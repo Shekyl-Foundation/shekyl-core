@@ -22,7 +22,7 @@ use shekyl_daemon_rpc::submit::{
     VerifyReject,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
-use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
+use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
@@ -47,9 +47,9 @@ pub fn valid_key_images(n: usize) -> Vec<[u8; 32]> {
 
 fn pqc_auth() -> PqcAuth {
     PqcAuth {
-        auth_version: 1,
-        scheme_id: 1,
-        flags: 0,
+        auth_version: PqcAuth::VERSION,
+        scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+        flags: PqcAuth::NO_FLAGS,
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
         hybrid_signature: vec![0xCD; 3385],
     }
@@ -97,14 +97,10 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
     let (outputs, base) = two_outputs_base();
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: key_images
                 .iter()
-                .map(|ki| Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: *ki,
-                })
+                .map(|ki| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(*ki)))
                 .collect(),
             outputs,
             // Two outputs, so the PQC scan fields must both be present and
@@ -120,7 +116,6 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
             base,
             pqc_auths: key_images.iter().map(|_| pqc_auth()).collect(),
             prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -133,48 +128,6 @@ pub fn spend_tx_with_kis(key_images: &[[u8; 32]], fee: u64) -> Transaction {
 /// The default 2-input spend fixture.
 pub fn spend_tx(fee: u64) -> Transaction {
     spend_tx_with_kis(&valid_key_images(2), fee)
-}
-
-/// A fee-only serve-credit tx (all-serve-credit vin, no outputs, empty
-/// pqc_auths, no prunable) — `fee` is parameterized so the zero-fee
-/// consensus static can be exercised from both sides.
-pub fn serve_credit_tx(fee: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ServeCredit {
-                // Opaque kept half (RF-D1 / rule 40): tag ‖ p_id ‖ shard ‖ epoch ‖ ed25519.
-                canonical_bytes: {
-                    let mut b = vec![TAG_INPUT_SERVE_CREDIT];
-                    b.extend_from_slice(&[0x11; 32]);
-                    b.extend_from_slice(&[7, 42]);
-                    b.extend_from_slice(&[0x66; 64]);
-                    b
-                },
-            }],
-            outputs: vec![],
-            extra: vec![],
-        },
-        ct: Ct::Fcmp {
-            fee,
-            reference_block: BlockHash::NULL,
-            base: CtBase {
-                enc_amounts: vec![],
-                enc_labels: vec![],
-                commitments: vec![],
-            },
-            pqc_auths: vec![],
-            // RF-D1: the pruned half of the record, one per serve-credit vin.
-            prunable: Some(Prunable {
-                bulletproofs: vec![],
-                tree_depth: 0,
-                fcmp_proof: vec![],
-                pseudo_outs: vec![],
-                // One opaque pruned record per serve-credit vin.
-                serve_credit_pruned: vec![vec![0x77; 64]],
-            }),
-        },
-    }
 }
 
 /// A synthetic-but-decodable emission vin (the retention `emission_wire`
@@ -231,13 +184,9 @@ pub fn emission_tx(fee: u64) -> Transaction {
     outputs[0].amount = 3_000_000;
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![
-                Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: ki[0],
-                },
+                Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(ki[0])),
                 Input::ArchivalRewardEmission {
                     canonical_bytes: emission_vin_bytes(),
                 },
@@ -252,7 +201,6 @@ pub fn emission_tx(fee: u64) -> Transaction {
             pqc_auths: vec![pqc_auth(), pqc_auth()],
             prunable: Some(Prunable {
                 // Spend fixture: no pass records (RF-D1).
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus()],
                 tree_depth: 3,
                 fcmp_proof: vec![0xEF; 2500],
@@ -262,9 +210,10 @@ pub fn emission_tx(fee: u64) -> Transaction {
     }
 }
 
-/// Hex-encode a transaction for `parse_submission` / `SubmitEngine::submit`.
-pub fn hexify(tx: &Transaction) -> String {
-    hex::encode(tx.serialize())
+/// A transaction's bytes, as `parse_submission` / `SubmitEngine::submit`
+/// take them.
+pub fn tx_bytes(tx: &Transaction) -> Vec<u8> {
+    tx.serialize()
 }
 
 /// A fact snapshot under which the spend fixture is fully admissible:
@@ -278,11 +227,10 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         key_image_conflicts: vec![KeyImageConflict::Free; parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(150),
-            root: FIXTURE_ROOT,
+            root: shekyl_types::CurveTreeRoot::from_bytes(FIXTURE_ROOT),
             tree_depth: 8,
         }),
-        fee_per_byte: 1,
-        fee_floor_window: None,
+        fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
@@ -291,6 +239,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     }
 }
 
@@ -370,6 +319,10 @@ impl MockShim {
 }
 
 impl SubmitStateShim for MockShim {
+    fn network_id(&self) -> shekyl_network::NetworkId {
+        shekyl_network::HARNESS_NETWORK_ID
+    }
+
     fn snapshot_facts(
         &self,
         txid: &TxHash,
@@ -408,7 +361,7 @@ impl SubmitStateShim for MockShim {
             cert_txid: *cert.txid(),
             cert_reference_block: *cert.reference_block(),
             cert_ref_height: cert.ref_height(),
-            cert_root: *cert.root(),
+            cert_root: cert.root().to_bytes(),
             expected: expected.clone(),
         });
         self.commit_outcome
@@ -454,7 +407,12 @@ impl MockVerifier {
 }
 
 impl TxVerifier for MockVerifier {
-    fn verify(&self, _parsed: &ParsedSubmission, _facts: &SubmitFacts) -> Result<(), VerifyReject> {
+    fn verify(
+        &self,
+        _parsed: &ParsedSubmission,
+        _facts: &SubmitFacts,
+        _network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.result.clone()
     }

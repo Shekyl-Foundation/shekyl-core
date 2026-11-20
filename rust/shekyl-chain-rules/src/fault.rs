@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The faults [`validate`](crate::validate) can return that are **not the
+//! The faults [`validate`](fn@crate::validate) can return that are **not the
 //! view's**: a stateless-stage premise that no longer holds against the
 //! committing view ([`Stale`]), and view data no conforming store can hold
 //! ([`Corrupt`]). Neither is a verdict (`CHAIN_RULES_SLICE_2.md` §8.1 Q8).
@@ -44,6 +44,7 @@
 use core::fmt;
 
 use shekyl_fcmp::LeafInput;
+use shekyl_network::NetworkId;
 use shekyl_types::{
     BlockHash, BlockHeight, GlobalOutputIndex, PCanonicalId, SettlementEpoch, ShardId,
 };
@@ -90,10 +91,10 @@ pub enum Stale {
         retry: Retry,
     },
     /// The rule set `form` judged under is not the one in force at the
-    /// connecting height. Compared by **value** — a Fakechain `Fixed`
+    /// connecting height. Compared by **value** — a levered `Fixed`
     /// target reuses [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS), so
-    /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
-    /// different `n`.
+    /// the id alone cannot tell `GENESIS` from `with_levers(Some(n), …)`,
+    /// or two different `n`.
     ///
     /// **This arm is what sized [`Fault`]** (112 bytes at slice 5 with
     /// `RuleSet` at 48): it carries two rule sets by value, so every byte
@@ -106,7 +107,7 @@ pub enum Stale {
     /// joined the set (PR #861: `RuleSet` 56, `Fault` past clippy's 128;
     /// `tx_spendable_age` took it to 64 at DRS-E3 commit 2, absorbed) and
     /// the fix is the one written here in advance — **the payload is
-    /// boxed**, which keeps the by-value comparison the Fakechain caveat
+    /// boxed**, which keeps the by-value comparison the lever caveat
     /// requires — not shrinking `RuleSet`, and not keeping limits off it
     /// that a schedule step could vary (slice 5 Q5, corrected). `Fault` and
     /// `Stale` are `Clone`, not `Copy`, for this box.
@@ -115,6 +116,20 @@ pub enum Stale {
         formed_under: Box<RuleSet>,
         /// What `validate` was given.
         in_force: Box<RuleSet>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+    /// The network id `form` bound every signature and proof under is not
+    /// the id `validate` was given (`trust.network_id()`). A signature is
+    /// valid on one network (NI-Q4). A mismatch means the two stages
+    /// described different networks — a driver defect, the same class as
+    /// [`Self::RuleSet`]. A fault, never a refusal. The id is sixteen
+    /// bytes, so both values travel by value.
+    Network {
+        /// What `form` bound.
+        formed_under: NetworkId,
+        /// What `validate` was given.
+        in_force: NetworkId,
         /// Whether `form` may be run again.
         retry: Retry,
     },
@@ -153,6 +168,21 @@ pub enum Stale {
         /// The two claims, boxed so the fault stays small on every path
         /// that carries it.
         claims: Box<ReferenceMismatch>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+    /// The candidate does not carry the body the bundle reference at
+    /// `position` names: the bodies are fewer than the references, or the
+    /// body at that position is not the one its reference hashes to.
+    /// The caller assembles a candidate's bodies by the references'
+    /// prunable hashes before `form` (§7.5: a body is accepted on hash
+    /// equality), so this is a driver defect, the class of
+    /// [`Self::Network`]. A fault, never a refusal: the block committed to
+    /// the reference, and the wrong bytes are the caller's, not the
+    /// block's (`BundleRefused::BodyNotReferenced`).
+    BundleBody {
+        /// The reference's position in the section.
+        position: usize,
         /// Whether `form` may be run again.
         retry: Retry,
     },
@@ -221,10 +251,6 @@ pub enum Corrupt {
     /// The parent's cumulative difficulty plus this block's target does not
     /// fit the type.
     ///
-    /// (A `ZeroTarget` arm lived here until 2026-09-20. Zero at the mint is
-    /// **not** a corrupt view — LWMA-1 has no output floor and a conforming
-    /// slow chain derives it — so it is CEN-D6's *refusal*, a verdict, and
-    /// no longer a fault: `rules::difficulty` module docs, DRS-E2 RD-F17.)
     CumulativeDifficultyOverflow,
     /// The recorded `cumulative_tx_count` **decreased** between two heights
     /// the volume window spans (CEN-F20). A prefix sum the store folds
@@ -337,21 +363,6 @@ pub enum Corrupt {
         /// Which invariant the fold found broken.
         which: RecordInvariant,
     },
-    /// A recorded bond's `hybrid_pubkey` is not a canonical hybrid public
-    /// key. The at-rest record keeps the key as bytes (`BondRecord` lives
-    /// in `shekyl-types`, below the crypto crate that owns the grammar),
-    /// and a bond is admitted only with bytes that grammar accepts. Bytes
-    /// that no longer parse are store contents admission cannot have
-    /// written — the same class as [`Self::LeafNotConstructible`], a halt
-    /// on `archival_bond`, not a fold [`RecordInvariant`].
-    ///
-    /// Absence of a record is CEN-B4's refusal of the block. The FFI
-    /// distinguishes a malformed key from an absent bond because there the
-    /// bytes are the caller's input. Here they are the view's.
-    BondHybridKeyMalformed {
-        /// The persona whose record holds the key.
-        persona: PCanonicalId,
-    },
     /// The open epoch's accruing budget plus this block's accrual does not
     /// fit the type (CEN-L8's third clause; SI-8 on
     /// `archival_budget_accruing`). The accrual is bounded by the emission
@@ -373,16 +384,6 @@ pub enum Corrupt {
         /// Which check failed.
         check: SettlementCheck,
     },
-    /// `epoch` has a frozen `Σwork(E)` and no frozen complete-tree set
-    /// (A22; SI-31). The slash pass writes the two in one write set, so a
-    /// settled epoch without the set is a file that lost a row, never an
-    /// epoch a claim may be judged on without it: the re-gather would have
-    /// to read the record's flag, which is the defect the set closes
-    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
-    CompleteTreesAbsent {
-        /// The settled epoch whose set is missing.
-        epoch: SettlementEpoch,
-    },
     /// The drawable set of `epoch` cannot be built from the recorded state
     /// (`SO-D12` increment 2; SI-30). Never a refusal of the block: the
     /// block is not invalid, this node's journals or records are.
@@ -400,6 +401,18 @@ pub enum Corrupt {
         height: BlockHeight,
         /// Why it could not be.
         why: DrawCountFault,
+    },
+    /// The bundle view of the chain a block is connecting to did not
+    /// answer for something a chain that holds the referenced block must
+    /// hold (`BundleRefused::Unanswered`), or for a drawable epoch the
+    /// filing step put in the memo before admission read it (SI-35's
+    /// class). Never a refusal of the block: the block is not invalid,
+    /// this node's rows are.
+    BundleUnanswered {
+        /// The block whose section was being admitted.
+        including: BlockHeight,
+        /// What the view did not answer.
+        why: crate::archival::BundleUnanswered,
     },
 }
 
@@ -441,6 +454,19 @@ pub enum DrawCountFault {
     InFlightOverflow,
     /// `COUNTED_DRAWS · |D|` does not fit the shortfall's `u64`.
     ShortfallOverflow,
+    /// The carry the row at `h − 1` left owes a tree more than the cap
+    /// `c`: no transition writes one.
+    SupportCountPastCap {
+        /// The count the row holds.
+        count: u32,
+    },
+    /// The block before this one, or the block whose response window
+    /// closes here, has no support row: every connected height writes one
+    /// (SI-40).
+    MissingSeats {
+        /// The height whose row is absent.
+        at: BlockHeight,
+    },
 }
 
 impl fmt::Display for DrawCountFault {
@@ -463,6 +489,12 @@ impl fmt::Display for DrawCountFault {
             Self::InFlightOverflow => write!(f, "the in-flight draws do not fit a u64"),
             Self::ShortfallOverflow => {
                 write!(f, "the visible shortfall does not fit a u64")
+            }
+            Self::SupportCountPastCap { count } => {
+                write!(f, "a support row's carry owes {count}, past the cap")
+            }
+            Self::MissingSeats { at } => {
+                write!(f, "no support row is recorded at height {at}")
             }
         }
     }
@@ -513,6 +545,15 @@ pub enum DrawableEpochFault {
         /// `h_open(E)`.
         h_open: BlockHeight,
     },
+    /// The snapshot handed in for a height of this epoch is another
+    /// epoch's. The memo is keyed by the epoch and its opening hash, so a
+    /// conforming lookup cannot return one; a caller that reads the support
+    /// seats of a height over the wrong snapshot would seat another epoch's
+    /// members.
+    OtherEpoch {
+        /// The epoch the snapshot is for.
+        held: SettlementEpoch,
+    },
 }
 
 impl fmt::Display for DrawableEpochFault {
@@ -535,6 +576,10 @@ impl fmt::Display for DrawableEpochFault {
                 f,
                 "the epoch has not opened: h_open {h_open} is above this view's tip, so there \
                  is no post-state to rebuild"
+            ),
+            Self::OtherEpoch { held } => write!(
+                f,
+                "the snapshot read for this epoch's support seats is epoch {held}'s"
             ),
         }
     }
@@ -759,6 +804,14 @@ impl fmt::Display for Stale {
                 f,
                 "stale rule set: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
             ),
+            Self::Network {
+                formed_under,
+                in_force,
+                retry,
+            } => write!(
+                f,
+                "stale network: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
+            ),
             Self::Target {
                 claimed,
                 expected,
@@ -786,6 +839,11 @@ impl fmt::Display for Stale {
                     claims.expected.height, claims.expected.root
                 ),
             },
+            Self::BundleBody { position, retry } => write!(
+                f,
+                "stale bundle bodies: the candidate does not carry the body bundle reference \
+                 #{position} names ({retry})"
+            ),
         }
     }
 }
@@ -840,10 +898,6 @@ impl fmt::Display for Corrupt {
             Self::BondRecordInvariant { persona, which } => {
                 write!(f, "bond record of {persona} is inconsistent: {which} (SI-7)")
             }
-            Self::BondHybridKeyMalformed { persona } => write!(
-                f,
-                "bond record of {persona} holds a hybrid key that is not canonical (SI-7)"
-            ),
             Self::AccrualOverflow { epoch } => {
                 write!(f, "budget accruing for epoch {epoch} overflows (SI-8)")
             }
@@ -880,14 +934,14 @@ impl fmt::Display for Corrupt {
             Self::DrawableEpoch { epoch, why } => {
                 write!(f, "the drawable set of epoch {epoch} cannot be built: {why} (SI-30)")
             }
-            Self::CompleteTreesAbsent { epoch } => write!(
-                f,
-                "settled epoch {epoch} has a frozen Σwork and no frozen complete-tree set \
-                 (SI-31)"
-            ),
             Self::DrawCount { height, why } => {
                 write!(f, "the draw count at height {height} cannot be recorded: {why} (SI-33)")
             }
+            Self::BundleUnanswered { including, why } => write!(
+                f,
+                "admitting the section of the block at height {including}: the view did not \
+                 answer {why:?}"
+            ),
         }
     }
 }

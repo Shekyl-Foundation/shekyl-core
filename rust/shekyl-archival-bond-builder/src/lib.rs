@@ -23,7 +23,7 @@
 //!    `bond_debit == 0` (§7.1). The vin carries no signature: its on-chain
 //!    authorization is the transaction-level `pqc_auths` slot (surface A), not
 //!    an on-vin blob (ARCHIVAL_BOND_GATE4.md §3.4.1; SA-2b, SIGNATURE_ALIGNMENT.md §2.2).
-//! 2. [`ReleaseVin`]: [`BondPostKind::Release`] with empty holdings,
+//! 2. [`ReleaseVin`]: [`BondPostKind::Release`](shekyl_archival_retention::bond_wire::BondPostKind::Release) with empty holdings,
 //!    `bonded_total_atomic == bond_credit == 0`, and
 //!    `bond_debit == record_bonded_total`. The debit term rides the **input**
 //!    side as an [`InputTerm`].
@@ -176,7 +176,7 @@ pub fn build_join_market_vin(
     holdings: HoldingsDescriptor,
     endpoint: [u8; ENDPOINT_BYTES],
 ) -> Result<JoinMarketVin, BondBuildError> {
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     if floor == 0 {
         return Err(BondBuildError::BondFloorZero);
     }
@@ -256,8 +256,8 @@ pub fn build_join_market_vin(
 /// - [`BondBuildError::CreditImbalance`] if `funding_total` does not equal that
 ///   sum.
 ///
-/// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end
-/// (rule 20); the raw `u64` is derived only at the error boundary.
+/// Amounts are [`AtomicUnits`] so the funds path stays checked end-to-end;
+/// the raw `u64` is derived only at the error boundary.
 pub fn verify_credit_funding(
     funding_total: AtomicUnits,
     output_total: AtomicUnits,

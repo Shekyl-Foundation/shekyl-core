@@ -27,6 +27,9 @@ zeroize = { workspace = true }
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # The grant a row names under `option show` (RT-O24): the RPC's grants.
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+# A development row is admitted by the network's row: a lever it permits or
+# a staging flag it stages (NETWORK_IDENTITY.md NI-R6, NI-R9).
+shekyl-network = { path = "../shekyl-network" }
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@ use shekyl_archival_retention::{support_challenge_nonce, PassBitmap, PassStream}
 use super::*;
 use crate::harness::bundle::{fixture_block_hash, BundleReadFaulted, BundleWorld};
 
-const WIDTH: u64 = 64;
+const WIDTH: std::num::NonZeroU64 = std::num::NonZeroU64::new(64).expect("non-zero");
 
 fn targets(world: &BundleWorld) -> Result<DrawTargets, BundleRefused<BundleReadFaulted>> {
     draw_targets(&world.view, world.h, &world.seed, &RuleSet::GENESIS)
@@ -26,7 +26,7 @@ fn targets(world: &BundleWorld) -> Result<DrawTargets, BundleRefused<BundleReadF
 fn seat(world: &BundleWorld, n: usize) -> SupportSeat {
     SupportSeat {
         persona: world.personas[n].persona,
-        receipt_key: world.personas[n].receipt_public_key.clone(),
+        receipt_key: world.personas[n].receipt_key(),
     }
 }
 
@@ -56,6 +56,7 @@ fn the_producers_economy_pairs_are_the_verifiers_draws() {
         world.h + shekyl_types::BlockCount::ONE,
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
     .expect("the all-miss bundle admits");
     assert_eq!(economy.len(), admitted.draws.len());
@@ -103,7 +104,7 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
     // the target's shard, under the target's nonce.
     let hash = fixture_block_hash(world.h);
     let pass = support[1];
-    let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), pass.draw, 0);
+    let nonce = support_challenge_nonce(&world.seed, &hash, pass.draw, 0);
     let record = world.persona_record(2, pass.shard.to_raw(), PassStream::Support, &nonce);
     let (reference, body) = world.assemble_support(
         PassBitmap::from_passes(world.count, []).expect("no economy passes"),
@@ -116,6 +117,7 @@ fn the_producers_support_seats_are_the_verifiers_observations() {
         world.h + shekyl_types::BlockCount::ONE,
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
     .expect("the support pass the producer collected admits");
     assert_eq!(admitted.support.len(), support.len());

@@ -13,8 +13,8 @@ use shekyl_difficulty::FTL_SECONDS;
 use shekyl_types::{BlockHeight, CurveTreeRoot, Timestamp};
 
 use crate::mutation::{
-    Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Unmutable,
-    UNHELD_ATTESTATION_ROOT, UNHELD_ROOT,
+    Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Unmutable, UNHELD_ROOT,
+    UNHELD_SECTION_ROOT,
 };
 use crate::source::{IngestEvent, Source};
 use crate::test_support::{h, GrownTree, Scripted, FIRST_SPEND_HEIGHT};
@@ -54,7 +54,7 @@ fn the_wrapper_keeps_numbering_and_heights_and_mutates_exactly_one_block() {
     }
     let block_at = |i: usize| match &seen[i].event {
         IngestEvent::Extend(c) => c.block.clone(),
-        IngestEvent::Rewind { .. } | IngestEvent::Inject(_) => panic!("Extend-only"),
+        IngestEvent::Rewind { .. } => panic!("Extend-only"),
     };
     assert_eq!(block_at(0), chain[0].0, "below: untouched");
     assert_eq!(block_at(2), chain[2].0, "above: untouched");
@@ -176,8 +176,8 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::HeaderVersion, ExpectedPlace::Block),
             (Mutation::Orphan, ExpectedPlace::Block),
             (Mutation::WrongRoot, ExpectedPlace::Block),
-            // Slice 8 row 10: B4 names the block, as the header rows do.
-            (Mutation::WrongAttestationRoot, ExpectedPlace::Block),
+            // The switch's C3: J29's root check names the block, as the header rows do.
+            (Mutation::WrongSectionRoot, ExpectedPlace::Block),
             (Mutation::FutureTimestamp, ExpectedPlace::Block),
             (Mutation::StaleTimestamp, ExpectedPlace::Block),
             (Mutation::PowUnderWrongSeed, ExpectedPlace::Block),
@@ -193,7 +193,6 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             // slice 8 row 9 — `Mutation` docs.)
             (Mutation::RelistedTransaction, ExpectedPlace::Listed),
             (Mutation::DoubledListing, ExpectedPlace::Listed),
-            (Mutation::DuplicateServeCredit, ExpectedPlace::Input),
             (Mutation::DuplicateBondPost, ExpectedPlace::Input),
             (Mutation::OverweightBlock, ExpectedPlace::Block),
             (Mutation::DoubleSpend, ExpectedPlace::Input),
@@ -202,6 +201,8 @@ fn every_mutation_names_a_row_and_the_pending_ones_are_those_the_plan_lists() {
             (Mutation::ReferenceTooRecent, ExpectedPlace::Listed),
             // Slice 6 commit 8: the signature names its input, as I7 does.
             (Mutation::ForgedSignature, ExpectedPlace::Input),
+            // CEN-I4 names the transaction whose vin is over the cap.
+            (Mutation::TooManyInputs, ExpectedPlace::Listed),
         ]
     );
 }
@@ -282,18 +283,13 @@ fn the_unheld_root_is_not_a_fixture_root() {
 }
 
 #[test]
-fn the_unheld_attestation_root_is_not_the_empty_sets() {
-    // The mutation's whole claim: a block supplying nothing commits the
-    // empty set, so a root that is not the empty set's is CEN-B4's
+fn the_unheld_section_root_is_not_the_empty_sections() {
+    // The mutation's whole claim: a block admitting no bundle commits the
+    // empty section, so a root that is not the empty section's is CEN-B4's
     // refusal. Pinned against the retention crate's recompute, which the
-    // production module cannot name (`UNHELD_ATTESTATION_ROOT` docs).
+    // production module cannot name (`UNHELD_SECTION_ROOT` docs).
     let chain = crate::test_support::chain(CHAIN_LEN);
-    let mut source = Mutated::new(
-        scripted(&chain),
-        h(AT),
-        Mutation::WrongAttestationRoot,
-        env(),
-    );
+    let mut source = Mutated::new(scripted(&chain), h(AT), Mutation::WrongSectionRoot, env());
     for _ in 0..AT {
         source.next().expect("blocks below the mutation");
     }
@@ -301,12 +297,12 @@ fn the_unheld_attestation_root_is_not_the_empty_sets() {
     let IngestEvent::Extend(candidate) = ev.event else {
         panic!("Extend-only");
     };
-    assert!(candidate.attestation_witness.is_none(), "nothing supplied");
-    let root = candidate.block.header.attestation_root;
-    assert_eq!(root.as_bytes(), &UNHELD_ATTESTATION_ROOT);
+    assert!(candidate.bundle_references.is_none(), "nothing supplied");
+    let root = candidate.block.header.section_root;
+    assert_eq!(root.as_bytes(), &UNHELD_SECTION_ROOT);
     assert_ne!(
         *root.as_bytes(),
-        shekyl_archival_retention::empty_attestation_root()
+        shekyl_archival_retention::empty_section_root()
     );
 }
 
@@ -351,4 +347,25 @@ fn the_last_representable_height_is_yielded_and_another_event_is_a_fault() {
     );
     assert!(source.next().expect("yielded").is_some());
     assert!(source.next().expect("clean end").is_none());
+}
+
+/// [`EXTRA_KEY_IMAGES`] are what they claim: `k·G` for `k` in `2..=9`,
+/// each canonical, torsion-free and not the identity, all distinct.
+#[test]
+fn the_extra_images_are_k_times_g() {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+    use curve25519_dalek::scalar::Scalar;
+    for (k, bytes) in (2u64..).zip(crate::mutation::EXTRA_KEY_IMAGES) {
+        let point = CompressedEdwardsY(bytes)
+            .decompress()
+            .unwrap_or_else(|| panic!("{k}·G decodes"));
+        assert_eq!(point, ED25519_BASEPOINT_POINT * Scalar::from(k), "{k}·G");
+        assert_eq!(point.compress().to_bytes(), bytes, "{k}·G is canonical");
+        assert!(point.is_torsion_free(), "{k}·G is torsion-free");
+    }
+    let mut seen = crate::mutation::EXTRA_KEY_IMAGES.to_vec();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), crate::mutation::EXTRA_KEY_IMAGES.len());
 }

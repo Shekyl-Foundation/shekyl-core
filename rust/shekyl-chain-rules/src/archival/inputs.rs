@@ -22,9 +22,7 @@ use crate::rules::Rule;
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
 
-use super::{
-    emptied, record_invariant, BondArm, Post, RecordWriteKind, ReleasePreImage, ServeCreditKey, L7,
-};
+use super::{emptied, record_invariant, BondArm, Post, RecordWriteKind, ReleasePreImage, L7};
 
 impl super::Transition {
     // ---- phase 2: the transactions' arms ---------------------------------
@@ -37,29 +35,6 @@ impl super::Transition {
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         match input {
             Input::Gen(_) | Input::ToKey { .. } => Ok(Ok(())),
-            Input::ServeCredit { .. } => {
-                // A vin the crate's one parse cannot read writes nothing;
-                // the block that carries it does not connect (CEN-J1 will
-                // refuse it earlier; this is the backstop).
-                let Some(ArchivalKey::ServeCredit { p, shard, epoch }) = ArchivalKey::of(input)
-                else {
-                    return refused(L7::ROW, locus);
-                };
-                let persona = PCanonicalId::from_bytes(p);
-                // The persona must have a record. CEN-J4 refuses this at
-                // `tx_against`, before the fold, against the view alone;
-                // this arm is the fold's belt beneath it (it also sees the
-                // block's own joins), and SI-15 is the store's beneath both.
-                if self.post(view, persona)?.is_none() {
-                    return refused(L7::ROW, locus);
-                }
-                self.serve_credits.push(ServeCreditKey {
-                    persona,
-                    shard: ShardId::from_raw(shard),
-                    epoch: SettlementEpoch::from_raw(epoch),
-                });
-                Ok(Ok(()))
-            }
             // [`BondArm::of`] is the classifier `judge_bond_post` uses too,
             // so the sequence and the fold cannot disagree about the arm.
             // `None` is a post no arm names. The sequence refuses it under
@@ -230,6 +205,7 @@ impl super::Transition {
             &record.bad_intervals,
             post_ids,
             epoch,
+            shekyl_archival_retention::archival_params(),
         ) {
             Ok(connect) => connect,
             Err(
@@ -288,7 +264,12 @@ impl super::Transition {
             .map(|e| e.to_raw())
             .collect::<Vec<_>>();
         for &epoch in epochs {
-            match claimed_epochs_check_and_set(&mut set, epoch, current_settled) {
+            match claimed_epochs_check_and_set(
+                &mut set,
+                epoch,
+                current_settled,
+                shekyl_archival_retention::archival_params(),
+            ) {
                 Ok(true) => {}
                 // Already claimed (a dedup breach past CEN-J25) or not
                 // claimable (unsettled or expired): never a soft skip.

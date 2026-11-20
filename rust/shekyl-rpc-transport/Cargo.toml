@@ -6,7 +6,7 @@ version = "0.1.0"
 # SemVer contract on its public surface. Owns a small hyper client (see `http_client`)
 # re-absorbed from `simple-request` so it can add an optional SOCKS5h proxy connector.
 publish = false
-description = "Shekyl RPC transport: hyper client (optional SOCKS5h) plus the shared listen-address classifier (RT-1/RT-2)"
+description = "Shekyl RPC transport: hyper client (optional SOCKS5h), the shared listen-address classifier (RT-1/RT-2), and the \"this computer\" dial of a daemon's owner's leg (RT-15)"
 license = "BSD-3-Clause"
 repository = "https://github.com/Shekyl-Foundation/shekyl-core"
 authors = ["Luke Parker <lukeparker5132@gmail.com>", "Shekyl Foundation <dev@shekyl.org>"]
@@ -20,6 +20,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+# TEST_ONLY (scripts/ci/check_test_only_features.py): `LocalTarget::test_override`,
+# a test node's own directories in place of "this computer"'s. Enabled on
+# dev-dependency edges alone, so no production client can name a directory.
+test-override = []
+
 [dependencies]
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 zeroize = { version = "^1.5", default-features = false, features = ["alloc", "std"] }
@@ -27,7 +33,7 @@ digest_auth = { version = "0.3", default-features = false }
 # sync = Mutex (auth serialization), time = request timeout, net = the TCP
 # stream the SOCKS connector dials. Previously pulled in transitively via
 # simple-request; made explicit now that it is gone.
-tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "net", "io-util", "rt"] }
 
 # Small hyper client owned in `http_client` (re-absorbed from simple-request so
 # a SOCKS5h connector can be added). Feature flags mirror what simple-request's
@@ -42,10 +48,55 @@ tower-service = { version = "0.3", default-features = false }
 shekyl-socks = { path = "../shekyl-socks" }
 
 shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, features = ["std"] }
+# The one JSON-RPC framing (`SyncDaemon::json_rpc`) reads a refusal through
+# `read_error_object` (RW-Q3). This crate already reaches the types through
+# `shekyl-rpc-client`; the direct edge is the call.
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# "This computer" (`local`): the daemon's own rendezvous naming and record
+# (RPC_CHANNEL.md RT-15, §7.1), without the channel's handshake, and the
+# network whose id the name hashes.
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
+shekyl-network = { path = "../shekyl-network" }
+
+# The account's root and, on Unix, the peer's account for the owner's leg's
+# check (`SO_PEERCRED`, `getpeereid`): the leaf with no network stack that
+# the daemon's process crate reads the same root from.
+shekyl-os-account = { path = "../shekyl-os-account" }
+# The RPC channel's client (`channel`, RT-W11): the hybridXK handshake and
+# its retry policy, the record stream it carries, and the grant a session
+# asks for. The handshake brings ML-KEM into every client of this crate,
+# which RT-W12 moves onto the channel.
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+# The handshake retry's jitter (`retry::HandshakeRetry` takes the source).
+rand_core = { version = "0.6", features = ["getrandom"] }
+tracing = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+# The logon session, and the pipe's open with its peer check
+# (`open_verified`).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# This crate's own integration tests name a test node's directory.
+shekyl-rpc-transport = { path = ".", features = ["test-override"] }
+tempfile = "3"
 # rt for #[tokio::test]; io-util for the in-test SOCKS5 acceptor's
 # read_exact/write_all (the ATYP=DOMAIN wire pin in `http_client`).
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util"] }
 # Integration tests decode Bech32m addresses for generate_blocks (see tests/tests.rs).
 shekyl-address = { path = "../shekyl-address" }
+
+[target.'cfg(windows)'.dev-dependencies]
+# tests/local_peer_check.rs: a pipe with a Low integrity label behind a
+# rendezvous record, which the peer check must refuse (RT-15).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+

@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use std::ffi::OsString;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source, Value};
@@ -18,10 +18,31 @@ use crate::platform::{Platform, RunMode};
 use crate::resolve::{choosers, resolve};
 use crate::table::TABLE;
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/srv/op` is
+/// not absolute and the path kinds refuse it (DC-F40). A TOML fixture
+/// quotes the result with `'…'`, the literal string, so the backslashes
+/// are not escapes.
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
+/// The per-account root under the fixture home: `Shekyl` on Windows,
+/// `.shekyl` elsewhere (IG-13).
+fn home_root() -> PathBuf {
+    PathBuf::from(abs("/srv/op")).join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
+}
+
 fn platform() -> Platform {
     Platform {
-        home: Some(PathBuf::from("/srv/op")),
-        program_data: None,
+        home: Some(PathBuf::from(abs("/srv/op"))),
+        service_parent: None,
+        session_dir: None,
+        service_rendezvous: None,
     }
 }
 
@@ -45,12 +66,12 @@ fn codes(r: Result<DaemonConfig, Vec<Diagnostic>>) -> Vec<(Code, String)> {
 fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     let c = build_from(&[], "").unwrap();
     assert_eq!(c.network, Network::Mainnet);
-    assert_eq!(c.data_dir, PathBuf::from("/srv/op/.shekyl"));
+    assert_eq!(c.data_dir, home_root());
     assert_eq!(
         c.logging.file,
-        PathBuf::from("/srv/op/.shekyl/logs/shekyld-mainnet.log")
+        home_root().join("logs").join("shekyld-mainnet.log")
     );
-    assert_eq!(c.logging.directive(), "warn");
+    assert_eq!(c.logging.directive().as_str(), "warn");
     assert_eq!(c.tor, Tor::Managed { binary: None });
     assert!(
         matches!(&c.clearnet, Clearnet::On { listen, socks: None, advertise } if listen.len() == 1 && listen[0].port() == 11021 && advertise.is_empty())
@@ -58,29 +79,27 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
     assert_eq!(c.rpc.admin_listen, vec!["127.0.0.1:11029".parse().unwrap()]);
     assert!(c.rpc.view_listen.is_empty());
     assert_eq!(c.rpc.connections_max.get(), 25);
-    assert_eq!(c.txpool_weight_max, 648_000_000);
     assert_eq!(c.p2p.upload_max, None);
     assert!(c.dev.sync);
     assert!(!c.offline());
-    assert!(!c.is_client());
 }
 
 #[test]
 fn explicit_paths_are_taken_as_given_and_defaults_follow_the_network() {
     let c = build_from(
-        &["--network", "testnet", "--data-dir", "/srv/chain"],
-        "log-file = \"/var/log/s.log\"\n",
+        &["--network", "testnet", "--data-dir", &abs("/srv/chain")],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
     )
     .unwrap();
-    assert_eq!(c.data_dir, PathBuf::from("/srv/chain"));
-    assert_eq!(c.logging.file, PathBuf::from("/var/log/s.log"));
+    assert_eq!(c.data_dir, PathBuf::from(abs("/srv/chain")));
+    assert_eq!(c.logging.file, PathBuf::from(abs("/var/log/s.log")));
     assert!(matches!(&c.clearnet, Clearnet::On { listen, .. } if listen[0].port() == 12021));
     assert_eq!(c.rpc.admin_listen[0].port(), 12029);
 }
 
 #[test]
 fn no_home_refuses_each_path_that_needs_it_and_not_an_explicit_one() {
-    let args: Vec<OsString> = ["--data-dir", "/srv/chain"]
+    let args: Vec<OsString> = ["--data-dir", &abs("/srv/chain")]
         .iter()
         .map(OsString::from)
         .collect();
@@ -155,6 +174,42 @@ fn shekyl_onion_v3_hostname() -> String {
     shekyl_onion_v3::v3_onion_hostname(&b)
 }
 
+/// **A child that asks for nothing confirms a parent that refuses it**
+/// (Rick, 2026-11-18). `clearnet off` with `clearnet-listen none` or
+/// `clearnet-advertise none` is no clearnet, said twice, on the command
+/// line or in the file. `p2p-peer none` and `p2p-closed-peer none` beside
+/// both connectors off confirm the same way. An endpoint under an off
+/// connector is still a request and a conflict (the test below). Red edit:
+/// in `Value::bearing`, classify an empty list as `Request`.
+#[test]
+fn an_absence_confirms_a_parent_that_refuses_the_row() {
+    let c = build_from(
+        &[
+            "--clearnet",
+            "off",
+            "--clearnet-listen",
+            "none",
+            "--clearnet-advertise",
+            "none",
+            "--p2p-peer",
+            "none",
+            "--p2p-closed-peer",
+            "none",
+            "--tor",
+            "off",
+        ],
+        "",
+    )
+    .expect("absence beside an off connector is accepted");
+    assert!(c.offline());
+    let c = build_from(
+        &["--clearnet", "off", "--tor", "off"],
+        "clearnet-listen = \"none\"\nclearnet-advertise = \"none\"\n",
+    )
+    .expect("the same from the file");
+    assert!(c.offline());
+}
+
 #[test]
 fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
     let d = codes(build_from(
@@ -168,11 +223,19 @@ fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
     ));
     assert_eq!(d, vec![(Code::ValueConflict, "clearnet-listen".into())]);
     let d = codes(build_from(
+        &["--clearnet", "off", "--clearnet-advertise", "8.8.8.8:1"],
+        "",
+    ));
+    assert_eq!(d, vec![(Code::ValueConflict, "clearnet-advertise".into())]);
+    let d = codes(build_from(
         &["--clearnet", "off", "--p2p-peer", "8.8.8.8:11021"],
         "",
     ));
     assert_eq!(d, vec![(Code::ValueConflict, "p2p-peer".into())]);
-    let d = codes(build_from(&["--tor-file", "/opt/tor", "--tor", "off"], ""));
+    let d = codes(build_from(
+        &["--tor-file", &abs("/opt/tor"), "--tor", "off"],
+        "",
+    ));
     assert_eq!(d, vec![(Code::ValueConflict, "tor-file".into())]);
     let c = build_from(&["--clearnet", "off", "--tor", "off"], "").unwrap();
     assert!(c.offline());
@@ -342,39 +405,55 @@ fn log_categories_become_the_owners_directive() {
     )
     .unwrap();
     let d = c.logging.directive();
-    assert!(d.starts_with("info,"), "{d}");
+    assert!(d.as_str().starts_with("info,"), "{d}");
     assert!(
-        d.contains("shekyl_dialer=debug") && d.contains("shekyl_daemon_rpc=trace"),
+        d.as_str().contains("shekyl_dialer=debug")
+            && d.as_str().contains("shekyl_daemon_rpc=trace"),
         "{d}"
     );
     let sink = c.logging.file_sink();
     assert_eq!(sink.filename_prefix, "shekyld-mainnet.log");
 }
 
+/// A C++ log category is not a subsystem: the key is refused where it is
+/// read, on the command line and in the file, so a configuration written
+/// for the C++ daemon fails at start instead of filtering nothing.
 #[test]
-fn positional_words_make_a_client_that_needs_an_admin_endpoint() {
-    let c = build_from(&["status"], "").unwrap();
-    assert!(c.is_client());
-    assert_eq!(
-        c.session.client_endpoint,
-        Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 11029))
-    );
-    let d = codes(build_from(&["--rpc-admin-listen", "none", "status"], ""));
-    assert_eq!(d, vec![(Code::ClientNoEndpoint, "rpc-admin-listen".into())]);
+fn a_cxx_log_category_is_refused_as_a_key() {
+    let cli = build_from(&["--log-category", "net=debug"], "").unwrap_err();
+    assert_eq!(cli[0].option.as_deref(), Some("log-category"), "{cli:?}");
+    let file = build_from(&[], "log-category = { blockchain = \"debug\" }\n").unwrap_err();
+    assert_eq!(file[0].option.as_deref(), Some("log-category"), "{file:?}");
+    // The same form with a subsystem key is the user guide's example, and
+    // builds: the refusal is the key's.
+    let ok = build_from(&[], "log-category = { p2p = \"debug\", tor = \"trace\" }\n").unwrap();
+    assert!(ok
+        .logging
+        .directive()
+        .as_str()
+        .contains("shekyl_dialer=debug"));
 }
 
-/// The console dials IPv4. A daemon may bind an IPv6 admin listener; a
-/// client command to one is refused at parse, with the grammar's range code.
+/// A view listener given an address alone binds at the network's view port,
+/// the RPC port plus one (Rick, 2026-11-17); a port given is kept; the file
+/// takes the same spelling; and the admin listener still needs its port.
 #[test]
-fn a_client_refuses_an_admin_endpoint_the_console_cannot_dial() {
-    let d = codes(build_from(
-        &["--rpc-admin-listen", "[::1]:11029", "status"],
-        "",
-    ));
-    assert_eq!(d, vec![(Code::ValueRange, "rpc-admin-listen".into())]);
+fn a_view_listener_without_a_port_takes_the_network_view_port() {
+    let c = build_from(&["--rpc-view-listen", "127.0.0.1"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:11030".parse().unwrap()]);
+    let c = build_from(&["--network", "testnet", "--rpc-view-listen", "::1"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["[::1]:12030".parse().unwrap()]);
+    let c = build_from(&["--rpc-view-listen", "127.0.0.1:2000"], "").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:2000".parse().unwrap()]);
+    let c = build_from(&[], "rpc-view-listen = [\"127.0.0.1\"]\n").unwrap();
+    assert_eq!(c.rpc.view_listen, vec!["127.0.0.1:11030".parse().unwrap()]);
+    assert!(build_from(&["--rpc-admin-listen", "127.0.0.1"], "").is_err());
+}
+
+#[test]
+fn an_ipv6_admin_listener_is_accepted() {
     let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();
     assert_eq!(c.rpc.admin_listen, vec!["[::1]:11029".parse().unwrap()]);
-    assert!(c.session.client_endpoint.is_none());
 }
 
 #[test]
@@ -430,16 +509,56 @@ fn notify_commands_and_levers_are_carried() {
             "--dev-sync",
             "off",
         ],
-        "notify-block = [\"/usr/bin/logger\", \"{height}\"]\n",
+        &format!(
+            "notify-block = ['{}', '{{height}}']\n",
+            abs("/usr/bin/logger")
+        ),
     )
     .unwrap();
     assert_eq!(
         c.notify.block.as_deref(),
-        Some(&["/usr/bin/logger".to_owned(), "{height}".to_owned()][..])
+        Some(&[abs("/usr/bin/logger"), "{height}".to_owned()][..])
     );
     assert_eq!(c.dev.difficulty, Some(1));
     assert!(!c.dev.sync);
     assert_eq!(c.mine.threads, None, "auto");
+}
+
+/// `mine` defaults off; `on` needs `mine-address`, refused at parse naming
+/// that row (IG-11; Rick, 2026-11-02); an address alone starts nothing.
+/// Red edit: let `mine = on` build without an address.
+#[test]
+fn mine_on_needs_an_address_and_an_address_alone_starts_nothing() {
+    let c = build_from(&[], "").unwrap();
+    assert!(!c.mine.start);
+    assert_eq!(
+        codes(build_from(&["--mine", "on"], "")),
+        vec![(Code::ValueRequires, "mine".into())]
+    );
+    let refused = build_from(&["--mine", "on"], "").unwrap_err();
+    assert_eq!(
+        refused[0].params,
+        vec![("requires", "mine-address".to_owned())]
+    );
+    assert_eq!(
+        codes(build_from(&["--mine", "maybe"], "")),
+        vec![(Code::ValueWord, "mine".into())]
+    );
+    let text = shekyl_address::ShekylAddress::new(
+        shekyl_address::Network::Mainnet,
+        [0xaa; 32],
+        [0xbb; 32],
+        [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+        vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+    )
+    .encode()
+    .unwrap();
+    let c = build_from(&["--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start, "an address alone starts nothing");
+    let c = build_from(&["--mine", "on", "--mine-address", &text], "").unwrap();
+    assert!(c.mine.start);
+    let c = build_from(&["--mine", "off", "--mine-address", &text], "").unwrap();
+    assert!(!c.mine.start);
 }
 
 /// The decode's keys stay with the address. The miner assembles from them
@@ -644,5 +763,214 @@ fn derived_defaults_are_in_the_map_and_clearnet_off_names_no_listen() {
     assert_eq!(
         off.get("rpc-admin-listen").map(Value::render).as_deref(),
         Some("127.0.0.1:11029")
+    );
+}
+
+/// A `shekyld.toml` saved by a Windows editor ends its lines with CRLF.
+/// `file::open` reads the bytes as they are (`read_to_string`, no
+/// conversion) and `read_file` parses them as TOML, which treats CRLF as
+/// a newline, so the CRLF text builds the same configuration as its LF
+/// twin, and a refusal in it names the same line (review 3 §3 of the
+/// Rust-binary PR; DC-F42). Red edit: make the parser refuse `\r`.
+#[test]
+fn a_crlf_file_builds_what_its_lf_twin_builds() {
+    let lf = format!(
+        "log-level = 'debug'\nmine-threads = 2\nnotify-block = ['{}', '{{height}}']\n",
+        abs("/usr/bin/logger")
+    );
+    let crlf = lf.replace('\n', "\r\n");
+    assert!(crlf.contains("\r\n") && !lf.contains('\r'));
+    let from_lf = build_from(&[], &lf).unwrap();
+    let from_crlf = build_from(&[], &crlf).unwrap();
+    assert_eq!(from_crlf, from_lf);
+    assert_eq!(from_crlf.mine.threads.map(std::num::NonZero::get), Some(2));
+
+    let bad = "log-level = 'debug'\r\nmine-threads = 'two'\r\n";
+    let refused = build_from(&[], bad).unwrap_err();
+    assert_eq!(
+        refused[0].option.as_deref(),
+        Some("mine-threads"),
+        "{refused:?}"
+    );
+    assert!(
+        matches!(&refused[0].source, Source::File { line: 2, .. }),
+        "{:?}",
+        refused[0].source
+    );
+}
+
+/// A named instance is a second node and keeps its own state, so it names
+/// its own data directory (`RPC_CHANNEL.md` §7.1). Red edit: drop the
+/// `given("data-dir")` check and the first assertion fails.
+#[test]
+fn a_named_instance_needs_its_own_data_directory() {
+    assert_eq!(
+        codes(build_from(&["--instance", "bench"], "")),
+        vec![(Code::ValueRequires, "instance".into())]
+    );
+    let c = build_from(
+        &["--instance", "bench", "--data-dir", &abs("/srv/bench")],
+        "",
+    )
+    .unwrap();
+    assert_eq!(
+        c.rpc.instance,
+        shekyl_rpc_rendezvous::Instance::Named(
+            shekyl_rpc_rendezvous::InstanceName::parse("bench").unwrap()
+        )
+    );
+    assert_eq!(
+        build_from(&[], "").unwrap().rpc.instance,
+        shekyl_rpc_rendezvous::Instance::Default
+    );
+}
+
+/// The instance name's rule is the channel crate's, and `default` names
+/// the default instance (`RPC_CHANNEL.md` §7.1).
+#[test]
+fn an_instance_name_outside_the_rule_is_refused_at_parse() {
+    for bad in ["default", "Bench", "-bench", "a_b", "seventeen-chars-x"] {
+        let refused =
+            build_from(&["--instance", bad, "--data-dir", &abs("/srv/bench")], "").expect_err(bad);
+        assert_eq!(refused.len(), 1, "{bad}");
+        assert_eq!(refused[0].code, Code::ValueRange, "{bad}");
+        assert_eq!(refused[0].option.as_deref(), Some("instance"), "{bad}");
+    }
+}
+
+/// A service serves no owner socket, so a socket directory with `service`
+/// is refused rather than ignored (IG-Q105). Red edit: drop the conflict and
+/// the service start builds.
+#[cfg(not(windows))]
+#[test]
+fn a_service_is_given_no_socket_directory() {
+    let paths = [
+        "--data-dir",
+        "/var/lib/shekyl",
+        "--log-file",
+        "/var/log/shekyl/shekyld.log",
+    ];
+    let mut with_dir = vec!["--service", "--rpc-socket-dir", "/run/shekyl"];
+    with_dir.extend(paths);
+    assert_eq!(
+        codes(build_from(&with_dir, "")),
+        vec![(Code::ValueConflict, "rpc-socket-dir".into())]
+    );
+    let mut service = vec!["--service"];
+    service.extend(paths);
+    let c = build_from(&service, "").unwrap();
+    assert_eq!(c.run_mode, RunMode::Service);
+    assert_eq!(c.rpc.socket_dir, None);
+    let c = build_from(&["--rpc-socket-dir", "/run/shekyl"], "").unwrap();
+    assert_eq!(c.rpc.socket_dir, Some(PathBuf::from("/run/shekyl")));
+}
+
+/// The channel's listeners are any address, a wildcard included (RT-14),
+/// and `none` by default (no channel port is ruled).
+#[test]
+fn the_channel_listens_where_it_is_told_and_nowhere_by_default() {
+    assert!(build_from(&[], "").unwrap().rpc.channel_listen.is_empty());
+    let c = build_from(&["--rpc-listen", "0.0.0.0:28100"], "").unwrap();
+    assert_eq!(
+        c.rpc.channel_listen,
+        vec!["0.0.0.0:28100".parse::<std::net::SocketAddr>().unwrap()]
+    );
+}
+
+/// Only a service has a console key, so its reset is refused in any other
+/// run mode (IG-Q88). Red edit: drop the run-mode rule in
+/// `session_section`, and the run-as-user reset builds.
+#[cfg(not(windows))]
+#[test]
+fn the_console_key_reset_is_a_services() {
+    assert_eq!(
+        codes(build_from(&["--rpc-console-key-reset"], "")),
+        vec![(Code::ValueRequires, "rpc-console-key-reset".into())]
+    );
+    let c = build_from(
+        &[
+            "--service",
+            "--rpc-console-key-reset",
+            "--data-dir",
+            "/var/lib/shekyl",
+            "--log-file",
+            "/var/log/shekyl/shekyld.log",
+        ],
+        "",
+    )
+    .unwrap();
+    assert!(c.session.console_key_reset);
+}
+
+/// On Windows the owner's rendezvous directory is fixed, so a socket
+/// directory is refused with its own code (Rick, 2026-11-14).
+#[cfg(windows)]
+#[test]
+fn a_socket_directory_is_refused_on_windows() {
+    let d = codes(build_from(
+        &[
+            "--rpc-socket-dir",
+            &abs("/srv/s"),
+            "--data-dir",
+            &abs("/srv/chain"),
+        ],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
+    ));
+    assert!(
+        d.contains(&(Code::SocketDirPlatform, "rpc-socket-dir".into())),
+        "{d:?}"
+    );
+}
+
+/// The owning connection (IG-Q106) is the command line's alone, never a
+/// standard stream's number, and never a service's: the service manager
+/// holds a service's life. Red edit: drop the conflict in
+/// `session_section`, and the service start builds.
+#[cfg(not(windows))]
+#[test]
+fn the_owning_connection_is_the_command_lines_and_not_a_services() {
+    assert_eq!(
+        codes(build_from(&[], "owning-connection = 5\n")),
+        vec![(Code::ValueSurface, "owning-connection".into())]
+    );
+    for standard in ["0", "1", "2"] {
+        assert_eq!(
+            codes(build_from(&["--owning-connection", standard], "")),
+            vec![(Code::ValueRange, "owning-connection".into())],
+            "{standard}"
+        );
+    }
+    assert_eq!(
+        codes(build_from(
+            &[
+                "--service",
+                "--owning-connection",
+                "5",
+                "--data-dir",
+                "/var/lib/shekyl",
+                "--log-file",
+                "/var/log/shekyl/shekyld.log",
+            ],
+            ""
+        )),
+        vec![(Code::ValueConflict, "owning-connection".into())]
+    );
+    let c = build_from(&["--owning-connection", "5"], "").unwrap();
+    assert_eq!(c.session.owning_connection, Some(5));
+    assert_eq!(build_from(&[], "").unwrap().session.owning_connection, None);
+}
+
+/// On Windows `service` also answers the service manager, whose dispatcher
+/// is RT-W14's, so the switch is refused there as the reserved row was.
+#[cfg(windows)]
+#[test]
+fn a_windows_start_refuses_service_until_rt_w14() {
+    let d = codes(build_from(
+        &["--service", "--data-dir", &abs("/srv/chain")],
+        &format!("log-file = '{}'\n", abs("/var/log/s.log")),
+    ));
+    assert!(
+        d.contains(&(Code::ServicePlatform, "service".into())),
+        "{d:?}"
     );
 }

@@ -26,20 +26,19 @@ use crate::rules::{Rule, TxContext, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Verdict};
 use shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey;
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
-use shekyl_crypto_pq::multisig::HYBRID_SCHEME_ID_MULTISIG;
+use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
-    ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES, MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN,
-    PQC_MAX_PUBLIC_KEY_BLOB,
+    MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
-use shekyl_wire::{Ct, Input};
+use shekyl_wire::{Ct, Input, PqcAuth};
 
 // ---- census 4.I, the stateless rows (slice 6 commit 2) ------------------
 //
 // The input-side shape rules the C++ `check_tx_inputs` states before any
 // chain read (`blockchain.cpp`, the `reject_form` arms ahead of the
-// key-image and reference-block lookups) and `tx_pqc_verify.cpp`'s
-// structural pass over `pqc_auths`. Every one is decidable from the bytes,
+// key-image and reference-block lookups) and the structural pass over
+// `pqc_auths` (CEN-I16). Every one is decidable from the bytes,
 // so every one is `tx_form`'s. The view-bound rows (I7, I10–I13) and the
 // verification rows (I15, I17, I18) are `tx_against`'s, later commits.
 //
@@ -51,12 +50,11 @@ use shekyl_wire::{Ct, Input};
 // and I14 therefore judge `TxClass::Spend` and record as evaluated — the
 // premise checked, the count another row's — on the archival classes. The
 // census names the split: I9 "regular spend; archival shapes use their
-// spend-subset counts, CEN-H21/H22"; I8 "serve-credit excepted".
+// spend-subset counts, CEN-H21/H22".
 
-/// CEN-I1: a non-serve-credit transaction has at least two outputs
-/// (`blockchain.cpp`: *"has fewer than two outputs"*, `tx.version >= 2 &&
-/// !is_archival_serve_credit_only`). Spend, bond post and emission alike;
-/// the serve-credit response has none by H20. Ratified `≥ 2`
+/// CEN-I1: a non-coinbase transaction has at least two outputs
+/// (`blockchain.cpp`: *"has fewer than two outputs"*). Spend, bond post and
+/// emission alike. Ratified `≥ 2`
 /// (`GENESIS_TX_WIRE_FORMAT.md` :167 — *"earlier 'exactly one' was
 /// over-strict"*). Non-coinbase: the coinbase's count is CEN-F4's.
 pub(crate) struct I1;
@@ -69,9 +67,6 @@ impl TxRule for I1 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        if matches!(cx.class, TxClass::ServeCreditOnly { .. }) {
-            return Ok(());
-        }
         if cx.tx.prefix.outputs.len() < 2 {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
         }
@@ -182,9 +177,8 @@ impl TxRule for I6 {
 }
 
 /// CEN-I8, the regular spend's arm: `pqc_auths.len() == vin.len()`
-/// (`blockchain.cpp` *"pqc_auths count N does not match input count"*,
-/// `!is_archival_serve_credit_only`). The serve-credit exception is H20's
-/// (*must be zero*); the bond-post and emission counts are H21's and H22's
+/// (`blockchain.cpp` *"pqc_auths count N does not match input count"*).
+/// The bond-post and emission counts are H21's and H22's
 /// (module section docs). Evaluated on every class; decides on `Spend`.
 pub(crate) struct I8;
 
@@ -272,20 +266,17 @@ impl TxRule for I14 {
     }
 }
 
-/// The least a multisig key blob can be: the container header
-/// (`tx_pqc_verify.cpp:56` `MULTISIG_KEY_HEADER_LEN = 3` — version,
-/// `n_total`, `threshold`). The exact container parse is `shekyl_crypto_pq::
-/// multisig`'s, run by CEN-I17/I18 when the signature is verified; this
-/// bound is the structural floor the C++ applies before that parse.
-const MULTISIG_KEY_BLOB_MIN: usize = 3;
-
-/// CEN-I16: every `pqc_auth`'s structure (`tx_pqc_verify.cpp:161–221`) —
-/// `auth_version == 1`; `flags == 0`; `scheme_id` is the solo hybrid
+/// CEN-I16: every `pqc_auth`'s structure —
+/// `auth_version` is [`PqcAuth::VERSION`]; `flags` is
+/// [`PqcAuth::NO_FLAGS`]; `scheme_id` is the solo hybrid
 /// ([`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`]) or the multisig container
 /// ([`HYBRID_SCHEME_ID_MULTISIG`]), with **no** cross-input agreement
 /// required (MSW-6 withdrawn); a solo key blob exactly
 /// [`PQC_HYBRID_SINGLE_KEY_LEN`]; a multisig key blob within
-/// `[MULTISIG_KEY_BLOB_MIN, PQC_MAX_PUBLIC_KEY_BLOB]`. Every class that
+/// `[MULTISIG_KEY_BLOB_MIN, PQC_MAX_PUBLIC_KEY_BLOB]`, the floor being
+/// crypto-pq's shortest legal blob (a 2-of-2 revealing both keys, R-11; the
+/// submit verifier's K13 imports the same constant). The exact parse is
+/// `shekyl_crypto_pq::multisig`'s, run by CEN-I18. Every class that
 /// carries auths; a serve-credit response carries none (H20) and records
 /// as evaluated over the empty vector. The signature blob's own bound is a
 /// DoS ceiling on the wire, not a census row.
@@ -304,7 +295,7 @@ impl TxRule for I16 {
         };
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         for auth in pqc_auths {
-            if auth.auth_version != 1 || auth.flags != 0 {
+            if auth.auth_version != PqcAuth::VERSION || auth.flags != PqcAuth::NO_FLAGS {
                 return refuse();
             }
             let key = auth.hybrid_public_key.len();
@@ -326,48 +317,6 @@ impl TxRule for I16 {
 #[cfg(test)]
 #[path = "tx_inputs_tests.rs"]
 mod tx_inputs_tests;
-
-// ---- census 4.J, the stateless serve-credit row ---------------------------
-
-/// CEN-J2: one pruned pass record per serve-credit vin, in vin order, each
-/// non-empty and within `ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES` (`RF-D1`).
-/// The live C++ states it in the serve-credit arm of `check_tx_inputs`
-/// (the record count against the vins, then each record's length in
-/// `check_archival_serve_credit_input`) before any chain read, so it is
-/// `tx_form`'s.
-///
-/// It runs after H20, which has already required the region: an absent
-/// region is H20's, never this row's. Order only pairs a record with its
-/// vin; what a record holds is CEN-J10's.
-pub(crate) struct J2;
-
-impl Rule for J2 {
-    const ROW: CenRow = CenRow::J2;
-}
-
-impl TxRule for J2 {
-    const SCOPE: TxScope = TxScope::NonCoinbase;
-
-    fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        let TxClass::ServeCreditOnly { credits } = cx.class else {
-            return Ok(());
-        };
-        let records: &[Vec<u8>] = match &cx.tx.ct {
-            Ct::Fcmp {
-                prunable: Some(p), ..
-            } => &p.serve_credit_pruned,
-            _ => &[],
-        };
-        if records.len() != credits
-            || records
-                .iter()
-                .any(|r| r.is_empty() || r.len() > ARCHIVAL_SERVE_CREDIT_PRUNED_MAX_BYTES)
-        {
-            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
-        }
-        Ok(())
-    }
-}
 
 // ---- census 4.J, the stateless bond-post rows (slice 8 row 4) -----------
 //
@@ -395,7 +344,7 @@ fn the_bond_post<'tx>(cx: &TxContext<'tx>) -> Option<&'tx shekyl_wire::BondPost>
 /// CEN-J11: the post's `hybrid_public_key` is canonical-length
 /// ([`PQC_HYBRID_SINGLE_KEY_LEN`]) and its `p_canonical_id` **is the
 /// recompute over it** ([`p_canonical_id_from_hybrid_pubkey`], the function
-/// the C++ calls through `shekyl_archival_p_canonical_id_from_pubkey`).
+/// the C++ called through its FFI, deleted by `DEL-008`).
 /// The hint is what every later read keys on — the fold's record write,
 /// J13's record read, G10's block uniqueness — so a post whose hint names
 /// another persona would insert the poster's key under the other's id;

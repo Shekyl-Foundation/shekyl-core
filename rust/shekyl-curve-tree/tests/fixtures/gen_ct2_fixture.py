@@ -13,12 +13,13 @@ This is dev tooling. It is *not* run in CI — its output
 (`ct2_tier_a.json`) is checked in and the KAT replays it offline.
 Regenerate only when the consensus leaf/root rules change (see README).
 
-Why daemon JSON rather than a Rust block decode: Shekyl's coinbase
-serializes a real `outPk` under `CTTypeNull` (`ct_types.h`
-`serialize_ctsig_base`), which `shekyl-oxide`'s coinbase model
-(`proofs: None`) does not parse. Until that gap closes (FOLLOWUPS),
-the authoritative leaf inputs come from the daemon's structured block
-JSON, which serializes `outPk`/vout/extra correctly.
+The leaf inputs come from the block's body bytes (`block_show`'s `body`,
+base64), decoded here by the grammar `shekyl-wire` documents
+(`rust/shekyl-wire/src/block.rs`, `transaction.rs`): the header, the
+coinbase's prefix, and its `Ct(Null)` base with the real `outPk`. The
+decode is held to the daemon's own reply: it must consume the body
+exactly, its root must be the header's `curve_tree_root`, and its count
+of other transactions the header's `tx_count`.
 
 Usage:
     python3 gen_ct2_fixture.py \
@@ -29,6 +30,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -44,6 +46,20 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parents[4] / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 import armed_lever  # noqa: E402
+import owner_socket  # noqa: E402
+
+_RECIPIENTS = (
+    Path(__file__).resolve().parents[3]
+    / "shekyl-wire"
+    / "tests"
+    / "vectors"
+    / "regtest_mining_recipients.json"
+)
+
+
+def mining_address() -> str:
+    with open(_RECIPIENTS, encoding="utf-8") as fh:
+        return json.load(fh)["recipients"][0]["address"]
 
 # Consensus windows (mirror shekyl-curve-tree::recon constants).
 COINBASE_LOCK = 60
@@ -60,19 +76,6 @@ DEEP_REGEN = 72
 SHALLOW_POP = 5  # < COINBASE_LOCK+1: pops only pending coinbases (§6 no-mutation branch)
 SHALLOW_REGEN = 7
 
-# Genesis treasury address (regtest accepts the mainnet genesis address
-# for generateblocks; coinbase outputs land in the curve tree identically).
-# The recipients file lives in this repo's `config/` (the genesis tool's
-# source of truth), not in the retired `shekyl-dev` tooling tree.
-GENESIS_RECIPIENTS = (
-    Path(__file__).resolve().parents[4] / "config/genesis_recipients.mainnet.json"
-)
-
-
-def load_miner_address() -> str:
-    data = json.loads(GENESIS_RECIPIENTS.read_text())
-    return data["recipients"][0]["address"]
-
 
 class Daemon:
     """A throwaway regtest daemon with a temp data-dir."""
@@ -81,7 +84,6 @@ class Daemon:
         self.binary = binary
         self.port = port
         self.url = f"http://127.0.0.1:{port}/json_rpc"
-        self.base = f"http://127.0.0.1:{port}"
         self.workdir = tempfile.mkdtemp(prefix="ct2_fixture_")
         self.proc: subprocess.Popen | None = None
         self.log = None
@@ -99,8 +101,10 @@ class Daemon:
                 "off",
                 "--dev-difficulty",
                 "1",
-                # generateblocks and pop_blocks are armed test levers.
+                # dev_block_generate and dev_chain_pop are armed test levers.
                 armed_lever.FLAG,
+                "--mine-address",
+                mining_address(),
                 "--data-dir",
                 self.workdir,
                 "--log-file",
@@ -109,6 +113,7 @@ class Daemon:
                 f"127.0.0.1:{self.port}",
                 "--log-level",
                 "warn",
+                *owner_socket.argv("ct2"),
             ],
             stdout=self.log,
             stderr=subprocess.STDOUT,
@@ -116,7 +121,7 @@ class Daemon:
         # Wait for RPC readiness.
         for _ in range(60):
             try:
-                ready = self.json_rpc("get_info").get("status") == "OK"
+                ready = isinstance(self.json_rpc("daemon_status"), dict)
             except Exception:
                 ready = False
             if ready:
@@ -143,8 +148,9 @@ class Daemon:
             self.log = None
         shutil.rmtree(self.workdir, ignore_errors=True)
 
-    def json_rpc(self, method: str, params: dict | None = None) -> dict:
-        body = {"jsonrpc": "2.0", "id": "0", "method": method}
+    def json_rpc(self, method: str, params: dict | None = None):
+        """One JSON-RPC 2.0 call; a refusal raises with its class and code."""
+        body = {"jsonrpc": "2.0", "id": 0, "method": method}
         if params is not None:
             body["params"] = params
         req = urllib.request.Request(
@@ -157,33 +163,15 @@ class Daemon:
             raise RuntimeError(f"{method} failed: {resp['error']}")
         return resp["result"]
 
-    def other_rpc(self, path: str, params: dict) -> dict:
-        req = urllib.request.Request(
-            f"{self.base}/{path}",
-            data=json.dumps(params).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        return json.load(urllib.request.urlopen(req, timeout=900))
+    def tip(self) -> int:
+        """The tip's height, an ordinal."""
+        return self.json_rpc("chain_height")["height"]
 
-    def height(self) -> int:
-        return self.json_rpc("get_info")["height"]
-
-    def generate(self, n: int, address: str) -> None:
-        self.json_rpc(
-            "generateblocks", {"amount_of_blocks": n, "wallet_address": address}
-        )
+    def generate(self, n: int) -> None:
+        self.json_rpc("dev_block_generate", {"count": n})
 
     def pop(self, n: int) -> None:
-        self.other_rpc("pop_blocks", {"nblocks": n})
-
-
-def output_target(target: dict) -> tuple[str, str]:
-    """Return (kind, output_key_hex) for a vout target."""
-    if "tagged_key" in target:
-        return "tagged_key", target["tagged_key"]["key"]
-    if "key" in target:
-        return "key", target["key"]
-    raise RuntimeError(f"unexpected vout target: {target}")
+        self.json_rpc("dev_chain_pop", {"count": n})
 
 
 # tx_extra tags (mirror shekyl-scanner::extra). 0x06/0x07 (and 0x02/0x04/0xDE)
@@ -252,20 +240,109 @@ def extract_leaf_hash_blob(extra: bytes) -> bytes:
     return b""
 
 
-def record_block(daemon: Daemon, height: int) -> dict:
-    blk = daemon.json_rpc("get_block", {"height": height})
-    root = blk["block_header"]["curve_tree_root"]
-    miner = json.loads(blk["json"])["miner_tx"]
-    ct = miner.get("ct_signatures", {})
-    out_pk = ct.get("outPk", [])
-    outputs = []
-    for i, vout in enumerate(miner["vout"]):
-        kind, okey = output_target(vout["target"])
-        commitment = out_pk[i] if i < len(out_pk) else None
-        outputs.append(
-            {"output_key": okey, "commitment": commitment, "target": kind}
+class _Reader:
+    """A cursor over bytes that refuses to read past their end."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+
+    def take(self, n: int) -> bytes:
+        if self.pos + n > len(self.data):
+            raise RuntimeError(f"block body truncated: {n} B wanted at offset {self.pos}")
+        out = self.data[self.pos : self.pos + n]
+        self.pos += n
+        return out
+
+    def byte(self) -> int:
+        return self.take(1)[0]
+
+    def varint(self) -> int:
+        value, self.pos = _read_varint(self.data, self.pos)
+        return value
+
+
+# Output target tags (`shekyl-wire` `transaction.rs`): the tagged key is
+# the sole genesis output.
+TARGET_TAGGED_KEY = 0x00
+# Input tag of the coinbase's one `gen` input.
+INPUT_GEN = 0x00
+# `Ct(Null)`'s type byte: a coinbase's RingCT base.
+CT_NULL = 0x00
+
+
+def decode_coinbase(body: bytes) -> dict:
+    """The coinbase's outputs, `outPk` and extra from a block's body bytes.
+
+    `Block := BlockHeader Transaction(miner) V(n_tx) n_tx×Hash[32]`
+    (`shekyl-wire` `block.rs`), and the miner transaction is
+    `V(3) V(unlock) vec(Input) vec(Output) V(extra_len) extra Ct(Null)`
+    with `Ct(Null) := 0x00 enc_amounts[n×9] enc_labels[n×9] outPk[n×32]`
+    (`transaction.rs`). Anything else refuses; nothing is guessed.
+    """
+    r = _Reader(body)
+    r.varint()  # major
+    r.varint()  # minor
+    r.varint()  # timestamp
+    r.take(32)  # prev
+    r.take(4)  # nonce
+    root = r.take(32)
+    r.take(32)  # attestation root
+    version = r.varint()
+    if version != 3:
+        raise RuntimeError(f"coinbase version {version}, not 3")
+    r.varint()  # unlock time
+    n_in = r.varint()
+    for _ in range(n_in):
+        tag = r.byte()
+        if tag != INPUT_GEN:
+            raise RuntimeError(f"coinbase input tag 0x{tag:02x} is not gen")
+        r.varint()  # height
+    n_out = r.varint()
+    keys = []
+    for _ in range(n_out):
+        r.varint()  # amount
+        tag = r.byte()
+        if tag != TARGET_TAGGED_KEY:
+            raise RuntimeError(f"coinbase output target 0x{tag:02x} is not a tagged key")
+        keys.append(r.take(32).hex())
+        r.take(1)  # view tag
+    extra = r.take(r.varint())
+    ct = r.byte()
+    if ct != CT_NULL:
+        raise RuntimeError(f"coinbase RingCT type 0x{ct:02x} is not Null")
+    r.take(n_out * 9)  # enc_amounts
+    r.take(n_out * 9)  # enc_labels
+    out_pk = [r.take(32).hex() for _ in range(n_out)]
+    n_tx = r.varint()
+    r.take(n_tx * 32)
+    if r.pos != len(body):
+        raise RuntimeError(
+            f"block body holds {len(body) - r.pos} B past its last transaction id"
         )
-    extra = bytes(miner.get("extra", []))
+    return {"root": root.hex(), "keys": keys, "out_pk": out_pk, "extra": extra, "n_tx": n_tx}
+
+
+def record_block(daemon: Daemon, height: int) -> dict:
+    blk = daemon.json_rpc("block_show", {"height": height})
+    root = blk["header"]["curve_tree_root"]
+    decoded = decode_coinbase(base64.b64decode(blk["body"], validate=True))
+    # The decode is held to the daemon's own header: the same root, and the
+    # same count of other transactions.
+    if decoded["root"] != root:
+        raise RuntimeError(
+            f"height {height}: decoded root {decoded['root']} is not the header's {root}"
+        )
+    if decoded["n_tx"] != blk["header"]["tx_count"]:
+        raise RuntimeError(
+            f"height {height}: decoded {decoded['n_tx']} transactions, "
+            f"the header counts {blk['header']['tx_count']}"
+        )
+    outputs = [
+        {"output_key": key, "commitment": commitment, "target": "tagged_key"}
+        for key, commitment in zip(decoded["keys"], decoded["out_pk"])
+    ]
+    extra = decoded["extra"]
     leaf_blob = extract_leaf_hash_blob(extra)
     # Guard: a well-formed Tier-A coinbase carries one 64-byte 0x07 entry
     # (leaf commitment point ‖ record, PL-D3) per output. A mis-parsed walk
@@ -286,7 +363,7 @@ def record_block(daemon: Daemon, height: int) -> dict:
 
 
 def record_chain(daemon: Daemon, name: str) -> dict:
-    tip = daemon.height() - 1
+    tip = daemon.tip()
     blocks = [record_block(daemon, h) for h in range(tip + 1)]
     print(f"  recorded chain '{name}': heights 0..{tip} ({len(blocks)} blocks)")
     return {"name": name, "tip": tip, "blocks": blocks}
@@ -299,7 +376,6 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="fixture JSON output path")
     args = ap.parse_args()
 
-    address = load_miner_address()
     daemon = Daemon(os.path.abspath(args.daemon), args.port)
     chains = []
     try:
@@ -308,19 +384,19 @@ def main() -> int:
 
         # MAIN: empty window 0..=60, first founder drain at 61, segment freeze.
         print(f"mining MAIN to height {MAIN_TIP}")
-        daemon.generate(MAIN_TIP - (daemon.height() - 1), address)
+        daemon.generate(MAIN_TIP - daemon.tip())
         chains.append(record_chain(daemon, "main"))
 
         # DEEP reorg: trims already-drained leaves (§6 trim branch).
         print(f"deep reorg: pop {DEEP_POP}, regen {DEEP_REGEN}")
         daemon.pop(DEEP_POP)
-        daemon.generate(DEEP_REGEN, address)
+        daemon.generate(DEEP_REGEN)
         chains.append(record_chain(daemon, "reorg_deep"))
 
         # SHALLOW reorg: pops only pending coinbases (§6 no-mutation branch).
         print(f"shallow reorg: pop {SHALLOW_POP}, regen {SHALLOW_REGEN}")
         daemon.pop(SHALLOW_POP)
-        daemon.generate(SHALLOW_REGEN, address)
+        daemon.generate(SHALLOW_REGEN)
         chains.append(record_chain(daemon, "reorg_shallow"))
     finally:
         daemon.stop()

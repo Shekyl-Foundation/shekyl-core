@@ -14,6 +14,7 @@ use super::{
     FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
 };
 use crate::proof::{KeyImage, ShekylFcmpProof};
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 /// Fixed inputs: two inputs, three layers, each value a distinct byte
 /// pattern. The seed reads bytes, never validity.
@@ -43,12 +44,25 @@ fn fixed() -> Inputs {
     }
 }
 
-fn statement<'a>(inputs: &'a Inputs, key_images: Option<&'a [KeyImage]>) -> BatchWeights<'a> {
+/// The root and the signable hash of `inputs`, typed. They stay bytes in
+/// [`Inputs`] so a test can flip one; the statement takes them typed.
+fn typed(inputs: &Inputs) -> (CurveTreeRoot, TxSignableHash) {
+    (
+        CurveTreeRoot::from_bytes(inputs.root),
+        TxSignableHash::from_bytes(inputs.hash),
+    )
+}
+
+fn statement<'a>(
+    inputs: &'a Inputs,
+    (tree_root, signable_tx_hash): &'a (CurveTreeRoot, TxSignableHash),
+    key_images: Option<&'a [KeyImage]>,
+) -> BatchWeights<'a> {
     BatchWeights {
         proof: &inputs.proof,
         layers: inputs.layers,
-        tree_root: &inputs.root,
-        signable_tx_hash: &inputs.hash,
+        tree_root,
+        signable_tx_hash,
         kind: match key_images {
             Some(key_images) => BatchKind::Full { key_images },
             None => BatchKind::MembershipOnly,
@@ -68,11 +82,11 @@ fn key_images_of(inputs: &Inputs) -> Vec<KeyImage> {
 
 fn full_seed(inputs: &Inputs) -> [u8; 32] {
     let key_images = key_images_of(inputs);
-    statement(inputs, Some(&key_images)).seed()
+    statement(inputs, &typed(inputs), Some(&key_images)).seed()
 }
 
 fn membership_only_seed(inputs: &Inputs) -> [u8; 32] {
-    statement(inputs, None).seed()
+    statement(inputs, &typed(inputs), None).seed()
 }
 
 /// The one test call of cSHAKE: the cross-domain check hashes one preimage
@@ -104,7 +118,10 @@ fn the_seeds_of_fixed_inputs_are_pinned() {
         }
     }
     let key_images = key_images_of(&inputs);
-    assert_eq!(statement(&inputs, Some(&key_images)).preimage(), by_hand);
+    assert_eq!(
+        statement(&inputs, &typed(&inputs), Some(&key_images)).preimage(),
+        by_hand
+    );
     assert_eq!(
         full_seed(&inputs),
         [
@@ -211,7 +228,7 @@ fn every_pseudo_out_byte_moves_the_seed() {
 #[test]
 fn the_two_verifies_seed_under_separate_domains() {
     let inputs = fixed();
-    let preimage = statement(&inputs, None).preimage();
+    let preimage = statement(&inputs, &typed(&inputs), None).preimage();
     assert_ne!(
         hash_under(FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION, &preimage),
         hash_under(FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, &preimage),

@@ -11,10 +11,9 @@
 //! `N + 1` entries ending at `bei_height - 1`. This function decides
 //! **which entries fill the window** — the main-chain prefix range and
 //! how many alt entries to take from the newest end — and enforces the
-//! window invariant (`main + alt == min(N + 1, bei_height)`). The C++
-//! side performs the DB fetches and the alt-list walk (rule 20: data
-//! access is orchestration; a crossing that put LMDB reads behind the
-//! FFI would be the anti-target).
+//! window invariant (`main + alt == min(N + 1, bei_height)`). The caller
+//! performs the store reads and the alt-list walk: data access is
+//! orchestration and stays with the caller that owns the store.
 //!
 //! Both regimes live here — the short-alt stitch and the
 //! alt-covers-the-window tail — so neither can drift against the other.

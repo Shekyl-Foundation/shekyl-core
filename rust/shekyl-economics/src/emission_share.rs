@@ -13,12 +13,88 @@
 //! miner_emission  = block_emission − staker_emission
 //! ```
 //!
-//! One schedule. The elapsed-time kernel is private.
-//! [`emission_share`] closes it over [`EMISSION_SPLIT_EPOCH`].
-//! [`emission_share_at`] closes that over the shipped constants.
+//! One schedule. [`EmissionSchedule`] is the well-formed triple the
+//! kernel reads. [`emission_share`] is that schedule at a height.
+//! [`emission_share_at`] is the shipped schedule.
 //! [`compute_emission_split`] applies the shipped share to one block.
+//! A fold that carries its own [`crate::EconomicParams`] splits through
+//! [`EmissionSchedule::share_at`] on that set.
 
-use crate::params::{BLOCKS_PER_YEAR, SCALE, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE};
+use crate::params::SCALE;
+
+/// Why a share, a decay and a year are not a schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EmissionScheduleError {
+    /// The staker leg would exceed the block.
+    #[error("staker emission share {share} is above SCALE; the staker leg would exceed the block")]
+    ShareAboveScale { share: u64 },
+    /// A year would raise the share. The kernel subtracts `SCALE − decay`.
+    #[error("staker emission decay {decay} is above SCALE; a year would raise the share")]
+    DecayAboveScale { decay: u64 },
+    /// A year of no blocks is not a decay axis a chain can select.
+    /// [`emission_share`] still treats it as "no decay" for a caller that
+    /// passes raw numbers; [`crate::EconomicParams::validate`] refuses it.
+    #[error("blocks per year is zero; the emission schedule has no year")]
+    EmptyYear,
+}
+
+/// The staker emission schedule: initial share, annual decay, year length.
+///
+/// The share and the decay are at most [`SCALE`]. The year contains at
+/// least one block. Production fills the year with
+/// [`crate::blocks_per_year`] of the DAA target. A fold replaces any of
+/// the three by building its own schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmissionSchedule {
+    initial_share: u64,
+    annual_decay: u64,
+    blocks_per_year: u64,
+}
+
+impl EmissionSchedule {
+    /// The schedule those three numbers are, or why they are not one.
+    pub const fn try_new(
+        initial_share: u64,
+        annual_decay: u64,
+        blocks_per_year: u64,
+    ) -> Result<Self, EmissionScheduleError> {
+        if initial_share > SCALE {
+            return Err(EmissionScheduleError::ShareAboveScale {
+                share: initial_share,
+            });
+        }
+        if annual_decay > SCALE {
+            return Err(EmissionScheduleError::DecayAboveScale {
+                decay: annual_decay,
+            });
+        }
+        if blocks_per_year == 0 {
+            return Err(EmissionScheduleError::EmptyYear);
+        }
+        Ok(Self {
+            initial_share,
+            annual_decay,
+            blocks_per_year,
+        })
+    }
+
+    /// The share at `height`, in [`SCALE`] units.
+    ///
+    /// Zero below [`EMISSION_SPLIT_EPOCH`]. From the epoch, the private
+    /// elapsed-time kernel of `height − EMISSION_SPLIT_EPOCH`.
+    #[must_use]
+    pub fn share_at(self, height: u64) -> u64 {
+        match height.checked_sub(EMISSION_SPLIT_EPOCH) {
+            Some(elapsed) => decayed_share(
+                elapsed,
+                self.initial_share,
+                self.annual_decay,
+                self.blocks_per_year,
+            ),
+            None => 0,
+        }
+    }
+}
 
 /// The miner and staker legs of one block's emission (CEN-F16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,11 +118,13 @@ pub const EMISSION_SPLIT_EPOCH: u64 = 1;
 /// The share after `elapsed_blocks` of decay, measured from the block the
 /// share turns on.
 ///
-/// Elapsed 0 is `initial_share`. A zero `blocks_per_year` is the same: the
-/// schedule has no decay axis, so the share does not move. Whole years
-/// multiply by `annual_decay / SCALE`; the leftover blocks interpolate
-/// linearly to the next year's share. The multiplications truncate, and
-/// that truncation is the value the year-boundary pins hold.
+/// Elapsed 0 is `initial_share`. Whole years multiply by
+/// `annual_decay / SCALE`; the leftover blocks interpolate linearly to
+/// the next year's share. The multiplications truncate, and that
+/// truncation is the value the year-boundary pins hold.
+///
+/// `blocks_per_year` is at least one and `annual_decay` is at most
+/// [`SCALE`]: [`EmissionSchedule::try_new`] is the door.
 #[allow(clippy::cast_possible_truncation)]
 fn decayed_share(
     elapsed_blocks: u64,
@@ -54,7 +132,9 @@ fn decayed_share(
     annual_decay: u64,
     blocks_per_year: u64,
 ) -> u64 {
-    if elapsed_blocks == 0 || blocks_per_year == 0 {
+    debug_assert!(blocks_per_year > 0);
+    debug_assert!(annual_decay <= SCALE);
+    if elapsed_blocks == 0 {
         return initial_share;
     }
 
@@ -88,9 +168,15 @@ fn decayed_share(
 /// The staker emission share at `height` for a schedule that turns on at
 /// [`EMISSION_SPLIT_EPOCH`], in [`SCALE`] units.
 ///
-/// Zero below the epoch. From the epoch, the private elapsed-time kernel
-/// of `height − EMISSION_SPLIT_EPOCH`. A sweep of the initial share or the
-/// annual decay passes those here; it does not pass an epoch.
+/// A well-formed triple is [`EmissionSchedule::share_at`]. A year of no
+/// blocks has no decay axis, so the share stays at `initial_share` from
+/// the epoch: that edge is not a chain schedule
+/// ([`EmissionScheduleError::EmptyYear`]). A share or a decay above
+/// [`SCALE`] is not a schedule, and this function refuses it.
+///
+/// # Panics
+///
+/// Panics when `initial_share` or `annual_decay` is above [`SCALE`].
 #[must_use]
 pub fn emission_share(
     height: u64,
@@ -98,23 +184,25 @@ pub fn emission_share(
     annual_decay: u64,
     blocks_per_year: u64,
 ) -> u64 {
-    match height.checked_sub(EMISSION_SPLIT_EPOCH) {
-        Some(elapsed) => decayed_share(elapsed, initial_share, annual_decay, blocks_per_year),
-        None => 0,
+    match EmissionSchedule::try_new(initial_share, annual_decay, blocks_per_year) {
+        Ok(schedule) => schedule.share_at(height),
+        Err(EmissionScheduleError::EmptyYear) => match height.checked_sub(EMISSION_SPLIT_EPOCH) {
+            Some(_) => initial_share,
+            None => 0,
+        },
+        Err(err) => panic!("emission_share: {err}"),
     }
 }
 
-/// The shipped staker emission share at `height`: [`emission_share`] of
-/// [`STAKER_EMISSION_SHARE`], [`STAKER_EMISSION_DECAY`] and
-/// [`BLOCKS_PER_YEAR`].
+/// The shipped staker emission share at `height`.
+///
+/// [`crate::EconomicParams::emission_schedule`] of [`crate::economic_params`].
+/// A fold with its own set calls [`EmissionSchedule::share_at`] on that set.
 #[must_use]
 pub fn emission_share_at(height: u64) -> u64 {
-    emission_share(
-        height,
-        STAKER_EMISSION_SHARE,
-        STAKER_EMISSION_DECAY,
-        BLOCKS_PER_YEAR,
-    )
+    crate::params::economic_params()
+        .emission_schedule()
+        .share_at(height)
 }
 
 /// The emission split (CEN-F16): [`emission_share_at`] the height, then
@@ -149,6 +237,7 @@ pub fn split_block_emission(block_emission: u64, effective_share: u64) -> (u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::{STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE};
 
     /// Zero emission is the split at zero: both legs are zero.
     #[test]

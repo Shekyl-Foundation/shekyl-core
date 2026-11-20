@@ -5,7 +5,7 @@
 
 //! Open a proved spend and seal its extra auth slots.
 //!
-//! [`sign_transaction_with_terms`] returns proofs and an empty `pqc_auths`.
+//! [`sign_transaction_with_terms`](crate::sign_transaction_with_terms) returns proofs and an empty `pqc_auths`.
 //! The payload hash of each prefix input covers that slot's public key, so
 //! the keys have to be in place before any slot is signed, and a signature
 //! cannot be filled in before its own hash exists. [`open_spend`] is that
@@ -23,13 +23,14 @@
 //! A spend with no extra input seals with an empty signature list.
 
 use shekyl_bulletproofs::Bulletproof;
+use shekyl_network::NetworkId;
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::Input;
 
 use crate::error::TxBuilderError;
 use crate::sign::sign_pqc_auths;
 use crate::types::{PqcAuth, SignedProofs, SpendInput, PQC_AUTH_VERSION};
-use crate::wire::{encode_final_tx, phase1_payload_hashes, WireEncodeInput};
+use crate::wire::{build_wire_tx, encode_final_tx, phase1_payload_hashes, WireEncodeInput};
 
 /// Hybrid public keys that occupy `pqc_auths`, split by who signs them.
 ///
@@ -94,6 +95,7 @@ pub struct OpenSpend {
 fn placeholder_auth(public_key: Vec<u8>) -> PqcAuth {
     PqcAuth {
         auth_version: PQC_AUTH_VERSION,
+        scheme: crate::types::PqcScheme::Single,
         signature: Vec::new(),
         public_key,
     }
@@ -105,7 +107,9 @@ fn placeholder_auth(public_key: Vec<u8>) -> PqcAuth {
 /// [`crate::sign_transaction`]). `spend_inputs` are the inputs that were
 /// proved, in the same order as `layout.key_images` and `layout.slots.spend`.
 /// The layer count on the returned spend is `signed.tree_depth`: the FCMP++
-/// layer count `L`, which the encoder serializes as `L - 1`.
+/// layer count `L`, which the encoder serializes as `L - 1`. Every slot's
+/// payload hash binds `network`, the id of the network the spend is for
+/// (`NETWORK_IDENTITY.md` NI-Q4).
 ///
 /// # Errors
 ///
@@ -119,6 +123,43 @@ pub fn open_spend(
     signed: SignedProofs,
     spend_inputs: &[SpendInput],
     layout: SpendLayout,
+    network: &NetworkId,
+) -> Result<OpenSpend, TxBuilderError> {
+    open_spend_with(signed, spend_inputs, layout, network, sign_pqc_auths)
+}
+
+/// [`open_spend`] with the spend slots' ML-DSA randomness drawn from `seed`
+/// ([`crate::sign_pqc_auths_seeded`]), so one seed gives the same signed
+/// spend byte for byte (`CHAIN_FORGE.md` §5.3, seam T2). Only under the
+/// TEST_ONLY `seeded-rng` feature.
+///
+/// # Errors
+///
+/// As [`open_spend`].
+#[cfg(feature = "seeded-rng")]
+pub fn open_spend_seeded(
+    seed: &[u8; 32],
+    signed: SignedProofs,
+    spend_inputs: &[SpendInput],
+    layout: SpendLayout,
+    network: &NetworkId,
+) -> Result<OpenSpend, TxBuilderError> {
+    open_spend_with(signed, spend_inputs, layout, network, |hashes, inputs| {
+        crate::sign::sign_pqc_auths_seeded(seed, hashes, inputs)
+    })
+}
+
+/// [`open_spend`]'s body, over `sign_auths` (production's
+/// [`sign_pqc_auths`], or the seeded one).
+fn open_spend_with(
+    signed: SignedProofs,
+    spend_inputs: &[SpendInput],
+    layout: SpendLayout,
+    network: &NetworkId,
+    sign_auths: impl FnOnce(
+        &[shekyl_types::SigningPayloadHash],
+        &[SpendInput],
+    ) -> Result<Vec<PqcAuth>, TxBuilderError>,
 ) -> Result<OpenSpend, TxBuilderError> {
     let spend_slots = spend_inputs.len();
     if spend_slots == 0 {
@@ -173,7 +214,17 @@ pub fn open_spend(
         fcmp_layers: signed.tree_depth,
     };
 
-    let payload_hashes = phase1_payload_hashes(&wire)?;
+    let proved_over = signed.tx_signable;
+    let assembled = build_wire_tx(&wire)?.tx_signable(network);
+    if assembled != proved_over {
+        return Err(TxBuilderError::WireError(
+            "the assembled transaction's tx_signable is not the one its proofs were made over \
+             (the layout's prefix, fee or outputs differ from what was signed)"
+                .into(),
+        ));
+    }
+
+    let payload_hashes = phase1_payload_hashes(&wire, network)?;
     if payload_hashes.len() != slot_count {
         return Err(TxBuilderError::WireError(format!(
             "phase 1 produced {} payload hashes for {slot_count} prefix inputs",
@@ -181,7 +232,7 @@ pub fn open_spend(
         )));
     }
 
-    let spend_auths = sign_pqc_auths(&payload_hashes[..spend_slots], spend_inputs)?;
+    let spend_auths = sign_auths(&payload_hashes[..spend_slots], spend_inputs)?;
     for (index, (auth, slot)) in spend_auths.iter().zip(wire.pqc_auths.iter()).enumerate() {
         if auth.public_key != slot.public_key {
             return Err(TxBuilderError::PqcSignError {
@@ -323,6 +374,7 @@ mod tests {
             pqc_auths: Vec::new(),
             reference_block: BlockHash::from_bytes([0; 32]),
             tree_depth: 2,
+            tx_signable: shekyl_types::TxSignableHash::from_bytes([0; 32]),
         }
     }
 
@@ -360,19 +412,31 @@ mod tests {
 
     #[test]
     fn open_spend_refuses_an_empty_spend() {
-        let err = open_spend(blank_signed(), &[], layout_with(0, 0, 0)).unwrap_err();
+        let err = open_spend(blank_signed(), &[], layout_with(0, 0, 0), &[0; 16]).unwrap_err();
         assert!(matches!(err, TxBuilderError::NoInputs));
     }
 
     #[test]
     fn open_spend_refuses_a_key_image_count_mismatch() {
-        let err = open_spend(blank_signed(), &[blank_spend()], layout_with(2, 0, 0)).unwrap_err();
+        let err = open_spend(
+            blank_signed(),
+            &[blank_spend()],
+            layout_with(2, 0, 0),
+            &[0; 16],
+        )
+        .unwrap_err();
         assert!(matches!(err, TxBuilderError::WireError(_)));
     }
 
     #[test]
     fn open_spend_refuses_an_extra_slot_count_mismatch() {
-        let err = open_spend(blank_signed(), &[blank_spend()], layout_with(1, 1, 0)).unwrap_err();
+        let err = open_spend(
+            blank_signed(),
+            &[blank_spend()],
+            layout_with(1, 1, 0),
+            &[0; 16],
+        )
+        .unwrap_err();
         assert!(matches!(err, TxBuilderError::WireError(_)));
     }
 }

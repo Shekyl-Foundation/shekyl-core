@@ -6,7 +6,7 @@
 //! consumer of which is the reward-emission vin
 //! (`docs/design/REWARD_EMISSION_LEG.md` §7.2).
 //!
-//! This is a sibling type to [`SpendAuthAndLinkability`], not a mode flag: cross-type
+//! This is a sibling type to [`SpendAuthAndLinkability`](crate::sal::SpendAuthAndLinkability), not a mode flag: cross-type
 //! rejection is a compile-time property at the typed API, and the transcript
 //! domain-separation tag ([`SAL_MEMBERSHIP_ONLY_DST`]) is the guard at the byte seam,
 //! where the type guarantee evaporates. See `docs/design/FCMP_MEMBERSHIP_ONLY.md` §2.2,
@@ -43,6 +43,7 @@ use ciphersuite::{
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 
 use shekyl_curve_generators::T;
+use shekyl_types::TxSignableHash;
 
 use crate::{
     sal::{
@@ -201,7 +202,7 @@ impl MembershipSpendAuth {
     /// `MembershipSpendAuth` cannot be transplanted across inputs, even identical
     /// ones), the input tuple without `L`, and the nonce commitment `R_O`.
     fn challenge(
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input_index: u32,
         input: &Input,
         R_O: EdwardsPoint,
@@ -225,7 +226,7 @@ impl MembershipSpendAuth {
     /// `input_index` is the input's position in the transaction's ordered input set.
     pub fn prove(
         rng: &mut (impl RngCore + CryptoRng),
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input_index: u32,
         opening: &OpenedInputTuple,
     ) -> MembershipSpendAuth {
@@ -238,7 +239,7 @@ impl MembershipSpendAuth {
         let c_tilde = opening.input.C_tilde().to_bytes();
         let r = opening.input.R().to_bytes();
         let context_parts: &[&[u8]] = &[
-            &signable_tx_hash,
+            signable_tx_hash.as_bytes(),
             &index_bytes,
             &o_tilde,
             &i_tilde,
@@ -271,7 +272,7 @@ impl MembershipSpendAuth {
         &self,
         rng: &mut (impl RngCore + CryptoRng),
         verifier: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input_index: u32,
         input: &Input,
     ) {

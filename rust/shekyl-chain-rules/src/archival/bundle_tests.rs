@@ -6,7 +6,7 @@
 //! `verify_bundle` against the fixture view (`harness::bundle`).
 //!
 //! The section check lives in `bundle_section_tests`. The census rows and
-//! the staging falsifier live in `bundle_staging_tests`. Each admission
+//! the staging falsifier live in `bundle_rows_tests`. Each admission
 //! row, through `judge_bundles`, lives in `bundle_admission_tests`.
 //!
 //! # What these tests bite against, and what they do not cover
@@ -26,9 +26,9 @@
 //! Every test names the edit that turns it red.
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
-    PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_WITNESS_KEY_LEN,
-    BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    section_budget, section_root, BundleBody, BundleRecord, BundleRef, DrawableEpoch, DrawablePair,
+    PassBitmap, BUNDLE_RECORD_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN, CHALLENGE_READS,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -39,14 +39,14 @@ use super::*;
 use crate::harness::bundle::{
     fixture_block_hash, with_hash, BundleRead, BundleReadFaulted, BundleWorld,
 };
-use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 
 type Judged = Result<Admitted, BundleRefused<BundleReadFaulted>>;
 
-/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// [`section_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
 fn root_of(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// Judge at `h + 1` under the genesis rule set.
@@ -61,6 +61,7 @@ fn judge_at(world: &BundleWorld, reference: &BundleRef, body: &BundleBody, h_inc
         BlockHeight::from_raw(h_incl),
         &world.view,
         &RuleSet::GENESIS,
+        &crate::HARNESS_NETWORK_ID,
     )
 }
 
@@ -188,7 +189,7 @@ fn an_empty_support_bitmap_over_an_issued_support_draw_is_a_count_refusal() {
     let refuse = |count: u32| {
         let mut world = BundleWorld::new(count);
         let persona = world.personas[0].persona;
-        let receipt_key = world.personas[0].receipt_public_key.clone();
+        let receipt_key = world.personas[0].receipt_key();
         world.view.support_roster.insert(
             world.h,
             vec![SupportSeat {
@@ -483,9 +484,9 @@ fn the_window_is_above_h_and_within_w2() {
 #[test]
 fn the_window_is_read_off_the_rule_set() {
     let short_epoch = |blocks: u64, cap: u64| {
-        RuleSet::fakechain(
+        RuleSet::GENESIS.with_levers(
             None,
-            FakechainSchedule::new(
+            CappedEpoch::new(
                 SettlementEpochBlocks::new(blocks).expect("non-zero"),
                 BlockCount::from_raw(cap),
             )
@@ -503,6 +504,7 @@ fn the_window_is_read_off_the_rule_set() {
             BlockHeight::from_raw(h_incl),
             &world.view,
             rule_set,
+            &crate::HARNESS_NETWORK_ID,
         )
     };
     assert!(at(1_051, &hundred).is_ok());
@@ -614,7 +616,7 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
     let rules = rules_of(seb.get());
     let epoch = rules.settlement_schedule().epoch_at(honest.h()).to_raw();
-    let budget_of = |d: u64| section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d, seb);
+    let budget_of = |d: u64| section_budget(shekyl_archival_retention::archival_params(), d, seb);
     // `⌊9·4_000 / 10_000⌋ + 1 = 4`, times `c`, is 8. `D = 5_000` is the
     // next count cap, budget 10. `D = 8` is the small network, budget 2.
     assert_eq!(
@@ -875,6 +877,31 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
     );
 }
 
+/// The witness signature binds the network (the signing envelope §2.4):
+/// an honest bundle, signed under the harness network's id, is refused as
+/// [`BundleInvalid::WitnessSignature`] by a verifier on any other network.
+/// Red edit: drop the network id from the bundle commitment.
+#[test]
+fn a_bundle_signed_for_one_network_is_refused_on_every_other() {
+    let world = BundleWorld::new(10);
+    let (reference, body) = world.bundle(&[1, 4, 9]);
+    assert!(judge(&world, &reference, &body).is_ok());
+    for net in shekyl_network::Network::ALL {
+        assert_eq!(
+            verify_bundle(
+                &reference,
+                &body,
+                world.h + BlockCount::ONE,
+                &world.view,
+                &RuleSet::GENESIS,
+                &net.network_id(),
+            ),
+            invalid(BundleInvalid::WitnessSignature),
+            "{net}"
+        );
+    }
+}
+
 /// One flipped byte anywhere in the prunable part refuses the bundle, and
 /// which check refuses depends on where: without the reference's hash
 /// recomputed, the body is not the reference's at all; with it, a flip in
@@ -1112,7 +1139,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
     let anchor = world.honest_anchor();
     let nonce = shekyl_archival_retention::challenge_nonce(
         &world.seed,
-        fixture_block_hash(world.h).as_bytes(),
+        &fixture_block_hash(world.h),
         draw,
         0,
     );
@@ -1153,7 +1180,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         .collect();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, keys, pairs).expect("every pair has a key"),
+        DrawableEpoch::new(epoch, Some(wide_archive()), keys, pairs).expect("every pair has a key"),
     );
     assert!(judge(&world, &reference, &body).is_ok());
     // And the honest bundle, signed by key A, is now the one refused.
@@ -1292,19 +1319,18 @@ fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
     use shekyl_archival_retention::{select_support_shard, support_challenge_nonce, PassStream};
 
     let mut world = BundleWorld::new(4);
-    let width = 64u64;
+    let width = std::num::NonZeroU64::new(64).expect("non-zero");
     world.view.archive_width.insert(world.h, width);
     let hash = fixture_block_hash(world.h);
     let seat = |world: &BundleWorld, n: usize| SupportSeat {
         persona: world.personas[n].persona,
-        receipt_key: world.personas[n].receipt_public_key.clone(),
+        receipt_key: world.personas[n].receipt_key(),
     };
     let support_record = |world: &BundleWorld, draw: u32, attempt: u8| {
         let persona = &world.personas[draw as usize];
-        let shard =
-            select_support_shard(&world.seed, hash.as_bytes(), &persona.persona, draw, width)
-                .expect("a non-zero archive selects");
-        let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), draw, attempt);
+        let shard = select_support_shard(&world.seed, &hash, &persona.persona, draw, width)
+            .expect("a non-zero archive selects");
+        let nonce = support_challenge_nonce(&world.seed, &hash, draw, attempt);
         let mut record = world.record_signed_by(
             &persona.receipt_secret_key,
             shard,
@@ -1477,7 +1503,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(other_epoch, keys, pairs).expect("keyed"),
+        DrawableEpoch::new(other_epoch, Some(wide_archive()), keys, pairs).expect("keyed"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1494,7 +1520,8 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), []).expect("empty"),
+        DrawableEpoch::new(epoch, None, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), [])
+            .expect("empty"),
     );
     assert_eq!(
         unanswered(&world, &bundle),
@@ -1571,8 +1598,8 @@ fn a_support_pass_is_not_serve_credit() {
 
     let mut world = BundleWorld::new(4);
     let persona = world.personas[0].persona;
-    let receipt_key = world.personas[0].receipt_public_key.clone();
-    let width = 64;
+    let receipt_key = world.personas[0].receipt_key();
+    let width = std::num::NonZeroU64::new(64).expect("non-zero");
     world.view.archive_width.insert(world.h, width);
     world.view.support_roster.insert(
         world.h,
@@ -1582,11 +1609,10 @@ fn a_support_pass_is_not_serve_credit() {
         }],
     );
     let hash = fixture_block_hash(world.h);
-    let shard = select_support_shard(&world.seed, hash.as_bytes(), &persona, 0, width)
+    let shard = select_support_shard(&world.seed, &hash, &persona, 0, width)
         .expect("a non-zero archive selects");
-    let support_nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
-    let economy_nonce =
-        shekyl_archival_retention::challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let support_nonce = support_challenge_nonce(&world.seed, &hash, 0, 0);
+    let economy_nonce = shekyl_archival_retention::challenge_nonce(&world.seed, &hash, 0, 0);
     let good = world.persona_record(0, shard, PassStream::Support, &support_nonce);
     let passes = PassBitmap::from_passes(world.count, []).expect("no economy passes");
     let support = PassBitmap::from_passes(1, [0]).expect("the one support bit");
@@ -1609,4 +1635,10 @@ fn a_support_pass_is_not_serve_credit() {
         judge(&world, &reference, &body),
         invalid(BundleInvalid::Receipt { draw: 0 })
     );
+}
+
+/// A roster over every shard a test names and no complete tree: the
+/// archive is as wide as it can be.
+fn wide_archive() -> shekyl_archival_retention::SupportRoster {
+    shekyl_archival_retention::SupportRoster::empty(std::num::NonZeroU64::MAX)
 }

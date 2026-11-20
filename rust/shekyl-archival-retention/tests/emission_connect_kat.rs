@@ -6,7 +6,7 @@
 //! C-1 connect-arm KAT fixture (`REWARD_EMISSION_E3_GATING_ROUND.md` §9.5
 //! item 7): a structurally-valid `txin_archival_reward_emission` wire blob
 //! plus the extraction outputs (`P_canonical_id`, `settlement_epochs`) the
-//! C++ connect dispatch obtains through `shekyl_archival_emission_vin_extract`.
+//! C++ connect dispatch obtained through its extract FFI (deleted, `DEL-008`).
 //!
 //! The connect arm never verifies — verify ran at `check_tx_inputs` — so the
 //! fixture carries deterministic length-canonical filler for the pubkeys and
@@ -112,7 +112,7 @@ fn regenerate_emission_connect_fixture() {
 
 /// The pinned fixture reproduces from source (deterministic builder) and its
 /// recorded extraction outputs match a fresh parse of the wire bytes — the
-/// same parse `shekyl_archival_emission_vin_extract` performs.
+/// same parse the deleted extract FFI performed (`DEL-008`).
 #[test]
 fn emission_connect_kat_vectors() {
     let kat: Value = serde_json::from_str(EMISSION_CONNECT_KAT).expect("kat json");

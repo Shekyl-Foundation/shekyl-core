@@ -14,7 +14,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# The network the captured corpora run on, and its levers' row
+# (NETWORK_IDENTITY.md NI-R6).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-clearnet = { path = "../shekyl-clearnet" }
+# The Tor connector's stream-end table: the scripted dialer stamps as each connector does.
+shekyl-tor = { path = "../shekyl-tor" }
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-runtime = { path = "../shekyl-runtime" }
@@ -26,6 +31,11 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # peers over real Levin framing on a seam dialer, against the real store,
 # ingest service, hasher budget and RandomX.
 serde_json = { workspace = true }
+# Each `sync::Chain`'s store directory, removed with the store and the
+# files beside it when the chain drops.
+tempfile = { workspace = true }
+shekyl-block-template = { path = "../shekyl-block-template" }
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer" }
 shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
@@ -35,16 +45,31 @@ shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# Each simulated node's own hasher, as each daemon has its own
+# (RANDOMX_CACHE_ACTOR.md): its own cap and its own ranked list.
+shekyl-hasher = { path = "../shekyl-hasher" }
+shekyl-miner = { path = "../shekyl-miner" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-shekyl-seam = { path = "../shekyl-seam" }
+shekyl-p2p-session = { path = "../shekyl-p2p-session" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"
 
 [dev-dependencies]
-# The tests' seeded draw source for the node under test; held to this edge,
-# as the generator is test-only (`check_test_only_features.py`).
+# The tests' seeded draw source for the node under test, and the session
+# crate's scripted frames. Both features are test-only
+# (`check_test_only_features.py`): the library takes the draw as a
+# `RelayRng` and builds its own 1001, so neither feature is on the normal
+# edge above.
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-p2p-session = { path = "../shekyl-p2p-session", features = ["harness"] }
+# The miner's keys for a node that posts templates (CS-5 §3).
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+# The bundle relay test: a witness key, its bundle, and a template's
+# economic operands.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-economics = { path = "../shekyl-economics" }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 

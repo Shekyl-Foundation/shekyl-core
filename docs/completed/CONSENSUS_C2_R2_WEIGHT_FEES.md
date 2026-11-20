@@ -10,7 +10,8 @@ notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
 amended — the window/hysteresis half ratified, the ×50 surge factor
 REFUTED-NOT-SUPERSEDED by GAP-7's floor measurement** (§3 Q3 carries the
 strike-through, the named refuter, and the re-derived bound's numbers for
-signature); **Q2 COUNTERSIGNED on the corrected two-regime rationale** — its own
+signature) — **Q3 RE-SIGNED 2026-11-08: S = 3, an Assumption, re-derived
+at `BA-T10`** (§3 Q3); **Q2 COUNTERSIGNED on the corrected two-regime rationale** — its own
 mandated instrument refuted the early-chain half of the first signed
 reason; the corrected text, Rick's account of the refutation, the
 embedded trace, and the load-bearing Q2↔Q3 coupling are all in §3 Q2.
@@ -342,7 +343,8 @@ the falsifier existed to do; recorded as such.
 
 **LOAD-BEARING COUPLING (in both this row and Q3's, so neither can be
 revisited alone):** the ramp-in regime's protection is load-bearing, not
-incidental — **Q3's verification-time bound at surge_max = 4 is the ONLY
+incidental — **Q3's verification-time bound (surge_max = 3 as re-signed
+2026-11-08; 4 at this row's signature) is the ONLY
 thing bounding early-chain weight growth** while the window fills, so
 **any future loosening of surge_max REOPENS Q2, not just Q3.** (Rick:
 *"that coupling is exactly the kind that goes silent otherwise, and it's
@@ -453,6 +455,35 @@ first ~100 000 blocks this bound is the ONLY protection against
 early-chain weight growth — the long-term governor is structurally weak
 while its window fills (Q2's corrected rationale) — so any future
 loosening of surge_max reopens Q2, not just this row.**
+
+**RE-SIGNED (Rick, 2026-11-08): S = 3 — an Assumption, re-derived at
+`BA-T10`.** The verification term the signature priced was not the
+shipped one. The 128.77 ms/tx verify_floor took its Bp+ term from the
+C++ batched verifier (1.745 ms/proof on the floor); the verifier that
+ships is the Rust `verify_batch`, which folds `Â` into the batch (BA-Q9,
+#1319) and which the floor device measured, flagless, on 2026-11-08. On
+the signed inputs (f·T = 40 s, RandomX 1.2845 s per block, 46.13 argmax
+txs per 600 kB zone block, the floor-measured 3.76 ms/layer depth slope):
+
+| Bp+ term per argmax tx | basis | d2 | d7 | d24 |
+|---|---|---|---|---|
+| 1.745 ms (C++ batched) | the signature's composition | 6.52 | 5.69 | 3.97 |
+| 3.659 ms (Rust, batch of 46) | measured: the shipped verifier's batched term | 6.42 | 5.61 | 3.93 |
+| 18.84 ms (Rust, lone proof) | conservative: no batch amortisation at all | 5.75 | 5.10 | **3.67** |
+
+The signature's own rule — sign the d24 consensus-max tier — puts the
+signed 4 above its bound under both the measured term and the bracket.
+**S is the integer below the conservative d24 bracket: ⌊3.67⌋ = 3.** It
+is an Assumption: the Bp+ term is measured, but the rest of the
+composition is the 2026-09-05 capture's, from before `PL-D3`. `BA-T10`'s
+floor re-run of the full sweep, the depth sweep included, records the
+measured d24 `surge_max`, and S is re-signed on it
+(`docs/FOLLOWUPS.md`, the S-interim row). The coupling above carries
+over unchanged: S = 3 tightens the early-chain bound, so Q2 is not
+reopened; a later re-signature above 3 reopens Q2 as any loosening does.
+Doubling cadence is unchanged: reaching ×3 from the floor takes the same
+two 51-block crossings ×4 did (102 blocks). The transient unit becomes
+`2·3·LTEM` = 1.8 MB at launch.
 
 **Falsifier (defect) — FIRED IN REVIEW, correction recorded against the
 signed row (flagged, not smoothed):** ~~"51 full blocks minimum to move
@@ -931,52 +962,85 @@ parent chain extends `k` blocks past it.
 3. **The sound bound, both operands receiver-local:**
    **`margin(k) = min(2^k, S·LTEM/EM)`, S = the ratified surge factor** —
    the proved single-step bound iterated, cut by the surge clamp's
-   absolute ceiling (`EM ≤ S·LTEM`; S = 50 in today's code, but Q3's
-   amendment REFUTED ×50 and **the signed re-derivation is S = 4 (d24
-   denomination)** — carry the symbol, never the literal,
+   absolute ceiling (`EM ≤ S·LTEM`; S = 50 in the code this section was
+   drafted against, but Q3's amendment REFUTED ×50 and **the signed
+   re-derivation is S = 3 (d24
+   denomination, re-signed 2026-11-08)** — carry the symbol, never the literal,
    so no legal announce ever exceeds `2·S·LTEM` regardless of lag). The
    receiver computes both `EM` (its `m_current_block_cumul_weight_limit/2`)
    and `LTEM` live, so the cap needs no protocol constant beyond `S`
    and the lag bound `k` the P2P row states. At typical announce-lag
-   `k ≤ 2`: **×4**, already dominating the observed adversarial ladder
-   (2.5 at k = 2); at the crossover `k ≥ 6`-ish the clamp term takes over.
+   `k ≤ 2` with EM at the floor: **×3** (the clamp arm `S·LTEM/EM` = 3
+   binds at k = 2, below `2^k` = 4), still above the observed adversarial
+   ladder (2.5 at k = 2); above the floor EM leaves less room and the clamp
+   arm binds sooner.
 4. **Genesis-era note:** at chain height `H < 100` the windows are
    `H`-sized and the hysteresis reasoning shifts, but bound (1) and the
    clamp term are window-size-independent, so `min(2^k, S·LTEM/EM)`
    holds from block 1 (with `EM` floored at the zone, limit ≥ 600 000
    while real blocks are tiny — the additive `entry_max` terms dominate).
-5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 4 this is
-   `8·LTEM` (2.4 MB at launch LTEM; the code's unfixed S = 50 would give
-   `100·LTEM` = 30 MB, the refuted figure); LTEM itself moves ≤ ×1.7 per 50 000 blocks (Q2).
+5. **Ceiling (reference):** `L ≤ 2·S·LTEM` — at the signed S = 3 (Q3,
+   re-signed 2026-11-08) this is `6·LTEM` (1.8 MB at launch LTEM; the
+   code's unfixed S = 50 would give `100·LTEM` = 30 MB, the refuted figure); LTEM's full-window rate is ≤ ×1.7 per 50 000 blocks (Q2). Movement inside an announce lag is the discrete residual below, not that rate.
 
 **Handoff:** `margin(k) = min(2^k, S·LTEM/EM)` with S = the ratified
-surge factor (signed S = 4), computed live; the P2P row states its
-assumed announce-lag `k` (for `k = 2`: multiplier 4).
-**Staleness of the receiver-local LTEM, quantified (review finding — the
-clamp arm substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):**
-LTEM's growth over the lag is bounded by its own ratified rate,
-`LTEM_{h+k}/LTEM_h ≤ 1.7^(k / ⌈min(h,100 000)/2⌉)` — at full window this
-is ≤ 1.00003 for k ≤ 2 (invisible); in the worst ramp-in case (h = 100,
-k = 2) it is ≤ 1.7^(1/25) ≈ 1.022. The error direction is the familiar
-liveness one (a too-small cap rejects a legal announce, never admits an
-oversized one). **The shortfall is NOT absorbed by `entry_max`'s additive
-witness term** — 866 568 B budgets the announce's own independently-capped
-witness, and a legal announce can consume all of it while its body sits at
-the true (grown-LTEM) limit, so that term has no slack to lend; an earlier
-revision claimed absorption and double-counted the budget (review
-finding, 2026-09-06). What actually holds: within the stated announce-lag
-assumption `k ≤ 2` the cap under-admits by up to the ≈ 13 kB shortfall on
-a ≈ 600 kB-scale term — a bounded liveness cost, accepted. Beyond the
-assumed lag (the latched `is_synchronized()` enforces no numeric `k`) the
-shortfall grows with LTEM's ratified rate and is unbounded in `k` — but
-the consequence stays liveness-shaped: a far-behind receiver drops a tip
+surge factor (signed S = 3, Q3 re-signed 2026-11-08), computed live; the
+P2P row states its assumed announce-lag `k` (for `k = 2` with EM at the
+floor: multiplier 3 — the clamp arm binds at the assumed lag, so its
+receiver-local LTEM staleness below applies inside it, not only beyond).
+**Staleness of the receiver-local LTEM (review finding — the clamp arm
+substitutes LTEM_h where the bound at h+k is S·LTEM_{h+k}):** the
+half-window exponent `1.7^(k / ⌈min(h,100 000)/2⌉)` is the rate §2 states
+for a monotone saturating history (×1.7 per doubled chain length while the
+window fills; ×1.7 per 50 000 blocks once it is full). It is not a bound
+on LTEM movement inside an announce lag. The same class of mistake as
+point 2: a smooth history-rate standing in for the discrete median. While
+the long window is still the chain, one sample crossing the middle order
+statistics moves LTEM by a full clamp step inside `k = 2`. The error
+direction is unchanged and liveness-shaped: a too-small cap rejects a
+legal announce and never admits an oversized one. The short-median arm
+`min(2^k, S·LTEM/EM)` is not touched.
+**The shortfall is NOT absorbed by `entry_max`'s additive witness term** —
+866 568 B budgets the announce's own independently-capped witness, and a
+legal announce can consume all of it while its body sits at the true
+(grown-LTEM) limit, so that term has no slack to lend; an earlier revision
+claimed absorption and double-counted the budget (review finding,
+2026-09-06).
+What the discrete median does is exhibited, not closed. Zone 300 000,
+S = 3, the code's clamps (long median floored at the zone; an even count
+is the floor of the mean of the two middle elements, with no sum; a
+block's long-term weight is clamped to `LTEM + ⌊LTEM·7/10⌋`). One hundred
+blocks at the zone weight, then blocks at the legal maximum, on the
+growing window:
+
+- Heights 199→201. At 199 the window holds 199 samples, LTEM is still the
+  zone 300 000, the effective median is 600 000 and the limit is
+  1 200 000. `margin(2) = min(4, 3·300 000/600 000) = 1.5`, so the cap is
+  1 800 000. At 201 LTEM is 510 000, the effective median is 1 050 000 and
+  the legal limit is 2 100 000. Shortfall 300 000 bytes.
+- Heights 399→401, same trace. The effective median is on the surge
+  ceiling (1 530 000), so `S·LTEM/EM = 1` and `margin(2) = 1`. The cap is
+  the limit at 399, 3 060 000. The legal limit at 401 is 4 131 000.
+  Shortfall 1 071 000 bytes. While the effective median sits at `S·LTEM`
+  the clamp arm is 1 for every k, and LTEM growth during the lag is
+  entirely a liveness cost.
+
+An empty chain of maximal blocks, heights 0→2, is the other shape. The
+empty-window floor is not a sample, so LTEM moves 300 000 → 688 500
+(×2.295) and on that trace the cap meets the legal limit (shortfall 0).
+Neither shortfall is claimed maximal. No closed form replaces the
+withdrawn exponent; the ≈ 13 kB figure and the 2.2 % residual are
+withdrawn with it.
+Beyond the assumed lag (the latched `is_synchronized()` enforces no
+numeric `k`) the shortfall is not given by the half-window exponent. The
+consequence stays liveness-shaped: a far-behind receiver drops a tip
 announce it could not use anyway and recovers by the block-sync path
 (2002/2004, byte-budgeted separately), which is that node's designed path
 regardless. If the announce path is ever required to serve far-behind
 receivers, the fix is a bounded-lag check at the announce gate — already
 routed with the PWD-B7 announce-arm item in `docs/FOLLOWUPS.md` — not a
-bigger cap. Recorded so the substitution is a stated approximation with
-its true consequence, not an unnoticed unsoundness.
+bigger cap. Recorded so the substitution is a stated gap with its true
+consequence, not an unnoticed unsoundness.
 **The clamp arm is load-bearing, not a safety belt** (P2P-2 lane's
 grounding, verified at this pin): the announce path ignores announces
 unless `state_normal` and `is_synchronized()`
@@ -985,8 +1049,8 @@ unless `state_normal` and `is_synchronized()`
 `cryptonote_protocol_handler.h:111`), not a within-`k`-of-tip check — a
 synced-then-partitioned node processes announces while arbitrarily far
 behind, so no code enforces a numeric `k` and `S·LTEM/EM` is what holds
-when the lag assumption fails (S = 50 in the shipped C++ today; signed
-S = 4). **Error direction, for the reviewer when
+when the lag assumption fails (S = 3, the signed factor, which is the
+factor the code clamps with). **Error direction, for the reviewer when
 the falsifier fires:** a bound that is too tight here **rejects a legal
 announce** (the receiver's EM is the crash valley while the announced
 block is legally larger) — a *liveness* failure, not a safety one; an
@@ -1019,7 +1083,8 @@ the zone-point worst cold block measures **7.23 s ≈ 6.0 % of T** —
 Q1 signs unconditionally. Transient leg: the `2·50·LTEM` unit named
 below **failed** (≈ 316 % of T), firing the condition exactly as written —
 the ×50 surge factor is REFUTED (§3 Q3) and the signed re-derivation is
-**S = 4 (d24)**, making the transient unit `2·4·LTEM` = 2.4 MB at launch.
+**S = 3 (d24, conservative bracket; re-signed 2026-11-08)**, making the
+transient unit `2·3·LTEM` = 1.8 MB at launch.
 The text below stands as the blocker's record as named, pre-measurement.
 
 **The gap (as named):** nothing binds weight to verification time on the

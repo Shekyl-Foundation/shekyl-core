@@ -18,10 +18,16 @@ default = []
 # The challenge read over the daemon's fetch scheduler, and the
 # classification of its outcome. Off by default: the ring is drawn from by
 # the template producer in `shekyl-chain-ingest`'s `pipeline`, which
-# `shekyl-ffi` (the wallet-side image) links, and the fetch client must not
-# enter that graph (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
+# `shekyl-chain-sync-runtime` and `shekyl-p2p-harness` take without the
+# fetch client (SF-D4; `shekyl-archival-fetch-sched` is daemon-only).
 # `shekyl-chain-ingest`'s `producer` feature turns this on for the node.
 fetch = ["dep:shekyl-archival-fetch-sched"]
+# The ring's witnesses and their signatures from a caller's draws in
+# place of the OS (`WitnessRing::drawing`, `RingDraws`): the chain forge's
+# producer plan (CHAIN_FORGE.md §4, the producer audit). TEST_ONLY
+# (check_test_only_features.py): its one enabler forwards it from
+# `shekyl-chain-ingest`'s TEST_ONLY `forge`.
+seeded-rng = []
 
 [dependencies]
 # The bundle's bytes and its assembler, the nonces, `draw_commit`, `K`.
@@ -31,6 +37,8 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # The witness key: scheme 3, drawn from the OS per block.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The network id the bundle commitment is framed under.
+shekyl-network = { path = "../shekyl-network" }
 # Heights, hashes, personas, shards, `DrawCommitment`.
 shekyl-types = { path = "../shekyl-types" }
 # The one fetch path, with the challenge nonce (feature `fetch`).
@@ -44,6 +52,9 @@ zeroize = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net"] }
 # The fetch read against the production serve loop behind the loopback
 # SOCKS shim, signing receipts with the staged receipt key's test signer.

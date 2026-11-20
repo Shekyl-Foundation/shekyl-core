@@ -9,11 +9,12 @@
 
 use crate::harness::fixture::{
     bp_plus_layout_for, coinbase, coinbase_extra, listed, persona, point, pqc_auth_filler,
-    pqc_extra, serve_credit_only, G, TWO_G,
+    pqc_extra, G, TWO_G,
 };
+use shekyl_types::KeyImage;
 use shekyl_wire::transaction::{
     MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
-    TAG_INPUT_SERVE_CREDIT, UNLOCK_TIME_BLOCK_SENTINEL,
+    UNLOCK_TIME_BLOCK_SENTINEL,
 };
 use shekyl_wire::tx_extra::{self, conforming_pqc_leaf_blob, TxExtraField, HYBRID_KEM_CT_BYTES};
 use shekyl_wire::{BondPost, BondPostKind, Ct, Holdings, Input, Output, Transaction};
@@ -64,23 +65,6 @@ pub(super) fn spend2() -> Transaction {
     with_pqc_extra(tx)
 }
 
-/// A serve-credit both copies accept: the fixture with the prunable region
-/// `RF-D1` gave it — one pruned pass record for its one vin, and no spend
-/// material.
-pub(super) fn serve_credit_ok() -> Transaction {
-    let mut tx = serve_credit_only([0x51; 32]);
-    if let Ct::Fcmp { prunable, .. } = &mut tx.ct {
-        *prunable = Some(shekyl_wire::Prunable {
-            bulletproofs: Vec::new(),
-            tree_depth: 0,
-            fcmp_proof: Vec::new(),
-            pseudo_outs: Vec::new(),
-            serve_credit_pruned: vec![vec![0x01; 4]],
-        });
-    }
-    tx
-}
-
 /// The fixture coinbase — which carries CEN-I20's grammar since slice 6
 /// commit 3 (`fixture::coinbase_extra`); kept as the trips' name for it.
 pub(super) fn coinbase_ok(height: u64) -> Transaction {
@@ -113,12 +97,6 @@ pub(super) fn bond_post_input(hybrid_key_len: usize, kind: BondPostKind) -> Inpu
     }))
 }
 
-pub(super) fn serve_credit_input() -> Input {
-    let mut canonical_bytes = vec![TAG_INPUT_SERVE_CREDIT];
-    canonical_bytes.extend_from_slice(&[0x52; 32]);
-    Input::ServeCredit { canonical_bytes }
-}
-
 pub(super) fn emission_input() -> Input {
     Input::ArchivalRewardEmission {
         canonical_bytes: vec![
@@ -129,11 +107,7 @@ pub(super) fn emission_input() -> Input {
 }
 
 pub(super) fn spend_input(k: usize) -> Input {
-    Input::ToKey {
-        amount: 0,
-        key_offsets: Vec::new(),
-        key_image: point(k),
-    }
+    Input::fcmp_spend(KeyImage::from_bytes(point(k)))
 }
 
 /// `spend2()` with `input` appended and an auth for it.
@@ -176,17 +150,6 @@ pub(super) fn bond_post_alone(
 
 // ---- the trips ------------------------------------------------------------
 
-pub(super) fn j2_empty_pass_record() -> Transaction {
-    let mut tx = serve_credit_ok();
-    if let Ct::Fcmp {
-        prunable: Some(p), ..
-    } = &mut tx.ct
-    {
-        p.serve_credit_pruned = vec![Vec::new()];
-    }
-    tx
-}
-
 pub(super) fn j11_short_hybrid_key() -> Transaction {
     spend2_plus(bond_post_input(5, BondPostKind::Other(2)))
 }
@@ -219,18 +182,6 @@ pub(super) fn h19_seventeen_outputs() -> Transaction {
 
 pub(super) fn h5_gen_beside_a_spend() -> Transaction {
     spend2_plus(Input::Gen(0))
-}
-
-pub(super) fn h6_serve_credit_beside_a_spend() -> Transaction {
-    spend2_plus(serve_credit_input())
-}
-
-pub(super) fn h20_serve_credit_with_an_auth() -> Transaction {
-    let mut tx = serve_credit_ok();
-    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
-        pqc_auths.push(pqc_auth_filler());
-    }
-    tx
 }
 
 pub(super) fn h6_two_bond_posts() -> Transaction {
@@ -269,22 +220,47 @@ pub(super) fn h9_output_amounts_overflow() -> Transaction {
 }
 
 /// An `extra` past the relay cap that **parses and satisfies I19**: the two
-/// PQC fields the outputs require, then a `0x09` view-tag-hints blob of
+/// PQC fields the outputs require, then `0x04` additional keys past
 /// `MAX_TX_EXTRA` bytes. Raw filler (the first cut, `[0xEE; MAX + 1]`) would
 /// reach the twin's cap arm all the same — it checks the length before it
 /// parses — but the crate would refuse it on I19 for not parsing, and the
 /// entry would record a shape disagreement, not the policy one it is for.
-/// The `0x09` blob is admissible on a listed transaction under I19 (the
+/// The `0x04` keys are admissible on a listed transaction under I19 (the
 /// general subject bounds the PQC fields and bans the nonce; the parser's
-/// `READ_LEN_CAP` is the only limit on a hints blob), which is itself a
-/// finding — recorded on the census-sweep FOLLOWUPS row.
+/// `READ_LEN_CAP` is the only limit on additional keys), which is itself
+/// a finding — recorded on the census-sweep FOLLOWUPS row. (`0x0D`, the
+/// multisig entries, is bounded by the output count and cannot reach the
+/// cap.)
 pub(super) fn m4_extra_over_the_relay_cap() -> Transaction {
     let mut tx = spend2();
     let n = tx.prefix.outputs.len();
     tx.prefix.extra = tx_extra::serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
         TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
-        TxExtraField::PqcViewTagHints(vec![0x99; MAX_TX_EXTRA]),
+        TxExtraField::AdditionalPubKeys(vec![[0x99; 32]; MAX_TX_EXTRA / 32 + 1]),
+    ])
+    .expect("three fields serialize");
+    tx
+}
+
+/// The baseline spend's conforming PQC fields plus a `0x0D` multisig entry
+/// naming output 2 of its two: CEN-I19's multisig clause refuses it as
+/// `MultisigOutputIndex` (an entry for an output the transaction does not
+/// have). The `0x0D` successor of the trips that carried a `0x09` blob.
+pub(super) fn i19_multisig_entry_for_a_missing_output() -> Transaction {
+    use shekyl_wire::tx_extra::{KemCiphertext, MultisigEntry};
+    let mut tx = spend2();
+    let n = tx.prefix.outputs.len();
+    let entry = MultisigEntry::new(
+        u8::try_from(n).expect("two outputs"),
+        vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+        vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+    )
+    .expect("one member, right lengths");
+    tx.prefix.extra = tx_extra::serialize(&[
+        TxExtraField::PqcKemCiphertext(vec![0x5A; HYBRID_KEM_CT_BYTES * n]),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n)),
+        TxExtraField::PqcMultisig(vec![entry]),
     ])
     .expect("three fields serialize");
     tx
@@ -337,11 +313,7 @@ pub(super) fn i5_ascending_key_images() -> Transaction {
     }
     tx.prefix.inputs = [a, b]
         .into_iter()
-        .map(|key_image| Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image,
-        })
+        .map(|key_image| Input::fcmp_spend(KeyImage::from_bytes(key_image)))
         .collect();
     tx
 }
@@ -413,7 +385,6 @@ pub(super) fn i1_one_output_bond_post() -> Transaction {
         tree_depth: 0,
         fcmp_proof: vec![0xF0],
         pseudo_outs: Vec::new(),
-        serve_credit_pruned: Vec::new(),
     };
     bond_post_alone(1, Some(prunable))
 }

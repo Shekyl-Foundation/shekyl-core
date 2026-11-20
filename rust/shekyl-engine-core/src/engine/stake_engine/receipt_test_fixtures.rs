@@ -14,7 +14,6 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::{pass_countersignature_message, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_p_host::{PassKey, SignRefused};
@@ -38,15 +37,14 @@ pub(crate) const ANCHOR_HASH: [u8; 32] = [0x22; 32];
 pub(crate) const DIGEST: [u8; 32] = [0x5a; 32];
 
 /// A real transcript, from the consensus builder both ends agree on.
-pub(crate) fn message() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-    pass_countersignature_message(
+pub(crate) fn transcript() -> shekyl_archival_retention::PassTranscript {
+    shekyl_archival_retention::PassRequestHeader::from_parts(
         shekyl_archival_retention::PassStream::Economy,
-        &NONCE,
+        NONCE,
         ANCHOR,
-        &ANCHOR_HASH,
-        SHARD,
-        &DIGEST,
+        shekyl_types::BlockHash::from_bytes(ANCHOR_HASH),
     )
+    .transcript(SHARD, DIGEST)
 }
 
 /// The persona's public receipt key, from the derivation oracle the
@@ -64,9 +62,9 @@ pub(crate) fn slot(raw: u32) -> PSlot {
 /// loop asks for it: it parks on the actor's reply.
 pub(crate) async fn sign(
     key: Arc<ResidentReceiptKey>,
-    message: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+    transcript: shekyl_archival_retention::PassTranscript,
 ) -> Result<FnDsaHybridSignature, SignRefused> {
-    tokio::task::spawn_blocking(move || key.sign_pass(&message))
+    tokio::task::spawn_blocking(move || key.sign_pass(&transcript))
         .await
         .expect("blocking task")
 }

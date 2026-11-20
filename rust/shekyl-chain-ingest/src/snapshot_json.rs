@@ -6,7 +6,7 @@
 //! The archival snapshot as committed data — `DRS_E4_ARCHIVAL_WRITER.md`
 //! `ARW-Q15` (RULED 2026-10-01).
 //!
-//! A §3.8.1 [`ArchivalSnapshot`] is ten families of `(key, value)` rows,
+//! A §3.8.1 [`ArchivalSnapshot`] is nine families of `(key, value)` rows,
 //! every byte of which the Rust side encoded. This module writes those rows
 //! as JSON and reads them back, so a snapshot the C++ LMDB unit fixture
 //! walked (`write_e4_fixture_capture`, `tests/unit_tests/archival_substrate_lmdb.cpp`,
@@ -37,7 +37,7 @@
 //! schema of the record — one encoding per row (§3.8.1), and this is its
 //! transport, not a rival.
 //!
-//! The ten families are always present, empty or not, in positional order:
+//! The nine families are always present, empty or not, in positional order:
 //! a fixture with no slash rows says so with an empty `archival_slash_log`,
 //! never by omission, so a family the walker forgot to cursor is a visible
 //! absence rather than a silent one.
@@ -81,7 +81,7 @@ pub enum RowsFileFault {
         /// What the file said.
         found: String,
     },
-    /// The families are not the ten §3.8.1 families in positional order.
+    /// The families are not the nine §3.8.1 families in positional order.
     #[error("archival rows file: family {index} is {found:?}, expected {expected:?}")]
     Family {
         /// Position in the file.
@@ -203,20 +203,13 @@ fn digit(c: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+    use shekyl_types::SettlementEpoch;
     use shekyl_units::AtomicUnits;
 
     use super::*;
 
     fn sample() -> ArchivalSnapshot {
         let mut s = ArchivalSnapshot::empty();
-        s.push_serve_credit(
-            &PCanonicalId::from_bytes([7; 32]),
-            ShardId::from_raw(3),
-            SettlementEpoch::from_raw(1),
-            BlockHeight::from_raw(900),
-        )
-        .expect("serve credit");
         s.push_budget(SettlementEpoch::from_raw(0), AtomicUnits::from_raw(5_000))
             .expect("budget");
         s.set_last_slash_epoch(SettlementEpoch::from_raw(1))
@@ -231,11 +224,11 @@ mod tests {
         assert!(text.contains(ROWS_SCHEMA));
         let back = from_json(&text).expect("reads back");
         assert!(s.diff(&back).is_identical());
-        assert_eq!(back.row_count(), 3);
+        assert_eq!(back.row_count(), 2);
     }
 
     #[test]
-    fn the_empty_snapshot_names_all_ten_families() {
+    fn the_empty_snapshot_names_all_nine_families() {
         let text = to_json(&ArchivalSnapshot::empty());
         for family in SnapshotFamily::ALL {
             assert!(text.contains(family.name()), "{} missing", family.name());
@@ -255,12 +248,12 @@ mod tests {
         let mut file: RowsFile = serde_json::from_str(&to_json(&sample())).expect("json");
         file.families.pop();
         let text = serde_json::to_string(&file).expect("json");
-        let fault = from_json(&text).expect_err("nine families");
+        let fault = from_json(&text).expect_err("eight families");
         assert!(
             matches!(
                 fault,
                 RowsFileFault::Family {
-                    index: 9,
+                    index: 8,
                     found: None,
                     ..
                 }
@@ -311,8 +304,7 @@ mod tests {
 
     /// The committed LMDB-fixture capture (`ARW-Q15`) reads back as a
     /// snapshot, and its rows agree with the inputs file beside it on the
-    /// facts the inputs name: the serve passes are the credit rows, the
-    /// slash lands at the slash epoch's deadline on the named persona, the
+    /// facts the inputs name: the slash lands at the slash epoch's deadline on the named persona, the
     /// watermark is that epoch, and the accruing row is the tip's open
     /// epoch. Nothing compares the pair with the Rust writer (module
     /// docs); this is what keeps it readable and self-consistent.
@@ -330,7 +322,6 @@ mod tests {
 
         let u64_at = |v: &serde_json::Value| v.as_u64().expect("u64");
         let le = |n: u64| n.to_le_bytes().to_vec();
-        let m = u64_at(&inputs["failure_window"]["m"]);
         let seb = u64_at(&inputs["schedule"]["settlement_epoch_blocks"]);
         let slash_epoch = u64_at(&inputs["expected"]["slash_epoch"]);
         let tip = u64_at(&inputs["chain"]["tip_height"]);
@@ -354,19 +345,6 @@ mod tests {
             deadline + 1,
             "the inputs name the C++'s count operand"
         );
-
-        // Every serve pass the inputs name is a credit row, and nothing else is.
-        let passes = inputs["serve_passes"].as_array().expect("passes");
-        assert_eq!(passes.len(), usize::try_from(m).expect("m"));
-        let credits = rows.rows(SnapshotFamily::ServeCredit);
-        assert_eq!(credits.len(), passes.len());
-        for pass in passes {
-            let mut key = persona(&pass["persona"]);
-            key.extend(le(u64_at(&pass["shard"])));
-            key.extend(le(u64_at(&pass["epoch"])));
-            key.extend(le(u64_at(&pass["height"])));
-            assert!(credits.contains_key(&key), "pass {pass} has no credit row");
-        }
 
         // One slash, at the slash epoch's deadline, on the named persona.
         let slash_log = rows.rows(SnapshotFamily::SlashLog);

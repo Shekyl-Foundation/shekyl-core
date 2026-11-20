@@ -21,7 +21,9 @@ use shekyl_units::AtomicUnits;
 
 use crate::{
     balance::BalanceSummary,
-    bench_fixtures::{make_bench_wallet, scannable_block_for_recipient, BenchWalletKeys},
+    bench_fixtures::{
+        fresh_tx_key, make_bench_wallet, scannable_block_for_recipient, BenchWalletKeys,
+    },
     extra::{Extra, ExtraField},
     ledger_ext::LedgerIndexesExt,
     scan::{ScannableBlock, Timelocked},
@@ -32,14 +34,14 @@ use crate::{
 /// real `0x07` entry the production writer would publish.
 fn honest_block(wallet: &BenchWalletKeys) -> ScannableBlock {
     let spend_pub = wallet.view_pair.spend().compress().to_bytes();
-    scannable_block_for_recipient(1, &wallet.wallet_kem_pk, &spend_pub)
+    scannable_block_for_recipient(1, &wallet.wallet_kem_pk, &spend_pub, &fresh_tx_key())
 }
 
 /// Rewrite the transaction's `0x07` field through `f` (or drop it when `f`
 /// returns `None`), re-serializing through the production writer.
 fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Option<Vec<u8>>) {
     let tx = &mut block.transactions[0];
-    let extra = Extra::read(&mut tx.prefix.extra.as_slice()).expect("fixture extra parses");
+    let extra = Extra::read(&mut tx.tx().prefix.extra.as_slice()).expect("fixture extra parses");
     let mut fields = extra.0;
     let pos = fields
         .iter()
@@ -51,7 +53,7 @@ fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Opt
     if let Some(new_blob) = f(blob) {
         fields.insert(pos, ExtraField::PqcLeafEntries(new_blob));
     }
-    tx.prefix.extra = Extra(fields).serialize();
+    tx.modify(|tx| tx.prefix.extra = Extra(fields).serialize());
 }
 
 /// Consumes the wallet: `ViewPair` is wipe-on-drop and not `Clone`, and the
@@ -163,7 +165,7 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
     indexes.process_scanned_outputs(
         &mut ledger,
         shekyl_types::BlockHeight::from_raw(7),
-        [0x22u8; 32],
+        shekyl_types::BlockHash::from_bytes([0x22u8; 32]),
         outputs,
     );
     assert_eq!(ledger.transfers.len(), 1);
@@ -173,15 +175,18 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
         td.tx_hash, sender_tx_hash,
         "the row names the sender's transaction (rule 82)"
     );
-    assert!(!td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &no_locks()));
+    assert!(!td.is_spendable(
+        shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+        &no_locks()
+    ));
 
     let amount = td.amount();
     let summary = BalanceSummary::compute(
         &ledger.transfers,
-        shekyl_types::BlockHeight::from_raw(u64::MAX),
-        &no_locks(),
+        shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+        &shekyl_engine_state::SendJournalBlock::empty(),
     );
-    assert_eq!(summary.total, amount);
-    assert_eq!(summary.unspendable, amount);
-    assert_eq!(summary.unlocked, AtomicUnits::ZERO);
+    assert_eq!(summary.unspendable, amount, "beside the balance");
+    assert_eq!(summary.balance(), AtomicUnits::ZERO, "never in it");
+    assert_eq!(summary.spendable, AtomicUnits::ZERO);
 }

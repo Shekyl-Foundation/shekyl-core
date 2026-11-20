@@ -6804,3 +6804,557 @@ only by this daemon's own bundles until 4b, and rule 23's falsifier guards
 the connect path, which the queue is not.
 
 ---
+
+## 2026-11-03 — One secret, one derivation: a wallet is 32 bytes on every network, salted by the network's name
+
+**Decision** (Rick, `NETWORK_IDENTITY.md` NI-R7 and NI-R10). A wallet's
+secret is 32 bytes on every network, written as BIP-39's 24 words. The
+words decode to the 32 bytes and nothing else: no 12-word option, not
+even on import, and no passphrase, so no PBKDF2 step. Key derivation runs
+`normalize_seed(seed)` and then HKDF under the salt
+`shekyl-master-derive-v2-` ‖ the network's tag (`shekyl/<network>`). The
+seed format leaves the derivation salt and the wallet file; the keys file
+stores the 32-byte seed (format `0x02`), so a wallet can always show its
+words and an import round-trips. A `0x01` file is refused with its
+reason, never reinterpreted.
+
+**Why.**
+- *One pathway for every network* (NI-R4). Mainnet and stagenet derived
+  from BIP-39's PBKDF2 output, testnet and regtest from raw bytes, through
+  separate code: the test networks exercised a wallet path mainnet does
+  not run.
+- *24 words only.* 12 words is 128 bits, 64 bits of security under
+  Grover, below the post-quantum floor.
+- *No passphrase.* Its PBKDF2 stretch is weak, and the wallet file has
+  its own encryption.
+- *The network's name, not its id* (NI-R10). The genesis pays addresses
+  this derivation produces, and the network id is a hash of the genesis,
+  so the id cannot salt the keys the genesis pays. The name exists before
+  genesis, and genesis commits to it in its coinbase. The same 32 bytes
+  on two networks still give unrelated keys.
+
+**Consequences.** Every key-derivation vector is re-recorded:
+`ADDRESS_DERIVATION_V2` becomes `ADDRESS_DERIVATION_V3` and
+`ARCHIVAL_P_DERIVE_V1` becomes `ARCHIVAL_P_DERIVE_V2`; the keys-file
+vectors move to `WALLET_FILE_FORMAT_V2`, with the `V1` file kept as the
+refused input. Format `0x02` also mints the region wrap-key labels
+`shekyl-region1-aead-v2` and `shekyl-region2-aead-v2`, as
+`WALLET_FILE_FORMAT_V1.md` §2.6 requires of a format bump; the prefs HMAC
+label stays `-v1`, because the prefs format did not change. Addresses
+derived from an existing seed move, mainnet's
+genesis recipients included; their custodians re-derive at the genesis
+ceremony (NI-R11). The wallet RPC returns the 24 words on every network
+and no longer a raw seed. Raw 32-byte seeds remain only as harness input.
+
+---
+
+---
+
+## 2026-11-04 — The derivation salt is the name's 16-byte binding, then the purpose
+
+**Decision** (Rick, ruling 2 on the signing envelope, `NETWORK_IDENTITY.md`;
+`claude/NI_SIGNING_ENVELOPE.md` §2.6 in the planning repository). Key
+derivation's HKDF salt is the network's `name_id`, then the purpose label,
+unframed: `salt = name_id ‖ "shekyl-master-derive-v3"`, where
+`name_id = cSHAKE256(S = "shekyl/network-name-v1", X = "shekyl/<network>")[..16]`.
+It replaces `shekyl-master-derive-v2-` ‖ the tag. HKDF stays the key
+primitive; only the salt's shape changes. The same seed derives different
+keys and addresses from this entry on.
+
+**Why.** One binding rule for everything Shekyl hashes, signs or derives:
+16 bytes at position 0, the genesis-derived id for what is signed or proved
+against the chain, the name's `name_id` for what is derived from keys or
+addresses (NI-R10, NI-R15). The salt was the one network binding of its own
+shape (a variable-length tag after a label).
+
+**Where it lands.** In network identity PR 1 (#1264), so testnet, stagenet
+and regtest are regenerated once: their genesis recipients, genesis blocks,
+network ids, the recorded ids, the captured chains and the vector suites
+(`ADDRESS_DERIVATION_V3`, `ARCHIVAL_P_DERIVE_V2`, `WALLET_FILE_FORMAT_V2`)
+move in that one PR. The rest of the envelope lands in PR 2 (#1266).
+Testnet's and stagenet's genesis wallets are generated fresh, not
+re-derived from the 2026-11-03 custody seeds: one of those seeds was
+printed into a working session transcript while this change was prepared,
+so that set is retired.
+
+## 2026-11-10 — The switch deletes the serve-credit input and what only it needed
+
+**Decision** (Rick, the C7 rulings on PR #1327, `SO-D12` 4b). After the
+switch a pass is credited only from an admitted bundle, so the carrier and
+the machinery that served it are deleted, not retired in code:
+
+- **The serve-credit input** (`Input::ServeCredit`) with its whole surface:
+  the pruned pass records, the blob checks and their caps, retention's wire
+  record, the empty-`pqc_auths` form, the KAT fixtures that carried one, the
+  transaction class and the submit engine's kind, the `archival_serve_credit`
+  table with its reads A3–A5, SI-15, and the challenge helpers. Input tag
+  `0x02` is unassigned and refused as any unknown input tag (CEN-G2), with
+  no constant and no typed error: before genesis there is no history to
+  protect. `0x03` and `0x04` keep their values.
+- **The census rows.** J1–J3 and J7–J10 are retired by ruling (`SO-D12g`),
+  each naming the bundle rows that carry its subject (J29–J37). J4–J6, G7
+  and H20, which judged only the deleted class, leave the registry.
+- **The pass-anchor window** and its floor and length constants. The lag
+  stays as `ARCHIVAL_PASS_ANCHOR_LAG_BLOCKS`.
+- **The coinbase `0x0B` attestation tag**, with no retired note.
+- **The frozen complete-tree set** (`SO-D12h`), the A22 table, SI-31 and the
+  gather's complete-tree flag: a complete tree lists no shard (CEN-J14), so
+  no gather credits one and the set was always empty.
+
+**Why.** Rule 15: removing the last reader means deleting the thing. A
+retired list protects data mainnet has already parsed, and there is none.
+
+**Fixtures.** The gate-2 serve-credit KAT goes whole. The gate-4 lifecycle
+fixture took its persona from gate-2's, so it is regenerated under this
+entry with its own persona, and its pinned join becomes the keyed
+JoinMarket. The PQC signing-preimage KAT drops its serve-credit subject.
+
+## 2026-11-11 — The shard fill is a captured chain of real spends
+
+**Decision** (Rick, the shard-fill rulings on PR #1327). The store's prune
+and slash-scan tests built their shards from padded serve credits, whose
+input the previous entry deletes. They now load a chain of real spends,
+built once and checked in at `rust/shekyl-harness-spender/vectors/shard-fill.bin`:
+
+- **Option A, the fan-out.** Each spend takes one output and pays the miner
+  two, which the chain spends once they drain into the tree, so a block
+  fills to 280 000 weight and a shard closes in about fourteen blocks. It
+  is built with the harness spender's watched-output path
+  (`Spender::own`, `owned_input`, `spend_owned`), not a second fixture.
+- **One chain, every consumer.** Each test connects the prefix it needs.
+  The two long ingest scenarios connect the prefix that closes shard 0.
+  Coinbases 0–9 are left unspent for the ingest's bond posts.
+- **Lengths, not bytes, are the recapture check.** Proving draws fresh
+  randomness, so a rebuild's bytes differ and its archival lengths do not.
+  The store's `#[ignore]`d real-spends test rebuilds the chain nightly and
+  fails if a block's lengths differ from the vector's. The vector moves
+  only under a decision cited to `capture_the_shard_fill_chain`.
+- **The exact-length properties** (a transaction starting at `k·W`, a
+  straddle) are tests of `shard_of` with any lengths. The store asserts
+  the straddle from measured lengths.
+
+**Why.** Rule 50: a test's bytes are ones every landed rule verifies.
+Proving them in every run costs minutes; verifying the captured chain
+costs seconds.
+
+---
+
+## 2026-11-12 — Canonical test chains: as many as testing needs, forged byte for byte, regtest only
+
+**Decision** (Rick, the chain forge lane brief; `CHAIN_FORGE.md` §1,
+`CF-R1`…`CF-R5`). Every lane tests against real chains that one tool
+forges, instead of each test building its own history or replaying a chain
+captured from a live daemon.
+
+- **As many chains as the testing needs require, no fewer** (`CF-R1`).
+  Needs that do not fit one chain are not forced into it. The starting
+  set is Chain L (the lifecycle, on a levered schedule), Chain P (the
+  production schedule under load) and a short LWMA chain; the event
+  catalogue decides whether more are needed.
+- **Byte-for-byte deterministic regeneration** (`CF-R2`). A chain is a
+  KAT: at the same commit it regenerates exactly, and at a new commit the
+  first block that differs names the consensus change.
+- **Commit the chains if possible** (`CF-R3`); a release asset pinned by
+  SHA-256 when a chain is too large. Chain P is.
+- **Order** (`CF-R4`): the forge and Chain L first; Chain P second, with
+  the daemon budget lane.
+- **One lane** owns the forge and the chains (`CF-R5`); each consuming
+  lane migrates its own tests.
+
+The brief also sets three security constraints. Deterministic randomness
+exists only behind test-only features the test-only feature gate polices,
+and the production prover and signers keep OS randomness with no injectable
+RNG in their public API. Every forged chain carries regtest's network
+identity and cannot validate under testnet or mainnet rules, and a test
+asserts it. A store snapshot is built only by a fully verifying replay of
+the committed corpus.
+
+**Why.**
+- *Every test rebuilt its own history.* No committed chain crossed a
+  settlement epoch, so 13 nightly tests and 2 nightly-slow daemon walks
+  each filled a shard with real proofs, and whole families (serve credits,
+  settlement, slashes, reorgs) had no realistic witness at all.
+- *Capturing from a live daemon does not keep up.* The five committed
+  chains were re-captured three times in three days (2026-11-03…05), each
+  time with a daemon built at the head. A forged chain regenerates from
+  the commit alone.
+
+**Not part of the ruling.** The lane's Round 0 (`CHAIN_FORGE.md`) proposes
+the chain set from its catalogue (L, a bundle-producer chain B, P and an
+LWMA chain W, with L's own split undecided) and puts four questions to
+Rick (§13, `CF-Q1`…`CF-Q4`): whether Chain L's bytes are committed or
+pinned as an asset, given that chain bytes do not compress or delta;
+reading two corpus layouts during migration; the forge's runnable as an
+example target rather than a binary; and where the no-injectable-RNG line
+is held. Rick ruled all four the same day (the next entry).
+
+---
+
+## 2026-11-12 — Chain forge Round 0 rulings: storage and hosting, layouts, the RNG line, the split of CF-1
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R6`…`CF-R11`).
+
+- **Storage** (`CF-R6`). Chain bytes up to 5 MB are committed. Above that,
+  the manifest, the block-hash list and the trace are committed, and the
+  bytes are a release asset pinned by SHA-256. The asset is a cache:
+  deterministic regeneration at the pinned commit is the source of truth.
+  The five old corpora move to this scheme when they are next regenerated.
+- **Hosting** (`CF-R11`). Chains above 5 MB are OCI artifacts on GHCR
+  (`ghcr.io/shekyl-foundation/test-chains/<chain>`, one per chain
+  version, public), pushed and pulled with `oras`, in a package linked to
+  a new repository, `shekyl-test-chains`, that holds the forge plans,
+  manifests, hash lists and release notes. Layers carry their own media
+  types under the artifact type `application/vnd.shekyl.test-chain`.
+  shekyl-core pins each chain by digest, never by tag, in a committed pin
+  file with every layer's SHA-256 and size; the fetch script pulls by
+  digest and refuses any layer that disagrees; `oras` is installed from a
+  pinned, checksum-verified release. Only a protected workflow in
+  `shekyl-test-chains`, approved by Rick, publishes, so a pin change is
+  always a reviewed core PR. The artifacts are a cache: a deleted package
+  is rebuilt from the pinned commit, never lost, and a nightly pull of
+  every pinned digest reports a missing one through `dev-red`.
+- **Corpus layouts** (`CF-R7`). The reader takes both the old and the new
+  layout until the last old corpus is gone, then the old reader is
+  deleted. No live-daemon re-capture.
+- **The forge's runnable** (`CF-R8`) is a cargo example, and CI builds the
+  examples.
+- **The RNG line** (`CF-R9`) sits at Shekyl's signing and proving entry
+  points. `prove_with_rng` becomes crate-private behind a test-only
+  `seeded-rng` feature that `shekyl-verify-cost` enables, and a gate
+  refuses seedable-RNG construction (`from_seed`, `seed_from_u64` and the
+  like) in production code outside test-only features.
+- **CF-1 splits in three** (`CF-R10`): `CF-1a` chain identity (regtest's
+  genesis, network id and name), `CF-1b` the RNG line (with the
+  forwarded-feature gate fix and `shekyl-crypto-pq` under the gate through
+  F-7), `CF-1c` the forge skeleton and the determinism check in CI.
+  Chain B is accepted, conditional on `CF-1c`: anything the bundle
+  producer depends on besides chain state is either by design, and B's
+  regeneration check then compares state digests, or a defect filed with
+  SO-D12.
+
+**Why.** The chains do not compress and git cannot delta one regeneration
+against the last, so committing a 20 MB chain costs its full size in
+history at every regeneration, and the five small corpora had already
+left 96 MB that way. Determinism makes the bytes reproducible from the
+commit, so a pinned asset loses nothing the tree needs. A cargo example
+keeps every edge into the test-only driver and seeds a dev edge, which
+the test-only feature gate already enforces. Splitting CF-1 keeps each
+change reviewable on one validation surface.
+
+## 2026-11-12 — Chain forge Round 0: the seedable-RNG gate's site list, the home of each chain file, the hosting repository
+
+**Decision** (Rick, on `CF-0`; `CHAIN_FORGE.md` §1, `CF-R12`…`CF-R14`).
+
+- **The seedable-RNG gate lists sites, not groups** (`CF-R12`). Each
+  allowed site is listed by path and function, with its group and one
+  line on where its seed comes from; naming a group allows nothing on its
+  own. The allowed seed sources, and only these: G0, a seed drawn from
+  `OsRng` on the spot (listed anyway, so the gate never has to guess);
+  G1, the output of a key-derivation function over a secret key or seed;
+  G2, verifier batch weights from a domain-separated transcript, weights
+  only, never a value that is published or signed; G3, multisig values
+  every participant must derive identically, from a transcript that
+  already binds every participant's commitments. Always refused: a
+  constant seed, a seed the caller chooses, or a seed built from public
+  data alone, at any signing or proving nonce; a fixed seed is available
+  only through the test-only `seeded-rng` feature. No grandfathering: at
+  `CF-1b` every current hit is listed with its justification or changed,
+  a later site needs a reviewed change to the list, and a file move drops
+  a listing on purpose.
+- **The SAL multisig is allowed under G3.** α, β, δ, μ, r_z, r_p and
+  r_r_p cover parameters that are not secret within the signing group,
+  the upstream FCMP++ SAL design; only `y` is the threshold secret, and
+  its nonce comes from FROST's hedged preprocess step. Two conditions, in
+  `CF-1b`: a test that fails if the `y` nonce ever comes from the
+  `deterministic_nonces` stream, and a confirmation in code, with its line
+  recorded, that the transcript binds every preprocess commitment before
+  `rng_seed` is called.
+- **Which repository holds what** (`CF-R13`, rules `CF-Q5`). shekyl-core
+  keeps each chain's plan and `blocks.txt`. `shekyl-test-chains` keeps
+  the published manifests and release notes. The chain, its trace and its
+  manifest go to GHCR as layers pinned by digest; the digest in
+  shekyl-core is the source of truth, and a mismatch fails.
+- **The `shekyl-test-chains` setup is accepted** (`CF-R14`). Making the
+  package public cannot be undone, so it waits until `CF-4`, after the
+  first artifact has been reviewed, and only on Rick's explicit approval.
+  Rick checks the organization's public-package setting by hand before
+  `CF-4`.
+
+**Why.** A group named in the gate would allow every future site that
+claims it; a site list makes each one a reviewed decision with its seed
+source written beside it. Keeping the plan and `blocks.txt` in shekyl-core
+keeps regeneration at one commit and puts the first differing block in a
+consensus PR's own diff.
+
+## 2026-11-13 — Chain forge: CF-7 before CF-6; PB-D1 names both limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R25`).
+
+- After `CF-4b`, `CF-7` (the max-bundle chain) runs in parallel with the
+  rest of `CF-5`, then `CF-6`. `CF-7`'s surge-ceiling timing is an input
+  to the block-size decision; `CF-6` (Chain P) depends on that decision
+  and is redone after it.
+- `DAEMON_REDB_STORE.md`'s `PB-D1` row names both limits (`CF-R24`): the
+  design-load limit, gated and derived when the plan is built; the surge
+  ceiling, required and reported, a miss over 10 s a finding for the
+  simulation and not a change to the budget. #1370 carries the edit; the
+  `PB-` rows stay the DRS line's. #1373 edits row 8 of the same file, and
+  whichever of the two merges second rebases.
+
+## 2026-11-13 — Chain forge: the shard-fill replacement moves ahead of Chain L; the max-bundle block at two limits
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R23`, `CF-R24`).
+
+- The order is `CF-1b`, `CF-1c`, `CF-4a`, `CF-3`, `CF-4b`, then the rest
+  of `CF-5`. `CF-4` splits: `CF-4a` is the hosting with the forge-built
+  replacement for `shard-fill.bin` as its first artifact, covering every
+  listed reader function by function before the file and its gate are
+  deleted; `CF-4b` is Chain L v1 and its pilot consumers. The freeze
+  blocks every consensus change until the replacement exists, and a
+  consensus change before Chain L is likely (the block-size change after
+  alpha.12 is certain), while `CF-3` and Chain L block no one by waiting.
+  It cannot precede `CF-1b` and `CF-1c`: without the RNG gate and the
+  determinism check it would be a second non-reproducible file. Its
+  re-forge when `CF-3` changes the corpus layout is expected and cheap.
+- The max-bundle block is measured at two limits, and `PB-D1` is read
+  the same way. Gated: the design-load limit, derived from the
+  validator's median functions when the plan is built. Required, not
+  gated: the surge ceiling `2 × S × LTEM`, with its floor-device
+  verification time reported; over the 10 s floor budget it is a finding
+  for the economics simulation's zone and `S` derivation, and the budget
+  is not changed to make it pass.
+
+## 2026-11-13 — Chain forge: the max-bundle block (PB-D1 shape 8) is the forge's to build
+
+**Decision** (Rick; `CHAIN_FORGE.md` §1, `CF-R22`; `DAEMON_REDB_STORE.md`
+§1.3a.7 row 8 on #1373).
+
+- `CF-E35` max-bundle is built by the chain forge, no longer waiting on
+  SO-D12. SO-D12 owns the definition and checks the forge's chain
+  against it; it does not build chains of its own.
+- The definition: the worst of shapes 1–7 filled to the weight limit,
+  plus a bundle section at its full budget, `c · (⌊9·D/SEB⌋ + 1)` draws;
+  the budget counts draws, not weight, so the two add. Pass/fail at the
+  `D` = 324,000 equivalent (292 records a bundle, 584 a section), mined
+  under the real validator on a short regtest epoch with the same record
+  count (`SEB` 100, about 3,240 drawable pairs), every block admitted,
+  with real receipt-key signatures.
+- The report: cost per record and per bundle, and the largest `D` at
+  which `PB-D1` holds on the floor device.
+
+## 2026-11-13 — Chain forge: the design load stays 30 spends for now; the shard-fill freeze against consensus changes
+
+**Decision** (Rick, on `69e366391`; `CHAIN_FORGE.md` §1, `CF-R20`, `CF-R21`).
+
+- The design load is 30 two-in/two-out spends a block for now, because
+  the `PB-` budgets are stated against it. The block size is re-derived
+  through the economics simulation later (likely about 90 spends, not
+  before alpha.12); Chain P, the `PB-` rows and the fixtures are then
+  redone, an accepted cost.
+- Chain P's weight ramp is derived when its plan is built, from the
+  validator's own `medians_over` and `long_term_weight`, with every block
+  asserted under the limit in force at its height; a vanished margin
+  makes the derivation insert the extra 51-block step itself. Changing
+  the target re-plans the chain.
+- The shard-fill chain's replacement for its twelve consumers lands
+  before any consensus change that would invalidate it, the block-size
+  re-derivation included, brought forward if needed. If such a change
+  must land first, Rick approves one re-capture explicitly, the reason
+  cited in the freeze gate's pin update, into the hosted store if live
+  or into git once. The tests are never turned off: the gate blocking
+  the consensus PR is how the case is decided.
+
+## 2026-11-13 — Chain forge after the 4b switch: CF-2 retired, the shard-fill chain frozen, Chain B's criteria, Chain P's ramp
+
+**Decision** (Rick, on #1370 after #1327 merged; `CHAIN_FORGE.md` §1,
+`CF-R16`…`CF-R19`).
+
+- `CF-2` is retired as an increment, its number not reused: #1327
+  deleted the serve-credit input it was to sign. The driver's receipt
+  stand-in (`signed_record`) stays, gated test-only and listed on
+  `CF-1b`'s seedable-RNG gate; where it is defined, a comment says no
+  rule checks a delivery digest, so the production signer would change
+  no verdict. `CF-1c` adds the connect-path tamper test: each signed
+  field in turn, refused at CEN-J34 or J37 by name, beside an untampered
+  positive control. `CF-E34` is marked RETIRED with its reason, never
+  deleted: catalogue IDs are not reused.
+- The shard-fill chain (`shard-fill.bin`, 11.5 MB) is frozen until
+  `CF-5`: never regenerated or re-committed, because its bytes do not
+  reproduce and each regeneration would add its size to history for
+  good. It takes no new consumers (a gate holds both). `CF-5`'s forged
+  replacement covers every current consumer's test before the file is
+  deleted, and `CF-5`'s plan lists them.
+- Chain B's state comparison is accepted, with four criteria for `CF-1c`:
+  recorded inputs replay through the producer's production seams behind
+  the test-only flag, with no separate replay path; the projection is
+  defined by exclusion, each excluded field with its reason and each row
+  category with a negative control; `CF-1c` shows the settlement outcome
+  is timing-independent under the cross-check's conditions, and if not,
+  the answer is tighter conditions or another check, never wider
+  tolerances; an input that cannot be recorded makes B's artifact the
+  only copy, an immutable digest-pinned release held in more than one
+  place.
+- Chain P's design-load segment cannot start at genesis (limit 600,000
+  against about 635,520 for 30 spends, from the CI lane's #1365). P
+  grows the medians under the real rule, its miners taking the penalty,
+  before the segment, and again before the 4x segment; the plan says
+  whether that fits P's length (it does: two 51-block ramps). Pending
+  the design-load ruling.
+
+## 2026-11-13 — Chain forge: the harness identity ends in CF-5, and the harness seed is public and regtest-only
+
+**Decision** (Rick, on `CF-1a`; `CHAIN_FORGE.md` §1, `CF-R15`).
+
+- `CF-1a` adds a regtest mode alongside the existing harness id; the
+  design's regtest-identity section governs. Two identities side by side
+  are fine for now.
+- The old harness id is marked test-only and due for deletion in `CF-5`,
+  and listed as a follow-up, so a later revival fails review instead of
+  passing quietly. Where the test-only feature gate can check it, it does.
+- Lock 4 (the wire) may be cited rather than tested only if the citation
+  names, by path and function, an existing test of the network's
+  transport prefix; with none, `CF-1a` writes one with the positive-control
+  pattern of locks 1–3.
+- The harness seed is public and regtest-only: the regtest miner's
+  coinbases can be spent by anyone who restores it, which is intended.
+  Its addresses are refused on mainnet and testnet because their prefixes
+  do not match, and a test holds that refusal.
+- The emission claim takes the chain's network id and the proof
+  reference as two arguments (revised in review before #1370 merged).
+  Pairing them in one struct held no invariant the parameters do not
+  name. The two public wrappers carry the same scoped
+  `too_many_arguments` allow the private assembler already has.
+
+**Why.** An identity kept for convenience is the one that quietly comes
+back; a dated deletion with a gate behind it does not. A public seed is
+safe only while what it can spend is worthless, which regtest's prefixes
+make true and a test keeps true.
+
+
+## 2026-11-15 — The balance is spendable plus held (held SUPERSEDED the same day); spendable has one definition
+
+**Decision** (Rick, the wallet lane's PR 2 brief; A17 of the alpha.11 bug
+hunt).
+
+- **balance = spendable + held**, and **held = incoming + parked**.
+  SUPERSEDED the same day (the user freeze is deleted, below): balance =
+  spendable + incoming, and `held` names nothing in the balance.
+- **Spendable** is what a send could use at the wallet's synced tip: not
+  spent, not parked by the user, not unspendable, not under an in-flight
+  send's lock, and in the tree of the reference block the wallet anchors to
+  (`in_tree_at_reference` on `select_reference_height(synced)`). One
+  classifier decides it, and the balance, the spendable views and the send
+  path all call it.
+- **Incoming** is the wallet's received outputs not yet spendable by that
+  rule, plus each in-flight send's change from dispatch until the change
+  output is scanned. It carries the wait, in blocks, until the soonest
+  on-chain incoming output is spendable; the wait is absent, not 0, when
+  no incoming output is on chain.
+- **Parked** is the outputs the user took out of coin selection; the word
+  is its own because the glossary's `frozen` means frozen shards.
+  SUPERSEDED the same day: there is no parked leg (below).
+- Beside the balance, never in it: **outgoing** (recipients plus fee of
+  the in-flight sends), **unspendable**, and the staking legs.
+- The tree rebuild is the wallet's state, not the money's: an output
+  spendable by the rule stays spendable while the wallet's tree catches
+  up, and a send in that window keeps its own refusal.
+- The contract carries the balance and each leg once; no field but
+  `balance` holds a sum. `liquid`, `unlocked` and `pending` are deleted.
+- A send the parked money alone would cover is refused with its own
+  error, naming the parked amount and the remedy. SUPERSEDED the same
+  day: `-29127` is retired (below).
+
+**Why.** The balance said "unlocked" seven blocks before a build could
+spend the money, and two fields held the same number. A wallet that says
+spendable must mean what a send can use; one predicate at one tip makes
+the balance and the build agree by construction.
+
+## 2026-11-15 — The fee tier is economy, standard or high; there is no custom rate
+
+**Decision** (Rick, the wallet lane's PR 2 brief; A18; IG-Q52 for the
+names).
+
+- One fee tier set, `economy`, `standard`, `high`, lowercase on every
+  surface; one type (`shekyl_economics::FeePriority`) beside the ladder
+  whose rungs it names. The ladder's top rung is `high`.
+- **The custom rate is deleted.** The fee is in cleartext on chain.
+  Conforming wallets pay one of three values derived from chain state, so
+  a tier hides in its cohort, and a custom rate marks its wallet
+  (`FEE_LADDER_DERIVATION.md` W3, which had left it "out of scope").
+- **Reopens only** on a measured case where `high` misses its confirmation
+  target under congestion. The fix then goes in the derivation of the
+  ladder's top rung, so every wallet still pays the same top rate. It never
+  comes back as a per-wallet rate.
+
+**Why.** A per-wallet rate is a fingerprint the wallet pays for.
+
+## 2026-11-15 — #1393's review: a change of at least one unit, reserve proofs show money held, the names
+
+**Decision** (Rick, the review of #1393 at `24f6cf5c4`).
+
+- **The fee is always a ladder value; the change is at least one unit.**
+  A leftover above the with-change fee becomes a change output however
+  small, never a fee of its own. A leftover exactly equal to the
+  with-change fee would leave a change of zero: the output would not be
+  built while the fee stayed sized for it, off the ladder for the
+  transaction's real shape. It is refused, and selection covers the
+  payments, the with-change fee and one unit.
+- **No sentinel fee.** The signer's with-change fee is absent, not
+  `u64::MAX`, when the payments fill the output limit (second pass, at
+  `3ad490c8b`). The send path never builds that case: a request with more
+  payments than leave room for a change output is refused before
+  selection.
+- **A reserve proof shows money held, not money spendable at the
+  reference.** Its candidates are every on-chain output in the balance:
+  spendable, parked and incoming (parked SUPERSEDED below: spendable and
+  incoming). In-flight inputs and unspendable outputs are out.
+- **`-29127 OUTPUTS_PARKED` carries no amount**: the parked amount's one
+  source is `get_balance.parked`, and error data is logged like the
+  message. SUPERSEDED: `-29127` is retired (below).
+- **The fee tier is not a preference.** The prefs file's
+  `default_priority` and the fee reply's `default_priority`, which nothing
+  read, are deleted.
+- **Names ratified**: `parked` (the user-freeze leg; `frozen` means frozen
+  shards), `held` as the definition's name with no field,
+  `incoming_wait`, the codes `-29123`…`-29127`, and the `-29119` fault
+  keywords. The sim names the top tier `high` too. `parked`, `held` and
+  `-29127` SUPERSEDED below; `incoming_wait`, `-29123`…`-29126` and the
+  fault keywords stand.
+
+**Why.** A fee sized for an output the transaction does not carry marks
+the wallet as surely as a fee of its own. A reserve proof answers "how much
+does this wallet hold", which incoming money is part of.
+
+## 2026-11-15 — The user freeze is deleted
+
+**Decision** (Rick, on #1393: option (b)).
+
+- **A user-set hold on outputs is removed.** The ledger's `frozen` flag,
+  the engine's freeze and thaw, the classifier's parked state, the
+  balance's parked leg and `-29127 OUTPUTS_PARKED` are deleted; `-29127`
+  is retired and never reused. Ledger block version 15 and wallet ledger
+  format 26: a file an earlier build wrote is refused for its version,
+  and the refusal names the remedy, restoring the wallet from its seed,
+  and what that restore does not bring back: the scan re-derives the
+  received outputs and the balance, not the send history, the proofs for
+  earlier sends (their transaction secrets are random), the notes or the
+  payment requests.
+- **balance = spendable + incoming.** `held` names nothing in the
+  balance: it would be incoming under a second name, and the grammar's
+  `held` already means the shards a wallet holds.
+- **`freeze`, `thaw` and `frozen` are REJECTED**, the names a Monero user
+  would try, in the CLI's table and the contract's method registry. Each
+  refusal states the reason and points to this entry. A REJECTED registry
+  row carries the reason the server states (`reason`), held equal to the
+  server's table by a test.
+- This supersedes, in the entries above: held = incoming + parked, the
+  parked leg, the parked refusal, parked outputs among a reserve proof's
+  candidates, and the ratified names `parked`, `held` and `-29127`.
+
+**Why.** FCMP++ already hides which outputs a spend uses, so a hold has no
+privacy job left. Any human choice on a visible parameter (input count,
+consolidation timing) becomes a pattern, while deterministic selection
+gives every wallet the same shapes. The wallet's own reservations already
+keep built and staking-held outputs out of selection.
+
+**Reopens** only on a named user job those reservations do not cover.

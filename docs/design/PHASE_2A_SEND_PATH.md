@@ -676,7 +676,7 @@ than catching them. This is the anchor point for F5's validity-horizon (§3.6,
     because it is benign.
   - **Change output** — carries **no cleartext amount**; the actor computes
     `change = Σinputs − sent − fee` from the recovered-input total it **already
-    holds** engine-side, applies the dust-fold rule there, and the orchestrator
+    holds** engine-side, chooses the fee and change there (§3.8.2), and the orchestrator
     decides only that a change output **exists** (the count/weight input the F4
     fee loop needs), never its value. This extends the input-amount pin one step
     further: change is the output amount most tightly coupled to the values
@@ -688,9 +688,9 @@ than catching them. This is the anchor point for F5's validity-horizon (§3.6,
     natural home already holds it.*
 
   This defines a small orchestrator↔engine protocol — orchestrator:
-  "to-recipient + change-to-self"; engine: compute change, apply dust-fold,
+  "to-recipient + change-to-self"; engine: compute change, choose the fee,
   **report the final output count back** so the orchestrator's weight/fee stays
-  correct. That dust/count handshake is part of the **F4 + F8** unit deferred
+  correct. That fee/count handshake is part of the **F4 + F8** unit deferred
   behind F1 (§9); pin the locality now, work the handshake in that pass.
 
   The actor does the ECDH/HKDF → `shekyl_tx_builder::OutputInfo`
@@ -891,7 +891,7 @@ cancelled).
 
 These two shapes (§3.7.2 + §3.7.3) are the load-bearing type decisions; C2–C5
 hang off them. **2a-2** populates the superset/projection and writes the C5
-per-field locality assertion (§3.7.8); the change-locality dust/count handshake
+per-field locality assertion (§3.7.8); the change-locality fee/count handshake
 is the **F4 + F8** unit, now pinned in **§3.10**. **2a-3** lands the
 `TxSignatures`/`TxInputSignature` reshape, deletes `FcmpPlusPlusWitness`, adds
 the `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3), and ships the C5 structural test.
@@ -909,12 +909,12 @@ material, only structural counts").
 
 #### 3.8.1 The circularity
 
-`fee ← weight ← output_count ← (change output exists?) ← (change ≥ dust?) ←
+`fee ← weight ← output_count ← (change output exists?) ← (change > 0?) ←
 change = Σinputs − sent − fee`. The loop closes on a predicate
-(**`change ≥ dust`**) that ranges over a **secret** (the change value), which is
+(**`change > 0`**) that ranges over a **secret** (the change value), which is
 exactly the quantity §3.7.2 keeps engine-side. The existing build path does not
 model this: `estimate_fee` is called once on `recipient_count`, `target = sent +
-fee`, `change = total − target` — no dust-fold of the change output, and the
+fee`, `change = total − target` — no output-count feedback, and the
 signed weight can differ from the estimate.
 
 #### 3.8.2 Resolution: pass *both* candidate fees; the engine decides (no iteration)
@@ -929,20 +929,29 @@ round-trip, **pre-prove**:
 
 ```text
 leftover = Σinputs − Σsent
-if leftover < fee_N            → InsufficientFunds { shortfall }   // early return, NO proving
-change = leftover − fee_{N+1}
-if !dust(change, fee_rate)      → WithChange  (build change output; count N+1; fee = fee_{N+1})   // canonical dust() §3.8.5
-else                            → NoChange    (dust-fold / exact change; count N; fee = leftover)
+if leftover == fee_N                      → NoChange    (exact; count N; fee = fee_N)
+if leftover <  fee_N                      → InsufficientFunds { shortfall }   // early return, NO proving
+match fee_{N+1}:
+  Some(f), leftover − f ≥ 1               → WithChange  (change = leftover − f; count N+1; fee = f)
+  Some(f), leftover ≤ f                   → InsufficientFunds { shortfall: f + 1 − leftover }
+  None (N payments fill MAX_OUTPUTS)      → TooManyOutputs { count: MAX_OUTPUTS + 1 }
 ```
 
-`NoChange` validity: the `leftover ≥ fee_N` guard means `fee = leftover ≥` the
-minimum fee for `N` outputs; the overpay (`leftover − fee_N`) is the
-change-output's weight plus the sub-dust remainder — standard dust-as-fee
-behavior. **Single-pass, no fixpoint iteration**: assume-change-exists is the
-conservative selection target; the engine downgrades to `NoChange` when change
-falls below dust. The exact-change case (`leftover ∈ [fee_N, fee_{N+1})`)
-collapses into `NoChange` — which is why **both** candidate fees are
-load-bearing.
+**The fee is always one of the two ladder values, never the leftover**
+(`sign_bridge::fee_and_change`). The fee is cleartext on chain: a wallet paying
+a ladder value hides in that rung's cohort, and one paying its leftover marks
+itself (`FEE_LADDER_DERIVATION.md` W3). So every leftover above `fee_{N+1}`
+gets a change output, however small (at least one atomic unit, `MIN_CHANGE`),
+and `NoChange` is taken only for a leftover exactly equal to `fee_N`. A
+leftover equal to `fee_{N+1}` would leave a change of zero: the output is not
+built, and the fee, sized for `N+1` outputs, is off the ladder for the
+transaction's `N`. It is refused one unit short, as is any leftover between the
+two fees. **Single-pass, no fixpoint iteration**: selection covers
+`sent + fee_{N+1} + 1` (`selection_target`), so both refusals are defensive.
+`fee_{N+1}` is `None` only when the payments fill the output limit;
+`TxRequest::check_recipients` refuses a request with more payments than leave
+room for a change output, so the send path never builds that directive
+(`too_many_recipients_are_refused_at_the_request`).
 
 #### 3.8.3 The return is one public bit
 
@@ -956,21 +965,19 @@ That the entire cross-boundary surface reduces to public structural facts in
 
 #### 3.8.4 Pre-prove early return (mirrors C3)
 
-The affordability/dust decision is cheap arithmetic and runs **before** the
+The affordability decision is cheap arithmetic and runs **before** the
 FCMP++ prover commits. `InsufficientFunds` returns without proving; the prover
 runs only once the variant is locked and the output set assembled — the same
 fail-cheap discipline as the C3 path precondition (§3.7.6).
 
-#### 3.8.5 One canonical `dust()` predicate, two decision sites
+#### 3.8.5 One canonical `dust()` predicate, decided at selection
 
-Input-dust (selection) and change-fold (build) are the **same predicate** — "is
-amount A worth less than `k×` the cost to spend one input at the current fee
-rate?" — sited differently. What must stay separate is the **decision sites**
-(selection *deprioritizes* tiny inputs; the engine *folds* a sub-threshold change
-output into the fee); what must be **shared** is the predicate itself. So this is
-**not** "two thresholds that must agree" — it is **one canonical function** called
-from both sites, which makes drift *unrepresentable* rather than merely
-discouraged:
+Input dust is decided at selection — "is input amount A worth less than `k×` the
+cost to spend it at the current fee rate?" — and selection *deprioritizes* such
+inputs. The build has no dust predicate: a leftover above the with-change fee
+becomes a change output however small, because folding it into the fee would
+put an off-ladder fee on chain (§3.8.2). The predicate is **one canonical
+function**:
 
 ```text
 fn dust(amount: u64, fee_rate: FeeRate) -> bool {
@@ -978,12 +985,10 @@ fn dust(amount: u64, fee_rate: FeeRate) -> bool {
 }
 ```
 
-The change-fold *decision* still has one authoritative owner — the engine's build
-step (§3.8.2) — because it ranges over the **secret** change value; the
-orchestrator's selection-side call is over input amounts it already holds. Same
-function, two call sites, one decision owner. Selection targets `sent +
-fee_{N+1}` (conservative), so `InsufficientFunds` is a **defensive** outcome (an
-input locked/spent between select and sign), not the normal re-selection driver.
+Selection targets `sent + fee_{N+1} + 1` (conservative: the payments, the
+with-change fee and a change of at least one unit), so `InsufficientFunds` at
+the build is a **defensive** outcome (an input locked/spent between select and
+sign), not the normal re-selection driver.
 
 **Denominated in spend cost, not nominal SKL (rule 05 + rule 75).** An output is
 dust iff it is worth less than `k×` **the cost to spend it later** — the Bitcoin
@@ -1006,7 +1011,7 @@ it is a triple failure exactly where Shekyl can least afford it:
 
 1. **Privacy.** A purchasing-power threshold needs a price oracle — the wallet
    either phones a price feed (network deanonymization) or reads a per-wallet
-   configured rate; either way the fold boundary varies with the price the wallet
+   configured rate; either way the dust boundary varies with the price the wallet
    believed at build time, a structural metadata leak in a coin whose thesis is
    uniformity.
 2. **Not network-derivable.** The chain knows feerate, weight, emission, supply;
@@ -1022,15 +1027,15 @@ need for a hard floor emerges that `dust()` + `K_DUST` cannot express — the fi
 axis does **not** reopen.
 
 **`K_DUST` is a canonical constant, not a per-wallet value.** The user-knob
-rejection extends to `k` itself: if wallet A folds at `k=1` and wallet B at
-`k=3`, the fold boundary fingerprints the wallet — the same uniformity logic that
+rejection extends to `k` itself: if wallet A skips inputs at `k=1` and wallet B
+at `k=3`, the selection boundary fingerprints the wallet — the same uniformity logic that
 forbids a per-wallet `enc_label` slot. `K_DUST` is pinned **once** in code (F4 +
 F8 pass), identical for every honest wallet.
 
 **Consensus where it can be; canonical convention where privacy forecloses
 consensus.** This rule cannot be consensus-enforced, and that is **not** a gap to
 close later — it is **forced by privacy**. Validators cannot see output values
-(FCMP++/Pedersen), so they cannot reject a wallet that folds differently; a
+(FCMP++/Pedersen), so they cannot reject a wallet that selects differently; a
 deviant wallet's tx stays valid. The strongest available form is therefore
 **canonical convention** — one `dust()` formula every honest wallet computes
 identically — and that ceiling is set by privacy, not by unfinished work. Making
@@ -1055,16 +1060,12 @@ construction.
 - A **build directive** carries `{ fee_rate snapshot (§3.3), fee_N, fee_{N+1},
   change-to-self subaddress intent }`.
 - A **build outcome** carries `{ final_output_count, fee, change_included }`.
-- New `InsufficientFunds { shortfall }` outcome (cheap, pre-prove); the dust-fold
-  is a **normal non-error** outcome, not a stub.
+- New `InsufficientFunds { shortfall }` outcome (cheap, pre-prove); `NoChange`
+  is the normal outcome for a leftover exactly equal to `fee_N`.
 - The dust threshold is **not** a nominal constant — it is the canonical
-  `dust(amount, fee_rate)` predicate (§3.8.5). The pass pins one shared function
-  + the canonical `K_DUST`, migrates `coin_select`'s nominal `1_000_000` to a
-  `dust()` call, and computes `FeeDirective.dust_threshold` **via `dust()`'s inner
-  expression** (not an inline recomputation): the orchestrator owning the fee
-  *arithmetic* and the engine owning the variant *decision* is a clean cut —
-  single-siting binds the *decision*, not the arithmetic — provided the value
-  flows from the one canonical function.
+  `dust(amount, fee_rate)` predicate (§3.8.5), called at selection. The pass
+  pins one shared function + the canonical `K_DUST` and migrates
+  `coin_select`'s nominal `1_000_000` to it.
 - Weight model **resolved in §3.10.1**: `fee_{N+1} − fee_N` is *smooth* in 2a
   (`n_out ∈ {1,2}` ⇒ clawback 0; the step is one output's fields + the ~64 B BP+
   1→2 padding delta). The power-of-2 clawback discontinuity is forward-looking for
@@ -1150,25 +1151,25 @@ pub enum TxOutputContext {
     /// Change-to-self INTENT. Carries no amount: the actor computes the change
     /// value engine-side (§3.8) and derives the one-time output to its own
     /// subaddress. The actor materializes this output only if the variant is
-    /// WithChange (§3.8.2); under dust-fold it is dropped.
+    /// WithChange (§3.8.2); an exact leftover (NoChange) drops it.
     Change {
         #[zeroize(skip)] subaddress_index: SubaddressIndex,  // 2a default: primary / index 0
     },
 }
 
 /// Public, network-derived fee model the actor decides the change variant
-/// against (§3.8.2). All three are atomic-unit `u64`s computed orchestrator-side
-/// from the `FeeRate` snapshot (§3.3) — NO human knob, NO secret. `dust_threshold`
-/// is fee-relative, not nominal (§3.8.5).
+/// against (§3.8.2). Atomic-unit `u64`s computed orchestrator-side from the
+/// `FeeRate` snapshot (§3.3) — NO human knob, NO secret. The fee the actor
+/// signs is always one of the two.
 pub struct FeeDirective {
-    pub fee_no_change: u64,    // weight_N     × rate (quantized)
-    pub fee_with_change: u64,  // weight_{N+1} × rate (quantized)
-    pub dust_threshold: u64,   // k · FeeRate::calculate_fee_from_weight(marginal_input_weight)
+    pub fee_no_change: u64,            // weight_N     × rate (quantized)
+    pub fee_with_change: Option<u64>,  // weight_{N+1} × rate (quantized); None when N fills MAX_OUTPUTS
 }
 
 /// The actor message. F4/F8 adds `fee` to the F2 vessel.
 /// `outputs` carries the INTENDED set (payments + one `Change` intent); the actor
-/// drops the change entry under dust-fold, so the signed output count ∈ {N, N+1}.
+/// drops the change entry when the leftover is exactly `fee_N`, so the signed
+/// output count ∈ {N, N+1}.
 ///
 /// **NON-CLONE (refinement B):** transitively non-`Clone` because it holds
 /// `Vec<TxOutputContext>`; a whole-message clone must not be able to duplicate the
@@ -1213,7 +1214,7 @@ The signing entry point and the only non-success outcome:
 // KeyEngine handle:
 //   async fn sign_transaction(&self, tx: &TxToSign) -> Result<TxSignatures, KeyEngineError>;
 //
-// The variant decision + dust-fold run pre-prove inside the actor (§3.8.4); the
+// The variant decision runs pre-prove inside the actor (§3.8.4); the
 // FCMP++ prover commits only after the variant is locked. The sole pre-prove
 // early return is the DEFENSIVE affordability miss (an input locked/spent
 // between selection and sign — §3.8.5), surfaced up to BuildError (§7) to drive
@@ -1345,7 +1346,7 @@ predictor is validated component-wise (`fcmp_proof_size` KAT + BP+ size +
 #### 3.10.2 D — canonical `dust()` + `K_DUST` + `MARGINAL_INPUT_WEIGHT` (§9 #4)
 
 §3.8.5 pinned the *form* (`amount < K_DUST · fee_rate.calculate_fee_from_weight(
-MARGINAL_INPUT_WEIGHT)`), fee-relative not nominal, one fn / two sites, `K_DUST`
+MARGINAL_INPUT_WEIGHT)`), fee-relative not nominal, one fn, `K_DUST`
 canonical. This sub-unit pins the two constants, derived from W:
 
 - **`MARGINAL_INPUT_WEIGHT`** is the weight one *additional input* adds when
@@ -1358,8 +1359,8 @@ canonical. This sub-unit pins the two constants, derived from W:
 - **`MARGINAL_INPUT_WEIGHT` is a canonical constant evaluated at `D_ref =
   MAX_TREE_DEPTH (24)`, not per-tx.** This is the canonical-convention discipline
   (§3.8.5) applied one level deeper: a `tree_depth`-local value would make two
-  wallets at different sync heights compute different dust boundaries — the fold
-  boundary would fingerprint sync state, the same uniformity failure that bans a
+  wallets at different sync heights compute different dust boundaries — the
+  selection boundary would fingerprint sync state, the same uniformity failure that bans a
   per-wallet `enc_label` slot or per-wallet `k`. So it is pinned **once** at the
   fixed depth `D_ref = MAX_TREE_DEPTH` (`shekyl-fcmp`), identical for every honest
   wallet. `MAX_TREE_DEPTH` is the right `D_ref` because it is **a named ceiling
@@ -1373,37 +1374,25 @@ canonical. This sub-unit pins the two constants, derived from W:
   `[1,8]×[1,24]` grid measures — it is an assumption *until* the KAT shows the
   depth term is immaterial across the grid, not a settled fact. **If** the KAT
   shows depth moves `MARGINAL_INPUT_WEIGHT` by more than a token amount, then the
-  choice of `D_ref` stops being free and becomes a real fold-direction decision —
-  **high `D_ref` → larger threshold → fold more → less output-count uniformity;
-  low `D_ref` → fold less → more 2-output uniformity** — to be re-decided under
-  privacy > features with the measured numbers. Do not finalize the "nearly free"
+  choice of `D_ref` stops being free and becomes a real selection-threshold
+  decision (high `D_ref` → larger threshold → more inputs skipped) — to be
+  re-decided under privacy > features with the measured numbers. Do not finalize the "nearly free"
   rationale ahead of the measurement that justifies it.
-- **`K_DUST = 1` — re-derived against Shekyl's objective, not inherited.** The
+- **`K_DUST = 1` — derived against Shekyl's objective, not inherited.** The
   *form* (dimensionless `k` × spend cost) ports cleanly: `k` is unitless and the
   PQC-inflated base is already absorbed by `MARGINAL_INPUT_WEIGHT`. The *value* is
-  **not** Bitcoin Core's `dustRelayFee` `k ≈ 3` — that number is a relay-spam risk
-  appetite with **no privacy-uniformity term** in its optimization. Here the
-  objective differs: a higher `k` folds change worth up to `k×` its spend cost
-  into the fee, producing more 1-output txs and **less output-count uniformity** —
-  and uniformity is the privacy property being protected (1-output txs are
-  builder-permitted — verified `shekyl-tx-builder::tests` single-output
-  `sign_transaction` — so the folded population is real and observable). `k = 3`
-  is therefore the *least* uniform plausible choice. Under privacy > features,
-  pin **`k = 1`**: fold change only when it is **at or below break-even to spend**
-  (worth ≤ its own spend cost — strictly uneconomic to ever recover). This is the
-  point that *both* maximizes 2-output uniformity (smallest fold band → fewest
-  1-output txs) *and* never destroys net-recoverable value (`k > 1` folds change
-  that is net-positive to spend). The `k → 0` limit is always-emit-change
-  (Monero-style 2-output uniformity max); §3.8 already chose folding-exists
-  (avoids unspendable-dust bloat), so `k = 1` is the most-uniform point *within*
-  the pinned shape — this does not reopen §3.8. **Reopen** to `k = 2` only if
-  marginal-dust accumulation proves a concrete wallet-hygiene problem that the
-  privacy objective must yield to.
-- **One function, two sites.** The `dust(amount, fee_rate)` fn (§3.8.5) is the
-  single definition. `coin_select.rs`'s nominal `dust_threshold = 1_000_000`
-  migrates to a `dust()` call (selection-site, over input amounts the orchestrator
-  already holds); the engine's build step calls the same fn over the secret change
-  value (decision-site). Drift is unrepresentable because there is one function.
+  **not** Bitcoin Core's `dustRelayFee` `k ≈ 3`, a relay-spam risk appetite. Pin
+  **`k = 1`**: selection skips an input only when it is **at or below break-even
+  to spend** (worth ≤ its own spend cost — strictly uneconomic to ever spend);
+  `k > 1` would skip inputs that are net-positive to spend. `k` sets no
+  output-count boundary: the build never folds change into the fee (§3.8.2), so
+  every transaction with a leftover above `fee_{N+1}` carries its change output.
+  **Reopen** to `k = 2` only if marginal-dust accumulation proves a concrete
+  wallet-hygiene problem that the privacy objective must yield to.
+- **One function.** The `dust(amount, fee_rate)` fn (§3.8.5) is the single
+  definition. `coin_select.rs`'s nominal `dust_threshold = 1_000_000` migrates to
+  a `dust()` call (selection-site, over input amounts the orchestrator already
+  holds).
 
 #### 3.10.3 H — fee-loop + change handshake surfaces (§3.8.7)
 
@@ -1432,15 +1421,10 @@ The concrete surface deltas, now that W and D are pinned:
 - **`FeeDirective` population (§3.9).** Orchestrator-side, from the `FeeRate`
   snapshot (§3.3):
   - `fee_no_change   = quantize(predict_weight(n_in, N,   depth, fee) × rate)`
-  - `fee_with_change = quantize(predict_weight(n_in, N+1, depth, fee) × rate)`
+  - `fee_with_change = quantize(predict_weight(n_in, N+1, depth, fee) × rate)`,
+    `None` when `N` payments fill `MAX_OUTPUTS` and no change output fits
     — each converged by the §3.3 two-pass loop over the `varint_len(fee)`
     fixpoint (§3.10.1); the `fee` self-feeds, the loop settles in ≤2 passes.
-  - `dust_threshold  = dust()`'s inner expression
-    `= K_DUST · rate.calculate_fee_from_weight(MARGINAL_INPUT_WEIGHT)` with
-    `K_DUST = 1` and `MARGINAL_INPUT_WEIGHT` at `D_ref = MAX_TREE_DEPTH` (§3.10.2)
-    — flowing from the **one** canonical fn (§3.8.7: orchestrator owns the
-    *arithmetic*, engine owns the *decision*; single-siting binds the decision,
-    not the arithmetic).
 - **Variant decision** lives in the actor's pre-prove build step (§3.8.2 tree),
   ranging over the secret change value; returns the public bit via
   `TxSignatures` projection (§3.8.3 — no `BuildOutcome` struct).
@@ -1467,6 +1451,47 @@ The concrete surface deltas, now that W and D are pinned:
   Phase 6 gate (§3.0.5, §6) like every other 2a real-root claim.
 
 ---
+
+### 3.11 Output order (R-24)
+
+Every transaction a wallet builds places its outputs in the order its
+transaction key derives, so no transaction says by its layout which
+output came back to the sender (ruling R-24, 2026-11-15; mission
+commitment 2). The order is `TxKey::output_order` (`shekyl-crypto-pq`
+`output_order.rs`): an unbiased Fisher–Yates shuffle over an HKDF-SHA-512
+stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
+(`docs/test_vectors/TX_OUTPUT_ORDER_V1.json`) and an independent oracle
+(`scripts/kat/tx_output_order_oracle.py`).
+
+- **One place orders outputs.** `shekyl_tx_builder::outputs::BuiltSpend::build`
+  takes a list of recipients, never a position: recipient `i` lands at
+  `π(i)` and is built with derivation index `π(i)`, so a recipient's scan
+  is unchanged. The single-output builder is private to that crate
+  (a `compile_fail` holds it). A caller that needs one recipient's output
+  asks for it by recipient.
+- **Solo.** The key is drawn from the OS, so the change lands at each
+  position with equal probability (a seeded chi-square test holds it).
+- **Multisig.** The key comes from the intent, so every member derives the
+  same order; the intent's recipients stay sorted (`PQC_MULTISIG.md` §9.5).
+- **Consensus reads no wallet-built output by position.** Each kind:
+
+| Kind | Outputs | Read by position? | Order |
+|---|---|---|---|
+| Transfer | payments and change | no | `π` over all |
+| Drain | principal and `P` change (or two principal halves) | no | `π` over all |
+| Bond post | confidential change to `P` | no | `π` over all |
+| Emission claim | one loud reward vout and two change vouts | no: CEN-J24's reward set is the loud vouts in vout order, wherever they sit | `π` over all; the claim reads its reward's position back for the cross-check and the wire amounts |
+| Group spend | the intent's recipients, change among them | no | `π` over all |
+
+- **The test producers build the same way.** The harness spender (the
+  spends of every forged chain and scenario) and the driver's emission
+  assembly place their outputs through `BuiltSpend::build` too, so a
+  forged chain's spends are the transactions a wallet makes, `R` in
+  `tx_extra` included.
+- **Not wallet-built.** The coinbase and the genesis transaction, whose
+  outputs are public by construction, take no order.
+- **An exact spend** (two outputs, no change) pads nothing here; that
+  question is the wallet lane's.
 
 ## 4. Wire encoding ownership (closed — Round 1)
 
@@ -1692,8 +1717,8 @@ raised: `IoError::Daemon { fault, .. }` on every path and
 |---------|-------|
 | Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::Daemon(DaemonFault::Unreachable)` |
 | Daemon is not one this wallet can use (`VC-4`) | `IoError::Daemon` / `FeeEstimatorError::Daemon` with `DaemonFault::Identity(IdentityMismatch)` — one wallet-RPC code per axis |
-| Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
-| Signer / builder failure | `SendError::Tx` (proof or signature construction), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { reason }` (a downstream signer failure) |
+| Absurd priority fee | `SendError::Fee(FeeEstimatorError::DaemonFeeUnreasonable(_))` |
+| Signer / builder failure | `SendError::Sign(SignFault)` (the builder's fault, by identity), `SendError::SignerUnavailable` (no spend-key material in scope), or `SendError::SignerFailed { fault: SignerFault }` (a wallet-side signing fault) |
 | Output not yet spendable at reference block (`eligible_height >= reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::BuildInvariant` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
 | Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |
@@ -1753,8 +1778,8 @@ step 2), never read from a daemon field.
    stored tree-position) / Set B (actor, secret, via `output_handle`); the
    grep-driven Set-B confirmation is that doc's Round-1 task.
 4. **Change output (F4 + F8 — handshake shape pinned in §3.8):** Phase 2a
-   includes one change output when the inputs exceed `sent + fee` by at least the
-   change-fold threshold. The change **value** is computed **engine-side**
+   includes one change output whenever the inputs exceed `sent + fee_{N+1}`, of
+   at least one atomic unit (§3.8.2). The change **value** is computed **engine-side**
    (`Σinputs − sent − fee`) and never crosses on `TxOutputContext`. The
    fee↔count circularity is resolved **without iteration** by passing both
    candidate fees (`fee_N` / `fee_{N+1}`) and letting the engine pick the variant
@@ -1770,8 +1795,8 @@ step 2), never read from a daemon field.
    2a (§3.10.3, reversion-clause). Change-output **crypto** stays 2c (§3.10.4).
    **One provisional item:** the "depth nearly free, so `D_ref` choice is free"
    premise behind D is confirmed only when the §3.10.1 KAT shows the depth term is
-   immaterial across `[1,8]×[1,24]`; if it isn't, `D_ref` becomes a fold-direction
-   choice re-decided under privacy > features (§3.10.2).
+   immaterial across `[1,8]×[1,24]`; if it isn't, `D_ref` becomes a
+   selection-threshold choice re-decided under privacy > features (§3.10.2).
 5. **FCMP++ proof validity horizon + reference-block selection (RESOLVED):**
    §3.6 handles stale roots *reactively* via `ProofStale`. The *proactive* bound
    — how many blocks a built proof stays submittable before the wallet should
@@ -1826,7 +1851,7 @@ step 2), never read from a daemon field.
 - [ ] §3.7.8 C5 structural SpendInput/bridge escape test (deferred; Debug redaction only today)
 - [x] §3.8 change/fee handshake pressure-tested (both-candidate-fees, engine-decides, one-bit return, two-dust-concept trap)
 - [x] §3.9 consolidated type definitions pinned (`TxToSign` + `FeeDirective` + `TxOutputContext` enum + `TxSignatures` with `fee`; no `BuildOutcome` — outcome is a `TxSignatures` projection)
-- [x] §3.8.5 canonical `dust(amount, fee_rate)` predicate (one function, two sites; `K_DUST` canonical not per-wallet; fiat-floating rejected by name; canonical-convention-not-consensus pinned)
+- [x] §3.8.5 canonical `dust(amount, fee_rate)` predicate (one function, selection-site; `K_DUST` canonical not per-wallet; fiat-floating rejected by name; canonical-convention-not-consensus pinned)
 - [x] §3.9 refinements B/C (2a-2/2a-3); [ ] `dest` `zeroize(skip)` 2c re-audit clause (D)
 - [x] §3.10 F4 + F8 design pass complete: W (weight predictor mirrors verified `Transaction::weight()`; only `fcmp_proof_size(n_in,tree_depth)` measured; 2a clawback ≡ 0; `+varint_len(fee)` fixpoint) → D (`dust()` + `K_DUST = 1` re-derived for uniformity + canonical `MARGINAL_INPUT_WEIGHT` at `D_ref = MAX_TREE_DEPTH`, **provisional pending KAT**) → H (surfaces)
 - [ ] §3.10.1 full `fcmp_proof_size` grid (depth-1 KAT landed 2a-3; depth>1 deferred)

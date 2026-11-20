@@ -8,8 +8,8 @@
 
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
-use shekyl_types::{BlockHash, PrefixHash, SigningPayloadHash};
+use shekyl_network::NetworkId;
+use shekyl_types::{BlockHash, KeyImage, PrefixHash, SigningPayloadHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -35,8 +35,8 @@ pub struct WireEncodeInput {
     /// ordinary FCMP++ spend). Non-zero only for the emission-claim reward vouts,
     /// which are *loud* by consensus: the daemon reads `tx.vout[i].amount` directly
     /// to form the reward-commit set and the `total_reward` operand of
-    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `ct_semantics.cpp:348`). Arity
-    /// is pinned to `output_keys` at build.
+    /// `verCtSemanticsEmission` (`blockchain.cpp:3926`, `ct_semantics.cpp` at
+    /// `ac3836de90` (lines 290–322)). Arity is pinned to `output_keys` at build.
     pub output_amounts: Vec<u64>,
     pub view_tags: Vec<Option<u8>>,
     pub tx_extra: Vec<u8>,
@@ -52,10 +52,10 @@ pub struct WireEncodeInput {
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
     /// consume), NOT the on-chain `curve_trees_tree_depth`. The name is distinct
     /// on purpose: the consensus prunable field is the LMDB depth `L − 1`, so
-    /// [`build_wire_tx`] serializes `fcmp_layers - 1` and the daemon reconstructs
+    /// `build_wire_tx` serializes `fcmp_layers - 1` and the daemon reconstructs
     /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
     /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4); a spendable
-    /// tx needs `L >= 2` (see [`build_wire_tx`]). The old shekyl-oxide encoder
+    /// tx needs `L >= 2` (see `build_wire_tx`). The old shekyl-oxide encoder
     /// omitted it (it put `reference_block` in the prunable instead — divergence
     /// §3.2/§3.3).
     pub fcmp_layers: u8,
@@ -81,11 +81,7 @@ fn wire_inputs(
     }
     Ok(key_images
         .iter()
-        .map(|ki| Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: *ki,
-        })
+        .map(|ki| Input::fcmp_spend(KeyImage::from_bytes(*ki)))
         .chain(extra_inputs.iter().cloned())
         .collect())
 }
@@ -131,13 +127,36 @@ fn wire_outputs(
         .collect()
 }
 
+/// The committed base of a spend's outputs: each output's encrypted amount
+/// and label, and its commitment, in output order.
+///
+/// The provenance type ends here, deliberately. `CtBase` is `shekyl-wire`'s
+/// representation, shared with the *parse* direction, where the nine bytes
+/// came off the network and no one in this process vouches for them.
+/// Wrapping those in `EncryptedOutputField` would launder unverified data
+/// into a type whose whole meaning is "this crate computed these". So the
+/// send path stays typed right up to this assembly and unwraps only as it
+/// becomes wire. Every spend's base is written here, a multisig one
+/// included ([`crate::outputs::SpendOutputs`]).
+pub(crate) fn committed_base(
+    enc_amounts: &[EncryptedOutputField],
+    enc_labels: &[EncryptedOutputField],
+    commitments: Vec<[u8; 32]>,
+) -> CtBase {
+    CtBase {
+        enc_amounts: enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+        enc_labels: enc_labels.iter().map(|f| f.to_bytes()).collect(),
+        commitments,
+    }
+}
+
 /// Map the builder's spend material onto a canonical `shekyl_wire::Transaction`.
 ///
 /// This replaces the old shekyl-oxide assembly and fixes its four §3 divergences vs the
 /// C++ daemon: the version is part of the prefix hash, `reference_block` is a 32-byte
 /// hash in the *base*, the prunable is `nbp ‖ bp+ ‖ tree_depth ‖ proof ‖ pseudoOuts`, and
 /// the pqc_header uses a varint public-key length.
-fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
+pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError> {
     // Enforce the wire arity couplings up front: the committed-base arrays are per-output
     // and pqc_auths / pseudo_outs are per-input (the invariants `Transaction::validate`
     // assumes). A mismatch would otherwise serialize a tx only the daemon (or
@@ -194,8 +213,8 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
         .iter()
         .map(|a| WirePqcAuth {
             auth_version: a.auth_version,
-            scheme_id: HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
-            flags: 0,
+            scheme_id: a.scheme.id(),
+            flags: WirePqcAuth::NO_FLAGS,
             hybrid_public_key: a.public_key.clone(),
             hybrid_signature: a.signature.clone(),
         })
@@ -220,7 +239,7 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
 
     Ok(Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: wire_inputs(&input.key_images, &input.extra_inputs)?,
             outputs: wire_outputs(&input.output_keys, &input.output_amounts, &input.view_tags)?,
             extra: input.tx_extra.clone(),
@@ -228,19 +247,11 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
         ct: Ct::Fcmp {
             fee: input.fee,
             reference_block: input.reference_block,
-            base: CtBase {
-                // The provenance type ends here, deliberately. `CtBase` is
-                // `shekyl-wire`'s representation, shared with the *parse*
-                // direction, where the nine bytes came off the network and no
-                // one in this process vouches for them. Wrapping those in
-                // `EncryptedOutputField` would launder unverified data into a
-                // type whose whole meaning is "this crate or the FFI boundary
-                // computed these". So the send path stays typed right up to
-                // this private assembly and unwraps only as it becomes wire.
-                enc_amounts: input.enc_amounts.iter().map(|f| f.to_bytes()).collect(),
-                enc_labels: input.enc_labels.iter().map(|f| f.to_bytes()).collect(),
-                commitments: input.out_commitments.clone(),
-            },
+            base: committed_base(
+                &input.enc_amounts,
+                &input.enc_labels,
+                input.out_commitments.clone(),
+            ),
             pqc_auths,
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
@@ -256,7 +267,6 @@ fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBuilderError>
                 // *spends*, and a serve-credit vin cannot co-reside with one
                 // (the all-or-none mixing rule, §2.5). Pass records are built
                 // by the archival path, never here.
-                serve_credit_pruned: Vec::new(),
             }),
         },
     })
@@ -274,7 +284,7 @@ fn prefix_only_tx(
 ) -> Result<Transaction, TxBuilderError> {
     Ok(Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: wire_inputs(key_images, extra_inputs)?,
             outputs: wire_outputs(output_keys, output_amounts, view_tags)?,
             extra: tx_extra.to_vec(),
@@ -287,14 +297,17 @@ fn prefix_only_tx(
     })
 }
 
-/// Per-input PQC signing-preimage hashes — delegates to the canonical
+/// Per-input PQC signing-preimage hashes on the network whose id is
+/// `network` — delegates to the canonical
 /// [`shekyl_wire::Transaction::pqc_signing_payload_hashes`]
-/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1). Typed to the signing call: the
-/// hash degrades to bytes only where the primitive takes its message.
+/// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1; `NETWORK_IDENTITY.md` NI-Q4).
+/// Typed to the signing call: the hash degrades to bytes only where the
+/// primitive takes its message.
 pub fn phase1_payload_hashes(
     input: &WireEncodeInput,
+    network: &NetworkId,
 ) -> Result<Vec<SigningPayloadHash>, TxBuilderError> {
-    Ok(build_wire_tx(input)?.pqc_signing_payload_hashes())
+    Ok(build_wire_tx(input)?.pqc_signing_payload_hashes(network))
 }
 
 /// Assemble and serialize the final signed transaction via the canonical
@@ -383,6 +396,9 @@ pub fn tx_prefix_hash_from_parts_with_extra(
 
 #[cfg(test)]
 mod tests {
+    /// Any network's id: the builder hashes under the id it is given.
+    const TEST_NETWORK_ID: NetworkId = [7; 16];
+
     use super::*;
     use shekyl_bulletproofs::Bulletproof;
 
@@ -395,8 +411,8 @@ mod tests {
             view_tags: vec![Some(3)],
             tx_extra: vec![1, 2, 3],
             fee: 1_000,
-            enc_amounts: vec![crate::tests::enc_field_fixture([0u8; 9])],
-            enc_labels: vec![crate::tests::enc_field_fixture([0u8; 9])],
+            enc_amounts: vec![crate::tests::enc_fields().0],
+            enc_labels: vec![crate::tests::enc_fields().1],
             out_commitments: vec![[4u8; 32]],
             pseudo_outs: vec![[5u8; 32]],
             bulletproof: Bulletproof::prove_plus(
@@ -410,7 +426,8 @@ mod tests {
             reference_block: BlockHash::from_bytes([0xAB; 32]),
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
-                auth_version: 1,
+                auth_version: crate::types::PQC_AUTH_VERSION,
+                scheme: crate::types::PqcScheme::Single,
                 signature: vec![0xDD; 128],
                 public_key: vec![0xEE; 64],
             }],
@@ -429,10 +446,33 @@ mod tests {
         assert!(!a.is_empty());
     }
 
+    /// Each slot's scheme reaches the wire as its own `scheme_id`: a
+    /// multisig slot is written as the multisig scheme, not as one signer.
+    #[test]
+    fn each_auth_slot_is_written_under_its_own_scheme() {
+        for scheme in [
+            crate::types::PqcScheme::Single,
+            crate::types::PqcScheme::Multisig,
+        ] {
+            let mut input = minimal_input();
+            for auth in &mut input.pqc_auths {
+                auth.scheme = scheme;
+            }
+            let Ct::Fcmp { pqc_auths, .. } = build_wire_tx(&input).expect("build").ct else {
+                panic!("an FCMP++ spend");
+            };
+            assert!(pqc_auths.iter().all(|a| a.scheme_id == scheme.id()));
+        }
+        assert_ne!(
+            crate::types::PqcScheme::Single.id(),
+            crate::types::PqcScheme::Multisig.id()
+        );
+    }
+
     #[test]
     fn phase1_payload_hashes_len_matches_inputs() {
         let input = minimal_input();
-        let hashes = phase1_payload_hashes(&input).expect("hashes");
+        let hashes = phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes");
         assert_eq!(hashes.len(), input.key_images.len());
     }
 
@@ -515,8 +555,8 @@ mod tests {
         let tx = Transaction::from_bytes(&bytes).expect("encoded tx must re-parse");
 
         assert_eq!(
-            phase1_payload_hashes(&input).expect("hashes"),
-            tx.pqc_signing_payload_hashes(),
+            phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes"),
+            tx.pqc_signing_payload_hashes(&TEST_NETWORK_ID),
             "delegated phase-1 hashes must match the encoded tx's signing hashes"
         );
         assert_eq!(
@@ -558,7 +598,8 @@ mod tests {
         input.extra_inputs = vec![synthetic_bond_post()];
         // 1 spend + 1 extra ⇒ 2 pqc_auths, still 1 pseudo_out.
         input.pqc_auths.push(PqcAuth {
-            auth_version: 1,
+            auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
@@ -568,8 +609,8 @@ mod tests {
         assert_eq!(tx.prefix.inputs.len(), 2);
         assert!(matches!(tx.prefix.inputs[1], Input::BondPost(_)));
         assert_eq!(
-            phase1_payload_hashes(&input).expect("hashes"),
-            tx.pqc_signing_payload_hashes()
+            phase1_payload_hashes(&input, &TEST_NETWORK_ID).expect("hashes"),
+            tx.pqc_signing_payload_hashes(&TEST_NETWORK_ID)
         );
         assert_eq!(tx_prefix_hash_for_signing(&input), tx.prefix_hash());
         assert_eq!(
@@ -650,13 +691,10 @@ mod tests {
     #[test]
     fn tokey_extra_input_is_rejected() {
         let mut input = minimal_input();
-        input.extra_inputs = vec![Input::ToKey {
-            amount: 0,
-            key_offsets: Vec::new(),
-            key_image: [9u8; 32],
-        }];
+        input.extra_inputs = vec![Input::fcmp_spend(KeyImage::from_bytes([9u8; 32]))];
         input.pqc_auths.push(PqcAuth {
-            auth_version: 1,
+            auth_version: crate::types::PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: vec![0xDD; 128],
             public_key: vec![0xEE; 64],
         });
@@ -690,9 +728,7 @@ mod tests {
         // A per-output base array out of step with the output count must fail at the
         // boundary, not serialize a tx the daemon later rejects.
         let mut input = minimal_input();
-        input
-            .enc_amounts
-            .push(crate::tests::enc_field_fixture([0u8; 9])); // 2 enc_amounts vs 1 output
+        input.enc_amounts.push(crate::tests::enc_fields().0); // 2 enc_amounts vs 1 output
         assert!(matches!(
             encode_final_tx(&input),
             Err(TxBuilderError::WireError(_))

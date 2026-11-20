@@ -3,95 +3,77 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Master-seed extraction from an open wallet handle.
+//! Seed extraction from an open wallet handle.
 //!
-//! **Live module.** It was written for the 2k → 2m-keys rewire window so
-//! the C++ `wallet2::load_keys` shim could pull the master seed across
-//! the FFI; that shim and the whole C++ wallet path were deleted in
-//! Phase 5 (2026-08-19), and this module stayed because the Rust stack
-//! uses the same extraction: the Engine's open path
-//! (`shekyl-engine-core::engine::lifecycle::open`) drives
-//! `shekyl_account_rederive`, and message signing
-//! (`shekyl-engine-core::engine::message_signing`) rederives
-//! `msg_sign_sk` from the seed on each call. The "transitional" in the
-//! filename is historical; renaming it is a mechanical follow-up, not a
-//! deletion.
+//! The Engine's open path (`shekyl-engine-core::engine::lifecycle::open`)
+//! rederives the account from what this returns, and message signing
+//! (`shekyl-engine-core::engine::message_signing`) rederives `msg_sign_sk`
+//! from it on each call.
 //!
-//! # Why master-seed-only (Option A')
+//! # One secret (`NETWORK_IDENTITY.md` NI-R7)
 //!
-//! The classical Ed25519 spend and view scalars are **outputs** of
-//! `shekyl_account_rederive`, not independent secrets. The master seed
-//! is the single piece of key material a caller needs to rebuild the
-//! account. Exposing only the seed:
-//!
-//! 1. Keeps the derivation pipeline in one place
-//!    (`shekyl_crypto_pq::account`). This module does not run HKDF at
-//!    all — it returns the already-authenticated 64 bytes that the
-//!    envelope stored under `cap_content`.
-//!
-//! 2. Preserves the atomic-consistency invariant: the master seed and
-//!    its derivatives are *the same secret* viewed at different stages
-//!    of the pipeline. Returning only the seed guarantees there is no
-//!    intermediate state in which a caller holds the classical scalars
-//!    without the seed, or vice versa.
+//! A wallet's secret is its 32-byte seed; the keys file stores exactly
+//! that, and the 24 words are its spelling. The master seed and every key
+//! are **outputs** of the seed (`shekyl_crypto_pq::account`), not
+//! independent secrets. This returns the seed and the master seed
+//! normalised from it, so a caller can show the words or rebuild the
+//! account, and holds nothing else.
 //!
 //! # Invariants
 //!
-//! The handle has already validated at `open` / `create` time that
-//! `(network, seed_format)` is a permitted pair per
-//! [`DerivationNetwork::permitted_seed_format`]; this module does not
-//! re-check. Every wallet is `Capability::Full` (rule 23: ViewOnly is
-//! REJECTED, hardware-offload is DEFERRED with zero code — decision log
-//! 2026-09-07), and FULL-mode `cap_content` is pinned to 64 bytes by
-//! envelope construction, so extraction is infallible: the seed is
-//! always on disk and always 64 bytes.
+//! Every wallet is `Capability::Full` (rule 23: ViewOnly is REJECTED,
+//! hardware-offload is DEFERRED with zero code — decision log 2026-09-07),
+//! and FULL-mode `cap_content` is pinned to 32 bytes by envelope
+//! construction, so extraction is infallible.
 
 use zeroize::Zeroizing;
 
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::{normalize_seed, MASTER_SEED_BYTES, SEED_BYTES};
 
 use crate::handle::WalletFile;
 
-/// 64-byte master seed extracted from a wallet handle.
+/// The seed and its master seed, extracted from a wallet handle.
 /// The inner `Zeroizing` wipes on drop, so any Rust-side intermediary
 /// that holds this value in a local variable gets auto-wipe by
-/// construction. The FFI layer copies the bytes into a caller-provided
-/// C buffer under Rule 40 (zero-fill-on-failure); callers MUST receive
-/// the bytes into a wipe-disciplined container.
+/// construction.
 ///
 /// Not `Debug`: secret material never prints.
 pub struct RederivationInputs {
+    /// The wallet's 32-byte seed: the bytes its 24 words spell.
+    pub seed: Zeroizing<[u8; SEED_BYTES]>,
+    /// `normalize_seed(seed)`: what every key expands from.
     pub master_seed_64: Zeroizing<[u8; MASTER_SEED_BYTES]>,
 }
 
 impl WalletFile {
-    /// Extract the 64-byte master seed needed to drive
-    /// `shekyl_account_rederive` and per-call signing-key rederivation.
+    /// Extract the seed and its master seed, for rederivation and
+    /// per-call signing-key rederivation.
     ///
     /// Infallible: every wallet is `Capability::Full`, validated at
     /// open/create time, and FULL-mode `cap_content` is pinned to
-    /// 64 bytes by the envelope.
+    /// 32 bytes by the envelope.
     ///
     /// # Panics
     ///
     /// Panics only on a programmer bug: reaching this function with a
-    /// non-64-byte `cap_content` means the envelope's own invariant was
-    /// violated, which is an internal inconsistency that we refuse to
-    /// paper over.
+    /// `cap_content` of any other length means the envelope's own
+    /// invariant was violated, which we refuse to paper over.
     pub fn extract_rederivation_inputs(&self) -> RederivationInputs {
         let opened = self.opened_keys();
         let cap_content: &[u8] = opened.cap_content.as_slice();
         assert_eq!(
             cap_content.len(),
-            MASTER_SEED_BYTES,
-            "FULL capability_mode cap_content length is pinned to 64 bytes by the envelope; \
+            SEED_BYTES,
+            "FULL capability_mode cap_content length is pinned to 32 bytes by the envelope; \
              reaching here with a different length is a programmer bug"
         );
 
-        let mut seed_bytes = Zeroizing::new([0u8; MASTER_SEED_BYTES]);
-        seed_bytes.copy_from_slice(cap_content);
+        let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+        seed.copy_from_slice(cap_content);
+        let master_seed_64 = normalize_seed(seed.as_ref());
         RederivationInputs {
-            master_seed_64: seed_bytes,
+            seed,
+            master_seed_64,
         }
     }
 }
@@ -116,9 +98,9 @@ mod tests {
         }
     }
 
-    /// Build a FULL wallet under `tmp` with a known 64-byte master
-    /// seed and return the opened handle.
-    fn open_full_fixture(tmp: &tempfile::TempDir, master_seed_64: &[u8; 64]) -> WalletFile {
+    /// Build a FULL wallet under `tmp` with a known 32-byte seed and
+    /// return the opened handle.
+    fn open_full_fixture(tmp: &tempfile::TempDir, seed: &[u8; 32]) -> WalletFile {
         let base = tmp.path().join("w");
         let password: &[u8] = b"test-password";
 
@@ -128,11 +110,8 @@ mod tests {
         let params = CreateParams {
             base_path: &base,
             password,
-            // Testnet + Raw32 is a permitted (network, seed_format)
-            // pair per `DerivationNetwork::permitted_seed_format`.
             network: Network::Testnet,
-            seed_format: 0x02, // SEED_FORMAT_RAW32
-            capability: &CapabilityContent::Full { master_seed_64 },
+            capability: &CapabilityContent::Full { seed },
             creation_timestamp: 0x6000_0000,
             restore_height_hint: 0,
             expected_classical_address: &addr,
@@ -143,23 +122,28 @@ mod tests {
     }
 
     #[test]
-    fn extract_full_returns_master_seed_bytewise() {
+    fn extract_full_returns_the_seed_and_its_master_seed() {
         let tmp = tempfile::tempdir().unwrap();
-        let seed = [0x42u8; 64];
+        let seed = [0x42u8; 32];
         let h = open_full_fixture(&tmp, &seed);
 
         let inputs = h.extract_rederivation_inputs();
-        assert_eq!(inputs.master_seed_64.as_slice(), &seed);
+        assert_eq!(inputs.seed.as_slice(), &seed);
+        assert_eq!(
+            inputs.master_seed_64.as_slice(),
+            shekyl_crypto_pq::account::normalize_seed(&seed).as_slice()
+        );
     }
 
     #[test]
     fn extract_is_deterministic() {
         let tmp = tempfile::tempdir().unwrap();
-        let seed = [0x77u8; 64];
+        let seed = [0x77u8; 32];
         let h = open_full_fixture(&tmp, &seed);
 
         let a = h.extract_rederivation_inputs();
         let b = h.extract_rederivation_inputs();
+        assert_eq!(a.seed.as_slice(), b.seed.as_slice());
         assert_eq!(a.master_seed_64.as_slice(), b.master_seed_64.as_slice());
     }
 }

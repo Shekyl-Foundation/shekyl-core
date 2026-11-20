@@ -91,12 +91,3 @@ impl JsonRpcResponse {
         }
     }
 }
-
-/// Intermediate representation for the JSON-RPC FFI response envelope.
-#[derive(Deserialize)]
-pub struct FfiJsonRpcResult {
-    pub ok: bool,
-    pub result: Option<serde_json::Value>,
-    pub error_code: Option<i64>,
-    pub error_message: Option<String>,
-}

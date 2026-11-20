@@ -38,7 +38,8 @@ impl StalenessBound {
 ///
 /// # One clock read twice, and two drivers
 ///
-/// The lag is [`ServingReader::sync_tip_height`](shekyl_curve_tree::ServingReader::sync_tip_height)
+/// The lag is the store's ingest tip
+/// ([`StoreFacts::sync_tip_height`](super::StoreFacts::sync_tip_height))
 /// now, minus the same value stamped when the witness was minted. That is
 /// deliberately *one* quantity: a difference of two different quantities is
 /// only a lag when they happen to agree, and the two available here do not

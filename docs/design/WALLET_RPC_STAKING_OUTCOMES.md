@@ -5,7 +5,8 @@ accepted, with the amendments recorded in each ruling (§3). **WR-Q3 amended
 2026-10-16:** no daemon verdict releases a submitted record of any kind
 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3).
 **Implemented in #1109** (§7), with the review rulings of 2026-10-17
-(§7.3). One dependency on the bond lane is open (§1.1), recorded in
+(§7.3). **WR-Q6** (what an entry holds, §3) ruled 2026-11-07 and
+implemented 2026-11-09. One dependency on the bond lane is open (§1.1), recorded in
 FOLLOWUPS and posed in the bond lane's Round 0
 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)). One
 follow-on is not ruled here (§5).
@@ -14,7 +15,7 @@ follow-on is not ruled here (§5).
 #1075), with the daemon RPC at `CORE_RPC_VERSION` 3.54 (#1057). Every
 `file:line` below was read at that commit.
 
-**Identifier family:** `WR-Q1…WR-Q5` (the questions), registered in
+**Identifier family:** `WR-Q1…WR-Q6` (the questions), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth. The
 round extends `WI-RPC-1`'s `staking_info` and adds nothing to any other
 family.
@@ -84,7 +85,7 @@ round.
   (`engine/stake_engine/helpers.rs:455-463`, `:487-503`), so the offset
   stays uniform.
 - Both daemons refuse a reference older than
-  `FCMP_REFERENCE_BLOCK_MAX_AGE` (100): `src/cryptonote_core/blockchain.cpp:3615-3621`
+  `FCMP_REFERENCE_BLOCK_MAX_AGE` (100): `src/cryptonote_core/blockchain.cpp`
   and `shekyl-chain-rules/src/rules/tx_against.rs:320-324`. A proof built
   at the canonical anchor stays submittable for `PROOF_VALIDITY_HORIZON`
   (94) blocks (`shekyl-curve-tree/src/reference.rs:95-106`).
@@ -111,10 +112,6 @@ round.
   (one settlement epoch between the principal's funding transfer and the
   bond post) is `#[allow(dead_code)]`, "inert until cold-start spacing
   check is wired" (`engine/stake_timing.rs:192-203`).
-- **Today the C++ daemon hides all of this.** It answers every kind-5
-  JoinMarket post `JoinMarketUnsupported` before any reference check
-  (the FOLLOWUPS row "The five bonded regtest walks are decided dark…").
-  The defect appears at `DEL-008`.
 
 **Shown by a dispatch unit test**, committed `#[ignore]`d with its
 reason pointing at the FOLLOWUPS row:
@@ -224,23 +221,15 @@ cadence driver:
 
 - **The cause type.** The cause the dispatcher holds is the engine's
   `TerminalErrorKind` (`engine/error/submit.rs:34`). `RejectCause` is the
-  daemon reply's type (`shekyl-rpc-types/src/lib.rs:210`); the wallet
+  daemon reply's type (line 210 of `shekyl-rpc-types/src/lib.rs` at `a0d3ebcb1`); the wallet
   contract has no reject-cause type.
 - **The exit is the one kind pruned at its seam.** A definite first-send
   refusal removes it (§2's table). Claims and drains are held.
-- **The pool's clock is per node, and the Rust pool has none.** The C++
-  pool's is three days from that node's admission
-  (`CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `src/cryptonote_config.h:104`), about
-  2,160 blocks at 120 s, measured from `receive_time`
-  (`src/cryptonote_core/tx_pool.cpp:1080`); a byte-identical resend to a
-  node that still holds the transaction does not reset it, and only
-  re-admission after eviction, or a relay-method upgrade, does
-  (`tx_pool.cpp:498-512`). The Rust pool, live from the DRS-X flip, drops
-  an entry when its reference leaves CEN-I11's window,
-  `REFERENCE_BLOCK_MAX_AGE` (100) blocks after the block it names, about
-  3.3 hours, or sooner under weight pressure (`DRS_E5_POOL_ALT_PRUNE.md`,
-  CEN-M10, ruled 2026-10-17). Either way the pool is not what ends a
-  transaction; its reference window is (§2).
+- **The pool has no clock.** It drops an entry when its reference leaves
+  CEN-I11's window, `REFERENCE_BLOCK_MAX_AGE` (100) blocks after the block
+  it names, about 3.3 hours, or sooner under weight pressure
+  (`DRS_E5_POOL_ALT_PRUNE.md`, CEN-M10, ruled 2026-10-17). Either way the
+  pool is not what ends a transaction; its reference window is (§2).
 - **The dispatcher's clock is not one the RPC has.** The driver judges
   against the sweep's claimed daemon count (`pscan/task.rs:435-437`).
   `staking_info` reads only sealed files (`engine/staking_read.rs:417-450`).
@@ -374,10 +363,8 @@ entry with:
   | `spent_elsewhere` | the end date passed with the record's reserved inputs **partly** spent by another transaction (WR-Q3) | the unspent rest is `returned` |
 
 - **`reason`**: a user sentence, never an enum name (rule 81):
-  - `rejected`: chosen from `TerminalErrorKind`, starting from the
-    sentence already shipped, `STAKING_UNAVAILABLE_ON_THIS_DAEMON`
-    (`dispatch.rs:53-56`). Every other kind gets a row before the commit
-    lands.
+  - `rejected`: chosen from `TerminalErrorKind`; every kind has a row
+    (`staking_outcomes.rs` `refusal`).
   - `expired`: one sentence that does not blame the user, since under
     §1.1 the cause is usually the wallet's own timing. For example: "The
     stake was not accepted in time and has been withdrawn. Its funds are
@@ -413,17 +400,18 @@ gain a match (WR-Q3).
 **Schema.** `PENDING_POST_VERSION` 12 → 13, refuse-not-migrate, schema
 snapshot (rule 42), shared with WR-Q3's `reference_height`.
 
-**Falsifier.** The armed tripwire
-`e2e_the_cxx_daemon_answers_join_market_unsupported`
-(`engine/regtest_e2e.rs:3481`) drives a terminal rejection end to end
-against the real C++ daemon. Extended: after the refusal the record
+**Falsifier.** `a_terminal_verdict_holds_the_post_and_never_resends`
+(`engine/pscan/dispatch_tests.rs`) and
+`a_recorded_verdict_reads_refused_then_expired_with_its_reason`
+(`engine/staking_outcomes.rs`) pin a terminal rejection's arc. After the
+refusal the record
 stays in `in_flight` as `refused`, with its reservation, the reason and
 `funds_return_at`; past the end date, until the release, it shows
 `expired` with the reason; at the release `staking_info` shows
 `outcomes[0].outcome == "rejected"` for `kind == "stake"`, with the
 reason, `funds == "returned"` and `in_flight` empty. After a restart it
-still does. The shipped sentence's "its funds are spendable again"
-(`dispatch.rs:53-56`) becomes the return at `funds_return_at`.
+still does. The pre-flip dispatch log's "its funds are spendable again"
+became the return at `funds_return_at`.
 
 ### WR-Q3 — How a record that will never land ends — RULED 2026-10-15
 
@@ -656,9 +644,10 @@ including the empty and the partly spent reservation.
   `ended_unconfirmed`, with the daemon's reason kept.
 - **What it costs.** The `reference_height` field on all four kinds (the
   one shared v13 bump), with the terminal verdict seen, if any. A refused
-  stake, claim, drain or exit holds its funds until about a day after its
-  end date, and then reports `rejected` with its reason (the zero-fee
-  claim holds none and reports `ended_unconfirmed`).
+  stake, claim, drain or exit keeps the record until about a day after its
+  end date. What it still holds is `reserved` (WR-Q6): zero when the
+  record reserved nothing. It then reports `rejected` with its reason
+  (the zero-fee claim holds none and reports `ended_unconfirmed`).
 
 **The exit's "fate unknown" gets an end.** `unstake`'s
 `-29522 UNSTAKE_FATE_UNKNOWN` today has no way to resolve. Its message
@@ -746,6 +735,69 @@ on each start (WR-Q3), which names no persona.
 - A decode test refuses an `acknowledge_staking_outcome` request carrying
   `p_slot`.
 
+### WR-Q6 — How much an entry holds — RULED 2026-11-07
+
+Posed by the GUI lane ("Say when an outstanding staking record holds
+funds"). A new question, not a reopening of WR-Q1.
+
+**Ruling (Rick, 2026-11-07).** Every `in_flight` entry carries a required
+`reserved` field in atomic units: `0` when nothing is held, and for a
+partly spent reservation the amount still held.
+
+**What "held" is.** A record reserves inputs by global output index; the
+record stores no amount. The amount is the sum of the staking scan's
+recovered `amount` over the record's reserved inputs that are still in the
+live funding set. A partly spent reservation therefore holds what is
+left, and a `held` stake, whose every reserved input is spent, holds `0`,
+as does an empty reservation.
+
+**The one case the ruling did not name.** When the staking scan has
+produced no evidence (no scan seal, or a frontier still at zero), the
+funding set cannot be read, so neither can the amount. That is not "0":
+`0` says nothing is held. The field is required and `null` there, the
+contract's convention for an answer that is not known yet (rule 43), as
+`funds_return_at` and `pscan_synced_height` already are. The CLI says
+the amount shows once the staking scan has run.
+
+**What it reveals, and to whom.** The caller is the wallet's owner, as
+in WR-Q5. A per-record amount says how much each piece of staking work
+moves; the totals were already on `staking_info`. No gindex, persona or
+slot reaches the wire. The engine's record redacts the amount from
+`Debug`, as the funding records it is summed from are redacted.
+
+**No sentence claims funds the field does not show.** Before WR-Q6 the
+engine's `refused` reason ended "Its funds stay set aside until its
+transaction can no longer be mined", and the CLI added "Its funds return
+once the staking scan passes height N" to every `refused` and `expired`
+line. Both are false for a zero-fee claim, which reserves nothing. The
+state cannot know what is held, so the `refused` reason now says only the
+refusal and that nothing more will be sent; `reserved` carries the funds.
+The CLI says a record holds funds that return at the end date only when
+`reserved` is above zero. At `"0"` with an end date it says the record
+holds nothing and stays until the staking scan passes that height. At
+`null` it says the amount shows once the scan has run, and, when there
+is an end date, that the record stays until the scan passes it. Neither
+sentence says the scan will show whether the record was mined: a
+zero-fee claim ends `ended_unconfirmed` because the scan cannot see
+whether it landed (§5).
+
+**Overflow.** The inputs are the wallet's own distinct outputs, so a sum
+past `u64` is corrupt state. The read fails closed with the staking
+read's overflow error; a money total is never wrapped.
+
+**Falsifiers.** `an_in_flight_record_reports_what_it_still_holds`
+(engine: all live, partly spent, fully spent, empty, no scan, frontier at
+zero, and the redacted `Debug`); `an_in_flight_entry_carries_what_it_holds`
+(wire: a decimal string, `"0"`, `null`);
+`staking_info_refuses_a_reply_missing_a_required_member` (the field is
+required, `null` decodes, a JSON number does not);
+`an_in_flight_line_says_what_it_holds` (CLI: an amount, nothing, unknown,
+and on a `refused` line no claim of funds unless something is held, and
+neither the zero nor the unread line says the scan will show whether it
+was mined);
+`reasons_are_user_sentences_and_linkage_follows_the_send` (no `refused`
+reason says funds are set aside).
+
 ---
 
 ## 4. Proving it
@@ -800,9 +852,7 @@ the honest outcome for that one case.
 ## 6. What this round does not do
 
 - No C++.
-- No wallet-contract removal. `JoinMarketUnsupported` stays enumerated
-  until `DEL-008` deletes it (the FOLLOWUPS row "The five bonded regtest
-  walks are decided dark…").
+- No wallet-contract removal in this round.
 - No change to when or how a bond post is signed. That belongs to the
   bond lane's Round 0 (§1.1).
 - No byte-identical resubmit for claims, drains or exits. That stays
@@ -869,13 +919,14 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
 | WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
 | WR-Q1, amended: `refused` below the end date, `expired` with the same reason after it | `a_recorded_verdict_reads_refused_then_expired_with_its_reason` |
-| WR-Q2, amended: the full arc against a real daemon | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: the stake reads `refused` with the refusal sentence and `funds_return_at` the end date, before and after a restart; `expired` with the reason once the ledger passes the end date; then the production P-scan's dispatch tick releases it and `outcomes` holds one `rejected` stake with the reason and its funds returned, before and after another restart |
+| WR-Q2, amended: the full arc of a terminal refusal | `a_terminal_verdict_holds_the_post_and_never_resends` (the driver records the cause, holds the record and its reservation, never resends, and releases at the end date with the outcome carrying the reason) and `a_recorded_verdict_reads_refused_then_expired_with_its_reason` (the read before and after the end date) |
 | WR-Q3: a refused zero-fee claim ends `ended_unconfirmed` | `the_release_outcome_follows_the_precedence_table`; its sentence and `none_held` in `reasons_are_user_sentences_and_linkage_follows_the_send` |
 | WR-Q3 / WR-Q5: the error line once per start | `the_integrity_error_is_written_once_per_start_and_on_change` |
 | WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
 | §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held` (ledger at the end date while the frontier is still behind it); the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| WR-Q6: an entry's `reserved` is what its reserved inputs still hold; `null` with no scan evidence | `staking_outcomes::tests::an_in_flight_record_reports_what_it_still_holds`; `staking::tests::an_in_flight_entry_carries_what_it_holds`; `types::tests::staking_info_refuses_a_reply_missing_a_required_member`; the CLI's `an_in_flight_line_says_what_it_holds`; `staking_outcomes::tests::reasons_are_user_sentences_and_linkage_follows_the_send` (no `refused` reason claims funds) |
 | WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
 
 ### 7.3 Review rulings — RULED 2026-10-17 (Rick, on #1109 at `c9ac6bf52`)

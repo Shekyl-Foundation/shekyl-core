@@ -1,0 +1,28 @@
+{
+  "posture": {
+    "tor": "managed",
+    "clearnet": "off"
+  },
+  "origination": "connecting",
+  "sync_connector": [],
+  "tor_quiet": null,
+  "tor": {
+    "state": "waiting",
+    "cause": {
+      "install-defect": null
+    },
+    "age": 75,
+    "respawn_count": 0,
+    "progress": null,
+    "flagged": false,
+    "fix": [
+      "restore-managed",
+      "operator",
+      "clearnet-on",
+      "clearnet-only"
+    ],
+    "onion": null,
+    "bootstrap": null,
+    "carriage": "gone"
+  }
+}

@@ -16,11 +16,11 @@
 //! table; none of it crosses the trait boundary. The orchestrator
 //! interacts with claimed outputs through opaque [`OutputHandle`]
 //! references whose unforgeability is rooted in a deterministic cSHAKE256
-//! derivation per [`derive_output_handle`].
+//! derivation per [`derive_output_handle`](shekyl_crypto_pq::handle::derive_output_handle).
 //!
 //! # Round 4a visibility
 //!
-//! Per [`super::mod`]'s visibility note, the trait ships `pub(crate)`.
+//! Per the visibility note in [`traits`](super), the trait ships `pub(crate)`.
 //! Stage 1's consumer is [`Engine<S>`](super::super::Engine), which lives
 //! inside this crate.
 //!
@@ -41,7 +41,7 @@
 //! [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`] §3.2 / preflight D2),
 //! [`TxInputSigningContext`] carries
 //! [`source_ciphertext: HybridCiphertext`](TxInputSigningContext::source_ciphertext)
-//! and [`output_index: u64`](TxInputSigningContext::output_index)
+//! and [`internal_output_index: u64`](TxInputSigningContext::internal_output_index)
 //! instead of a populated `SourceSecretsBundle`. The orchestrator
 //! supplies the on-chain hybrid ciphertext for each input; the
 //! implementor reconstructs the per-input secret material internally
@@ -77,7 +77,7 @@ use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, TxHash};
 
 // --- Constants -------------------------------------------------------------
 
@@ -209,11 +209,8 @@ pub(crate) struct OutputDetectionInput {
     /// The containing transaction's hash, consumed by
     /// [`shekyl_crypto_pq::handle::derive_output_handle`] alongside the
     /// view secret and `output_index` to produce the deterministic
-    /// 16-byte handle. Raw `[u8; 32]` (rather than a typed `TxHash`
-    /// newtype) for consistency with the workspace-wide raw-bytes
-    /// pattern for transaction hashes; introducing a
-    /// workspace-wide `TxHash` newtype is tracked separately.
-    pub tx_hash: [u8; 32],
+    /// 16-byte handle.
+    pub tx_hash: TxHash,
 }
 
 /// Result of a [`KeyEngine::try_claim_output`] call.
@@ -345,7 +342,7 @@ pub(crate) struct TxInputSigningContext {
     /// workflow-internal handle table.
     pub handle: OutputHandle,
     /// Containing transaction hash (co-located with handle per §3.9 PF2).
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
     /// Output index within the containing transaction.
     pub internal_output_index: u64,
     /// Decrypted spend amount (atomic units).
@@ -544,13 +541,18 @@ pub(crate) struct OutputDestination {
     pub rid: Option<shekyl_engine_state::PaymentRequestId>,
 }
 
-/// Public fee variant directive (§3.9). All fields are network-derived.
+/// Public fee variant directive (§3.9): the two ladder fees a signing
+/// pass may carry, both network-derived. Which one it carries is
+/// `fee_variant::fee_and_change`'s rule; the fee is always one of these,
+/// never the leftover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub(crate) struct FeeDirective {
+    /// The fee for the payments alone.
     pub fee_no_change: u64,
-    pub fee_with_change: u64,
-    pub dust_threshold: u64,
+    /// The fee with a change output added; `None` when the payments
+    /// already fill the output limit and no change output fits.
+    pub fee_with_change: Option<u64>,
 }
 
 /// Per-output signing context (§3.9). Deliberately **not** `Clone`.
@@ -597,11 +599,10 @@ pub(crate) struct FcmpPlusPlusContext {
 /// for final wire encode in `LocalSigner`, plus the per-tx secret
 /// scalar retained for OUTBOUND tx proofs (WI-RPC-3).
 ///
-/// **Not `Clone`** — `tx_key_secret` refuses duplication
-/// ([`TxSecretKey`] is deliberately non-`Clone`); the struct moves
-/// through the actor reply channel and the signer, never fans out.
-/// `Debug` stays derivable because `TxSecretKey`'s own `Debug` is
-/// redacted.
+/// **Not `Clone`** — `tx_key` refuses duplication
+/// ([`shekyl_crypto_pq::TxKey`] is deliberately non-`Clone`); the struct
+/// moves through the actor reply channel and the signer, never fans out.
+/// `Debug` stays derivable because `TxKey`'s own `Debug` is redacted.
 #[derive(Debug)]
 #[non_exhaustive]
 pub(crate) struct TxSignatures {
@@ -627,7 +628,7 @@ pub(crate) struct TxSignatures {
     /// submit-ACCEPTED (`docs/api/wallet_rpc.yaml` OUTBOUND
     /// PREREQUISITE, lifecycle pin 1). Zeroizes on drop; every
     /// build-then-discard path wipes it structurally.
-    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
+    pub tx_key: shekyl_crypto_pq::TxKey,
 }
 
 /// Per-input public signature bundle (§3.9).
@@ -787,25 +788,18 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// per-output spending material needed to produce the per-input
     /// signature.
     ///
-    /// # M3a stub status
+    /// # Stage 1 implementor
     ///
-    /// The Stage 1 implementor `LocalKeys::sign_transaction` is an
-    /// **M3a stub**: it returns
-    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]
-    /// without producing signatures. The bridge into
-    /// [`shekyl_tx_builder::sign_transaction`] is PR-5-pinned — it
-    /// waits on [`TxToSign`]'s shape finalizing the per-input public
-    /// on-chain carriers and FCMP++ tree-branch context the builder's
-    /// `SpendInput` construction requires. The per-input secret
-    /// material is never supplied as a populated bundle crossing the
-    /// trait boundary; per the module-level "secrets stay
-    /// engine-internal" section, the committed direction reconstructs
-    /// it inside the engine from each
+    /// The Stage 1 implementor `LocalKeys::sign_transaction` delegates to
+    /// [`sign_tx`](crate::engine::sign_bridge::sign_tx), which signs
+    /// through [`shekyl_tx_builder::sign_transaction`]. The per-input
+    /// secret material is never supplied as a populated bundle crossing
+    /// the trait boundary; per the module-level "secrets stay
+    /// engine-internal" section, the engine reconstructs it from each
     /// [`TxInputSigningContext::source_ciphertext`] +
-    /// [`output_index`](TxInputSigningContext::output_index) via the
-    /// engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
-    /// helper. The trait's contract for what `sign_transaction`
-    /// consumes stays stable across the stub-to-PR-5 transition.
+    /// [`internal_output_index`](TxInputSigningContext::internal_output_index)
+    /// via the engine-internal `LocalKeys::derive_primary_source_secrets_bundle`
+    /// helper.
     ///
     /// # Validation contract
     ///
@@ -845,14 +839,6 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// may reject double-spend attempts at the handle layer; the
     /// counter-based pathway treats each call independently. The
     /// committed direction is replay-rejection at handle resolution.
-    ///
-    /// # Panics
-    ///
-    /// **Does not panic.** The M3a stub returns
-    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]; it
-    /// acquires no lock and asserts no invariant. PR 5's signing body
-    /// will document its own panic surface (handle-table access,
-    /// builder invariants) when it lands.
     fn sign_transaction(
         &self,
         tx: TxToSign,
@@ -905,7 +891,7 @@ mod tests {
     }
 
     fn sentinel_handle() -> shekyl_crypto_pq::handle::OutputHandle {
-        derive_output_handle(&[0u8; 32], &[0u8; 32], 0)
+        derive_output_handle(&[0u8; 32], &TxHash::from_bytes([0u8; 32]), 0)
     }
 
     fn assert_no_decimal_leak_of_byte(rendered: &str, byte: u8) {
@@ -948,7 +934,7 @@ mod tests {
     fn tx_input_signing_context_debug_redacts_on_chain_material() {
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
-            tx_hash: [0x77; 32],
+            tx_hash: TxHash::from_bytes([0x77; 32]),
             internal_output_index: 0,
             amount: AtomicUnits::from_raw(1),
             key_image: KeyImage::from_canonical_bytes([0x88; 32]),
@@ -988,7 +974,7 @@ mod tests {
             network: Network::Mainnet,
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
-                tx_hash: [0x77; 32],
+                tx_hash: TxHash::from_bytes([0x77; 32]),
                 internal_output_index: 0,
                 amount: AtomicUnits::from_raw(1),
                 key_image: KeyImage::from_canonical_bytes([0x88; 32]),
@@ -1009,8 +995,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         };
         let rendered = format!("{tx:?}");

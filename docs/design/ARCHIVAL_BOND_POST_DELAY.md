@@ -41,7 +41,7 @@ bonded `P` service is hard to connect to its funding transaction.
 | The principal funds `P` with an ordinary FCMP++ transfer, `stake_in`, a separate transaction before the stake request. | `engine/principal_stake.rs:153-158` |
 | The stake request (`first_stake`) sweeps `P`'s funding outputs that the P-scan has found, persists the bonded slot, then assembles and signs the post. It does not broadcast. | `engine/bond_orchestrator.rs:833`, `:975-1004`; doc `:803-809` |
 | A funding output can be swept only once its leaf is in the tree at the reference height: `spendable_height ≤ reference_height`. | `engine/backing_set.rs:156` |
-| `spendable_height = height + SPENDABLE_AGE` (10) for an ordinary output. | `shekyl-engine-state/src/transfer.rs:33-34`, `:65-71`; `shekyl-consensus/src/lib.rs:28` |
+| `spendable_height = height + SPENDABLE_AGE` (10) for an ordinary output. | `shekyl-engine-state/src/transfer.rs:33-34`, `:65-71`; `shekyl-consensus/src/lib.rs:22` |
 | The wallet records the funding output's block height and its spendable height. | `shekyl-engine-state/src/pscan_state.rs:237`, `:259` |
 | The stake request sweeps only funding records the sealed P-scan has found (`engine/bond_orchestrator.rs:742-777`), and that scan covers only blocks below `claimed count − ARCHIVAL_REORG_DEPTH_BLOCKS` (720): a funding output at height `h_f` is first sweepable at tip `h_f + 720`. | `engine/pscan/task.rs:245-252`; `engine/pscan/start.rs:91-99` |
 | The delay is drawn at the request: `bond_post_offset_blocks ~ U[0, 600]`, one unbiased draw. | `engine/stake_engine/actor.rs:154-170`; `shekyl-standoff/src/draw.rs:96-98` |
@@ -411,6 +411,17 @@ constant and its golden vector.
    - **A wallet without its own node** still reaches its daemon over
      clearnet by default (§2), and that daemon sees the submission.
 
+   **TRC-1 reported 2026-11-15** (`TOR_COVER_POSTURE.md` banner, REOPENED):
+   the operator-relay posture does not hide originated cells either. An
+   observer of the guard connections of a node using its own relay's Tor
+   picked out the node's sends: in 100 ms windows, a window holding a send
+   ranks above a random other window 93 % of the time (AUC 0.928). So the
+   operator-relay branch above, and its "residue" below, no longer hold.
+   The reading measured a node with a relay. For the default client-only
+   Tor, whose guard connections carry only its own traffic, the anchor
+   follows by reasoning, not by measurement. That is BD-Q4's TRC-1 input;
+   this round has not yet read it into the window.
+
    So, under the default posture, the network-origin observer is the
    ISP's burst-timing vantage plus the remote-daemon case, not an IP link
    at the first stem edge; under the operator-relay posture it is
@@ -599,9 +610,9 @@ object from a window ("uniform from funding").
 - Rule 2 in the dispatch driver: the terminal arm
   (`engine/pscan/dispatch.rs:794-803`) stops sending and keeps the record
   and the reservation.
-- **Rewrite the shipped `STAKING_UNAVAILABLE_ON_THIS_DAEMON` sentence**
-  (`engine/pscan/dispatch.rs:53-56`). Its "its funds are spendable
-  again" is false under Rule 2: the funds return at `funds_return_at`.
+- The dispatch log's "its funds are spendable again" sentence: false
+  under Rule 2 (the funds return at `funds_return_at`); the sentence and
+  the refusal it answered went with the C++ daemon at the store flip.
 - The BD-Q5 deletion (`MIN_COLD_START_SPACING`, `EconomicSpacing`,
   `SebSpan`), with the drifted citation at `engine/stake_timing.rs:160-163`
   and the 2C2B inventory of landed types

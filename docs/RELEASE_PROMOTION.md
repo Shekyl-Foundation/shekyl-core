@@ -97,14 +97,30 @@ then tag** (avoids the "tag not on the default branch" trap that
    references this SHA. `dev` stays open: the release ships from a branch
    cut at the SHA (step 3), so a later merge into `dev` goes to the next
    release. A pull request that merges after the changelog cut but before
-   the freeze ships in this release while its entry sits under
-   `[Unreleased]`; move the entry into the release's section in one more
-   pull request, whose merge is then the frozen SHA.
+   the freeze ships in this release while its entry waits under
+   `docs/changelog.d/`. Move the entry into the release's section, and
+   delete its file, in one more pull request. That merge is then the
+   frozen SHA.
 2. **Pre-flight at the frozen SHA:**
    - [ ] CI green on the SHA (fmt + clippy `-D warnings` + full test suite).
    - [ ] `Cargo.lock` and vendored-dep state are exactly the green-on-`dev`
          state (reproducible-build inputs must match what was reviewed).
    - [ ] **Frozen-tuple diff-check** (highest severity — see §6).
+   - [ ] **Staging deadlines:** `python3 scripts/release/check_staging_deadlines.py <tag>`
+         with the tag this cut will carry. A staging flag
+         (`NETWORK_IDENTITY.md` NI-R9) names a deadline release
+         (`Staging::deadline`, `rust/shekyl-network/src/lib.rs`), and the
+         gate refuses a cut at or past it while the flag still exists. The
+         remedy is the flag's exit, by its owner, or a re-ruled deadline
+         with its reason recorded beside it; there is no command-line
+         exemption.
+   - [ ] **Binding ratchet:** `python3 scripts/release/check_binding_ratchet.py <tag>`
+         with the tag this cut will carry. The ratchet
+         (`docs/design/DOMAIN_BINDING_RATCHET.tsv`) lists the domain rows the
+         binding gate cannot yet hold to their network binding
+         (`NETWORK_IDENTITY.md` §2.4.1), and it must be empty at v3.1.0: the
+         gate refuses a cut at or past that release with any row left. The
+         remedy is fixing the row's site; there is no command-line exemption.
    - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:
@@ -141,9 +157,8 @@ then tag** (avoids the "tag not on the default branch" trap that
    request** from that branch to `main`, titled `Release: vX.Y.Z`. Never
    promote from `dev` itself: the pull request's head would be `dev`, so `dev`
    could take no merge until the release shipped. The branch must be cut from
-   a commit in `dev`: the dial-path freeze's release exemption applies only
-   when `compare dev...<head>` is ahead by 0 (`scripts/ci/is_release_promotion.py`).
-   The build and test workflows run on pull requests and on pushes to `main`,
+   a commit in `dev`, so that every commit the promotion carries was judged
+   there. The build and test workflows run on pull requests and on pushes to `main`,
    not on pushes to `dev`, so this pull request is the first full run on the
    frozen SHA against `main`. To see a gate that only fails against `main`
    before the freeze, open a draft rehearsal pull request from a branch at
@@ -155,7 +170,11 @@ then tag** (avoids the "tag not on the default branch" trap that
 5. **Promote to `main`** by merging that pull request with a **merge commit**,
    so `main`'s history shows discrete release points. Never squash, rebase or
    fast-forward: the merge commit is the branch-topology release marker. Its
-   tree must equal the frozen SHA's tree.
+   tree must equal the frozen SHA's tree. The merge's push to `main` runs the
+   grep gates again; a gate that only fails against `main` shows there. (The
+   dial-path freeze, whose base-relative verdict needed a release exemption
+   here, was deleted with the C++ dial path on 2026-11-05.) The step 11 pull
+   request's head is `main`, so the push's result shows there too.
 6. **Sign the tag** on that merge commit with the Foundation signing subkey
    (`6914D74823DDA8DC`), by the ceremony in `SIGNING.md`
    §"Release-tag signing ceremony". The merge happened on the remote, so the
@@ -235,10 +254,10 @@ what follows from it, in one change:
 - [ ] the nonce in `src/cryptonote_config.h`;
 - [ ] the block id, from `cargo run -p shekyl-genesis-tool -- block-id --network testnet`,
       in `rust/shekyl-rpc-types/src/identity.rs` (`TESTNET_GENESIS`),
-      `rust/shekyl-chain-rules/src/anchors.rs` (`ReleaseAnchors::TESTNET`, a
+      `rust/shekyl-chain-rules/src/genesis_pin.rs` (`GenesisPin::TESTNET`, a
       byte array, so a search for the hex string does not find it),
       `tests/unit_tests/mining_parity.cpp` and `docs/GENESIS_ALLOCATIONS.md`;
-- [ ] the id and prefix in `rust/shekyl-ffi/src/network_id_ffi.rs`'s KAT, which
+- [ ] the id and prefix in `rust/shekyl-network/src/tests.rs`'s `RECORDED`, which
       fails and prints the new bytes until they are recorded, and the same
       two values in the table in `docs/design/SHEKYL_P2P_PROTOCOL.md`.
 
@@ -277,7 +296,7 @@ each before the genesis freeze — after it, these are immutable.**
 Block version is the constant 1.0 on every network. The hard-fork table is
 deleted, so there is no fork number, vote, or activation height to freeze.
 A later consensus change is a design document before any code
-(`design/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
+(`completed/CXX_VERSION_GATES.md` §5, `UPGRADE_POLICY.md`).
 
 ---
 

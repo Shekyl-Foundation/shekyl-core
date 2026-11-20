@@ -30,9 +30,47 @@ The CI workflows install all dependencies automatically. For local builds:
 
 ## Creating a Release
 
-1. **Prepare the changelog on `dev`.** In `docs/CHANGELOG.md`, rename the
-   `## Unreleased` section to `## [X.Y.Z] - YYYY-MM-DD` and add a fresh
-   empty `## Unreleased` section above it. Commit on `dev`.
+**Early in the cut week: the alpha resync.** Until the full wallet
+adjustment lands, every cut resyncs the GUI wallet with the core it ships
+beside, once per cut. Dispatch `gitian.yml` with `package_dry_run` from
+`dev`, with the head commit as `tag`, never from a tag ref: the publish step
+keys on the ref, not the event, so a dispatch from a tag publishes. Then
+the GUI's release dry run runs against that run id. The GUI repository's
+`docs/design/GUI_SYNC_LANE.md` §7 ("Alpha resync") is the sequence, and the
+GUI is tagged beside this release. Run both again at the freeze. The CLI's
+half is in this tree: its daemon calls are typed and its `--json` is the
+wire's reply, so the sweep checks only its human lines' words against
+`docs/design/HEIGHT_SEMANTICS.md` §1.
+
+1. **Prepare the changelog on `dev`.** Until the cut, each pull request's
+   entry is a file of its own under `docs/changelog.d/` (its `README.md`
+   says why). The cut is one commit, on a branch off `dev`, merged by pull
+   request:
+   1. List the entries, newest merge first, from the repository root of
+      the cut branch before any edit:
+
+      ```bash
+      git fetch origin
+      git log origin/dev --first-parent --diff-filter=A --name-only --format= \
+        -- docs/changelog.d/ | awk 'NF && !seen[$0]++' \
+        | while read -r f; do
+            if [ -f "$f" ] && [ "${f##*/}" != README.md ]; then echo "$f"; fi
+          done
+      ```
+
+      The history also names entries an earlier cut deleted, and the
+      README, which is always its oldest name. The `if` skips them and
+      keeps the listing's exit status 0, so it runs under `set -e`.
+
+      Its count must equal
+      `find docs/changelog.d -type f ! -name README.md | wc -l`.
+      A file the list misses was added outside `dev`'s first-parent history.
+      Place it by hand, then go on.
+   2. In `docs/CHANGELOG.md`, rename `## [Unreleased]` to
+      `## [X.Y.Z] - YYYY-MM-DD` and put each file's bullets, in that order,
+      at the top of its `### Changes`, above any already there. Add a fresh
+      empty `## [Unreleased]` section above it.
+   3. `git rm` the listed files. The README stays.
 
 2. **Promote `dev` to `main`** by pull request, titled `Release: vX.Y.Z`, and
    merge it with GitHub's **Create a merge commit** — never squash, rebase or
@@ -169,20 +207,51 @@ Platforms"); nothing is produced for it.
 
 ## Linux Package Details
 
-The `.deb` and `.rpm` packages are available for both x86_64 and ARM64:
-- Install `shekyld`, `shekyl-cli`, and `shekyl-wallet-rpc` to `/usr/local/bin/`
-- Include a systemd service unit for `shekyld`
-- After install: `sudo systemctl enable --now shekyld`
-- Data directory: `/var/lib/shekyl`
-- Logs: systemd journal (`journalctl -u shekyld`)
+The `.deb` and `.rpm` packages are available for both x86_64 and ARM64.
+Both packages, the same way:
+- Install `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and `shekyl-rpc-tunnel`
+  to `/usr/local/bin/` and the pinned Tor under `/opt/shekyl/`
+- Install the template `shekyld@.service` (one instance per network:
+  `shekyld@testnet`), `shekyl.slice` and the tunnel's unit under
+  `/lib/systemd/system/`; the tunnel's is not enabled
+- Ship each public network's settings file under `/usr/share/shekyl/` and
+  copy it to `/etc/shekyl/shekyld-<network>.toml`, `root:shekyl` `0640`,
+  when none is there; an upgrade never overwrites one (IG-Q64)
+- Declare the daemon's account and its configuration directory
+  (`INPUT_GRAMMAR.md` IG-Q64): `/usr/lib/sysusers.d/shekyl.conf`, the system
+  account `shekyl` with no home and no login shell, and
+  `/usr/lib/tmpfiles.d/shekyl.conf`, `/etc/shekyl` as `root:shekyl` `0750`.
+  `post-install.sh` applies both
+- Refuse to install, before any file is unpacked, when an account or group
+  named `shekyl` already exists and is a login (a shell, an administrators'
+  group, a sudo rule) or another account's group (`pre-install.sh`). The
+  daemon would run with that login's rights. The refusal names the rename
+  that frees the name
+- Do not enable, start or restart the daemon. Set what you need in
+  `/etc/shekyl/shekyld-<network>.toml`, then run
+  `sudo systemctl enable --now shekyld@<network>`; after an upgrade,
+  `sudo systemctl restart shekyld@<network>`. The unit checks the file
+  (`--config-verify`, as the daemon's account) before every start
+- On removal, stop and disable every instance and keep the account,
+  `/etc/shekyl` and the chain data. Purging the `.deb` also removes the
+  per-network settings files and then `/etc/shekyl` if it is empty; the
+  `.rpm` has no purge and keeps them
+- Data directory: `/var/lib/shekyl/<network>` (the instance's `StateDirectory`)
+- Log: `/var/log/shekyl/<network>/shekyld.log`
 
 ## Windows Installer Details
 
 The NSIS installer:
-- Installs binaries to `Program Files\Shekyl`
+- Installs `shekyld.exe`, `shekyl-rpc-tunnel.exe` and `shekyld.example.toml`
+  (the settings reference, every option commented out) to `Program Files\Shekyl`,
+  and the pinned Tor in `tor\` beside them, where the daemon looks for it on
+  Windows; the package job checks that Tor against its pin. Windows ships no
+  `shekyl-cli` or `shekyl-wallet-rpc`
 - Optionally adds to system PATH
-- Creates Start Menu shortcuts
+- Creates Start Menu shortcuts for the daemon and the uninstaller
 - Registers a standard Windows uninstaller
+- Does not install a service: on Windows the daemon runs as the user until
+  RT-W14
 
 ## Gitian Deterministic Builds
 

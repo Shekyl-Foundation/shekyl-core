@@ -92,6 +92,9 @@ use std::hint::black_box;
 use std::pin::pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+// Valgrind client requests exist only where the Callgrind benches
+// measure (the crate's `cfg(target_os = "linux")` dev-dependency).
+#[cfg(target_os = "linux")]
 use gungraun::client_requests::callgrind as callgrind_cr;
 use gungraun::{
     library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
@@ -153,8 +156,10 @@ fn engine_trait_bench_key_dispatch_baseline_claim_mine(
 /// (`ledger_iai.rs` is the pattern's origin; see the module doc for why the
 /// default toggle cannot be trusted here).
 fn measure<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "linux")]
     callgrind_cr::start_instrumentation();
     let out = f();
+    #[cfg(target_os = "linux")]
     callgrind_cr::stop_instrumentation();
     out
 }

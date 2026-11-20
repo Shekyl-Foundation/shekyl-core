@@ -1,8 +1,12 @@
 # CompleteTree support draws — Round 0
 
-**Status: RULED 2026-10-22.** Rick ruled §12, all five as recommended.
-Ground: `dev` at `11f8fd1f0`. §4 stays **TABLED** until after EUP-4:
-whether a hole that 2-of-3 cannot see needs more. The row is in
+**Status: RULED 2026-10-22; the connect-path schedule RULED
+2026-11-01.** Rick ruled §12, all five as recommended, and §13's three
+points on the schedule's placement, each as option 1. The seats and the
+epoch snapshot are on the connect path (`SO-D12` 4b §5.1 item 3); the
+carry, the issued journal and §13.3's anchor join it at the switch with
+admission. Ground: `dev` at `11f8fd1f0`. §4 stays **TABLED** until after
+EUP-4: whether a hole that 2-of-3 cannot see needs more. The row is in
 `docs/FOLLOWUPS.md`.
 
 A complete tree is a support role. It is challenged and slashable. Its
@@ -30,9 +34,9 @@ unanswered draws top the economy's count up, up to nine times the base.
 `bond_floor_of` returns a single `ARCHIVAL_BOND_FLOOR_ATOMIC` for
 `HoldingsKind::CompleteTree`.
 
-`freeze_complete_trees` (`close.rs`) and `market_member_at_epoch`
-(`consensus_state.rs`) keep a credited complete tree out of `R_market`
-and `Σwork`. On rewards it is not a Sybil route. The drawable set is
+A complete tree lists no shard (CEN-J14, `CompleteTreeWithShardIds`), so
+no economy row credits it and it is in no `R_market` and no `Σwork`. On
+rewards it is not a Sybil route. The drawable set is
 the route.
 
 A draw is an index `j` below `BlockDraws.count` at height `h`
@@ -76,23 +80,34 @@ share a block only when their offsets land on it.
 The heights are public. The shard a draw selects is not.
 
 The cSHAKE input is `seed ‖ block_hash(h) ‖ persona ‖ j_le[4] ‖
-attempt_le[4]`, customization `shekyl/archival-support-draw-v1`.
-`persona` is required so two trees on one block do not share a shard.
-The seed and the block hash are the economy draw's inputs; the label
-and the persona are what separate the streams. Selection reuses
-`select_draw`'s zone and the 256th-attempt cap. The set size is
-`final_count`, not `|D|`. The first in-zone candidate is accepted.
-The economy's 16 : 1 short weight is not applied: a shard index has no
-economy shortfall.
+final_count_le[8] ‖ attempt_le[4]`, customization
+`shekyl/archival-support-draw-v1`. `persona` is required so two trees
+on one block do not share a shard. The seed and the block hash are the
+economy draw's inputs; the label and the persona are what separate the
+streams. Selection rejection-samples into `0..final_count` and stops
+after 8 attempts; running out has probability below
+`(final_count / 2^64)^8`. The set size is `final_count`, the archive
+width at `h_open(E)` (pin 2), not `|D|`. The first in-zone candidate is
+accepted. The economy's 16 : 1 short weight is not applied: a shard
+index has no economy shortfall.
 
-**Unissued carry.** A support draw the producer did not issue moves to
-the next block that can issue it. The counter for one tree is capped
-at `c`: an epoch that opens while `c` are already unissued adds
-nothing. The tree is never owed more than `c`, so a stall does not
-stack epochs and there is no top-up multiple. While the producer is
-keeping up, a skipped block is filled later in the same epoch and the
-tree is issued `c`. An issued draw that goes unanswered does not
-return to this counter. It is one observation in §3.
+**Unissued carry** (as ruled 2026-11-01, §13.2: the carry stays inside
+its epoch). A seat at `h` whose bundle is not admitted when `h`'s window
+closes is unfiled; the transition first sees that at `h + W₂ + 1`. The
+tree then gets one carried seat at the first later block of the same
+epoch whose own window still closes inside the epoch (offset below
+`SEB − W₂`) and where the schedule does not seat it already: one seat
+per tree per block. A carried seat that again goes unfiled is carried
+again. The counter for one tree is capped at `c`, and the tree is never
+owed more than `c`. Whatever is still carried when the epoch's usable
+span ends lapses, like an unrevealed draw: not a miss. No carry crosses
+an epoch, so a stall does not stack epochs and there is no top-up
+multiple. While the producer is keeping up, a skipped block is filled
+later in the same epoch and the tree is issued `c`. A draw whose slot is
+too late to re-seat (roughly the last `W₂` of the span, about one slot
+in nineteen) lapses; `c` was sized with no carry (§3), so the bound does
+not depend on it. An issued draw that goes unanswered does not return
+to this counter. It is one observation in §3.
 
 ## 3. Settlement — what the PR builds
 
@@ -269,14 +284,17 @@ maximum object, beside the economy bundle at the count cap. There is
 no second numeric cap on `N`. The structural bound is one record per
 tree per block.
 
-**Store.** Economy `BlockDraws` (`archival_block_draws`, layout at
-`SCHEMA_VERSION` 30) is unchanged: `count`, `carry`, `shortfall`,
-`issued_short`, `revealed`. Support issuance is a new persisted row:
-per tree, the unissued counter (capped at `c`), and per block the
-support count issued. Unanswered support draws are not that counter
-and are not `shortfall` or `issued_short`. The implementation PR bumps
-`SCHEMA_VERSION` and regenerates `rust/shekyl-chain-store/schemas/`.
-Rule 42: the snapshot gate is the red check.
+**Store.** Economy `BlockDraws` (`archival_block_draws`) is unchanged:
+`count`, `carry`, `shortfall`, `issued_short`, `revealed`. Support
+issuance is its own persisted rows: per tree and epoch, the unissued
+counter (capped at `c`, `archival_support_unissued`); and per block its
+seats, the trees it seated in persona order, whose length is the
+support count (`archival_support_block`, layout 35; §13.1). Admission
+reads a past block's roster from its seat row, as written when it
+connected, with each seat's key from the epoch snapshot, so it never
+replays the carry. Unanswered support draws are not that counter and
+are not `shortfall` or `issued_short`. Rule 42: the snapshot gate is the
+red check.
 
 ## 6. What each site becomes
 
@@ -286,8 +304,8 @@ empty: every flag below still has a job.
 | Site | Class | Why |
 | --- | --- | --- |
 | `emit` complete-tree arm | support role, leaves `D` | The PR skips `Holdings::CompleteTree`: no pairs, no receipt key. Both derivations share `emit`, so the digest cross-check still compares them. Digest vectors are re-derived. |
-| `freeze_complete_trees`, `archival_complete_trees[E]`, SI-31 `CompleteTreesNotFrozen` | still needed | SO-D12h freezes, at the slash pass, every credited persona whose record is a complete tree (`close.rs` `freeze_complete_trees`). That is the set `market_member_at_epoch` excludes. It is not the epoch-open membership the schedule needs. |
-| `is_support_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | still the §1.4 guard | Serve credit is written from passed draws. After complete trees leave `D`, an economy draw cannot select one. A support pass must not write credit. The exclusion is what still drops the persona from `R_market` and `Σwork` if a credit row is written anyway. The flag is reachable. Renamed from `is_foundation_complete_tree`; not deleted. |
+| `freeze_complete_trees`, `archival_complete_trees[E]`, SI-31 `CompleteTreesNotFrozen` | deleted (the switch's C7) | No gather credits a complete tree, so the set each pass froze was always empty (`ARCHIVAL_SETTLEMENT_WRITER.md` §17.3). |
+| `is_support_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | deleted (the switch's C7) | Credit is written only from an admitted economy pass, and an economy draw cannot select a complete tree, so the flag was always false. Market membership is `good_through`. The claim-source RPC row loses the field at 3.71. |
 | `SlashedHolding::CompleteTree`, `unslashed` | stays live | §3 demotes through it. |
 | `ReportedSet::CompleteTreePrefix`, `ServingPosture::SupportCompleteTree`, `PinCompleteTreePrefix` | support role, stays | The node already serves the prefix. The producer of `h` dials, the same pull as an economy read (`read_from` / `read_from_nonce`), and files the support bitmap in the same bundle (§5). The serve posture does not need a second arm to answer a fetch of a prefix shard. Renamed from `FoundationCompleteTree`. |
 | `HolderSource::holders_of` | design question, §7 | The scheduler's holders are the drawable holders. Leaving `D` removes complete trees from that urn. |
@@ -322,8 +340,8 @@ Consensus accepts `HoldingsKind::CompleteTree` from any poster
 (`verify_join_market_bond_post` allows the kind with an empty shard
 list). The wallet's ordinary path is `ShardSetCompact`. The names
 that said Foundation were the role's names and were wrong for ruling 2.
-They are now `is_support_complete_tree` and
-`ServingPosture::SupportCompleteTree`. The Foundation is one holder.
+The serving posture is `ServingPosture::SupportCompleteTree`. The
+Foundation is one holder.
 
 `verify_release_bond_post` does not refuse the kind. `Reinstate` does
 (`ReinstateOnCompleteTree`). The proposal for the ruling: a voluntary
@@ -437,3 +455,40 @@ Rick ruled all five as recommended. No new slash rule.
    tried while a drawn holder of that shard exists.
 5. **Release.** A voluntary holder releases through the existing
    `Release` and its cooldown, and stays slashable during the cooldown.
+
+## 13. The schedule on the connect path — RULED 2026-11-01
+
+Rick ruled the three points `SO-D12` 4b §5.1 item 3 raised, each as
+option 1.
+
+1. **One epoch snapshot** (`SO-D12q`). The value filed at `h_open(E)` holds `D` with
+   its receipt keys and the support roster (the archive width and the
+   members in persona order with their receipt keys), under one digest
+   that both derivations produce (`shekyl/archival-drawable-epoch-v2`).
+   Support reuses the economy's paths: the same filing, digest, memo and
+   no-rebuild contract (admission's miss is SI-35). A member is a
+   complete tree of pin 1 at `h_open(E)`. Each block's support row holds
+   its seats (SI-40), and the store's view requires that row to equal
+   the schedule over the snapshot (SI-43).
+2. **The carry stays inside its epoch** (`SO-D12r`; §2, as amended). The sentence
+   "an epoch that opens while `c` are already unissued adds nothing" is
+   struck by this ruling: no carry crosses an epoch. The carry is built
+   and tested and joins the connect path at the switch, with admission:
+   before then nothing is admitted on chain, so every scheduled seat
+   would read as unfiled.
+3. **A complete tree's release anchor** (`SO-D12s`) is the epoch of its last passed
+   support draw, read from `archival_support_issued`'s pass bit: the
+   support-stream counterpart of the economy's issued-draw read. J16's
+   two checks are unchanged. It lands at the switch with 4b §5.3's J16
+   change, because the issued journal is written only once admission is
+   live.
+4. **No shards, no support stream** (`SO-D12t`, Rick, 2026-11-02). No
+   support draw is made while the archive has no closed shard ("you
+   can't draw from an empty pool"). It is a fact of the type: the
+   snapshot holds `Option<SupportRoster>`, and a roster's width is a
+   `NonZeroU64`, present only when the archive at `h_open(E)` has a
+   shard. The seats, the view's width answer and `select_support_shard`
+   take that width, so "members at width zero" cannot be expressed and
+   no check guards it. The economy has the same shape without a guard:
+   with no shards `D` is empty and the count rule draws zero.
+

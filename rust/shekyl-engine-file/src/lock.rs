@@ -64,8 +64,7 @@
 //! wraps `flock(2)` on POSIX and `LockFileEx` on Windows behind a
 //! `#![forbid(unsafe_code)]`-compatible safe API. This keeps
 //! `shekyl-engine-file` itself `#![deny(unsafe_code)]` with zero
-//! exceptions, per the workspace rule that only `shekyl-ffi` may relax
-//! that lint (see `rust/25-rust-architecture.mdc`).
+//! exceptions (see `25-rust-architecture.mdc`).
 //!
 //! The acquisition path:
 //!
@@ -84,7 +83,7 @@
 //!    which step 4 below makes unnecessary.
 //!
 //! A lock is held on an *inode*, and `.wallet.keys` is replaced by a
-//! fresh inode on every password rotation (`atomic_write_file`: tmp,
+//! fresh inode on every password rotation (`atomic_write_file`: staged,
 //! fsync, rename). A lock left on the old inode would guard nothing once
 //! the path names the new one — a second `open` would succeed. So the
 //! rotation locks the staged file **before** it is renamed into place

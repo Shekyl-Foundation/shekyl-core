@@ -21,7 +21,7 @@ use stub::{connect, formed, with_view};
 #[allow(dead_code)]
 fn program() {
     with_view(|view| {
-        let valid = validate(formed(), &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let valid = validate(formed(), &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .unwrap()
             .unwrap();
         connect(&view, valid);

@@ -2,7 +2,6 @@
 description: Consensus is PoW-based; staking is an economic primitive. Speculative consensus scaffolding is forbidden.
 globs:
   - "**/consensus/**"
-  - "**/cryptonote_core/**"
   - rust/shekyl-consensus/**
   - rust/shekyl-economics/**
 ---
@@ -45,7 +44,7 @@ A second proof type would require, before any code lands:
 2. Explicit accessibility analysis: PoW must remain CPU-friendly (RandomX),
    any PoS component must have a stake floor low enough for individuals,
    and delegation mechanisms must not concentrate power at exchanges.
-3. The migration discipline from `20-rust-vs-cpp-policy.mdc` (its own
-   design doc, its own review cycle, its own PR).
+3. The discipline of `26-sub-pr-design-discipline.mdc` §"A new subsystem
+   is its own change" (its own design doc, its own review, its own PR).
 
 Until that exists, the PoW assumption is load-bearing — code freely.

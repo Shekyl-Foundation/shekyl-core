@@ -7,25 +7,30 @@
 //! PR2-Q5): blocks a scenario driver mined elsewhere arrive at a service
 //! over a fresh store, the way a peer's blocks do.
 //!
-//! The service's substrate is [`Gated`]: the free longhash, a clock ahead
-//! of every scenario timestamp, and a gate a test closes on one block's
-//! hash to hold its `form` while another arrival's write moves the tip
-//! under it.
+//! The service's proof-of-work boundary is [`Gated`]: the free longhash, a
+//! clock ahead of every scenario timestamp, and a gate a test closes on
+//! one block's hash to hold its `form` while another arrival's write moves
+//! the tip under it. It holds no cache. A `run` job takes one permit of a
+//! budget the fixture owns, so a test can hold the permits and watch which
+//! class a form waits in, and it records each job asked for and the last
+//! ranked list sent.
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use shekyl_chain_rules::Substrate;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
-use super::{Arrival, ArrivalTag, Door, Origin, Refusal, Reply, Service, ServiceConfig, SessionId};
+use super::{Arrival, ArrivalTag, Origin, Refusal, Reply, Service, ServiceConfig, SessionId};
 use crate::connector::Rewind;
+use crate::pow::{LendJob, Pow, RunJob};
 use crate::scenario::{Mined, Scenario, CLOCK_START, RULES};
-use crate::test_support::{cleanup, open_store, tmp};
+use crate::test_support::{open_store, tmp, TestPath};
 use shekyl_hash_budget::Budget;
+use shekyl_hasher::{Class, Ranked, Resident};
 
 /// The free longhash under a clock ahead of the scenarios', with a gate.
 pub(crate) struct Gated {
@@ -34,32 +39,32 @@ pub(crate) struct Gated {
     hashes: AtomicUsize,
     /// Longhashes that met a closed gate and waited.
     waited: AtomicUsize,
-    /// Seeds pinned: every cache this substrate was asked to build.
-    pins: AtomicUsize,
-    /// The two cache slots, as the cache store keeps them: canonical, then
-    /// transient.
-    slots: Mutex<(Option<BlockHash>, Option<BlockHash>)>,
-    /// Caches a preparation built: a branch seed no slot held.
-    prepared: AtomicUsize,
-    /// Forms hashing under a held branch cache now, and the most at once.
-    branch_forms: AtomicUsize,
-    branch_forms_max: AtomicUsize,
+    /// The permits a `run` job holds one of for its scope: the hasher's
+    /// budget, as this fixture models it.
+    budget: Budget,
+    /// Every job asked for, in the order asked: its class and its seed.
+    jobs: Mutex<Vec<(Class, BlockHash)>>,
+    /// The ranked list last sent.
+    ranked: Mutex<Option<Ranked>>,
     /// Set: the next clock read panics.
     clock_panics: std::sync::atomic::AtomicBool,
 }
 
 impl Gated {
     pub(crate) fn new() -> Self {
+        Self::on(Budget::of_host())
+    }
+
+    /// A gate whose `run` jobs take their permits from `budget`.
+    pub(crate) fn on(budget: Budget) -> Self {
         Self {
             held: Mutex::new(HashSet::new()),
             opened: Condvar::new(),
             hashes: AtomicUsize::new(0),
             waited: AtomicUsize::new(0),
-            pins: AtomicUsize::new(0),
-            slots: Mutex::new((None, None)),
-            prepared: AtomicUsize::new(0),
-            branch_forms: AtomicUsize::new(0),
-            branch_forms_max: AtomicUsize::new(0),
+            budget,
+            jobs: Mutex::new(Vec::new()),
+            ranked: Mutex::new(None),
             clock_panics: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -80,24 +85,14 @@ impl Gated {
         self.hashes.load(Ordering::Acquire)
     }
 
-    /// Seeds pinned so far.
-    pub(crate) fn pins(&self) -> usize {
-        self.pins.load(Ordering::Acquire)
+    /// Every job asked for so far: its class and its seed.
+    pub(crate) fn jobs(&self) -> Vec<(Class, BlockHash)> {
+        self.jobs.lock().expect("jobs").clone()
     }
 
-    /// Caches preparations built so far.
-    pub(crate) fn prepared(&self) -> usize {
-        self.prepared.load(Ordering::Acquire)
-    }
-
-    /// The seed in the canonical slot.
-    pub(crate) fn canonical(&self) -> Option<BlockHash> {
-        self.slots.lock().expect("slots").0
-    }
-
-    /// The most forms that hashed under a held branch cache at once.
-    pub(crate) fn branch_forms_max(&self) -> usize {
-        self.branch_forms_max.load(Ordering::Acquire)
+    /// The ranked list last sent, if any was.
+    pub(crate) fn ranked(&self) -> Option<Ranked> {
+        self.ranked.lock().expect("ranked").clone()
     }
 
     /// Wait until a longhash has met a closed gate: the held block is in
@@ -109,9 +104,79 @@ impl Gated {
     }
 }
 
+/// The boundary a test plugs in: jobs call the gate itself, a `run` job
+/// under one permit of the fixture's budget, a `lend` job under none. Every
+/// seed reads as warm, since there is no cache to build.
+impl Pow for Gated {
+    type Fault = std::convert::Infallible;
+
+    fn clock(&self) -> Result<Timestamp, Self::Fault> {
+        self.local_clock()
+    }
+
+    fn run<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&RunJob<'job, Self::Fault>) -> R,
+    ) -> Option<R> {
+        self.jobs.lock().expect("jobs").push((class, seed));
+        let permit = self.budget.acquire_unless(class, stop)?;
+        let result = job(self);
+        drop(permit);
+        Some(result)
+    }
+
+    fn lend<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&LendJob<'job, Self::Fault>) -> R,
+    ) -> Option<R> {
+        self.jobs.lock().expect("jobs").push((class, seed));
+        if stop.load(Ordering::Acquire) {
+            return None;
+        }
+        Some(job(self))
+    }
+
+    fn wake(&self) {
+        self.budget.wake();
+    }
+
+    fn rank(&self, list: Ranked) {
+        *self.ranked.lock().expect("ranked") = Some(list);
+    }
+
+    fn warm(&self, _seed: &BlockHash) -> bool {
+        true
+    }
+
+    fn resident(&self) -> Option<tokio::sync::watch::Receiver<Resident>> {
+        None
+    }
+
+    fn permits(&self) -> usize {
+        self.budget.permits()
+    }
+
+    fn derives(&self) -> crate::metrics::Derives {
+        crate::metrics::Derives::default()
+    }
+
+    fn unlent<R>(&self, job: impl for<'job> FnOnce(&LendJob<'job, Self::Fault>) -> R) -> R {
+        job(self)
+    }
+
+    fn stopped(fault: &Self::Fault) -> bool {
+        match *fault {}
+    }
+}
+
 impl Substrate for Gated {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         assert!(
@@ -134,42 +199,6 @@ impl Substrate for Gated {
         self.hashes.fetch_add(1, Ordering::AcqRel);
         Ok(PowHash::from_bytes([0; 32]))
     }
-
-    /// The cache store's `pin_canonical`: the previous canonical seed is
-    /// demoted to the transient slot.
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.pins.fetch_add(1, Ordering::AcqRel);
-        let mut slots = self.slots.lock().expect("slots");
-        if slots.0 != Some(*seed) {
-            *slots = (Some(*seed), slots.0);
-        }
-    }
-
-    /// The cache store's derive: a seed no slot holds is built into the
-    /// transient slot; the canonical slot does not move.
-    fn prepare_seed(&self, seed: &BlockHash) {
-        let mut slots = self.slots.lock().expect("slots");
-        if slots.0 != Some(*seed) && slots.1 != Some(*seed) {
-            self.prepared.fetch_add(1, Ordering::AcqRel);
-            slots.1 = Some(*seed);
-        }
-    }
-
-    /// A form under a held branch cache, held open briefly so two at once
-    /// would overlap.
-    fn longhash_held(
-        &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        _held: &(),
-    ) -> Result<PowHash, Self::Fault> {
-        let now = self.branch_forms.fetch_add(1, Ordering::AcqRel) + 1;
-        self.branch_forms_max.fetch_max(now, Ordering::AcqRel);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let hashed = self.longhash(pow_blob, seed);
-        self.branch_forms.fetch_sub(1, Ordering::AcqRel);
-        hashed
-    }
 }
 
 /// `mined` as a peer's arrival on `session`.
@@ -187,38 +216,52 @@ pub(crate) fn arrival(tag: u64, session: u64, mined: &Mined) -> Arrival {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
-/// A service over a fresh store named `name`, and the store's path.
-pub(crate) fn service(
-    name: &str,
-    substrate: Arc<Gated>,
-    config: ServiceConfig,
-) -> (Service<Gated>, std::path::PathBuf) {
-    service_on(name, substrate, config, Budget::of_host())
+/// A running service and the directory its store lives in.
+///
+/// The service is private and the directory is last. Dropping this drops
+/// the service, then the directory. [`Self::stop`] does that after the
+/// service has released the file. `&self` methods of [`Service`] are
+/// reached by deref. `stop` takes the service by value, so it is a method
+/// here rather than one the deref can find.
+pub(crate) struct Running {
+    service: Service<Gated>,
+    _path: TestPath,
 }
 
-/// [`service`] taking its permits from `budget`.
-pub(crate) fn service_on(
-    name: &str,
-    substrate: Arc<Gated>,
-    config: ServiceConfig,
-    budget: Budget,
-) -> (Service<Gated>, std::path::PathBuf) {
+impl std::ops::Deref for Running {
+    type Target = Service<Gated>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.service
+    }
+}
+
+impl Running {
+    /// Stop the service, then release its directory.
+    pub(crate) async fn stop(self) -> Result<(), super::ServiceFault<std::convert::Infallible>> {
+        self.service.stop().await
+    }
+}
+
+/// A service over a fresh store named `name`.
+pub(crate) fn service(name: &str, substrate: Arc<Gated>, config: ServiceConfig) -> Running {
     let path = tmp(name);
     let store: ChainStore = open_store(&path);
-    (
-        Service::start(
+    Running {
+        service: Service::start(
             Arc::new(store),
             RULES,
             substrate,
             config,
-            budget,
             super::Follow::default(),
         ),
-        path,
-    )
+        _path: path,
+    }
 }
 
 /// [`service`] under `rules`, over a store opened under the rule set in
@@ -228,30 +271,34 @@ pub(crate) fn service_under(
     substrate: Arc<Gated>,
     config: ServiceConfig,
     rules: crate::schedule::ChainRules,
-) -> (Service<Gated>, std::path::PathBuf) {
+) -> Running {
     let path = tmp(name);
     let store = crate::test_support::open_store_under(
         &path,
         &rules.in_force(BlockHeight::ZERO),
         shekyl_chain_store::apply_policy::ApplyPolicy::Full,
     );
-    (
-        Service::start(
+    Running {
+        service: Service::start(
             Arc::new(store),
             rules,
             substrate,
             config,
-            Budget::of_host(),
             super::Follow::default(),
         ),
-        path,
-    )
+        _path: path,
+    }
 }
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
-pub(crate) async fn offer_all(door: &Door, session: u64, blocks: &[Mined]) -> Vec<Reply> {
+pub(crate) async fn offer_all(
+    service: &Service<Gated>,
+    session: u64,
+    blocks: &[Mined],
+) -> Vec<Reply> {
     // A caller asks for room before it sends: spans no larger than the
     // room the door reports, each answered before the next.
+    let door = service.door();
     let mut replies = Vec::new();
     let mut index = 0u64;
     for chunk in blocks.chunks(door.room().max(1)) {
@@ -268,6 +315,11 @@ pub(crate) async fn offer_all(door: &Door, session: u64, blocks: &[Mined]) -> Ve
         }
     }
     replies
+}
+
+/// `hash` as the hasher names a seed.
+fn as_seed(hash: BlockHash) -> shekyl_pow_randomx::Seedhash {
+    shekyl_pow_randomx::Seedhash::from_bytes(*hash.as_bytes())
 }
 
 /// What the store holds for `hash`: on the main chain, as an alt row.
@@ -287,8 +339,8 @@ async fn a_span_from_the_tip_connects_in_order() {
     let mut y = Scenario::open("service-span-y");
     let blocks = y.mine(6).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service("service-span", Arc::clone(&gate), ServiceConfig::default());
-    let replies = offer_all(&service.door(), 1, &blocks).await;
+    let service = service("service-span", Arc::clone(&gate), ServiceConfig::default());
+    let replies = offer_all(&service, 1, &blocks).await;
     for (mined, reply) in blocks.iter().zip(&replies) {
         assert_eq!(
             *reply,
@@ -300,7 +352,286 @@ async fn a_span_from_the_tip_connects_in_order() {
     }
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
+}
+
+/// A span the door accepts lands in one write: one commit and one
+/// `TipChanged` for the run, at the run's last block, not one per block
+/// (DRS-D6's mitigation, 2026-10-30: the door committed once per block,
+/// two fsyncs each, where the C++ batched a whole span). Every block is
+/// still answered `Connected` at its height, in order.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_span_lands_in_one_commit() {
+    use crate::connector::TipChanged;
+    let mut y = Scenario::open("service-one-commit-y");
+    let blocks = y.mine(6).await;
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-one-commit",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    assert!(
+        door.room() >= blocks.len(),
+        "the span fits the door's window"
+    );
+    let mut tips = service.watch_tip().await.expect("watch");
+    assert_eq!(*tips.borrow_and_update(), TipChanged { seq: 0, tip: None });
+    let replies = offer_all(&service, 1, &blocks).await;
+    for (mined, reply) in blocks.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            }
+        );
+    }
+    assert!(
+        tips.has_changed().expect("open"),
+        "the run published its tip"
+    );
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq, 1,
+        "one commit for the span, not {}",
+        published.seq
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(blocks[blocks.len() - 1].hash),
+        "the one publication is the run's last block"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A substrate whose longhash faults on one block, and is the gated one
+/// for every other: what a run meets when its cache cannot be read.
+struct Faulting {
+    gate: Gated,
+    faulting: BlockHash,
+}
+
+/// The fault [`Faulting`] raises: not a cache miss, so the run does not
+/// place its arrivals again.
+#[derive(Debug)]
+struct FormFault;
+
+impl crate::pow::Fixture for Faulting {}
+
+impl Substrate for Faulting {
+    type Fault = FormFault;
+
+    fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
+        Ok(self.gate.local_clock().expect("the gate's clock"))
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault> {
+        if shekyl_wire::identity_of_pow_blob(pow_blob) == self.faulting {
+            return Err(FormFault);
+        }
+        Ok(self.gate.longhash(pow_blob, seed).expect("the gate hashes"))
+    }
+}
+
+/// A form that faults fails the service before the run's write: nothing
+/// of the run lands, the arrivals are answered `Stopped`, and the stop
+/// reports the fault. A door that landed the formed prefix first and only
+/// then looked at the fault had a path on which the write's own outcome
+/// (a refusal, a stale view) returned before the fault was ever reported,
+/// and the service ran on as if its substrate were sound; failing before
+/// the write leaves that path no entry.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_form_that_faults_fails_the_service_before_the_run_lands() {
+    let mut y = Scenario::open("service-form-fault-y");
+    let blocks = y.mine(3).await;
+    let path = tmp("service-form-fault");
+    let store: ChainStore = open_store(&path);
+    let service = Service::start(
+        Arc::new(store),
+        RULES,
+        Arc::new(Faulting {
+            gate: Gated::new(),
+            faulting: blocks[1].hash,
+        }),
+        ServiceConfig::default(),
+        super::Follow::default(),
+    );
+    let door = service.door();
+    let span = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, m)| arrival(u64::try_from(i).expect("fits"), 1, m))
+        .collect();
+    let tickets = door.offer_span(span).expect("room");
+    let replies = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut replies = Vec::new();
+        for ticket in tickets {
+            replies.push(ticket.reply().await.reply);
+        }
+        replies
+    })
+    .await
+    .expect("every arrival is answered");
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Stopped)),
+        "nothing landed and every arrival was answered Stopped: {replies:?}"
+    );
+    assert!(
+        service.stop().await.is_err(),
+        "the service reports the form's fault"
+    );
+    y.close().await;
+}
+
+/// A run whose last block lists a spend anchored on a root the run itself
+/// writes: the spend connecting at `AT` references block `AT − 5` (CEN-I11's
+/// newest admissible reference), whose root is the tree's state after
+/// block `AT − 6`, and the span handed over is `AT − 6 ..= AT`, so that
+/// root exists only in the run's open transaction when block `AT` is
+/// judged. The whole run lands, in one commit, each block answered at its
+/// height. The run also crosses the first seed boundary of a fresh store
+/// in the sibling test above (genesis under the null seed, block 1 under
+/// genesis's): one run, two seeds pinned, one commit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_spend_anchored_on_a_root_its_own_run_writes_lands_with_it() {
+    use crate::test_support::{h, Family, FIRST_SPEND_HEIGHT};
+    use shekyl_harness_spender::Spender;
+    let at = FIRST_SPEND_HEIGHT + 1;
+    let mut y = Scenario::open("service-run-anchor-y");
+    let mut blocks = y.mine(at).await;
+    let spend = {
+        let spender = Spender::on(y.network_id(), &blocks);
+        spender.spend_coinbase(y.wallet(), h(0), h(at), Family::Main.fee())
+    };
+    let spending = y
+        .mine_listing(vec![spend])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block connects on the scenario: {outcome}"));
+    assert_eq!(spending.height, h(at));
+    let spending_hash = spending.hash;
+    blocks.push(spending);
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-run-anchor",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    // Everything below the reference root's block, in spans as the door
+    // has room; then the dependent run as one span.
+    let split = usize::try_from(at - 6).expect("fits");
+    let before = offer_all(&service, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    assert!(door.room() >= run.len(), "the run fits the door's window");
+    let replies = offer_all(&service, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    assert_eq!(
+        published.tip.map(|t| t.top_id),
+        Some(spending_hash),
+        "the one publication is the spending block"
+    );
+    // The spend is on the chain the service holds: its key image is spent.
+    let (on_chain, as_alt) = homes(&service, spending_hash);
+    assert!(on_chain && !as_alt);
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A run across a seed boundary lands in one commit: the span
+/// `2107 ..= 2113` ends at height 2113, the first block hashed under the
+/// seed at height 2048 (`SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1`),
+/// so the run's forms are jobs on two seeds, and the run's one write
+/// records both halves. Afterwards the ranked list's first seed is the new
+/// epoch's. Ignored: it mines 2,114 blocks, and the nightly ignored lane
+/// runs it.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "mines past the first seed epoch; the chain-ingest ignored lane runs it"]
+async fn a_run_across_a_seed_boundary_lands_in_one_commit() {
+    use shekyl_difficulty::{SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+    let boundary = SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG; // 2112
+    let mut y = Scenario::open("service-seed-run-y");
+    let blocks = y.mine(boundary + 2).await;
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-seed-run",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let mut tips = service.watch_tip().await.expect("watch");
+    let split = usize::try_from(boundary - 5).expect("fits");
+    let before = offer_all(&service, 1, &blocks[..split]).await;
+    assert!(
+        before.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{before:?}"
+    );
+    let seq_before = tips.borrow_and_update().seq;
+    let jobs_before = gate.jobs().len();
+    let run = &blocks[split..];
+    assert_eq!(run.len(), 7);
+    let replies = offer_all(&service, 1, run).await;
+    for (mined, reply) in run.iter().zip(&replies) {
+        assert_eq!(
+            *reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            },
+            "block {} of the run",
+            mined.height
+        );
+    }
+    let published = *tips.borrow_and_update();
+    assert_eq!(
+        published.seq,
+        seq_before + 1,
+        "the run landed in one commit"
+    );
+    let genesis = blocks[0].hash;
+    let epoch_seed = blocks[usize::try_from(SEEDHASH_EPOCH_BLOCKS).expect("fits")].hash;
+    let seeds: Vec<BlockHash> = gate.jobs()[jobs_before..]
+        .iter()
+        .map(|(_, seed)| *seed)
+        .collect();
+    assert_eq!(
+        seeds,
+        [vec![genesis; 6], vec![epoch_seed; 1]].concat(),
+        "each form is a job on its own seed: six under block 0's id, the last under block 2048's"
+    );
+    // The ranker runs after the write; the list is read once it has.
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(
+        gate.ranked(),
+        Some(Ranked::new(as_seed(epoch_seed), Some(as_seed(genesis)), None).expect("two seeds")),
+        "the list's first seed is the new epoch's, block 2048's, and the window still names \
+         the epoch before it"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
 }
 
 /// Two arrivals at one height from two sessions: one connects and the
@@ -315,13 +646,13 @@ async fn two_arrivals_at_one_height_one_connects_and_one_is_held() {
     let a = y.mine(1).await;
     let b = z.mine(1).await;
     assert_ne!(a[0].hash, b[0].hash, "two blocks at one height");
-    let (service, path) = service(
+    let service = service(
         "service-two",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
+    offer_all(&service, 1, &prefix).await;
     let first = door.offer(arrival(10, 2, &a[0])).expect("room");
     let second = door.offer(arrival(20, 3, &b[0])).expect("room");
     let replies = [first.reply().await.reply, second.reply().await.reply];
@@ -342,7 +673,6 @@ async fn two_arrivals_at_one_height_one_connects_and_one_is_held() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// One block id from two sessions, placed once as an alternative and once
@@ -358,14 +688,14 @@ async fn one_block_placed_alt_then_extend_has_one_home() {
     y.idle();
     let tip = y.mine(1).await;
     let x = z.mine(1).await;
-    let (service, path) = service(
+    let service = service(
         "service-home",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &tip).await;
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &tip).await;
     // Session 2: x's parent is not the tip, so it is offered as an
     // alternative and held.
     let held = door
@@ -405,7 +735,6 @@ async fn one_block_placed_alt_then_extend_has_one_home() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// An extension whose parent stops being the tip before it connects is
@@ -422,9 +751,9 @@ async fn an_extension_whose_parent_moves_is_placed_again() {
     let mine = y.mine(2).await;
     let theirs = z.mine(1).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service("service-moves", Arc::clone(&gate), ServiceConfig::default());
+    let service = service("service-moves", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
+    offer_all(&service, 1, &prefix).await;
     // `mine[0]` is placed as an extension and held in `form` ...
     gate.hold(mine[0].hash);
     let held = door.offer(arrival(10, 2, &mine[0])).expect("room");
@@ -464,7 +793,6 @@ async fn an_extension_whose_parent_moves_is_placed_again() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// Room is asked before sending: a span larger than the room is refused
@@ -475,17 +803,12 @@ async fn an_extension_whose_parent_moves_is_placed_again() {
 async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
     let mut y = Scenario::open("service-room-y");
     let blocks = y.mine(4).await;
-    let gate = Arc::new(Gated::new());
+    let gate = Arc::new(Gated::on(Budget::new(NonZeroUsize::MIN)));
     let config = ServiceConfig {
         // Three seats: one stays reserved, so a sync caller sees two.
         room: NonZeroUsize::new(3).expect("three"),
     };
-    let (service, path) = service_on(
-        "service-room",
-        Arc::clone(&gate),
-        config,
-        Budget::new(NonZeroUsize::MIN),
-    );
+    let service = service("service-room", Arc::clone(&gate), config);
     let door = service.door();
     assert_eq!(door.room(), 2);
     let span: Vec<_> = blocks[..3]
@@ -494,7 +817,7 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         .collect();
     assert_eq!(door.offer_span(span).err(), Some(Refusal::NoRoom));
     assert_eq!(door.room(), 2, "nothing of a refused span is kept");
-    let replies = offer_all(&door, 1, &blocks[..2]).await;
+    let replies = offer_all(&service, 1, &blocks[..2]).await;
     assert!(replies.iter().all(|r| matches!(r, Reply::Connected { .. })));
     assert_eq!(door.room(), 2, "each reply gives its room back");
 
@@ -504,12 +827,19 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
         .offer_span(vec![arrival(30, 1, &blocks[2]), arrival(31, 1, &blocks[3])])
         .expect("room");
     gate.until_held().await;
+    // The span's two arrivals hold both seats, so the room reads zero
+    // before any stop: the room can't say the stop has begun.
+    assert_eq!(door.room(), 0, "the span holds every seat");
+    let mut stopping = service.shared.stop_signal();
     let stop = tokio::spawn(service.stop());
-    // The held `form` finishes and its block may connect; the stop answers
-    // the rest.
-    while !stop.is_finished() && door.room() != 0 {
-        tokio::task::yield_now().await;
-    }
+    // Wait for the stop itself. Opening the gate before it is seen lets
+    // both blocks form and connect, which is right for a service that has
+    // not been stopped. Once it is seen, the held `form` finishes and its
+    // block may connect; the stop answers the rest.
+    assert!(*stopping
+        .wait_for(|stopping| *stopping)
+        .await
+        .expect("the service holds its stop signal"));
     gate.open(blocks[2].hash);
     stop.await.expect("joins").expect("stops");
     for ticket in tickets {
@@ -529,7 +859,6 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
     }
     assert_eq!(door.room(), 0, "a stopped door has no room");
     y.close().await;
-    cleanup(&path);
 }
 
 /// CEN-A1, held by the router: an arrival this node holds — on the main
@@ -545,10 +874,10 @@ async fn an_arrival_this_node_holds_is_already_held() {
     let tip = y.mine(1).await;
     let side = z.mine(1).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service("service-a1", Arc::clone(&gate), ServiceConfig::default());
+    let service = service("service-a1", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &tip).await;
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &tip).await;
     let held = door
         .offer(arrival(20, 2, &side[0]))
         .expect("room")
@@ -569,7 +898,6 @@ async fn an_arrival_this_node_holds_is_already_held() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// CEN-A4, held by the router: an arrival whose parent neither table holds
@@ -580,9 +908,9 @@ async fn an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored() {
     let mut y = Scenario::open("service-a4-y");
     let blocks = y.mine(4).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service("service-a4", Arc::clone(&gate), ServiceConfig::default());
+    let service = service("service-a4", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
-    offer_all(&door, 1, &blocks[..2]).await;
+    offer_all(&service, 1, &blocks[..2]).await;
     let orphan = door
         .offer(arrival(30, 2, &blocks[3]))
         .expect("room")
@@ -592,19 +920,18 @@ async fn an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored() {
     assert_eq!(homes(&service, blocks[3].hash), (false, false));
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
 /// A service whose session buckets refill by a clock the test advances.
+///
+/// The clock handle is the second value. It does not own the store, so
+/// dropping it before [`Running`] leaves the directory in place until the
+/// service drops.
 fn service_with_clock(
     name: &str,
     substrate: Arc<Gated>,
     config: ServiceConfig,
-) -> (
-    Service<Gated>,
-    std::path::PathBuf,
-    Arc<std::sync::atomic::AtomicU64>,
-) {
+) -> (Running, Arc<std::sync::atomic::AtomicU64>) {
     let path = tmp(name);
     let store: ChainStore = open_store(&path);
     let millis = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -612,16 +939,17 @@ fn service_with_clock(
     let clock: super::Clock =
         Arc::new(move || std::time::Duration::from_millis(read.load(Ordering::Acquire)));
     (
-        Service::start_with_clock(
-            Arc::new(store),
-            RULES,
-            substrate,
-            config,
-            Budget::of_host(),
-            super::Follow::default(),
-            clock,
-        ),
-        path,
+        Running {
+            service: Service::start_with_clock(
+                Arc::new(store),
+                RULES,
+                substrate,
+                config,
+                super::Follow::default(),
+                clock,
+            ),
+            _path: path,
+        },
         millis,
     )
 }
@@ -636,6 +964,8 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
         },
         block: vec![0xA5; len],
         bodies: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -646,7 +976,7 @@ fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
 /// session has its own bucket.
 #[tokio::test]
 async fn the_third_unsolicited_arrival_in_an_interval_is_throttled_before_parse() {
-    let (service, path, millis) = service_with_clock(
+    let (service, millis) = service_with_clock(
         "service-bucket",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
@@ -685,14 +1015,13 @@ async fn the_third_unsolicited_arrival_in_an_interval_is_throttled_before_parse(
         "one token earned"
     );
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// An arrival one byte over the bound is refused before parse; one at the
 /// bound is accepted, and its junk is then refused by the parser.
 #[tokio::test]
 async fn an_arrival_one_byte_over_the_bound_is_oversize_before_parse() {
-    let (service, path) = service(
+    let service = service(
         "service-oversize",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
@@ -707,7 +1036,6 @@ async fn an_arrival_one_byte_over_the_bound_is_oversize_before_parse() {
     let accepted = door.offer(junk(2, 1, true, at)).expect("at the bound");
     assert!(matches!(accepted.reply().await.reply, Reply::Refused(_)));
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// A span with a refused block in the middle: the blocks before it
@@ -721,15 +1049,14 @@ async fn an_arrival_one_byte_over_the_bound_is_oversize_before_parse() {
 async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_it() {
     let mut y = Scenario::open("service-cancel-y");
     let blocks = y.mine(6).await;
-    let gate = Arc::new(Gated::new());
-    let (service, path) = service_on(
+    let gate = Arc::new(Gated::on(Budget::new(NonZeroUsize::MIN)));
+    let service = service(
         "service-cancel",
         Arc::clone(&gate),
         ServiceConfig::default(),
-        Budget::new(NonZeroUsize::MIN),
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..2]).await;
+    offer_all(&service, 1, &blocks[..2]).await;
     let hashed = gate.hashes();
     let mut bad = blocks[4].template.block.clone();
     bad.header.minor_version = 1;
@@ -761,36 +1088,35 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
     assert_eq!(gate.hashes(), hashed + 2, "no hash after the refusal");
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
-/// An arrival's `form` waits in its origin's class (PR2-Q3): a block this
+/// An arrival's form is a job in its origin's class (PR2-Q3): a block this
 /// node asked for in the chain's, an announcement in the unsolicited one.
+/// This bites against an origin stamped onto the wrong class: red when
+/// `class_of` answers `Chain` for an unsolicited peer arrival.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_arrival_forms_in_the_class_its_origin_names() {
-    use shekyl_hash_budget::Class;
+    use std::time::Duration;
+    /// How long a form may take to reach its permit wait. The observation
+    /// ends when the waiter is counted; this bounds a form that never is.
+    const CLASS_WAIT_WITHIN: Duration = Duration::from_secs(10);
+    /// The pause between waiter-count reads. The bound is a failure
+    /// ceiling, so the reads must not spin a core until it expires.
+    const CLASS_WAIT_POLL: Duration = Duration::from_millis(20);
     let mut y = Scenario::open("service-class-y");
     let blocks = y.mine(3).await;
     let budget = Budget::new(NonZeroUsize::MIN);
-    let (service, path) = service_on(
+    let service = service(
         "service-class",
-        Arc::new(Gated::new()),
+        Arc::new(Gated::on(budget.clone())),
         ServiceConfig::default(),
-        budget.clone(),
     );
     let door = service.door();
-    // An arrival waits for the attendant's first window. Holding the only
-    // permit before that install would starve the install, and the
-    // arrival would wait on the window, never in the budget.
-    assert!(
-        service.shared.seed_pair().await.is_some(),
-        "the window is installed"
-    );
     for (index, (solicited, class)) in [(true, Class::Chain), (false, Class::Unsolicited)]
         .into_iter()
         .enumerate()
     {
-        let held = {
+        let header_permit = {
             let budget = budget.clone();
             tokio::task::spawn_blocking(move || budget.acquire(Class::HeaderPow))
                 .await
@@ -801,25 +1127,32 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
             session: SessionId(1),
             solicited,
         };
+        // Sampled before the offer. The span can be inside its permit wait
+        // before the next statement runs, and that waiter would already be
+        // in a later sample. The permit above stays held, so a waiter
+        // counted here cannot be granted and leave.
+        let waiting_at_offer = budget.waiting(class);
         let ticket = door.offer(offered).expect("room and a token");
-        let started = std::time::Instant::now();
-        // The attendant may already be waiting in the chain class to pin
-        // the window. The form is the increase after the offer.
-        let waiting_before = budget.waiting(class);
-        while budget.waiting(class) <= waiting_before {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(10),
-                "the form never waited in {class:?}"
-            );
-            tokio::task::yield_now().await;
-        }
-        drop(held);
+        let appeared = tokio::time::timeout(CLASS_WAIT_WITHIN, async {
+            while budget.waiting(class) == waiting_at_offer {
+                tokio::time::sleep(CLASS_WAIT_POLL).await;
+            }
+        })
+        .await;
+        assert!(appeared.is_ok(), "the form never waited in {class:?}");
+        assert_eq!(
+            budget.waiting(class),
+            waiting_at_offer
+                .checked_add(1)
+                .expect("the waiter count fits"),
+            "one waiter in {class:?}"
+        );
+        drop(header_permit);
         let reply = ticket.reply().await;
         assert!(matches!(reply.reply, Reply::Connected { .. }), "{reply:?}");
     }
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
 /// `TipChanged` (DX-Q2 item 5) is published once after each committed
@@ -836,7 +1169,7 @@ async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
     y.idle();
     let ours = y.mine(2).await;
     let theirs = z.mine(2).await;
-    let (service, path) = service(
+    let service = service(
         "service-tip",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
@@ -951,7 +1284,6 @@ async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// The tip follower posts the node's job for the block after the tip
@@ -975,7 +1307,6 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         RULES,
         Arc::new(Gated::new()),
         ServiceConfig::default(),
-        Budget::of_host(),
         super::Follow {
             job: Some(seat),
             pool: None,
@@ -1007,7 +1338,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         board.posted().expect("posted").1.height,
         BlockHeight::from_raw(0)
     );
-    offer_all(&service.door(), 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     until_followed(&mut followed, 1).await;
     assert_eq!(
         board.posted().expect("posted").1.height,
@@ -1037,7 +1368,6 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
     service.stop().await.expect("stops");
     drop(sender);
     y.close().await;
-    cleanup(&path);
 }
 
 /// The door's answer to a fork past the cap is the hint, `BeyondCap`, and
@@ -1060,16 +1390,16 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
     let main = y.mine(REORG_CAP_BLOCKS + 1).await;
     let fork = z.mine(1).await;
     let substrate = Arc::new(Gated::new());
-    let (service, path) = service_under(
+    let service = service_under(
         "service-cap",
         Arc::clone(&substrate),
         ServiceConfig::default(),
         rules,
     );
     let door = service.door();
-    offer_all(&door, 1, &prefix).await;
-    offer_all(&door, 1, &main).await;
-    let (hashes, pins) = (substrate.hashes(), substrate.pins());
+    offer_all(&service, 1, &prefix).await;
+    offer_all(&service, 1, &main).await;
+    let (hashes, jobs) = (substrate.hashes(), substrate.jobs().len());
     let reply = door
         .offer(arrival(90, 2, &fork[0]))
         .expect("room")
@@ -1083,7 +1413,11 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
         "{reply:?}"
     );
     assert_eq!(substrate.hashes(), hashes, "no hash for the door's answer");
-    assert_eq!(substrate.pins(), pins, "no cache built for it");
+    assert_eq!(
+        substrate.jobs().len(),
+        jobs,
+        "no job asked for it, so no cache built"
+    );
     assert_eq!(
         homes(&service, fork[0].hash),
         (false, false),
@@ -1093,7 +1427,6 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
     for s in [y, z] {
         s.close().await;
     }
-    cleanup(&path);
 }
 
 /// An external miner reads the posted job, writes eight bytes at its
@@ -1105,7 +1438,7 @@ async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_
     use crate::follower::Posting;
     let board = Arc::new(shekyl_miner::JobBoard::new());
     let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, mut posting) = service_mining(
+    let (service, mut posting) = service_mining(
         "service-external-miner",
         Arc::new(Gated::new()),
         &board,
@@ -1146,7 +1479,6 @@ async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_
         "{reply:?}"
     );
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// Every job the producer posts while the tip moves under it describes
@@ -1154,48 +1486,70 @@ async fn an_external_miner_writes_at_the_reported_offsets_and_the_door_connects_
 /// value-shaped test): its block names the tip below its height as the
 /// parent, and its coinbase claims that height. A job may be stale; it is
 /// never torn between two tips.
+///
+/// The subject is two publications of the record the sink reads. The empty
+/// chain is posted first. The blocks connect after that, while the follower
+/// builds. Each post is that record — the job and its bodies, under one
+/// generation — and the check is every job the record held. Red edit: sample
+/// the posting watch against the board's current job, or offer the blocks
+/// before the empty chain has a job in the record.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
-    use crate::follower::Posting;
+    let deadline = Deadline::start();
+    use std::collections::BTreeMap;
+
+    use crate::follower::kept_jobs;
     let mut y = Scenario::open("service-one-snapshot-y");
     let blocks = y.mine(24).await;
     let board = Arc::new(shekyl_miner::JobBoard::new());
     let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, posting) =
+    let (service, mut posting) =
         service_mining("service-one-snapshot", Arc::new(Gated::new()), &board, sync);
-    let watcher = {
-        let board = Arc::clone(&board);
-        let mut posting = posting.clone();
-        tokio::spawn(async move {
-            let mut seen = Vec::new();
-            while posting.changed().await.is_ok() {
-                if let Posting::Posted(generation) = *posting.borrow_and_update() {
-                    if let Some((at, job)) = board.posted() {
-                        if at == generation {
-                            seen.push(job);
-                        }
-                    }
-                }
+    let seen = {
+        let mut seen: BTreeMap<shekyl_miner::Generation, shekyl_miner::Job> = BTreeMap::new();
+        let collect = |seen: &mut BTreeMap<shekyl_miner::Generation, shekyl_miner::Job>| {
+            for (generation, job) in kept_jobs(&service.shared.postings()) {
+                seen.entry(generation).or_insert(job);
             }
-            seen
-        })
+        };
+        deadline
+            .wait("the empty chain's job", async {
+                loop {
+                    collect(&mut seen);
+                    if seen.values().any(|job| job.height == BlockHeight::ZERO) {
+                        return;
+                    }
+                    posting.changed().await.expect("the posting watch");
+                }
+            })
+            .await;
+        for block in &blocks {
+            offer_all(&service, 1, std::slice::from_ref(block)).await;
+            // The build yields, so a generation is in the record here, before
+            // a later post drops it from the ring.
+            collect(&mut seen);
+        }
+        deadline
+            .wait("a job after the tip moved", async {
+                loop {
+                    collect(&mut seen);
+                    if seen.values().any(|job| job.height.to_raw() > 0) {
+                        return;
+                    }
+                    posting.changed().await.expect("the posting watch");
+                }
+            })
+            .await;
+        collect(&mut seen);
+        seen
     };
-    for block in &blocks {
-        offer_all(&service.door(), 1, std::slice::from_ref(block)).await;
-    }
-    let mut followed = service.followed();
-    followed
-        .wait_for(|at| *at >= u64::try_from(blocks.len()).expect("fits"))
-        .await
-        .expect("following");
     service.stop().await.expect("stops");
-    let seen = watcher.await.expect("the watcher");
     assert!(
         seen.len() >= 2,
         "the subject: jobs while blocks connected ({})",
         seen.len()
     );
-    for job in &seen {
+    for job in seen.values() {
         let parent = job
             .height
             .to_raw()
@@ -1215,7 +1569,6 @@ async fn a_job_built_while_blocks_connect_never_pairs_two_tips() {
         );
     }
     y.close().await;
-    cleanup(&path);
 }
 
 /// A service over a fresh store whose follower feeds `board`, paying
@@ -1226,26 +1579,27 @@ fn service_mining(
     board: &Arc<shekyl_miner::JobBoard>,
     sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
 ) -> (
-    Service<Gated>,
-    std::path::PathBuf,
+    Running,
     tokio::sync::watch::Receiver<crate::follower::Posting>,
 ) {
     let path = tmp(name);
     let (seat, _sender, posting) =
         crate::test_support::job_seat(board, Some(crate::test_support::harness_keys()), sync);
-    let service = Service::start(
-        Arc::new(open_store(&path)),
-        RULES,
-        substrate,
-        ServiceConfig::default(),
-        Budget::of_host(),
-        super::Follow {
-            job: Some(seat),
-            pool: None,
-            ..Default::default()
-        },
-    );
-    (service, path, posting)
+    let service = Running {
+        service: Service::start(
+            Arc::new(open_store(&path)),
+            RULES,
+            substrate,
+            ServiceConfig::default(),
+            super::Follow {
+                job: Some(seat),
+                pool: None,
+                ..Default::default()
+            },
+        ),
+        _path: path,
+    };
+    (service, posting)
 }
 
 /// The tip follower dying is the service's fault: it stops, the door
@@ -1258,8 +1612,7 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
     // The follower reads the clock first when it builds a template.
     let substrate = Arc::new(Gated::new());
     substrate.clock_panics.store(true, Ordering::Release);
-    let (service, path, _posting) =
-        service_mining("service-follower-dies", substrate, &board, sync);
+    let (service, _posting) = service_mining("service-follower-dies", substrate, &board, sync);
     let door = service.door();
     let started = std::time::Instant::now();
     while door.room() != 0 {
@@ -1275,16 +1628,62 @@ async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
         matches!(ended, Err(super::ServiceFault::FollowerEnded)),
         "{ended:?}"
     );
-    cleanup(&path);
 }
 
-/// How long the follower may take to post once a matured chain is in the
-/// store. Offering that chain is the slow part; a later wake is
-/// [`WAKE_POSTED`].
-const CHAIN_POSTED: std::time::Duration = std::time::Duration::from_secs(180);
+/// When a test calls an event it waits for a hang rather than a slow host:
+/// one deadline per test, set as the test starts, that every wait in it
+/// draws on.
+///
+/// These waits detect a hang; none of them is the test's claim. They were
+/// sized for an idle machine (a wake within 30 s, a stop within 15 s), and
+/// on a fleet host running beside a miner at load ten, with the lib suite
+/// taking 8,323 s, two tests timed out while the code was doing what they
+/// assert: `a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job`
+/// ("a job posted in time: Elapsed") and
+/// `stop_answers_a_found_block_waiting_inside_the_door` ("stop deadlocked
+/// ..."). Rule 50 bars widening a timeout a flake's race slips past; these
+/// time no claim, so the bound is set past any loaded host's latency.
+///
+/// The budget is the whole test's, not a step's: a test that waits on more
+/// steps does not wait longer. Twenty minutes leaves ten of nextest's
+/// 30-minute terminate (`rust/.config/nextest.toml`) for the teardown after
+/// the last wait, so a real hang fails here, naming the step it was on,
+/// rather than being killed by nextest without one.
+#[derive(Clone, Copy)]
+struct Deadline(std::time::Instant);
 
-/// How long one wake may take once the chain is up.
-const WAKE_POSTED: std::time::Duration = std::time::Duration::from_secs(30);
+impl Deadline {
+    /// One test's budget, from its start to its last wait.
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+    /// [`Self::BUDGET`] from now. A test sets it first, so its set-up
+    /// spends from the same budget.
+    fn start() -> Self {
+        Self(std::time::Instant::now() + Self::BUDGET)
+    }
+
+    /// The deadline on tokio's clock.
+    fn at(self) -> tokio::time::Instant {
+        tokio::time::Instant::from_std(self.0)
+    }
+
+    /// The time left; zero once the deadline has passed.
+    fn left(self) -> std::time::Duration {
+        self.0.saturating_duration_since(std::time::Instant::now())
+    }
+
+    /// `event`'s output, or a panic naming `step` once the deadline passes.
+    async fn wait<F: std::future::Future>(self, step: &str, event: F) -> F::Output {
+        tokio::time::timeout_at(self.at(), event)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "{step}: still waiting at the test's deadline, {:?} after it started",
+                    Self::BUDGET
+                )
+            })
+    }
+}
 
 /// A service with a real pool and a job seat. The sync sender and the
 /// found-block sender stay alive for the service's life: dropping either
@@ -1294,8 +1693,10 @@ struct SeatedPool {
     board: Arc<shekyl_miner::JobBoard>,
     posting: tokio::sync::watch::Receiver<crate::follower::Posting>,
     pool: Arc<Mutex<shekyl_mempool::Pool>>,
-    store_path: std::path::PathBuf,
-    pool_path: std::path::PathBuf,
+    /// The two stores' directories, removed when this drops (after the
+    /// service and the pool above).
+    _store_path: TestPath,
+    _pool_path: TestPath,
     _sync: tokio::sync::watch::Sender<shekyl_chain_sync::SyncState>,
     _found: shekyl_miner::FoundBlocks,
 }
@@ -1319,6 +1720,7 @@ impl SeatedPool {
                 UnixSeconds::from_raw(1),
                 &view,
                 &rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
             )
             .expect("the pool opens");
@@ -1333,13 +1735,13 @@ impl SeatedPool {
             RULES,
             Arc::new(Gated::new()),
             ServiceConfig::default(),
-            Budget::of_host(),
             super::Follow {
                 job: Some(seat),
                 pool: Some(super::PoolWiring {
                     pool: Arc::clone(&pool),
                     policy: AdmissionPolicy::GENESIS,
                     wall: Arc::new(|| UnixSeconds::from_raw(10)),
+                    departed: None,
                 }),
                 ..Default::default()
             },
@@ -1349,15 +1751,17 @@ impl SeatedPool {
             board,
             posting,
             pool,
-            store_path,
-            pool_path,
+            _store_path: store_path,
+            _pool_path: pool_path,
             _sync: sync_tx,
             _found: found,
         }
     }
 
     /// Admit `tx` and mark it shown. The follower is not woken: the test
-    /// wakes it once the hook it wants is in place.
+    /// wakes it once the hook it wants is in place. Production wakes on
+    /// `shekyl_pool_fluffed` (Q9); tests that admit through this lock
+    /// still call [`Self::wake`].
     fn show(&self, tx: &shekyl_wire::Transaction) {
         use shekyl_chain_rules::AdmissionPolicy;
         use shekyl_chain_store::store::{ChainStore, SnapshotView};
@@ -1401,8 +1805,6 @@ impl SeatedPool {
     async fn stop(self) {
         self.service.stop().await.expect("stops");
         drop(self.pool);
-        cleanup(&self.store_path);
-        cleanup(&self.pool_path);
     }
 }
 
@@ -1432,27 +1834,29 @@ fn flush_series(
     (hook, calls)
 }
 
-/// The next posting that is a job `holds` accepts, within `limit`.
+/// The next posting that is a job `holds` accepts, before `deadline`; a
+/// hang fails naming `step`.
 async fn posted_job(
     posting: &mut tokio::sync::watch::Receiver<crate::follower::Posting>,
     board: &shekyl_miner::JobBoard,
-    limit: std::time::Duration,
+    deadline: Deadline,
+    step: &str,
     holds: impl Fn(shekyl_miner::Generation, &shekyl_miner::Job) -> bool,
 ) -> crate::follower::Posting {
     use crate::follower::Posting;
-    tokio::time::timeout(
-        limit,
-        posting.wait_for(|now| match now {
-            Posting::Posted(generation) => board
-                .posted()
-                .is_some_and(|(at, job)| at == *generation && holds(*generation, &job)),
-            Posting::Withdrawn(_) => false,
-        }),
-    )
-    .await
-    .expect("a job posted in time")
-    .expect("the posting watch")
-    .clone()
+    deadline
+        .wait(
+            step,
+            posting.wait_for(|now| match now {
+                Posting::Posted(generation) => board
+                    .posted()
+                    .is_some_and(|(at, job)| at == *generation && holds(*generation, &job)),
+                Posting::Withdrawn(_) => false,
+            }),
+        )
+        .await
+        .expect("the posting watch")
+        .clone()
 }
 
 fn lists(job: &shekyl_miner::Job, id: shekyl_types::TxHash) -> bool {
@@ -1466,6 +1870,7 @@ fn lists(job: &shekyl_miner::Job, id: shekyl_types::TxHash) -> bool {
 /// still names the body.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
+    let deadline = Deadline::start();
     use crate::follower::Posting;
     use crate::pool_door_tests::{matured, paying_the_floor};
 
@@ -1474,11 +1879,12 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     let txid = tx.txid_parts().hash;
     let next = prefix.last().expect("the chain").height.to_raw() + 1;
     let mut seated = SeatedPool::start("service-body-left-out");
-    offer_all(&seated.service.door(), 1, &prefix).await;
+    offer_all(&seated.service, 1, &prefix).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the matured chain's job",
         |_at, job| job.height.to_raw() == next && !lists(job, txid),
     )
     .await;
@@ -1487,7 +1893,8 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     let Posting::Posted(with_body) = posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job listing the shown body",
         |_at, job| lists(job, txid),
     )
     .await
@@ -1500,7 +1907,8 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the rebuilt job without the flushed body",
         |at, job| at != with_body && !lists(job, txid),
     )
     .await;
@@ -1510,13 +1918,85 @@ async fn a_body_flushed_between_the_locks_is_left_out_of_the_rebuilt_job() {
     assert_eq!(builds, 2, "the withdrawal was built again");
 }
 
+/// Q9: a body a pop returns to the pool is a shown-set change the relay's
+/// hook never sees, and its admission judges at the tip the pop left, which
+/// the pool's work order keeps behind the heavier tip it last judged at. The
+/// return wakes the attendant: its reconcile re-judges at this tip and the
+/// rebuilt job lists the body. The red is the regtest walk
+/// `e2e_fcmp_spend_reorg_restores_pool_and_fee` on a daemon whose
+/// `offer_carried` admitted without waking: the job posted on the pop's tip
+/// change, before the return, stayed and listed nothing (2026-10-29). In
+/// this harness the attendant may reach the pop's tip after the return and
+/// list the body on that build alone, so this test pins the property, not
+/// the wake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_a_pop_returns_is_listed_by_the_rebuilt_job() {
+    let deadline = Deadline::start();
+    use crate::pool_door_tests::{matured, paying_the_floor};
+
+    let (mut scenario, prefix) = matured("service-pop-returns").await;
+    let tx = paying_the_floor(&mut scenario, &prefix, 0).await;
+    let txid = tx.txid_parts().hash;
+    let next = prefix.last().expect("the chain").height.to_raw() + 1;
+    let mut seated = SeatedPool::start("service-pop-returns");
+    offer_all(&seated.service, 1, &prefix).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        deadline,
+        "the matured chain's job",
+        |_at, job| job.height.to_raw() == next && !lists(job, txid),
+    )
+    .await;
+    seated.show(&tx);
+    seated.wake();
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        deadline,
+        "the job listing the shown body",
+        |_at, job| lists(job, txid),
+    )
+    .await;
+    let carrying = scenario
+        .mine_listing(vec![tx.clone()])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend's block lands: {outcome}"));
+    offer_all(&seated.service, 1, std::slice::from_ref(&carrying)).await;
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        deadline,
+        "the job on the spend's block",
+        |_at, job| job.height.to_raw() == next + 1 && !lists(job, txid),
+    )
+    .await;
+    seated
+        .service
+        .rewinder()
+        .pop_blocks(1)
+        .await
+        .expect("the pop");
+    posted_job(
+        &mut seated.posting,
+        &seated.board,
+        deadline,
+        "the job after the pop, listing the returned body",
+        |_at, job| job.height.to_raw() == next && lists(job, txid),
+    )
+    .await;
+    seated.stop().await;
+    scenario.close().await;
+}
+
 /// Two builds in a row lose a listed body at one tip: the one rebuild
 /// withdraws for the same reason, and the board rests on `Stuck`, which
-/// `generateblocks` refuses. The next wake, whose first build loses a
+/// `dev_block_generate` refuses. The next wake, whose first build loses a
 /// body again, gets its own rebuild and posts. Red edit: leave the budget
 /// spent, so that wake rests on `Stuck` at once.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
+    let deadline = Deadline::start();
     use crate::follower::{NoJob, Posting, Rebuild, Unbuilt};
     use crate::pool_door_tests::{matured, paying_the_floor};
 
@@ -1531,11 +2011,12 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     );
     let next = prefix.last().expect("the chain").height.to_raw() + 1;
     let mut seated = SeatedPool::start("service-stuck-rebuild");
-    offer_all(&seated.service.door(), 1, &prefix).await;
+    offer_all(&seated.service, 1, &prefix).await;
     posted_job(
         &mut seated.posting,
         &seated.board,
-        CHAIN_POSTED,
+        deadline,
+        "the matured chain's job",
         |_at, job| job.height.to_raw() == next,
     )
     .await;
@@ -1545,15 +2026,16 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the job listing both bodies",
         |_at, job| lists(job, first_id) && lists(job, second_id),
     )
     .await;
     let (hook, first_calls) = flush_series(vec![first_id, second_id]);
     seated.set_hook(hook);
     seated.wake();
-    let settled = tokio::time::timeout(
-        WAKE_POSTED,
+    let settled = tokio::time::timeout_at(
+        deadline.at(),
         seated.posting.wait_for(|now| {
             matches!(
                 now,
@@ -1575,7 +2057,8 @@ async fn a_second_withdrawal_is_a_refusal_and_the_next_wake_rebuilds() {
     posted_job(
         &mut seated.posting,
         &seated.board,
-        WAKE_POSTED,
+        deadline,
+        "the next wake's rebuilt job",
         |_at, job| !lists(job, first_id) && !lists(job, second_id) && !lists(job, third_id),
     )
     .await;
@@ -1602,14 +2085,18 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
     let blocks = y.mine(2).await;
     let board = Arc::new(shekyl_miner::JobBoard::new());
     let (sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
-    let (service, path, posting) =
+    let (service, posting) =
         service_mining("service-sync-closed", Arc::new(Gated::new()), &board, sync);
     let mut followed = service.followed();
     drop(sync_tx);
-    offer_all(&service.door(), 1, &blocks).await;
+    offer_all(&service, 1, &blocks).await;
+    // The span lands in one commit, so the follower has one publication to
+    // reach, not one per block: the tip watch's sequence after the offers.
+    let published = service.watch_tip().await.expect("watch").borrow().seq;
+    assert!(published >= 1, "the span published its tip");
     tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        followed.wait_for(|at| *at >= 2),
+        followed.wait_for(|at| *at >= published),
     )
     .await
     .expect("the follower still follows")
@@ -1626,7 +2113,6 @@ async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
         .await
         .expect("no fault: the chain was never the problem");
     y.close().await;
-    cleanup(&path);
 }
 
 /// A block this node mined meets a full window: the sink waits for the
@@ -1636,7 +2122,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     let mut y = Scenario::open("service-sink-y");
     let blocks = y.mine(3).await;
     let substrate = Arc::new(Gated::new());
-    let (service, path) = service(
+    let service = service(
         "service-sink",
         Arc::clone(&substrate),
         ServiceConfig {
@@ -1644,7 +2130,7 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         },
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     // Block 1 enters as this node's own and is held in form: at a window
     // of two it holds the one seat local arrivals share.
     substrate.hold(blocks[1].hash);
@@ -1654,11 +2140,11 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
     substrate.until_held().await;
     // The miner finds block 2. The sink meets no room and waits.
     let board = shekyl_miner::JobBoard::new();
-    let generation = board.publish(shekyl_miner::Job {
+    let job = shekyl_miner::Job {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
         seed: BlockHash::NULL,
-        difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+        difficulty: shekyl_difficulty::Difficulty::ONE,
         offsets: blocks[2]
             .template
             .block
@@ -1669,15 +2155,20 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         median_weight: 0,
         already_generated: shekyl_units::AtomicUnits::ZERO,
         listed: Vec::new(),
-    });
+    };
+    let generation = board.publish(job.clone());
     let postings = crate::follower::Postings::default();
-    postings
-        .lock()
-        .expect("postings")
-        .insert(generation, blocks[2].template.transactions.clone());
+    postings.lock().expect("postings").insert(
+        generation,
+        crate::follower::KeptPosting {
+            job,
+            bodies: blocks[2].template.transactions.clone(),
+            section: None,
+        },
+    );
     let (sender, inbox) = shekyl_miner::found_blocks();
     let (done_tx, _done_rx) = tokio::sync::oneshot::channel();
-    let sink = crate::follower::spawn_sink(inbox, door.clone(), postings, done_tx);
+    let sink = crate::follower::sink::spawn_sink(inbox, door.clone(), postings, done_tx);
     assert!(sender.deliver(shekyl_miner::Found {
         block: blocks[2].template.block.clone(),
         height: blocks[2].height,
@@ -1690,39 +2181,52 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         (false, false),
         "waiting for a seat: not connected, not stored"
     );
+    // The block is inside the door. The verdict stays parked until the
+    // door returns, and the chain shows the block when the wait returns.
+    // Red edit: record the answer in `answer_with` before the closure
+    // returns. The park signal never arrives.
+    let (parked_tx, parked) = std::sync::mpsc::channel();
+    let (returned_tx, returned) = std::sync::mpsc::channel();
+    let verdict = std::thread::spawn(move || {
+        sender.answered_observing(|| {
+            parked_tx.send(()).expect("the test hears the park");
+        });
+        returned_tx.send(()).expect("the test hears the verdict");
+    });
+    parked
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the verdict parked while the block was still at the door");
+    assert!(
+        returned.try_recv().is_err(),
+        "the verdict was read before the door replied"
+    );
     substrate.open(blocks[1].hash);
     assert!(
         matches!(first.reply().await.reply, Reply::Connected { .. }),
         "block 1 connects and gives its seat back"
     );
-    let started = std::time::Instant::now();
-    while !homes(&service, blocks[2].hash).0 {
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(20),
-            "the mined block was dropped"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    drop(sender);
+    returned
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the door's reply releases the verdict");
+    assert!(
+        homes(&service, blocks[2].hash).0,
+        "the chain shows the block the verdict waited for"
+    );
+    verdict.join().expect("the verdict returns");
     tokio::task::spawn_blocking(move || sink.join().expect("the sink ends"))
         .await
         .expect("joined");
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
-/// How long the follower may take to act on its first tip.
-const FOLLOWER_START_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long the sink may take to hold a seat after a block is delivered.
-const SEAT_TAKEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How long a stop may take before the test calls it stuck. A stop that
-/// deadlocks the runtime worker cannot poll an async timeout, so the wait
-/// is this thread's, beside the runtime. It covers the follower starting,
-/// the sink taking its seat, and the stop itself.
-const STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long past the test's [`Deadline`] the thread beside the runtime
+/// waits for the runtime's report. A stop that deadlocks the runtime worker
+/// cannot poll an async timeout, so that wait is the thread's own; the grace
+/// lets a step that timed out on the runtime at the deadline report first
+/// and name itself. The budget and the grace stay under nextest's
+/// terminate.
+const REPORT_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -1732,7 +2236,7 @@ fn current_thread_runtime() -> tokio::runtime::Runtime {
 }
 
 fn coinbase_block() -> shekyl_wire::Block {
-    use shekyl_types::{AttestationRoot, CurveTreeRoot};
+    use shekyl_types::{CurveTreeRoot, SectionRoot};
     use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
     use shekyl_wire::{Block, BlockHeader, Transaction};
     Block {
@@ -1743,11 +2247,11 @@ fn coinbase_block() -> shekyl_wire::Block {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 1,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+            section_root: SectionRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(7)],
                 outputs: Vec::new(),
                 // The shape every built coinbase opens with: its pubkey, the
@@ -1773,10 +2277,11 @@ fn coinbase_block() -> shekyl_wire::Block {
 }
 
 fn miner_follow(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     found: shekyl_miner::FoundInbox,
     sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
 ) -> Service<Gated> {
+    let path: &std::path::Path = path.as_ref();
     let (posting, _posted) = tokio::sync::watch::channel(crate::follower::Posting::Withdrawn(
         crate::follower::NoJob::Starting,
     ));
@@ -1785,14 +2290,15 @@ fn miner_follow(
         RULES,
         Arc::new(Gated::new()),
         ServiceConfig::default(),
-        Budget::of_host(),
         super::Follow {
             job: Some(crate::follower::JobSeat {
                 board: Arc::new(shekyl_miner::JobBoard::new()),
                 keys: None,
                 miner: crate::follower::MinerFeed { found, sync },
                 posting,
-                witness: Arc::new(shekyl_bundle_producer::WitnessRing::new()),
+                witness: Arc::new(shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                )),
             }),
             pool: None,
             ..Default::default()
@@ -1808,6 +2314,7 @@ fn report(done: &std::sync::mpsc::Sender<bool>, stopped: bool) {
 /// ends the sink. Red edit: join the sink on the sender's lifetime.
 #[test]
 fn stop_returns_while_a_found_block_sender_lives() {
+    let deadline = Deadline::start();
     let (sender_tx, sender_rx) = std::sync::mpsc::channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -1821,15 +2328,14 @@ fn stop_returns_while_a_found_block_sender_lives() {
                     tokio::sync::watch::channel(shekyl_chain_sync::SyncState::NoView);
                 let service = miner_follow(&path, found, sync);
                 service.stop().await.expect("stops");
-                cleanup(&path);
             });
         }));
         report(&done_tx, outcome.is_ok());
     });
     let sender = sender_rx
-        .recv_timeout(STOP_WITHIN)
+        .recv_timeout(deadline.left())
         .expect("the service started");
-    match done_rx.recv_timeout(STOP_WITHIN) {
+    match done_rx.recv_timeout(deadline.left()) {
         Ok(true) => {}
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop did not return while a found-block sender lived"),
@@ -1843,6 +2349,7 @@ fn stop_returns_while_a_found_block_sender_lives() {
 /// the sink on the runtime worker before that answer.
 #[test]
 fn stop_answers_a_found_block_waiting_inside_the_door() {
+    let deadline = Deadline::start();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = current_thread_runtime();
@@ -1855,9 +2362,9 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                 let service = miner_follow(&path, found, sync);
                 let mut followed = service.followed();
                 followed.borrow_and_update();
-                tokio::time::timeout(FOLLOWER_START_WITHIN, followed.changed())
+                deadline
+                    .wait("the follower started", followed.changed())
                     .await
-                    .expect("the follower started")
                     .expect("followed");
                 let before = service.door().room();
                 let block = coinbase_block();
@@ -1865,7 +2372,7 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     block: block.clone(),
                     height: BlockHeight::from_raw(1),
                     seed: BlockHash::from_bytes([1; 32]),
-                    difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+                    difficulty: shekyl_difficulty::Difficulty::ONE,
                     offsets: block
                         .blob_offsets()
                         .expect("a built coinbase reserves the extra nonce"),
@@ -1881,22 +2388,20 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                     generation,
                     pow: PowHash::from_bytes([0; 32]),
                 }));
-                let started = std::time::Instant::now();
                 while service.door().room() >= before {
                     assert!(
-                        started.elapsed() < SEAT_TAKEN_WITHIN,
-                        "the sink never took a seat"
+                        !deadline.left().is_zero(),
+                        "the sink never took a seat before the test's deadline"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
                 service.stop().await.expect("stops");
                 drop(sender);
-                cleanup(&path);
             });
         }));
         report(&done_tx, outcome.is_ok());
     });
-    match done_rx.recv_timeout(STOP_WITHIN) {
+    match done_rx.recv_timeout(deadline.left() + REPORT_GRACE) {
         Ok(true) => {}
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop deadlocked on a found block waiting in the door"),
@@ -1932,9 +2437,7 @@ where
             AtHeight::AboveTip => BlockHash::NULL,
         },
     };
-    let target = target_claim(&view, connecting, &rule_set)
-        .expect("view")
-        .expect("a target");
+    let target = target_claim(&view, connecting, &rule_set).expect("view");
     let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
     let formed = form_header(&pow, &rule_set, gate, seed, target, FormAttempt::FIRST)
         .expect("the substrate answers")
@@ -1952,17 +2455,16 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     let mut y = Scenario::open("service-bound-y");
     let blocks = y.mine(5).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service("service-bound", Arc::clone(&gate), ServiceConfig::default());
+    let service = service("service-bound", Arc::clone(&gate), ServiceConfig::default());
     let door = service.door();
     let (prefix, last) = blocks.split_at(blocks.len() - 1);
-    offer_all(&door, 1, prefix).await;
+    offer_all(&service, 1, prefix).await;
     let mined = &last[0];
     let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
     let hashes_before = gate.hashes();
     let bound = super::BoundArrival {
         tag: ArrivalTag(99),
         session: SessionId(1),
-        solicited: true,
         judged,
         block: mined.template.block.serialize(),
         bodies: mined
@@ -1971,20 +2473,28 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
-    // The door bounds the block and its bodies; the witness is not
-    // counted, and the caller's measure is the door's own.
+    // The door bounds the block and its bodies; the references are a
+    // sidecar with their own cap, a count, and the caller's measure is the
+    // door's own.
     let measured = bound.bytes();
-    let with_witness = super::BoundArrival {
-        attestation_witness: vec![0; 64],
+    let with_references = super::BoundArrival {
+        bundle_references: vec![vec![0; 80]; 3],
         ..bound.clone()
     };
-    assert_eq!(with_witness.bytes(), measured);
+    assert_eq!(with_references.bytes(), measured);
     assert_eq!(
         measured,
         bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
     );
+    let over = super::BoundArrival {
+        bundle_references: vec![vec![0; 80]; shekyl_types::archival::MAX_SECTION_REFERENCES + 1],
+        ..bound.clone()
+    };
+    assert_eq!(over.bytes(), measured);
+    assert_eq!(door.offer_bound(vec![over]).err(), Some(Refusal::Oversize));
     let tickets = door.offer_bound(vec![bound]).expect("room");
     let reply = tickets
         .into_iter()
@@ -2007,35 +2517,37 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
     );
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
-/// A bound announcement spends the session's unsolicited bucket
-/// ([`crate::admission::TOKENS_PER_INTERVAL`]). The next one is
-/// `Throttled` before it is formed. A body this node asked for, offered
-/// the same way, still takes a seat after that bucket is dry: the door
-/// reads `solicited` off the bound arrival.
+/// A bound span is judged as a solicited span, whatever brought each body
+/// (`Door::offer_bound`'s contract). The sync owner proved every header in
+/// it and offers only what [`Door::room`] reported, so the room it reads
+/// is the room it gets: a span of the whole reported room is seated, and
+/// a session's bound announcements take no bucket token. Until 2026-11-02
+/// the door seated a bound announcement as unsolicited: a span of more
+/// announced bodies than the unsolicited share was `NoRoom` however empty
+/// the window, the model froze its seats at zero for a seat report the
+/// unchanged room never sent, and a node that had learned its peers' chain
+/// from announcements sat `behind` for good (#1237, the three-miner
+/// rehearsal).
 #[tokio::test(flavor = "multi_thread")]
-async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body_does_not() {
-    use crate::admission::TOKENS_PER_INTERVAL;
-
-    let mut y = Scenario::open("service-bound-bucket-y");
+async fn a_bound_span_is_seated_as_the_room_the_door_reported() {
+    let mut y = Scenario::open("service-bound-room-y");
     let blocks = y.mine(2).await;
     let gate = Arc::new(Gated::new());
-    let (service, path) = service(
-        "service-bound-bucket",
+    let service = service(
+        "service-bound-room",
         Arc::clone(&gate),
         ServiceConfig::default(),
     );
     let door = service.door();
     let (prefix, last) = blocks.split_at(blocks.len() - 1);
-    offer_all(&door, 1, prefix).await;
+    offer_all(&service, 1, prefix).await;
     let mined = &last[0];
     let judged = judged_header(&service.shared.store, gate.as_ref(), mined);
-    let bound = |tag: u64, solicited: bool| super::BoundArrival {
+    let bound = |tag: u64| super::BoundArrival {
         tag: ArrivalTag(tag),
         session: SessionId(9),
-        solicited,
         judged: judged.clone(),
         block: mined.template.block.serialize(),
         bodies: mined
@@ -2044,29 +2556,36 @@ async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body
             .iter()
             .map(shekyl_wire::Transaction::serialize)
             .collect(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
-    let mut accepted = Vec::new();
-    for token in 0..TOKENS_PER_INTERVAL {
-        let tickets = door
-            .offer_bound(vec![bound(u64::from(token), false)])
-            .expect("a token");
-        accepted.extend(tickets);
-    }
-    assert_eq!(
-        door.offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL), false)])
-            .err(),
-        Some(Refusal::Throttled)
+    let room = door.room();
+    assert!(
+        room > crate::room::unsolicited_cap_for(door.window()),
+        "the room is more than the unsolicited share, or the span below proves nothing"
     );
-    let solicited = door
-        .offer_bound(vec![bound(u64::from(TOKENS_PER_INTERVAL) + 1, true)])
-        .expect("a requested body takes no token");
-    for ticket in accepted.into_iter().chain(solicited) {
+    let span: Vec<_> = (0..room).map(|tag| bound(tag as u64)).collect();
+    let tickets = door
+        .offer_bound(span)
+        .expect("a bound span of the reported room is seated whole");
+    assert_eq!(tickets.len(), room);
+    for ticket in tickets {
+        let _reply = ticket.reply().await;
+    }
+    // Every seat is back, and one session's announcements took no token:
+    // the same session offers again, more times than any bucket holds.
+    let mut again = Vec::new();
+    for tag in 0..8u64 {
+        let tickets = door
+            .offer_bound(vec![bound(1_000 + tag)])
+            .expect("a bound announcement takes no token");
+        again.extend(tickets);
+    }
+    for ticket in again {
         let _reply = ticket.reply().await;
     }
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
 }
 
 /// Chain sync's alarm (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7): the
@@ -2076,7 +2595,7 @@ async fn a_bound_announcement_spends_the_unsolicited_bucket_and_a_solicited_body
 async fn the_sync_owners_alarm_sets_the_latch_once_and_publishes_it() {
     use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
 
-    let (service, path) = service(
+    let service = service(
         "service-latch",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
@@ -2104,7 +2623,6 @@ async fn the_sync_owners_alarm_sets_the_latch_once_and_publishes_it() {
         .expect("cell");
     assert_eq!(held, Some(first), "the first evidence stays in the store");
     service.stop().await.expect("stops");
-    cleanup(&path);
 }
 
 /// A door that cannot read the store answers a local arrival once, as
@@ -2116,7 +2634,7 @@ async fn the_sync_owners_alarm_sets_the_latch_once_and_publishes_it() {
 async fn a_door_that_cannot_read_the_store_answers_a_local_arrival_once() {
     let mut y = Scenario::open("service-unreadable-y");
     let blocks = y.mine(1).await;
-    let (service, path) = service(
+    let service = service(
         "service-unreadable",
         Arc::new(Gated::new()),
         ServiceConfig::default(),
@@ -2142,7 +2660,6 @@ async fn a_door_that_cannot_read_the_store_answers_a_local_arrival_once() {
         .store(false, std::sync::atomic::Ordering::Release);
     service.stop().await.expect("stops");
     y.close().await;
-    cleanup(&path);
     assert_eq!(
         answer.expect("answered within the deadline, not spun"),
         Err(Refusal::StoreUnreadable)
@@ -2157,7 +2674,7 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
     let mut y = Scenario::open("service-local-entry-y");
     let blocks = y.mine(4).await;
     let substrate = Arc::new(Gated::new());
-    let (service, path) = service(
+    let service = service(
         "service-local-entry",
         Arc::clone(&substrate),
         ServiceConfig {
@@ -2165,7 +2682,7 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
         },
     );
     let door = service.door();
-    offer_all(&door, 1, &blocks[..1]).await;
+    offer_all(&service, 1, &blocks[..1]).await;
     let local = |tag: u64, mined: &Mined| {
         let door = door.clone();
         let block = mined.template.block.serialize();
@@ -2206,5 +2723,375 @@ async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() 
         .expect("not oversize");
     assert_eq!(after.reply, Reply::Stopped, "a closed door answers Stopped");
     y.close().await;
-    cleanup(&path);
+}
+
+/// A2, the window half: once genesis is connected the window never names
+/// the null seed. Only genesis hashes under it, and genesis is never
+/// popped, so the window's lower end is block 1, whose seed is genesis's.
+/// Under the levered cap of ten, five blocks are well inside the cap,
+/// where the lower end used to reach height 0 and name the null seed as
+/// the window's other seed. A cap past the tip, the reach stops at the
+/// floor.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_window_names_no_null_seed_once_genesis_connects() {
+    let seeds_for = |store: &ChainStore, rules| {
+        crate::cache_window::seeds_on(&store.begin_read().expect("read"), rules)
+    };
+    let rules = crate::scenario_shard::levered_rules();
+    let mut y = Scenario::open_under("window-null-seed", crate::scenario::FreeHash, rules);
+    let blocks = y.mine(5).await;
+    let genesis = blocks[0].hash;
+    let pair = seeds_for(&y.store(), rules).expect("the window reads");
+    assert_eq!(
+        pair.canonical, genesis,
+        "block 5 hashes under genesis's seed"
+    );
+    assert_eq!(
+        pair.transient, None,
+        "the window does not name the null seed: {pair:?}"
+    );
+    assert!(!pair.holds(&BlockHash::NULL));
+    // A cap deep and past it, the same: one seed until the next epoch.
+    y.mine(10).await;
+    let deeper = seeds_for(&y.store(), rules).expect("the window reads");
+    assert_eq!(deeper.transient, None, "{deeper:?}");
+    y.close().await;
+}
+
+/// Nothing is ranked on a store with no block, so the list never names the
+/// null seed: genesis is hashed under it by its own job, and the cache is
+/// freed when that job ends. Once genesis connects the list is the
+/// window's: block 0's id alone.
+///
+/// Red edit: have `cache_window::gather` rank an empty store (return the
+/// window instead of `None`): the first list names the null seed.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_empty_store_ranks_nothing_and_the_list_never_names_the_null_seed() {
+    let mut y = Scenario::open("service-null-seed-y");
+    let blocks = y.mine(3).await;
+    let genesis = blocks[0].hash;
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-null-seed",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(gate.ranked(), None, "an empty store ranks nothing");
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{replies:?}"
+    );
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(
+        gate.ranked(),
+        Some(Ranked::new(as_seed(genesis), None, None).expect("one seed")),
+        "after genesis the list is block 0's id alone"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A run that begins at genesis hashes under a seed the window does not
+/// name. Every height from 1 through the first epoch and its lag hashes
+/// under block 0's id (CEN-D3), with no lag after block 0. So a span of
+/// blocks 0 and 1 on an empty store forms block 1 under block 0's id while
+/// the store does not hold block 0 yet, and nothing ranks that seed. Each
+/// form is a job on its own seed, and a job gets its cache whether or not
+/// the list names it (HA-R1): genesis under the null seed, block 1 under
+/// block 0's id.
+///
+/// The node connects its pinned genesis before it takes a span, so this is
+/// a fresh store's first span and nothing a peer can cause.
+///
+/// Red edit: in `span::spawn_form`, ask for the job on the window's
+/// canonical seed instead of `claims.seed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_from_genesis_is_a_job_on_a_seed_the_window_does_not_name() {
+    let mut y = Scenario::open("service-genesis-run-seed-y");
+    let blocks = y.mine(2).await;
+    assert_eq!(blocks[0].height, BlockHeight::ZERO);
+    assert_eq!(
+        shekyl_chain_rules::seed_height(blocks[1].height),
+        Some(BlockHeight::ZERO),
+        "block 1 hashes under block 0's id"
+    );
+    let gate = Arc::new(Gated::new());
+    let service = service(
+        "service-genesis-run-seed",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    let window = crate::cache_window::seeds_on(
+        &service.shared.store().begin_read().expect("read"),
+        service.shared.rules(),
+    )
+    .expect("the window reads on an empty store");
+    assert!(
+        !window.holds(&blocks[0].hash),
+        "the window cannot name block 0's id before block 0 is stored"
+    );
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Reply::Connected { .. })),
+        "the two blocks connect as one run: {replies:?}"
+    );
+    assert_eq!(
+        gate.jobs(),
+        vec![
+            (Class::Chain, BlockHash::NULL),
+            (Class::Chain, blocks[0].hash)
+        ],
+        "genesis under the null seed, block 1 under block 0's id"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// Chain sync's frontier is the list's third while its sender lives, and
+/// when the sender closes (the sync owner ended or stopped) the ingest
+/// ranks without a frontier and keeps serving: a closed sender is not a
+/// fault here (`RANDOMX_CACHE_ACTOR.md` §5.1).
+///
+/// Red edit: in `window::rank`, return when the frontier's sender closes:
+/// the last list keeps the dead frontier's seed, and the next
+/// `ranked_now` never returns.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_frontier_ranks_without_it_and_the_service_keeps_serving() {
+    use crate::cache_window::Frontier;
+    let mut y = Scenario::open("service-frontier-y");
+    let blocks = y.mine(3).await;
+    let genesis = blocks[0].hash;
+    let ahead = BlockHash::from_bytes([0xfa; 32]);
+    let (frontier, listening) = tokio::sync::watch::channel(None);
+    let gate = Arc::new(Gated::new());
+    let path = tmp("service-frontier");
+    let service = Service::start(
+        Arc::new(open_store(&path)),
+        RULES,
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+        super::Follow {
+            frontier: Some(listening),
+            ..Default::default()
+        },
+    );
+    offer_all(&service, 1, &blocks[..2]).await;
+    frontier.send_replace(Some(Frontier {
+        seed: ahead,
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(u128::MAX),
+    }));
+    assert!(service.shared.ranked_now().await, "the service is running");
+    assert_eq!(
+        gate.ranked(),
+        Some(
+            Ranked::new(
+                as_seed(genesis),
+                None,
+                Some((as_seed(ahead), Class::HeaderPow))
+            )
+            .expect("two seeds")
+        ),
+        "the frontier's seed is the third, at the header-proof class"
+    );
+    drop(frontier);
+    // The ranker hears the close on its own; ask once more to be behind it.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            assert!(service.shared.ranked_now().await, "the service is running");
+            if gate.ranked() == Some(Ranked::new(as_seed(genesis), None, None).expect("one")) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the list drops the closed frontier's seed");
+    let replies = offer_all(&service, 1, &blocks[2..]).await;
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "the service keeps serving: {replies:?}"
+    );
+    assert!(service.ended().borrow().is_none(), "and has not ended");
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A span sends its next form once the previous one's job was granted, so
+/// one span has at most one ungranted form waiting on a blocking thread
+/// (`span` module docs; the node sizes its blocking pool from it).
+///
+/// The fixture's budget has one permit and the test holds it, so no job is
+/// granted. A span of four blocks is offered: one form asks for its job
+/// and waits, and the other three are not sent.
+///
+/// Red edit: in `span::extend_run`'s launcher, drop the wait on `granted`:
+/// all four forms wait at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_span_has_one_form_waiting_for_its_job_at_a_time() {
+    use std::time::Duration;
+    let mut y = Scenario::open("service-one-waiting-y");
+    let blocks = y.mine(5).await;
+    let budget = Budget::new(NonZeroUsize::MIN);
+    let gate = Arc::new(Gated::on(budget.clone()));
+    let service = service(
+        "service-one-waiting",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+    );
+    offer_all(&service, 1, &blocks[..1]).await;
+    let asked_before = gate.jobs().len();
+    let held = {
+        let budget = budget.clone();
+        tokio::task::spawn_blocking(move || budget.acquire(Class::HeaderPow))
+            .await
+            .expect("joins")
+    };
+    let span: Vec<Arrival> = blocks[1..]
+        .iter()
+        .zip(10u64..)
+        .map(|(mined, tag)| arrival(tag, 1, mined))
+        .collect();
+    let tickets = service.door().offer_span(span).expect("room");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while budget.waiting(Class::Chain) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the span's first form waits for its permit");
+    // Long enough for a launcher that did not wait to send the rest.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        budget.waiting(Class::Chain),
+        1,
+        "one form of the span waits; the rest are not sent"
+    );
+    assert_eq!(
+        gate.jobs().len() - asked_before,
+        1,
+        "one job was asked for while none was granted"
+    );
+    drop(held);
+    for ticket in tickets {
+        let reply = ticket.reply().await.reply;
+        assert!(matches!(reply, Reply::Connected { .. }), "{reply:?}");
+    }
+    assert_eq!(gate.jobs().len() - asked_before, 4, "then each in turn");
+    service.stop().await.expect("stops");
+    y.close().await;
+}
+
+/// A service fault is said when it happens, and published. On the CS-5
+/// rehearsal of 2026-11-02 a commit met `ENOSPC`, the service stopped, and
+/// the one record printed 34 minutes later at SIGTERM while the RPC kept
+/// answering from the old tip.
+///
+/// The connector is killed and a block is offered, so the service loses
+/// its connector: the follower's tip watch closes, or a span cannot reach
+/// it. The fault it records is logged at `error` then, not at `stop`, and
+/// [`Service::ended`] carries the fault's own words: what the node forwards
+/// and the daemon's exit line quotes. A commit that fails inside a live
+/// connector takes the same `Shared::fail`; a test cannot make the store
+/// fail a commit without a lever, so the dead connector stands for it.
+///
+/// [`super::log_capture::Capture`] is `!Send` and this test is
+/// `current_thread`, so the task that records the fault runs on this
+/// thread and the buffer sees its line.
+///
+/// Red edit: take the `tracing::error!` out of `Shared::fail`, move it to
+/// `debug`, or drop the `ended` publish, and the matching assertion fails.
+#[tokio::test(flavor = "current_thread")]
+async fn a_dead_connector_is_logged_when_the_fault_is_recorded_and_published() {
+    let logging = super::log_capture::Capture::open();
+    let mut y = Scenario::open("service-connector-fault-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-connector-fault",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let mut ended = service.ended();
+    assert!(ended.borrow().is_none(), "a running service has not ended");
+    service.shared.connector.kill();
+    service.shared.connector.wait_for_shutdown().await;
+    let door = service.door();
+    // The door may already be closed: the follower can meet the dead
+    // connector first. Either way the service has a connector fault.
+    if let Ok(tickets) = door.offer_span(vec![arrival(1, 1, &blocks[0])]) {
+        for ticket in tickets {
+            let _answered = ticket.reply().await;
+        }
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        ended.wait_for(Option::is_some),
+    )
+    .await
+    .expect("the fault is published without a stop")
+    .expect("the service holds the watch");
+    let published = ended.borrow().as_ref().cloned().expect("a cause");
+    // Before the stop: the record does not wait for it.
+    let at_fault = logging.lines();
+    let fault = service
+        .stop()
+        .await
+        .expect_err("the service ended on its fault");
+    assert_eq!(published, fault.end(), "the published cause is the fault's");
+    assert!(
+        matches!(
+            fault,
+            super::ServiceFault::Mailbox | super::ServiceFault::FollowerEnded
+        ),
+        "a dead connector is unreachable, or ends the follower: {fault:?}"
+    );
+    let expected = format!("the ingest service stops on a fault: {fault}");
+    assert!(
+        at_fault
+            .iter()
+            .any(|(level, line)| *level == tracing::Level::ERROR && *line == expected),
+        "no error line {expected:?} before the stop; logged: {at_fault:?}"
+    );
+    y.close().await;
+}
+
+/// A stop that met no fault says nothing at `error` and publishes no end:
+/// the daemon must not exit failed, or log a fault, for a stop it was
+/// asked for. A block connects first, so the service has worked.
+///
+/// The capture and the runtime are as in the test above, so a line a
+/// stop wrote would be seen: that test is this one's proof the buffer
+/// fills.
+///
+/// Red edit: publish a cause, or log at `error`, in `Service::stop` or
+/// `Shared::request_stop`.
+#[tokio::test(flavor = "current_thread")]
+async fn a_clean_stop_logs_no_error_and_publishes_no_end() {
+    let logging = super::log_capture::Capture::open();
+    let mut y = Scenario::open("service-clean-stop-y");
+    let blocks = y.mine(1).await;
+    let service = service(
+        "service-clean-stop",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let ended = service.ended();
+    let replies = offer_all(&service, 1, &blocks).await;
+    assert!(
+        replies
+            .iter()
+            .all(|reply| matches!(reply, Reply::Connected { .. })),
+        "the block connects: {replies:?}"
+    );
+    service.stop().await.expect("a clean stop returns no fault");
+    assert!(ended.borrow().is_none(), "a clean stop publishes no end");
+    let errors = logging.lines();
+    assert!(
+        errors.is_empty(),
+        "a clean stop logged at error: {errors:?}"
+    );
+    y.close().await;
 }

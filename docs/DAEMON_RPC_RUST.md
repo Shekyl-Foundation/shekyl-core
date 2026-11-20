@@ -45,8 +45,6 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
 | `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start(core)` and `shekyl_daemon_rpc_stop()`: the one start, reading the RPC section the Rust `main()` recorded (`DAEMON_CONFIG_CUTOVER.md` §2.3) |
-| `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
-| `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
 | `src/daemon/daemon.cpp` | The C++ remnant's `run`: calls the one RPC start on the core; the listeners are the RPC section's |
 
@@ -198,12 +196,14 @@ machines you own), not from a public-remote-node model:
   strangers' nodes. The affordance is what people reach for, regardless of
   what the docs recommend.
 
-**Restricted RPC stays.** `--restricted-rpc` and `--rpc-restricted-bind-port`
-are an operator tool: admin console on loopback, view-only on a less-
-privileged port for *your* wallet (phone on LAN, a second machine you
-own). They are not a public-remote-node product. Advertising the port over
-P2P was the half that contradicted the posture; the second listener without
-advertising is still both-ends-yours.
+**The view listener is an operator tool.** `rpc-view-listen` is a
+plaintext listener on loopback, off by default, at the network's view port
+when given an address alone (11030 on mainnet). It serves the `view` preset
+of the grant table (with `submit` and `mining-work` until RT-W12 re-scopes
+it), for *your* tools on this machine: a status reader, a co-located
+website, a wallet beside a service. It is not a public-remote-node product,
+and nothing advertises it. Another machine of yours reaches the node over
+the authenticated channel (`rpc-listen`), as an enrolled key.
 
 **Phone-only gap (deliberate product boundary).** Under operator-to-operator
 only, a user with no always-on machine has no supported configuration. That
@@ -213,29 +213,27 @@ and reach it from the phone." **Rule-21 reopen:** a designed light-client
 protocol that does not restore foreign-daemon RPC. Disposition is never
 "ship `--public-node` as unsupported-but-possible."
 
-## Restricted Mode
+## Grants
 
-In restricted mode (`--restricted-rpc` or a separate restricted bind port) —
-the operator's own view-only listener, not a public remote node:
-
-- JSON REST: admin-only routes are not registered in the Axum router.
-- JSON-RPC: admin-only methods are rejected with code `-32601` before C++.
-
-Note: the restricted-method list exists in both Axum and (historically) epee
-maps — dual-list single-sourcing is a FOLLOWUPS item.
+Every connection carries a grant set (`docs/design/RPC_CHANNEL.md` §6.1),
+one table for every leg: the owner's socket or pipe and the plaintext admin
+listener hold every grant; the view listener holds the `view` preset (with
+`submit` and `mining-work` until RT-W12); a channel session holds its key's
+ceiling, the request clamped to it. A method outside the connection's grant
+is refused as `OutsideTheGrant` (`-32002`) before its handler runs.
 
 ## Auth, TLS, and remote access
 
 | Context | Story |
 |---------|--------|
-| Local | Plaintext loopback (`127.0.0.1` or `::1`), and loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2; `--confirm-external-bind` retired). `--rpc-use-ipv6` binds `--rpc-bind-ipv6-address` on the same start. shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
-| Remote (your other machine) | Onion (address = key; `has_strong_verification` already) or a reverse proxy outside the daemon. Still operator-to-operator. |
+| Local | The owner's socket or pipe ("this computer": this account's node, the peer checked on every dial), the default for `shekyl-cli` and the wallet. The plaintext listeners (`rpc-admin-listen`, `rpc-view-listen`) bind loopback only: a wildcard or a network bind is refused at the Rust bind seam (RT-1/RT-2). shekyld does **not** register `--rpc-login` or `--rpc-ssl*`. |
+| Remote (your other machine) | The authenticated channel (`rpc-listen`): hybrid post-quantum Noise, enrolled keys only (`rpc client add`); `shekyl-rpc-tunnel` fronts it for a tool that speaks plain HTTP. Still operator-to-operator. |
 | Wallet-RPC | Separate Rust process. `--rpc-login` (HTTP Basic) on loopback; any non-loopback bind requires it and wildcard binds are refused; there is no `--rpc-ssl*` — the encrypted remote leg is pinned mutual TLS (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-4). |
-| CLI outbound | `shekyld <command>` reaches the running daemon through `shekyl_daemon_ctl_post` (`shekyl-daemon-rpc/src/ctl_client.rs`, over `shekyl-rpc-transport`): plaintext loopback, no login, no TLS — the outbound half mirrors the inbound ruling. epee's `http_simple_client` is no longer on this path. |
+| CLI outbound | Daemon commands are `shekyl-cli` words. `shekyld` takes options only; a bare word is refused before it loads. |
 
 **Rule-21 reopen for in-daemon clearnet TLS / digest auth:** named production
 need + threat-model review. Disposition is never “implement Axum `--rpc-ssl`”
-as the remote-security story — that remains onion / reverse proxy.
+as the remote-security story — that is the authenticated channel.
 
 ## CORS
 

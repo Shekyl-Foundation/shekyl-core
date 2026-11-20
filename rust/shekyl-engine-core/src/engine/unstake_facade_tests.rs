@@ -276,6 +276,33 @@ fn collect_resolves_lowest_exited_slot_with_rows_and_completes_on_empty() {
     );
 }
 
+/// A failed peer check and a service at this computer stay that fault
+/// through the exit, on the fee query and on the record fetch. Red edit:
+/// map either to `DaemonUnreachable`, and unstake reports a retry.
+#[test]
+fn a_target_refusal_is_not_an_unreachable_daemon() {
+    use shekyl_rpc_client::{DaemonFault, RpcError};
+
+    let peer = flatten_unstake_error(ReleaseRequestError::Fetch(EmissionSourceError::Rpc(
+        RpcError::PeerCheck("not a socket".into()),
+    )));
+    assert!(
+        matches!(peer, UnstakeError::DaemonTarget(DaemonFault::PeerCheck)),
+        "{peer:?}"
+    );
+    let view = "127.0.0.1:11030".parse().unwrap();
+    let service = flatten_unstake_error(ReleaseRequestError::Fee(FeeEstimatorError::Daemon(
+        DaemonFault::Service(Some(view)),
+    )));
+    assert!(
+        matches!(
+            service,
+            UnstakeError::DaemonTarget(DaemonFault::Service(Some(got))) if got == view
+        ),
+        "{service:?}"
+    );
+}
+
 /// This bites against the seam's two pending refusals collapsing onto
 /// one façade arm (`BondPostPending` mapped to
 /// `ExitInProgress` sent a just-bonded wallet to `collect_unstaked`,
@@ -446,9 +473,12 @@ async fn a_non_staker_reads_not_staker_never_nothing_staked() {
     let arc = StdArc::new(TokioRwLock::new(engine));
 
     // The daemon address is never dialed — the gate returns before transport.
-    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
-        .await
-        .expect_err("a non-staker cannot unstake");
+    let err = StakeFacade::unstake(
+        arc.clone(),
+        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+    )
+    .await
+    .expect_err("a non-staker cannot unstake");
     assert!(
         matches!(err, UnstakeError::NotStaker),
         "no stake engine is NotStaker (-29513), not NothingStaked: {err:?}"
@@ -478,7 +508,7 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close");
+    engine.close(&creds).await.expect("close");
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,
         &creds,
@@ -494,9 +524,12 @@ async fn a_staker_with_nothing_bonded_is_not_collapsed_to_not_staker() {
     );
     let arc = StdArc::new(TokioRwLock::new(opened));
 
-    let err = StakeFacade::unstake(arc.clone(), "http://127.0.0.1:1")
-        .await
-        .expect_err("nothing is bonded to exit");
+    let err = StakeFacade::unstake(
+        arc.clone(),
+        &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+    )
+    .await
+    .expect_err("nothing is bonded to exit");
     assert!(
         matches!(err, UnstakeError::NothingStaked),
         "actor present, nothing bonded is NothingStaked, not NotStaker: {err:?}"
@@ -553,6 +586,276 @@ fn a_sealed_exit_is_excluded_so_the_next_live_bond_can_exit() {
         UnstakeTarget::Post(PSlot::from_raw(2)),
         "the sealed-exit persona 1 is excluded; the next live bond (slot 2) is the target"
     );
+}
+
+/// An in-memory pending store: the block is the store. Its first save
+/// reports the durability `first` names, every later one is confirmed: a
+/// seal on a volume Windows cannot confirm, then its removal.
+struct MemPending {
+    block: std::sync::Mutex<Option<PendingPostBlock>>,
+    first: std::sync::Mutex<Option<shekyl_engine_file::Durability>>,
+}
+
+impl MemPending {
+    fn first_save(first: shekyl_engine_file::Durability) -> StdArc<Self> {
+        StdArc::new(Self {
+            block: std::sync::Mutex::new(None),
+            first: std::sync::Mutex::new(Some(first)),
+        })
+    }
+}
+
+impl crate::engine::pscan::dispatch::PendingSealStore for StdArc<MemPending> {
+    type Error = std::convert::Infallible;
+
+    async fn load(&self) -> Result<Option<PendingPostBlock>, Self::Error> {
+        Ok(self.block.lock().expect("mem pending").clone())
+    }
+
+    async fn save(
+        &self,
+        block: &PendingPostBlock,
+    ) -> Result<shekyl_engine_file::Durability, Self::Error> {
+        *self.block.lock().expect("mem pending") = Some(block.clone());
+        Ok(self
+            .first
+            .lock()
+            .expect("mem pending")
+            .take()
+            .unwrap_or(shekyl_engine_file::Durability::Confirmed))
+    }
+
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        match error {}
+    }
+}
+
+/// Seal persona 1's exit through `store` as the seam does
+/// (`seal_reporting`, its removal the unseal), and the save's durability.
+async fn seal_exit(
+    store: &crate::engine::pscan::dispatch::PendingPostStore<StdArc<MemPending>>,
+) -> shekyl_engine_file::Durability {
+    let (admission, durability) = store
+        .seal_reporting(
+            |block| {
+                let g = block.generation();
+                let admission = block.seal_release(
+                    PendingRelease {
+                        persona: persona(1),
+                        tx_bytes: vec![0xEE; 4],
+                        funding_gindexes: Vec::new(),
+                        state: PendingPostState::Pending,
+                        reference_height: BlockHeight::from_raw(1_000_000),
+                        terminal: None,
+                    },
+                    ChainCount::from_raw(5_000),
+                    g,
+                );
+                (admission == SealAdmission::Admit, admission)
+            },
+            |block| block.remove_release(&persona(1)).is_some(),
+        )
+        .await
+        .expect("an in-memory seal");
+    assert_eq!(admission, SealAdmission::Admit);
+    durability
+}
+
+/// What `unstake` resolves for persona 1's live bond against `store`'s
+/// block.
+async fn retry_target(
+    store: &crate::engine::pscan::dispatch::PendingPostStore<StdArc<MemPending>>,
+) -> UnstakeTarget {
+    let block = store.read(Clone::clone).await.expect("an in-memory read");
+    let bonded = pscan(
+        vec![bond_match(1, JOIN)],
+        BTreeMap::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    resolve_unstake_target(&evidence(Some(bonded), Some(block), &[(1, 1)])).expect("resolvable")
+}
+
+/// An exit whose seal was saved but not confirmed on disk sent nothing
+/// (Rick, 2026-11-19): it answers with the save's own cause, never
+/// `-29522`'s "sent, seal held"; the seal is removed under the seal's own
+/// guard, so no pending record is left and no other writer ever saw it;
+/// and a retry resolves the same bond as its target again, never "an exit
+/// is in progress". The test first asserts its own subject: a confirmed
+/// seal closes the lane. Red edits: drop the `SealNotSaved` arm from
+/// `flatten_unstake_error`, and the answer is `ExitFateUnknown`; drop the
+/// unseal from `seal_reporting`, and the seal stays and the retry resolves
+/// `ExitInProgress`.
+#[tokio::test]
+async fn an_unconfirmed_exit_seal_answers_its_save_code_and_reopens_the_lane() {
+    use crate::engine::dispatch_durability::require_confirmed;
+    use crate::engine::error::PersistenceError;
+    use crate::engine::pending_post_gate::PendingPostGate;
+    use crate::engine::pscan::dispatch::PendingPostStore;
+    use crate::engine::transaction_submitter::BroadcastSubmitError;
+    use shekyl_engine_file::{Durability, Unconfirmed};
+
+    let confirmed = PendingPostStore::new(
+        MemPending::first_save(Durability::Confirmed),
+        PendingPostGate::new(),
+    );
+    assert!(matches!(seal_exit(&confirmed).await, Durability::Confirmed));
+    assert_eq!(
+        retry_target(&confirmed).await,
+        UnstakeTarget::ExitInProgress,
+        "the test's own subject: a sealed exit closes the lane"
+    );
+
+    let fat = || Unconfirmed::FileSystem("FAT32".to_owned());
+    let unconfirmed = PendingPostStore::new(
+        MemPending::first_save(Durability::Unconfirmed(fat())),
+        PendingPostGate::new(),
+    );
+    let durability = seal_exit(&unconfirmed).await;
+    // What the seam's `submit_bound` hands back for that durability.
+    let refused = BroadcastSubmitError::SealNotSaved(
+        require_confirmed(durability).expect_err("an unconfirmed seal is refused before any send"),
+    );
+    assert!(
+        matches!(
+            flatten_unstake_error(ReleaseRequestError::Submit(refused)),
+            UnstakeError::SealNotSaved(PersistenceError::DurabilityUnconfirmed(
+                Unconfirmed::FileSystem(ref name)
+            )) if name == "FAT32"
+        ),
+        "the save's cause is the answer"
+    );
+    let left = unconfirmed
+        .read(Clone::clone)
+        .await
+        .expect("an in-memory read");
+    assert_eq!(
+        left.sealed_records().count(),
+        0,
+        "no pending record is left"
+    );
+    assert_eq!(
+        retry_target(&unconfirmed).await,
+        UnstakeTarget::Post(PSlot::from_raw(1)),
+        "a retry exits the same bond, never an exit in progress"
+    );
+}
+
+/// A pending store whose every save fails with a read-only wallet file:
+/// nothing is written.
+struct ReadOnlyPending;
+
+impl crate::engine::pscan::dispatch::PendingSealStore for StdArc<ReadOnlyPending> {
+    type Error = shekyl_engine_file::WalletFileError;
+
+    async fn load(&self) -> Result<Option<PendingPostBlock>, Self::Error> {
+        Ok(None)
+    }
+
+    async fn save(
+        &self,
+        _block: &PendingPostBlock,
+    ) -> Result<shekyl_engine_file::Durability, Self::Error> {
+        Err(shekyl_engine_file::WalletFileError::ReadOnly {
+            target: std::path::PathBuf::from("wallet.pending"),
+        })
+    }
+
+    fn save_cause(
+        error: Self::Error,
+    ) -> Result<crate::engine::error::PersistenceError, Self::Error> {
+        Ok(error.into())
+    }
+}
+
+/// An exit whose seal's save fails outright answers the save's cause, as an
+/// unconfirmed one does, never an internal fault (Rick, 2026-11-19): here a
+/// read-only wallet file, which the contract answers as `SAVE_NOT_WRITABLE`
+/// with its target. Nothing was written, so no pending record is left. Red
+/// edit: fold a failed seal save into `SealError::Store`, and the release
+/// path answers `Engine` (`-29107`).
+#[tokio::test]
+async fn a_failed_exit_seal_answers_its_save_cause() {
+    use crate::engine::error::PersistenceError;
+    use crate::engine::pending_post_gate::PendingPostGate;
+    use crate::engine::pscan::dispatch::PendingPostStore;
+    use crate::engine::pscan::pending_store::SealError;
+    use crate::engine::transaction_submitter::BroadcastSubmitError;
+
+    let store = PendingPostStore::new(StdArc::new(ReadOnlyPending), PendingPostGate::new());
+    let failed = store
+        .seal_reporting(
+            |block| {
+                let g = block.generation();
+                let admission = block.seal_release(
+                    PendingRelease {
+                        persona: persona(1),
+                        tx_bytes: vec![0xEE; 4],
+                        funding_gindexes: Vec::new(),
+                        state: PendingPostState::Pending,
+                        reference_height: BlockHeight::from_raw(1_000_000),
+                        terminal: None,
+                    },
+                    ChainCount::from_raw(5_000),
+                    g,
+                );
+                (admission == SealAdmission::Admit, ())
+            },
+            |block| block.remove_release(&persona(1)).is_some(),
+        )
+        .await
+        .expect_err("a read-only file refuses the seal");
+    let SealError::NotSaved(cause) = failed else {
+        panic!("a failed save is the save's cause, not a store fault: {failed:?}");
+    };
+    // What the release seam hands back for it.
+    let answer = flatten_unstake_error(ReleaseRequestError::Submit(
+        BroadcastSubmitError::SealNotSaved(cause),
+    ));
+    assert!(
+        matches!(
+            answer,
+            UnstakeError::SealNotSaved(PersistenceError::WalletFile(
+                shekyl_engine_file::WalletFileError::ReadOnly { .. }
+            ))
+        ),
+        "{answer:?}"
+    );
+}
+
+/// Every seal a broadcast follows (the bond post, the claim, the drain, the
+/// exit) is taken through `seal_reporting`, which removes an unconfirmed
+/// seal under its own guard (Rick, 2026-11-19), never through
+/// `mutate_reporting`, which would leave it for the dispatch driver to
+/// select. Comment lines are dropped, and each file's test module.
+#[test]
+fn every_broadcast_seal_is_taken_through_seal_reporting() {
+    let seams = [
+        ("bond_orchestrator.rs", include_str!("bond_orchestrator.rs")),
+        ("claim_dispatch.rs", include_str!("claim_dispatch.rs")),
+        ("drain_dispatch.rs", include_str!("drain_dispatch.rs")),
+        ("release_dispatch.rs", include_str!("release_dispatch.rs")),
+    ];
+    for (name, text) in seams {
+        let (production, _) = text
+            .split_once("\n#[cfg(test)]\n")
+            .unwrap_or_else(|| panic!("{name} carries its test-module marker"));
+        let code: String = production
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains(".seal_reporting("),
+            "{name} seals through seal_reporting"
+        );
+        assert!(
+            !code.contains(".mutate_reporting("),
+            "{name} takes no seal through mutate_reporting"
+        );
+    }
 }
 
 /// Collect resolution honours a skip set: a slot the caller proved

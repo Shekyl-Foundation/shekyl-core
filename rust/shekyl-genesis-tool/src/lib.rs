@@ -10,15 +10,14 @@
 //! `cryptonote::build_genesis_coinbase_from_destinations`). The tool:
 //!
 //! - derives the genesis transaction key **deterministically** from the
-//!   recipients file ([`txkey`]), so the pinned `GENESIS_TX` in
-//!   `src/cryptonote_config.h` is byte-reproducible from
-//!   `config/genesis_recipients.*.json` — anyone can rebuild and check it;
-//! - assembles the genesis coinbase tx and the version-9 genesis block
-//!   ([`builder`]) on top of `shekyl-wire`;
+//!   network's name and its recipients file ([`txkey`]), so every network's
+//!   genesis in the table (`shekyl_network`) is byte-reproducible from
+//!   `config/genesis_recipients.<name>.json` — anyone can rebuild and check it;
+//! - assembles the genesis coinbase tx and the genesis block, nonce 0 on
+//!   every network ([`builder`]), on top of `shekyl-wire`;
 //! - runs the fresh-entropy genesis wallet ceremony ([`wallets`]);
-//! - parses and byte-compares the `cryptonote_config.h` genesis pins
-//!   ([`config_pin`]), replacing the retired
-//!   `build_genesis.py`/`verify_genesis.py` scripts.
+//! - writes and checks the table's genesis pins ([`table`]), regtest's
+//!   committed test recipients included.
 //!
 //! Logic lives here (not in `main.rs`) so the integration tests under
 //! `tests/` can drive it directly — the same split
@@ -27,8 +26,8 @@
 #![deny(unsafe_code)]
 
 pub mod builder;
-pub mod config_pin;
 pub mod recipients;
+pub mod table;
 pub mod txkey;
 pub mod wallets;
 

@@ -3,9 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The 4b gate (`ARCHIVAL_SETTLEMENT_WRITER.md` §16; round 0, F2): a bundle
-//! this daemon's producer made is admitted by 4a's verifier on a driven
-//! chain, and connects.
+//! The producer's path end to end (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.11):
+//! a bundle this daemon's producer made is admitted by the bundle verifier
+//! (CEN-J29 to J37) on a driven chain, and connects.
 //!
 //! One chain, in the live lane, because a compact bond needs a closed,
 //! final and priced shard (CEN-J15) and that is a few hundred real spends:
@@ -16,23 +16,24 @@
 //!    ring, and the producer's own task ([`run`]) runs over the scenario's
 //!    connector and store. It reads through the daemon's fetch scheduler,
 //!    over the store's facts ([`StoreShardFacts`]), to P serving shard 0's
-//!    real bytes behind the loopback shim, signing with the staged
-//!    `ResidentReceiptKey` — the capability the cutover selects (4b).
+//!    real bytes behind the loopback shim, signing with its resident
+//!    `ResidentReceiptKey`.
 //! 3. Each block with draws: the producer reads, files, and the queue
-//!    admits the bundle; the next block takes every queued bundle through
-//!    4a's door (`connect_admitting`, [`Scenario::mine_admitting`]). Every
+//!    admits the bundle; the next block carries every queued bundle as its
+//!    section and `validate` admits it ([`Scenario::mine_admitting`]). Every
 //!    draw names P's pair and passed; the index rows carry the passed bits;
 //!    the epoch's settlement credits P as served.
 //! 4. Along the way: a restart mid-window reconciles the queue and the
 //!    entry survives it; a reorg pops the admitting tip and the entry is
 //!    judged again and kept under the new tip; an entry left untaken
 //!    leaves when its window closes.
-//! 5. The live path: P serving with an identity key. The producer files a
-//!    bundle with no passes, and the queue admits it.
+//! 5. P serving with a receipt key that is not its bond record's. Every
+//!    read is refused, the producer files a bundle with no passes, and the
+//!    queue admits it.
 //!
 //! Red edits, each of which turns this test red: P signing its receipts
-//! with the identity key (every read is the serving side's scheme, and
-//! the passed bits are clear); `challenge_nonce` without the attempt byte
+//! with another key (every read is refused, and the passed bits are
+//! clear); `challenge_nonce` without the attempt byte
 //! on the producer's side (the receipt is over another nonce than
 //! admission recomputes: J37 at the queue); a template commitment drawn
 //! outside the ring (no block is claimed, and no bundle is filed).
@@ -44,26 +45,27 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure, ShardFacts, ShardStanding};
+use shekyl_archival_fetch_sched::{FetchScheduler, ReadFailure};
 use shekyl_bundle_producer::WitnessRing;
-use shekyl_chain_rules::{Claimable, EpochFloor, FakechainSchedule, Settling};
+use shekyl_chain_rules::{CappedEpoch, Claimable, EpochFloor, Settling};
 use shekyl_p_host::DaemonTipCache;
 use shekyl_p_loopback::{endpoint_and_client, PFetchClient, PServeEndpoint, Timeouts};
 use shekyl_types::archival::{SettlementEpochBlocks, SettlementOutcome};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, SettlementEpoch, ShardId};
-use shekyl_wire::shard_frame::{encode_frame, FrameTx};
-use shekyl_wire::Ct;
+use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use tokio::sync::watch;
 
-use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
-use crate::bundle_producer::{run, ProducerParts, ProducerProgress, ProducerSeat};
+use crate::archival_driver::{ENDPOINT, FEE};
+use crate::bundle_producer::{run, ProducerParts, ProducerProgress};
 use crate::connector::{TipChanged, WatchTip};
+use crate::forged_fill::{self, FIRST_POST_COINBASE};
+use crate::producer_seat::ProducerSeat;
 use crate::scenario::{FreeHash, Mined, Scenario};
-use crate::scenario_archival::{shard_set, Persona};
-use crate::scenario_shard::{close_shards, first_admissible_compact_join, mine_to};
+use crate::scenario_archival::{complete_tree, shard_set, Persona};
+use crate::scenario_shard::{first_admissible_compact_join, mine_to};
 use crate::schedule::ChainRules;
 use crate::shard_facts::{StoreHolderSource, StoreShardFacts};
 use shekyl_harness_spender::Spender;
+use shekyl_network::Network;
 
 /// An epoch long enough for a response window that holds a read and a
 /// filing: `W₂ = SEB / 20 = 60`, so reads fall in `(h, h + 30]`.
@@ -74,20 +76,21 @@ const REORG_CAP_BLOCKS: u64 = 10;
 const W2: u64 = EPOCH_BLOCKS / 20;
 /// P's slot. No other scenario persona uses it on this chain.
 const SLOT: u32 = 12;
-/// The first coinbase the fill spends. Coinbase 0 funds the join.
-const FILL_FROM_COINBASE: u64 = 10;
 /// How long one block's reads and filing may take on a loaded host.
 const SETTLE: Duration = Duration::from_secs(120);
 
+fn epoch() -> CappedEpoch {
+    CappedEpoch::new(
+        SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
+        BlockCount::from_raw(REORG_CAP_BLOCKS),
+    )
+    .expect("the cap sits inside the epoch and the window under the anchor depth")
+}
+
+/// Regtest's rules under [`epoch`]: the forged shard-fill chain's identity.
 fn rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: FakechainSchedule::new(
-            SettlementEpochBlocks::new(EPOCH_BLOCKS).expect("non-zero"),
-            BlockCount::from_raw(REORG_CAP_BLOCKS),
-        )
-        .expect("the cap sits inside the epoch and the window under the anchor depth"),
-    }
+    ChainRules::new(Network::Regtest, Some(std::num::NonZeroU128::MIN), epoch())
+        .unwrap_or_else(|refused| panic!("regtest's row permits every lever: {refused}"))
 }
 
 /// The spread each read's start delay is drawn below here. The node's is
@@ -109,44 +112,11 @@ fn tip_of(chain: &[Mined]) -> BlockHeight {
     chain.last().expect("a mined chain").height
 }
 
-/// Shard `shard`'s body as P serves it: the closed shard's transactions,
-/// in chain order, as one `shard_frame` over their two archival segments.
-fn shard_body(scenario: &Scenario<FreeHash>, chain: &[Mined], shard: ShardId) -> Arc<[u8]> {
-    let facts = StoreShardFacts::new(scenario.store());
-    let ShardStanding::Closed(closed) = facts.shard(shard).expect("the facts read") else {
-        panic!("shard {shard:?} is closed");
-    };
-    let mut segments = Vec::new();
-    for row in closed.expected.txs() {
-        let tx = chain
-            .iter()
-            .flat_map(|mined| mined.template.transactions.iter())
-            .find(|tx| tx.txid_parts().hash == row.hash)
-            .expect("every transaction of the shard was mined here");
-        let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
-            panic!("a fill transaction is an FCMP++ spend");
-        };
-        segments.push((
-            u64::try_from(pqc_auths.len()).expect("fits"),
-            tx.write_segments().expect("segments"),
-        ));
-    }
-    let frame: Vec<FrameTx<'_>> = segments
-        .iter()
-        .map(|(count, segments)| FrameTx {
-            pqc_auth_count: *count,
-            pqc_auths: &segments.pqc_auths,
-            prunable: &segments.prunable,
-        })
-        .collect();
-    Arc::from(encode_frame(&frame))
-}
-
 /// P, serving `body` at `shard` behind the loopback shim, with its own
 /// height read from `tip`, and the one client aimed at it (the client is
 /// one per process by design: its in-flight cap is the Tor instance's).
-/// `receipts` picks the staged receipt capability or, for the live path,
-/// an identity key.
+/// `receipts` picks the persona's resident receipt capability or, for the
+/// no-pass path, a receipt key that is not the persona's.
 struct Serving {
     _endpoint: PServeEndpoint,
     _holder: Option<shekyl_engine_core::__test_helpers::ReceiptKeyHolder>,
@@ -160,7 +130,7 @@ async fn serve(
 ) -> (Serving, PFetchClient) {
     if receipts {
         let (holder, key) = shekyl_engine_core::__test_helpers::resident_receipt_key(
-            shekyl_harness_spender::Persona::at(SLOT).into_keys(),
+            shekyl_harness_spender::Persona::on(Network::Regtest, SLOT).into_keys(),
             SLOT,
         );
         let signer = shekyl_p_host::signer_over_tip(Arc::clone(tip), key);
@@ -174,11 +144,11 @@ async fn serve(
             client,
         )
     } else {
-        let key = Arc::new(shekyl_p_serve::TestKeySigner::ephemeral(BlockHeight::ZERO));
-        let signer = shekyl_p_host::signer_over_tip(
-            Arc::clone(tip),
-            key as Arc<dyn shekyl_p_host::PassKey<{ shekyl_p_host::IDENTITY_ENVELOPE_LEN }>>,
-        );
+        let key = Arc::new(shekyl_p_serve::TestReceiptKeySigner::ephemeral(
+            BlockHeight::ZERO,
+        ));
+        let signer =
+            shekyl_p_host::signer_over_tip(Arc::clone(tip), key as Arc<dyn shekyl_p_host::PassKey>);
         let (endpoint, client) =
             endpoint_and_client(shard.to_raw(), body, signer, timeouts()).await;
         (
@@ -225,7 +195,7 @@ async fn start(
     ));
     let ended = Arc::new(std::sync::Mutex::new(Vec::new()));
     let ended_by_reads = Arc::clone(&ended);
-    let read: crate::bundle_producer::ReadFn = Arc::new(move |due| {
+    let read: crate::producer_seat::ReadFn = Arc::new(move |due| {
         let scheduler = Arc::clone(&scheduler);
         let ended = Arc::clone(&ended_by_reads);
         Box::pin(async move {
@@ -244,13 +214,10 @@ async fn start(
             }
         })
     });
-    let seat = ProducerSeat {
-        witness: Arc::clone(ring),
-        read,
-        start_spread: START_SPREAD,
-    };
+    let seat = ProducerSeat::new(Arc::clone(ring), read, START_SPREAD);
     let parts = ProducerParts {
         connector: scenario.connector().clone(),
+        filed: tokio::sync::broadcast::Sender::new(crate::connector::FILED_FEED_CAPACITY),
         store,
         rules: rules(),
     };
@@ -299,7 +266,11 @@ fn queued(scenario: &Scenario<FreeHash>) -> Vec<shekyl_chain_store::store::Queue
 }
 
 /// One more block, then the producer's turn. With bundles queued, the
-/// block takes them through 4a's door; the verdicts come back.
+/// block takes them through 4a's door; the verdicts come back. A block
+/// that admitted a bundle is the block the store recorded: its record's
+/// candidate ([`Mined::candidate`]) carries the section the store holds at
+/// its height, so a second driver offered it gets the section the header
+/// commits.
 async fn step(
     scenario: &mut Scenario<FreeHash>,
     chain: &mut Vec<Mined>,
@@ -312,6 +283,20 @@ async fn step(
             .mine_admitting(Vec::new())
             .await
             .unwrap_or_else(|outcome| panic!("the block lands: {outcome}"));
+        if !admitted.is_empty() {
+            let recorded = scenario
+                .store()
+                .begin_read()
+                .expect("snapshot")
+                .bundle_references_at(mined.height)
+                .expect("the section reads");
+            assert_eq!(
+                recorded,
+                shekyl_chain_rules::AtHeight::Recorded(mined.candidate().bundle_references),
+                "block {}'s record carries the section the store recorded for it",
+                mined.height
+            );
+        }
         chain.push(mined);
         admitted
     } else {
@@ -330,24 +315,22 @@ async fn step(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "fills a shard with real proofs and mines three long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_bundle_is_admitted"]
-async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
-    let rules = rules();
+async fn a_produced_bundle_is_admitted_and_connects() {
+    let (mut scenario, mut chain, rules, filled) =
+        forged_fill::connect("bundle-producer-gate", epoch(), 1).await;
     let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
-    let mut scenario = Scenario::open_under("bundle-producer-gate", FreeHash, rules);
-    let mut chain = scenario
-        .mine(ChainCount::from_next_height(first_spending_height()).to_raw())
-        .await;
+    let network = scenario.network_id();
 
-    // 1. Shard 0 closes; P joins it.
-    let filled = close_shards(&mut scenario, &mut chain, FILL_FROM_COINBASE, 1).await;
+    // 1. Shard 0 closes (the forged shard-fill chain, `forged_fill`); P
+    // joins it.
     let close = filled.closed[0];
     let shard = close.shard;
     let admissible = first_admissible_compact_join(&rules, close);
     mine_to(&mut scenario, &mut chain, admissible).await;
-    let persona = Persona::at(SLOT);
-    let joining = Spender::over(&chain).spend_coinbase_posting(
+    let persona = Persona::on(Network::Regtest, SLOT);
+    let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
         scenario.wallet(),
-        BlockHeight::ZERO,
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
         admissible,
         FEE,
         Some(&persona.join(shard_set(vec![shard.to_raw()]), ENDPOINT)),
@@ -361,11 +344,11 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     let epoch = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
 
     // 2. The ring, P serving, the producer.
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(network));
     scenario.draw_from(Arc::clone(&ring));
     let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
     p_tip.stamp_synced(tip_of(&chain));
-    let body = shard_body(&scenario, &chain, shard);
+    let body = crate::scenario_shard::shard_body(&scenario, &chain, shard);
     let (mut serving, client) = serve(shard, Arc::clone(&body), &p_tip, true).await;
     let mut producing = start(&scenario, &ring, client).await;
 
@@ -392,7 +375,7 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
                     "the queue survives a restart, reconciled"
                 );
                 // A restart's ring is empty: a fresh one, as a new process.
-                ring = Arc::new(WitnessRing::new());
+                ring = Arc::new(WitnessRing::new(network));
                 scenario.draw_from(Arc::clone(&ring));
                 let (restarted_serving, client) =
                     serve(shard, Arc::clone(&body), &p_tip, true).await;
@@ -470,12 +453,13 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     drop(snap);
     drop(store);
 
-    // 5. The live path: P signs with an identity key. The producer files a
-    // bundle with no passes, and the queue admits it. Left untaken, the
-    // entry leaves when its window closes.
+    // 5. P signs with a receipt key that is not its bond record's. Every
+    // read is refused, the producer files a bundle with no passes, and the
+    // queue admits it. Left untaken, the entry leaves when its window
+    // closes.
     producing.stop().await;
     drop(serving);
-    let (_identity, client) = serve(shard, body, &p_tip, false).await;
+    let (_stranger, client) = serve(shard, body, &p_tip, false).await;
     let mut producing = start(&scenario, &ring, client).await;
     let mut no_pass = None;
     for _ in 0..(2 * EPOCH_BLOCKS) {
@@ -485,25 +469,20 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
             break;
         }
     }
-    let (h, reference) =
-        no_pass.expect("a block with draws filed while P signed with an identity key");
+    let (h, reference) = no_pass.expect("a block with draws filed while P signed with another key");
     assert!(reference.count() > 0);
     assert_eq!(reference.passes().popcount(), 0, "no read was a receipt");
-    // Every read under the identity key that was answered was recognised
-    // as the serving side's scheme, the line the live path logs, and none
-    // as a refusal. A stall (a loopback hiccup under load) reads again and
-    // is not the subject.
+    // Every read that was answered was refused. A stall (a loopback hiccup
+    // under load) reads again and is not the subject.
     {
         let ended = producing.ended.lock().expect("the outcome list");
-        let serving = shekyl_bundle_producer::ReadOutcome::Answered(
-            shekyl_bundle_producer::Answered::ServingScheme,
+        let refused = shekyl_bundle_producer::ReadOutcome::Refused;
+        assert!(
+            ended.iter().any(|read| read.outcome == refused),
+            "the no-pass path read: {ended:#?}"
         );
         assert!(
-            ended.iter().any(|read| read.outcome == serving),
-            "the live path read: {ended:#?}"
-        );
-        assert!(
-            ended.iter().all(|read| read.outcome == serving
+            ended.iter().all(|read| read.outcome == refused
                 || read.outcome == shekyl_bundle_producer::ReadOutcome::Stall),
             "{ended:#?}"
         );
@@ -514,6 +493,118 @@ async fn a_produced_bundle_is_admitted_and_connects_through_the_staged_door() {
     assert!(
         queued(&scenario).iter().all(|e| e.h != h),
         "the entry for {h} left with its window"
+    );
+    producing.stop().await;
+    scenario.close().await;
+}
+
+/// The support stream through the same door (`SO-D12` 4b §5.1 item 3): a
+/// complete tree is seated by the connect path's schedule, this daemon's
+/// producer reads it and files the support bitmap, the queue admits the
+/// bundle over the store's view, and the next block takes it.
+///
+/// One chain, in the live lane, because the archive needs a closed and
+/// final shard for the tree to be a member at all (a complete tree of an
+/// empty archive is seated nowhere):
+///
+/// 1. Shard 0 fills and closes, and persona T joins as a complete tree. The
+///    next epoch's snapshot holds T as its one support member over an
+///    archive of one shard, and no drawable pair.
+/// 2. T serves its prefix (shard 0's real bytes) behind the loopback shim,
+///    signing with its resident `ResidentReceiptKey`.
+/// 3. Through the epoch's usable span and the last seat's window, every
+///    admitted bundle is support only: each observation is T at shard 0,
+///    passed, at a height whose row seats T. T is issued exactly its `c`
+///    seats, every one filed and admitted.
+///
+/// Red edit: the store view's `support_roster` answers `None` (the
+/// producer's support targets are unanswered, no support bitmap is filed,
+/// and no seat is observed).
+///
+/// Live lane: `cargo test -p shekyl-chain-ingest -- --ignored
+/// a_produced_support_bundle_is_admitted`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills a shard with real proofs and mines two long epochs; minutes. Live lane: cargo test -p shekyl-chain-ingest -- --ignored a_produced_support_bundle_is_admitted"]
+async fn a_produced_support_bundle_is_admitted_and_connects() {
+    let (mut scenario, mut chain, rules, filled) =
+        forged_fill::connect("bundle-producer-support", epoch(), 1).await;
+    let schedule = rules.in_force(BlockHeight::ZERO).settlement_schedule();
+    let network = scenario.network_id();
+
+    // 1. Shard 0 closes and is final (the forged shard-fill chain,
+    // `forged_fill`); T joins as a complete tree.
+    let close = filled.closed[0];
+    let shard = close.shard;
+    mine_to(
+        &mut scenario,
+        &mut chain,
+        first_admissible_compact_join(&rules, close),
+    )
+    .await;
+    let tree = Persona::on(Network::Regtest, SLOT);
+    let joining = Spender::on(scenario.network_id(), &chain).spend_coinbase_posting(
+        scenario.wallet(),
+        BlockHeight::from_raw(FIRST_POST_COINBASE),
+        tip_of(&chain).saturating_add(BlockCount::ONE),
+        FEE,
+        Some(&tree.join(complete_tree(), ENDPOINT)),
+    );
+    let join = scenario
+        .mine_listing(vec![joining])
+        .await
+        .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+    let epoch = SettlementEpoch::from_raw(schedule.epoch_at(join.height).to_raw() + 1);
+    chain.push(join);
+
+    // 2. The ring, T serving its prefix, the producer.
+    let ring = Arc::new(WitnessRing::new(network));
+    scenario.draw_from(Arc::clone(&ring));
+    let p_tip = Arc::new(DaemonTipCache::new(Duration::from_secs(24 * 60 * 60)));
+    p_tip.stamp_synced(tip_of(&chain));
+    let body = crate::scenario_shard::shard_body(&scenario, &chain, shard);
+    let (_serving, client) = serve(shard, body, &p_tip, true).await;
+    let mut producing = start(&scenario, &ring, client).await;
+
+    // 3. Through the usable span and the last seat's window.
+    let open = schedule.open_height(epoch.to_raw());
+    let span = EPOCH_BLOCKS - W2;
+    let through = BlockHeight::from_raw(open + span + W2 + 1);
+    let mut observed = BTreeSet::new();
+    while tip_of(&chain) < through {
+        let admitted = step(&mut scenario, &mut chain, &mut producing, &p_tip, true).await;
+        for bundle in admitted {
+            assert!(bundle.draws.is_empty(), "no drawable pair: no economy draw");
+            for seen in &bundle.support {
+                assert_eq!(seen.persona, tree.id(), "the seat is T's");
+                assert_eq!(seen.shard, shard, "an archive of one shard");
+                assert!(
+                    seen.passed,
+                    "T served its prefix: the support draw passed; reads that did not \
+                     pass: {:#?}",
+                    producing.ended.lock().expect("the outcome list")
+                );
+            }
+            if !bundle.support.is_empty() && schedule.epoch_at(bundle.kept.h) == epoch {
+                observed.insert(bundle.kept.h);
+            }
+        }
+    }
+    let store = scenario.store();
+    let snap = store.begin_read().expect("snapshot");
+    for h in &observed {
+        let row = snap
+            .support_row(*h, shekyl_chain_rules::BlockDrawsFloor::NONE)
+            .expect("the row reads")
+            .expect("an admitted block's row")
+            .seats;
+        assert_eq!(row.as_slice(), [tree.id()], "{h}'s row seats T");
+    }
+    drop(snap);
+    drop(store);
+    assert_eq!(
+        observed.len(),
+        usize::try_from(shekyl_archival_retention::SUPPORT_DRAWS_PER_EPOCH).expect("small"),
+        "T is issued its c seats in epoch {epoch}, each filed and admitted: {observed:?}"
     );
     producing.stop().await;
     scenario.close().await;

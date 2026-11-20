@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! Block       := BlockHeader Transaction(miner) V(n_tx) n_tx×Hash[32]
-//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] attestation_root[32]
+//! BlockHeader := V(major) V(minor) V(timestamp) prev[32] nonce(u32 LE) curve_tree_root[32] section_root[32]
 //! ```
 //!
 //! The miner transaction is embedded inline; `n_tx` counts the *other*
@@ -19,7 +19,7 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash, TxTreeHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash, TxTreeHash};
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
@@ -85,10 +85,11 @@ pub struct BlockHeader {
     /// this block's outputs (CEN-B5, wording corrected 2026-09-05). The root
     /// *after* this block is the next header's.
     pub curve_tree_root: CurveTreeRoot,
-    /// The archival credit-wire attestation root over this block's pass records
-    /// (`ARCHIVAL_CREDIT_WIRE.md` §3). A `block_header` field alongside
-    /// `curve_tree_root`, mined via the header being the PoW preimage.
-    pub attestation_root: AttestationRoot,
+    /// The root over the references of the bundles this block admits, in
+    /// ascending `h` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.3, `SCS-P34`). A
+    /// `block_header` field alongside `curve_tree_root`, mined via the
+    /// header being the PoW preimage.
+    pub section_root: SectionRoot,
 }
 
 impl BlockHeader {
@@ -100,7 +101,7 @@ impl BlockHeader {
         w.write_all(self.previous.as_bytes())?;
         w.write_all(&self.nonce.to_le_bytes())?;
         w.write_all(self.curve_tree_root.as_bytes())?;
-        w.write_all(self.attestation_root.as_bytes())
+        w.write_all(self.section_root.as_bytes())
     }
 
     /// Where [`nonce`](Self::nonce)'s four little-endian bytes sit in
@@ -128,7 +129,7 @@ impl BlockHeader {
             previous: BlockHash::from_bytes(read_array(r)?),
             nonce: u32::from_le_bytes(read_array::<4, _>(r)?),
             curve_tree_root: CurveTreeRoot::from_bytes(read_array(r)?),
-            attestation_root: AttestationRoot::from_bytes(read_array(r)?),
+            section_root: SectionRoot::from_bytes(read_array(r)?),
         })
     }
 }
@@ -371,7 +372,7 @@ pub fn identity_of_pow_blob(blob: &[u8]) -> BlockHash {
 const PREIMAGE_HASH_BYTES: usize = 32;
 /// Varints that open a header. Each is one byte when the value is below 128.
 const HEADER_LEADING_VARINTS: usize = 3;
-/// `previous`, `curve_tree_root`, `attestation_root`.
+/// `previous`, `curve_tree_root`, `section_root`.
 const HEADER_HASH_FIELD_COUNT: usize = 3;
 /// Those three hashes.
 const HEADER_HASH_FIELDS: usize = HEADER_HASH_FIELD_COUNT * PREIMAGE_HASH_BYTES;
@@ -388,6 +389,30 @@ const POW_TAIL_BYTES: usize = PREIMAGE_HASH_BYTES + MIN_TX_COUNT_VARINT;
 /// allowance stays inside the two-byte portable-storage band.
 pub const MIN_POW_BLOB_SIZE: usize =
     HEADER_LEADING_VARINTS + HEADER_HASH_FIELDS + HEADER_NONCE_BYTES + POW_TAIL_BYTES;
+
+/// The longest hashing blob [`PowBlob::read`] accepts.
+///
+/// A hashing blob is the header, the transaction-tree hash and the
+/// transaction-count varint. It does not carry the block body, so
+/// [`MAX_BLOCK_BLOB_SIZE`] is not this length. The versions are at the
+/// width of a `u8`, the timestamp at the width of a `u64`, and the count
+/// at the preimage parser's own cap (`READ_LEN_CAP` plus the miner).
+pub const MAX_POW_BLOB_SIZE: usize = max_pow_blob_size();
+
+/// The largest `tx_count` [`PowBlob::read`] accepts: one more than
+/// [`READ_LEN_CAP`], because the count includes the miner.
+const MAX_POW_TX_COUNT: u64 = READ_LEN_CAP as u64 + 1;
+
+const fn max_pow_blob_size() -> usize {
+    use crate::varint::varint_len;
+    varint_len(u8::MAX as u64)
+        + varint_len(u8::MAX as u64)
+        + varint_len(u64::MAX)
+        + HEADER_HASH_FIELDS
+        + HEADER_NONCE_BYTES
+        + PREIMAGE_HASH_BYTES
+        + varint_len(MAX_POW_TX_COUNT)
+}
 
 /// The PoW preimage, parsed: the header, the transaction-tree hash, and the
 /// count the trailing varint carries (`tx_count = n_tx + 1`, the miner
@@ -411,7 +436,7 @@ impl PowBlob {
     /// Parse exactly the bytes [`Block::pow_blob`] writes.
     ///
     /// The transaction-hash count (`tx_count - 1`) is held to
-    /// [`READ_LEN_CAP`], the same cap [`Block::read`] puts on `n_tx`. A
+    /// `READ_LEN_CAP`, the same cap [`Block::read`] puts on `n_tx`. A
     /// trailing byte is refused: the preimage has no slack.
     ///
     /// # Errors
@@ -466,9 +491,9 @@ impl PowBlob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::empty_attestation_root;
+    use shekyl_archival_retention::empty_section_root;
 
-    fn header(attestation_root: [u8; 32]) -> BlockHeader {
+    fn header(section_root: [u8; 32]) -> BlockHeader {
         BlockHeader {
             major_version: 1,
             minor_version: 0,
@@ -476,7 +501,7 @@ mod tests {
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 0xDEAD_BEEF,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
-            attestation_root: AttestationRoot::from_bytes(attestation_root),
+            section_root: SectionRoot::from_bytes(section_root),
         }
     }
 
@@ -497,7 +522,7 @@ mod tests {
         )
         .expect("a leafless coinbase extra");
         let block = Block {
-            header: header(empty_attestation_root()),
+            header: header(empty_section_root()),
             miner_transaction: Transaction {
                 prefix: TxPrefix {
                     unlock_time: 300,
@@ -544,7 +569,7 @@ mod tests {
                 previous: BlockHash::from_bytes([0; 32]),
                 nonce: 0,
                 curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
-                attestation_root: AttestationRoot::from_bytes([0; 32]),
+                section_root: SectionRoot::from_bytes([0; 32]),
             },
             tx_tree_hash: TxTreeHash::from_bytes([0; 32]),
             tx_count: 1,
@@ -552,11 +577,44 @@ mod tests {
         let bytes = blob.write();
         assert_eq!(bytes.len(), MIN_POW_BLOB_SIZE);
         assert_eq!(PowBlob::read(&bytes).expect("the minimum parses"), blob);
+        // The RT-W10 harness (`examples/rt_w10_request_cost.rs` in
+        // `shekyl-pow-randomx`) repeats these two lengths as literals so
+        // that crate does not depend on this one, and its header bench
+        // (`benches/verify_header_iai.rs`) repeats the first. A change
+        // here updates both in the same commit.
+        assert_eq!(MIN_POW_BLOB_SIZE, 136);
+        assert_eq!(MAX_BLOCK_BLOB_SIZE, 33_000_128);
+    }
+
+    /// The format maximum is what the widest field encodings actually write,
+    /// and it is a hashing blob, not a block body.
+    #[test]
+    fn the_longest_pow_blob_is_what_the_widest_fields_write() {
+        let blob = PowBlob {
+            header: BlockHeader {
+                major_version: u8::MAX,
+                minor_version: u8::MAX,
+                timestamp: u64::MAX,
+                previous: BlockHash::from_bytes([0xff; 32]),
+                nonce: u32::MAX,
+                curve_tree_root: CurveTreeRoot::from_bytes([0xff; 32]),
+                section_root: SectionRoot::from_bytes([0xff; 32]),
+            },
+            tx_tree_hash: TxTreeHash::from_bytes([0xff; 32]),
+            tx_count: MAX_POW_TX_COUNT,
+        };
+        let bytes = blob.write();
+        assert_eq!(bytes.len(), MAX_POW_BLOB_SIZE);
+        const {
+            assert!(MAX_POW_BLOB_SIZE > MIN_POW_BLOB_SIZE);
+            assert!(MAX_POW_BLOB_SIZE < MAX_BLOCK_BLOB_SIZE);
+        }
+        assert_eq!(PowBlob::read(&bytes).expect("the maximum parses"), blob);
     }
 
     #[test]
-    fn attestation_root_roundtrips_and_is_the_final_header_field() {
-        let empty = empty_attestation_root();
+    fn section_root_roundtrips_and_is_the_final_header_field() {
+        let empty = empty_section_root();
         let h = header(empty);
         let mut bytes = Vec::new();
         h.write(&mut bytes).unwrap();
@@ -565,7 +623,7 @@ mod tests {
         assert_eq!(&bytes[bytes.len() - 32..], &empty);
         let back = BlockHeader::read(&mut &bytes[..]).unwrap();
         assert_eq!(back, h);
-        assert_eq!(back.attestation_root, AttestationRoot::from_bytes(empty));
+        assert_eq!(back.section_root, SectionRoot::from_bytes(empty));
     }
 
     /// The four bytes at `nonce_offset` in the PoW preimage are the nonce:
@@ -578,11 +636,11 @@ mod tests {
             let mut block = Block {
                 header: BlockHeader {
                     timestamp,
-                    ..header(empty_attestation_root())
+                    ..header(empty_section_root())
                 },
                 miner_transaction: Transaction {
                     prefix: crate::transaction::TxPrefix {
-                        unlock_time: 0,
+                        unlock_time: crate::transaction::TxPrefix::NO_UNLOCK_TIME,
                         inputs: vec![Input::Gen(7)],
                         outputs: Vec::new(),
                         extra: Vec::new(),
@@ -604,14 +662,14 @@ mod tests {
     }
 
     #[test]
-    fn attestation_root_is_committed_by_the_wire() {
-        // Two headers differing ONLY in attestation_root serialize differently and
+    fn section_root_is_committed_by_the_wire() {
+        // Two headers differing ONLY in section_root serialize differently and
         // to equal length — the field is on the wire (hence in the PoW/block-hash
         // preimage, since the header is the preimage prefix), never dropped.
         let mut a = Vec::new();
         let mut b = Vec::new();
         header([0u8; 32]).write(&mut a).unwrap();
-        header(empty_attestation_root()).write(&mut b).unwrap();
+        header(empty_section_root()).write(&mut b).unwrap();
         assert_ne!(a, b);
         assert_eq!(a.len(), b.len());
     }

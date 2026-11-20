@@ -14,21 +14,21 @@
 //! A submission is one of two runs:
 //!
 //! - a padded frame, at the record that finishes it;
-//! - exactly [`SUBMISSION_RECORDS`](crate::SUBMISSION_RECORDS) largest-class
+//! - exactly [`SUBMISSION_RECORDS`] largest-class
 //!   payload records in a row, counted from a message boundary.
 //!
 //! A boundary is the start of the stream, a record of a smaller class, a
 //! padded frame that just finished, or a record this side sent (on the
 //! daemon, a response). An empty padding record opens a frame.
 //! It does not end the message before it. One more largest-class record
-//! after the five clears the verdict, so a longer ordinary message is never
+//! after a submission's count clears the verdict, so a longer ordinary message is never
 //! a submission. A full-size submission sent straight after a message that
 //! ended on a largest-class record, with no response between them, has no
 //! boundary in front of it, and the daemon refuses it. Only a pipelining
 //! client sends that way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_noise::ClassId;
 
@@ -40,15 +40,43 @@ pub(crate) const CLOSE_CLASS: ClassId = ClassId(0);
 
 /// The verdict [`crate::RecordStream`] publishes for the request handler.
 ///
-/// The handler reads it after the body, while hyper owns the stream. It is
-/// the reader's decision at the last data record. The close record does not
-/// change it.
+/// [`Self::ends_in_submission`] is the reader's decision at the last data
+/// record. The close record does not change it. That decision is the whole
+/// connection's, so the channel binds it to one HTTP message
+/// ([`Self::note_message`]) before a handler reads
+/// [`Self::message_is_submission`]: two requests in one frame are not each
+/// a submission.
 #[derive(Clone, Debug)]
-pub struct InboundShape(Arc<AtomicBool>);
+pub struct InboundShape {
+    inner: Arc<Shape>,
+}
+
+/// Payload bytes `[from, to)` of one finished submission, in the order the
+/// reader copies them. Padding records add none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PayloadSpan {
+    from: u64,
+    to: u64,
+}
+
+#[derive(Debug)]
+struct Shape {
+    /// The last data record finished a submission.
+    record: AtomicBool,
+    /// The HTTP message last noted is exactly the stored span.
+    message: AtomicBool,
+    span: Mutex<Option<PayloadSpan>>,
+}
 
 impl Default for InboundShape {
     fn default() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self {
+            inner: Arc::new(Shape {
+                record: AtomicBool::new(false),
+                message: AtomicBool::new(false),
+                span: Mutex::new(None),
+            }),
+        }
     }
 }
 
@@ -56,11 +84,46 @@ impl InboundShape {
     /// Whether the records ending at the last data record are one submission.
     #[must_use]
     pub fn ends_in_submission(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.inner.record.load(Ordering::Acquire)
     }
 
-    pub(crate) fn set(&self, submission: bool) {
-        self.0.store(submission, Ordering::Release);
+    /// Whether the HTTP message last passed to [`Self::note_message`] is
+    /// exactly the submission the last data record finished.
+    #[must_use]
+    pub fn message_is_submission(&self) -> bool {
+        self.inner.message.load(Ordering::Acquire)
+    }
+
+    /// The message now being read is not yet a submission.
+    pub fn clear_message(&self) {
+        self.inner.message.store(false, Ordering::Release);
+    }
+
+    /// The bytes `[from, to)` are one HTTP message, in the same index as
+    /// the submission's payload. The message is a submission when those
+    /// bytes are exactly the frame the last data record finished, and the
+    /// verdict is consumed by this note: a later message in the same frame
+    /// does not match it again.
+    pub fn note_message(&self, from: u64, to: u64) {
+        let mut span = self
+            .inner
+            .span
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // One claim. A prefix of the frame, and the bytes left after it,
+        // are not the frame.
+        let matches = span.take() == Some(PayloadSpan { from, to });
+        self.inner.message.store(matches, Ordering::Release);
+    }
+
+    pub(crate) fn publish(&self, submission: bool, from: u64, to: u64) {
+        self.inner.record.store(submission, Ordering::Release);
+        *self
+            .inner
+            .span
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) =
+            submission.then_some(PayloadSpan { from, to });
     }
 }
 
@@ -81,7 +144,7 @@ pub(crate) enum Admit {
 enum Place {
     /// No frame is open. `count` is the consecutive largest-class payload
     /// records since a boundary, capped at one past
-    /// [`SUBMISSION_RECORDS`](crate::SUBMISSION_RECORDS). That extra one is
+    /// [`SUBMISSION_RECORDS`]. That extra one is
     /// a longer ordinary message, and further records stay there so the
     /// count cannot wrap back onto a submission.
     Run { count: usize },
@@ -166,7 +229,8 @@ impl Frame {
             return Err(Refused);
         }
         // This payload record is one of the frame. What remains after it
-        // is the rest of the five, not counting the padding already read.
+        // is the rest of the submission's records, not counting the padding
+        // already read.
         self.payload_accepted(SUBMISSION_RECORDS - count - 1);
         Ok(())
     }
@@ -207,7 +271,7 @@ impl Frame {
             return Ok(());
         }
         if class == largest {
-            // Exactly five, and no further. One past that is a longer
+            // Exactly the submission's count, and no further. One past that is a longer
             // ordinary message, or the continuation of one that already
             // ended on a full record. The count stays there.
             let count = count.saturating_add(1).min(SUBMISSION_RECORDS + 1);
@@ -220,6 +284,15 @@ impl Frame {
         self.submission = false;
         self.place = Place::Run { count: 0 };
         Ok(())
+    }
+
+    /// Whether the next payload record is the first byte of a message.
+    ///
+    /// Called before [`Self::admit`]. A run at a boundary, and the payload
+    /// that follows padding, both open one. A record inside a run or a
+    /// frame does not.
+    pub(crate) fn opening_payload(&self) -> bool {
+        matches!(self.place, Place::Run { count: 0 } | Place::Pad { .. })
     }
 
     /// This side sealed a record: on the daemon, its response.
@@ -287,7 +360,7 @@ mod tests {
     #[test]
     fn a_padded_frame_is_a_submission_only_when_it_finishes() {
         let largest = largest().0;
-        // Four padding records and one payload record: the common shape.
+        // Padding records and one payload record: the common shape.
         let mut run = copies(largest, true, SUBMISSION_RECORDS - 1);
         run.push((largest, false));
         assert!(drive(&run).unwrap());
@@ -297,40 +370,43 @@ mod tests {
         run.push((largest, false));
         assert!(!drive(&run).unwrap(), "one record after the frame");
 
-        // Four more largest records would fill a window of five by borrowing
-        // that padding. They are still the next message.
-        let mut four_after = run;
-        four_after.extend(copies(largest, false, SUBMISSION_RECORDS - 2));
+        // More largest records would fill a submission's window by
+        // borrowing that padding. They are still the next message.
+        let mut after_frame = run;
+        after_frame.extend(copies(largest, false, SUBMISSION_RECORDS - 2));
         assert!(
-            !drive(&four_after).unwrap(),
-            "four largest records after a padded frame"
+            !drive(&after_frame).unwrap(),
+            "largest records after a padded frame"
         );
     }
 
     #[test]
-    fn five_largest_records_count_only_from_a_boundary() {
+    fn a_full_run_of_largest_records_counts_only_from_a_boundary() {
         let largest = largest().0;
-        let five = copies(largest, false, SUBMISSION_RECORDS);
-        assert!(drive(&five).unwrap(), "the stream starts on a boundary");
+        let full_run = copies(largest, false, SUBMISSION_RECORDS);
+        assert!(drive(&full_run).unwrap(), "the stream starts on a boundary");
 
-        let mut six = five.clone();
-        six.push((largest, false));
-        assert!(!drive(&six).unwrap(), "a longer run is an ordinary message");
+        let mut longer = full_run.clone();
+        longer.push((largest, false));
+        assert!(
+            !drive(&longer).unwrap(),
+            "a longer run is an ordinary message"
+        );
 
-        // A smaller class ends an ordinary message. The five after it count.
+        // A smaller class ends an ordinary message. The run after it counts.
         let mut after_small = vec![(0, false)];
-        after_small.extend(five.iter().copied());
+        after_small.extend(full_run.iter().copied());
         assert!(drive(&after_small).unwrap());
 
-        // A message that ended on a full record is not a boundary. The five
-        // after it continue that run.
+        // A message that ended on a full record is not a boundary. The run
+        // after it continues that one.
         let mut after_full = copies(largest, false, 1);
-        after_full.extend(five.iter().copied());
+        after_full.extend(full_run.iter().copied());
         assert!(!drive(&after_full).unwrap());
     }
 
     #[test]
-    fn a_finished_frame_is_a_boundary_for_the_next_five() {
+    fn a_finished_frame_is_a_boundary_for_the_next_submission() {
         let largest = largest().0;
         let mut run = copies(largest, true, SUBMISSION_RECORDS - 1);
         run.push((largest, false));
@@ -342,18 +418,18 @@ mod tests {
     fn a_record_this_side_sent_is_a_boundary() {
         let largest = largest();
         let mut frame = Frame::new();
-        let five_full = |frame: &mut Frame| {
+        let full_run = |frame: &mut Frame| {
             for _ in 0..SUBMISSION_RECORDS {
                 frame.admit(largest, false, largest).unwrap();
             }
             frame.submission()
         };
-        assert!(five_full(&mut frame), "the first full-size submission");
-        // The daemon answers it. The next five are the next request.
+        assert!(full_run(&mut frame), "the first full-size submission");
+        // The daemon answers it. The next run is the next request.
         frame.sent();
-        assert!(five_full(&mut frame), "a second one after the response");
+        assert!(full_run(&mut frame), "a second one after the response");
         // Without a response between them, the run continues.
-        assert!(!five_full(&mut frame), "five more with no response");
+        assert!(!full_run(&mut frame), "another run with no response");
         // A response does not change the verdict the handler reads.
         frame.sent();
         assert!(!frame.submission());

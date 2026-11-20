@@ -24,7 +24,7 @@ use super::connect_fixtures::{
     root_going_into, spend, spendable_prefix, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, LeafCountFault, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{Canonical, LeafCount, OutTx, Raw, TxIndex, TxPrunedSegment};
 use crate::lmdb_order::LmdbHashKey;
@@ -120,7 +120,6 @@ fn outputs_at_returns_a_blocks_outputs_as_leaf_sources_in_output_order() {
         Ok(())
     });
     out.expect("reads");
-    cleanup(&path);
 }
 
 #[test]
@@ -200,7 +199,6 @@ fn the_verdict_derives_the_drain_in_drain_order_over_the_written_tree() {
         Ok(())
     });
     out.expect("derives");
-    cleanup(&path);
 }
 
 #[test]
@@ -221,7 +219,6 @@ fn before_any_window_elapses_the_verdict_carries_the_root_forward_unchanged() {
         Ok(())
     });
     out.expect("derives");
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +287,6 @@ fn a_leaf_count_row_that_does_not_chain_to_the_summary_halts_the_next_connect() 
             .to_string()
         ))
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -347,7 +343,6 @@ fn a_tx_index_row_pointing_at_another_height_is_corruption_not_a_drain() {
     })
     .to_string();
     assert_eq!(out, Err(TestErr::Store(expected)));
-    cleanup(&path);
 }
 
 #[test]
@@ -409,7 +404,6 @@ fn an_output_txs_row_owned_by_another_transaction_is_corruption_not_a_leaf() {
     })
     .to_string();
     assert_eq!(out, Err(TestErr::Store(expected)));
-    cleanup(&path);
 }
 
 #[test]
@@ -471,7 +465,6 @@ fn a_pruned_row_holding_another_transactions_body_is_corruption_not_a_drain() {
     })
     .to_string();
     assert_eq!(out, Err(TestErr::Store(expected)));
-    cleanup(&path);
 }
 
 /// The length row is an operand of the identity the drain rebuilds
@@ -547,6 +540,5 @@ fn a_wrong_archival_length_row_is_corruption_not_a_drain() {
         })
         .to_string();
         assert_eq!(out, Err(TestErr::Store(expected)), "{name}");
-        cleanup(&path);
     }
 }

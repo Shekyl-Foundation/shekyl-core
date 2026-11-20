@@ -146,13 +146,25 @@ fn convergence_cannot_be_declared_inside_the_conditioning_floor() {
     // throttle. Six agreeing samples in under a second is exactly the
     // measurement §5.2 rejects, reached through the steady-state test rather
     // than around it.
+    //
+    // The sample is 50 ms so the floor arrives near the 20th sample, well
+    // inside `MAX_ITERATIONS`. The loop then keeps sampling to the cap and
+    // tests convergence after every sample, about forty chances. At 5 ms the
+    // floor arrived near the 200th sample, past the cap, so the loop stopped
+    // after its first post-floor test: one noisy pair of windows under load
+    // and the series was "limits met, unconverged" (#1283's full workspace
+    // run, 2026-11-06). That asserted the box was quiet at one instant. The
+    // subject is unchanged: without the floor, six 50 ms samples would
+    // converge at 0.3 s, and the elapsed assertion below bites.
     let started = std::time::Instant::now();
     let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 1.0, || {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     });
     assert!(
         series.converged,
-        "a steady workload still converges eventually"
+        "a steady workload still converges eventually (stopped_because = {}, {} samples)",
+        series.stopped_because,
+        series.iterations_s.len()
     );
     assert!(
         started.elapsed().as_secs_f64() >= 1.0,

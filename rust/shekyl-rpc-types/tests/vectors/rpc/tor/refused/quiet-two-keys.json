@@ -1,0 +1,28 @@
+{
+  "posture": {
+    "tor": "managed",
+    "clearnet": "off"
+  },
+  "origination": "connecting",
+  "sync_connector": [],
+  "tor_quiet": {
+    "unreached": {
+      "age": 1
+    },
+    "throttled": {
+      "age": 9
+    }
+  },
+  "tor": {
+    "state": "usable",
+    "cause": null,
+    "age": 75,
+    "respawn_count": 0,
+    "progress": null,
+    "flagged": false,
+    "fix": [],
+    "onion": null,
+    "bootstrap": null,
+    "carriage": "carries"
+  }
+}

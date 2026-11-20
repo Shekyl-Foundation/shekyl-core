@@ -7,13 +7,17 @@ import urllib.error
 import urllib.request
 
 
-def rpc_call(base_url: str, method: str, params: dict):
+def rpc_call(base_url: str, method: str, params: dict | None = None):
+    # The daemon serves JSON-RPC 2.0 at /json_rpc and nothing else: a numeric
+    # id, `params` a named object or left out. A refusal is the error's class
+    # (its code) and the diagnostic's dotted code (its data).
     payload = {
         "jsonrpc": "2.0",
-        "id": "0",
+        "id": 0,
         "method": method,
-        "params": params,
     }
+    if params is not None:
+        payload["params"] = params
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         base_url.rstrip("/") + "/json_rpc",
@@ -24,63 +28,43 @@ def rpc_call(base_url: str, method: str, params: dict):
     with urllib.request.urlopen(req, timeout=8) as resp:
         body = json.loads(resp.read().decode("utf-8"))
     if "error" in body:
-        raise RuntimeError(f"RPC error from {base_url}: {body['error']}")
-    return body.get("result", {})
-
-
-def rest_call(base_url: str, path: str, params: dict):
-    # `get_transactions` is a REST endpoint (`/get_transactions`), not a
-    # JSON-RPC method — it has no row in either dispatch table, so wrapping it
-    # in a `/json_rpc` envelope answers "Method not found". REST replies carry
-    # their error channel in `status`, not an `error` member.
-    data = json.dumps(params).encode("utf-8")
-    req = urllib.request.Request(
-        base_url.rstrip("/") + path,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=8) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    status = body.get("status")
-    if status is not None and status != "OK":
-        raise RuntimeError(f"REST error from {base_url}{path}: {status}")
-    return body
+        error = body["error"]
+        code = (error.get("data") or {}).get("code")
+        raise RuntimeError(
+            f"RPC error from {base_url}: {error.get('code')} {code}: {error.get('message')}"
+        )
+    return body["result"]
 
 
 def get_genesis_tuple(base_url: str):
-    header = rpc_call(base_url, "get_block_header_by_height", {"height": 0})
-    block_header = header.get("block_header", {})
-    txs = rest_call(base_url, "/get_transactions", {"txs_hashes": [block_header.get("miner_tx_hash")]})
-    entries = txs.get("txs") or []
-    if not entries:
-        raise RuntimeError(f"{base_url}: could not fetch genesis miner tx hex")
-    # `txs[0].as_hex`, not the retired `txs_as_hex[0]`: the latter duplicated
-    # this for a wallet that no longer exists and was removed in RK-4c. The
-    # genesis coinbase has no prunable half, so the daemon answers in the split
-    # form and the body arrives under `pruned_as_hex`.
-    entry = entries[0]
-    tx_hex = entry.get("as_hex") or entry.get("pruned_as_hex")
-    if not tx_hex:
-        raise RuntimeError(f"{base_url}: genesis miner tx carried no body")
+    header = rpc_call(base_url, "block_header_show", {"height": 0})
+    coinbase = header["coinbase"]
+    # `tx_show` answers the entry, or `{"archived": ...}` in its place. The
+    # genesis coinbase is never discarded, so an archived answer is an error.
+    entry = rpc_call(base_url, "tx_show", {"id": coinbase})
+    if "body" not in entry:
+        raise RuntimeError(f"{base_url}: genesis coinbase came back without a body: {entry}")
     return {
         "url": base_url,
-        "height0_hash": block_header.get("hash"),
-        "height0_miner_tx_hash": block_header.get("miner_tx_hash"),
-        "height0_reward": block_header.get("reward"),
-        "height0_tx_hex": tx_hex,
+        "height0_hash": header["hash"],
+        "height0_coinbase": coinbase,
+        "height0_reward": header["reward"],
+        # base64, compared as text: equal text is equal bytes.
+        "height0_tx_body": entry["body"],
     }
 
 
-def get_info_fields(base_url: str):
-    info = rpc_call(base_url, "get_info", {})
-    keys = [
-        "release_multiplier",
-        "burn_pct",
-        "staker_emission_share_effective",
-        "total_burned",
-    ]
-    return {k: info.get(k) for k in keys}
+ECONOMY_FIELDS = (
+    "emission_multiplier",
+    "burn",
+    "stake_share",
+    "burn_total",
+)
+
+
+def get_economy_fields(base_url: str):
+    status = rpc_call(base_url, "daemon_status")
+    return {k: status.get(k) for k in ECONOMY_FIELDS}
 
 
 def main():
@@ -96,7 +80,7 @@ def main():
     parser.add_argument(
         "--check-economy",
         action="store_true",
-        help="Also verify economy fields exist in get_info on each node.",
+        help="Also verify economy fields exist in daemon_status on each node.",
     )
     args = parser.parse_args()
 
@@ -123,44 +107,39 @@ def main():
                 file=sys.stderr,
             )
             failed = True
-        if t["height0_miner_tx_hash"] != ref["height0_miner_tx_hash"]:
+        if t["height0_coinbase"] != ref["height0_coinbase"]:
             print(
-                f"MISMATCH: height 0 miner tx hash differs\n"
-                f"  ref {ref['url']}: {ref['height0_miner_tx_hash']}\n"
-                f"  got {t['url']}: {t['height0_miner_tx_hash']}",
+                f"MISMATCH: height 0 coinbase id differs\n"
+                f"  ref {ref['url']}: {ref['height0_coinbase']}\n"
+                f"  got {t['url']}: {t['height0_coinbase']}",
                 file=sys.stderr,
             )
             failed = True
-        if t["height0_tx_hex"] != ref["height0_tx_hex"]:
+        if t["height0_tx_body"] != ref["height0_tx_body"]:
             print(
-                f"MISMATCH: height 0 miner tx hex differs between {ref['url']} and {t['url']}",
+                f"MISMATCH: height 0 coinbase body differs between {ref['url']} and {t['url']}",
                 file=sys.stderr,
             )
             failed = True
 
     if args.check_economy:
-        required = {
-            "release_multiplier",
-            "burn_pct",
-            "staker_emission_share_effective",
-            "total_burned",
-        }
+        required = set(ECONOMY_FIELDS)
         for url in args.rpc:
             try:
-                fields = get_info_fields(url)
+                fields = get_economy_fields(url)
             except (urllib.error.URLError, RuntimeError, ValueError) as e:
-                print(f"ERROR: get_info failed for {url}: {e}", file=sys.stderr)
+                print(f"ERROR: daemon_status failed for {url}: {e}", file=sys.stderr)
                 failed = True
                 continue
             missing = [k for k in required if fields.get(k) is None]
             if missing:
-                print(f"MISMATCH: {url} missing economy fields in get_info: {missing}", file=sys.stderr)
+                print(f"MISMATCH: {url} missing economy fields in daemon_status: {missing}", file=sys.stderr)
                 failed = True
 
     print("Checked endpoints:")
     for t in tuples:
         print(
-            f"- {t['url']}  h0={t['height0_hash']}  miner_tx={t['height0_miner_tx_hash']}"
+            f"- {t['url']}  h0={t['height0_hash']}  coinbase={t['height0_coinbase']}"
         )
 
     if failed:

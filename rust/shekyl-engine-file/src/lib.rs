@@ -44,9 +44,6 @@
 //! - **[rule 35 — secure memory](../../../.cursor/rules/35-secure-memory.mdc):**
 //!   [`OpenedKeysFile`] stays in a [`Zeroizing`] container for the
 //!   handle's lifetime; passwords are borrowed, never cached.
-//! - **[rule 40 — FFI discipline](../../../.cursor/rules/40-ffi-discipline.mdc):**
-//!   this crate exposes only a Rust-native API. The FFI surface is
-//!   added in 2j as a thin wrapper on top.
 //!
 //! [`OpenedKeysFile`]: shekyl_crypto_pq::wallet_envelope::OpenedKeysFile
 //! [`Zeroizing`]: zeroize::Zeroizing
@@ -61,6 +58,7 @@ pub mod paths;
 pub mod payload;
 pub mod secrets_transitional;
 
+pub use atomic::{Durability, Unconfirmed};
 pub use capability::Capability;
 pub use error::WalletFileError;
 pub use handle::{CreateParams, OpenOutcome, SealedKeysEnvelope, WalletFile};
@@ -77,3 +75,7 @@ pub use shekyl_address::Network;
 // Re-export the envelope error [`WalletFileError::Envelope`] carries, so a
 // consumer can name its variants without depending on `shekyl-crypto-pq`.
 pub use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
+// Re-export what [`WalletFileError::HeldOpen`] and
+// [`WalletFileError::SaveStep`] carry, so a consumer can read them without
+// depending on `shekyl-os-account`.
+pub use shekyl_os_account::private_file::{HeldOpen, Step};

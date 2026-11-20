@@ -3,15 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `ARCHIVAL_P_DERIVE_V1`: frozen derivation of an archival staking persona `P`.
+//! `ARCHIVAL_P_DERIVE_V2`: frozen derivation of an archival staking persona `P`.
 //!
 //! This module is the **single source of truth** for how a Shekyl archival
 //! staking persona (`P`) derives its keys from a wallet's `master_seed_64`.
 //! It is the cryptographic foundation of the archival-bond construction flow
 //! (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md`) and the firewall gate-6 design
 //! (`docs/design/ARCHIVAL_FIREWALL_GATE6.md` §§9.3–9.6). The derivation is
-//! frozen and pinned in CI by the `ARCHIVAL_P_DERIVE_V1` KAT suite
-//! (`docs/test_vectors/ARCHIVAL_P_DERIVE_V1/`).
+//! frozen and pinned in CI by the `ARCHIVAL_P_DERIVE_V2` KAT suite
+//! (`docs/test_vectors/ARCHIVAL_P_DERIVE_V2/`).
 //!
 //! # Why this is genesis-frozen
 //!
@@ -26,7 +26,7 @@
 //! # Pipeline overview
 //!
 //! ```text
-//!  master_seed_64  ──HKDF-SHA-512(salt_for(net,fmt), info = LABEL ‖ 0x00 ‖ p_slot_le32)──┐
+//!  master_seed_64  ──HKDF-SHA-512(salt_for(net), info = LABEL ‖ 0x00 ‖ p_slot_le32)──┐
 //!                                                                                        │
 //!   ┌─── Payment keys (scalar consumers) ───────────────────────────────────────────────┤
 //!   │  spend_wide (L=64) ── wide_reduce ── Ed25519 spend scalar ─→ spend_pk/spend_sk      │
@@ -42,8 +42,8 @@
 //!   │  bond_spend_ed_seed     (L=32) ─ SigningKey::from_bytes ─┐                             │
 //!   │  bond_spend_ml_dsa_seed (L=32) ─ keygen_from_seed ───────┴─→ bond_spend_pk/sk         │
 //!   │                                                                                       │
-//!   └─── Serving identity (GF-9, seed consumer — not an ArchivalPKeys field) ───────────────┘
-//!      hs_id_seed             (L=32) ─ SigningKey::from_bytes ─→ ed25519 pk → v3 .onion (serve)
+//!   └─── Serving identity (GF-9, seed consumer) ───────────────────────────────────────────┘
+//!      hs_id_seed             (L=32) ─ OnionKeypair (RFC 8032 expansion) ─→ onion keypair → v3 .onion (serve)
 //! ```
 //!
 //! # Scalar-vs-seed (the byte that gates this primitive)
@@ -135,17 +135,16 @@ use sha2::Sha512;
 use zeroize::Zeroizing;
 
 use crate::account::{
-    ml_kem_keypair_from_d_z, salt_for, wide_reduce_to_scalar, DerivationNetwork, SeedFormat,
-    MASTER_SEED_BYTES,
+    ml_kem_keypair_from_d_z, salt_for, wide_reduce_to_scalar, Network, MASTER_SEED_BYTES,
 };
 use crate::derivation::keygen_from_seed;
 use crate::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSecretKey, HybridEd25519FnDsa};
-use crate::heap_secret::HeapSecret;
 use crate::kem::ML_KEM_768_EK_LEN;
 use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
 use crate::signature::{HybridPublicKey, HybridSecretKey, ML_DSA_65_SECRET_KEY_LENGTH};
 use crate::CryptoError;
+use shekyl_onion_key::OnionKeypair;
 
 // --- frozen info labels ------------------------------------------------------
 //
@@ -182,7 +181,7 @@ pub const ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO: &[u8] = b"shekyl-archival-p-bond-sp
 ///
 /// The `.onion` is `p_slot`-bound and seed-derived, so it rotates with the persona
 /// and never bridges a rotation. Like every sibling label it is **network-scoped**
-/// (`salt = salt_for(net, fmt)`): the same wallet serves at *different* `.onion`s on
+/// (`salt = salt_for(net)`): the same wallet serves at *different* `.onion`s on
 /// mainnet vs testnet/stagenet, so a persona's serving identity never links across
 /// networks. That is a deliberate, frozen choice — not incidental — and the KAT's
 /// `hs_id_network_separation` vector pins it un-regenerate-around-ably. **Hyphen-
@@ -227,18 +226,17 @@ fn p_info(label: &[u8], p_slot: u32) -> Vec<u8> {
     out
 }
 
-/// HKDF-Expand `master_seed` to `N` bytes under `(net, fmt)` salt and the
+/// HKDF-Expand `master_seed` to `N` bytes under `(net)` salt and the
 /// `(label, p_slot)` info. The output is written into the `Zeroizing` it is
 /// returned in. A bare array filled and then wrapped would be `Copy`, so the
 /// wrap would leave the first copy on the stack.
 fn p_expand<const N: usize>(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; N]> {
-    let salt = salt_for(net, fmt);
+    let salt = salt_for(net);
     let info = p_info(label, p_slot);
     let hk = Hkdf::<Sha512>::new(Some(&salt), master_seed);
     let mut out = Zeroizing::new([0u8; N]);
@@ -250,23 +248,21 @@ fn p_expand<const N: usize>(
 /// HKDF-Expand to the 64-byte form scalar consumers wide-reduce.
 fn p_expand_64(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand(master_seed, net, fmt, label, p_slot)
+    p_expand(master_seed, net, label, p_slot)
 }
 
 /// HKDF-Expand to the 32-byte form an RFC 8032 or ML-DSA keygen seed takes.
 fn p_expand_32(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     label: &[u8],
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand(master_seed, net, fmt, label, p_slot)
+    p_expand(master_seed, net, label, p_slot)
 }
 
 // --- per-row intermediate derivations (KAT Tier-1 pins) ----------------------
@@ -275,94 +271,82 @@ fn p_expand_32(
 #[must_use]
 pub fn derive_p_spend_wide(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_SPEND_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_SPEND_INFO, p_slot)
 }
 
 /// `P` payment view 64-byte intermediate; wide-reduce via [`wide_reduce_to_scalar`].
 #[must_use]
 pub fn derive_p_view_wide(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_VIEW_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_VIEW_INFO, p_slot)
 }
 
 /// `P` ML-KEM `d_z` 64-byte intermediate; feeds [`ml_kem_keypair_from_d_z`].
 #[must_use]
 pub fn derive_p_kem_d_z(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 64]> {
-    p_expand_64(master_seed, net, fmt, ARCHIVAL_P_KEM_INFO, p_slot)
+    p_expand_64(master_seed, net, ARCHIVAL_P_KEM_INFO, p_slot)
 }
 
 /// `P` identity Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_account_sign_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_ACCOUNT_SIGN_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_ACCOUNT_SIGN_INFO, p_slot)
 }
 
 /// `P` identity ML-DSA-65 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_ml_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_ML_DSA_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_ML_DSA_INFO, p_slot)
 }
 
 /// GF-1 `bond_spend` Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_bond_spend_ed_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_BOND_SPEND_ED_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_BOND_SPEND_ED_INFO, p_slot)
 }
 
 /// GF-1 `bond_spend` ML-DSA-65 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_bond_spend_ml_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(
-        master_seed,
-        net,
-        fmt,
-        ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO,
-        p_slot,
-    )
+    p_expand_32(master_seed, net, ARCHIVAL_P_BOND_SPEND_ML_DSA_INFO, p_slot)
 }
 
 /// `P` serving-side v3 onion (HS) identity Ed25519 RFC 8032 seed (32 B) — GF-9.
 ///
 /// `p_slot`-bound and seed-derived (`ARCHIVAL_FIREWALL_GATE6.md` §10.7), so the
-/// persona's `.onion` rotates with the slot. Its consumer expands it to tor's
-/// `ED25519-V3` expanded-private key for `ADD_ONION`.
+/// persona's `.onion` rotates with the slot. [`derive_p_onion_keypair`] expands
+/// it to tor's `ED25519-V3` expanded secret ([`OnionKeypair`]); the seed is
+/// created and consumed inside this crate.
 ///
 /// **Premise REFUTED 2026-08-12 (SH-2) — this IS an [`ArchivalPKeys`] field
 /// now.** The prior ruling was "serving-only, deliberately *not* an
-/// `ArchivalPKeys` field … rederived from `(master_seed, net, fmt, p_slot)` on
+/// `ArchivalPKeys` field … rederived from `(master_seed, net, p_slot)` on
 /// each serve, exactly like the other secrets". That is a coherent design for a
 /// serving path co-resident with the wallet, which is the architecture that
 /// existed when it was written. Model D then put the serving host on the far
@@ -383,69 +367,79 @@ pub fn derive_p_bond_spend_ml_dsa_seed(
 /// it is an instruction to rebuild the thing that was deleted.
 ///
 /// The line the bundle drew was one label short of what serving needs, so the
-/// fix moves the line rather than crossing it: the seed is derived with every
-/// other persona secret, while the master still exists, and travels in the same
-/// per-slot bundle. §7.2(iii)'s custody boundary is untouched — it governs
-/// StakeEngine→serving-host, and the host still receives only an expanded
+/// fix moves the line rather than crossing it: the onion keypair is derived
+/// with every other persona secret, while the master still exists, and travels
+/// in the same per-slot bundle. §7.2(iii)'s custody boundary is untouched — it
+/// governs StakeEngine→serving-host, and the host receives only the keypair's
 /// `OnionIdentity`, never this seed.
 ///
 /// # Callers
 ///
-/// **One legitimate production caller: bundle assembly**
-/// ([`derive_archival_p_keys`]). Any other production call site is, by
-/// construction, a path taking the master seed for serving purposes — the
-/// hazard above. The one that survives is
-/// `shekyl-sp-t3-spike/src/onion_key.rs`, which takes `master_seed_64` because
-/// it was written against the architecture this note refutes; it is on the
-/// spike's own deletion surface (rule 15, "deleted or fully rewritten before
-/// TJ-B") and goes with it. **The W₂ rig that replaces the spike must take an
-/// `OnionIdentity` from a bundle, not a master seed.**
+/// **One production caller: [`derive_p_onion_keypair`]**, which bundle
+/// assembly ([`derive_archival_p_keys`]) calls. Outside this crate the seed
+/// does not exist: a caller gets the keypair. The known-answer tests reach
+/// the seed through `derive_p_hs_id_seed`, compiled only under `test-utils`,
+/// so the frozen seed vectors stay pinned.
 ///
-/// The KATs call this directly and *should*: deriving the value independently
-/// of the bundle is what makes the bundle's field assertable against the same
-/// pinned vector, so the two producers cannot drift.
-///
-/// The derived Ed25519 **public** key (`SigningKey::from_bytes(seed)
-/// .verifying_key()`) is the v3 onion address's public key; the
-/// `ARCHIVAL_P_DERIVE_V1` KAT pins both the seed and that public key, since a
-/// cross-arch divergence there would leave an ARM user's persona unreachable at
-/// its advertised `.onion`.
+/// The derived Ed25519 **public** key is the v3 onion address's public key;
+/// the `ARCHIVAL_P_DERIVE_V2` KAT pins both the seed and that public key, since
+/// a cross-arch divergence there would leave an ARM user's persona unreachable
+/// at its advertised `.onion`.
+#[must_use]
+pub(crate) fn hs_id_seed(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: Network,
+    p_slot: u32,
+) -> Zeroizing<[u8; 32]> {
+    p_expand_32(master_seed, net, ARCHIVAL_P_HS_ID_INFO, p_slot)
+}
+
+/// The GF-9 serving seed (`hs_id_seed`), for the known-answer tests that
+/// pin it. Compiled only for this crate's tests and under the test-only
+/// `test-utils` feature, which no shipped binary enables
+/// (`scripts/ci/check_test_only_features.py`). Production takes the
+/// persona's keypair, [`derive_p_onion_keypair`].
+#[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn derive_p_hs_id_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_HS_ID_INFO, p_slot)
+    hs_id_seed(master_seed, net, p_slot)
+}
+
+/// A persona's v3 onion keypair — GF-9: the `hs_id_seed` for
+/// `(master_seed, net, p_slot)`, expanded. The seed is wiped before this
+/// returns and never leaves this crate; the keypair is what the serving path
+/// holds and hands Tor.
+#[must_use]
+pub fn derive_p_onion_keypair(
+    master_seed: &[u8; MASTER_SEED_BYTES],
+    net: Network,
+    p_slot: u32,
+) -> OnionKeypair {
+    OnionKeypair::from_seed(&hs_id_seed(master_seed, net, p_slot))
 }
 
 /// Receipt-key Ed25519 RFC 8032 seed (32 B).
 #[must_use]
 pub fn derive_p_receipt_ed_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(master_seed, net, fmt, ARCHIVAL_P_RECEIPT_ED_INFO, p_slot)
+    p_expand_32(master_seed, net, ARCHIVAL_P_RECEIPT_ED_INFO, p_slot)
 }
 
 /// Receipt-key FN-DSA-1024 keygen seed (32 B).
 #[must_use]
 pub fn derive_p_receipt_fn_dsa_seed(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Zeroizing<[u8; 32]> {
-    p_expand_32(
-        master_seed,
-        net,
-        fmt,
-        ARCHIVAL_P_RECEIPT_FN_DSA_INFO,
-        p_slot,
-    )
+    p_expand_32(master_seed, net, ARCHIVAL_P_RECEIPT_FN_DSA_INFO, p_slot)
 }
 
 // --- hybrid keypair assembly -------------------------------------------------
@@ -492,7 +486,7 @@ fn build_hybrid(
 /// **not** a field: it is computed downstream by
 /// `shekyl-archival-retention::id::p_canonical_id_from_hybrid_pubkey` over
 /// [`Self::hybrid_bond_id`]'s canonical bytes (`crypto-pq` must not depend on
-/// `archival-retention`). The `ARCHIVAL_P_DERIVE_V1` KAT pins the id and the
+/// `archival-retention`). The `ARCHIVAL_P_DERIVE_V2` KAT pins the id and the
 /// `archival-retention` cross-check proves the two cSHAKE paths agree.
 ///
 /// # Wipe-on-drop
@@ -503,8 +497,8 @@ fn build_hybrid(
 /// individually `ZeroizeOnDrop` — `spend_sk` / `view_sk` ([`SpendSecret`] /
 /// [`ViewSecret`]), `ml_kem_dk` ([`MlKem768DecapKey`]), and `hybrid_sign_sk` /
 /// `bond_spend_sk` ([`HybridSecretKey`]), `receipt_sign_sk`
-/// ([`FnDsaHybridSecretKey`], both halves wiped on the heap) and `hs_id_seed`
-/// (a heap buffer wiped on drop) — so each wipes on drop via its own
+/// ([`FnDsaHybridSecretKey`], both halves wiped on the heap) and `onion`
+/// ([`OnionKeypair`], a heap buffer wiped on drop) — so each wipes on drop via its own
 /// destructor. This is the rule-35 per-field discipline applied to a struct
 /// that also holds non-`Zeroize` public material.
 ///
@@ -556,28 +550,14 @@ pub struct ArchivalPKeys {
     /// nothing on a live route signs with it today.
     pub receipt_sign_sk: FnDsaHybridSecretKey,
 
-    /// GF-9 serving-side v3 onion identity **seed** (32 B), from
-    /// [`derive_p_hs_id_seed`].
-    ///
-    /// **The seed, deliberately — not the expanded key.** RFC 8032 expansion
-    /// to tor's `ED25519-V3` blob is `shekyl-tor-control-client`'s format and it already owns
-    /// that step (`OnionIdentity::from_hs_id_seed`), so the 32-byte seed is the
-    /// correct boundary object: it keeps this crate ignorant of Tor's key
-    /// encoding, and keeps the expansion in exactly one place rather than two
-    /// that can disagree. The bundle stopping one step short of something
-    /// directly usable is the point, not an omission.
+    /// GF-9 serving-side v3 onion keypair, from [`derive_p_onion_keypair`].
     ///
     /// Carried here because a serving persona must be able to publish its
     /// `.onion` for the life of its bond, and under Model D the master seed is
-    /// gone after derivation — see [`derive_p_hs_id_seed`] for the refuted
-    /// "rederive on each serve" premise and the caller discipline that follows
-    /// from it.
-    ///
-    /// On the heap: the bundle is moved into the actor's map and an inline
-    /// array would be copied at each move, with only the last copy wiped.
-    /// Borrowed through [`Self::hs_id_seed`]. Not dereferenced: the array is
-    /// `Copy`, and a deref would let `*seed` rebuild that stack copy.
-    hs_id_seed: HeapSecret<32>,
+    /// gone after derivation. The bundle holds the keypair, not the seed: the
+    /// seed ends with the derivation, and what the bundle keeps is what the
+    /// serving path hands Tor. Borrowed through [`Self::onion_keypair`].
+    onion: OnionKeypair,
 }
 
 impl ArchivalPKeys {
@@ -620,14 +600,14 @@ impl ArchivalPKeys {
         }
     }
 
-    /// The serving-onion seed, borrowed from the heap buffer this bundle
-    /// wipes on drop.
-    ///
-    /// `OnionIdentity::from_hs_id_seed` is the consumer. The borrow is the
-    /// buffer. A copy is `*keys.hs_id_seed()`.
+    /// The persona's onion keypair, borrowed. Its public key is the bond
+    /// record's serving endpoint. A serving request takes
+    /// [`OnionKeypair::duplicate`], a second owner of the same key. The
+    /// bytes Tor receives are a separate copy: `*keypair.expanded_secret()`
+    /// into one `ED25519-V3` blob (`OnionIdentity::mint_onion_key`).
     #[must_use]
-    pub fn hs_id_seed(&self) -> &[u8; 32] {
-        self.hs_id_seed.as_array()
+    pub fn onion_keypair(&self) -> &OnionKeypair {
+        &self.onion
     }
 }
 
@@ -721,31 +701,23 @@ impl BondPostKeys<'_> {
 
 /// Derive the full `ArchivalPKeys` bundle for persona slot `p_slot`.
 ///
-/// `master_seed` is the wallet's normalized 64-byte master seed; `(net, fmt)`
-/// must be a permitted pair (same gate as [`crate::account::rederive_account`]).
+/// `master_seed` is the wallet's normalized 64-byte master seed.
 /// Byte-for-byte deterministic across architectures — pinned by the
-/// `ARCHIVAL_P_DERIVE_V1` KAT on the `aarch64` qemu lane.
+/// `ARCHIVAL_P_DERIVE_V2` KAT on the `aarch64` qemu lane.
 pub fn derive_archival_p_keys(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Result<ArchivalPKeys, CryptoError> {
-    if !net.permitted_seed_format(fmt) {
-        return Err(CryptoError::InvalidInput(format!(
-            "{net:?} does not permit {fmt:?} seed format"
-        )));
-    }
-
     // --- Payment keys: Ed25519 spend (scalar consumer) ---
-    let spend_wide = derive_p_spend_wide(master_seed, net, fmt, p_slot);
+    let spend_wide = derive_p_spend_wide(master_seed, net, p_slot);
     let spend_scalar = wide_reduce_to_scalar(&spend_wide);
     let spend_sk = SpendSecret::from_bytes(*spend_scalar.as_bytes());
     let spend_pub = ED25519_BASEPOINT_TABLE * &spend_scalar;
     let spend_pk = SpendPublicKey::from_canonical_bytes(*spend_pub.compress().as_bytes());
 
     // --- Payment keys: Ed25519 view (scalar consumer) ---
-    let view_wide = derive_p_view_wide(master_seed, net, fmt, p_slot);
+    let view_wide = derive_p_view_wide(master_seed, net, p_slot);
     let view_scalar = wide_reduce_to_scalar(&view_wide);
     let view_sk = ViewSecret::from_bytes(*view_scalar.as_bytes());
     let view_pub = ED25519_BASEPOINT_TABLE * &view_scalar;
@@ -753,25 +725,25 @@ pub fn derive_archival_p_keys(
     let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(view_pk.as_canonical_bytes())?;
 
     // --- Payment keys: ML-KEM-768 (SHA3-ChaCha intermediary) ---
-    let d_z = derive_p_kem_d_z(master_seed, net, fmt, p_slot);
+    let d_z = derive_p_kem_d_z(master_seed, net, p_slot);
     let (ml_kem_ek, ml_kem_dk) = ml_kem_keypair_from_d_z(&d_z)?;
 
     // --- Public identity hybrid (seed consumers) ---
-    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
-    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, p_slot);
+    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, p_slot);
     let (hybrid_sign_pk, hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
 
-    // --- GF-9 serving-side onion identity seed (expanded by shekyl-tor-control-client) ---
-    let hs_id_seed = derive_p_hs_id_seed(master_seed, net, fmt, p_slot);
+    // --- GF-9 serving-side onion keypair ---
+    let onion = derive_p_onion_keypair(master_seed, net, p_slot);
 
     // --- GF-1 bond-debit authorizer hybrid (seed consumers) ---
-    let bond_ed_seed = derive_p_bond_spend_ed_seed(master_seed, net, fmt, p_slot);
-    let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let bond_ed_seed = derive_p_bond_spend_ed_seed(master_seed, net, p_slot);
+    let bond_ml_dsa_seed = derive_p_bond_spend_ml_dsa_seed(master_seed, net, p_slot);
     let (bond_spend_pk, bond_spend_sk) = build_hybrid(&bond_ed_seed, &bond_ml_dsa_seed)?;
 
     // --- Receipt key: Ed25519 + FN-DSA-1024 (seed consumers) ---
-    let receipt_ed_seed = derive_p_receipt_ed_seed(master_seed, net, fmt, p_slot);
-    let receipt_fn_dsa_seed = derive_p_receipt_fn_dsa_seed(master_seed, net, fmt, p_slot);
+    let receipt_ed_seed = derive_p_receipt_ed_seed(master_seed, net, p_slot);
+    let receipt_fn_dsa_seed = derive_p_receipt_fn_dsa_seed(master_seed, net, p_slot);
     let (receipt_sign_pk, receipt_sign_sk) =
         HybridEd25519FnDsa::keypair_from_seeds(&receipt_ed_seed, &receipt_fn_dsa_seed)?;
 
@@ -790,7 +762,7 @@ pub fn derive_archival_p_keys(
         bond_spend_sk,
         receipt_sign_pk,
         receipt_sign_sk,
-        hs_id_seed: HeapSecret::copied_from(&hs_id_seed),
+        onion,
     })
 }
 
@@ -805,24 +777,18 @@ pub fn derive_archival_p_keys(
 /// two paths cannot diverge (pinned by
 /// `identity_pk_matches_the_full_bundle`). What it skips is the rest of the
 /// bundle: the ML-KEM-768 keygen, the receive spend/view scalar mults +
-/// X25519 conversion, the onion seed, and the GF-1 bond-spend hybrid keygen —
+/// X25519 conversion, the onion keypair, and the GF-1 bond-spend hybrid keygen —
 /// the cost that made the probe-window id derivation heavy at the rule-76
 /// device floor. The secret half of the identity hybrid is still derived
 /// (keygen is seed→keypair) but is dropped here — `HybridSecretKey` is
 /// `ZeroizeOnDrop`, so nothing secret outlives the call.
 pub fn derive_archival_p_identity_pk(
     master_seed: &[u8; MASTER_SEED_BYTES],
-    net: DerivationNetwork,
-    fmt: SeedFormat,
+    net: Network,
     p_slot: u32,
 ) -> Result<HybridPublicKey, CryptoError> {
-    if !net.permitted_seed_format(fmt) {
-        return Err(CryptoError::InvalidInput(format!(
-            "{net:?} does not permit {fmt:?} seed format"
-        )));
-    }
-    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, fmt, p_slot);
-    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, fmt, p_slot);
+    let account_sign_seed = derive_p_account_sign_seed(master_seed, net, p_slot);
+    let ml_dsa_seed = derive_p_ml_dsa_seed(master_seed, net, p_slot);
     let (hybrid_sign_pk, _hybrid_sign_sk) = build_hybrid(&account_sign_seed, &ml_dsa_seed)?;
     Ok(hybrid_sign_pk)
 }

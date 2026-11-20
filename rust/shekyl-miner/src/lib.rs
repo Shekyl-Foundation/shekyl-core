@@ -11,17 +11,15 @@
 //! # A crate, not a daemon module
 //!
 //! The loop's threads hash with RandomX for as long as mining runs, and
-//! only under a cache the store already holds. The daemon's other RandomX
-//! callers are the validator's substrate, which fills the canonical slot
-//! through `pin_canonical`, and the RPC's `calc_pow`, which hashes only
-//! under a cache already held. The miner and `calc_pow` never derive: a
-//! derivation publishes into the transient slot and evicts the validator's
-//! spare (`DRS_X_STORE_FLIP.md` §3.1, ruled 2026-10-17), and both run on a
-//! seed they did not pin. They share one
-//! [`CacheStore`](shekyl_pow_randomx::CacheStore) — the daemon's one
-//! RandomX budget, handed in. The miner shares nothing else: it has no
-//! RPC, store or p2p dependency, and the RPC crate gains no hashing
-//! threads. PR 2's composition root wires the ends.
+//! only under a cache the node's one hasher already holds
+//! (`RANDOMX_CACHE_ACTOR.md`). Each job is a warm loan
+//! ([`Hasher::lend_warm`](shekyl_hasher::Hasher::lend_warm)) on the job's
+//! seed: it builds nothing, it is declined when the seed is not built or
+//! not on the ranked list, and it is cancelled when the seed leaves the
+//! list. Each hash takes one permit in the miner's class through the loan.
+//! The miner holds no cache and no budget, and shares nothing else: it has
+//! no RPC, store or p2p dependency, and the RPC crate gains no hashing
+//! threads. The composition root wires the ends.
 //!
 //! # Inputs are values
 //!
@@ -34,6 +32,10 @@
 //!   refused when it is not this network's, or carries no KEM key a coinbase
 //!   can pay.
 //! - **The thread count** is a [`NonZeroUsize`](std::num::NonZeroUsize).
+//! - **The search bound** is a [`SearchBound`]. [`SearchBound::Unbounded`]
+//!   searches every posted job. [`SearchBound::Until`] leaves a job above
+//!   its height unhashed and waits for a newer posting. That is how far
+//!   the one mining mode searches, not a second mode.
 //!
 //! # The loop
 //!
@@ -77,15 +79,20 @@
 //! The worker never derives. The crate has no dataset mode
 //! (`RANDOMX_V2_RUST.md` §9, measure-first; `RD-F11`), so the rate
 //! [`MinerStatus`] reports is that mode's, over the window it states.
+#![deny(unsafe_code)]
 
 mod address;
+mod drain;
 mod found;
 mod job;
 mod miner;
 mod rate;
 
 pub use address::{MiningAddress, MiningAddressRefused};
-pub use found::{found_blocks, Found, FoundBlocks, FoundInbox, FoundWait};
+pub use drain::{DrainGate, Draining};
+pub use found::{found_blocks, Found, FoundBlocks, FoundClose, FoundInbox, FoundWait};
 pub use job::{Generation, Job, JobBoard, ListedBody};
-pub use miner::{Miner, MinerConfig, MinerStartRefused, MinerStatus};
+pub use miner::{
+    Miner, MinerConfig, MinerStartRefused, MinerStatus, MinerStop, PreparedMiner, SearchBound,
+};
 pub use rate::{HashRate, RATE_WINDOW};

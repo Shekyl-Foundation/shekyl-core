@@ -35,25 +35,45 @@ shekyl-oxide output. Its full end-to-end proof is the live-oracle spend KAT
 > body. The definition below is unchanged — this section is now the
 > specification the one derivation is held to, by
 > `rust/shekyl-wire/tests/pqc_signing_preimage_kat.rs` over
-> `tests/fixtures/pqc_signing_preimage_v1.json`: eight daemon-accepted
-> transactions (one, two and six inputs; the bond post's and the emission's
-> mixed archival arms; the serve-credit form, which has no preimage — not
-> because it is unsigned but because consensus forbids it `pqc_auths`
-> (CEN-H20) and its hybrid countersignature is over the pass record under
-> `SCHEME_DOMAIN_SERVE_CREDIT`, Ed25519 leg on the vin and ML-DSA leg in the
-> pruned record, CEN-J10) with
+> `tests/fixtures/pqc_signing_preimage_v1.json`: five daemon-accepted
+> transactions (one input, two, six twice — a captured chain's and the
+> live oracle's — and the emission's mixed archival arms) with
 > every input's payload bytes and signed hash, **captured from the C++
 > assembly before its deletion as the specification's output for those
 > bytes**. The C++ line anchors that follow are records of where the layout
 > was read at the pin, not live sites.
 
 ### 1.1 Per-input PQC signing preimage
-`get_transaction_signed_payload(tx, i)` (`src/cryptonote_core/tx_pqc_verify.cpp:58-152`, at the pin; deleted 2026-09-25):
+`get_transaction_signed_payload(tx, i)` (`tx_pqc_verify.cpp:58-152` at the pin; the function was deleted 2026-09-25 and the file deleted with the C++ chain in DRS-X) assembled the payload whose fields the signatures bind:
 
 ```
 payload(i) = prefix_blob ‖ ct_base_blob ‖ prunable_hash ‖ pqc_header(i) ‖ all_key_hashes
-signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs this
 ```
+
+The signatures are over the signing envelope's frame of those fields
+(`NETWORK_IDENTITY.md` §2.4.1, NI-R17), never over the payload bytes:
+
+```
+tx_signable    = frame("shekyl/tx-signable-v1", network_id,
+                       [keccak256(prefix_blob), keccak256(ct_base_blob)])
+signed_hash(i) = frame64("shekyl/fcmp-spend-signing-v2", network_id,
+                         [tx_signable, pqc_header(i), all_key_hashes, prunable_hash])
+                 # PQC sig (ML-DSA + Ed25519) signs this, 64 bytes
+frame(S, b, [f…]) = cSHAKE256(S, X = b ‖ u64_le(len(f)) ‖ f ‖ …)
+```
+
+`network_id` is the 16-byte genesis-derived id of the network the spend is
+for (NI-Q4, NI-R10), at position 0 of each frame: a signature is valid on one
+network by construction. `keccak256(prefix_blob)` and `keccak256(ct_base_blob)`
+are the txid's first two components (GENESIS_TX_WIRE_FORMAT.md §11), read from
+`shekyl-wire`'s txid functions; for a transaction with an emission input the
+prefix component is CEN-J22's, the prefix hash with that input removed. The
+spend hash is 64 bytes because a hybrid signature signs it (§2.7 of the
+envelope). The KAT (`pqc_signing_preimage_kat.rs`) pins the captured payload
+bytes, and `tx_signable` and each `signed_hash` per network against
+`scripts/kat/spend_signing_hash_oracle.py`, which takes the captured payloads
+apart itself and frames them on a stdlib sponge (`scripts/kat/stdlib_cshake.py`)
+that shares no code with the Rust.
 
 - **prefix_blob** = `serialize(transaction_prefix)` — see §1.2. *Includes the tx version.*
 - **ct_base_blob** = `CtSigBase::serialize_ctsig_base(inputs, outputs)` — see §1.3.
@@ -61,7 +81,7 @@ signed_hash(i) = keccak256(payload(i))         # PQC sig (ML-DSA+ed25519) signs 
 - **pqc_header(i)** = the i-th auth's header — see §1.5 (no signature bytes).
 - **all_key_hashes** = `‖ over all auths: keccak256(hybrid_public_key)` (binds every input's key).
 
-### 1.2 transaction_prefix (`src/cryptonote_basic/cryptonote_basic.h:368-374`)
+### 1.2 transaction_prefix (`src/cryptonote_basic/cryptonote_basic.h` at `ac3836de90` (lines 368–374))
 ```
 VARINT(version)        # = 3 at genesis (Q12)   ← present in prefix_blob
 VARINT(unlock_time)
@@ -69,10 +89,11 @@ FIELD(vin)             # varint(count) + inputs
 FIELD(vout)            # varint(count) + outputs
 FIELD(extra)           # varint(len) + bytes
 ```
-The FCMP++ **`signable_tx_hash`** (what the membership/SAL proof signs) is the prefix
-hash = `keccak256(serialize(transaction_prefix))` — **also includes `version=3`**.
+The prefix hash = `keccak256(serialize(transaction_prefix))` — **also includes
+`version=3`** — is the first field of `tx_signable` (§1.1), which is what the
+membership/SAL proof signs.
 
-### 1.3 CtSigBase (`src/fcmp/ct_types.h:198-…`)
+### 1.3 CtSigBase (`src/fcmp/ct_types.h` at `ac3836de90` (from line 198))
 ```
 FIELD(type)                       # 1 byte: CTTypeNull(coinbase) | CTTypeFcmpPlusPlusPqc
 if Fcmp:
@@ -83,7 +104,7 @@ enc_labels                        # outputs × 9 bytes,            no len prefix
 outPk                             # outputs × 32 bytes (commitments), no len prefix
 ```
 
-### 1.4 CtSigPrunable (`src/fcmp/ct_types.h:348-…`)
+### 1.4 CtSigPrunable (`src/fcmp/ct_types.h` at `ac3836de90` (from line 348))
 ```
 VARINT(nbp)                       # bulletproof+ count (= 1 at genesis)
 bulletproofs_plus[nbp]            # Bp+ structure
@@ -162,11 +183,11 @@ proof-type imports are removed.
 - **Golden vectors (new):** pin `prefix_hash` + `pqc_signing_payload_hashes` for fixed
   inputs so a future drift fails closed (mirror the `scan_output_kat` idiom).
 - **The specification's-output KAT (landed 2026-09-25, E6 slice 6 commit 7):**
-  `pqc_signing_preimage_v1.json` — payload bytes and hashes per input over eight
-  daemon-accepted shapes, captured from the C++ assembly before the cutover
+  `pqc_signing_preimage_v1.json` — payload bytes and hashes per input over five
+  daemon-accepted transactions, captured from the C++ assembly before the cutover
   deleted it. This is the gate that survives the oracle: the golden vectors
   above pin fixed *synthetic* inputs; this pins the real shapes a divergence
-  could hide in (multi-input, mixed archival arms, no-preimage).
+  could hide in (multi-input, mixed archival arms).
 - **Live C++ oracle (§1.1):** **landed.** `e2e_fcmp_spend_accepted_by_daemon`
   builds via the production Engine; a live `shekyld` accepts and connects the
   spend; `live_oracle_spend_v1.json` is the captured blob, with Rust and C++

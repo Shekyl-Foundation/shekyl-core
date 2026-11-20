@@ -3,49 +3,72 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What this node's own Tor dials show, for the managed-Tor supervisor's
-//! posture line (`TOR_SUPERVISOR.md` §4.2, "every Tor dial's outcome").
+//! What one connector's dials show, for that connector's status line
+//! (`DIALER_OUTAGE_EVIDENCE.md` §6): whether peers are known, and when a
+//! dial that ended without a stream was launched. Published per connector
+//! under connector-neutral names; the daemon wires each copy where it is
+//! read (the Tor connector's to the Tor Manager).
 //!
-//! Display only, never a verdict on the link (`TSR-Q14`: Tor does Tor).
-//! Which reply a failed onion dial gets is the destination's to choose as
-//! much as the link's: a live service that refuses its port answers `0x01`,
-//! one that blackholes it answers `0x06`, as a blocked link does. So the
-//! tally says only what is plainly so: whether streams open, and whether
-//! the node holds a Tor session now. The supervisor never sees an address
-//! or a reply code.
+//! Display only, never a verdict on the path: whether the path works is the
+//! connector's own reading (`shekyl_transport_layer::PathSource`), and
+//! which reply a failed dial gets is the destination's to choose as much as
+//! the path's. The tally carries no address and no reply code.
 
 use std::sync::Arc;
 
-use shekyl_peerlist::{CloseKind, ConnectorId, DialOutcome};
+use shekyl_peerlist::DialOutcome;
+use shekyl_timing_engine::Stamp;
 
-/// What this node's Tor dials show.
+use crate::reach::{attempt_stream, AttemptStream};
+
+/// A connector's latest census of the addresses it could dial.
+///
+/// [`Self::Pending`] is no census yet. [`Self::Empty`] is a census that
+/// holds no address: zero is an answer. [`Self::Held`] is a non-empty run,
+/// and `since` is the clock time of the census that opened it. A later
+/// empty census ends the run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct TorLinkTally {
-    /// Tor dials whose stream opened, since the dialer started. Only grows.
-    pub opened: u64,
-    /// Tor dial attempts that ended without a stream since the last one
-    /// opened. Each attempt counts when it ends, including a failed one
-    /// whose test goes on to a retry (revision 4 of the in-flight bound,
-    /// Rick 2026-10-26).
-    pub unopened: u32,
-    /// Tor sessions this node holds now: outbound sessions the dialer
-    /// kept, plus inbound sessions on the board.
-    pub held: u32,
+pub enum LinkCensus {
+    /// No wake has censused the connector.
+    #[default]
+    Pending,
+    /// The latest census holds no address.
+    Empty,
+    /// The latest census holds `seats` addresses, white and gray, cooling
+    /// included. `since` opened this non-empty run.
+    Held { seats: u32, since: Stamp },
 }
 
-/// Where the tally goes. Called under the dialer's lock: it must not block.
-pub type TallySink = Arc<dyn Fn(TorLinkTally) + Send + Sync>;
+/// What one connector's dials show.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkTally {
+    /// The latest `attempt_began` among dials that ended without a stream
+    /// (`DIALER_OUTAGE_EVIDENCE.md` §6.1): when the dialer launched the
+    /// attempt, not when it was counted. A dial sent before a respawn, or
+    /// before a wake, fails after the reader's stretch begins, and its
+    /// launch says it did not test the path since. `None` until the first.
+    /// An opened stream does not clear it.
+    pub failed_attempt_began: Option<Stamp>,
+    /// The connector's latest census. [`LinkCensus::Pending`] until the first
+    /// wake of that connector, including a wake that only resumes a retry
+    /// (Rick, 2026-11-10).
+    pub census: LinkCensus,
+}
 
-/// The running fold over Tor dial outcomes.
+/// Where a connector's tally goes. Called under the dialer's lock: it must
+/// not block.
+pub type TallySink = Arc<dyn Fn(LinkTally) + Send + Sync>;
+
+/// The running fold over one connector's dial outcomes.
 pub(crate) struct LinkFold {
-    tally: TorLinkTally,
+    tally: LinkTally,
     sink: Option<TallySink>,
 }
 
 impl LinkFold {
     pub(crate) fn new() -> Self {
         Self {
-            tally: TorLinkTally::default(),
+            tally: LinkTally::default(),
             sink: None,
         }
     }
@@ -56,51 +79,42 @@ impl LinkFold {
         self.sink = Some(sink);
     }
 
-    pub(crate) fn tally(&self) -> TorLinkTally {
+    pub(crate) fn tally(&self) -> LinkTally {
         self.tally
     }
 
-    /// Fold one dial attempt's outcome when it is a Tor dial: the test's
-    /// outcome, or a failed attempt deferred for a retry. Anything that reached a
-    /// peer opened a stream; a dial this node closed itself is not a dial
-    /// that failed. A payload refusal is not a dial: it names a kept
-    /// session the payload owner declined, and that stream was counted
-    /// when the dial was accepted.
-    pub(crate) fn observe(&mut self, connector: ConnectorId, outcome: &DialOutcome, held: usize) {
-        if connector != ConnectorId::Tor {
-            return;
+    /// Fold one dial attempt's outcome: the test's outcome, or a failed
+    /// attempt deferred for a retry. A dial that ended without a stream,
+    /// this node's own failures included, moves the latest launch among
+    /// those to `began` when it is later. A stream that opened, and a
+    /// payload refusal (the close of a session already counted), leave it.
+    pub(crate) fn observe(&mut self, outcome: &DialOutcome, began: Stamp) {
+        if attempt_stream(outcome) == AttemptStream::Unopened {
+            let mut next = self.tally;
+            next.failed_attempt_began = next.failed_attempt_began.max(Some(began));
+            self.publish(next);
         }
+    }
+
+    /// A census of `seats` at `at`. Zero seats is [`LinkCensus::Empty`]. A
+    /// positive count continues the open run, or opens one at `at`.
+    pub(crate) fn census(&mut self, seats: usize, at: Stamp) {
+        let seats = seats_held(seats);
+        let census = if seats == 0 {
+            LinkCensus::Empty
+        } else {
+            let since = match self.tally.census {
+                LinkCensus::Held { since, .. } => since,
+                LinkCensus::Pending | LinkCensus::Empty => at,
+            };
+            LinkCensus::Held { seats, since }
+        };
         let mut next = self.tally;
-        match outcome {
-            DialOutcome::DialFailed(_, cause) if !cause.opened_a_stream() => {
-                if cause.kind() != CloseKind::LocalClose {
-                    next.unopened = next.unopened.saturating_add(1);
-                }
-            }
-            DialOutcome::PayloadRefused(_) => {}
-            DialOutcome::DialFailed(..)
-            | DialOutcome::PeerlistRefused(..)
-            | DialOutcome::Confirmed(_)
-            | DialOutcome::SessionAccepted(_) => {
-                next.opened = next.opened.saturating_add(1);
-                next.unopened = 0;
-            }
-        }
-        next.held = u32::try_from(held).unwrap_or(u32::MAX);
+        next.census = census;
         self.publish(next);
     }
 
-    /// A Tor session ended: the count of those held moves.
-    pub(crate) fn held(&mut self, connector: ConnectorId, held: usize) {
-        if connector != ConnectorId::Tor {
-            return;
-        }
-        let mut next = self.tally;
-        next.held = u32::try_from(held).unwrap_or(u32::MAX);
-        self.publish(next);
-    }
-
-    fn publish(&mut self, next: TorLinkTally) {
+    fn publish(&mut self, next: LinkTally) {
         if next == self.tally {
             return;
         }
@@ -111,133 +125,131 @@ impl LinkFold {
     }
 }
 
+/// A seat count for the census. A count past `u32` saturates. Saturation
+/// is still a non-empty run: [`LinkCensus::Pending`] and [`LinkCensus::Empty`] are
+/// the states that are not a count.
+fn seats_held(seats: usize) -> u32 {
+    u32::try_from(seats).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
-    use shekyl_peerlist::{CloseCause, NetworkAddress};
+    use shekyl_peerlist::NetworkAddress;
+    use shekyl_timing_engine::{Clock, ManualClock, Tick};
+    use shekyl_transport_layer::{DialFailure, Reached, Retry};
 
     use super::*;
 
-    fn onion(n: u8) -> NetworkAddress {
-        let host = format!("{}.onion", char::from(b'a' + n).to_string().repeat(56));
-        NetworkAddress::Tor { host, port: 12021 }
-    }
-
-    fn failed(n: u8, cause: CloseCause) -> DialOutcome {
-        DialOutcome::DialFailed(onion(n), cause)
-    }
-
-    /// Every reply Tor gives a failed dial is one unopened dial, whatever
-    /// its byte: `0x01`, `0x06`, the extended codes and the dial deadline
-    /// alike. A stream that opened, even one the peer then refused, resets
-    /// the count.
-    #[test]
-    fn any_dial_without_a_stream_is_unopened_and_an_opened_one_resets() {
-        let mut fold = LinkFold::new();
-        for reply in [0x01, 0x06, 0xF0, 0xF2, 0xF3, 0xF7] {
-            fold.observe(
-                ConnectorId::Tor,
-                &failed(0, CloseCause::proxy_refused(reply, 0)),
-                0,
-            );
-        }
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(1, CloseCause::new(CloseKind::TransportTimeout)),
-            0,
-        );
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(2, CloseCause::new(CloseKind::ProxyUnavailable)),
-            0,
-        );
-        assert_eq!(
-            fold.tally(),
-            TorLinkTally {
-                opened: 0,
-                unopened: 8,
-                held: 0,
-            }
-        );
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(3, CloseCause::new(CloseKind::LevinHandshakeRejected)),
-            0,
-        );
-        assert_eq!(
-            fold.tally().opened,
-            1,
-            "a rejected handshake reached a peer"
-        );
-        assert_eq!(fold.tally().unopened, 0);
-    }
-
-    /// A payload refusal is the close of a session already counted. It
-    /// moves the held count and leaves the dial counts where the open
-    /// and the failures since it put them.
-    #[test]
-    fn a_payload_refusal_is_a_close_and_not_another_open() {
-        let mut fold = LinkFold::new();
-        fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(0)), 1);
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(1, CloseCause::proxy_refused(0x06, 0)),
-            1,
-        );
-        let opened = fold.tally();
-        assert_eq!(opened.opened, 1);
-        assert_eq!(opened.unopened, 1);
-        fold.observe(ConnectorId::Tor, &DialOutcome::PayloadRefused(onion(0)), 0);
-        assert_eq!(fold.tally().opened, 1, "the close is not a new stream");
-        assert_eq!(fold.tally().unopened, 1, "failed dials since the open stay");
-        assert_eq!(fold.tally().held, 0);
-    }
-
-    /// This node's own close is not a failed dial, and another connector's
-    /// dials say nothing about Tor.
-    #[test]
-    fn own_closes_and_other_connectors_leave_the_tally_alone() {
-        let mut fold = LinkFold::new();
-        fold.observe(
-            ConnectorId::Tor,
-            &failed(0, CloseCause::new(CloseKind::LocalClose)),
-            0,
-        );
-        let clearnet = NetworkAddress::Ipv4 {
-            ip: std::net::Ipv4Addr::new(203, 0, 113, 7),
+    fn peer(n: u8) -> NetworkAddress {
+        NetworkAddress::Ipv4 {
+            ip: std::net::Ipv4Addr::new(203, 0, 113, n),
             port: 11021,
-        };
-        fold.observe(
-            ConnectorId::Clearnet,
-            &DialOutcome::DialFailed(clearnet.clone(), CloseCause::new(CloseKind::DialFailed)),
-            3,
-        );
-        fold.observe(
-            ConnectorId::Clearnet,
-            &DialOutcome::SessionAccepted(clearnet),
-            3,
-        );
-        fold.held(ConnectorId::Clearnet, 3);
-        assert_eq!(fold.tally(), TorLinkTally::default());
+        }
     }
 
-    /// The count of held sessions follows accepts and closes, and the sink
-    /// hears only changes.
+    fn failed(n: u8, failure: DialFailure) -> DialOutcome {
+        DialOutcome::DialFailed(peer(n), failure)
+    }
+
+    /// The process clock read at `nanos`.
+    fn at(nanos: u64) -> Stamp {
+        ManualClock::new(Tick::new(nanos)).stamp()
+    }
+
+    /// Every dial that ended without a stream is a failed launch, whatever
+    /// its evidence. A stream that opened, even one the peer then refused,
+    /// and a payload refusal leave the launch where it was. Counting an
+    /// opened stream as a failure fails this.
     #[test]
-    fn held_sessions_follow_accepts_and_closes_and_only_changes_are_sent() {
-        let heard = Arc::new(Mutex::new(Vec::new()));
-        let sink_heard = Arc::clone(&heard);
+    fn only_a_dial_without_a_stream_is_a_failed_launch() {
         let mut fold = LinkFold::new();
+        for (n, failure) in [
+            DialFailure::destination(Retry::Again, Reached::NoStream),
+            DialFailure::uncertain(Retry::AgainInsideWindow, Reached::NoStream),
+            DialFailure::local(Retry::Again, Reached::NoStream),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let n = u8::try_from(n).expect("three");
+            fold.observe(&failed(n, failure), at(u64::from(n) + 1));
+        }
+        assert_eq!(fold.tally().failed_attempt_began, Some(at(3)));
+        fold.observe(
+            &failed(
+                4,
+                DialFailure::uncertain(Retry::Again, Reached::StreamOpened),
+            ),
+            at(9),
+        );
+        fold.observe(&DialOutcome::SessionAccepted(peer(5)), at(10));
+        fold.observe(&DialOutcome::PayloadRefused(peer(5)), at(11));
+        assert_eq!(
+            fold.tally().failed_attempt_began,
+            Some(at(3)),
+            "a stream that opened is not a failed launch"
+        );
+    }
+
+    /// A census sets the census, and only a change is published. A later
+    /// positive count keeps the run's `since`; an empty census ends the
+    /// run, and the next positive count opens a new one. Resetting `since`
+    /// on every census, or treating a repeat as a change, fails this.
+    #[test]
+    fn a_census_sets_the_run_and_keeps_its_start() {
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let mut fold = LinkFold::new();
+        let sink = Arc::clone(&published);
         fold.set_sink(Arc::new(move |tally| {
-            sink_heard.lock().expect("heard").push(tally);
+            sink.lock().expect("sink").push(tally.census);
         }));
-        fold.observe(ConnectorId::Tor, &DialOutcome::SessionAccepted(onion(0)), 1);
-        fold.held(ConnectorId::Tor, 1);
-        fold.held(ConnectorId::Tor, 0);
-        let heard = heard.lock().expect("heard");
-        assert_eq!(heard.len(), 3, "the initial tally, the accept, the close");
-        assert_eq!(heard[1].held, 1);
-        assert_eq!(heard[2].held, 0);
+        let opened = at(10);
+        let later = at(40);
+        let reopened = at(70);
+        fold.census(0, opened);
+        fold.census(0, later);
+        fold.census(6, opened);
+        fold.census(7, later);
+        fold.census(0, later);
+        fold.census(2, reopened);
+        assert_eq!(
+            *published.lock().expect("sink"),
+            vec![
+                LinkCensus::Pending,
+                LinkCensus::Empty,
+                LinkCensus::Held {
+                    seats: 6,
+                    since: opened,
+                },
+                LinkCensus::Held {
+                    seats: 7,
+                    since: opened,
+                },
+                LinkCensus::Empty,
+                LinkCensus::Held {
+                    seats: 2,
+                    since: reopened,
+                },
+            ],
+            "the first tally at the sink, then each change of the run"
+        );
+    }
+
+    /// The tally keeps the latest launch among failed dials, not the last
+    /// one counted: a dial launched early and counted late does not move
+    /// the launch back. Taking the counted attempt's launch fails this.
+    #[test]
+    fn a_failed_dial_keeps_the_latest_launch_among_failures() {
+        let mut fold = LinkFold::new();
+        let lost = || DialFailure::uncertain(Retry::Again, Reached::NoStream);
+        fold.observe(&failed(0, lost()), at(10));
+        fold.observe(&failed(1, lost()), at(4));
+        assert_eq!(
+            fold.tally().failed_attempt_began,
+            Some(at(10)),
+            "an older launch counted later does not move the latest back"
+        );
     }
 }

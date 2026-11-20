@@ -10,6 +10,7 @@
 //! says. `scripts/ci/check_daemon_option_docs.py` holds the guides equal to
 //! the committed fragments.
 
+use shekyl_network::Network;
 use shekyl_options::{
     Default, Dimension, EndpointRule, Kind, PeerRule, Surface, Table, Visibility,
 };
@@ -41,7 +42,7 @@ pub fn options_markdown(table: &Table) -> String {
         .rows
         .iter()
         .filter_map(|r| match r.visibility {
-            Visibility::Dev { networks } => Some(format!("{} ({})", r.name, networks.join(", "))),
+            Visibility::Dev { gate } => Some(format!("{} ({})", r.name, gate.networks())),
             _ => None,
         })
         .collect();
@@ -83,6 +84,42 @@ pub fn example_toml(table: &Table) -> String {
     out
 }
 
+/// The networks a package ships a settings file for: the public ones.
+/// `regtest` is a harness network and gets none (INPUT_GRAMMAR.md IG-Q64).
+pub const PACKAGED_NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
+
+/// The settings file a Linux package ships for `network` (INPUT_GRAMMAR.md
+/// IG-Q64): a header that says how the packaged unit uses the file, then
+/// [`example_toml`] unchanged, every option line commented out. The
+/// package installs it as `/usr/share/shekyl/shekyld-<network>.toml` and
+/// copies it to `/etc/shekyl/` when no file is there.
+#[must_use]
+pub fn packaged_toml(table: &Table, network: Network) -> String {
+    let n = network.name();
+    let mut out = format!(
+        "# /etc/shekyl/shekyld-{n}.toml: the settings of shekyld@{n}, the {n}\n\
+         # daemon the packaged unit runs (`systemctl enable --now shekyld@{n}`).\n\
+         #\n\
+         # Before every start the unit checks this file as the daemon's\n\
+         # account, with the command line it starts with (its ExecStartPre):\n\
+         #   shekyld --service --network {n} --data-dir /var/lib/shekyl/{n} \\\n\
+         #     --log-file /var/log/shekyl/{n}/shekyld.log --config-verify\n\
+         # The unit sets data-dir and log-file on that command line, and a\n\
+         # flag on the command line wins over the same key here. The file is\n\
+         # read at start; a runtime option changes while the daemon runs with\n\
+         # `shekyl-cli option set`.\n\
+         #\n\
+         # The package placed this file root:shekyl 0640 and never overwrites\n\
+         # it; the shipped copy is /usr/share/shekyl/shekyld-{n}.toml. A secret\n\
+         # (a SOCKS password) may be kept here: the daemon refuses the file\n\
+         # only when an account other than root and the daemon's can read it,\n\
+         # so the daemon's account stays the only member of its group.\n\
+         #\n"
+    );
+    out.push_str(&example_toml(table));
+    out
+}
+
 fn public(table: &Table) -> impl Iterator<Item = &shekyl_options::Row> {
     table
         .rows
@@ -121,10 +158,11 @@ fn kind_text(kind: &Kind) -> String {
             with_keywords(&base, keywords)
         }
         Kind::Endpoint(_) => "IP endpoint (`address:port`)".to_owned(),
+        Kind::Listen(_) => "IP address, with or without a port (`address[:port]`)".to_owned(),
         Kind::PeerEndpoint(PeerRule::Any) => "IP endpoint or v3 onion with a port".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "v3 onion with a port".to_owned(),
         Kind::Address => "Shekyl address".to_owned(),
-        Kind::Path => "absolute path".to_owned(),
+        Kind::Path { keywords } => with_keywords("absolute path", keywords),
         Kind::Secret => "secret (file only, never shown)".to_owned(),
         Kind::Command { placeholders } => format!(
             "command (an array of words; placeholders {})",
@@ -135,6 +173,8 @@ fn kind_text(kind: &Kind) -> String {
                 .join(", ")
         ),
         Kind::Origin => "web origin".to_owned(),
+        Kind::Hash => "64 hexadecimal characters".to_owned(),
+        Kind::Name(rule) => format!("name ({})", rule.describe),
         Kind::List(item) => format!("list of {} (`none` for empty)", kind_text(item)),
         Kind::Map { value, .. } => format!("map to {}", kind_text(value)),
     }
@@ -195,10 +235,11 @@ fn example_value(kind: &Kind, default: &Default) -> String {
         .to_owned(),
         Kind::Endpoint(EndpointRule::GlobalUnicast) => "\"<public-address>:11021\"".to_owned(),
         Kind::Endpoint(_) => "\"127.0.0.1:11029\"".to_owned(),
+        Kind::Listen(_) => "\"127.0.0.1\"".to_owned(),
         Kind::PeerEndpoint(PeerRule::Any) => "\"203.0.113.10:11021\"".to_owned(),
         Kind::PeerEndpoint(PeerRule::OnionOnly) => "\"<56 characters>.onion:11021\"".to_owned(),
         Kind::Address => "\"<address>\"".to_owned(),
-        Kind::Path => "\"/path\"".to_owned(),
+        Kind::Path { .. } => "\"/path\"".to_owned(),
         Kind::Secret => "\"<secret>\"".to_owned(),
         Kind::Command { placeholders } => format!(
             "[\"/path/to/command\"{}]",
@@ -208,6 +249,8 @@ fn example_value(kind: &Kind, default: &Default) -> String {
                 .unwrap_or_default()
         ),
         Kind::Origin => "\"https://example.org\"".to_owned(),
+        Kind::Hash => "\"<64 hex characters>\"".to_owned(),
+        Kind::Name(_) => "\"<name>\"".to_owned(),
         Kind::List(item) => format!("[{}]", example_value(item, &Default::Unset)),
         Kind::Map { .. } => "{ }".to_owned(),
     }
@@ -253,8 +296,36 @@ mod tests {
         }
     }
 
+    /// The example's `/path` values as the host spells an absolute path:
+    /// as written on Unix, `C:\path` on Windows, where `/path` is not
+    /// absolute and the path kinds refuse it (DC-F40). The example itself
+    /// stays the Unix spelling; it is one file for every platform. The
+    /// Windows installer puts it beside the binaries (INPUT_GRAMMAR.md
+    /// IG-Q64), where every line is a comment and a path value is an
+    /// illustration to be respelled, not a default (review 3 §3 of the
+    /// Rust-binary PR).
+    fn host_absolute(value: &toml::Value) -> toml::Value {
+        match value {
+            toml::Value::String(s) if cfg!(windows) && s.starts_with('/') => {
+                toml::Value::String(format!("C:{}", s.replace('/', "\\")))
+            }
+            toml::Value::Array(items) => {
+                toml::Value::Array(items.iter().map(host_absolute).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
     const TABLE_FILE: &str = "shekyld_options.md";
     const EXAMPLE_FILE: &str = "shekyld.example.toml";
+
+    /// The settings file a package ships for `network`, in
+    /// `contrib/packaging/linux/`.
+    fn packaged(network: Network) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contrib/packaging/linux")
+            .join(format!("shekyld-{}.toml", network.name()))
+    }
 
     /// The subject assertion (rule 47): the rendering is not empty and
     /// names every public row, before anything is compared against it.
@@ -330,7 +401,7 @@ mod tests {
                 continue; // a placeholder for a value the example cannot invent
             }
             row.kind
-                .parse_file(value)
+                .parse_file(&host_absolute(value))
                 .unwrap_or_else(|e| panic!("{key}'s example value is its kind's: {e:?}"));
         }
     }
@@ -344,8 +415,12 @@ mod tests {
             (EXAMPLE_FILE, example_toml(&TABLE)),
         ] {
             let path = generated(name);
+            // A checkout with `core.autocrlf` hands the fragment back with
+            // CRLF line ends; the rendering is the bytes between them
+            // (DC-F40).
             let committed = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()));
+                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()))
+                .replace("\r\n", "\n");
             assert_eq!(
                 committed,
                 text,
@@ -355,10 +430,79 @@ mod tests {
         }
     }
 
+    /// The packaged files are this rendering, one per public network, and
+    /// each is the example under its header: every option line commented
+    /// out, so a fresh install runs on the defaults. Regenerate with
+    /// `cargo test -p shekyl-daemon-config regenerate_generated_docs -- --ignored`.
     #[test]
-    #[ignore = "writes docs/generated/; run on purpose after a table change"]
+    fn the_packaged_files_are_the_rendering() {
+        let example = example_toml(&TABLE);
+        for network in PACKAGED_NETWORKS {
+            let text = packaged_toml(&TABLE, network);
+            assert!(
+                text.ends_with(&example),
+                "the packaged {} file is the example under its header",
+                network.name()
+            );
+            let parsed: toml::Table = text.parse().expect("the packaged file parses");
+            assert!(
+                parsed.is_empty(),
+                "the packaged {} file sets nothing",
+                network.name()
+            );
+            let path = packaged(network);
+            let committed = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("{} is committed: {e}", path.display()))
+                .replace("\r\n", "\n");
+            assert_eq!(
+                committed,
+                text,
+                "{} differs from its rendering; regenerate it",
+                path.display()
+            );
+        }
+        assert!(
+            !PACKAGED_NETWORKS.contains(&Network::Regtest),
+            "regtest is a harness network and gets no packaged file"
+        );
+        // The package ships exactly these files, and the .deb's purge
+        // removes exactly these names: one list, held here.
+        let dir = packaged(Network::Mainnet)
+            .parent()
+            .expect("a directory")
+            .to_path_buf();
+        let mut shipped: Vec<String> = std::fs::read_dir(&dir)
+            .expect("contrib/packaging/linux is readable")
+            .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+            .filter(|n| n.starts_with("shekyld-") && n.ends_with(".toml"))
+            .collect();
+        shipped.sort();
+        let mut want: Vec<String> = PACKAGED_NETWORKS
+            .iter()
+            .map(|n| format!("shekyld-{}.toml", n.name()))
+            .collect();
+        want.sort();
+        assert_eq!(
+            shipped, want,
+            "contrib/packaging/linux ships one file per packaged network"
+        );
+        let purge =
+            std::fs::read_to_string(dir.join("deb-after-purge.sh")).expect("the purge script");
+        let names = PACKAGED_NETWORKS.map(Network::name).join(" ");
+        assert!(
+            purge.contains(&format!("for network in {names}; do")),
+            "deb-after-purge.sh removes the packaged networks' files: {names}"
+        );
+    }
+
+    #[test]
+    #[ignore = "writes docs/generated/ and contrib/packaging/linux/; run on purpose after a table change"]
     fn regenerate_generated_docs() {
         std::fs::write(generated(TABLE_FILE), options_markdown(&TABLE)).expect("write table");
         std::fs::write(generated(EXAMPLE_FILE), example_toml(&TABLE)).expect("write example");
+        for network in PACKAGED_NETWORKS {
+            std::fs::write(packaged(network), packaged_toml(&TABLE, network))
+                .expect("write packaged file");
+        }
     }
 }

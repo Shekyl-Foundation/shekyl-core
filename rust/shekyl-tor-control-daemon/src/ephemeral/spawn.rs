@@ -6,9 +6,11 @@
 //! Spawning one incarnation and keeping its data directory across a respawn.
 //!
 //! A failed spawn returns the directory. [`DaemonTorControl::stop_for_respawn`]
-//! stops the child and returns it too. Dropping the directory wipes it, which
-//! is the daemon's stop, not a respawn (`TSR-Q1`).
+//! stops the child and returns it too. A directory that is not spawned into
+//! again is retired ([`KeptDataDir::retire`]): Tor's log is kept beside it and
+//! the rest becomes a tombstone (`TSR-Q1`, `TOR_SUPERVISOR.md` §4.7).
 
+use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -21,15 +23,16 @@ use tokio::sync::{oneshot, watch};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, Command, DiskWrites, EventSink, ManagedTor, SocksPort, SocksTimeout,
-    TorControlClient, TorControlClientConfig, TorLaunch,
+    BootstrapReadiness, Command, DiskWrites, EventSink, HandshakeWait, ManagedTor, SocksPort,
+    SocksTimeout, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_tor_control_client::directory_cache;
 
-use super::{DaemonTorConfig, DaemonTorControl, DaemonTorStartError};
-use crate::data_dir::{EphemeralDataDir, CACHE_DIR_NAME};
+use super::{retire, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, Retirement};
+use crate::data_dir::{sweep_stale_data_dirs, EphemeralDataDir, CACHE_DIR_NAME};
 
-/// A data directory kept across a respawn. Dropping it wipes the directory.
+/// A data directory kept across a respawn. [`Self::retire`] ends it; a drop
+/// retires it too and leaves the tombstone to the next start's sweep.
 pub struct KeptDataDir {
     dir: EphemeralDataDir,
 }
@@ -40,13 +43,35 @@ impl KeptDataDir {
     pub fn path(&self) -> &Path {
         self.dir.path()
     }
+
+    /// Keep Tor's log beside the directory, rename the directory to its
+    /// tombstone and delete that under
+    /// [`super::TOMBSTONE_DELETE_BOUND`]. For a directory no later
+    /// incarnation uses: the daemon's stop while Tor is down, and the switch
+    /// to a fresh directory after a run of failed launches.
+    pub async fn retire(self) -> Retirement {
+        retire(self.dir).await
+    }
+
+    /// End this directory for a fresh one: sweep what earlier incarnations
+    /// left beside it, sparing this one, then [`Self::retire`] it. The order
+    /// keeps this incarnation's log, the last dead one's evidence, which the
+    /// sweep would otherwise remove (`TOR_SUPERVISOR.md` §4.10). The
+    /// tombstone's delete may still be running when the caller next reads
+    /// the disk; a later sweep that meets the same tree finds it gone.
+    pub async fn replace(self) -> Retirement {
+        if let Some(parent) = self.path().parent() {
+            sweep_stale_data_dirs(parent, Some(self.path()));
+        }
+        self.retire().await
+    }
 }
 
 /// A spawn that did not come up, with the directory still on disk.
 pub struct LaunchFailure {
     /// Why it did not come up.
     pub error: DaemonTorStartError,
-    /// The directory. Drop it to wipe, or spawn into it again.
+    /// The directory. Retire it, or spawn into it again.
     pub directory: KeptDataDir,
 }
 
@@ -60,33 +85,50 @@ pub enum SpawnError {
 
 impl DaemonTorControl {
     /// Spawn tor and return when `GETINFO version` answers. Bootstrap is
-    /// not a gate.
-    pub async fn spawn_keeping(config: DaemonTorConfig) -> Result<Self, SpawnError> {
+    /// not a gate. The spawn waits for that first reply until `until`
+    /// resolves, and past it stops and reaps the child and fails with
+    /// [`DaemonTorStartError::Unanswered`]: a deadline is the caller's to
+    /// give. [`Self::launch`] gives [`shekyl_tor_control_client::awake::sleep`]
+    /// of the reply bound. A supervisor that holds its own bound passes the
+    /// future that abandons the launch.
+    pub async fn spawn_keeping(
+        config: DaemonTorConfig,
+        until: impl Future<Output = ()> + Send,
+    ) -> Result<Self, SpawnError> {
         let data_dir =
             EphemeralDataDir::create_under(&config.data_dir_parent).map_err(SpawnError::DataDir)?;
         let kept = KeptDataDir { dir: data_dir };
-        Self::spawn_in(kept, config, true)
+        Self::spawn_in(kept, config, true, until)
             .await
             .map_err(SpawnError::Launch)
     }
 
-    /// [`Self::spawn_keeping`], wiping the directory when the spawn fails.
+    /// [`Self::spawn_keeping`] within the config's reply deadline, retiring
+    /// the directory when the spawn fails.
     pub async fn launch(config: DaemonTorConfig) -> Result<Self, DaemonTorStartError> {
-        match Self::spawn_keeping(config).await {
+        // The reply budget starts here. `sleep` reads that deadline at this
+        // call, so the directory and the cache copy `spawn_keeping` finishes
+        // before it polls this future still count against it.
+        let deadline = shekyl_tor_control_client::awake::sleep(config.reply_deadline);
+        match Self::spawn_keeping(config, deadline).await {
             Ok(up) => Ok(up),
             Err(SpawnError::DataDir(error)) => Err(DaemonTorStartError::DataDir(error)),
-            Err(SpawnError::Launch(failure)) => Err(failure.error),
+            Err(SpawnError::Launch(failure)) => {
+                failure.directory.retire().await;
+                Err(failure.error)
+            }
         }
     }
 
     /// Spawn into a directory a previous incarnation kept. The cache is not
-    /// copied again.
+    /// copied again. `until` is as [`Self::spawn_keeping`]'s.
     pub async fn spawn_into(
         directory: KeptDataDir,
         tor_binary: VerifiedTorBinary,
         events: EventSink,
         reply_deadline: Duration,
         socks_timeout: SocksTimeout,
+        until: impl Future<Output = ()> + Send,
     ) -> Result<Self, LaunchFailure> {
         let parent = directory
             .path()
@@ -103,6 +145,7 @@ impl DaemonTorControl {
                 socks_timeout,
             },
             false,
+            until,
         )
         .await
     }
@@ -111,6 +154,7 @@ impl DaemonTorControl {
         directory: KeptDataDir,
         config: DaemonTorConfig,
         install_cache: bool,
+        until: impl Future<Output = ()> + Send,
     ) -> Result<Self, LaunchFailure> {
         let DaemonTorConfig {
             tor_binary,
@@ -155,6 +199,7 @@ impl DaemonTorControl {
             }
         });
         let (readiness, ready) = BootstrapReadiness::new();
+        let (handshake, abandoned) = oneshot::channel();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary,
@@ -164,6 +209,8 @@ impl DaemonTorControl {
                 disable_network: false,
                 disk_writes: DiskWrites::Prompt,
                 exit_observer: Some(exit_tx),
+                // The caller's `until` is the only bound on the first reply.
+                handshake: HandshakeWait::Until(abandoned),
             }),
             events,
             readiness,
@@ -177,12 +224,16 @@ impl DaemonTorControl {
             copied,
             bootstrapped: false,
             ready,
+            handshake: Some(handshake),
             data_dir: Some(directory.dir),
         };
-        if let Err(error) = handle
-            .ask_bounded(Command::GetInfo(vec!["version".to_owned()]), reply_deadline)
-            .await
-        {
+        let asker = handle.asker();
+        let first = asker.ask(Command::GetInfo(vec!["version".to_owned()]));
+        let answered = tokio::select! {
+            reply = first => reply.map(drop),
+            () = until => Err(DaemonTorStartError::Unanswered),
+        };
+        if let Err(error) = answered {
             let directory = handle.abandon().await;
             return Err(LaunchFailure { error, directory });
         }

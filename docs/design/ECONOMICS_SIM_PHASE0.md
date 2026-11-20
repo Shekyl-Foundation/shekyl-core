@@ -192,7 +192,9 @@ the chain runs at, not its reachable minimum, and no document uses it as one.
 - `rust/shekyl-economics-sim/src/fee_model.rs:19` says "three places" and
   lists two.
 - umbrella §3.2 row b: "batches the penalty-free part … Done". The ruled item
-  was the penalty *zone* (§P0.6).
+  was the penalty *zone* (§P0.6). Closed by the zone's closed form
+  ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+  §5.28): row b records it built.
 
 ### Instruments that report an extreme from sampled heights
 
@@ -379,7 +381,7 @@ sweep can see it. "EP" marks a field `EconomicParams` already has.
 | `RELAY_FLOOR_WINDOW` | `fee/relay.rs:21` | 6 | D (G + 1) | no | no | derived |
 | `RELAY_ADMISSION_SLACK_BP` | `rust/shekyl-economics/src/fee/relay.rs:26` | 0 | P | **no** | imports | ruled (FL-R23 implementation) |
 | `FEE_DECIMAL_PLACES` | `rust/shekyl-economics/src/fee/quantization.rs:21` | 6 | P (relay policy) | no | no | FL-R27 ruled where it lives, not its size; inherited from C++ `PER_KB_FEE_QUANTIZATION_DECIMALS` |
-| `FEE_QUANTIZATION_MASK` | `rust/shekyl-economics/src/fee/quantization.rs:30` | 1 000 atomic | U (from the above) | no | **not read**: the sim pays unrounded (ESR-15) | FL-R27 |
+| `FEE_QUANTIZATION_MASK` | `rust/shekyl-economics/src/fee/quantization.rs:30` | 1 000 atomic | U (from the above) | no | the production arm calls `quantized_fee` (ESR-15, #1213); the mask is not a swept field | FL-R27 |
 | `EMISSION_CLAIM_FEE_FLOOR` | `rust/shekyl-economics/src/fee/ladder.rs:19` | 3.6 SKL | D as a literal (the genesis Economy rung × the claim envelope) | no | **not read** (§4's claim row) | no test recomputes it, so it does not follow a `w_ref` or zone sweep |
 
 ### Block weight, penalty, limit
@@ -472,7 +474,7 @@ term, to be re-graded at EUP-4. EUP-5's decision list (D, F, G, H, I and the
 | --- | --- |
 | A block's weight is its bodies' | **Closed by #1152**, and replaced by a smaller departure (U1 below). `BlockSpace::fill` passes `COINBASE_RESERVE` to `Fill::empty` (`rust/shekyl-economics-sim/src/block_space.rs:114`), the medians record `fill.block_weight()`, and the cursor prices that weight. Phase 1's first commit deletes the row and declares U1 |
 | Fee multiplier on Standard; rung mix; every transaction pays Standard | **ESR-10.** Only `×1` is built outside tests; the pool is one class (`rust/shekyl-economics-sim/src/block_space.rs:52`) |
-| Fee paid unrounded | **ESR-15.** `quantized_fee` appears only in a doc comment |
+| Fee paid unrounded | **Closed by ESR-15.** At the Phase 0 pin the product was unrounded. The production arm calls `quantized_fee`; the flat control arm's weight-fees stay the unrounded product |
 | A claim is one ordinary transaction at the admission rate | **Still needed, and no step is planned.** The owner, `EMISSION_CLAIM_FEE_FLOOR`, exists; the sim does not read it |
 | Gate-7 one shard per `blocks_per_shard`; A3/A4 through the plateau curve | **Still needed**; EUP-4 items in `FOLLOWUPS.md` |
 | Maturity operands | **Still needed; the row's text is stale.** `MATURITY_D` was deleted with the urn reproduction (`eba3d3822`); the operands are now `EVIDENCE_PAIRS` (`rust/shekyl-economics-sim/src/secret_draw.rs:254`) and `projected_pairs` in `mn_feasibility.rs` |
@@ -497,7 +499,7 @@ defect; each needs a row or a reason it is not a departure.
 | Emission curve, tail subsidy | through production (`price_emission` → `base_block_reward`) | — |
 | Release multiplier, 720-block window | through production (`TxVolume::window`, `tx_volume_span`) | the window's length stress is EUP-5 §4.2 |
 | Medians, penalty, limit | through production (`medians_from`, `Fill`) | — |
-| Fill rule | through production (`Fill::admit_up_to`) | the penalty zone is walked one body at a time (§P0.6) |
+| Fill rule | through production (`Fill::admit_up_to`) | the penalty zone is admitted in closed form (rebase doc §5.28) |
 | Standard rung, fee correction, growth gate | through production (`corrected_fee_ladder`, `fee_correction`) | rounding: ESR-15 |
 | Burn and its split, staker emission share, net supply, corpus, escalation share | through production (`calc_burn_pct_at`, `compute_burn_split_at`, `emission_share_at`, `CirculatingSupply::derive`, `shard_of`, `staker_pool_share_at`) | — |
 | Secret draw | through production (`draw_count`, `draw_horizon`, `select_draw`); behaviour modelled | — |
@@ -507,7 +509,7 @@ defect; each needs a row or a reason it is not a departure.
 | Fee multiplier | design arm, only `×1` run | yes (capacity, usability): ESR-10 |
 | Rung mix; per-rung pool | **not modelled** (one-class pool) | yes: ESR-10, after `ESR10_PREDICTIONS.md` §0.1's pool |
 | Staking coupling (purse into the staking sim) | **not modelled**: the staking sim takes its purse by hand | yes: EUP-3 |
-| Challenge egress against the budget (H) | **not modelled** here (the staking sim has `--f34-calibrated`) | yes: EUP-3 |
+| Challenge egress against the budget (H) | **not modelled** here (the staking sim's `--f34-calibrated` was deleted 2026-11-08, last at `40f98fc44`) | yes: EUP-3 |
 | Tail criterion: per-block fee revenue, median and variance, to ≈ year 135 | **not modelled**; the sim prints yearly sums and a decade-sampled mean fee | yes: **no step builds it** |
 | Emission-gain stuffing at the window's edge | **not modelled** (scenario 4's fake volume is ordinary demand) | yes (goal 5 is graded at EUP-4), but it is placed at EUP-5 §4.2: **a sequencing gap** |
 | Demand elasticity, wallet rung escalation | not modelled, declared out | no: the wallet does not escalate, and the criteria read fixed demand schedules |
@@ -541,27 +543,19 @@ minute on either arm, so the 135-year arms are affordable except for growth.
 Growth blows up once its demand outgrows the penalty-free room: from year 61
 on the flat control, and somewhere past year 80 on production, whose blocks
 grow later. That is the shape umbrella §4.1 recorded and attributed to
-`Fill::admit_up_to` offering the penalty zone one body at a time (not profiled
-here). #1152 did not change it. **The closed form is still needed** for any growth arm past
-year 80 on production or year 61 on the flat control.
+`Fill::admit_up_to` offering the penalty zone one body at a time. #1152 did
+not change it.
 
-**The closed form approved on 2026-10-05 was never built.** The ruling
-(`82ad0876e`) approved "`Fill::admit_up_to` batches **the penalty zone**,
-held to the single-offer walk". `1f7718f2e` (2026-10-22) restated umbrella
-§3.2 row b as "batches **the penalty-free part** … Done", which is what the
-code already did on 2026-10-04. The loop at
-`rust/shekyl-block-template/src/fill.rs:242` still walks the penalty zone one
-body at a time; `admit_up_to_is_the_single_offer_walk`
-(`rust/shekyl-block-template/src/fill.rs:302`) pins the free-part batch
-against the walk and does not cover a zone batch. No 135-year arm exists: every
-horizon caps at `ONSET_HORIZON_YEARS = 60`
+**The closed form is built**
+([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+§5.28): `Fill::admit_up_to` admits the penalty zone by bisection past the
+real root, held to the single-offer walk by the parity tests §5.28 lists. The
+fold's cost at 135 years is §5.28.1's table, which succeeds the one above.
+The growth schedule no longer stops on the fill. It stops on the sim's
+supply invariant, in year 114 on production and year 80 on the flat control
+(§5.28.1). No 135-year arm is wired: every horizon
+caps at `ONSET_HORIZON_YEARS = 60`
 (`rust/shekyl-economics-sim/src/onset.rs:87`).
-
-The parity test the closed form owes: for every offered count, weight and fee
-on a grid spanning the penalty-free part, the penalty zone and the 2× limit
-(including the coinbase operand and fees that do and do not cover the
-marginal penalty), `admit_up_to(w, f, n)` returns the same count, block weight
-and fees as `n` single offers of `admit(w, f)`.
 
 ---
 
@@ -579,9 +573,9 @@ only.
 | tail multiple **`k`** | per-block fee revenue, median and variance, to ≈ year 135 | yearly sums (`A1YearAgg`) and a per-transaction mean fee at y10–y60 | the per-block distribution and the horizon: **EUP-4 prep**, after the zone closed form |
 | **F** knee and GF-7 asymptote | A1 clearance per candidate; A4 and A5; the knee band by its definitions on an uncapped chain | `print_escalation_family`, `a1_clearance_report`, A1-T and A1-L (`onset.rs`), `a4_stuffing_report`; the band is printed only by a test | no run with the escalation live (the ledger is flat); the band needs the uncapped chain (**ESR-10**) and its 135-year high (**EUP-4 prep**) |
 | **I** bond floor | A1 with a reward-proportional principal beside the fixed one; TJ-4 / TJ-7; the staking population fed this sim's purse | A1 burden at 0.75 × R6 × n × rate; A1-L; `cartel::tj_inequalities_report`; `--gate7` (≈ 900× low) | no reward-proportional arm (**EUP-4 prep**); the purse coupling (**EUP-3**) |
-| **H** challenge doctrine | L19i egress against `budget(E)` | only in the staking sim (`--f34-calibrated`) | egress as a burden term: **EUP-3** |
+| **H** challenge doctrine | L19i egress against `budget(E)` | was only in the staking sim (`--f34-calibrated`, deleted 2026-11-08, last at `40f98fc44`) | egress as a burden term: **EUP-3** |
 | 720-block window (umbrella §4.2) | step response, sub-window boom/bust, an edge-timed stuffer | the window is imported with no length knob; step response is a unit test | per-block traces, step and surge schedules, edge stuffer: **EUP-4 prep** |
-| fee lattice size | the lattice step as a fraction of the ordinary fee, against a bar | `FEE_DECIMAL_PLACES = 6`, inherited; the sim does not round | rounding: **ESR-15**; a step-over-fee column: ESR-15 or the sweep. From PROD, the ordinary fee falls to 0.0001 SKL by y30–y60, where one 1 000-atomic step is 100 bp, above the 50 bp bar G uses |
+| fee lattice size | the lattice step as a fraction of the ordinary fee, against a bar | `FEE_DECIMAL_PLACES = 6`, inherited. ESR-15 landed: the production arm rounds, and `--stage2` prints the step (year-1 baseline 0.0084 bp; 169 bp where the fee prints 0.0001 SKL) | the size stays open for EUP-5; six decimals stay until that ruling |
 
 ---
 
@@ -597,7 +591,7 @@ are proposed here.
 | 5. Demand-responsive | multiplier and burn under step, boom/bust and stuffing; window step response; edge stuffer | **partial**: year-end values; step response is a unit test; no edge stuffer | the §4.2 instrument: **EUP-4 prep** |
 | 6. Self-regulating | (a) staker yield; (b) A1-T flat-25 at 10 % by decade, and onset; (c) coverage | (a) exists but divides by the deleted stake-ratio term (finding E); (b) **exists**, both arms; (c) only in the staking sim | **EUP-3** |
 | Capacity | BLOCK SPACE, growth gate | **exists** on the inherited pair | the re-derived pair and the rung mix: **ESR-10** |
-| Usability | mean ordinary fee (`onset.rs`) | **partial**: from year 10, unrounded, a mean | years 1–9: **EUP-4 prep**; rounding: **ESR-15**; rung mix: **ESR-10** |
+| Usability | mean ordinary fee (`onset.rs`) | **partial**: the mean is printed from year 10; the lattice step is printed from year 1. ESR-15 rounded the production arm | years 1–9 of the mean: **EUP-4 prep**; rung mix: **ESR-10** |
 | Tail | per-block fee revenue to ≈ year 135 | **missing** | **EUP-4 prep**, after the zone closed form |
 | Stuffing | `print_envelope`, today / fixed vs relay | **partial**: SKL per shard, not floors per byte; four rows; "tail" is year 45 | every scenario, a floors-per-byte column, true tail rows: **EUP-4 prep** plus the horizon |
 
@@ -671,6 +665,9 @@ steps below and listed at the end.
    - *Predictions owed:* the fixture lines that move and by how much; that no
      onset year, no crossing year and no A1 verdict moves; the
      `--fee-floor` / `--fee-ladder` outputs, which do not round today.
+   - **Landed** 2026-10-28, PR #1213 (`716bd8ab7`). §5.25.1 grades the run.
+     The production arm rounds. `--fee-floor` stayed exact. The size row
+     is open in `FEE_LADDER_DERIVATION.md` §12.
 2. **The parameter sweep** (§B.3a of the brief), as ruled in 2 and 3:
    - **Two generated structs from the one JSON file.** `EconomicParams` is
      chain identity and stays in the digest; every economic constant that is
@@ -698,9 +695,21 @@ steps below and listed at the end.
      copy goes.
    - *Predictions owed:* every default-valued sweep cell equals the default
      report byte for byte; the sweep's own falsifier per parameter.
+   - The run is graded in
+     [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
+     §5.26.1, the completion (#1218, ruled 2026-10-29) in §5.26.2. Three
+     generated structs, one file each: `EconomicParams`
+     (`economics_params.json` and three consensus keys, in the params
+     digest), `ArchivalParams` (`consensus_constants.json`, in the
+     consensus digest) and `RelayPolicy` (`relay_policy.json`, outside
+     both). A sim run is the production baseline plus named overrides
+     (`--set set.field=value`, `--stage2` only), each through its struct's
+     validator; every report opens with the three digests and the
+     overrides, and a cell prints each moved figure beside its baseline.
 3. **ESR-10**, the multi-class pool (`ESR10_PREDICTIONS.md` §0.1) first, then
-   both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), so the
-   re-derived arm needs only `w_ref` as a parameter, which step 2 provides.
+   both constant arms. #1152 delivered the one-zone reader (C2-R2 R3), and
+   `w_ref` is `RelayPolicy::ref_tx_weight`, which a run sets with
+   `--set relay.ref_tx_weight=…` (step 2), so the re-derived arm is a cell.
    ESR-10 runs before the sweep grades the release rails: `M_r` sits at 0.8
    while 22 of 50 are carried (ruling 4).
    - *Predictions owed:* the registered set, amended against the post-#1152

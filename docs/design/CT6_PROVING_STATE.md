@@ -781,7 +781,8 @@ This is the finding, and it corrects a line in production:
 > `assemble.rs`: "…`n` the drained leaf count (765 600 at the graded worst
 > case)."
 
-765 600 is `worst_case_window_leaves` — the **725-block replay window**, about
+The quoted figure is `worst_case_window_leaves` under an S = 4 surge clamp
+(580 000 leaves under the S = 3 clamp) — the **725-block replay window**, about
 one day of chain at a 120 s target. Assembly is not bounded by it.
 `CurveTreeClient::entries` is append-only (`extend` on ingest, replaced
 wholesale only by a rollback's rebuild, never `retain`ed, `drain`ed or
@@ -875,18 +876,21 @@ unqualified "floor" beside a duration invites a reader to merge a staker
 measurement with a floor-device one. They are different numbers on different
 hardware.
 
-Projecting each per-leaf rate at 760 320 leaves/day:
+Projecting each per-leaf rate at 576 000 leaves/day (800 leaves/block at
+depth 6 under the S = 3 surge clamp):
 
 | assembly population | `n` | staker-class x86 (observed, 221 µs/leaf) | floor device, projected (509 µs/leaf) |
 | --- | --- | --- | --- |
-| replay window, ~1 day of chain | 765 600 | **169 s** (measured) | ~6.5 min |
-| `min_leaves_for_depth(6)`, ~23 days | 17 778 529 | ~65 min | ~2.5 h |
-| one year of chain | 277 516 800 | ~17 h | ~39 h |
+| replay window, ~1 day of chain | 580 000 | ~128 s | ~4.9 min |
+| `min_leaves_for_depth(6)`, ~31 days | 17 778 529 | ~65 min | ~2.5 h |
+| one year of chain | 210 240 000 | ~13 h | ~30 h |
 
-The staker column is the **observed before-figure**. The floor-device column is
-a **projection and only that**: 509 µs/leaf is `537.59 ms` ÷ `1 056`
-leaves/block, the per-block replay rate §9 already carries, and no Pi has run
-this instrument. It is here to size the gap, not to grade anything.
+The staker column applies the **observed before-figure**, a per-leaf rate; the
+arm it was observed on is the 2026-10-02 record's 765 600-leaf `rung_top`,
+measured at **169 s**. The floor-device column is a **projection and only
+that**: 509 µs/leaf is `537.59 ms` ÷ `1 056` leaves/block, the per-block replay
+rate §9 measured at that leaf rate, and no Pi has run this instrument. It is
+here to size the gap, not to grade anything.
 
 **Increment 6 does not owe a Pi measurement of today's cost.** Rule 76 pins a
 *graded* figure to the floor device, and what increment 6 grades is capture —
@@ -936,8 +940,8 @@ reading once in this session:
 | axis | value | what it is |
 | --- | --- | --- |
 | rate model | `GRADED_TREE_DEPTH` = 6 | what a path's proof weight is priced at, which fixes a block's leaf rate |
-| replay window | 5 | the depth of the tree 765 600 leaves makes — and it is 5 at every model depth 3…7, since the leaf rate moves 4.5 % across them while a rung needs 38× |
-| the chain | grows | what the curve tree actually is; it crosses `min_leaves_for_depth(6)` after ~23 days, so `GRADED_TREE_DEPTH`'s stated band is satisfied in weeks and its rule-21 reopener was never unsatisfiable |
+| replay window | 5 | the depth of the tree 580 000 leaves makes — and it is 5 at every model depth 3…7, since the leaf rate moves 4.0 % across them (580 000…603 200 leaves) while a rung needs 38× |
+| the chain | grows | what the curve tree actually is; it crosses `min_leaves_for_depth(6)` after ~31 days, so `GRADED_TREE_DEPTH`'s stated band is satisfied in weeks and its rule-21 reopener was never unsatisfiable |
 
 Two set relations are pinned by test so the conflation cannot return: the
 window's leaf count stays strictly below the floor of the rung the rate model
@@ -958,7 +962,12 @@ The populations are chosen so both are observable, and derived from the
 production ladder rather than restated: the cross-rung pair differs by **one
 leaf** (a rung floor and its predecessor), which isolates the layer step from
 the population term entirely, and the same-rung pair separates ≥ 1.5×, where a
-linear term shows as ≥ 50 % against a 10 % bound.
+linear term shows as ≥ 50 % against a 10 % bound. In the replay-window plan the
+window is a reading, not a pair member: the pairs are the window rung's own
+(its floor and `separated_leaves` of it). The window is recorded beside that
+rung, and its separation from the floor is the ratio of the two leaf counts,
+printed and never required. It is not a pair role, and its series does not
+withhold the pair grade.
 
 `expected_cross_rung_ratio` is a **uniform-layer model** and says so: Selene
 nodes are 38 wide and Helios 18, so the true step is in chunk work. It is right
@@ -1515,13 +1524,16 @@ is load-bearing:
   it, the new chain's pair is compared with the old chain's leaf at that
   gindex, reported stale and dropped;
 - **before the first fold**, for the reason above;
-- **inside the respawn-aware wrapper**, because a respawned actor starts with
+- **inside the recovery wrapper**, because a rebuilt client starts with
   an empty registry: the retry re-offers the set before it folds the rest of
   the range. This is also what the earlier ordering rule — "register after
-  the respawn-aware ingest, so a dead actor has been healed" — was for. A
-  dead actor fails this call with the same respawn-recoverable fault the
+  the recovering ingest, so a poisoned client has been rebuilt" — was for. A
+  poisoned client fails this call with the same recoverable fault the
   ingest's own calls raise, and the ordering that rule asked for would have
-  let a respawned actor fold the whole range unregistered.
+  let a rebuilt client fold the whole range unregistered. *Records-was
+  (until 2026-11-02):* recovery was an engine-side respawn of the actor;
+  it is now an in-place rebuild inside it (`CURVE_TREE_CLIENT.md` §11),
+  with the same empty registry and the same placement.
 
 Since the placement is only visible in what the registration *cost*, the
 ingest returns the `OwnershipSync` it got. The first draft of the tests below
@@ -1669,7 +1681,7 @@ each failed by the mutation beside it:
 | --- | --- |
 | `an_output_found_and_drained_within_one_scan_result_is_captured_as_it_folds` | the registration moved behind the fold (`after_drain` reads 1) |
 | `a_reorged_result_registers_against_the_chain_it_keeps` | the registration moved ahead of the rollback (the new pair is reported stale) |
-| `a_respawned_actor_is_re_offered_the_set_before_it_folds` | the respawn retry offering nothing |
+| `a_rebuilt_client_is_re_offered_the_set_before_it_folds` (named `a_respawned_actor_…` until 2026-11-02) | the recovery retry offering nothing |
 | `a_detection_spent_within_the_same_result_is_not_registered` | the spent filter removed |
 | `a_ledger_row_the_result_supersedes_is_not_offered_from_the_ledger` | the range filter removed; the result's observed spends ignored |
 | `refresh::start_refresh_integration_tests::refresh_registers_a_found_output_before_the_fold_reaches_it` | the refresh task handing the ingest an empty set |
@@ -1762,7 +1774,7 @@ the block's listed hash for a body, computed for the coinbase.
 
 **Where it sits.** The expectations ride the same registration step as the
 pairs (`ownership::curve_tree_offer`): inside the ingest, after its
-rollback, before its first fold, inside the respawn wrapper — for §11.12's
+rollback, before its first fold, inside the recovery wrapper — for §11.12's
 reasons, and one more: a rollback leaves the expectations in place, so a
 transaction mined again on the other fork is matched again at its new
 gindex (`a_re_mined_transaction_is_matched_again_after_a_rollback`).

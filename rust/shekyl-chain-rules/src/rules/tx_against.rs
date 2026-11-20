@@ -32,6 +32,7 @@
 //! This module reads the chain and compares that claim; it does not verify
 //! again. I17 and I18 are re-exported so the census path stays.
 
+use shekyl_network::NetworkId;
 use std::collections::BTreeSet;
 
 use crate::block::VerifiedReference;
@@ -107,8 +108,8 @@ impl Rule for I7 {
 impl TxAgainstRule for I7 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
-    fn check<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn check<'id, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         for (input, item) in cx.tx.prefix.inputs.iter().enumerate() {
@@ -253,8 +254,8 @@ impl I10 {
     /// `None` when there is none to look up or it is on no block of this
     /// chain. The row it refuses under is the class arm's
     /// ([`ReferenceRows::lookup`]).
-    fn lookup<'id, V: ChainView<'id>>(
-        cx: &TxContext<'_>,
+    fn lookup<'id, N, V: ChainView<'id>>(
+        cx: &TxContext<'_, N>,
         view: &V,
     ) -> Result<Option<BlockHeight>, V::Fault> {
         let Some(reference) = proof_reference(cx.tx) else {
@@ -359,7 +360,7 @@ impl I11 {
 /// on the parallel stage), and this step reads the record — the chain's
 /// own — for [`judge_reference`] to compare with the claim `form` verified
 /// ([`VerifiedReference`]). A disagreement is
-/// [`Stale::Reference`](crate::Stale::Reference), a fault the driver
+/// [`Stale::Reference`], a fault the driver
 /// answers by forming again, never a verdict; the comparison is the only
 /// place the two witnesses meet, and nothing in `validate` verifies a
 /// proof. The C++ reads only the record (`blockchain.cpp:4152`
@@ -453,13 +454,13 @@ impl I13 {
 
 /// CEN-I15: the FCMP++ membership-and-spend-authorisation proof verifies
 /// over the transaction's spends — the proof bytes, every spend's key
-/// image, every pseudo-out, each spend's PQC key scalar
-/// `k = H_ℓ(hybrid_public_key)` (`shekyl_fcmp_pqc_key_scalar`), the root
-/// at the reference, `layers = depth + 1`, and the prefix hash
-/// (`shekyl_fcmp_verify`, `blockchain.cpp:4224`; `FCMP_PLUS_PLUS.md` §7
-/// step 4). The body is [`shekyl_fcmp::proof::verify`], **the function the
-/// daemon's FFI and daemon-rpc's K12 call** — one verifier, reached from
-/// three sites. The operands are assembled here, beside I12's anchor and
+/// image, every pseudo-out, each spend's PQC key scalar `k`
+/// ([`PqcKeyScalar::from_pqc_auth`]: over the whole solo key, or over a
+/// multisig blob's committed form), the root at the reference,
+/// `layers = depth + 1`, and the transaction's signable hash
+/// (`FCMP_PLUS_PLUS.md` §7 step 4). The body is
+/// [`shekyl_fcmp::proof::verify`], **the function daemon-rpc's K12 calls**
+/// — one verifier, reached from both sites. The operands are assembled here, beside I12's anchor and
 /// I13's depth, where they are defined.
 ///
 /// The row is a function over a **spend subset**, because its two callers
@@ -494,6 +495,7 @@ impl I15 {
         tx: &Transaction,
         spend_slots: &[usize],
         reference: &ReferenceContext,
+        network: &NetworkId,
     ) -> Result<(), ()> {
         let Ct::Fcmp {
             pqc_auths,
@@ -522,7 +524,9 @@ impl I15 {
                 return Err(());
             };
             key_images.push(KeyImage::from_canonical_bytes(*key_image));
-            pqc_keys.push(PqcKeyScalar::from_pqc_public_key(&auth.hybrid_public_key));
+            pqc_keys.push(
+                PqcKeyScalar::from_pqc_auth(auth.scheme_id, &auth.hybrid_public_key).ok_or(())?,
+            );
         }
         let num_inputs = u32::try_from(spend_slots.len()).map_err(|_| ())?;
         let layers = reference.tree_depth.checked_add(1).ok_or(())?;
@@ -538,9 +542,11 @@ impl I15 {
             &key_images,
             &prunable.pseudo_outs,
             &pqc_keys,
-            reference.anchor.as_bytes(),
+            &reference.anchor,
             layers,
-            tx.prefix_hash().to_bytes(),
+            // The transaction's network-bound message (the signing
+            // envelope §2.2): a proof made for another network fails here.
+            tx.tx_signable(network),
         ) {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(()),
@@ -699,8 +705,8 @@ const BOND_POST_REFERENCE: ReferenceRows = ReferenceRows {
 /// passed: those steps' rows are recorded, except where the row is the
 /// refusing one — a refused row is not recorded, whichever of its steps
 /// refused it (on an emission, every step is J21).
-fn refuse_step(
-    cx: &TxContext<'_>,
+fn refuse_step<N>(
+    cx: &TxContext<'_, N>,
     rows: ReferenceRows,
     passed: usize,
     row: CenRow,
@@ -731,8 +737,8 @@ fn refuse_step(
 /// `Option<ReferenceContext>`, `None` when `rows` staged the depth step
 /// off — the anchor then derived, recorded and dropped; no constant has
 /// staged it off since the spend's CEN-I13 landed (2026-10-08).
-fn reference_context<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+fn reference_context<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     rows: ReferenceRows,
     coverage: &mut RuleCoverage,
@@ -782,8 +788,8 @@ fn record_passed_context(rows: ReferenceRows, coverage: &mut RuleCoverage) {
 /// passed rows are recorded only when the chain's context is the claim
 /// `form` verified — the rule the bond-post arm used to keep with a
 /// scratch, now the rule for every class.
-fn context_after_claim<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+fn context_after_claim<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     rows: ReferenceRows,
     verified: Option<VerifiedReference>,
@@ -824,8 +830,8 @@ fn context_after_claim<'id, V: ChainView<'id>>(
 /// the bond post was a vacuous class. Until 2026-10-16 the spend and
 /// emission arms recorded their context rows before the claim was
 /// compared, and only the bond post held them back.
-pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
-    cx: &TxContext<'_>,
+pub(crate) fn judge_reference<'id, N, V: ChainView<'id>>(
+    cx: &TxContext<'_, N>,
     view: &V,
     verified: Option<VerifiedReference>,
     attempt: FormAttempt,
@@ -851,7 +857,7 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
             coverage.insert(J21::ROW);
             context_after_claim(cx, view, BOND_POST_REFERENCE, verified, attempt, coverage)
         }
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => {
+        TxClass::Coinbase => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
@@ -868,8 +874,8 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
 /// another height or root, or no claim at all — is
 /// [`Stale::Reference`], never a verdict, and `validate` never verifies the
 /// proof itself. Pure over its operands, so the mock earns its keep on it.
-fn compare_claim<VF>(
-    cx: &TxContext<'_>,
+fn compare_claim<N, VF>(
+    cx: &TxContext<'_, N>,
     reference: &ReferenceContext,
     verified: Option<VerifiedReference>,
     attempt: FormAttempt,

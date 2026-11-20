@@ -24,7 +24,7 @@ Per [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc)
 this document is the design-doc-first step before any Phase 3 code. It
 exists because the cutover touches a consensus-rule boundary (the PoW
 hash a validating node computes for every block) and the
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 C/Rust boundary, both of which the sub-PR discipline requires be
 specified, surveyed, and reviewer-mapped before implementation.
 
@@ -111,8 +111,8 @@ greped-and-assumed. Line numbers are against `e63701676`.
 
 | File:line | Function | Disposition |
 |-----------|----------|-------------|
-| `src/crypto/pow_randomx.cpp:16` | `RandomXPowSchema::hash` | swap → FFI hash |
-| `src/cryptonote_core/cryptonote_tx_utils.cpp:257` (was `cryptonote_format_utils.cpp:1488` at plan time; re-anchored 2026-09-23) | `get_block_longhash` (blobdata overload) | swap → FFI hash |
+| `pow_randomx.cpp:16` (at the plan's era; deleted with the C++ chain in DRS-X) | `RandomXPowSchema::hash` | swap → FFI hash |
+| `cryptonote_tx_utils.cpp:257` (was `cryptonote_format_utils.cpp:1488` at plan time; re-anchored 2026-09-23; deleted with the C++ chain in DRS-X) | `get_block_longhash` (blobdata overload) | swap → FFI hash |
 | `src/cryptonote_core/cryptonote_tx_utils.cpp` (line 869 at pin `e63701676`; now `:755`) | `get_altblock_longhash` | swap → FFI hash |
 
 Dead (RPC-payment, **left untouched** per §1.2 #1):
@@ -208,6 +208,8 @@ it at this pin); its deletion **LANDED 2026-09-15** with Phase 4.
 
 ## 3. Architecture: v1-C → v2-Rust, pre-genesis
 
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
+
 ### 3.1 What changes
 
 Today, for non-genesis blocks the daemon computes
@@ -266,6 +268,8 @@ tip advance ──► shekyl_pow_randomx_v2_set_canonical(&seed)  [3a]
 
 ### 4.1 Why a second committed export
 
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
+
 Spec §5 commits **one** export (`…_hash`) and lists
 `set_main_seedhash` and `prewarm` as explicitly *not* exported (§5,
 §6, §13). But the ratified sticky-eviction DoS mitigation
@@ -318,7 +322,7 @@ sticky-pin so the canonical cache survives LRU eviction. The eager
 derive is the **internal** prewarm the user direction sanctioned
 (prewarm is forbidden as *FFI surface*, not as Rust-internal
 behavior); moving canonical-cache management into Rust is the
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md)
 forward cut.
 
 ### 4.4 Latency-profile change (named explicitly)
@@ -369,6 +373,8 @@ is a 3c deliverable. Until then the C constants
 (`rx-slow-hash.c:137-138`) are authoritative and unchanged.
 
 ## 6. Phase 3a — FFI export + flag-gated coherent swap
+
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
 
 ### 6.1 Deliverables
 
@@ -425,8 +431,8 @@ The Rust verifier is **light-cache only** (256 MiB `PreparedCache`;
 no dataset in the crate). Miners run the v2 C library in
 **full-dataset** fast mode. RandomX guarantees light and full produce
 identical hashes — but the Phase 2g differential harness compares
-Rust-light vs C-**light** (`randomx-v2-sys` is light-only *by
-design*). The full-dataset path has therefore **never** been
+Rust-light vs C-**light** (the light build of `randomx-v2-sys` leaves
+`full-dataset` off). The full-dataset path has therefore **never** been
 differentially checked against the Rust verifier. The cutover
 invariant is exactly that check:
 
@@ -436,37 +442,37 @@ invariant is exactly that check:
 
 ### 7.2 Test construction
 
-A gated C++ test (built only with `BUILD_RANDOMX_V2_MINER_LIB=ON`,
-which links `external/randomx-v2` @ `aaafe71`):
+The gate is Rust: `shekyl-randomx-differential`'s `full-parity` and
+`miner-kat` binaries, over `randomx-v2-sys`'s `full-dataset` feature
+(the light build does not enable it), bound to `external/randomx-v2`
+@ `aaafe71`.
 
-1. Build the C-full reference **deterministically** — not via
-   `rx-slow-hash.c`'s async state machine (which races light/full),
-   but directly: `randomx_alloc_cache` → `randomx_init_cache` →
-   `randomx_alloc_dataset` → `randomx_init_dataset` →
-   `randomx_create_vm(flags | RANDOMX_FLAG_FULL_MEM | RANDOMX_FLAG_V2)`
-   → `randomx_calculate_hash`. The `RANDOMX_FLAG_V2` inclusion is
-   load-bearing (its omission was the PR #79 divergence).
-2. Compare byte-for-byte against `shekyl_pow_randomx_v2_hash` over a
-   fixed corpus that includes the **genesis** `(seedhash=genesis
-   block hash, blob=genesis hashing blob)` case (spec §16) and
-   several non-genesis blocks.
-3. Pin at least one **miner-produced KAT**: a `(seedhash, blob,
-   expected_hash)` whose `expected_hash` was captured from an actual
-   full-dataset mining run (not an in-process `rx_slow_hash`), frozen
-   as a vector. This closes the in-process-proxy gap — it proves
-   "blocks real miners produce validate under the Rust verifier," not
-   just "two in-process computations agree."
-   **(Status: discharged**, test-regime hardening PR-1, 2026-07. The
-   separate-process miner-shaped tool
-   (`tests/randomx_v2_parity/randomx_v2_miner_kat.cpp`) recomputes the
-   canonical-seed KAT under `FULL_MEM|V2` with no harness plumbing, no
-   Rust FFI, and no consensus code linked, and asserts the frozen
-   `kFrozenKatHashHex` on every gate run —
-   `randomx_v2_full_parity_miner_kat`.)
+1. Build the C-full reference **deterministically**, as a miner does:
+   `randomx_alloc_cache` → `randomx_init_cache` →
+   `randomx_alloc_dataset` → `randomx_init_dataset` (on every core) →
+   `randomx_create_vm(randomx_get_flags() | RANDOMX_FLAG_FULL_MEM |
+   RANDOMX_FLAG_V2)` → `randomx_calculate_hash`. The `RANDOMX_FLAG_V2`
+   inclusion is load-bearing (its omission was the PR #79 divergence).
+   The Rust side is the verifier itself (`PreparedCache::derive`,
+   `compute_hash`).
+2. Compare byte-for-byte, one dataset per process, over three modes:
+   `genesis` (seedhash = mainnet's genesis block hash and blob = its PoW
+   blob, the block assembled as the daemon assembles it from the network
+   table; spec §16), `canonical` (seed `0x01..=0x20`, carrying the frozen
+   known answer `34f8b017…`), and `corpus <i>` (seed group `i` of the
+   nightly random corpus, generated in-process, every case also pinned
+   to its committed canonical hash).
+3. A **miner-shaped known answer**: `miner-kat` recomputes the canonical
+   known answer under `FULL_MEM|V2` with the C library alone (no Rust
+   verifier, no harness corpus, no consensus code) on every gate run.
 
-Gating: a ctest label (e.g. `randomx_v2_full_parity`) in the
-release-gate suite, **not** the per-PR fast gate (the full dataset is
-2+ GiB and minutes to build).
+Gating: the `full-parity` job of `randomx-v2-differential.yml`, cron
+and dispatch only, **not** the per-PR gate (each dataset is ~2 080 MiB).
+The daily scope is genesis, canonical, the miner known answer and corpus
+seeds 0–15; the Monday scope is all 32 seeds, every one of the 1 024
+canonical pins. The Rust verifier's side of the known answer is also a
+per-PR unit test (`shekyl-pow-randomx`'s
+`the_verifier_reproduces_the_canonical_known_answer`).
 
 ### 7.3 Named risk — halt-on-red, not fix-the-test
 
@@ -527,7 +533,7 @@ exists.)
 
 | Gate | Cadence | Asserts |
 |------|---------|---------|
-| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron (`randomx_v2_full_parity_daily` / `randomx_v2_full_parity`; wired by test-regime hardening PR-1, 2026-07) | the cutover invariant; **halt-on-red** |
+| Hole-1 C-full vs Rust-light parity (§7) | daily/weekly cron, the `full-parity` job (`full-parity` and `miner-kat` bins; daily 19 datasets, Monday all 32 corpus seeds) | the cutover invariant; **halt-on-red** |
 | 2g differential (light-vs-light) | per-PR | Rust verifier ≡ C v2 light |
 | Per-hash average latency ≤3.0× (T5, in-mode gate) | daily cron in the dedicated `runtime-modes` job, main + dev matrix; opt-in on dispatch (`runtime_modes` input) — wired by the runtime-mode change, 2026-07; interleaved same-process ratio — runner-noise-immune. Baseline recorded 2026-07-04: 1.817× on the committed runner class (budget holds, ~39% headroom); dev-hardware ~3.1× readings are a hardware artifact (no drift vs the 2g-close pin) — canonical record on `LATENCY_RATIO_BUDGET` | parent §6 line 246 |
 | Three-leg correctness `--mode=correctness` (rust ≡ C ≡ canonical) | per-PR at 16×8 sizing + daily cron at full 32×32 (x86, runtime-mode change) and per-PR on the native-arm lane (PR #239) | the 1024 canonical pins, all three legs |

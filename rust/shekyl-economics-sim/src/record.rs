@@ -27,10 +27,12 @@
 //!
 //! The fixture lives at `docs/test_vectors/economics/baseline_steady_state.json`.
 //! Regenerate it (after an `economics_params.json` or scenario change)
-//! with:
+//! under a cited decision (rule 50), the date naming the
+//! `ECONOMICS_SIM_PRODUCTION_REBASE.md` entry that records what moved:
 //!
 //! ```text
-//! SHEKYL_REGEN_FIXTURES=1 cargo test -p shekyl-economics-sim -- regen_baseline_fixture --ignored
+//! SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+//!   cargo test -p shekyl-economics-sim -- regen_baseline_fixture --ignored
 //! ```
 //!
 //! The non-`--ignored` `committed_fixture_matches_recorder` test fails
@@ -176,8 +178,11 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     // The fee here is a test-vector input, not a model of what users pay:
     // the fixture exists so the engine reproduces the burn and split from a
     // recorded fee total, and any total serves. It stays on the flat arm so
-    // the committed vectors do not move with the run's fee arm.
-    let sim = SimParams::section_12_14_control();
+    // the committed vectors do not move with the run's fee arm, and on the
+    // steady control's traffic so they do not move with the sim's standard
+    // traffic either (§5.35): its job in `shekyl-engine-core` is arithmetic
+    // agreement.
+    let sim = SimParams::section_12_14_control().on_steady();
     let config = scenario_1_baseline(&sim);
     assert!(
         sim.fee.flat_per_tx_atomic().is_some(),
@@ -186,7 +191,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     let params = sim.economic();
 
-    let blocks_per_year = sim.blocks_per_year;
+    let blocks_per_year = sim.blocks_per_year();
     let total_blocks = blocks_per_year * config.sim_years;
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
@@ -199,7 +204,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     for block in 0..total_blocks {
         let priced = chain.price(
             ChainStep {
-                fold_height: block,
                 chain_height: block + config.genesis_height_offset,
                 demand: (config.volume.get_volume)(block, blocks_per_year),
                 leaves: outputs.leaves(),
@@ -208,9 +212,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
                 closed_shards: ClosedShardCount::ZERO,
             },
             &sim,
-            &params,
+            params,
         );
-        outputs.accrue(priced.filled.included);
+        outputs.accrue(priced.filled.carried_txs());
 
         if samples.contains(&block) {
             // One block, one window. The burn the cursor priced and the
@@ -226,9 +230,9 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             };
             let multiplier = calc_release_multiplier(
                 priced.volume,
-                sim.tx_volume_baseline,
-                sim.release_min,
-                sim.release_max,
+                sim.economic().tx_volume_baseline,
+                sim.economic().release_min,
+                sim.economic().release_max,
             );
             // Pool-weighted total: at V3.0 the sim has no separate
             // weighted aggregate, so the principal `total_staked` stands
@@ -237,10 +241,10 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             records.push(RecordedRow {
                 height: block,
                 already_generated_coins: ag_start,
-                base_block_reward: base_block_reward(ag_start, &params)
+                base_block_reward: base_block_reward(ag_start, params)
                     .expect("sim neutral trajectory stays within the arithmetic domain"),
                 release_multiplier_milli: multiplier / 1000,
-                tx_volume: priced.filled.included,
+                tx_volume: priced.filled.carried_txs(),
                 volume_tx_count_sum: priced.volume.tx_count_sum(),
                 volume_window_blocks: priced.volume.blocks(),
                 circulating_supply: circulating,
@@ -263,14 +267,14 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         (5 * blocks_per_year, "≈5 yr"),
         (10 * blocks_per_year, "≈10 yr"),
         (
-            half_emitted_height(&params),
+            half_emitted_height(params),
             "first height with half the asymptote emitted (≈ yr 11 at ESF 22 per block)",
         ),
     ]
     .into_iter()
     .map(|(height, note)| NeutralMilestone {
         height,
-        base_emission_at_neutral: base_emission_at(height, &params)
+        base_emission_at_neutral: base_emission_at(height, params)
             .expect("neutral projection stays within supply bounds"),
         note: note.to_string(),
     })
@@ -284,7 +288,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 
     RecordedChainFixture {
         calibration_generation: shekyl_economics::CALIBRATION_GENERATION,
-        params_digest: digest_label(&params_digest(&params)),
+        params_digest: digest_label(&params_digest(params)),
         scenario: config.name,
         staking_state: staking_state.to_string(),
         records,
@@ -295,6 +299,7 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::committed_fixture::{regenerate, Output};
 
     const FIXTURE_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -315,20 +320,25 @@ mod tests {
         assert_eq!(fx.staking_state, "live");
     }
 
-    /// Regenerate the committed fixture. Ignored by default; run with
-    /// `SHEKYL_REGEN_FIXTURES=1 cargo test -p shekyl-economics-sim -- \
-    /// regen_baseline_fixture --ignored`.
+    /// Regenerate the committed fixture, armed (rule 50). Ignored by
+    /// default; run with `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD
+    /// <rationale>" cargo test -p shekyl-economics-sim -- --ignored
+    /// regen_baseline_fixture`, the date naming the
+    /// `ECONOMICS_SIM_PRODUCTION_REBASE.md` entry that records what moved.
     #[test]
-    #[ignore = "regeneration helper; writes the committed fixture"]
+    #[ignore = "armed regeneration helper; writes the committed fixture; requires SHEKYL_PINNED_REGEN_DECISION"]
     fn regen_baseline_fixture() {
-        assert_eq!(
-            std::env::var("SHEKYL_REGEN_FIXTURES").as_deref(),
-            Ok("1"),
-            "set SHEKYL_REGEN_FIXTURES=1 to regenerate"
+        regenerate(
+            "the recorded baseline chain",
+            &[Output {
+                path: FIXTURE_PATH,
+                build: || {
+                    serde_json::to_string_pretty(&record_baseline_fixture())
+                        .expect("serialize fixture")
+                        + "\n"
+                },
+            }],
         );
-        let fx = record_baseline_fixture();
-        let json = serde_json::to_string_pretty(&fx).expect("serialize fixture");
-        std::fs::write(FIXTURE_PATH, json + "\n").expect("write fixture");
     }
 
     #[test]
@@ -339,7 +349,8 @@ mod tests {
         assert_eq!(
             committed,
             record_baseline_fixture(),
-            "committed fixture drifted from recorder; regenerate with SHEKYL_REGEN_FIXTURES=1"
+            "committed fixture drifted from recorder; if the change is intended, cite its \
+             decision-log entry and regenerate (regen_baseline_fixture)"
         );
     }
 }

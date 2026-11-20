@@ -5,8 +5,9 @@
 
 //! The trace artifact (§3.9): round trips, pinned layout facts, every
 //! refusal observed; and `fetch_corpus` against a scripted transport — in
-//! particular RD-F15's pruned answer. The corpus's own tests live in
-//! `corpus_tests.rs`.
+//! particular RD-F15's pruned answer. The codec's laws live in
+//! `shekyl-corpus`. `corpus_tests.rs` is the replay adapter: sequenced
+//! events, the rewind, and the bundle section on the candidate.
 
 use std::io::Cursor;
 
@@ -68,10 +69,10 @@ fn the_trace_round_trips_through_both_doors() {
     for hh in 0..3 {
         w.push_facts(h(hh), &facts_at(hh)).expect("facts");
     }
-    let hashes = [[0x11; 32], [0x12; 32], [0x13; 32]];
-    let spent = [[0x21; 32], [0x22; 32]];
+    let hashes = [0x11, 0x12, 0x13].map(|b| BlockHash::from_bytes([b; 32]));
+    let spent = [0x21, 0x22].map(|b| shekyl_types::KeyImage::from_bytes([b; 32]));
     let root = CurveTreeRoot::from_bytes([0xc2; 32]);
-    let state = digest_v0(&hashes, &spent, root.as_bytes());
+    let state = digest_v0(&hashes, &spent, &root);
     w.push_checkpoint(&state).expect("checkpoint");
     // The checkpoint's other encoding (§3.8.1): one accrual row, one
     // budget row — 8 + 8 bytes each behind a `u32` length.
@@ -139,7 +140,7 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
             found: 2
         }
     ));
-    let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+    let state = digest_v0(&[], &[], &CurveTreeRoot::EMPTY);
     let mut empty = TraceWriter::new(Vec::new()).expect("header");
     assert!(matches!(
         empty.push_checkpoint(&state).expect_err("no facts"),
@@ -226,7 +227,7 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     // checkpoint's. A trace with no checkpoint carries neither and reads;
     // the `0x00` layout, which carried neither record, is not read at all.
     let empty = ArchivalSnapshot::empty();
-    let state = digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes());
+    let state = digest_v0(&[], &[], &CurveTreeRoot::EMPTY);
 
     // Writer: unanchored, duplicate, missing.
     let mut w = TraceWriter::new(Vec::new()).expect("header");
@@ -313,7 +314,8 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     ));
     // Reader: a row the snapshot refuses — a second row of a singleton
     // family — is the snapshot's fault, carried.
-    let mut two_watermarks = good[..snapshot_at + 1 + 8 + 9 * 8].to_vec();
+    // Every family's empty count but the last, the watermark's.
+    let mut two_watermarks = good[..snapshot_at + 1 + 8 + EMPTY_BODY_LEN - 8].to_vec();
     two_watermarks.extend_from_slice(&2u64.to_le_bytes());
     for epoch in [1u64, 2] {
         two_watermarks.extend_from_slice(&8u32.to_le_bytes());
@@ -389,21 +391,26 @@ mod fetch {
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
-    use shekyl_rpc_client::{Rpc, RpcError};
-    use shekyl_rpc_types::{
-        BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus,
-    };
-    use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+    use shekyl_rpc_client::{wire, Rpc, RpcError, RpcMethod};
+    use shekyl_rpc_types::hash::HashHex;
+    use shekyl_rpc_types::kinds::{Asked as Selected, Bytes, Integer};
+    use shekyl_rpc_types::wire::block::BlockTx;
+    use shekyl_rpc_types::wire::shared::{Archived, ArchivedState, OrArchived};
+    use shekyl_types::{BlockHeight, TxHash};
 
     use super::three_blocks;
-    use crate::corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter};
-    use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
-    use crate::source::{IngestEvent, Injection, Sequenced, ServeCredit, Source};
+    use shekyl_corpus::{CorpusFault, CorpusWriter};
 
-    /// One recorded request: the route and the heights asked.
+    use crate::corpus::CorpusSource;
+    use crate::fetch::{fetch_corpus, FetchFault};
+    use crate::source::Source;
+    use shekyl_network::Network;
+
+    /// One recorded request: the method and the heights asked.
     type Asked = (String, Vec<u64>);
 
-    /// A transport that answers from a script and records what it was asked.
+    /// A transport that answers from a script of JSON-RPC replies and
+    /// records what it was asked.
     #[derive(Clone)]
     struct Scripted {
         replies: Arc<Mutex<VecDeque<Vec<u8>>>>,
@@ -411,12 +418,23 @@ mod fetch {
     }
 
     impl Scripted {
-        fn new(replies: &[GetBlocksByHeightResponse]) -> Self {
+        /// Each reply a `block_list` result.
+        fn new(results: &[serde_json::Value]) -> Self {
+            Self::envelopes(
+                &results
+                    .iter()
+                    .map(|result| serde_json::json!({"jsonrpc": "2.0", "id": 0, "result": result}))
+                    .collect::<Vec<_>>(),
+            )
+        }
+
+        /// Each reply a whole JSON-RPC envelope.
+        fn envelopes(envelopes: &[serde_json::Value]) -> Self {
             Self {
                 replies: Arc::new(Mutex::new(
-                    replies
+                    envelopes
                         .iter()
-                        .map(|r| r.to_bin().expect("encode"))
+                        .map(|envelope| serde_json::to_vec(envelope).expect("encode"))
                         .collect(),
                 )),
                 asked: Arc::new(Mutex::new(Vec::new())),
@@ -427,30 +445,75 @@ mod fetch {
     impl Rpc for Scripted {
         fn post(
             &self,
-            route: &str,
+            _route: &str,
             body: Vec<u8>,
         ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
-            let req = GetBlocksByHeightRequest::from_bin(&body).expect("a by-height request");
-            self.asked
-                .lock()
-                .expect("lock")
-                .push((route.to_owned(), req.heights));
+            let request: serde_json::Value = serde_json::from_slice(&body).expect("a request");
+            let heights = request["params"]["height"]
+                .as_array()
+                .expect("a by-height request")
+                .iter()
+                .map(|h| h.as_u64().expect("a height"))
+                .collect();
+            self.asked.lock().expect("lock").push((
+                request["method"].as_str().expect("a method").to_owned(),
+                heights,
+            ));
             let next = self.replies.lock().expect("lock").pop_front();
             async move { next.ok_or_else(|| RpcError::ConnectionError("script exhausted".into())) }
         }
     }
 
-    fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> GetBlocksByHeightResponse {
-        GetBlocksByHeightResponse {
-            status: RpcStatus::ok(),
-            blocks: entries
+    /// A served block's header. Nothing here is read by the fetch.
+    fn header(height: BlockHeight) -> serde_json::Value {
+        let zero = "00".repeat(32);
+        serde_json::json!({
+            "height": height.to_raw(), "hash": zero, "parent": zero, "version_major": 1,
+            "version_minor": 0, "time": 0, "nonce": 0, "orphan": false, "depth": 0,
+            "difficulty": "0x1", "difficulty_cumulative": "0x1", "reward": "0",
+            "weight": 0, "weight_longterm": 0, "tx_count": 0,
+            "coinbase": zero, "curve_root": zero, "section_root": zero,
+        })
+    }
+
+    /// A full-form reply: every listed body whole.
+    fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> serde_json::Value {
+        reply_with(entries, |body| {
+            OrArchived::Item(BlockTx {
+                id: HashHex::ZERO,
+                body: Bytes(body.clone()),
+                // The full form, asked without `prune`: `{id, body}`.
+                prunable_hash: Selected::Unasked,
+                pqc_auth_hash: Selected::Unasked,
+                archival_size: Selected::Unasked,
+            })
+        })
+    }
+
+    /// A full-form reply with each body shaped by `slot`.
+    fn reply_with(
+        entries: &[(Vec<u8>, Vec<Vec<u8>>)],
+        mut slot: impl FnMut(&Vec<u8>) -> OrArchived<BlockTx>,
+    ) -> serde_json::Value {
+        serde_json::Value::Array(
+            entries
                 .iter()
-                .map(|(block, txs)| BlockEntry {
-                    block: block.clone(),
-                    txs: txs.clone(),
+                .enumerate()
+                .map(|(index, (block, txs))| {
+                    let height =
+                        BlockHeight::from_raw(u64::try_from(index).expect("a block height"));
+                    serde_json::json!({
+                        "header": header(height),
+                        "body": Bytes(block.clone()),
+                        "tx": txs.iter().map(&mut slot).collect::<Vec<_>>(),
+                        "output_index": 0,
+                        "section": [],
+                        "section_body": [],
+                        "draws": 1,
+                    })
                 })
                 .collect(),
-        }
+        )
     }
 
     fn batch(n: usize) -> std::num::NonZeroUsize {
@@ -458,25 +521,28 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn fetches_in_batches_through_the_route_and_the_corpus_reads_back() {
+    async fn fetches_in_batches_through_block_list_and_the_corpus_reads_back() {
         let blocks = three_blocks();
         let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &[], &mut w)
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &mut w)
             .await
             .expect("fetched");
         assert_eq!(written, 3);
         assert_eq!(
             *rpc.asked.lock().expect("lock"),
-            vec![(ROUTE.to_owned(), vec![0, 1]), (ROUTE.to_owned(), vec![2])]
+            vec![
+                (<wire::BlockList as RpcMethod>::NAME.to_owned(), vec![0, 1]),
+                (<wire::BlockList as RpcMethod>::NAME.to_owned(), vec![2])
+            ]
         );
         let bytes = w.finish().expect("count").into_inner();
-        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+        let mut r = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
         let mut n = 0;
         while r.next().expect("record").is_some() {
             n += 1;
@@ -485,21 +551,71 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn a_pruned_answer_is_caught_by_the_writer_at_its_height() {
-        // RD-F15 end to end: the daemon returns block 2 with one of its two
-        // bodies and says nothing; the fetcher hands it to the writer and
-        // the writer names height 2.
+    async fn an_archived_slot_is_refused_at_its_height() {
+        // PDM-Q10 / SB-Q2: the daemon names a body it discarded as that
+        // slot's `archived` state. A corpus needs the body whole, so the
+        // fetch refuses before the writer sees the block, naming the height,
+        // the transaction and the shard the archive serves it from.
+        let blocks = three_blocks();
+        let archived_hash = [0xa7; 32];
+        let mut slots = 0;
+        let rpc = Scripted::new(&[reply_with(&blocks, |body| {
+            slots += 1;
+            if slots == 2 {
+                OrArchived::Archived(ArchivedState::Archived(Archived {
+                    id: HashHex::from_bytes(archived_hash),
+                    shard: Integer(7),
+                }))
+            } else {
+                OrArchived::Item(BlockTx {
+                    id: HashHex::ZERO,
+                    body: Bytes(body.clone()),
+                    prunable_hash: Selected::Unasked,
+                    pqc_auth_hash: Selected::Unasked,
+                    archival_size: Selected::Unasked,
+                })
+            }
+        })]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            Network::Regtest,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
+            .await
+            .expect_err("archived");
+        match err {
+            FetchFault::Archived {
+                height,
+                tx_hash,
+                shard: 7,
+            } => {
+                assert_eq!(tx_hash, TxHash::from_bytes(archived_hash));
+                // Block 0 lists no body and block 1 one, so the second slot
+                // is block 2's first.
+                assert_eq!(height, BlockHeight::from_raw(2));
+            }
+            other => panic!("{other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_short_body_list_is_caught_by_the_writer_at_its_height() {
+        // RD-F15 end to end: a reply lists fewer bodies than block 2's header
+        // does, with every slot it does carry whole; the fetcher hands it to
+        // the writer and the writer names height 2.
         let blocks = three_blocks();
         let mut pruned = blocks.clone();
         pruned[2].1.truncate(1);
         let rpc = Scripted::new(&[reply(&pruned)]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("pruned");
         match err {
@@ -513,42 +629,58 @@ mod fetch {
     }
 
     #[tokio::test]
-    async fn a_refusal_and_a_short_reply_are_the_conversations_faults() {
+    async fn a_refusal_a_missing_block_and_a_short_reply_are_the_conversations_faults() {
         let blocks = three_blocks();
-        let refused = GetBlocksByHeightResponse {
-            status: RpcStatus("Failed".into()),
-            blocks: Vec::new(),
-        };
-        let rpc = Scripted::new(&[refused]);
+        let refused = serde_json::json!({"jsonrpc": "2.0", "id": 0, "error": {
+            "code": -32004, "message": "not ready",
+            "data": {"code": "daemon.unready", "parameter": {}, "message": "not ready"},
+        }});
+        let rpc = Scripted::envelopes(&[refused]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("refused");
         assert!(
-            matches!(
-                err,
-                FetchFault::Refused {
-                    first: 0,
-                    end: 3,
-                    ..
-                }
-            ),
+            matches!(&err, FetchFault::Rpc(RpcError::Refused(refusal))
+                if refusal.diagnostic.code == "daemon.unready"),
+            "{err}"
+        );
+
+        // A height above the tip is `{"missing": null}`: the daemon holds
+        // no block there, and the fetch names the height.
+        let mut slots = reply(&blocks[..2]);
+        slots
+            .as_array_mut()
+            .expect("slots")
+            .push(serde_json::json!({ "missing": null }));
+        let rpc = Scripted::new(&[slots]);
+        let mut w = CorpusWriter::create(
+            std::io::Cursor::new(Vec::new()),
+            Network::Regtest,
+            BlockHeight::from_raw(0),
+        )
+        .expect("header");
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
+            .await
+            .expect_err("missing");
+        assert!(
+            matches!(err, FetchFault::Missing { height } if height == BlockHeight::from_raw(2)),
             "{err}"
         );
 
         let rpc = Scripted::new(&[reply(&blocks[..1])]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[], &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("short");
         assert!(
@@ -566,91 +698,15 @@ mod fetch {
         let rpc = Scripted::new(&[]);
         let mut w = CorpusWriter::create(
             std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
+            Network::Regtest,
             BlockHeight::from_raw(0),
         )
         .expect("header");
         assert!(matches!(
-            fetch_corpus(&rpc, 0..1, batch(1), &[], &mut w)
+            fetch_corpus(&rpc, 0..1, batch(1), &mut w)
                 .await
                 .expect_err("transport"),
             FetchFault::Rpc(RpcError::ConnectionError(_))
         ));
-    }
-
-    fn receipt(at: u64, tag: u8) -> Injection {
-        Injection {
-            at: BlockHeight::from_raw(at),
-            credit: ServeCredit {
-                persona: PCanonicalId::from_bytes([tag; 32]),
-                shard: ShardId::from_raw(u64::from(tag) + 100),
-                epoch: SettlementEpoch::from_raw(u64::from(tag)),
-            },
-        }
-    }
-
-    /// The injector's receipts are placed right after the block at their
-    /// height — across a batch boundary, two at one height in the order
-    /// given — and the corpus reads the `Inject` back where the daemon
-    /// wrote it. A receipt the range does not reach is refused before the
-    /// first request.
-    #[tokio::test]
-    async fn injections_land_beside_their_block_and_a_stray_one_is_refused_first() {
-        let blocks = three_blocks();
-        let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        // Out of height order on purpose: placement is by `at`, not by
-        // position in the flag list.
-        let receipts = [receipt(2, 0x22), receipt(1, 0x11), receipt(2, 0x33)];
-        let written = fetch_corpus(&rpc, 0..3, batch(2), &receipts, &mut w)
-            .await
-            .expect("fetched");
-        assert_eq!(written, 3, "blocks, not records");
-        let bytes = w.finish().expect("count").into_inner();
-        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-        assert_eq!(r.declared(), 6);
-        let mut shape = Vec::new();
-        while let Some(Sequenced { event, .. }) = r.next().expect("record") {
-            shape.push(match event {
-                IngestEvent::Extend(_) => None,
-                IngestEvent::Inject(credit) => Some(credit),
-                other => panic!("{other:?}"),
-            });
-        }
-        assert_eq!(
-            shape,
-            vec![
-                None,
-                None,
-                Some(receipts[1].credit),
-                None,
-                Some(receipts[0].credit),
-                Some(receipts[2].credit),
-            ]
-        );
-
-        let rpc = Scripted::new(&[reply(&blocks)]);
-        let mut w = CorpusWriter::create(
-            std::io::Cursor::new(Vec::new()),
-            CorpusNet::Fakechain,
-            BlockHeight::from_raw(0),
-        )
-        .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, batch(10), &[receipt(3, 0x44)], &mut w)
-            .await
-            .expect_err("stray");
-        assert!(
-            matches!(err, FetchFault::InjectionOutOfRange { injection } if injection == receipt(3, 0x44)),
-            "{err}"
-        );
-        assert!(
-            rpc.asked.lock().expect("lock").is_empty(),
-            "refused before any block was requested"
-        );
     }
 }

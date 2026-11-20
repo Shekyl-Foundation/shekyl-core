@@ -42,7 +42,7 @@
 //! - [`bundle_commitment`] — what the witness signs.
 //! - [`bundle_prunable_hash`] — what a reference carries of the prunable
 //!   part, and the key a body is fetched and accepted by.
-//! - [`bundle_root`] — what the block header commits to.
+//! - [`section_root`] — what the block header commits to.
 //!
 //! All three are consensus: every node must compute the same bytes.
 //!
@@ -52,9 +52,7 @@
 //! is the pure verifier in `shekyl-chain-rules` (`archival::bundle`), which
 //! `SO-D12`'s cutover increment calls at admission
 //! ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-//! §9.6, §11). The carrier's set commitment
-//! ([`serve_credit_batch_commitment`](crate::secret_draw::serve_credit_batch_commitment))
-//! is what this replaces; it stays beside it until that lane deletes it.
+//! §9.6, §11).
 //!
 //! # No secrets
 //!
@@ -62,23 +60,30 @@
 //! the reveal. The seed and the witness key *before* the reveal are the
 //! challenger's, held in its ring, and never pass through these types.
 
+use std::collections::BTreeMap;
+
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridPublicKey, FnDsaHybridSignature};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
+use shekyl_network::envelope::{Framed64, IdDomain, W64};
+use shekyl_network::NetworkId;
+
 use crate::hash::cshake256_32;
-use crate::secret_draw::COUNT_CAP_BASE_MULTIPLE;
+use crate::ArchivalParams;
 use crate::SettlementSchedule;
 
-/// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
-/// one message, versioned).
-pub const BUNDLE_COMMITMENT_CUSTOMIZATION: &[u8] = b"shekyl/archival-serve-credit-bundle-v1";
+/// The envelope domain of [`bundle_commitment`]: two fields under the
+/// network's id, 64 bytes wide because a hybrid signature signs it (the
+/// signing envelope §2.4, §2.7).
+pub const BUNDLE_COMMITMENT: IdDomain<2, W64> =
+    IdDomain::new(b"shekyl/archival-serve-credit-bundle-v2");
 
 /// cSHAKE256 customization for [`bundle_prunable_hash`].
 pub const BUNDLE_PRUNABLE_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-prunable-v1";
 
-/// cSHAKE256 customization for [`bundle_root`].
-pub const BUNDLE_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
+/// cSHAKE256 customization for [`section_root`].
+pub const SECTION_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-bundle-root-v1";
 
 /// The draw seed's length.
 pub const BUNDLE_SEED_LEN: usize = 32;
@@ -105,13 +110,6 @@ pub const BUNDLE_KEPT_FIXED_LEN: usize = BUNDLE_SEED_LEN + 8 + 4;
 /// A reference before its bitmap: the kept part's fixed bytes and the
 /// 32-byte hash of the prunable part.
 pub const BUNDLE_REF_FIXED_LEN: usize = BUNDLE_KEPT_FIXED_LEN + 32;
-
-/// The section budget's multiple of the count cap, `c`.
-///
-/// **PROVISIONAL** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.2 V6, `SCS-P20`).
-/// Reopen when it binds on the first build, or when section bytes,
-/// propagation to Tor peers, the orphan rate or `BA-T33` say otherwise.
-pub const BUNDLE_SECTION_BUDGET_MULTIPLE: u64 = 2;
 
 // The specification's widths (§6.2, §7.2, §7.4), as numbers, against the
 // widths derived from the scheme. A scheme whose key or signature has a
@@ -400,10 +398,11 @@ impl BundleKept {
     }
 
     /// [`bundle_commitment`] over this kept part and `records`, the
-    /// records' bytes in order ([`BundleBody::records_bytes`]).
+    /// records' bytes in order ([`BundleBody::records_bytes`]), on the
+    /// network whose id is `network_id`.
     #[must_use]
-    pub fn commitment(&self, records: &[u8]) -> [u8; 32] {
-        bundle_commitment(self, records)
+    pub fn commitment(&self, network_id: &NetworkId, records: &[u8]) -> Framed64 {
+        bundle_commitment(network_id, self, records)
     }
 
     /// [`bundle_charge`] of this bundle's stated count.
@@ -535,6 +534,56 @@ impl BundleRef {
             u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
         BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
+
+    /// The body this reference names, from bytes a peer sent for it
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): accepted only at exactly
+    /// [`Self::body_len`] bytes and only on hash equality.
+    ///
+    /// The length is checked before anything is hashed, so a body the
+    /// reference's bitmaps do not fix costs a comparison and no hash. A
+    /// body that passes both is not yet a valid bundle: the witness and
+    /// receipt checks are admission's (§9.1).
+    ///
+    /// # Errors
+    ///
+    /// [`BodyRefused::Length`] for any length but [`Self::body_len`];
+    /// [`BodyRefused::Hash`] when the bytes do not hash to the reference's
+    /// prunable hash.
+    pub fn accept_body(&self, bytes: &[u8]) -> Result<BundleBody, BodyRefused> {
+        let expected = self.body_len();
+        if u64::try_from(bytes.len()).ok() != Some(expected) {
+            return Err(BodyRefused::Length {
+                expected,
+                found: bytes.len(),
+            });
+        }
+        if bundle_prunable_hash(bytes) != self.prunable_hash {
+            return Err(BodyRefused::Hash);
+        }
+        // The exact length is the witness and a whole number of records,
+        // so this decode cannot refuse; its error is mapped, not unwrapped.
+        BundleBody::decode(bytes).map_err(|_| BodyRefused::Length {
+            expected,
+            found: bytes.len(),
+        })
+    }
+}
+
+/// Bytes refused as the body a reference names (§7.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BodyRefused {
+    /// The reference's bitmaps fix the body's length, and these bytes are
+    /// another length.
+    #[error("the reference names a {expected}-byte body, not {found} bytes")]
+    Length {
+        /// [`BundleRef::body_len`].
+        expected: u64,
+        /// The bytes offered.
+        found: usize,
+    },
+    /// The bytes do not hash to the reference's prunable hash.
+    #[error("the body does not hash to the reference's prunable hash")]
+    Hash,
 }
 
 /// One pass record. It names nothing: its draw is the position of its bit,
@@ -700,7 +749,8 @@ impl BundleBody {
 ///
 /// `records` are the set bits' records in bitmap order, economy first and
 /// support after. `sign` is the witness's signing capability: it is handed
-/// the 32-byte commitment and returns the canonical scheme-3 signature
+/// the 64-byte commitment on the network whose id is `network_id` and
+/// returns the canonical scheme-3 signature
 /// under `SCHEME_DOMAIN_WITNESS_BUNDLE` ([`sign_bundle_commitment`] over a
 /// held key). The secret key itself never enters this function, so the
 /// producer's ring can keep it. The fixture producer
@@ -713,13 +763,14 @@ impl BundleBody {
 ///
 /// Whatever `sign` returns.
 pub fn assemble_bundle<E>(
+    network_id: &NetworkId,
     kept: &BundleKept,
     records: &[BundleRecord],
     witness_public_key: &[u8; BUNDLE_WITNESS_KEY_LEN],
-    sign: impl FnOnce(&[u8; 32]) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
+    sign: impl FnOnce(&Framed64) -> Result<[u8; BUNDLE_SIGNATURE_LEN], E>,
 ) -> Result<(BundleRef, BundleBody), E> {
     let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
-    let signature = sign(&kept.commitment(&records_bytes))?;
+    let signature = sign(&kept.commitment(network_id, &records_bytes))?;
     let body = BundleBody::new(witness_public_key, &signature, records);
     Ok((BundleRef::of(kept, &body), body))
 }
@@ -733,15 +784,48 @@ pub fn assemble_bundle<E>(
 /// canonical width.
 pub fn sign_bundle_commitment(
     secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
-    commitment: &[u8; 32],
+    commitment: &Framed64,
 ) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
     use shekyl_crypto_pq::signature::SignatureScheme as _;
-    let signature = shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
+    canonical_scheme3(shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign(
         secret,
         shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
-        commitment,
-    )?;
-    signature.to_canonical_bytes().try_into().map_err(|_| {
+        commitment.as_bytes(),
+    ))
+}
+
+/// [`sign_bundle_commitment`] with FN-DSA's nonce drawn from `rng_seed`, so
+/// one seed gives the same witness signature (`CHAIN_FORGE.md` §5.3, S8).
+/// Only under the TEST_ONLY `seeded-rng` feature: a shipped build's witness
+/// signs with the OS.
+///
+/// # Errors
+///
+/// As [`sign_bundle_commitment`].
+#[cfg(feature = "seeded-rng")]
+pub fn sign_bundle_commitment_seeded(
+    secret: &shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSecretKey,
+    commitment: &Framed64,
+    rng_seed: &[u8; 32],
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    canonical_scheme3(
+        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa.sign_with_rng_seed(
+            secret,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_WITNESS_BUNDLE,
+            commitment.as_bytes(),
+            rng_seed,
+        ),
+    )
+}
+
+/// A scheme-3 signature at the width a bundle's prunable part stores.
+fn canonical_scheme3(
+    signed: Result<
+        shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridSignature,
+        shekyl_crypto_pq::CryptoError,
+    >,
+) -> Result<[u8; BUNDLE_SIGNATURE_LEN], shekyl_crypto_pq::CryptoError> {
+    signed?.to_canonical_bytes().try_into().map_err(|_| {
         shekyl_crypto_pq::CryptoError::SerializationError(
             "a scheme-3 signature is not the canonical width".into(),
         )
@@ -753,24 +837,25 @@ pub fn sign_bundle_commitment(
 /// `SCS-P35`).
 ///
 /// ```text
-/// cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
-///              ‖ support_count_le[4] ‖ support_bitmap ‖ r₁ ‖ … ‖ rₙ)
+/// frame("shekyl/archival-serve-credit-bundle-v2", network_id, [kept, records])[..64]
+/// kept    = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
+///           ‖ support_count_le[4] ‖ support_bitmap
+/// records = r₁ ‖ … ‖ rₙ
 /// ```
 ///
-/// That is **the kept part followed by the records**: the preimage opens
-/// with [`BundleKept::encode`], the same bytes a reference opens with, and
-/// `records` follows — the records' bytes in order, each
-/// [`BUNDLE_RECORD_LEN`] wide. The hash does not check the records'
-/// length: the verifier holds their number to the bitmap's set bits before
-/// it compares. Nothing is framed because nothing needs to be (module
-/// docs).
+/// Field 1 is [`BundleKept::encode`], the same bytes a reference opens
+/// with; field 2 the records' bytes in order, each [`BUNDLE_RECORD_LEN`]
+/// wide. The hash does not check the records' length: the verifier holds
+/// their number to the bitmap's set bits before it compares.
+///
+/// The network's id is at position 0 because nothing else in the message
+/// is network-bound: the seed is the witness's own random value, and the
+/// draw commitment that binds it to block `h` is checked beside this
+/// signature, not inside it. With the id, a witness signature made on one
+/// network verifies on no other (the signing envelope §2.4).
 #[must_use]
-pub fn bundle_commitment(kept: &BundleKept, records: &[u8]) -> [u8; 32] {
-    let mut input = Vec::with_capacity(kept.encoded_len() + records.len());
-    kept.encode_into(&mut input);
-    input.extend_from_slice(records);
-    cshake256_32(BUNDLE_COMMITMENT_CUSTOMIZATION, &input)
+pub fn bundle_commitment(network_id: &NetworkId, kept: &BundleKept, records: &[u8]) -> Framed64 {
+    BUNDLE_COMMITMENT.frame(network_id, [&kept.encode(), records])
 }
 
 /// The hash of a bundle's prunable bytes: what its reference carries, and
@@ -786,6 +871,45 @@ pub fn bundle_commitment(kept: &BundleKept, records: &[u8]) -> [u8; 32] {
 #[must_use]
 pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
     cshake256_32(BUNDLE_PRUNABLE_CUSTOMIZATION, prunable)
+}
+
+/// Bundle bodies a block carried or a peer sent, each hashed once by
+/// [`bundle_prunable_hash`], so that each of a section's references finds
+/// its body by a lookup (§7.5).
+///
+/// Trying every carried body against every reference hashes each body
+/// once per reference: `n` references and `n` bodies cost `n²` hashes of
+/// bytes a peer chose. Indexed, each body costs one hash and each
+/// reference one lookup. A body carried twice is indexed once.
+///
+/// A lookup matches on the hash alone. Whether the bytes are the
+/// reference's body is still [`BundleRef::accept_body`]'s to say (its
+/// length), and whether they parse is the validator's.
+#[derive(Clone, Debug, Default)]
+pub struct CarriedBodies<'a> {
+    by_hash: BTreeMap<[u8; 32], &'a [u8]>,
+}
+
+impl<'a> CarriedBodies<'a> {
+    /// Hash each of `carried` once and index it by its prunable hash.
+    #[must_use]
+    pub fn index<I>(carried: I) -> Self
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        let mut by_hash = BTreeMap::new();
+        for bytes in carried {
+            by_hash.entry(bundle_prunable_hash(bytes)).or_insert(bytes);
+        }
+        Self { by_hash }
+    }
+
+    /// The carried bytes whose prunable hash is the one `reference`
+    /// states, if any were carried.
+    #[must_use]
+    pub fn named_by(&self, reference: &BundleRef) -> Option<&'a [u8]> {
+        self.by_hash.get(reference.prunable_hash()).copied()
+    }
 }
 
 /// The header root over a block's bundle references, in the order given
@@ -814,14 +938,24 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 /// root's preimage counts them in four bytes, so such a section has no
 /// root. A consensus caller refuses the section for it; nothing here
 /// panics.
-pub fn bundle_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
+pub fn section_root(refs: &[BundleRef]) -> Result<[u8; 32], TooManyReferences> {
     let n = section_reference_count(refs.len())?;
     let mut input = Vec::new();
     input.extend_from_slice(&n.to_le_bytes());
     for reference in refs {
         reference.encode_into(&mut input);
     }
-    Ok(cshake256_32(BUNDLE_ROOT_CUSTOMIZATION, &input))
+    Ok(cshake256_32(SECTION_ROOT_CUSTOMIZATION, &input))
+}
+
+/// The root of a section with no references: what the header commits to
+/// on a block that admits no bundle, genesis included (§7.3, `SCS-P34`).
+#[must_use]
+pub fn empty_section_root() -> [u8; 32] {
+    match section_root(&[]) {
+        Ok(root) => root,
+        Err(_) => unreachable!("an empty section's count fits"),
+    }
 }
 
 /// A section holds more references than the root's `n_le[4]` can count.
@@ -840,9 +974,9 @@ pub struct TooManyReferences {
 /// `n` as the root's preimage carries it: the section's reference count in
 /// 32 bits, checked, never truncated.
 ///
-/// Crate-private. [`bundle_root`] is the caller. The bound is tested on
+/// Crate-private. [`section_root`] is the caller. The bound is tested on
 /// this function because a section of 2³² references is not something a
-/// test allocates. The verifier maps [`bundle_root`]'s error and does not
+/// test allocates. The verifier maps [`section_root`]'s error and does not
 /// call this.
 ///
 /// # Errors
@@ -878,18 +1012,28 @@ pub const fn bundle_charge(count: u32) -> u64 {
 /// ```
 ///
 /// `d_max` is the largest `D` among the epochs of the bundles in the
-/// section, and `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`] in production.
-/// `⌊9·D / SEB⌋ + 1` is the count cap: the per-block target is at most
-/// `9·D / SEB` and the carry adds less than one. The `9` is
-/// [`COUNT_CAP_BASE_MULTIPLE`], the one the count rule caps at. The `+ 1` is what lets a
-/// network below `SEB / 9` pairs admit a bundle at all.
+/// section, and `c` is `params`'
+/// [`bundle_section_budget_multiple`](ArchivalParams::bundle_section_budget_multiple)
+/// (2, `SCS-P20`, PROVISIONAL §13.2 V6). `⌊9·D / SEB⌋ + 1` is the count
+/// cap: the per-block target is at most `9·D / SEB` and the carry adds less
+/// than one. The `9` is the set's
+/// [`count_cap_base_multiple`](ArchivalParams::count_cap_base_multiple), the
+/// one the count rule caps at. The `+ 1` is what lets a network below
+/// `SEB / 9` pairs admit a bundle at all.
 ///
 /// Computed in 128 bits and saturated: a budget above `u64::MAX` binds
 /// nothing a `u64` sum can reach.
 #[must_use]
-pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> SectionBudget {
-    let cap = u128::from(d_max) * u128::from(COUNT_CAP_BASE_MULTIPLE) / u128::from(seb.get()) + 1;
-    SectionBudget(u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX))
+pub fn section_budget(
+    params: &ArchivalParams,
+    d_max: u64,
+    seb: SettlementEpochBlocks,
+) -> SectionBudget {
+    let cap = u128::from(d_max) * u128::from(params.count_cap_base_multiple())
+        / u128::from(seb.get())
+        + 1;
+    let c = u128::from(params.bundle_section_budget_multiple);
+    SectionBudget(u64::try_from(c.saturating_mul(cap)).unwrap_or(u64::MAX))
 }
 
 /// The section budget, in draws: [`section_budget`]'s result.

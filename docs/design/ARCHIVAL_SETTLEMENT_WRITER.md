@@ -9,9 +9,10 @@ wiring ahead of the secret draw, §14. **`SO-D11` RULED 2026-10-09** —
 accrual reads the row and the gather moves to the slash pass, §15.
 **`SO-D12` RULED 2026-10-10** — admission and the draw, §16: ten
 questions, ruled the day they were posed (§16.6, §16.7). Increment 1 is
-built (§16.8, §16.9). **`SO-D12h` RULED 2026-10-17 and BUILT** — a
-settled epoch's market membership is frozen at its pass, and the
-per-epoch tables are retired at their last reader's horizon, §17.
+built (§16.8, §16.9). **`SO-D12h` RULED 2026-10-17 and BUILT, re-ruled
+2026-11-10** — a claim gathers a settled epoch's market as its pass
+did, and the per-epoch tables are retired at their last reader's
+horizon, §17.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -106,7 +107,7 @@ from landed figures rather than carried:
 Sources: 3.43 KB/record and the chain-growth finding, `FOLLOWUPS.md` §"ADDITION
 FROM CHECKING IT"; 99 B kept / 5,107 B pruned / ≈5,204 B record, the `RF-D10`
 row in `IMPLEMENTATION_INDEX.md` and `SERVE_CREDIT_PRUNED_MAX_BYTES`
-(`ct_types.h:318–321`).
+(`ct_types.h` at `ac3836de90` (lines 318–321)).
 
 **The record got bigger and the chain got smaller** — because `RF-D8` ruling
 (i) kept the ~1,920 B opening *additively*, and `RF-D10` put the 5,107 B
@@ -146,7 +147,7 @@ k_cap·SEB/D) = min(3, 32.1) = 3` even at the TJ-extreme `D ≈ 324,000` —
 | Maturity (TJ extreme) | ~324,000 | **98** | ~506 KB | **1.7×** — penalised |
 
 `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 = 300000`
-(`cryptonote_config.h:58`) is a **penalty threshold, not a hard cap** — so
+(`cryptonote_config.h` at `ac3836de90` (line 58)) is a **penalty threshold, not a hard cap** — so
 maturity-scale exact coverage is an *economic* cost (a standing block-reward
 penalty), not an impossibility. That is a materially different finding from
 "the mechanism does not scale past ~10⁵ pairs", and it is better news, but it
@@ -726,9 +727,9 @@ the network is in.
 
 ## 14. `SO-D10` — wiring the writer ahead of the secret draw — RULED 2026-10-08
 
-**Status:** RULED 2026-10-08, all seven sub-items (§14.5). Nothing in it
-is built except the two pure functions of §14.4 items 1 and 2. Grounded at
-`dev@98fbd20acb`; every `file:line` below is at that commit.
+**Status:** RULED 2026-10-08, all seven sub-items (§14.5), and built.
+§14.1 is the code at `dev@98fbd20acb`, where this section is grounded;
+every `file:line` below is at that commit.
 
 **The charge.** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §11 item 2: "The
 settlement writer is wired before the secret draw goes live. The slash fold
@@ -736,7 +737,7 @@ and accrual read the settlement row with its NonObservation floor." The
 reason is its §9.4: under the secret draw, a reader of "any pass" counts
 every pair the draw did not reach as a miss.
 
-### 14.1 What the code does today
+### 14.1 The code at `dev@98fbd20acb`
 
 | Subject | State | Where |
 | --- | --- | --- |
@@ -1133,7 +1134,7 @@ what the specification assumes.
 
 | Subject | State | Where |
 | --- | --- | --- |
-| The draw's hashes | Selection with its cap, the `0x0C` commitment, the challenge nonce, the set commitment, the count rule and its horizon, each with the specification's vectors. No caller on a block path | `rust/shekyl-archival-retention/src/secret_draw.rs` (`select_draw`, `draw_commit`, `challenge_nonce`, `serve_credit_batch_commitment`, `draw_count`, `draw_horizon`) |
+| The draw's hashes | Selection with its cap, the `0x0C` commitment, the challenge nonce, the count rule and its horizon, each with the specification's vectors. No caller on a block path | `rust/shekyl-archival-retention/src/secret_draw.rs` (`select_draw`, `draw_commit`, `challenge_nonce`, `draw_count`, `draw_horizon`) |
 | The drawable set | `DrawableSet::at_epoch_open` enumerates the bond records **at the view's tip**, drops a bond that joined in `E` or later, expands a complete tree over the shards closed and final at `h_open(E)`, and sorts. Its module doc says the walk that recovers holdings a Release or a slash has cleared is left to this step | `rust/shekyl-chain-rules/src/archival/drawable.rs` |
 | The challenger's read | `challenge_read` derives the nonce and reads through the one fetch entry point. No producer calls it | `rust/shekyl-archival-fetch-sched/src/read.rs` |
 | Scheme 3 | Ed25519 + FN-DSA-1024 with its two signature domains, landed with no consumer. Receipts signed under the receipt key (increment 4 of [`FN_DSA_HYBRID.md`](FN_DSA_HYBRID.md) §6) are not built. *(Corrected 2026-10-12: this row also listed the receipt key's derivation and the JoinMarket post that carries it as not built. The derivation is increment 2, merged in #1031; the post is increment 3, `FN_DSA_HYBRID.md` §8, PR #1046 — the JoinMarket, bond-post `post_kind` `5`, judged by CEN-J28.)* | `rust/shekyl-crypto-pq/src/fn_dsa_hybrid.rs` |
@@ -1274,19 +1275,17 @@ This lane's increments, each its own change:
 4. **The cutover**, after the Slice C verifier lands. Split, as ruled
    2026-10-21 (Q1): 4a is staged and has no consensus effect; 4c is the
    producer, between 4a and 4b, **built 2026-10-25** (§16.11); 4b is the
-   rule-07 switch after the DRS-X flip, and does not land until a bundle
-   the producer made is admitted by 4a's verifier on a driven chain
-   (round 0, F2). 4c's gate test is that showing.
+   rule-07 switch after the DRS-X flip, **built** (PR #1327). 4c's gate
+   test is a bundle the producer made, admitted by 4a's verifier on a
+   driven chain (round 0, F2).
    - implement the view trait on this lane's store. The view is the
      batch view plus the drawable memo: `D` is rules-side state, and the
      store computes none of it. A miss is SI-35; the view does not
-     rebuild. The count phase files the previous epoch's set into that
-     memo while the connecting block is still within `W₂` of the open,
-     by the same digest-checked rebuild it uses for its own epoch. The
-     brief's contract covered a memo kept across the epoch boundary. A
-     restart inside the window leaves the memo cold. Before this filing
-     the count rebuilt only the epoch it was counting, and a bundle for
-     the previous epoch faulted SI-35. The filing is that correction;
+     rebuild. Admission's filing step (`remember_window_epochs`, before
+     the verdict) files every epoch a section inside `W₂` can name, by
+     the same digest-checked rebuild the count uses for its own epoch, so
+     a memo left cold by a restart inside the window still holds the
+     previous epoch's set when a bundle for it is judged;
    - `admission_plan` builds the rows a connect journals from `Admitted`:
      the heights revealed, the issued draws keyed `(E, P, s, h, j)` — `j`
      the draw's place in its bundle, not its place in `D` — the digest
@@ -1299,15 +1298,28 @@ This lane's increments, each its own change:
      Its index rows, digest terms, `revealed(h)` and passed bits are
      issued into `epoch(h)`, and the new epoch's shortfall is untouched
      (the sim pins that opening shortfall at 1536 when `|D|` is 512).
-     Increment 4a does not call the verifier: a connect writes the plan
-     only when it is handed bundles;
-   - flip the switch as one rule-07 cutover, calling the verifier from
-     `validate`. The `passed` bit is set by
-     an admitted record and by nothing else, and the Fakechain door is
-     deleted;
-   - the attestation-path deletions, with the Rust CEN-B4 rule and the
-     census status for a row retired by ruling; and the serve-credit
-     table with the two reads that stand on it (`SO-D10c`, `SO-D12j`).
+     A connect writes the plan from the admissions `validate` returns;
+   - the template's section: `fill_section`
+     beside `check_section` in the rules crate walks the bundle queue's
+     references in ascending `h` and keeps those inside the window whose
+     epoch's `D` the view holds. A section spans at most two epochs. It
+     packs them oldest-first under the budget the epochs it keeps earn —
+     the largest `D` among those epochs, the cap `check_section` applies —
+     passing over one that would exceed it, and passing over one that would
+     crowd out the epoch earning a larger `D`. What it returns is a section
+     `check_section` admits. The block template calls it;
+   - the switch, one rule-07 cutover: `validate` calls the verifier. The
+     `passed` bit is set by an admitted record and by nothing else. The
+     economy, complete-tree and slash chains run on admitted bundles, on a
+     schedule long enough that the count rule, crediting at most one draw
+     a block onto a pair still short of its counted draws, issues every
+     pair those draws (`settled_epoch_blocks`, derived from the rule; a
+     20-block epoch issues a pair about one draw). A popped block returns
+     its bundles to the queue;
+   - the deletions: the attestation path with the Rust CEN-B4 rule, the
+     serve-credit input with its table and the two reads on it (`SO-D10c`,
+     `SO-D12j`), and the census status `Retired` for a row retired by
+     ruling.
 
 No tree before the cutover admits a bundle. The verifier that checks
 receipts and the wiring that calls it arrive together.
@@ -1352,12 +1364,16 @@ rule for the prunable part of a carrier (the fee-and-weight round's).
 | `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
 | `SO-D12g` | **Agreed** |
 | `SO-D12h` | **Ruled 2026-10-17: freeze the fact at the pass**, in its own PR beside increment 2 and sharing no code with it. **The per-epoch tables are retired in the same PR** at their last reader's horizon. Both are §17 || `SO-D12i` | **Required from increment 1, with no height gate.** The testnet runs tagged releases and the next tag is a regenesis, so nothing on `dev` reaches a running chain and there is no compatibility window. One condition, on correctness: the grammar that requires `0x0C` lands for the validator that judges blocks in that release. The C++ daemon is that validator until `DEL-008` and must accept the tag in increment 1 itself. What the change touches is in §16.7 |
-| `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the cutover, §16.3 item 4) |
+| `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the cutover, §16.3 item 4). **Answered there (§17.5):** the Release's served anchor reads the issued indexes' pass bits inside the cooldown window, which the settling floor keeps |
 | `SO-D12k` | **The count writer is increment 3** (2026-10-16), its own change after increment 2. The cutover is increment 4. *(Relayed as CW-1; `CW-` is the credit-wire family, `IMPLEMENTATION_INDEX.md`.)* |
 | `SO-D12l` | **`BlockDraws` gains `issued_short: u32`** (2026-10-16), the shortfall reduction a block's admissions cause. Lands with increment 3. *(Relayed as CW-2.)* |
-| `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17): `cSHAKE256_32("shekyl/archival-drawable-epoch-v1", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*)`, pairs in canonical order, personas ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
+| `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17), **and the archive width and the support members** (`SO-D12q`, 2026-11-01): `cSHAKE256_32("shekyl/archival-drawable-epoch-v2", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)* ‖ roster_tag ‖ [archive_width_le8 ‖ n_members_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*])`, the bracket present only under tag `0x01` (`SO-D12t`), pairs in canonical order, personas and members ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
 | `SO-D12n` | **`DrawableSet`'s tip read is replaced** by the builder of increment 2 (2026-10-17): no second drawable-set type remains, and the pair emitter stays inside the builder |
 | `SO-D12p` | **The bundle queue and the body store land in 4c, in the chain store** (Rick, 2026-10-25). No sink trait with stand-in implementations: the producer writes to the real queue. A memory outbox nothing could consume before 4b, and a test sink proving a path the product does not have, were refused. The queue is pool-like state fed only by this daemon's own bundles until 4b; rule 23's falsifier guards the connect path, which the queue is not |
+| `SO-D12q` | **One epoch snapshot for both streams** (Rick, 2026-11-01; item 3's S1, option 1): the value filed at `h_open(E)` holds `D` with its receipt keys and the support roster (the archive width and the members in persona order with theirs), under one digest both derivations produce (`SO-D12m`, now `-v2`). A member is a complete tree of pin 1 at `h_open(E)`. Each block's support row holds its seats; admission reads a past roster from that row with keys from the snapshot, and never rebuilds (`ARCHIVAL_SUPPORT_DRAW.md` §13.1) |
+| `SO-D12r` | **The support carry stays inside its epoch** (Rick, 2026-11-01; S2, option 1): an unfiled seat re-seats at the next usable block of the same epoch where the tree has no scheduled seat; what is still carried at the end of the usable span lapses as a non-observation; the cross-epoch sentence of `ARCHIVAL_SUPPORT_DRAW.md` §2 is struck. The carry is staged and joins the connect path at the switch, with admission (§13.2) |
+| `SO-D12s` | **A complete tree's J16 anchor is its last passed support draw** (Rick, 2026-11-01; S3, option 1), read from `archival_support_issued`'s pass bit; J16's two checks are unchanged. Lands at the switch with §16.3's J16 change, since the issued journal is written only by admission (§13.3) |
+| `SO-D12t` | **No shards, no support stream** (Rick, 2026-11-02, ratifying #1255's width-zero call): no support draw is made while the archive has no closed shard. By type, not by checks: the snapshot holds `Option<SupportRoster>` whose width is a `NonZeroU64`, present only when the archive at `h_open(E)` has a shard; the seats, the view's width answer and `select_support_shard` take that width. `emit`'s `NonZeroU64::new(final_count)` is the one place it is decided (`ARCHIVAL_SUPPORT_DRAW.md` §13.4) |
 | `SO-D12o` | **The draw rows retire in increment 3** (Q-D, option 1, Rick, 2026-10-21). At the boundary of `B` the store deletes `archival_block_draws` strictly below `(B − 1)·SEB + 1 − W₂`, or below `(B − 1)·SEB` when the schedule has no window. `BlockDrawsFloor` computes that height beside the Release journal's floor; the store compares and does not source it, and a read below it is SI-34. `CHALLENGE_RESPONSE_BLOCKS` is at least 1 and below `SETTLEMENT_EPOCH_BLOCKS` wherever a window exists, so the floor sits below the undo floor. Admission, increment 4, reads `h_incl − W₂ ≤ h < h_incl` and is not clipped at `h_open` |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
@@ -1559,6 +1575,11 @@ for decisions 7 and 8 in the table above:**
   Rust is not deleted: the input, its rules, the submit path and the
   wallet all stay.
 - **No C++ refusal** is added for the input.
+- **The serve-credit input is deleted with its whole surface** (ruled
+  2026-11-10, at the switch, `SO-D12` 4b). Input tag `0x02` is unassigned
+  and refused as any unknown input tag is (CEN-G2), with no constant and
+  no typed error. Decision 8's condition is the live testnet's, which the
+  regenesis ends, and before genesis there is no history to keep.
 
 **The slow C++ tests (ruled 2026-10-12).** Rust's writer generates a key
 on every call. The C++ unit scaffolds that lay a coinbase by hand build
@@ -1762,9 +1783,12 @@ keyed by the block's hash).
 **The draws** come from the connector, which holds the drawable memo:
 `draw_targets` derives them with `select_pairs` and `support_seats`, the
 functions `verify_bundle` runs, so the pair the producer reads is the pair
-the verifier derives. **Support draws** are derived and read the same way;
-on the store view the support schedule is not on the connect path yet, so
-every block's support count is zero and the store's roster is not asked.
+the verifier derives. **Support draws** are derived and read the same way.
+The support schedule is on the connect path (`SO-D12` 4b §5.1 item 3,
+`ARCHIVAL_SUPPORT_DRAW.md` §13): each block's row holds the trees its
+epoch's schedule seats, and the store's roster answers from that row with
+each seat's key and the archive width from the epoch snapshot. Only
+scheduled seats until the switch; the carry joins with admission.
 
 **Assembly** is the retention crate's `assemble_bundle`, with the witness
 signature through a signing closure; the rules fixture assembles through
@@ -1794,18 +1818,30 @@ moved from `shekyl-daemon-image`). `shekyl-ffi`, the wallet-side image,
 links the ingest crate with `pipeline` only, so the fetch client stays out
 of its graph (SF-D4). The task (`bundle_producer.rs`) wakes on the
 connector's tip and on each read's end. The node runs it when it mines and
-has an operator's Tor SOCKS endpoint; a managed Tor publishes its route to
-the network after the node opens, so a node on one runs no producer yet.
+has a Tor: through an operator's `tor-socks` endpoint, or through the
+managed Tor's route, which the fetch client reads at each fetch
+(`shekyl_ffi::zone_ffi::managed_socks`; `TOR_SUPERVISOR.md` §4.5, `TSR-F10`)
+because it appears after the node opens and moves when Tor respawns. A read
+while there is no route is `Stall::NoRoute`: nothing was sent, and it
+retries the same `P`. Each read still presents its own credentials from its
+nonce (`SF-D3`), so settlement reads share no circuit with each other, the
+peer dials or the probe. A node with Tor off runs no producer. Under
+either Tor the node builds one fetch client with two lanes (IG-Q90): the
+producer's `READS_AT_ONCE` slots when the node mines, and the shard view's
+`VIEW_SLOTS`, which views never exceed, so a started read never waits for a
+slot. The daemon reserves the client's descriptors for the inbound ceiling,
+one SOCKS stream per slot (`shekyl_node::fetch_descriptors`).
 
 **Tests.** The gate (`bundle_producer_gate_tests`, live lane): a compact
 bond on a closed shard, the ring drawing every template, the producer's own
 task reading through the scheduler over the store's facts to the persona
-serving its shard's real bytes with the staged `ResidentReceiptKey`, the
+serving its shard's real bytes with `ResidentReceiptKey`, the
 queue admitting each bundle, and the next block connecting it through
 `connect_admitting`; every draw is the persona's pair and passed, the index
 carries the passed bits, the epoch settles the pair as served; a restart
 mid-window keeps the entry, a reorg keeps it under the new tip, and with
-the persona on an identity key a no-pass bundle is admitted and later
+the persona signing with a receipt key that is not its own a no-pass
+bundle is admitted and later
 leaves with its window. Fast: the queue's admission, the J33 refusal, the
 window, the reorg re-judge, the restart, the connector's derivation and the
 claim (ingest); the queue's tables and SI-41 (store); the ring, the plan
@@ -1816,8 +1852,8 @@ identity endpoint's class and the §5.1 test through the producer's read;
 
 **Not in this increment:** references on the wire, bodies pulled at
 connect, body fetch from peers, broadcast (4b); the live receipt-key
-selection on the serving host (4b); census flips and deletions (4b); a
-managed Tor's route to the producer; any C++.
+selection on the serving host (4b); census flips and deletions (4b); any
+C++.
 
 ## 17. `SO-D12h` — a settled epoch's market membership, and the per-epoch retirement — RULED 2026-10-17, BUILT
 
@@ -1829,54 +1865,36 @@ increment 2 and sharing no code with it. Grounded at `dev@09402ea19`.
 | # | Ruling |
 | --- | --- |
 | `SO-D12h` (A) | **Freeze the fact at the pass.** The slash pass for `E` writes the set of personas its gather excluded from `E`'s market as complete trees; a claim's re-gather reads the flag from that set. The Release journal cannot carry it: the slash log retires after `k + n` epochs plus the reorg cap, a claim reaches back over the 26-epoch claim window, and the reference point is the pass, not `h_open(E)` |
+| `SO-D12h` (A), re-ruled 2026-11-10 | **The frozen set is deleted**, with its table (A22), SI-31 and the gather's complete-tree flag: no gather credits a complete tree (§17.3), so the set is always empty |
 | `SO-D12h` (retirement) | **Retire the per-epoch tables in this PR.** Each per-epoch table is retired below the epoch where its last reader stops, in the boundary batch, unjournaled, every horizon a function of the epoch calendar and the rule set. A read below a table's horizon is refused, never answered as absent. A table with no derivable horizon is reported, not given one |
 
-### 17.2 The defect
+### 17.2 What the gather reads
 
-The slash pass for `E` gathers `Σwork(E)` over the bond records as it
-left them (`close.rs`, `Transition::gather`). A claim on `E` re-gathers
-with the records as they are at the claim (`tx_emission_against.rs`,
-`J23::gather`). Market membership (`market_member_at_epoch`) excludes a
-complete tree, and the gather read that flag off the record's holdings.
-A complete tree that is slashed or released after the pass holds a
-compact set, so it was a member in the claim's re-gather and not in the
-pass's. The recomputed `Σwork(E)` then differed from the frozen row and
-an honest claim failed CEN-J25 at any epoch of the claim window.
-
-### 17.3 What the pass freezes
-
-- **The set.** `CompleteTreeSet` (`shekyl_types::archival`): persona
-  ids, strictly increasing. It holds the bonds the gather **credited** at
-  `E` (a Served settlement row) whose record held a complete tree as the
-  pass left them — the gather's exclusions as complete trees
-  (`freeze_complete_trees`). A complete tree with no credit is not in the
-  gather and not in the set. A bond excluded for a bad interval is in the
-  set only if it is also a complete tree.
-- **One source for both readers.** `gather_epoch_snapshot` takes the set
-  as an operand and never reads a record's holdings for the flag. The pass
-  computes the set from its post-images and gathers with it; CEN-J23
-  reads it back (A22) and gathers with it. The pass's
-  `freeze_complete_trees` is the one read of the record's flag on the
-  gather's path.
-- **The table.** `archival_complete_trees` (Rust-only, ordinal 45, layout 29): epoch
-  → the set. Written by the pass in its write set beside
-  `archival_sigma_work[E]`, insert-once, the empty set written and not
-  skipped (`ARW-Q4`), undone with the block through the journal. An epoch
-  with no row was not settled. Governed by `ArchivalFamily::SigmaWork`,
-  the family whose reader needs it.
-- **SI-31** (`StoreInvariant::CompleteTreesNotFrozen`): a second write
-  is refused at the insert; a settled epoch whose `Σwork` has no set is
-  `Corrupt::CompleteTreesAbsent` at the claim's read, a fault and never a
-  refusal of the claim.
-
-**No other field the gather reads moves under a settled epoch.** The
-gather reads the join epoch, the complete-tree flag and the interval
-log. The join epoch is immutable, and SI-19 makes a join insert once. A
+**No field the gather reads moves under a settled epoch.** The
+gather reads the join epoch and the interval log. The join epoch is immutable, and SI-19 makes a join insert once. A
 slash opens `[E', ∞)` at the epoch it slashes for, and a later pass
 slashes for a later epoch. A Release appends the zero-length `[R, R)`,
 which `good_through` skips. A Reinstate closes the one open interval at
 `R + 1` (`bond_connect.rs`, `reinstate_connect`), and `R` is after every
 settled epoch. No Rust path removes a bond record.
+
+### 17.3 Why the pass and a claim gather the same market
+
+The slash pass for `E` gathers `Σwork(E)` over the bond records as it
+left them (`close.rs`, `Transition::gather`). A claim on `E` re-gathers
+with the records as they are at the claim (`tx_emission_against.rs`,
+`J23::gather`). Market membership is `good_through` alone, and neither
+gather reads a record's holdings. No gather credits a complete tree:
+
+- a complete tree lists no shard (CEN-J14, `CompleteTreeWithShardIds`),
+  so it is drawn on the support stream only and no economy settlement row
+  is ever Served for it;
+- a record is never removed, and CEN-J14 refuses a JoinMarket for a
+  persona with a record (`RecordExists`), so no persona credited in `D`
+  becomes a tree, even across a release and a rejoin.
+
+So a tree slashed or released after the pass changes neither gather, and
+the two gathers read the same records and the same credits.
 
 ### 17.4 Retiring the per-epoch tables
 
@@ -1890,8 +1908,8 @@ epoch below `epoch(h) − LAG`, and each read takes that floor
 
 | Family | Tables | Last reader | `LAG` | Tight at |
 | --- | --- | --- | --- | --- |
-| Claimable | `archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement` | a claim (CEN-J23, after the window check); the failure window (`settlement_retention_floor`) | `W` = `MAX_CLAIM_AGE_W` = 26 | a claim on the window's floor; the window's own bound, which is `epoch(h) − W` |
-| Settling | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | the slash pass of the epoch, in epoch `E + k` | `k` = `SLASH_GRACE_EPOCHS` = 1 | the pass reads its own epoch |
+| Claimable | `archival_sigma_work`, `archival_budget`, `archival_settlement`, `archival_support_settlement` | a claim (CEN-J23, after the window check); the failure window (`settlement_retention_floor`) | `W` = `MAX_CLAIM_AGE_W` = 26 | a claim on the window's floor; the window's own bound, which is `epoch(h) − W` |
+| Settling | `archival_issued_draw`, `archival_support_issued`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | the slash pass of the epoch, in epoch `E + k`; the Release cooldown (CEN-J16), whose window of `RELEASE_COOLDOWN_EPOCHS` epochs lies inside this floor | `k` = `SLASH_GRACE_EPOCHS` = 1 | the pass reads its own epoch |
 | Pricing | `archival_r_market` | CEN-J15, at the slash watermark as of the parent | `k + 1` = 2 | the first block of an epoch, whose parent ran the pass of `epoch − 1 − k` |
 
 `archival_drawable_digest`'s last reader is the pass's compare against
@@ -1930,7 +1948,7 @@ is the refusal at open above.
 
 **A read below a floor is refused (SI-32,
 `StoreInvariant::EpochReadBelowFloor`).** Each read of these tables (A6–A8,
-A12, A14–A17, A19, A22) takes its family's floor from the caller, as A2
+A12, A14–A17, A19) takes its family's floor from the caller, as A2
 takes the slash log's (SI-26). The store compares and does not source the
 floor, and refuses an epoch below it rather than answer "absent": absent
 means never written, and a retired row was written. Every reader asks
@@ -1966,36 +1984,40 @@ the diff at each family's horizon or drops these families from it.
 
 ### 17.5 Tables with no derivable horizon (reported, not retired)
 
-`archival_block_draws` left this table on 2026-10-21 (`SO-D12o`, option 1):
-it retires below `BlockDrawsFloor`, and a read below that floor is SI-34.
+`archival_block_draws` retires below `BlockDrawsFloor` (`SO-D12o`,
+option 1), and a read below that floor is SI-34.
+
+The Release cooldown reads the issued indexes' pass bits, not a table of
+its own: a held shard's latest epoch with a passed economy draw, and a
+complete tree's latest with a passed support draw, over the last
+`RELEASE_COOLDOWN_EPOCHS` epochs (`release_last_served`). That window
+lies inside the settling floor because `SLASH_GRACE_EPOCHS <
+RELEASE_COOLDOWN_EPOCHS ≤ SLASH_GRACE_EPOCHS + 1`, which the archival
+parameter set's validation refuses to break (`CooldownPastReadableWindow`,
+`shekyl-archival-retention` `params.rs`).
 
 | Table | Why no horizon is derived here | Blocker |
 | --- | --- | --- |
-| `archival_serve_credit` | A3 and A4 (CEN-J16, the Release cooldown) ask for the latest epoch a pair *ever* served. Retiring a row turns "served 30 epochs ago" into "never served", which changes the cooldown's verdict. The C++ retires it at `tip − W`, which is a horizon for a different read | `SO-D12j`, deferred to the merged increment's design text, which decides what the served anchor reads |
 | `archival_budget_accruing` | Holds the open epoch's row and no other (SI-23); the close deletes it | None needed: it retires itself |
 
 ### 17.6 Pruning
 
-The frozen set and the claim's read of it come from kept state: bond
-records and settlement rows, themselves built from the kept transaction
-prefix. A node that replays from the pruned corpus, or syncs below an
+The gather comes from kept state: bond records and settlement rows,
+themselves built from the kept transaction prefix. A node that replays from the pruned corpus, or syncs below an
 anchor, builds the same row. Neither reads prunable transaction bytes or
 bundle bytes.
 
 ### 17.7 Tests
 
-- **The defect, driven** (`shekyl-chain-ingest`, live lane,
-  `a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`).
-  Two complete trees are Served beside the claimant in `E`. After `E`'s
-  pass one releases and the other is slashed at its eleventh miss. The
-  claim on `E` connects at the first block where `E` is the oldest
-  claimable epoch. A claim one epoch older is refused there at CEN-J25.
-  With the flag read from the records in CEN-J23, the same claim is
-  refused at CEN-J25.
-- **The frozen set** (`settlement_slash_tests`): a Served complete tree is
-  in it, a Missed one is not, and an epoch that credited nothing writes
-  the empty set. The pop of the settling block removes the row. A second
-  write is SI-31, and the absent half maps to SI-31.
+- **The claim window's edge, driven** (`shekyl-chain-ingest`, live lane,
+  `a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`,
+  on the support-trees chain). Two complete trees serve on the support
+  stream beside the claimant in `E`; `E`'s issued draws are the
+  claimant's pair alone. After `E`'s pass one tree releases (its early
+  release refused at CEN-J16, its rejoin at CEN-J14) and the other is
+  slashed at its eleventh miss. The claim on `E` connects at the first
+  block where `E` is the oldest claimable epoch. A claim one epoch older
+  is refused there at CEN-J25.
 - **Retirement** (`prune_tests`): each table retires at its family's floor
   at the boundary. A read below a floor is SI-32 with the table and both
   epochs; a read at it answers. A pop and a reconnect restore nothing and
@@ -2009,13 +2031,11 @@ bundle bytes.
 ### 17.8 Open
 
 - **#1102's `emission_epoch_facts`** is routed through the same gather:
-  the claimable floor, the frozen set, and the claim window. Each claimed
+  the claimable floor and the claim window. Each claimed
   epoch answers with one `EmissionEpochStanding`: `Expired` (below the
   claimable floor, with the window's floor; nothing is read, since its rows
   may be retired), `Unsettled` (the rows it has), or `Settled` (the rows and
   the snapshot). The submit shim carries the same state into its facts
   (`EpochClaimStanding`), and the verifier refuses an expired epoch as
   `EpochClaimExpired` at that floor before E7, so a submission is never
-  refused as a missing budget row and never becomes a `ShimFault`. A
-  settled epoch without its set is `Corrupt::CompleteTreesAbsent` (SI-31),
-  as on the claim path.
+  refused as a missing budget row and never becomes a `ShimFault`.

@@ -10,39 +10,37 @@ name: ci/gh-actions/rust
 # purely a re-run-isolation change, not a graph change.
 #
 # Branch-protection note: required status checks are keyed by the bare job
-# name ("Rust: audit, test, determinism") plus the GitHub Actions app, not by
-# the workflow name — the "ci/gh-actions/cli /" prefix in the PR UI is display
-# grouping only. Because this split keeps the job name identical, the existing
-# required-check context keeps matching this job in its new workflow; no
-# ruleset / branch-protection change is needed.
+# name plus the GitHub Actions app, not by the workflow name. The one this
+# workflow reports is `rust-pass` (the `pass` job at the end), which stands
+# for every job in it (ruled 2026-11-16).
 
 on:
-  # Merge queue (06-branching.mdc): the same checks on the *merge result*,
-  # not only the branch head — the class of failure neither PR's CI can
-  # see (#771×#772, #853×#858, #878×#880). `merge_group` takes no `paths`
-  # filter, so this runs on every group regardless of the PR filter above
-  # or below.
-  merge_group:
-    types: [checks_requested]
-    branches: [dev]
   push:
-    # `main` only. PRs are covered by `pull_request`. A push-to-dev
-    # trigger double-ran this ~95-minute job on every merge.
-    #
-    # `paths` with negations instead of `paths-ignore` (the two cannot be
-    # combined per event): docs are skipped EXCEPT the domain registry TSV,
-    # which shekyl-crypto-pq's tests/domain_registry.rs include_str!s — a
-    # TSV-only PR that skipped this workflow could merge a duplicate domain
-    # and turn dev's test suite red for the next unrelated rust/** PR.
-    # Order matters: the last matching pattern wins.
-    branches: [main]
+    # `dev` and `main`. A pull request's run tests its head merged onto the
+    # `dev` of its last push; the run on `dev` tests what the merges
+    # actually made, the one place two pull requests each green alone can
+    # show red together (06-branching.mdc). Docs-only pushes are skipped by
+    # the `changes` job below, not by a `paths` filter here: a filter would
+    # suppress the required check.
+    branches: [dev, main]
   pull_request:
+    # `ready_for_review`: the heavy jobs below skip a draft, and run when it
+    # is marked ready (ruled 2026-11-16).
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Own concurrency group (distinct from build.yml's `build-<ref>`) so same-PR
 # reruns of the Rust gate supersede only each other, not the OS build run.
+# Only a pull request's run is cancelled by a newer push. Every push to
+# `dev` shares one ref; a merge queues behind the running `dev` run, which
+# finishes, and a newer merge replaces the queued one, so a burst is
+# tested at the running commit and at its newest. Cancelled, a run this
+# long never finished between merges (50 of 84 from 2026-11-10 to 11-17).
+# The `changes` job measures a push from the last green run, not from the
+# previous push, so a replaced run's commits are still in scope
+# (`scripts/ci/check_dev_push_runs_finish.py`).
 concurrency:
   group: rust-audit-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
 
 permissions:
   contents: read
@@ -60,7 +58,7 @@ jobs:
   # See build.yml's `changes` job for why this is a job-level condition rather
   # than a workflow `paths` filter: a path filter suppresses the WORKFLOW, so a
   # docs-only PR gets no check at all and branch protection waits forever for
-  # `Rust: audit, test, determinism`. A skipped job still reports.
+  # `rust-pass`. A job skipped by its `if:` is accepted by `rust-pass`.
   #
   # Code inputs under docs/ (docs/design/CRYPTO_DOMAIN_REGISTRY.tsv, which
   # shekyl-crypto-pq's tests include_str!, and the test vectors) are found by
@@ -71,42 +69,86 @@ jobs:
   changes:
     name: 'Change scope (rust)'
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      # The Rust job's scope, decided by dependency (scripts/ci/change_scope.py):
+      # whether the job runs, which packages' tests run (`all`, `none`, or the
+      # changed packages, expanded below to them and their dependents), and
+      # the `-p` list for the doctests.
+      rust_job: ${{ steps.scope.outputs.rust_job }}
+      rust_tests: ${{ steps.scope.outputs.rust_tests }}
+      rust_doc_pkgs: ${{ steps.scope.outputs.rust_doc_pkgs }}
+      # Whether the economics sim's narration pins run: the test scope
+      # reaches the sim, or the change is to the pins' own lane script.
+      sim_narrations: ${{ steps.scope.outputs.sim_narrations }}
+    # `actions: read` lists this workflow's earlier runs for a push's base.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: scope
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -u
+          head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="${{ github.event.pull_request.base.sha }}"
-          elif [ "${{ github.event_name }}" = "merge_group" ]; then
-            # The queue's group: its base is the `dev` tip the group merges onto.
-            base="${{ github.event.merge_group.base_sha }}"
           else
-            base="${{ github.event.before }}"
+            # A push is measured from the last commit this workflow passed
+            # on, not from `before`: see scripts/ci/push_scope_base.sh. No
+            # base prints nothing, and the classifier then runs everything.
+            base=$(scripts/ci/push_scope_base.sh rust-audit-test.yml "${{ github.ref_name }}" "$head")
           fi
-          head="${{ github.sha }}"
 
           # One classifier for every scope job: scripts/ci/change_scope.py.
           # It finds the code inputs that live under docs/ (the domain
           # registry, the test vectors) by reading the tree, and fails closed.
+          # Fail closed: if the classifier does not run at all, every output
+          # is written as its widest value, so no step below reads an empty one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
-            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            || printf '%s\n' docs_only=false rust_job=run rust_tests=all rust_doc_pkgs= sim_narrations=run >> "$GITHUB_OUTPUT"
 
   rust-audit-and-test:
     name: "Rust: audit, test, determinism"
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    # Skipped for a docs-only change, and for a change owned by other jobs
+    # alone (a documentation gate, another workflow's job). Skipped on a
+    # draft pull request too (ruled 2026-11-16): the `ready_for_review` run
+    # runs it on the same head. `rust-pass` accepts a skip by scope and
+    # reports only once this job has finished.
+    if: >-
+      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.rust_job != 'skip'
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
+    # The six green runs under nextest (2026-11-07) took 120, 179, 180,
+    # 181, 183 and 236 min, so twice the p90 passes the 360 min platform
+    # cap. The `ci` profile kills a hung test at 30 min and its retry at
+    # 30 more, so this bounds a hang outside the test run; 300 ends one an
+    # hour early. It comes down when the test run is partitioned across
+    # runners.
+    timeout-minutes: 300
     container:
       image: ubuntu:24.04
       env:
         DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: the runner's CPUs
+        # Printed so the test step's wall time can be read against the
+        # cores it ran on: nextest runs one test per CPU, and the runner
+        # size is the platform's to change. A figure derived from this job's
+        # time states the count printed here, not an assumed one.
+        # awk, not grep: a line the image lacks prints nothing and does not
+        # fail the job over a diagnostic.
+        run: |
+          echo "nproc: $(nproc)"
+          awk -F': ' '/^model name/ { print "cpu: " $2; exit }' /proc/cpuinfo
+          awk '/^MemTotal/ { print "memory: " $2 " " $3; exit }' /proc/meminfo
       - name: set apt conf
         run: ${{env.APT_SET_CONF}}
       - name: update apt
@@ -120,7 +162,6 @@ jobs:
         # (`ci/benchmarks`) already ships clang, so the capture job
         # stayed green while this gate failed. Still gungraun — no
         # harness swap. clippy `--all-targets` builds benches.
-        # ripgrep moved with lint_cpp_clamp_ban.sh to grep-gates.yml.
         run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang
       - name: configure git
         run: git config --global --add safe.directory '*'
@@ -188,6 +229,11 @@ jobs:
       # graph; each banned name is asserted to be a real workspace package.
       - name: "chain-rules: no store handle in the resolved graph (G1)"
         run: scripts/ci/check_chain_rules_no_store.sh
+      # Same placement reason: reads `cargo tree`. The dialer knows no
+      # connector (DIALER_OUTAGE_EVIDENCE.md §3.3, Rick 2026-11-15): no
+      # `shekyl-tor*` crate on its shipped graph. Fails closed, like G1.
+      - name: "dialer: no Tor crate in the resolved graph"
+        run: scripts/ci/check_dialer_no_tor.sh
       - name: verify x86_64 architecture
         run: |
           ARCH=$(uname -m)
@@ -196,42 +242,11 @@ jobs:
             echo "FATAL: expected x86_64 runner, got $ARCH"
             exit 1
           fi
-      - name: verify fuzz harness inventory (smoke gate)
-        shell: bash
-        run: |
-          REQUIRED_TARGETS=(
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_fcmp_proof_deserialize.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_curve_tree_leaf_hash.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_block_header_tree_root.rs
-            rust/shekyl-fcmp/fuzz/fuzz_targets/fuzz_tx_deserialize_fcmp_type7.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_kem_decapsulate.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_bech32m_address_decode.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_verify.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_key_blob.rs
-            rust/shekyl-crypto-pq/fuzz/fuzz_targets/fuzz_multisig_sig_blob.rs
-            rust/shekyl-wire/fuzz/fuzz_targets/fuzz_tx_extra_parse.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
-            rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
-            rust/shekyl-noise/fuzz/fuzz_targets/fuzz_classed_opener.rs
-          )
-          MISSING=0
-          for target in "${REQUIRED_TARGETS[@]}"; do
-            if [ ! -f "$target" ]; then
-              echo "FATAL: missing required fuzz harness: $target"
-              MISSING=1
-            fi
-          done
-          if [ "$MISSING" -ne 0 ]; then
-            exit 1
-          fi
-          echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
       - uses: Swatinem/rust-cache@v2
         with:
           # Workspace at rust/ with target dir at rust/target/.
-          # The fcmp fuzz workspace is excluded from that workspace, so
-          # it is listed on its own line and caches rust/shekyl-fcmp/fuzz/target.
-          # No CARGO_TARGET_DIR: that target must not be rust/target.
+          # No CARGO_TARGET_DIR: that target must not be rust/target. The
+          # fuzz crates are compiled by fuzz-harness.yml, not here.
           # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
           # workspace target/. The default cache key already mixes
           # rustc version + Cargo.lock hash + a per-job component, so
@@ -241,7 +256,8 @@ jobs:
           # which had three known waste modes documented in
           # docs/CI_TIMING_BASELINE.md:
           #   - ~8m post-job upload of the entire target/ even when
-          #     only a few crates changed (Swatinem only writes deltas).
+          #     only a few crates changed (Swatinem skips the save when
+          #     the restore hit its exact key).
           #   - No rustc-version key component (so a 1.94 -> 1.95 bump
           #     would have silently restored a 1.94-built target/).
           #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
@@ -250,8 +266,14 @@ jobs:
           # docs/formal/checkct/dynamic, with its own target/ likewise.
           workspaces: |
             rust -> target
-            rust/shekyl-fcmp/fuzz -> target
             docs/formal/checkct/dynamic -> target
+          # Saved by push runs only (`dev`, `main`); a pull request
+          # restores and never saves. A cache saved by a pull request is
+          # readable by that pull request alone, and each of this job's
+          # is 2.6 GB against the repository's 10 GB, so a pull
+          # request's save evicts the `dev` cache every other pull
+          # request restores from.
+          save-if: ${{ github.event_name == 'push' }}
       - name: install cargo-audit
         # `cargo install --locked` is idempotent: on Swatinem cache
         # hits the binary is already present in ~/.cargo/bin and this
@@ -259,6 +281,11 @@ jobs:
         # source. Moved here from pre-checkout so the cache restore
         # has a chance to populate ~/.cargo/bin first.
         run: cargo install cargo-audit --locked
+      - name: install cargo-nextest
+        # Same cache behaviour as cargo-audit above. The pinned version is
+        # scripts/ci/rust_scoped_tests.sh's, shared with the freshness
+        # re-test, so both run the tests under the same runner.
+        run: bash scripts/ci/rust_scoped_tests.sh install-nextest
       - name: cargo audit
         working-directory: rust
         run: |
@@ -302,6 +329,17 @@ jobs:
         # workspace in one pass instead of stopping at the first crate's
         # first error, so reviewers see the full triage in one log.
         run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
+      - name: cargo build --examples (workspace)
+        working-directory: rust
+        # CF-R8 (CHAIN_FORGE.md §11.1): the chain forge's runnable is a
+        # cargo example, and the release build never asks for examples.
+        # `clippy --all-targets` above checks an example but does not link
+        # it, so an example that stops linking would merge green; built
+        # here, it is red on the pull request that broke it.
+        # `shekyl-randomx-differential` is excluded as in the test build
+        # below: its examples and tests link the C reference, which this
+        # job does not build.
+        run: cargo build --locked --workspace --examples --exclude shekyl-randomx-differential
       - name: "cargo clippy: gf7-hooks harness lane (shekyl-engine-core)"
         working-directory: rust
         # The GF-7 sealing seam + harness (`pscan/start.rs` SealingRunOverrides,
@@ -384,48 +422,25 @@ jobs:
       - name: "WP: probe sheet and probe suite agree"
         run: python3 scripts/ci/check_probe_registry.py
 
-      - name: rustdoc -D warnings (persona serving path)
+      - name: rustdoc -D warnings (every lib crate, private items included)
         working-directory: rust
-        # These crates' docs carry load-bearing security contracts (shekyl-tor-control-wallet's
-        # trust gate, §3c supervisor posture and pin-time/runtime split;
-        # shekyl-p-serve's wire-indistinguishability invariants; shekyl-p-host's
-        # custody boundary and endpoint-lifetime invariant), and reviews here
-        # repeatedly turned up public→private intra-doc links that only a
-        # `-D warnings` doc build catches. Each crate joins this list in the PR
-        # that lands it, while it is known clean — retrofitting a gate over
-        # accumulated warnings is the task that never happens. Still scoped
-        # rather than `--workspace` because other crates carry pre-existing
-        # rustdoc warnings; widening to the whole workspace is a separate
-        # hygiene task, tracked in FOLLOWUPS.
-        #
-        # `shekyl-crypto-pq` is here though it is not on the serving path: its
-        # module docs state the hybrid schemes' contracts, and it joined when
-        # hybrid scheme 3 landed and its eight older warnings were cleared.
-        #
-        # `shekyl-win-sec` is deliberately NOT here: it is `cfg(windows)` and
-        # compiles to nothing on this runner, so documenting it would gate an
-        # empty crate and pass forever. Its rustdoc gate runs on the Windows
-        # job in build.yml, where its docs exist.
-        run: >-
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --lib
-          -p shekyl-tor-control-wallet -p shekyl-tor-control-client -p shekyl-p-serve -p shekyl-p-host
-          -p shekyl-operator-alarm -p shekyl-economics -p shekyl-store-codec
-          -p shekyl-capped-stream -p shekyl-crypto-pq -p shekyl-miner -p shekyl-hash-budget
-          -p shekyl-node -p shekyl-chain-sync -p shekyl-chain-sync-runtime
+        # Every doc link must resolve. The docs are written for maintainers,
+        # so private items are documented and a doc may link to one; the only
+        # rustdoc lint allowed is `rustdoc::private_intra_doc_links`. A link to
+        # a renamed, deleted or test-only item is a claim about the code that
+        # nothing checks, and it fails here. Every workspace lib crate is
+        # documented except the ones `scripts/ci/check_rustdoc.py` excludes by
+        # name, each with its reason (`shekyl-win-sec` is `cfg(windows)`; the
+        # Windows job in build.yml runs this gate on it), so a new crate is
+        # gated the day it lands. The selftest holds the policy: a missing name
+        # fails in a public doc and in a private one, and a link to a private
+        # item passes.
+        run: |
+          python3 ../scripts/ci/check_rustdoc.py --selftest
+          python3 ../scripts/ci/check_rustdoc.py
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
-      - name: compile the shekyl-fcmp fuzz harnesses
-        # The inventory step only checks the files exist. This is a separate
-        # workspace, so `cargo check --workspace` does not see it
-        # (rust/Cargo.toml exclude: a stable workspace check must not resolve
-        # libfuzzer-sys). This job is the exception: the four harnesses are
-        # the API-drift gate for shekyl-fcmp, and libfuzzer-sys 0.4 typechecks
-        # on the pinned stable toolchain. The lockfile is the fuzz workspace's
-        # own. Placed after the cache so the registry restore is already warm.
-        # No CARGO_TARGET_DIR: this workspace must not share rust/target.
-        # Its own target/ is the second cache workspace above.
-        run: cargo check --locked --manifest-path rust/shekyl-fcmp/fuzz/Cargo.toml
       - name: "constant-time dynamic harness: fmt, clippy, tests"
         # docs/formal/checkct/dynamic is its own workspace (its own lockfile
         # pins the audited crypto-bigint) on the shipped toolchain (its
@@ -442,23 +457,87 @@ jobs:
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-      - name: cargo test (all workspace crates)
+      - name: build the workspace test binaries
+        id: nextest-build
         working-directory: rust
-        # `shekyl-randomx-differential` excluded from the workspace-wide
-        # test because its `c_oracle` module links against the C
-        # reference's `librandomx.a` via `randomx-v2-sys`, which requires
-        # the `RANDOMX_V2_INSTALL_DIR` env var to point at a CMake-built
-        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
-        # §5.1.16 + §5.2.2 R5-D2). The `rust-audit-and-test` job does not
-        # configure CMake or build the C library; that work lives in the
-        # dedicated `.github/workflows/randomx-v2-differential.yml`
-        # workflow (per §5.5.1 + R1-D12), which builds the C library and
-        # runs `cargo test -p shekyl-randomx-differential` with the env
-        # var set. Excluding here is the discipline-correct shape:
-        # workspace-wide test asserts every crate that builds in the
-        # bare-Rust environment passes; the differential harness asserts
-        # under its own substrate-correct environment.
-        run: cargo test --locked --workspace --exclude shekyl-randomx-differential
+        # Its own step so the job's step times say how much of the test
+        # phase is compiling and how much is running. The same selection as
+        # the run below, which then finds every binary built.
+        #
+        # `shekyl-randomx-differential` is excluded because its `c_oracle`
+        # module links against the C reference's `librandomx.a` via
+        # `randomx-v2-sys`, which requires the `RANDOMX_V2_INSTALL_DIR` env
+        # var to point at a CMake-built install prefix (per
+        # `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.16 + §5.2.2 R5-D2).
+        # The `rust-audit-and-test` job does not configure CMake or build
+        # the C library; that work lives in the dedicated
+        # `.github/workflows/randomx-v2-differential.yml` workflow (per
+        # §5.5.1 + R1-D12), which builds the C library and runs
+        # `cargo test -p shekyl-randomx-differential` with the env var set.
+        # This step asserts every crate that builds in the bare-Rust
+        # environment passes; the differential harness asserts under its
+        # own substrate-correct environment.
+        run: cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential
+      - name: cargo nextest (all workspace crates)
+        working-directory: rust
+        # nextest runs each test in its own process and runs tests from
+        # every test binary at once. `cargo test` ran the binaries one
+        # after another, so the step lasted as long as their sum. Same
+        # tests, same exclusions as the build above; `--profile ci` is in
+        # `.config/nextest.toml` (no fail-fast, one retry, slow tests named
+        # and killed at 30 min, JUnit timings).
+        #
+        # The scope job names the changed packages; the run is every test
+        # of those packages and of every package that depends on them
+        # (`rdeps`, dev-dependencies included), so a changed fixture runs
+        # its consumers' tests. The build above stays the whole workspace,
+        # so the features each crate compiles with are the full run's.
+        # `none` is a job that runs for its gate steps alone (a changed
+        # script it executes); the test steps are skipped, not run empty. A
+        # scoped expression that selects no test passes: the selection was
+        # the decision, and a package name that no longer exists fails the
+        # expression instead.
+        if: ${{ needs.changes.outputs.rust_tests != 'none' }}
+        # The commands are scripts/ci/rust_scoped_tests.sh's, shared with the
+        # freshness re-test (freshness.yml), so both run the same selection.
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+        run: bash ../scripts/ci/rust_scoped_tests.sh nextest
+      - name: doctests (workspace crates in scope)
+        working-directory: rust
+        # nextest does not run doctests. They run whether or not a test
+        # above failed, so one run reports both; only a failed build skips
+        # them, since they would fail on the same error. The scope's `-p`
+        # list is the reverse closure of the changed packages, cut to those
+        # with a library target (`cargo test --doc` refuses the others).
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' && needs.changes.outputs.rust_tests != 'none' }}
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+          RUST_DOC_PKGS: ${{ needs.changes.outputs.rust_doc_pkgs }}
+        run: bash ../scripts/ci/rust_scoped_tests.sh doctests
+      - name: report flaky and slow tests
+        # Flaky tests (failed, then passed on the retry) to the job summary
+        # and as warnings on the pull request; then the slowest tests and
+        # binaries, which size the partition of the run. Report only: the
+        # run's own exit status is the verdict. It fails when there is no
+        # JUnit file to read, so a run that wrote none cannot read as clean;
+        # under a scope, a selection nextest recorded as empty is reported
+        # as "0 tests", not refused.
+        if: ${{ !cancelled() && steps.nextest-build.outcome == 'success' && needs.changes.outputs.rust_tests != 'none' }}
+        env:
+          RUST_TESTS: ${{ needs.changes.outputs.rust_tests }}
+        run: python3 scripts/ci/nextest_report.py rust/target/nextest/ci/junit.xml --scope "$RUST_TESTS"
+      - name: upload the test timings (JUnit)
+        # Each test's time from the nextest run above, kept for the slow
+        # tests to be named and the step to be partitioned by them.
+        if: ${{ !cancelled() && needs.changes.outputs.rust_tests != 'none' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: rust-nextest-junit
+          path: rust/target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          # A re-run of the job uploads under the same name.
+          overwrite: true
       - name: "BA-T5 floor probe smoke: the ignored probe still serves whole responses"
         working-directory: rust
         # The floor probe (`shekyl-p-serve/tests/ba_t5_floor_probe.rs`) is
@@ -494,6 +573,21 @@ jobs:
           fi
           BAT5_STORE="$store" BAT5_MODE=phase BAT5_N=2 BAT5_PHASE_N=1 BAT5_LABEL=ci \
             cargo test --locked -p shekyl-p-serve --test ba_t5_floor_probe -- --ignored --nocapture
+      - name: "Nightly ignored sets: each crate's ignored tests agree with its lane's list"
+        # The nightly ignored-set lanes judge `--list --ignored` in their
+        # scripts. `--check` is that judgement and then stops. The listing
+        # is the debug build the workspace tests above compiled. The nightly
+        # lists release (the trybuild lane debug, its header says why) and
+        # runs the tests. Each script keeps its own rule.
+        run: |
+          bash scripts/ci/ignored_set_chain_forge.sh --check
+          bash scripts/ci/ignored_set_chain_ingest.sh --check
+          bash scripts/ci/ignored_set_chain_store.sh --check
+          bash scripts/ci/ignored_set_economics_sim.sh --check
+          bash scripts/ci/ignored_set_hasher.sh --check
+          bash scripts/ci/ignored_set_staking_sim.sh --check
+          bash scripts/ci/ignored_set_trybuild.sh --check
+          bash scripts/ci/ignored_set_wire.sh --check
       - name: "shard-visual-x86-smoke"
         working-directory: rust
         # Option (c) of `docs/V3_SHARD_VISUALIZATION.md` "Where the bound is
@@ -512,7 +606,11 @@ jobs:
         #
         # --release is mandatory (the binary refuses debug: a debug-profile
         # latency measurement is meaningless). Thresholds are x86-derived
-        # and live beside the floor ones in the example source.
+        # and live beside the floor ones in the example source. They are
+        # wall clock on GitHub's hosted runners, and the step fails only
+        # there (RUNNER_ENVIRONMENT=github-hosted); the same step run on a
+        # fleet build VM reports its cells over threshold and passes
+        # (Rick, 2026-11-18).
         run: cargo run --locked --release -p shekyl-shard-visual --example budget_matrix -- x86-smoke
       - name: "cargo clippy: test-only features off, as production builds them (lib only)"
         working-directory: rust
@@ -534,7 +632,21 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-ct-balance -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-rpc-transport -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-win-sec -p shekyl-wire --lib -- -D warnings
+
+      - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
+        working-directory: rust
+        # The economics sim depends on shekyl-mempool with
+        # `default-features = false`: the `policy` module alone, no store
+        # (ECONOMICS_SIM_PRODUCTION_REBASE.md, ESR-17). Every other dependent
+        # turns `pool` on, and the workspace runs above unify features, so
+        # none of them builds the crate the sim links. This lane lints and
+        # tests that build: a pool-only item reached from `policy`, or a
+        # test target that needs the pool without requiring the feature,
+        # fails here.
+        run: |
+          cargo clippy --locked -p shekyl-mempool --no-default-features --all-targets -- -D warnings
+          cargo test --locked -p shekyl-mempool --no-default-features
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls
@@ -563,10 +675,14 @@ jobs:
         # not bit-identical across arches; a module-level `compile_error!` in
         # `stake_engine.rs` rejects the `conformance` feature on non-x86 targets so
         # the skip is loud, never a silent false "conformance passed".
-        run: cargo test --locked -p shekyl-engine-core --features conformance
-      - name: "Gate 1: proptest (--release for speed)"
-        working-directory: rust
-        run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+        #
+        # The whole crate again, not only the three `s6_self_cert` tests the
+        # feature adds: with the feature on, every wallet open that prepares
+        # a stake engine waits on the self-cert (`observe_stake_self_cert`
+        # in `lifecycle/assemble.rs`), and this run is the only one that
+        # executes that wait. `--lib --tests` leaves out the doctests, which
+        # the feature does not change and the workspace step already ran.
+        run: cargo test --locked -p shekyl-engine-core --features conformance --lib --tests
       - name: "FN-DSA vectors with the AVX2 paths compiled out"
         working-directory: rust
         # The pinned `fn-dsa` crate dispatches to AVX2 at run time on x86_64,
@@ -630,14 +746,14 @@ jobs:
           # 0.4 as a *normal* (non-dev, non-build) dependency. If upstream
           # ciphersuite upgrades to 0.5, this gate can be removed entirely.
           DIRECT=$(grep -rn 'dalek_ff_group' --include='*.rs' \
-                   shekyl-*/src shekyl-ffi/src shekyl-ffi/tests 2>/dev/null \
+                   shekyl-*/src 2>/dev/null \
                    | grep -v '^\s*//' || true)
           if [ -n "$DIRECT" ]; then
             echo "Files referencing dalek_ff_group directly (must all resolve to 0.5):"
             echo "$DIRECT"
           fi
           # Fail if any shekyl crate has a normal dependency on the 0.4 line
-          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-daemon-rpc; do
+          for crate in shekyld shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-daemon-rpc; do
             if cargo tree -p "$crate" --edges normal 2>/dev/null \
                | grep 'dalek-ff-group v0\.4'; then
               echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
@@ -648,11 +764,11 @@ jobs:
       - name: determinism check (build twice, compare hashes)
         working-directory: rust
         run: |
-          cargo build --locked --release -p shekyl-ffi
-          sha256sum target/release/libshekyl_ffi.a > /tmp/build1.sha256
-          cargo clean -p shekyl-ffi --release
-          cargo build --locked --release -p shekyl-ffi
-          sha256sum target/release/libshekyl_ffi.a > /tmp/build2.sha256
+          cargo build --locked --release -p shekyld
+          sha256sum target/release/shekyld > /tmp/build1.sha256
+          cargo clean -p shekyld --release
+          cargo build --locked --release -p shekyld
+          sha256sum target/release/shekyld > /tmp/build2.sha256
           echo "=== Build 1 ===" && cat /tmp/build1.sha256
           echo "=== Build 2 ===" && cat /tmp/build2.sha256
           diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
@@ -690,3 +806,96 @@ jobs:
         # PR that bumps the action pin.
         if: always()
         run: mkdir -p rust/target/tests/target
+
+  economics-sim-narrations:
+    name: 'Economics sim: narration pins'
+    needs: changes
+    # The sim's narration pins (`#[ignore]`d, release build): each folds the
+    # sim and compares its report with the committed fixture. A change to a
+    # value the sim reads anywhere upstream moves a narration without failing
+    # any test the Rust job runs: #1323 (the block-weight surge factor, 4 to
+    # 3) merged green and the nightly lane stayed red for three nights
+    # (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.30). This job runs the pins on
+    # every change to what a narration is made of (`sim_narrations` in
+    # scripts/ci/change_scope.py: the consensus configuration, the economics
+    # crates, the block-weight rule and the sim), on its own runner beside
+    # the Rust job, so it adds runner time and no wall time. The nightly lane
+    # still runs them, with the tests too long for a pull request.
+    # Skipped on a draft pull request, like the Rust job (ruled 2026-11-16).
+    if: >-
+      needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.sim_narrations == 'run'
+      && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 55  # one run, 26.7 min (#1375 at daff21237: release build 4.6, four pins 21.7); about twice it
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: install Rust
+        uses: ./.github/actions/install-rust
+      - name: the narration pins
+        # The pin list is scripts/ci/ignored_set_economics_sim.sh's, judged
+        # against the crate's ignored set before it runs.
+        run: bash scripts/ci/ignored_set_economics_sim.sh --narrations
+
+  # The one required check for this workflow: `rust-pass`
+  # (scripts/ci/workflow_pass.py, ruled 2026-11-16). It needs every other
+  # job but the reporter and runs whatever they did, so it reports once all
+  # of them have finished: green when each succeeded or was skipped by
+  # scope, red when the scope job did not succeed or any job failed or was
+  # cancelled. On a draft it reports as `rust-pass (draft)`, a name
+  # protection does not require, so a draft never satisfies it and a PR
+  # marked ready waits for its own `rust-pass`. build.yml's `pass` job
+  # carries the full reasoning; `workflow_pass.py --check` holds both.
+  pass:
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'rust-pass (draft)' || 'rust-pass' }}
+    needs: [changes, rust-audit-and-test, economics-sim-narrations]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/workflow_pass.py
+            scripts/ci/freshness_status.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: every job succeeded or was skipped by scope
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/workflow_pass.py --decide --scope changes
+      # Brief C: a merge to `dev` that shares a test with this pull request
+      # marks its head stale (freshness.yml), and the `merge-next` label
+      # re-tests it against the new `dev`; both report `fresh-against-dev`
+      # on the head. Absent or green passes; stale, re-testing or red fails,
+      # so a stale pull request cannot merge untested. freshness.yml re-runs
+      # this job when the verdict changes.
+      - name: fresh against dev (absent or green)
+        if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/freshness_status.py check "${{ github.event.pull_request.head.sha }}"
+
+  # Every push run on `dev` reports to `report-dev-red.yml`: a red job
+  # opens or threads its own tracking issue, and a job green again closes
+  # its issue. `needs` lists every other job in this file, so a red in any
+  # of them reports; scripts/ci/check_dev_red_reporter.py holds the list
+  # and this condition to the file. Only a push run on `dev` reports: a
+  # pull request's red is read on the pull request. A job past its
+  # `timeout-minutes` is cancelled, not failed, and the reporter counts it
+  # red. A run cancelled as a whole (a newer merge superseded it) reports
+  # nothing, which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [changes, rust-audit-and-test, economics-sim-narrations, pass]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

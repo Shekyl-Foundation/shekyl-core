@@ -3,20 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Byte-identity KATs against the gtest expectations in
-//! `tests/unit_tests/levin.cpp`.
-//!
-//! Each test mirrors a gtest (`make_noise.*`, `make_fragment.*`) assertion
-//! for assertion. After the emit cut those gtests execute this crate
-//! through the FFI, so these KATs are a same-language pin of the same
-//! bytes the gtests check across the boundary. `make_header` is still an
-//! independent C++ implementation. Removing these loses that pin; they do
+//! Byte-identity KATs. The expectations were transcribed assertion for
+//! assertion from the gtests (`tests/unit_tests/levin.cpp`, `make_noise.*`
+//! / `make_fragment.*`) that were deleted with the C++ Levin stack in the
+//! p2p remnant cutover; they are now the only pin of these bytes. They do
 //! NOT cover the read-side state machine (see `reader_stream.rs`).
 //!
 //! Coverage boundary, stated so it is not mistaken for completeness: these
-//! pin `make_header`, `noise_notify` and `fragmented_notify`. The
-//! constants both sides share are guarded separately, by
-//! `ci/levin-constant-parity`.
+//! pin the header writer, `noise_notify` and `fragmented_notify`.
 
 use shekyl_levin::{
     fragmented_notify, noise_notify, BucketHead, Flags, HEADER_SIZE, LEVIN_SIGNATURE,

@@ -18,19 +18,20 @@ license.workspace = true
 # validator never names the store (G1); the pipeline names all three and
 # wires them.
 #
-# Features keep the FFI lean: `shekyl-ffi` depends with
-# `default-features = false, features = ["pipeline"]` — the trace writer
-# and the ingest service its one arrival entry offers into, not the corpus
-# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch). The
-# pipeline (kameo/tokio and the service's pool, miner and hasher-budget
-# edges), the fetcher and the CLI are optional. Default enables all three
-# so `cargo test -p shekyl-chain-ingest` is the full crate.
+# Features let a consumer take part of the crate: `shekyl-chain-sync-runtime`
+# and `shekyl-p2p-harness` depend with `default-features = false, features =
+# ["pipeline"]` — the trace writer and the ingest service, not the corpus
+# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch), and
+# `shekyl-chain-sync` takes none of them. The pipeline (kameo/tokio and the
+# service's pool, miner and hasher-budget edges), the fetcher and the CLI are
+# optional. Default enables all of them, so `cargo test -p
+# shekyl-chain-ingest` is the full crate and the node takes everything.
 #
 # `producer` is the bundle producer's read path (SO-D12 increment 4c): the
 # fetch scheduler, its store-backed shard facts, and the task that reads,
 # assembles and files. It is the one feature that brings the shard-fetch
-# client into this crate's graph, so `shekyl-ffi` (the wallet-side image,
-# `pipeline` only) never has it (SF-D4). The witness ring the template
+# client into this crate's graph, so a `pipeline`-only consumer never has it
+# (SF-D4). The witness ring the template
 # draws from is in `pipeline`: it holds secrets and fetches nothing.
 [features]
 default = ["pipeline", "fetch", "replay-cli", "producer"]
@@ -46,23 +47,33 @@ pipeline = [
     "dep:kameo",
     "dep:tokio",
     "dep:tracing",
-    "dep:shekyl-hash-budget",
+    "dep:shekyl-hasher",
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
     "dep:shekyl-block-template",
-    "dep:shekyl-archival-retention",
+    # The template's coinbase key (`TxKey::random`, R-21).
+    "dep:shekyl-crypto-pq",
     "dep:shekyl-chain-sync",
     "dep:rand",
     "dep:zeroize",
     "dep:shekyl-bundle-producer",
 ]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
+# bench-internals: the synchronous block-path driver the instruction-count
+# benches run (`bench_support.rs`; `benches/block_path_iai.rs` and the
+# benches that read or serve from its store). The driver
+# also needs `harness`, for the unpinned regtest rules a fixture chain is
+# mined under (`ChainRules::harness_regtest`). This feature does not enable
+# it: `harness` is TEST_ONLY and no feature of this crate may turn it on
+# (check_test_only_features.py). The bench target requires both, and the
+# capture script names both on its command line.
+bench-internals = ["pipeline", "dep:tempfile"]
 replay-cli = [
     "pipeline",
     "fetch",
     "dep:clap",
+    "dep:shekyl-hash-budget",
     "dep:shekyl-rpc-transport",
-    "dep:shekyl-archival-retention",
 ]
 # harness: the driver's emission-claim assembly (`emission_assembly.rs`,
 # E6 slice 8 row 7) for the one test outside this crate that needs it —
@@ -70,14 +81,94 @@ replay-cli = [
 # TEST_ONLY feature (check_test_only_features.py): no feature here enables
 # it, `default` included, and the only enabler is that crate's
 # [dev-dependencies] edge. A shipping build never carries a second producer.
+# It forwards `shekyl-chain-rules/harness` because `ChainRules::unpinned()`
+# here reads `GenesisPin::NONE`, which exists only under that feature; an
+# enabler that turns on this crate's harness alone must still compile.
 harness = [
-    "dep:shekyl-archival-retention",
+    "shekyl-chain-rules/harness",
     "dep:shekyl-crypto-pq",
     "dep:shekyl-tx-builder",
     "dep:shekyl-curve-generators",
     "dep:curve25519-dalek",
     "dep:zeroize",
 ]
+# forge: the scenario driver for an outside caller, the chain forge
+# (CHAIN_FORGE.md §5.3, seam T5). The modules the executor names are
+# public (`scenario`, `scenario_shard`, `scenario_archival`, `chain_drive`,
+# `admitted_draws`, `archival_driver`, `emission_assembly`). The store
+# helpers they open stores with (`test_support`) stay crate-private. The
+# bench driver's rules are not part of this feature. A TEST_ONLY feature
+# (check_test_only_features.py): no feature here enables it, and its one
+# enabler is `shekyl-chain-forge`'s [dev-dependencies] edge, whose example
+# and integration test are the forge. No build that ships has the driver,
+# so no build that ships is a second producer.
+forge = [
+    "pipeline",
+    # The bundle producer's task, and its ring's draws from the forge's plan
+    # (CHAIN_FORGE.md §4, the producer audit).
+    "producer",
+    "shekyl-bundle-producer/seeded-rng",
+    # `harness`'s edges, named here: no feature of this crate may enable
+    # its own TEST_ONLY `harness` (the gate's second limb), and a forward to
+    # another crate's TEST_ONLY feature from this TEST_ONLY one is the
+    # accepted shape.
+    "shekyl-chain-rules/harness",
+    "dep:shekyl-crypto-pq",
+    "dep:shekyl-tx-builder",
+    "dep:shekyl-curve-generators",
+    "dep:curve25519-dalek",
+    "dep:zeroize",
+    "dep:shekyl-harness-wallet",
+    "dep:shekyl-harness-spender",
+    "shekyl-harness-spender/seeded-rng",
+    "shekyl-tx-builder/seeded-rng",
+    "shekyl-crypto-pq/seeded-rng",
+    "dep:shekyl-genesis-tool",
+    "dep:shekyl-hash-budget",
+    "dep:tempfile",
+]
+
+# The block path's instruction counts (BENCHMARK_ALIGNMENT.md BA-T2,
+# BA-T41): form, connect with its commit, pop and three store reads, over
+# committed blocks of four transactions. The per-PR capture.
+[[bench]]
+name = "block_path_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# The same three block rows over blocks at the weight limit: twenty
+# minutes of callgrind a row, so the nightly capture's (nightly.yml,
+# bench-full) and not a pull request's.
+[[bench]]
+name = "block_path_full_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One body response built from the store (BA-T44): the sync owner's
+# `serve_bodies`, over the block-path driver's store.
+[[bench]]
+name = "serve_bodies_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One inbound body response read off the session and decoded (BA-T45).
+[[bench]]
+name = "levin_bodies_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# A wallet's block read answered from the store (BA-T47): the RPC's
+# `block_list` over the store facts, and the reply serialized.
+[[bench]]
+name = "wallet_block_read_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
+
+# One block template built over a committed listing (BA-T46).
+[[bench]]
+name = "block_template_iai"
+harness = false
+required-features = ["bench-internals", "harness"]
 
 [[bin]]
 name = "shekyl-chain-replay"
@@ -85,10 +176,22 @@ path = "src/bin/shekyl-chain-replay.rs"
 required-features = ["replay-cli"]
 
 [dependencies]
+# A trace and a digest table are replaced through the tree's one replace
+# (Rick, 2026-11-18).
+shekyl-os-account = { path = "../shekyl-os-account" }
 # form (stateless) / validate (view-bound), Substrate, Candidate, the
 # verdict and fault types. The validator, never re-derived here.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# The production PoW verifier: PreparedCache / compute_hash / CacheStore.
+# The bundle's bytes: the corpus holds each body to its reference (§7.5)
+# in every build, and the pipeline builds and roots the template's
+# section. The validator already depends on it.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The corpus artifact's format: the replay `Source` (`corpus.rs`) wraps its
+# reader, and the fetch and the replay CLI write through its writer
+# (docs/design/CORPUS_CODEC.md).
+shekyl-corpus = { path = "../shekyl-corpus" }
+# The production PoW verifier's `Seedhash`, the name the hasher knows a
+# cache by. The cache itself is the hasher's: nothing here derives one.
 # Verification is this crate everywhere, forever (§1.3); the JIT is never
 # consulted here.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
@@ -100,8 +203,12 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 # `Network`: which public schedule a run resolves rules from (rule 71 —
 # data, never control flow). Default features only.
 shekyl-address = { path = "../shekyl-address" }
+# The network table: a run's network, its schedule, and the levers its row
+# permits (NETWORK_IDENTITY.md NI-R4, NI-R6).
+shekyl-network = { path = "../shekyl-network" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-consensus = { path = "../shekyl-consensus" }
 # The owners of two connect-fact folds `facts::Composed` performs:
 # `advance_already_generated` (CEN-F13's accumulator) and `long_term_weight`
 # (CEN-G6's clamp). Composition, not derivation — the emission itself is
@@ -123,8 +230,12 @@ serde_json = { workspace = true }
 
 # pipeline: the one stateful stage is an actor (RD-Q11); form workers are
 # blocking tasks on the same runtime.
-# pipeline: the daemon's one hasher budget (PR2-Q3), which the ingest
-# service's form workers take permits from.
+# pipeline: the node's one hasher (RANDOMX_CACHE_ACTOR.md), which every
+# hash in the ingest borrows a cache from, inside a job. The ingest holds
+# no budget: a permit is taken through a job and nowhere else.
+shekyl-hasher = { path = "../shekyl-hasher", optional = true }
+# replay-cli: the budget the replay binary starts its own hasher over, one
+# permit per `--hashers`. The library names no budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
 # pipeline: the miner's job board and found-block sink, which the ingest
 # service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
@@ -159,13 +270,21 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 shekyl-bundle-producer = { path = "../shekyl-bundle-producer", optional = true }
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched", optional = true }
 
+# bench-internals: the bench store's own directory (`bench_support.rs`).
+tempfile = { workspace = true, optional = true }
+
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
-# pipeline also takes `shekyl-archival-retention`: the empty attestation
-# root and the bundle's bytes.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
-shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
+
+# forge: the driver's harness crates, as optional normal edges only `forge`
+# enables (the [dev-dependencies] below name the same crates for this
+# crate's own tests). `shekyl-harness-spender`'s `seeded-rng` is TEST_ONLY;
+# `forge` forwards it, and `forge` is TEST_ONLY itself.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", optional = true }
+shekyl-harness-spender = { path = "../shekyl-harness-spender", optional = true }
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool", optional = true }
 
 # harness: what `emission_assembly.rs` signs and encodes with — the same
 # crates the [dev-dependencies] below name unconditionally for the rest of
@@ -177,8 +296,36 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The hosted shard-fill chain's pin and the check a fetched copy passes
+# (`forged_fill`, CHAIN_FORGE.md CF-4a). The forge's library only: no
+# driver, no seeded entry point (its own normal edges are the plan's and
+# the manifest's formats). That crate's test-kind targets depend on this
+# one; its library does not, so the edge makes no cycle.
+shekyl-chain-forge = { path = "../shekyl-chain-forge" }
+# The budget a test starts its own hasher over, and the one the service
+# tests' gate takes its jobs' permits from. The library names no budget.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The Tor status a store test hands `daemon_status`, as the daemon's
+# supervisor would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
+# The instruction-count harness of `benches/block_path_iai.rs`, at the
+# version every other gated bench uses.
+gungraun = "0.19"
+# `serve_bodies`, the subject of `benches/serve_bodies_iai.rs` and the
+# producer of the frame `benches/levin_bodies_iai.rs` decodes. That crate
+# depends on this one, so the edge is a dev-dependency cycle, as
+# `shekyl-chain-sync`'s edge back to this crate is.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
+# The body request and response those two benches build and decode.
+shekyl-levin = { path = "../shekyl-levin" }
+# Each test store's own directory (`test_support::tmp`), which takes the
+# store's sidecar files with it when the test ends.
+tempfile = { workspace = true }
 # Its workers' ledger rows, counted by the same tests.
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+# `BoundTx::modify` for the below-horizon test's edited body (TEST_ONLY,
+# check_test_only_features.py).
+shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
@@ -200,8 +347,16 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # with; the store's tests take the same two edges (the wallet's already,
 # the spender's with its fixture migration), which is why the spender is
 # a crate and not this crate's module.
-shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
-shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
+# `seeded-rng` (TEST_ONLY): the seeded spender's determinism test
+# (`scenario_spend_tests`), the full signing stack's seams T1–T4 through one
+# real chain (CHAIN_FORGE.md §5.3).
+shekyl-harness-spender = { path = "../shekyl-harness-spender", features = ["seeded-rng"] }
+# The genesis block assembly the node connects (`genesis_block`): a scenario
+# chain that carries a network's identity connects that network's table
+# genesis as block 0, assembled the node's way (`scenario_genesis.rs`,
+# CHAIN_FORGE.md §6). Dev edge only: the driver is test-only.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
 # Two subjects over the scenario chain: CEN-M9's witness (the submit
 # engine, with the production verifier, over
 # `shekyl_daemon_rpc::RustPoolShim` — the prepared reversion judged end to
@@ -210,16 +365,12 @@ shekyl-harness-spender = { path = "../shekyl-harness-spender" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# The archival body fixtures (`test_support::{serve_credit_body,
-# emission_claim_body}`, slice 7 commit 7): the kept-half and emission-vin
-# codecs, so the mutation family's duplicates carry keys the validator's
-# parse (`ArchivalKey::of`) reads. Unconditional here; the [dependencies]
-# edge above stays optional for the replay CLI alone.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `seeded-rng`: the transaction keys the driver and its tests pin
+# (`TxKey::seeded`, R-21).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
-# The driver's coinbase secret is a `Zeroizing<[u8; 32]>`, the type
-# `TemplateContext` takes (rule 35).
+# The tests' witness seeds are `Zeroizing` cells, as the ring holds them
+# (rule 35).
 zeroize = { workspace = true }
 # The emission claim's assembly (`emission_assembly.rs`): the production
 # tx-builder signs it and `open_spend` encodes it. Also behind `harness` above.

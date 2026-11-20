@@ -47,7 +47,7 @@ Verified at source on 2026-08-10, at the pin [`6bc65d2a9`](https://github.com/Sh
 
 ### 2.1 The coupling is at the line, not merely conceptual
 
-[`tx_pool.cpp:310-312`](../../src/cryptonote_core/tx_pool.cpp#L310-L312) draws
+`tx_pool.cpp:310-312` draws
 the delay **only** when `tx_relay == relay_method::forward`:
 
 ```cpp
@@ -78,7 +78,7 @@ all**; F-4/F-5 retired the fluff-delay draw that used it.
 
 ### 2.3 `FORWARD_DELAY_BASE` still has no consumer
 
-[`cryptonote_config.h:164`](../../src/cryptonote_config.h#L164). It was the
+`cryptonote_config.h` at `ac3836de90` (line 164). It was the
 derivation input for `AVERAGE` (`22 ≈ 15 × 3/2`) until Q11-A's decoupling
 replaced both with literals, and was kept deliberately as half of a registered
 open item. **This round decides whether it dies.**
@@ -865,7 +865,7 @@ here rather than left for a reader to assume from "the parts pass".
 
 **The blocker is NOT the pool-insertion fixture, and this paragraph used to say
 it was** (attempted 2026-09-11). `ShimFixture` in
-[`daemon_submit_shims.cpp`](../../tests/unit_tests/daemon_submit_shims.cpp)
+`daemon_submit_shims.cpp`
 already stands up a blockchain, a pool and a test DB, and it is where the tree's
 only `add_tx` call lives. Extending it is a few lines. What stops the test is
 that `add_tx` reaches `check_tx_inputs`, and the fixture's `make_fcmp_shape_tx`

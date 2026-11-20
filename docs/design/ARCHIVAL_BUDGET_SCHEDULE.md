@@ -39,7 +39,7 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
 ```
 
 - `staker_emission`: the staking share of block emission,
-  `compute_emission_split` (`src/shekyl/economics.h:92-98`) — zero when
+  `compute_emission_split` (`src/shekyl/economics.h` at `ac3836de90` (lines 92–98)) — zero when
   `block_emission == 0`, and zero at genesis because the share starts at
   block 1 (`shekyl_economics::EMISSION_SPLIT_EPOCH`). Above that, the
   decayed share. The split operand is
@@ -62,7 +62,7 @@ staker_inflow(h) = em_split.staker_emission + burn.staker_pool_amount
   inflow: its emission is the hardcoded `GENESIS_TX` amount, paid whole
   by the genesis coinbase.
 - `staker_pool_amount`: the staker share of the fee burn,
-  `compute_fee_burn` (`economics.h:55–60`) — **fee-dependent, per-block,
+  `compute_fee_burn` (`economics.h` at `ac3836de90` (lines 55–60)) — **fee-dependent, per-block,
   not recomputable from schedule alone.**
 
 The inflow is **accrued unconditionally**: passed into
@@ -107,9 +107,9 @@ of the FFI:
 
 - **C++ consensus path:** `cmake/generate_economics_params.py`
   (wired at `CMakeLists.txt:776–778`) emits
-  `economics_params_generated.h`, included by `cryptonote_config.h:37`;
+  `economics_params_generated.h`, included by `cryptonote_config.h` at `ac3836de90` (line 37);
   the write site passes the macros to the FFI **as arguments**
-  (`compute_emission_split`, `economics.h:79–85` →
+  (`compute_emission_split`, `economics.h` at `ac3836de90` (lines 79–85) →
   `shekyl_calc_emission_share(…, initial_share, annual_decay,
   blocks_per_year)`, `shekyl-ffi/src/lib.rs:727–733`). The Rust FFI computes
   from what it is handed — it holds no second copy of the values on the

@@ -17,6 +17,7 @@
 
 use hkdf::Hkdf;
 use sha2::Sha512;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips204::ml_dsa_65;
 
@@ -43,6 +44,49 @@ pub fn keygen_from_seed(
     let mut rng = crate::seeded_rng::SeededRng::from_seed(seed);
     ml_dsa_65::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-DSA-65 keygen: {e}")))
+}
+
+/// A hybrid Ed25519 + ML-DSA-65 keypair from 64 seed bytes: the first half
+/// is the Ed25519 seed, the second the ML-DSA-65 seed ([`keygen_from_seed`]).
+///
+/// The one place a 64-byte hybrid signing seed becomes a keypair: a multisig
+/// member's per-output signing key (`multisig_output`) and its long-term
+/// envelope key (`multisig_envelope`) both come through here. The member
+/// derivation's KAT pins the result.
+pub(crate) fn hybrid_keypair_from_seed(
+    seed: &[u8; 64],
+) -> Result<
+    (
+        crate::signature::HybridPublicKey,
+        crate::signature::HybridSecretKey,
+    ),
+    CryptoError,
+> {
+    use ed25519_dalek::SigningKey;
+    use fips204::traits::SerDes;
+
+    let ed_seed: Zeroizing<[u8; 32]> =
+        Zeroizing::new(seed[..32].try_into().expect("first half of 64"));
+    let ml_seed: Zeroizing<[u8; 32]> =
+        Zeroizing::new(seed[32..].try_into().expect("second half of 64"));
+
+    let ed_signing = SigningKey::from_bytes(&ed_seed);
+    let (ml_pk, ml_sk) = keygen_from_seed(&ml_seed)?;
+    let public = crate::signature::HybridPublicKey {
+        ed25519: ed_signing.verifying_key().to_bytes(),
+        ml_dsa: ml_pk.into_bytes().to_vec(),
+    };
+    // The serialized halves are secret. `to_bytes` / `into_bytes` return
+    // them by value; wrapping that value in `Zeroizing` wipes the source
+    // array when the copy into `HybridSecretKey` is done (rule 35).
+    let ed_sk_bytes = Zeroizing::new(ed_signing.to_bytes());
+    let ml_sk_bytes = Zeroizing::new(ml_sk.into_bytes());
+    let mut ed25519 = vec![0u8; ed_sk_bytes.len()];
+    ed25519.copy_from_slice(ed_sk_bytes.as_slice());
+    let mut ml_dsa = vec![0u8; ml_sk_bytes.len()];
+    ml_dsa.copy_from_slice(ml_sk_bytes.as_slice());
+    let secret = crate::signature::HybridSecretKey { ed25519, ml_dsa };
+    Ok((public, secret))
 }
 
 /// Derive the canonical hybrid public key bytes from combined shared secret and
@@ -114,6 +158,9 @@ const LABEL_OUTPUT_LABEL_TAG: &[u8] = b"shekyl-output-label-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
 const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
 const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
+/// The key that encrypts a multisig output's member key hashes (`0x0D`;
+/// `docs/PQC_MULTISIG.md` §7.3). Same PRK as every per-output secret.
+const LABEL_OUTPUT_MULTISIG_KEY_HASHES: &[u8] = b"shekyl-output-multisig-key-hashes";
 
 /// All per-output secrets derived from a combined KEM shared secret.
 ///
@@ -162,46 +209,155 @@ pub struct OutputSecrets {
     pub ed25519_pqc_seed: [u8; 32],
 }
 
+/// `ho` and `y` for one output: `O = ho·G + B + y·T`.
+///
+/// The key image is `(ho + b)·Hp(O)`. The amount key, the commitment mask
+/// and the signature seeds are the rest of [`OutputSecrets`], and a caller
+/// that only opens the output does not derive them. `ho` and `y` are the
+/// same two scalars [`derive_output_secrets`] stores.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub(crate) struct OutputOpening {
+    /// `O`'s coefficient of `G`, before the spend key `b`.
+    pub ho: [u8; 32],
+    /// `O`'s coefficient of `T`.
+    pub y: [u8; 32],
+}
+
+fn output_prk(combined_ss: &[u8]) -> Hkdf<Sha512> {
+    Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss)
+}
+
+/// `ho` and `y` over one PRK, written where they are kept (rule 35: no
+/// secret crosses into its holder by value). Both are wide-reduced scalars.
+/// A zero scalar is an HKDF failure, not an output.
+fn opening_into(prk: &Hkdf<Sha512>, output_index: u64, ho: &mut [u8; 32], y: &mut [u8; 32]) {
+    expand_to_scalar_into(prk, LABEL_OUTPUT_X, output_index, ho);
+    expand_to_scalar_into(prk, LABEL_OUTPUT_Y, output_index, y);
+    assert!(
+        *ho != [0u8; 32],
+        "HKDF produced zero ho scalar -- implementation bug"
+    );
+    assert!(
+        *y != [0u8; 32],
+        "HKDF produced zero y scalar -- implementation bug"
+    );
+}
+
+/// [`OutputOpening`] for `combined_ss` at `output_index`.
+///
+/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// on the production path. Any length is accepted (HKDF-Extract handles
+/// variable-length IKM).
+pub(crate) fn derive_output_opening(combined_ss: &[u8], output_index: u64) -> OutputOpening {
+    let mut opening = OutputOpening {
+        ho: [0u8; 32],
+        y: [0u8; 32],
+    };
+    opening_into(
+        &output_prk(combined_ss),
+        output_index,
+        &mut opening.ho,
+        &mut opening.y,
+    );
+    opening
+}
+
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
 /// `combined_ss` is the 64-byte OKM from the private `kem::combine_shared_secrets`
 /// on the production scan path. Any length is accepted here (HKDF-Extract
 /// handles variable-length IKM); test vectors may supply synthetic IKM directly.
+/// `ho` and `y` are [`derive_output_opening`]'s. Every secret is expanded
+/// into its field of the returned value (rule 35: no secret crosses into
+/// its holder by value).
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
-
-    let ho = expand_to_scalar(&hk, LABEL_OUTPUT_X, output_index);
-    let y = expand_to_scalar(&hk, LABEL_OUTPUT_Y, output_index);
-    let z = expand_to_scalar(&hk, LABEL_OUTPUT_MASK, output_index);
-    let k_amount = expand_32(&hk, LABEL_OUTPUT_AMOUNT_KEY, output_index);
-    let view_tag_combined = expand_first_byte(&hk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
-    let amount_tag = expand_first_byte(&hk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
-    let k_label = expand_32(&hk, LABEL_OUTPUT_LABEL_KEY, output_index);
-    let label_tag = expand_first_byte(&hk, LABEL_OUTPUT_LABEL_TAG, output_index);
-    let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
-    let ed25519_pqc_seed = expand_32(&hk, LABEL_OUTPUT_PQC_ED25519, output_index);
-
-    assert!(
-        ho != [0u8; 32],
-        "HKDF produced zero ho scalar -- implementation bug"
+    let prk = output_prk(combined_ss);
+    let mut secrets = OutputSecrets {
+        ho: [0u8; 32],
+        y: [0u8; 32],
+        z: [0u8; 32],
+        k_amount: [0u8; 32],
+        view_tag_combined: 0,
+        amount_tag: 0,
+        k_label: [0u8; 32],
+        label_tag: 0,
+        ml_dsa_seed: [0u8; 32],
+        ed25519_pqc_seed: [0u8; 32],
+    };
+    opening_into(&prk, output_index, &mut secrets.ho, &mut secrets.y);
+    expand_to_scalar_into(&prk, LABEL_OUTPUT_MASK, output_index, &mut secrets.z);
+    expand_32_into(
+        &prk,
+        LABEL_OUTPUT_AMOUNT_KEY,
+        output_index,
+        &mut secrets.k_amount,
     );
-    assert!(
-        y != [0u8; 32],
-        "HKDF produced zero y scalar -- implementation bug"
+    secrets.view_tag_combined =
+        expand_first_byte(&prk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
+    secrets.amount_tag = expand_first_byte(&prk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
+    expand_32_into(
+        &prk,
+        LABEL_OUTPUT_LABEL_KEY,
+        output_index,
+        &mut secrets.k_label,
     );
+    secrets.label_tag = expand_first_byte(&prk, LABEL_OUTPUT_LABEL_TAG, output_index);
+    expand_32_into(
+        &prk,
+        LABEL_OUTPUT_PQC,
+        output_index,
+        &mut secrets.ml_dsa_seed,
+    );
+    expand_32_into(
+        &prk,
+        LABEL_OUTPUT_PQC_ED25519,
+        output_index,
+        &mut secrets.ed25519_pqc_seed,
+    );
+    secrets
+}
 
-    OutputSecrets {
-        ho,
-        y,
-        z,
-        k_amount,
-        view_tag_combined,
-        amount_tag,
-        k_label,
-        label_tag,
-        ml_dsa_seed,
-        ed25519_pqc_seed,
-    }
+/// The AEAD key for a multisig output's encrypted member key hashes:
+/// `HKDF-Expand(prk, "shekyl-output-multisig-key-hashes" ‖ idx_le64, 32)`
+/// over the group's combined shared secret, the same derivation family as
+/// the output's amount and label keys. One key per output, used once.
+#[must_use]
+pub fn derive_multisig_key_hashes_key(
+    combined_ss: &[u8],
+    output_index: u64,
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let prk = output_prk(combined_ss);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    expand_32_into(
+        &prk,
+        LABEL_OUTPUT_MULTISIG_KEY_HASHES,
+        output_index,
+        &mut out,
+    );
+    out
+}
+
+/// Info label for the multisig group's transport secret
+/// (`CRYPTO_DOMAIN_REGISTRY.tsv`). The salt is [`crate::account::salt_for`].
+pub const LABEL_MULTISIG_GROUP_TRANSPORT: &[u8] = b"shekyl/multisig-transport-v1";
+
+/// The group transport secret, from the dealer's group seed.
+///
+/// HKDF-SHA-512 with salt [`crate::account::salt_for`]`(network)` and info
+/// [`LABEL_MULTISIG_GROUP_TRANSPORT`]. The dealer (slice 3) derives it once
+/// and writes the bytes into every member file. The file stores them; it
+/// does not derive them. The ceremony blobs' AEAD (R-4) keys from those bytes.
+#[must_use]
+pub fn derive_group_transport_secret(
+    network: crate::account::Network,
+    group_seed: &[u8; 32],
+) -> zeroize::Zeroizing<[u8; 32]> {
+    let salt = crate::account::salt_for(network);
+    let hk = Hkdf::<Sha512>::new(Some(&salt), group_seed);
+    let mut out = zeroize::Zeroizing::new([0u8; 32]);
+    hk.expand(LABEL_MULTISIG_GROUP_TRANSPORT, out.as_mut())
+        .expect("32 bytes is within HKDF-SHA-512's output");
+    out
 }
 
 /// Derive the on-wire view-tag pre-filter byte from ML-KEM shared secret only.
@@ -235,7 +391,7 @@ pub fn derive_view_tag_x25519_counterfactual(x25519_ss: &[u8; 32], output_index:
 /// `SHA3-256(x25519_pk || ml_kem_ek)` (32-byte fingerprint) `|| output_index_le64`.
 /// The fingerprint is collision-resistant at 2^128, far exceeding what's needed
 /// for domain separation, while avoiding a 1224-byte info field.
-pub fn derive_kem_seed(
+pub(crate) fn derive_kem_seed(
     tx_key_secret: &[u8; 32],
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
@@ -269,7 +425,7 @@ pub(crate) fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
 
 /// Expand 64 bytes under `info` and wide-reduce into a canonical Ed25519
 /// scalar (rule 30: wide-reduce, never 32-byte modular reduction). The shared
-/// body for every scalar derived off the output PRK: [`expand_to_scalar`] and
+/// body for every scalar derived off the output PRK: [`expand_to_scalar_into`] and
 /// the PQC leaf-commitment blind ([`crate::leaf_commitment`]) both come
 /// through here, so the reduction cannot drift between them. The 64-byte
 /// expansion is wiped structurally; the returned scalar wipes on drop.
@@ -280,11 +436,12 @@ pub(crate) fn expand_wide_scalar(hk: &Hkdf<Sha512>, info: &[u8]) -> zeroize::Zer
     zeroize::Zeroizing::new(Scalar::from_bytes_mod_order_wide(&wide))
 }
 
-fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+/// The wide-reduced scalar under `label ‖ idx_le64`, written into `out`:
+/// the scalar stays in its `Zeroizing` wrapper until its bytes are copied
+/// where they are kept (rule 35).
+fn expand_to_scalar_into(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64, out: &mut [u8; 32]) {
     let scalar = expand_wide_scalar(hk, &make_info(label, output_index));
-    let mut out = [0u8; 32];
     out.copy_from_slice(scalar.as_bytes());
-    out
 }
 
 /// HKDF-Expand 32 bytes under `label ‖ idx_le64` directly into `out` — the
@@ -301,20 +458,50 @@ pub(crate) fn expand_32_into(
         .expect("HKDF-Expand failed for 32-byte output");
 }
 
-pub(crate) fn expand_32(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    expand_32_into(hk, label, output_index, &mut out);
-    out
-}
-
+/// The first byte of the 32 expanded under `label ‖ idx_le64`: a one-byte
+/// tag. The other 31 bytes are wiped.
 fn expand_first_byte(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> u8 {
-    let buf = expand_32(hk, label, output_index);
+    let mut buf = Zeroizing::new([0u8; 32]);
+    expand_32_into(hk, label, output_index, &mut buf);
     buf[0]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The transport secret is bound to the network's name and the seed.
+    #[test]
+    fn transport_secret_binds_network_and_seed() {
+        use crate::account::Network;
+        let a = derive_group_transport_secret(Network::Testnet, &[1; 32]);
+        assert_eq!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Mainnet, &[1; 32])
+        );
+        assert_ne!(
+            *a,
+            *derive_group_transport_secret(Network::Testnet, &[2; 32])
+        );
+    }
+
+    /// The key-image path derives only the opening. Those two scalars are
+    /// the ones the full secret carries, at the same index.
+    #[test]
+    fn the_opening_is_the_secrets_ho_and_y() {
+        let shared_secret = [0xab; 64];
+        const OUTPUT_INDEX: u64 = 7;
+        let secrets = derive_output_secrets(&shared_secret, OUTPUT_INDEX);
+        let opening = derive_output_opening(&shared_secret, OUTPUT_INDEX);
+        assert_eq!(opening.ho, secrets.ho);
+        assert_eq!(opening.y, secrets.y);
+        let next = derive_output_opening(&shared_secret, OUTPUT_INDEX + 1);
+        assert_ne!(next.ho, opening.ho);
+    }
 
     #[test]
     fn derived_key_sizes() {

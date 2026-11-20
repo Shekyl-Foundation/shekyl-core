@@ -21,7 +21,7 @@ use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_join_market_bond_post, BondCtBalanceError,
     BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_ct_balance::amount_commitment;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
@@ -46,10 +46,9 @@ fn shard_set(shard_ids: Vec<u64>) -> HoldingsDescriptor {
 
 #[test]
 fn join_market_construct_verifies_against_retention() {
-    let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys");
+    let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, 0).expect("derive P keys");
     let holdings = shard_set(vec![7, 42]);
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(floor > 0);
 
     // --- construct: vin (no on-vin signature; authorization rides surface A) ---
@@ -97,8 +96,7 @@ fn join_market_construct_verifies_against_retention() {
 
 #[test]
 fn imbalanced_funding_is_rejected_before_proving() {
-    let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys");
+    let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, 0).expect("derive P keys");
     let built = build_join_market_vin(keys.bond_post_keys(), shard_set(vec![1]), [0xEE; 32])
         .expect("build JoinMarket vin");
 
@@ -117,10 +115,9 @@ fn imbalanced_funding_is_rejected_before_proving() {
 
 #[test]
 fn wrong_credit_amount_breaks_the_balance() {
-    let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys");
+    let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, 0).expect("derive P keys");
     let holdings = shard_set(vec![7, 42]);
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     let built = build_join_market_vin(keys.bond_post_keys(), holdings, [0xEE; 32])
         .expect("build JoinMarket vin");
 
@@ -157,8 +154,7 @@ fn join_market_commits_the_personas_receipt_key() {
     use shekyl_archival_retention::{ArchivalBondPostVin, BondPostKind};
     use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 
-    let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys");
+    let keys = derive_archival_p_keys(&MASTER, Network::Mainnet, 0).expect("derive P keys");
     let built = build_join_market_vin(keys.bond_post_keys(), shard_set(vec![7, 42]), [0xEE; 32])
         .expect("build JoinMarket vin");
     let vin = built.vin();
@@ -183,8 +179,7 @@ fn join_market_commits_the_personas_receipt_key() {
             .expect("encode bond_spend_pk")
     );
     // Another slot's persona commits another key: the post's is this one's.
-    let other = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 1)
-        .expect("derive P keys");
+    let other = derive_archival_p_keys(&MASTER, Network::Mainnet, 1).expect("derive P keys");
     assert_ne!(*committed, other.receipt_sign_pk.to_receipt_sign_pk());
 
     verify_join_market_bond_post(vin, false).expect("the post verifies as a JoinMarket");

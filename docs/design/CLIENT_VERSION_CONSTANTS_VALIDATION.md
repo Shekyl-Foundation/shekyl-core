@@ -69,11 +69,11 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 | --- | --- |
 | 1 | The producer: `rust/shekyl-daemon-rpc/src/methods.rs:130` fills `GetVersionResponse.version`. |
 | 2 | The producer's own unit test (`methods.rs:1852`, `:1873`) asserts the reply carries the constant. |
-| 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
+| 4 | The constant's definition: lines 44, 80, 81 and 82 of `rust/shekyl-rpc-types/src/chain.rs` at `2dba46537` (major, minor, the packing formula). The current definition is `rust/shekyl-rpc-types/src/version.rs:12`, `rust/shekyl-rpc-types/src/version.rs:34` and `rust/shekyl-rpc-types/src/version.rs:36`. |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
-| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
-| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h:84`, `:89`). |
+| 2 | The re-export, lines 87 to 88 of `rust/shekyl-rpc-types/src/lib.rs` at `2dba46537`. The current re-export is `rust/shekyl-rpc-types/src/lib.rs:47-49`. |
+| 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
 `shekyl-daemon-rpc/src/console/` (the `shekyld <command>` arm), not
@@ -88,7 +88,7 @@ whose `get_version.version` is not this build's packed `CORE_RPC_VERSION`.
 ### 0.2 `get_info.nettype` is read by nobody either — and a plan lock says it is
 
 The C++ `on_get_info` fills `nettype` as one of `"mainnet"`, `"testnet"`,
-`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp:237`). No Rust
+`"stagenet"`, `"fakechain"` (`src/rpc/core_rpc_server.cpp`). No Rust
 client reads it: `grep -rn nettype rust/shekyl-engine-core/src
 rust/shekyl-wallet-rpc/src rust/shekyl-cli/src rust/shekyl-daemon-rpc/src/console`
 returns nothing outside tests. `rust/shekyl-rpc-types` has no `nettype`
@@ -234,10 +234,12 @@ four after `VC-D12`):
 The genesis axis was added when `VC-D12`'s first draft excluded the
 `genesis_recipients.*.json` files from the digest on the ground that "the
 genesis block hash already commits to them" — and the steering lane checked
-whether anything compares that hash. Nothing does: no Rust pin of a genesis
-hash exists and no client reads block 0's hash. The daemon pins
-`GENESIS_TX` / `GENESIS_NONCE` per network in `src/cryptonote_config.h:368`
-(and `:500`, `:511`); the client side has never held the answer. So the
+whether anything compares that hash. Nothing did (at `e8838b0095`): no Rust
+pin of a genesis hash existed and no client read block 0's hash. The daemon
+pinned `GENESIS_TX` / `GENESIS_NONCE` per network at line 368 of
+`src/cryptonote_config.h` (and 500, 511) at that tree; the per-network pin
+is now `Genesis` in `rust/shekyl-network/src/genesis.rs:18-22` (network
+identity PR 1, #1264). The client side has never held the answer. So the
 axis joins the tuple rather than serving as an excuse — and it is carried in
 `get_version` with the other three (`VC-R2`, ruled 2026-09-07), not on a
 second call. Genesis does not replace network: `FAKECHAIN` takes
@@ -488,7 +490,7 @@ cleanup is where duplicates die).
 **The FFI cost, re-priced (rule 40) — the original estimate was written
 before `VC-R2` and nobody revisited it.** It read "one `u8`, one field, both
 sides of the boundary in the same slice", and at the time that was nearly
-free: `ChainTipFactsFfi` carries `reserved: [u8; 6]` (`ffi.rs:314-323`), so a
+free: `ChainTipFactsFfi` carries `reserved: [u8; 6]` (`ffi.rs` at `ac3836de90` (lines 314–323)), so a
 `nettype` byte could have landed in reserved space **with no layout movement
 at all**. Then `VC-R2` added a 32-byte genesis hash to the same field list,
 and 32 bytes do not fit in six. The estimate was never revised; §4's slice row
@@ -499,7 +501,7 @@ un-revised number wearing a different face.
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
 either. The precedent is already in the header — `shekyl_rpc_peerlist_limits`
-(`ffi.rs:741`, `:776`) is a narrow export for facts with no business in a
+(`ffi.rs` at `ac3836de90` (lines 741 and 776)) is a narrow export for facts with no business in a
 bigger POD (`shekyl_rpc_span_pruning_seed` was another until the stripe
 engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at
@@ -768,7 +770,7 @@ not mean (§1).
 
 Rejected with `VC-D4`: no C++ consumer exists. **Reopening criterion:** a C++
 consumer of the digest appears — which, given the direction of the FFI
-boundary ([`20-rust-vs-cpp-policy`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)),
+boundary ([`20-rust-vs-cpp-policy`](../completed/RULE_20_RUST_VS_CPP.md)),
 should first be asked whether it ought to be Rust.
 
 ### 3.10 `VC-D10` — no intra-binary agreement check

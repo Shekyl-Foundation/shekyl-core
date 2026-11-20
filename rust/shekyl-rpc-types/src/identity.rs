@@ -5,7 +5,7 @@
 
 //! Connect-time identity tuple: one comparison, every client (`VC-2`…`VC-4`).
 //!
-//! [`IdentityExpectation::read`] is the only place a `get_version` reply is
+//! [`IdentityExpectation::read`] is the only place a `version` reply is
 //! decoded and compared to this build. The wallet (`VC-4`) and the remote
 //! console (`VC-3`) fetch over their own transports and format the refusal in
 //! their own voice; they do not reimplement the axes.
@@ -28,9 +28,10 @@
 //! `docs/GENESIS_ALLOCATIONS.md` / `mining_parity`. A remint of `GENESIS_TX`
 //! updates those pins in the same change.
 
-use crate::chain::{core_rpc_version_string, GetVersionResponse, CORE_RPC_VERSION};
-use crate::consensus_digest::{DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST_HASH};
+use crate::consensus_digest::{Network, CONSENSUS_CONSTANTS_DIGEST_HASH};
 use crate::hash::HashHex;
+use crate::version::{core_rpc_version_string, CORE_RPC_VERSION};
+use crate::wire::chain::Version as GetVersionResponse;
 use serde::Deserialize as _;
 
 /// Which axis of the identity tuple disagreed.
@@ -58,44 +59,29 @@ impl std::fmt::Display for IdentityAxis {
     }
 }
 
-/// What this client requires of a daemon's identity tuple.
-///
-/// Constructed from this build's compiled pins plus the network the client is
-/// bound to. [`Self::exact_or_fakechain`] is the wallet regtest harness
-/// (`FakechainPolicy::Accept`); every shipped path uses [`Self::exact`].
+/// What this client requires of a daemon's identity tuple: this build's
+/// compiled pins and the network the client is bound to. One rule on every
+/// network, regtest included (`NETWORK_IDENTITY.md` NI-Q8): the daemon's
+/// `nettype` is the client's, and its genesis is the table's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdentityExpectation {
-    network: DaemonNetwork,
-    accept_fakechain: bool,
+    network: Network,
 }
 
 impl IdentityExpectation {
     /// Refuse any daemon whose `nettype` is not `network`.
     #[must_use]
-    pub const fn exact(network: DaemonNetwork) -> Self {
-        Self {
-            network,
-            accept_fakechain: false,
-        }
-    }
-
-    /// Accept `network` or `fakechain`. Wallet-only: a `shekyld --regtest`
-    /// daemon reports `fakechain` while sharing mainnet's genesis and digest.
-    #[must_use]
-    pub const fn exact_or_fakechain(network: DaemonNetwork) -> Self {
-        Self {
-            network,
-            accept_fakechain: true,
-        }
+    pub const fn exact(network: Network) -> Self {
+        Self { network }
     }
 
     /// The network this client is bound to.
     #[must_use]
-    pub const fn network(self) -> DaemonNetwork {
+    pub const fn network(self) -> Network {
         self.network
     }
 
-    /// Decode a `get_version` result and compare it to this build's pins.
+    /// Decode a `version` result and compare it to this build's pins.
     ///
     /// `result` is the JSON-RPC `result` member. Wire first, through
     /// [`daemon_rpc_version`], **before** the rest is decoded: a version
@@ -140,29 +126,25 @@ impl IdentityExpectation {
     }
 
     /// Rules, then network, then genesis. The wire axis is [`Self::read`]'s,
-    /// which is the only caller. Fakechain shares mainnet's genesis
-    /// (`cryptonote_config.h`: `FAKECHAIN` takes mainnet's configuration), so
-    /// [`Self::exact_or_fakechain`] on mainnet still compares the mainnet pin.
+    /// which is the only caller.
     fn check_tuple(self, reply: &GetVersionResponse) -> Result<(), IdentityMismatch> {
-        if reply.consensus_constants_digest != CONSENSUS_CONSTANTS_DIGEST_HASH {
+        if reply.consensus_digest != CONSENSUS_CONSTANTS_DIGEST_HASH {
             return Err(IdentityMismatch::Rules {
                 ours: CONSENSUS_CONSTANTS_DIGEST_HASH,
-                theirs: reply.consensus_constants_digest,
+                theirs: reply.consensus_digest,
             });
         }
-        let network_ok = reply.nettype == self.network
-            || (self.accept_fakechain && reply.nettype == DaemonNetwork::Fakechain);
-        if !network_ok {
+        if reply.network != self.network {
             return Err(IdentityMismatch::Network {
                 ours: self.network,
-                theirs: reply.nettype,
+                theirs: reply.network,
             });
         }
         let expected = genesis_hash_for(self.network);
-        if reply.genesis_hash.to_bytes() != expected {
+        if reply.genesis.to_bytes() != expected {
             return Err(IdentityMismatch::Genesis {
                 ours: HashHex::from_bytes(expected),
-                theirs: reply.genesis_hash,
+                theirs: reply.genesis,
                 network: self.network,
             });
         }
@@ -173,7 +155,7 @@ impl IdentityExpectation {
 /// The frozen key (`RK-D25`).
 const VERSION_KEY: &str = "version";
 
-/// A `get_version` result with no readable `version` member.
+/// A `version` result with no readable `version` member.
 ///
 /// Holds the parse failure, which is the daemon's own text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +169,7 @@ impl std::fmt::Display for VersionUnreadable {
 
 impl std::error::Error for VersionUnreadable {}
 
-/// The packed RPC version a daemon reports, read from a `get_version`
+/// The packed RPC version a daemon reports, read from a `version`
 /// result on its own (`RK-D25`).
 ///
 /// `result` is the JSON-RPC `result` member. Only `version` is read: a
@@ -240,7 +222,7 @@ impl<'de> serde::de::Visitor<'de> for VersionVisitor {
     }
 }
 
-/// A refused `get_version` reply: which axis, and what failed to parse.
+/// A refused `version` reply: which axis, and what failed to parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityRefusal {
     /// Why the reply is not this build.
@@ -250,7 +232,7 @@ pub struct IdentityRefusal {
     pub evidence: Option<String>,
 }
 
-/// Why a `get_version` reply is not this build.
+/// Why a `version` reply is not this build.
 ///
 /// A fixed-size value with no text from the reply in it, so every error type
 /// on the way up can carry it, including the refresh producer's `Copy`-only
@@ -282,9 +264,9 @@ pub enum IdentityMismatch {
     /// `nettype` disagrees.
     Network {
         /// The network this client is bound to.
-        ours: DaemonNetwork,
+        ours: Network,
         /// The network the daemon reported.
-        theirs: DaemonNetwork,
+        theirs: Network,
     },
     /// Block 0 disagrees.
     Genesis {
@@ -293,12 +275,12 @@ pub enum IdentityMismatch {
         /// The daemon's block 0.
         theirs: HashHex,
         /// The network whose pin was compared.
-        network: DaemonNetwork,
+        network: Network,
     },
 }
 
 impl IdentityMismatch {
-    /// A reply that did not parse as this build's `get_version` shape. The
+    /// A reply that did not parse as this build's `version` shape. The
     /// caller logs what failed to parse; see [`Self::WireUnreadable`].
     #[must_use]
     pub const fn unreadable() -> Self {
@@ -325,71 +307,28 @@ impl IdentityMismatch {
     }
 }
 
-/// Decode 64 lowercase hex characters into 32 bytes.
-///
-/// The pin literals below are the only callers; a non-hex byte would be a
-/// compile-time panic on a constant this crate ships.
-const fn hex_nibble_const(b: u8) -> u8 {
-    match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        _ => panic!("genesis pin is not lowercase hex"),
-    }
-}
-
-const fn hex32(s: &[u8; 64]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let mut i = 0;
-    while i < 32 {
-        out[i] = (hex_nibble_const(s[i * 2]) << 4) | hex_nibble_const(s[i * 2 + 1]);
-        i += 1;
-    }
-    out
-}
-
-/// Mainnet (and fakechain) block 0. Same string as
-/// `docs/GENESIS_ALLOCATIONS.md`, `mining_parity`'s `frozen_id`, and
-/// `shekyl-wire`'s `MAINNET_GENESIS_BLOCK_ID`.
-const MAINNET_GENESIS: [u8; 32] =
-    hex32(b"d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed");
-const TESTNET_GENESIS: [u8; 32] =
-    hex32(b"e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da");
-const STAGENET_GENESIS: [u8; 32] =
-    hex32(b"371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60");
-
-/// The genesis block hash this build expects on `network`.
-///
-/// These are the frozen block-0 ids (`get_block_id_by_height(0)` /
-/// `geblock block-id`), not `GENESIS_TX`. Fakechain shares mainnet's genesis
-/// (`cryptonote_config.h`: `FAKECHAIN` takes mainnet's configuration). Reminting
-/// genesis updates `GENESIS_TX` / nonce and these pins in the same change.
-/// The handshake network id is `network_id_from_genesis` of this pin, so that
-/// change rotates the id; the KAT in `shekyl-ffi`'s `network_id_ffi` fails
-/// until it is re-recorded.
+/// The genesis block hash this build expects on `network`: the network
+/// table's (`shekyl_network::Genesis`, `NETWORK_IDENTITY.md` NI-Q3), which the
+/// genesis tool rebuilds from each network's recipients file. The handshake
+/// network id is `network_id_from_genesis` of this hash.
 #[must_use]
-pub const fn genesis_hash_for(network: DaemonNetwork) -> [u8; 32] {
-    match network {
-        DaemonNetwork::Mainnet | DaemonNetwork::Fakechain => MAINNET_GENESIS,
-        DaemonNetwork::Testnet => TESTNET_GENESIS,
-        DaemonNetwork::Stagenet => STAGENET_GENESIS,
-    }
+pub const fn genesis_hash_for(network: Network) -> [u8; 32] {
+    network.genesis().hash()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::RpcStatus;
 
     fn agreeing() -> GetVersionResponse {
         GetVersionResponse {
-            status: RpcStatus::ok(),
-            version: CORE_RPC_VERSION,
-            release: false,
-            current_height: 1,
-            target_height: crate::Nullable::NULL,
-            consensus_constants_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
-            nettype: DaemonNetwork::Mainnet,
-            genesis_hash: HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet)),
+            version: crate::kinds::Integer(u64::from(CORE_RPC_VERSION)),
+            tagged: true,
+            height: crate::kinds::Height(0),
+            target_height: crate::nullable::Nullable(None),
+            consensus_digest: CONSENSUS_CONSTANTS_DIGEST_HASH,
+            network: Network::Mainnet,
+            genesis: HashHex::from_bytes(genesis_hash_for(Network::Mainnet)),
         }
     }
 
@@ -423,7 +362,13 @@ mod tests {
     /// with both sides named, in both directions.
     #[test]
     fn another_versions_reply_is_a_version_mismatch_whatever_its_shape() {
-        for theirs in [CORE_RPC_VERSION - 1, CORE_RPC_VERSION + 1, 4 << 16] {
+        // 3.70 is the last 3.x: the version a pre-rename client reads.
+        for theirs in [
+            CORE_RPC_VERSION - 1,
+            CORE_RPC_VERSION + 1,
+            (3 << 16) | 70,
+            5 << 16,
+        ] {
             for result in [
                 serde_json::json!({ "version": theirs }),
                 serde_json::json!({
@@ -432,7 +377,7 @@ mod tests {
                     "target_height": "not what this build expects",
                 }),
             ] {
-                let refusal = IdentityExpectation::exact(DaemonNetwork::Mainnet)
+                let refusal = IdentityExpectation::exact(Network::Mainnet)
                     .read(&result)
                     .expect_err("another version is refused");
                 assert_eq!(
@@ -466,7 +411,7 @@ mod tests {
                 daemon_rpc_version(&result).is_err(),
                 "{result} carries no readable version"
             );
-            let refusal = IdentityExpectation::exact(DaemonNetwork::Mainnet)
+            let refusal = IdentityExpectation::exact(Network::Mainnet)
                 .read(&result)
                 .expect_err("no version, no identity");
             assert_eq!(refusal.mismatch, IdentityMismatch::unreadable());
@@ -487,11 +432,11 @@ mod tests {
         missing
             .as_object_mut()
             .expect("an object")
-            .remove("genesis_hash")
+            .remove("genesis")
             .expect("the member is there to remove");
 
         for result in [extra, missing] {
-            let refusal = IdentityExpectation::exact(DaemonNetwork::Mainnet)
+            let refusal = IdentityExpectation::exact(Network::Mainnet)
                 .read(&result)
                 .expect_err("not this build's shape");
             assert_eq!(refusal.mismatch, IdentityMismatch::unreadable());
@@ -502,10 +447,7 @@ mod tests {
     #[test]
     fn an_agreeing_reply_passes() {
         assert_eq!(
-            verdict(
-                IdentityExpectation::exact(DaemonNetwork::Mainnet),
-                &agreeing()
-            ),
+            verdict(IdentityExpectation::exact(Network::Mainnet), &agreeing()),
             Ok(())
         );
     }
@@ -513,8 +455,8 @@ mod tests {
     #[test]
     fn wire_mismatch_names_both_packed_versions() {
         let mut reply = agreeing();
-        reply.version -= 1;
-        match verdict(IdentityExpectation::exact(DaemonNetwork::Mainnet), &reply) {
+        reply.version.0 -= 1;
+        match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Wire { ours, theirs }) => {
                 assert_eq!(ours, CORE_RPC_VERSION);
                 assert_eq!(theirs, CORE_RPC_VERSION - 1);
@@ -527,8 +469,8 @@ mod tests {
     #[test]
     fn rules_mismatch_carries_both_digests_and_is_not_wire() {
         let mut reply = agreeing();
-        reply.consensus_constants_digest = HashHex::from_bytes([0x99; 32]);
-        match verdict(IdentityExpectation::exact(DaemonNetwork::Mainnet), &reply) {
+        reply.consensus_digest = HashHex::from_bytes([0x99; 32]);
+        match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(m @ IdentityMismatch::Rules { .. }) => {
                 assert_eq!(m.axis(), IdentityAxis::Rules);
             }
@@ -539,43 +481,35 @@ mod tests {
     #[test]
     fn network_mismatch_is_the_only_axis_that_sees_testnet() {
         let mut reply = agreeing();
-        reply.nettype = DaemonNetwork::Testnet;
-        match verdict(IdentityExpectation::exact(DaemonNetwork::Mainnet), &reply) {
+        reply.network = Network::Testnet;
+        match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Network { ours, theirs }) => {
-                assert_eq!(ours, DaemonNetwork::Mainnet);
-                assert_eq!(theirs, DaemonNetwork::Testnet);
+                assert_eq!(ours, Network::Mainnet);
+                assert_eq!(theirs, Network::Testnet);
             }
             other => panic!("expected Network, got {other:?}"),
         }
     }
 
+    /// NI-Q8: regtest is a network like the others. A mainnet client
+    /// refuses a regtest daemon, and a regtest client takes one that
+    /// reports regtest and regtest's genesis.
     #[test]
-    fn fakechain_is_refused_unless_the_expectation_allows_it() {
+    fn regtest_is_refused_by_mainnet_and_taken_by_regtest() {
         let mut reply = agreeing();
-        reply.nettype = DaemonNetwork::Fakechain;
+        reply.network = Network::Regtest;
         assert!(matches!(
-            verdict(IdentityExpectation::exact(DaemonNetwork::Mainnet), &reply),
+            verdict(IdentityExpectation::exact(Network::Mainnet), &reply),
             Err(IdentityMismatch::Network { .. })
         ));
+        reply.genesis = HashHex::from_bytes(genesis_hash_for(Network::Regtest));
         assert_eq!(
-            verdict(
-                IdentityExpectation::exact_or_fakechain(DaemonNetwork::Mainnet),
-                &reply
-            ),
+            verdict(IdentityExpectation::exact(Network::Regtest), &reply),
             Ok(())
         );
-    }
-
-    #[test]
-    fn fakechain_still_compares_the_mainnet_genesis_pin() {
-        let mut reply = agreeing();
-        reply.nettype = DaemonNetwork::Fakechain;
-        reply.genesis_hash = HashHex::from_bytes([0xff; 32]);
+        reply.genesis = HashHex::from_bytes(genesis_hash_for(Network::Mainnet));
         assert!(matches!(
-            verdict(
-                IdentityExpectation::exact_or_fakechain(DaemonNetwork::Mainnet),
-                &reply
-            ),
+            verdict(IdentityExpectation::exact(Network::Regtest), &reply),
             Err(IdentityMismatch::Genesis { .. })
         ));
     }
@@ -583,50 +517,30 @@ mod tests {
     #[test]
     fn a_foreign_genesis_is_refused() {
         let mut reply = agreeing();
-        reply.genesis_hash = HashHex::from_bytes([0xff; 32]);
-        match verdict(IdentityExpectation::exact(DaemonNetwork::Mainnet), &reply) {
+        reply.genesis = HashHex::from_bytes([0xff; 32]);
+        match verdict(IdentityExpectation::exact(Network::Mainnet), &reply) {
             Err(IdentityMismatch::Genesis {
                 ours,
                 theirs,
                 network,
             }) => {
-                assert_eq!(ours.to_bytes(), genesis_hash_for(DaemonNetwork::Mainnet));
+                assert_eq!(ours.to_bytes(), genesis_hash_for(Network::Mainnet));
                 assert_eq!(theirs.to_bytes(), [0xff; 32]);
-                assert_eq!(network, DaemonNetwork::Mainnet);
+                assert_eq!(network, Network::Mainnet);
             }
             other => panic!("expected Genesis, got {other:?}"),
         }
     }
 
+    /// The pins are the network table's genesis, one per network, and no two
+    /// networks share one (NI-Q3; the genesis tool's table test rebuilds them).
     #[test]
-    fn pins_are_the_frozen_block_ids() {
-        // Same strings as `mining_parity.genesis_identity_is_pow_independent`
-        // and `docs/GENESIS_ALLOCATIONS.md`. A remint that updates those and
-        // not this file fails here.
-        assert_eq!(
-            HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Mainnet)).to_string(),
-            "d7af382339b2cd0c4ee4b2ea0afe7426f34bc2971495d9873fd4cec2107ad8ed"
-        );
-        assert_eq!(
-            HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Testnet)).to_string(),
-            "e895bf2baa4ea4ccb07620d354e544a4be243bf329925f6a8a51631da18033da"
-        );
-        assert_eq!(
-            HashHex::from_bytes(genesis_hash_for(DaemonNetwork::Stagenet)).to_string(),
-            "371e8fa310afb0c6089e47398ebe02c4e2aa1820e8ccfd32e328558b99677c60"
-        );
-        assert_eq!(
-            genesis_hash_for(DaemonNetwork::Fakechain),
-            genesis_hash_for(DaemonNetwork::Mainnet)
-        );
-        assert_ne!(
-            genesis_hash_for(DaemonNetwork::Testnet),
-            genesis_hash_for(DaemonNetwork::Mainnet)
-        );
-        assert_ne!(
-            genesis_hash_for(DaemonNetwork::Stagenet),
-            genesis_hash_for(DaemonNetwork::Mainnet)
-        );
+    fn pins_are_the_tables_genesis_and_pairwise_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for network in Network::ALL {
+            assert_eq!(genesis_hash_for(network), network.genesis().hash());
+            assert!(seen.insert(genesis_hash_for(network)), "{network}");
+        }
     }
 
     #[test]

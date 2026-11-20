@@ -4,9 +4,10 @@
 // BSD-3-Clause
 
 //! The dialer's owner: one loop per connector that wakes, plans and draws.
-//! The handshake module opens the channel, reads the response, and either
-//! adopts a kept session or closes a confirm dial in Rust (dialer brief,
-//! "The fill", "The dial", "`DialOutcome`").
+//! The handshake module asks the session layer for the dial and applies
+//! what it returns: a kept session's list is admitted, a confirm dial is
+//! recorded (dialer brief, "The fill", "The dial", "`DialOutcome`";
+//! `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1).
 //!
 //! The loop runs on a thread of its own. Its wake is a timing-engine owner:
 //! each gap is armed on the engine and the thread waits for that wake or
@@ -24,35 +25,43 @@
 //! again ([`crate::pace`]); the wait holds no in-flight slot, and this loop
 //! does not run it.
 //!
-//! A wake draws only when the connector can dial: its link is usable and the
-//! tip and the network id are known (`TSR-F1`; the `ready` module). While one
-//! is missing the loop does not arm its timer. It waits on the change that
-//! could supply it, and the wake spacing resumes when the connector is ready.
-//! The `tor_tally` module publishes how many Tor sessions are held. An
-//! inbound accept counts there and is not a dial.
+//! A wake draws only when the connector can dial: its link is usable
+//! (`TSR-F1`; the `ready` module). While it is not the loop does not arm its
+//! timer. It waits on the change that could supply it, and the wake spacing
+//! resumes when the connector is ready. The tip and the network id are the
+//! session layer's: it does not exist before they do.
+//! The [`peers`] module is the session layer's peers owner: the layer asks
+//! it for the list a handshake or timed sync discloses, hands it the lists
+//! peers send, and tells it when a session is established or closed. The
+//! two reference each other for the life of the process: the layer is
+//! built with the dialer among its owners, then attached to the dialer
+//! ([`Dialer::attach`]), which dials through it afterwards.
 
 mod address;
 mod flight;
 mod handshake;
+mod judging;
+mod peers;
 mod ready;
 mod recovery;
-mod tor_tally;
 mod wake;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
+use shekyl_p2p_session::{Board, SessionLayer};
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
-    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick,
+    dial_profile, white_diversity_floor, ConnectionId, ConnectorId, DialOutcome, ListName,
+    NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, Verdict,
 };
-use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
-use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
-use shekyl_timing_engine::{Clock, OwnerHandle};
+use shekyl_timing_engine::{Clock, Handle, OwnerHandle, Stamp};
+use shekyl_transport_layer::{
+    BanEvent, BanFeed, CloseKind, DialEnd, Links, PathReady, Retry, SocketId, Sockets, Subscription,
+};
 
 use self::address::live_sessions;
 pub use self::flight::{Applied, Launch};
@@ -62,17 +71,27 @@ pub use self::ready::NotReady;
 use self::ready::{park, wait_wake_or_bell, Bell, Waited};
 use self::wake::{plan_wake, Wake};
 use crate::attempts::Attempts;
-use crate::bans::BanSnapshot;
-use crate::fill::{in_flight_bound, DialAim};
-use crate::link_tally::{LinkFold, TallySink, TorLinkTally};
-use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
+use crate::fill::DialAim;
+use crate::link_tally::{LinkFold, LinkTally, TallySink};
 use crate::pace::{attempts_per_test, next_wake_nanos, retry_wait_nanos};
 use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 
-/// This node's sync payload, read at each handshake. `None` when the core
-/// has not published a tip yet: the dialer then dials nothing, because a
-/// handshake without the chain's height is not one.
-pub type SnapshotSource = Arc<dyn Fn() -> Option<SyncPayload> + Send + Sync>;
+/// The random numbers the owner's own calls draw: the hooks the session
+/// layer calls ([`shekyl_p2p_session::PeerOwner`]) carry no generator of
+/// the caller's.
+pub type OwnerRng = Box<dyn RelayRng + Send>;
+
+/// When one dial attempt ran, on the process clock.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AttemptTimes {
+    /// When the dialer launched the attempt (`attempt_began`,
+    /// `DIALER_OUTAGE_EVIDENCE.md` §6.1).
+    pub(super) began: Stamp,
+    /// When it resolved. The failure is dated here, so the connector is
+    /// asked for a reading after this instant; the wait in the completion
+    /// queue is not part of it.
+    pub(super) ended: Stamp,
+}
 
 /// The state the owner loops and the FFI calls share.
 pub struct Shared {
@@ -86,10 +105,11 @@ pub struct Shared {
     own: Vec<Vec<NetworkAddress>>,
     /// Kept sessions by id, so a close can name the address.
     kept: BTreeMap<u64, NetworkAddress>,
-    /// Kept dials from just before `adopt` until their kept row is written,
-    /// by socket id. A close in that window finds no kept row; it records
-    /// its cause here instead, and the kept row is never written for it.
-    adopting: BTreeMap<u64, Option<CloseCause>>,
+    /// Kept dials from their channel's open until their kept row is
+    /// written, by socket id ([`handshake::Window`]). A close in that window
+    /// finds no kept row; it records its cause here instead, and the kept
+    /// row is never written for it.
+    adopting: BTreeMap<u64, Option<DialEnd>>,
     /// Under-target wakes that dialed nothing, one slot per connector.
     idle: [Option<wake::IdleWatch>; ConnectorId::COUNT],
     /// A closed network (`--add-exclusive-node`): the candidate
@@ -109,31 +129,35 @@ pub struct Shared {
     /// attempt id. The stop flag and the insert share one lock section
     /// ([`flight`]): once the flag is set, nothing more is inserted, and
     /// an application that has not yet removed its row leaves it for the
-    /// drain. The row holds the attempt's nonce until the result is
+    /// drain. The row holds the attempt's cancel until the result is
     /// applied or the attempt is cancelled, and the attempt stays pending
     /// in [`Attempts`] until one of those.
     in_flight: BTreeMap<u64, InFlight>,
     /// Applications that have removed their row and not yet finished.
     /// [`Dialer::stop`] waits for zero, after it has refused every new
     /// application, before it writes the address file. The wait releases
-    /// this lock; the hub is never called under it.
+    /// this lock; the session layer is never called under it.
     applying: usize,
     /// The next attempt id.
     next_attempt: u64,
-    /// Each connector's in-flight bound ([`in_flight_bound`]): protocol
+    /// Each connector's in-flight bound, from its dial profile: protocol
     /// data, the same on every node.
     bounds: [usize; ConnectorId::COUNT],
-    /// The managed Tor's `SocksTimeout`, in nanoseconds, once the daemon
-    /// sets it ([`Dialer::set_tor_window`]). A Tor attempt that times out
-    /// at or after it is final within its test.
-    tor_window: Option<u64>,
-    /// What the Tor dials show, for the managed-Tor supervisor's posture
-    /// line (`TOR_SUPERVISOR.md` §4.2). Display only (`TSR-Q14`).
-    tor_link: LinkFold,
-    /// Inbound Tor rows last read off the board. [`Dialer::session_closed`]
-    /// does not read the board: the adopt poster calls it while holding
-    /// the table lock. The seam's close poster refreshes this first.
-    inbound_tor: usize,
+    /// The retry window each connector published with its route, in
+    /// nanoseconds ([`Dialer::set_window`]). A connector whose cutoff is its
+    /// dial deadline does not read this: the profile's `retry_cutoff_nanos`
+    /// answers from the row. `None` while a published window is unknown.
+    published_windows: [Option<u64>; ConnectorId::COUNT],
+    /// What each connector's dials show, for that connector's status line
+    /// (`DIALER_OUTAGE_EVIDENCE.md` §6). Display only.
+    tallies: [LinkFold; ConnectorId::COUNT],
+    /// Where the judge asks each connector whether its path works
+    /// ([`judging`]).
+    paths: [judging::PathJudging; ConnectorId::COUNT],
+    /// Failed tests whose verdict waits for a path reading.
+    pending: Vec<judging::PendingVerdict>,
+    /// What a source rings when it has a reading: this dialer's bell.
+    ready: PathReady,
 }
 
 impl Shared {
@@ -172,27 +196,38 @@ impl Shared {
     }
 }
 
-/// The outbound dialer for every connector of one process.
-pub struct Dialer {
-    hub: Hub,
+/// The outbound dialer for every connector of one process, and the session
+/// layer's peers owner.
+pub struct Dialer<C: Clock + Clone + Send + Sync + 'static> {
+    /// The session layer this dialer dials through, once
+    /// [`Self::attach`] gave it. The layer is built with this dialer among
+    /// its owners, so it cannot exist first.
+    layer: OnceLock<SessionLayer<C>>,
+    /// The daemon's one timing engine: the dialer's clock, and the engine
+    /// its wakes are owners of.
+    timing: Handle<C>,
+    /// Each connector's link, whose change rings the bell.
+    links: Arc<Links>,
     shared: Arc<Mutex<Shared>>,
-    nonces: HandshakeNonceSet,
+    /// The generator the session layer's hooks draw from.
+    rng: Mutex<OwnerRng>,
     stop: Arc<AtomicBool>,
-    /// Set when the zone host starts; the lists exist before it does.
-    network_id: Mutex<Option<[u8; 16]>>,
-    snapshot: SnapshotSource,
     /// The address file, once [`Self::open_address_file`] named it.
     store: Mutex<Option<AddressStore>>,
     /// Which connectors have an owner loop. One per connector: a second
     /// start is refused, not stacked (the ephemeral-tor path and the
     /// proxy-only zone branch both asked for Tor's, 2026-10-13).
     owners: Mutex<[bool; ConnectorId::COUNT]>,
-    /// What a parked owner loop waits on. The hub's links ring it on every
-    /// change; so do the tip, the network id and the stop.
+    /// What a parked owner loop waits on. The links ring it on every
+    /// change; so do the posted results and the stop.
     bell: Arc<Bell>,
-    /// The hub's links ring [`Self::bell`] while this is held. Dropped with
-    /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
+    /// The links ring [`Self::bell`] while this is held. Dropped with the
+    /// dialer, so a dialer rebuilt on the same links leaves no watcher.
     _links_watch: Subscription,
+    /// The ban list's events, starting with every entry in force when the
+    /// dialer was built; each rings [`Self::bell`]. Drained in order under
+    /// the dialer's lock, by every [`Self::shared`]. Dropped with the dialer.
+    bans: BanFeed,
     /// The results the attempt tasks posted; each also rings the bell.
     completions: Arc<Completions>,
     /// Wakes [`Self::stop`] when the last application that started before
@@ -200,8 +235,8 @@ pub struct Dialer {
     apply_idle: Condvar,
 }
 
-/// The peerlist's name for a seam session: the socket id, little-endian,
-/// in the first eight bytes.
+/// The peerlist's name for a session: the socket id, little-endian, in the
+/// first eight bytes.
 #[must_use]
 pub fn session_of(id: SocketId) -> ConnectionId {
     let mut bytes = [0u8; 16];
@@ -209,24 +244,35 @@ pub fn session_of(id: SocketId) -> ConnectionId {
     ConnectionId(bytes)
 }
 
-impl Dialer {
-    /// A dialer over `hub`, with empty lists built over `refused`.
+impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
+    /// A dialer on `timing`'s clock, watching `links` and `sockets`' bans,
+    /// with empty lists built over `refused`. `rng` is what the session
+    /// layer's hooks draw from.
     ///
-    /// Every handshake request carries the network id given later by
-    /// [`Self::set_network_id`]. `snapshot` is the core's latest published
-    /// tip, and [`Self::tip_published`] says
-    /// when it changes. Until both are known, and the connector's link on
-    /// `hub` is usable, the owner loops draw nothing.
+    /// It dials nothing until [`Self::attach`] gives it the session layer,
+    /// and a connector's owner loop draws nothing while that connector's
+    /// link is not usable.
     #[must_use]
-    pub fn new(hub: Hub, refused: RefusedSet, snapshot: SnapshotSource) -> Self {
-        let mut targets = vec![0usize; ConnectorId::COUNT];
-        targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
-        targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
+    pub fn new(
+        timing: Handle<C>,
+        links: Arc<Links>,
+        sockets: &Sockets,
+        refused: RefusedSet,
+        rng: OwnerRng,
+    ) -> Self {
+        let targets: Vec<usize> = ConnectorId::ALL
+            .iter()
+            .map(|connector| dial_profile(*connector).target as usize)
+            .collect();
         let bell = Arc::new(Bell::new());
         let ringing = Arc::clone(&bell);
-        let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
+        let links_watch = links.subscribe(Arc::new(move |_| ringing.ring()));
+        let ringing = Arc::clone(&bell);
+        let bans = sockets.subscribe_bans(Arc::new(move || ringing.ring()));
         Self {
-            hub,
+            layer: OnceLock::new(),
+            timing,
+            links,
             shared: Arc::new(Mutex::new(Shared {
                 lists: Peerlist::new(refused),
                 attempts: (0..ConnectorId::COUNT).map(|_| Attempts::new()).collect(),
@@ -242,22 +288,22 @@ impl Dialer {
                 in_flight: BTreeMap::new(),
                 applying: 0,
                 next_attempt: 0,
-                bounds: [
-                    in_flight_bound(ConnectorId::Clearnet),
-                    in_flight_bound(ConnectorId::Tor),
-                ],
-                tor_window: None,
-                tor_link: LinkFold::new(),
-                inbound_tor: 0,
+                bounds: std::array::from_fn(|index| {
+                    dial_profile(ConnectorId::ALL[index]).in_flight_bound
+                }),
+                published_windows: [None; ConnectorId::COUNT],
+                tallies: std::array::from_fn(|_| LinkFold::new()),
+                paths: std::array::from_fn(|_| judging::PathJudging::none()),
+                pending: Vec::new(),
+                ready: judging::ready_rings(&bell),
             })),
-            nonces: HandshakeNonceSet::new(),
+            rng: Mutex::new(rng),
             stop: Arc::new(AtomicBool::new(false)),
-            network_id: Mutex::new(None),
-            snapshot,
             store: Mutex::new(None),
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
             _links_watch: links_watch,
+            bans,
             completions: Arc::new(Completions::default()),
             apply_idle: Condvar::new(),
         }
@@ -281,83 +327,125 @@ impl Dialer {
         self.owners.lock().expect("owners")[connector.index()] = false;
     }
 
-    /// The network every handshake names. Set once, when the zone host
-    /// starts.
-    pub fn set_network_id(&self, network_id: [u8; 16]) {
-        *self.network_id.lock().expect("network id") = Some(network_id);
+    /// Give the dialer the session layer it dials through. Once: the
+    /// composition builds the layer with this dialer among its owners and
+    /// attaches it before anything dials.
+    ///
+    /// # Panics
+    ///
+    /// When a layer is already attached.
+    pub fn attach(&self, layer: SessionLayer<C>) {
+        assert!(
+            self.layer.set(layer).is_ok(),
+            "the dialer's session layer is attached once"
+        );
         self.bell.ring();
     }
 
-    /// The earliest the managed Tor's `SocksTimeout` can expire on an onion
-    /// connect and answer `0x06` (`SocksTimeout::earliest_expiry`: Tor's
-    /// window, less its whole-second clock). Tor has already retried
-    /// introduction points and descriptor fetches by then, so a Tor attempt
-    /// that times out at or after it, measured over the attempt's own run,
-    /// is final within its test: the address cools (Rick, 2026-10-26). A
-    /// timeout before it keeps its retries. `None`, the default,
-    /// leaves every timeout worth its retries: an operator's Tor sets its
-    /// own `SocksTimeout`, which this node does not know, and with no Tor
-    /// there is nothing to read. Set where the managed Tor's route is
-    /// published.
-    pub fn set_tor_window(&self, window: Option<std::time::Duration>) {
-        let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
-        self.shared().tor_window = nanos;
+    /// The attached session layer.
+    ///
+    /// # Panics
+    ///
+    /// Before [`Self::attach`]: the composition attaches the layer before
+    /// anything dials, and a dial before that is a construction-order bug.
+    fn layer(&self) -> &SessionLayer<C> {
+        self.layer
+            .get()
+            .expect("the composition attaches the session layer before anything dials")
     }
 
-    /// The Tor window [`Self::set_tor_window`] set.
+    /// The board now: the session layer's rows, or none before a layer is
+    /// attached.
+    fn board(&self) -> Board {
+        self.layer
+            .get()
+            .map_or_else(Board::empty, SessionLayer::board)
+    }
+
+    /// The engine's clock now.
     #[must_use]
-    pub fn tor_window(&self) -> Option<std::time::Duration> {
-        self.shared()
-            .tor_window
+    pub fn now(&self) -> Tick {
+        self.timing.clock().now()
+    }
+
+    /// The engine's clock now, as the stamp the Tor tally carries.
+    fn stamp(&self) -> Stamp {
+        self.timing.clock().stamp()
+    }
+
+    /// Store the retry window `connector` published with its route.
+    ///
+    /// `None` means this node does not know a window, so every timeout on a
+    /// connector that reads the publish keeps its retries. A connector whose
+    /// cutoff is its dial deadline does not read this store: [`Self::window`]
+    /// answers from the profile (rule 71), and a publish does not move it.
+    pub fn set_window(&self, connector: ConnectorId, window: Option<std::time::Duration>) {
+        let nanos = window.map(|window| u64::try_from(window.as_nanos()).unwrap_or(u64::MAX));
+        self.shared().published_windows[connector.index()] = nanos;
+    }
+
+    /// `connector`'s retry cutoff now: its dial deadline, the window it
+    /// published ([`Self::set_window`]), or `None` while a published window
+    /// is unknown.
+    #[must_use]
+    pub fn window(&self, connector: ConnectorId) -> Option<std::time::Duration> {
+        let shared = self.shared();
+        dial_profile(connector)
+            .retry_cutoff_nanos(shared.published_windows[connector.index()])
             .map(std::time::Duration::from_nanos)
     }
 
-    /// Send what the Tor dials show to `sink`: the tally now, then each
-    /// change. The sink runs under the dialer's lock and must
-    /// not block.
-    pub fn report_tor_link(&self, sink: TallySink) {
-        self.shared().tor_link.set_sink(sink);
+    /// Send what `connector`'s dials show to `sink`: the tally now, then
+    /// each change. The sink runs under the dialer's lock and must not
+    /// block.
+    pub fn report_link(&self, connector: ConnectorId, sink: TallySink) {
+        self.shared().tallies[connector.index()].set_sink(sink);
     }
 
-    /// The Tor link tally now.
+    /// `connector`'s tally now.
     #[must_use]
-    pub fn tor_link_tally(&self) -> TorLinkTally {
-        self.shared().tor_link.tally()
-    }
-
-    /// The core published a tip: a loop parked for want of one looks again.
-    pub fn tip_published(&self) {
-        self.bell.ring();
+    pub fn link_tally(&self, connector: ConnectorId) -> LinkTally {
+        self.shared().tallies[connector.index()].tally()
     }
 
     /// Whether `connector` can dial now, or the first thing it lacks. The
     /// plan reads this before it draws, and the owner loop parks on it.
     pub fn readiness(&self, connector: ConnectorId) -> Result<(), NotReady> {
-        if let Some(missing) = NotReady::from_outbound(self.hub.links().get(connector).outbound) {
+        if let Some(missing) = NotReady::from_outbound(self.links.get(connector).outbound) {
             return Err(missing);
         }
-        if (self.snapshot)().is_none() {
-            return Err(NotReady::NoTip);
-        }
-        if self.network_id().is_none() {
-            return Err(NotReady::NoNetworkId);
+        if self.layer.get().is_none() {
+            return Err(NotReady::NoLayer);
         }
         Ok(())
     }
 
-    fn network_id(&self) -> Option<[u8; 16]> {
-        *self.network_id.lock().expect("network id")
-    }
-
-    /// The shared state, for the calls that read or write the lists.
+    /// The shared state, for the calls that read or write the lists, with
+    /// the ban list's queued events applied first, in the order it made
+    /// them: a ban bars every seat its entry covers, a lift frees those no
+    /// remaining entry covers (Rick, 2026-10-31). Every caller takes the
+    /// lists through here, so whatever it reads reflects every ban and
+    /// lift posted before it, and the queue is taken under the lock, so
+    /// the owner loops apply one order between them.
     pub fn shared(&self) -> MutexGuard<'_, Shared> {
-        self.shared.lock().expect("dialer state")
+        let mut shared = self.shared.lock().expect("dialer state");
+        for event in self.bans.take() {
+            match event {
+                BanEvent::Banned(entry) => {
+                    shared.lists.ban(entry);
+                }
+                BanEvent::Lifted(entry) => {
+                    shared.lists.lift(entry);
+                }
+            }
+        }
+        shared
     }
 
-    /// The hub this dialer dials through.
+    /// Each connector's link, as the readiness reads it.
     #[must_use]
-    pub fn hub(&self) -> &Hub {
-        &self.hub
+    pub fn links(&self) -> &Arc<Links> {
+        &self.links
     }
 
     /// The connector's outbound target as it stands.
@@ -373,8 +461,8 @@ impl Dialer {
     }
 
     /// Run `connector` at `bound` dials in flight. A test seam: the bound is
-    /// protocol data ([`in_flight_bound`]), and no production crate turns
-    /// on the feature that compiles this.
+    /// protocol data (`dial_profile(connector).in_flight_bound`), and no
+    /// production crate turns on the feature that compiles this.
     #[cfg(feature = "test-seams")]
     pub fn set_in_flight_bound(&self, connector: ConnectorId, bound: usize) {
         self.shared().bounds[connector.index()] = bound;
@@ -407,15 +495,19 @@ impl Dialer {
             .collect();
         drop(shared);
         for id in &ids {
-            self.hub.close(*id);
+            self.layer()
+                .close(*id, DialEnd::local_close_after_channel());
         }
         ids
     }
 
     /// This node's own addresses on `connector`: never dial candidates,
-    /// and the disclosure population's own member (slice 1 §5a).
+    /// and the disclosure population's own member (slice 1 §5a). Logs what
+    /// this node now discloses there, or that it is dial-only: the line is
+    /// said when the fact is set, so a managed Tor's comes when its onion
+    /// is published, not when the connector starts.
     pub fn set_own_addresses(&self, connector: ConnectorId, addresses: Vec<NetworkAddress>) {
-        tracing::info!("{connector:?}: this node's own address(es) are {addresses:?}");
+        tracing::info!("{}", address::disclosure(connector, &addresses));
         let mut shared = self.shared();
         if let Some(first) = addresses.first() {
             // An address of another connector is refused by the lists and
@@ -442,16 +534,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
-            if let Err(refusal) =
-                shared
-                    .lists
-                    .admit_gray(address, Source::Operator, now, &mut bans, rng)
-            {
+            if let Err(refusal) = shared.lists.admit_gray(address, Source::Operator, now, rng) {
                 tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
@@ -482,21 +569,11 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
-        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
-        shared
-            .lists
-            .admit_gray(address, Source::Operator, now, &mut bans, rng)
-    }
-
-    /// The inbound handshake's question: is `nonce` one of ours in flight
-    /// on `connector`? Erases it.
-    #[must_use]
-    pub fn take_nonce(&self, connector: ConnectorId, nonce: &HandshakeNonce) -> bool {
-        self.nonces.take(connector, nonce)
+        shared.lists.admit_gray(address, Source::Operator, now, rng)
     }
 
     /// The session `id` closed, with the cause that won.
@@ -509,29 +586,21 @@ impl Dialer {
     /// the failed dials since that open. Any other cause only drops the
     /// kept row. An id this dialer is not keeping has no row here: a dial
     /// still in the handshake, a confirm dial, or an inbound Tor session,
-    /// which has no list address. The board is not read. The adopt poster
-    /// calls this while it holds the table lock, so the held count uses
-    /// the inbound rows last read by [`Self::note_inbound_tor`]. The seam's
-    /// close poster reads the board first
-    /// ([`Self::session_closed_from_seam`]).
-    pub fn session_closed<R: RelayRng + ?Sized>(
-        &self,
-        id: SocketId,
-        cause: CloseCause,
-        rng: &mut R,
-    ) {
-        let now = self.hub.now();
+    /// which has no list address.
+    pub fn session_closed<R: RelayRng + ?Sized>(&self, id: SocketId, end: DialEnd, rng: &mut R) {
+        let now = self.now();
         let mut shared = self.shared();
         if let Some(adopting) = shared.adopting.get_mut(&id.get()) {
-            *adopting = Some(cause);
+            *adopting = Some(end);
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
-                if cause.kind() == CloseKind::SessionRefused {
-                    // Not a dial. The stream was counted when the session
-                    // was accepted, so this does not finish a test and does
-                    // not fold the tally.
+                if end.cause().kind() == CloseKind::SessionRefused {
+                    // A payload refusal is not a dial. The stream was
+                    // counted when the session was accepted, so this does
+                    // not finish a test and does not fold the tally. It
+                    // settles an outstanding draw; the verdict is not read.
                     let outcome = DialOutcome::PayloadRefused(address.clone());
-                    shared.lists.apply(&outcome, now, rng);
+                    shared.lists.apply(&outcome, now, Verdict::Counted, rng);
                 }
                 // White expiry follows the connection (the gray lifecycle,
                 // item 1): the clock moves to the close.
@@ -539,7 +608,6 @@ impl Dialer {
                 shared.attempts(connector).session_closed(&address);
             }
         }
-        Self::publish_tor_held(&mut shared);
     }
 
     /// Stop every owner loop at its next bell, cancel every attempt in
@@ -556,10 +624,10 @@ impl Dialer {
     /// close is handed the result back and drops it, which releases the
     /// channel. An application that had already taken its row finishes
     /// first: this waits for it, and that wait does not hold the dialer
-    /// lock across the hub calls, so a session it keeps is in the lists
-    /// when the file is written and nothing is adopted afterwards. The
-    /// file is written last. All of this is before the zone's runtime
-    /// stops and before the managed Tor is torn down
+    /// lock across the session-layer calls, so a session it keeps is in the
+    /// lists when the file is written and nothing is kept afterwards. The
+    /// file is written last. All of this is before the session layer shuts
+    /// down and before the managed Tor is torn down
     /// (`TOR_SUPERVISOR.md`, `TSR-F13`: the dialer stops first).
     ///
     /// A caller that started the owner loops on threads of its own uses
@@ -612,29 +680,25 @@ impl Dialer {
         let loaded = store.load();
         *self.store.lock().expect("address store") = Some(store);
         let addresses = loaded?;
-        let now = self.hub.now();
+        let now = self.now();
         let mut shared = self.shared();
         shared.last_store = Some(now);
         Ok(shared.lists.restore(addresses, rng))
     }
 
     /// Write the address file now: every list address, by range only,
-    /// less those under an active ban at this moment (the hub's bans, the
-    /// snapshot the draws read). `Ok(false)` when no file was named.
+    /// less those a ban covers. `Ok(false)` when no file was named.
     ///
-    /// The ban snapshot and the clock are read before the store lock, so no
-    /// hub call is made under it. Two stores that overlap may therefore
-    /// write in either order: the later write can carry the earlier
-    /// snapshot. Each is a whole file of the lists at its own moment, and
-    /// the next store, at most one interval later, replaces it.
+    /// The clock is read before the store lock. Two stores that overlap may
+    /// write in either order: each is a whole file of the lists at its own
+    /// moment, and the next store, at most one interval later, replaces it.
     pub fn store_addresses(&self) -> io::Result<bool> {
-        let mut bans = BanSnapshot::take(&self.hub);
-        let now = self.hub.now();
+        let now = self.now();
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable(&mut bans, now);
+        let addresses = self.shared().lists.persistable();
         store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
@@ -654,27 +718,48 @@ impl Dialer {
         self.store_addresses()
     }
 
+    /// Record a test's outcome, from its final attempt's `times`. The
+    /// failure is dated at its end, not when this record runs. `at` is
+    /// now.
     fn record<R: RelayRng + ?Sized>(
         shared: &mut Shared,
         connector: ConnectorId,
         outcome: &DialOutcome,
-        now: Tick,
+        times: AttemptTimes,
+        at: Stamp,
         rng: &mut R,
     ) {
+        Self::apply_due_verdicts(shared, at, rng);
+        // The attempt frees its slot whatever the verdict: a waiting one
+        // holds only the outstanding seat.
         shared.attempts(connector).finish(outcome);
-        shared.lists.apply(outcome, now, rng);
-        let held = Self::tor_held(shared);
-        shared.tor_link.observe(connector, outcome, held);
+        Self::judge_outcome(shared, connector, outcome, times.ended, at, rng);
+        Self::note_attempt(shared, connector, outcome, times);
+    }
+
+    /// An attempt's place in its connector's tally, whether its test is
+    /// recorded or deferred for a retry.
+    fn note_attempt(
+        shared: &mut Shared,
+        connector: ConnectorId,
+        outcome: &DialOutcome,
+        times: AttemptTimes,
+    ) {
+        shared.tallies[connector.index()].observe(outcome, times.began);
+    }
+
+    /// Run `body` under the dialer's lock.
+    fn with_shared<R>(&self, body: impl FnOnce(&mut Shared) -> R) -> R {
+        body(&mut self.shared())
     }
 
     /// A finished attempt's outcome, or its deferral. A `DialFailed` whose
     /// cause is worth a retry, with attempts left in this test, is not
     /// recorded: the open test waits its [`retry_wait_nanos`] and the
     /// address stays an outstanding draw. The wake at or after the due
-    /// tick makes the next attempt. A Tor timeout whose attempt ran
-    /// `ran_nanos` (timed inside its task) at or past the Tor window is
-    /// not worth one
-    /// ([`Self::set_tor_window`]). Anything else, including a test that is
+    /// tick makes the next attempt. A timeout whose attempt ran `ran_nanos`
+    /// (timed inside its task) at or past the connector's window is not
+    /// worth one ([`Self::window`]). Anything else, including a test that is
     /// not in flight, is the test's one outcome and is recorded. A
     /// deferred Tor failure still counts in the tally: the stream did not
     /// open. The inbound count is taken under the table lock, across the
@@ -684,23 +769,36 @@ impl Dialer {
         connector: ConnectorId,
         outcome: &DialOutcome,
         ran_nanos: u64,
+        times: AttemptTimes,
         rng: &mut R,
     ) {
-        let now = self.hub.now();
-        self.with_inbound(|shared| {
+        let at = self.stamp();
+        let now = at.tick();
+        self.with_shared(|shared| {
             let address = outcome.address();
-            if let DialOutcome::DialFailed(_, cause) = outcome {
-                let outlasted_tor = connector == ConnectorId::Tor
-                    && cause.window_timeout()
-                    && shared.tor_window.is_some_and(|window| ran_nanos >= window);
-                if cause.retry_worthy() && !outlasted_tor {
-                    let cause = *cause;
+            if let DialOutcome::DialFailed(_, failure) = outcome {
+                let cutoff = dial_profile(connector)
+                    .retry_cutoff_nanos(shared.published_windows[connector.index()]);
+                // Retry follows the failure's meaning (§3): a timeout of the
+                // dial's own window that ran to the cutoff ends its test.
+                let worth = match failure.retry() {
+                    Retry::Final => false,
+                    Retry::Again => true,
+                    Retry::AgainInsideWindow => cutoff.is_none_or(|cutoff| ran_nanos < cutoff),
+                };
+                if worth {
+                    let failure = *failure;
+                    let list = if shared.lists.is_white(address) {
+                        ListName::White
+                    } else {
+                        ListName::Gray
+                    };
                     let mut wait = 0u64;
                     let next = shared.attempts(connector).defer_retry(
                         address,
-                        attempts_per_test(connector),
+                        attempts_per_test(dial_profile(connector).attempts, list),
                         |next| {
-                            wait = retry_wait_nanos(next, rng);
+                            wait = retry_wait_nanos(&dial_profile(connector).retry_waits, next, rng);
                             Tick::new(now.get().saturating_add(wait))
                         },
                     );
@@ -708,64 +806,58 @@ impl Dialer {
                         tracing::debug!(
                             "{connector:?} dial {address:?} attempt {} ended {:?} after {} ms; attempt {next} in {} ms",
                             next - 1,
-                            cause.kind(),
+                            failure.evidence(),
                             ran_nanos / 1_000_000,
                             wait / 1_000_000
                         );
-                        let held = Self::tor_held(shared);
-                        shared.tor_link.observe(connector, outcome, held);
+                        Self::note_attempt(shared, connector, outcome, times);
                         return;
                     }
                 }
             }
-            Self::record(shared, connector, outcome, now, rng);
+            Self::record(shared, connector, outcome, times, at, rng);
         });
     }
 
-    /// Record `SessionAccepted` and the kept row in one lock section, mark
-    /// the session established on the hub, then notify the strand and start
-    /// the pump. The poster of that notification already sees the kept
-    /// session, an empty in-flight count, and an established row whose gap
-    /// sender has fired. `Post::Established` was posted by `adopt`, before
-    /// this runs.
+    /// Record `SessionAccepted` and the kept row in one lock section. The
+    /// session layer established the session and told the other owners
+    /// before the dial's outcome reached this loop.
     ///
-    /// A close that reached the dialer after `adopt` and before this lock
-    /// section left its cause in `adopting`. The dial is then
-    /// `DialFailed` with that cause, no kept row is written, nothing is
-    /// posted, and this returns `false`: the hub posts a close once, so a
-    /// kept row written after it would never leave.
-    fn accept_and_notify<R: RelayRng + ?Sized>(
+    /// A close that reached the dialer between the channel's open and this
+    /// lock section left its cause in the dial's window. The dial is then
+    /// `DialFailed` with that cause, no kept row is written, and this
+    /// returns `false`: the layer reports a close once, so a kept row
+    /// written after it would never leave.
+    fn accept_kept<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         address: &NetworkAddress,
         kept: KeptDial,
+        times: AttemptTimes,
         rng: &mut R,
     ) -> bool {
-        let now = self.hub.now();
-        let closed = self.with_inbound(|shared| {
-            let closed = shared.adopting.remove(&kept.id.get()).flatten();
+        let KeptDial { id, mut window } = kept;
+        let at = self.stamp();
+        let closed = self.with_shared(|shared| {
+            let closed = window.settle(shared);
             let outcome = match closed {
-                Some(cause) => DialOutcome::DialFailed(address.clone(), cause),
+                Some(end) => DialOutcome::DialFailed(address.clone(), end.failure()),
                 None => DialOutcome::SessionAccepted(address.clone()),
             };
-            Self::record(shared, connector, &outcome, now, rng);
+            Self::record(shared, connector, &outcome, times, at, rng);
             if closed.is_none() {
-                shared.kept.insert(kept.id.get(), address.clone());
+                shared.kept.insert(id.get(), address.clone());
             }
             closed
         });
-        if let Some(cause) = closed {
+        if let Some(end) = closed {
             tracing::debug!(
                 "{connector:?} dial {address:?} closed before it was kept ({:?})",
-                cause.kind()
+                end.cause().kind()
             );
             return false;
         }
-        tracing::debug!("{connector:?} dial {address:?} kept as {:?}", kept.id);
-        self.hub.session_established(kept.id);
-        self.hub
-            .post_handshake_result(kept.id, connector, kept.sync);
-        self.hub.drive(kept.id, kept.session);
+        tracing::debug!("{connector:?} dial {address:?} kept as {id:?}");
         true
     }
 
@@ -779,13 +871,14 @@ impl Dialer {
     /// together. A bell applies the results attempt tasks posted and waits
     /// again on the same armed wake; only a wake launches, one attempt per
     /// wake, so the pace (R3) is unchanged and a slow dial skips no wake.
-    pub fn run<C: Clock, R: RelayRng + ?Sized>(
+    pub fn run<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         owner: &OwnerHandle<C>,
         rng: &mut R,
     ) {
         let mut parked: Option<NotReady> = None;
+        let mut dial_at: Option<Tick> = None;
         loop {
             // The bell first, then the stop, then readiness. `stop` sets its
             // flag before it rings, so a ring already counted in `seen` is a
@@ -795,6 +888,8 @@ impl Dialer {
                 break;
             }
             self.apply_completions(connector, rng);
+            // A bell may be a path reading a waiting verdict asked for.
+            self.apply_verdicts(rng);
             match self.readiness(connector) {
                 Err(missing) => {
                     if parked != Some(missing) {
@@ -812,13 +907,19 @@ impl Dialer {
                     }
                 }
             }
-            let deadline = Tick::new(
-                owner
-                    .clock()
-                    .now()
-                    .get()
-                    .saturating_add(next_wake_nanos(rng)),
-            );
+            let wake = *dial_at.get_or_insert_with(|| {
+                Tick::new(
+                    owner
+                        .clock()
+                        .now()
+                        .get()
+                        .saturating_add(next_wake_nanos(dial_profile(connector).wake, rng)),
+                )
+            });
+            // A deferred verdict due first wakes the loop for it alone.
+            let deadline = self
+                .next_verdict_due(connector)
+                .map_or(wake, |due| due.min(wake));
             if owner.arm(deadline).is_err() {
                 break;
             }
@@ -837,13 +938,19 @@ impl Dialer {
                             return;
                         }
                         self.apply_completions(connector, rng);
+                        self.apply_verdicts(rng);
                     }
                 }
             }
             if self.stop.load(Ordering::Acquire) {
                 break;
             }
-            if let Err(err) = self.store_if_due(self.hub.now()) {
+            self.apply_verdicts(rng);
+            if owner.clock().now() < wake {
+                continue;
+            }
+            dial_at = None;
+            if let Err(err) = self.store_if_due(self.now()) {
                 tracing::warn!("the address file was not written: {err}");
             }
             self.apply_completions(connector, rng);
@@ -861,35 +968,33 @@ impl Dialer {
     /// demoted and expired once ([`Peerlist::settle`]), counted and drawn
     /// from that view. A stranded connector re-admits its configured
     /// addresses and dials nothing this wake; the next wake draws from what
-    /// was admitted. The nonce is minted after the lists lock drops: it does
-    /// not depend on the lists, and the nonce set is its own lock. It stays
-    /// in flight until it is dropped. Public so a test can read the draw
-    /// without running the loop.
+    /// was admitted. The nonce is the session layer's, minted when the dial
+    /// opens. Public so a test can read the draw without running the loop.
     pub fn choose<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         rng: &mut R,
-    ) -> Option<(NetworkAddress, DialAim, InFlightNonce)> {
-        let now = self.hub.now();
+    ) -> Option<(NetworkAddress, DialAim)> {
+        let census_at = self.stamp();
+        let now = census_at.tick();
         if let Err(missing) = self.readiness(connector) {
             tracing::debug!("{connector:?} wake: nothing drawn: {}", missing.describe());
             return None;
         }
-        let live = live_sessions(&self.hub, connector);
-        let mut bans = BanSnapshot::take(&self.hub);
+        let live = live_sessions(&self.board(), connector);
         let mut shared = self.shared();
-        let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
+        let wake = plan_wake(&mut shared, connector, &live, now, census_at, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
                 // `plan_wake` already reported this wake. A report that
                 // closed the episode opens the next one here.
-                recovery::re_admit(&mut shared, &mut bans, connector, now, rng);
+                recovery::re_admit(&mut shared, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,
             Wake::Drawn { address, aim } => (address, aim),
         };
         drop(shared);
-        Some((address, aim, self.nonces.mint(connector, rng)))
+        Some((address, aim))
     }
 }

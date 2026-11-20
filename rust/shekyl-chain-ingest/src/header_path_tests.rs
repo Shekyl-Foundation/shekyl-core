@@ -19,22 +19,23 @@ use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
     bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
-    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView,
-    OpenHeader, ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, FormClaims,
+    GenesisPin, HeaderView, OpenHeader, ProspectFault, ReferenceClaims, RuleSet, Stale, Target,
+    Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS};
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::transaction::Input;
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::source::{IngestEvent, Source};
-use crate::test_support::{cleanup, open_store_under, tmp};
+use crate::test_support::{open_store_under, tmp};
 use crate::vectors_tests::replay::rules_for;
-use crate::vectors_tests::{captured_chains, mock_with_the_real_clock, UntilRetiredJoin};
+use crate::vectors_tests::{captured_chains, mock_with_the_real_clock};
 
 /// What a path concluded. A stale claim is the world having moved, not a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,16 +48,13 @@ enum Said {
 
 fn load(dir: &std::path::Path, shape: &str) -> Vec<Candidate> {
     let bytes = std::fs::read(dir.join("corpus.e2")).expect("read corpus");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(Cursor::new(bytes.as_slice())).expect("open corpus"),
-    );
+    let mut reader = CorpusSource::open(Cursor::new(bytes.as_slice())).expect("open corpus");
     let mut blocks = Vec::new();
     while let Some(sequenced) = reader.next().expect("corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {
             blocks.push(*candidate);
         }
     }
-    reader.finish(shape);
     assert!(!blocks.is_empty(), "{shape}: the corpus has no blocks");
     blocks
 }
@@ -78,10 +76,7 @@ fn target_of<'id, V: HeaderView<'id>>(view: &V, height: BlockHeight, rule_set: &
 where
     V::Fault: std::fmt::Debug,
 {
-    match target_claim(view, height, rule_set).expect("the target read") {
-        Ok(target) => target,
-        Err(refused) => panic!("the target claim was refused: {refused:?}"),
-    }
+    target_claim(view, height, rule_set).expect("the target read")
 }
 
 fn connecting<'id, V: HeaderView<'id>>(view: &V) -> BlockHeight
@@ -143,11 +138,14 @@ fn validate_said<'id, V: ChainView<'id, Fault = StoreError>>(
         ReferenceClaims::from_headers(view, connecting(view), &candidate).expect("references");
     match form(
         candidate,
-        rule_set,
+        &FormClaims {
+            rule_set,
+            seed,
+            target,
+            references: &references,
+            network: trust.network_id(),
+        },
         substrate,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     )
     .expect("the mock answers")
@@ -239,11 +237,14 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("the mock answers")
@@ -302,7 +303,6 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(blocks > 0, "no captured block was judged");
 }
@@ -350,11 +350,14 @@ fn at_first_later_block(
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -368,7 +371,6 @@ fn at_first_later_block(
             panic!("the chain has no block after genesis");
         })
         .expect("write");
-    cleanup(&path);
 }
 
 /// Header mutations refuse on the same row on both paths. A wrong seed and
@@ -518,6 +520,96 @@ fn coinbase_rows_are_not_on_the_header_path() {
     );
 }
 
+/// Input tag `0x02` was the serve-credit arm until the switch (`SO-D12`
+/// 4b) deleted it. No arm reads it, so a body that carries it is not a
+/// transaction, and the pairing refuses it (CEN-G2). The parser's own
+/// refusal is `emission_input_arm.rs`; this is the header path's.
+#[test]
+fn an_input_tagged_0x02_is_refused_at_the_tag_and_under_cen_g2() {
+    let substrate = mock_with_the_real_clock();
+    let (dir, manifest) = captured_chains()
+        .into_iter()
+        .find(|(_, manifest)| manifest.shape == "spend-1in-2out")
+        .expect("the spend chain");
+    let chain = load(&dir, &manifest.shape);
+    let rules = rules_for(&manifest);
+    let trust = rules.trust();
+    let path = tmp("header-path-input-tag");
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+    let mut pinned = false;
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            for candidate in &chain {
+                let view = batch.chain_view();
+                let height = connecting(&view);
+                let rule_set = rules.in_force(height);
+                let seed = seed_of(&view, height);
+                let target = target_of(&view, height, &rule_set);
+                if let Some(tx) = candidate.transactions.first() {
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    let mut retired = body_of(candidate);
+                    let TxBody::Full(bytes) = &mut retired.txs[0] else {
+                        panic!("body_of writes a full transaction");
+                    };
+                    let mut first = Vec::new();
+                    tx.prefix.inputs[0]
+                        .write(&mut first)
+                        .expect("write an input");
+                    let at = bytes
+                        .windows(first.len())
+                        .position(|window| window == first.as_slice())
+                        .expect("the first input is in its transaction");
+                    bytes[at] = 0x02;
+                    let refused = shekyl_wire::Transaction::from_bytes(bytes)
+                        .expect_err("an input tagged 0x02 parses");
+                    assert!(
+                        refused.to_string().contains("unsupported input tag 0x02"),
+                        "an input tagged 0x02 is refused for another reason: {refused}"
+                    );
+                    assert_eq!(
+                        bind_body(&header, &retired).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "an input tagged 0x02"
+                    );
+                    pinned = true;
+                    break;
+                }
+                let references =
+                    ReferenceClaims::from_headers(&view, height, candidate).expect("references");
+                let formed = form(
+                    candidate.clone(),
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
+                    substrate.as_ref(),
+                    FormAttempt::FIRST,
+                )
+                .expect("mock")
+                .expect("form");
+                let valid = validate(formed, &view, &rule_set, &rules.trust())
+                    .expect("view")
+                    .expect("validate");
+                drop(view);
+                batch.connect(valid, rule_set)?;
+            }
+            Ok(())
+        })
+        .expect("write");
+    assert!(pinned, "the chain listed no transaction");
+}
+
 fn body_of(candidate: &Candidate) -> BlockBody {
     let mut block = Vec::new();
     candidate.block.write(&mut block).expect("write");
@@ -533,11 +625,12 @@ fn body_of(candidate: &Candidate) -> BlockBody {
     BlockBody {
         block,
         txs,
-        attestation_witness: candidate
-            .attestation_witness
+        bundle_references: candidate
+            .bundle_references
             .as_ref()
-            .map(|w| w.as_bytes().to_vec())
+            .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -665,18 +758,18 @@ fn bind_body_agrees_with_validate() {
                         );
                         reordered = true;
                     }
-                    let mut bad_witness = intact;
-                    bad_witness.attestation_witness = vec![0xff];
-                    let mut with_witness = candidate.clone();
-                    with_witness.attestation_witness =
-                        Some(AttestationWitness::new(vec![0xff]).expect("within the cap"));
+                    let mut bad_references = intact;
+                    bad_references.bundle_references = vec![vec![0xff; 80]];
+                    let mut with_references = candidate.clone();
+                    with_references.bundle_references =
+                        Some(BundleReferences::new(vec![vec![0xff; 80]]).expect("a section"));
                     assert_eq!(
-                        bind_body(&header, &bad_witness).map_err(|e| e.rule),
-                        Err(CenRow::B4)
+                        bind_body(&header, &bad_references).map_err(|e| e.rule),
+                        Err(CenRow::J29)
                     );
                     assert_eq!(
                         validate_said(
-                            with_witness,
+                            with_references,
                             &view,
                             &rule_set,
                             &trust,
@@ -684,7 +777,7 @@ fn bind_body_agrees_with_validate() {
                             seed,
                             target,
                         ),
-                        Said::Refused(CenRow::B4)
+                        Said::Refused(CenRow::J29)
                     );
                     witnessed = true;
 
@@ -692,11 +785,14 @@ fn bind_body_agrees_with_validate() {
                         .expect("references");
                     let formed = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
@@ -713,7 +809,6 @@ fn bind_body_agrees_with_validate() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
     assert!(substituted, "no listed transaction to substitute");
     assert!(reordered, "no block listed two transactions");
@@ -721,15 +816,15 @@ fn bind_body_agrees_with_validate() {
     assert!(witnessed, "no witness was substituted");
 }
 
-/// A block at an anchored height whose hash is not the anchor's is CEN-E1
-/// on both paths.
+/// A genesis candidate whose hash is not the pin is CEN-E1 on both paths.
+/// Nothing above height 0 is pinned, so the fixture is block 0.
 #[test]
-fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
+fn a_genesis_candidate_with_the_wrong_hash_is_e1_on_both_paths() {
     let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
-    let anchors = ReleaseAnchors::for_tests(Some(BlockHash::from_bytes([0xab; 32])), &[]);
-    let trust = Trust::full(anchors);
+    let pin = GenesisPin::for_tests(Some(BlockHash::from_bytes([0xab; 32])));
+    let trust = Trust::full(pin);
     let substrate = mock_with_the_real_clock();
     let path = tmp("header-path-anchor");
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
@@ -766,7 +861,6 @@ fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// Bytes after a full transaction, or after a skeleton's pruned base, do
@@ -901,11 +995,14 @@ fn appended_bytes_are_not_the_transaction() {
                     ReferenceClaims::from_headers(&view, height, candidate).expect("references");
                 let formed = form(
                     candidate.clone(),
-                    &rule_set,
+                    &FormClaims {
+                        rule_set: &rule_set,
+                        seed,
+                        target,
+                        references: &references,
+                        network: rules.trust().network_id(),
+                    },
                     substrate.as_ref(),
-                    seed,
-                    target,
-                    &references,
                     FormAttempt::FIRST,
                 )
                 .expect("mock")
@@ -919,7 +1016,6 @@ fn appended_bytes_are_not_the_transaction() {
             Ok(())
         })
         .expect("write");
-    cleanup(&path);
     assert!(pinned, "the chain listed no transaction");
 }
 
@@ -960,7 +1056,6 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// All-ones under difficulty 2 fails CEN-D1. `form_header` and `form` both
@@ -999,11 +1094,14 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
                 ReferenceClaims::from_headers(&view, height, &chain[0]).expect("references");
             match form(
                 chain[0].clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed,
+                    target,
+                    references: &references,
+                    network: rules.trust().network_id(),
+                },
                 &substrate,
-                seed,
-                target,
-                &references,
                 FormAttempt::FIRST,
             )
             .expect("the mock answers")
@@ -1014,7 +1112,6 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
             Ok(())
         })
         .expect("inspect");
-    cleanup(&path);
 }
 
 /// Every captured block forms the same way from its judged header as from
@@ -1049,17 +1146,25 @@ fn a_judged_header_forms_the_block_without_hashing() {
                         .expect("references");
                     let from_bytes = form(
                         candidate.clone(),
-                        &rule_set,
+                        &FormClaims {
+                            rule_set: &rule_set,
+                            seed,
+                            target,
+                            references: &references,
+                            network: rules.trust().network_id(),
+                        },
                         substrate.as_ref(),
-                        seed,
-                        target,
-                        &references,
                         FormAttempt::FIRST,
                     )
                     .expect("mock")
                     .expect("forms from bytes");
-                    let from_header = form_judged(candidate.clone(), &judged, &references)
-                        .expect("forms from the header");
+                    let from_header = form_judged(
+                        candidate.clone(),
+                        &judged,
+                        &references,
+                        &rules.trust().network_id(),
+                    )
+                    .expect("forms from the header");
                     assert_eq!(from_header.coverage(), from_bytes.coverage());
                     assert_eq!(from_header.rule_set(), from_bytes.rule_set());
                     assert_eq!(from_header.seed(), from_bytes.seed());
@@ -1077,6 +1182,5 @@ fn a_judged_header_forms_the_block_without_hashing() {
                 Ok(())
             })
             .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
-        cleanup(&path);
     }
 }

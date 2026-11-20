@@ -25,6 +25,7 @@
 //!
 //! See `docs/V3_SHARD_VISUALIZATION.md` and the GUI's
 //! `docs/SHARD_PREVIEW_CUTOVER.md`.
+#![deny(unsafe_code)]
 
 use std::sync::LazyLock;
 

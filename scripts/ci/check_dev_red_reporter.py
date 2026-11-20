@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+"""Every push run on `dev` reaches the dev-red reporter from every job.
+
+`dev` has no merge queue, so the push runs of `build.yml`,
+`rust-audit-test.yml`, `benchmarks.yml` and `fuzz-harness.yml` on `dev`
+are the first to test what the merges made (06-branching.mdc). A pull
+request whose last run predates a workflow merges untested by it: #1399
+merged with no fuzz-harness run, and the push run on `dev` that went red
+after it reported to no one. Each ends in a job that
+calls `report-dev-red.yml`, which opens or threads an issue per red job
+and closes a job's issue when it is green again (Brief C, ruled
+2026-11-19). That job runs after the jobs it `needs`: a job added to the
+workflow and left out of that list could go red on `dev` with no issue.
+This holds the list, and the condition, to the file.
+
+What passes, in each of these workflows:
+
+* exactly one job calls `./.github/workflows/report-dev-red.yml`;
+* its `needs` is every other job in the file, no more and no fewer;
+* its `if` is exactly `CONDITION` below: a push run on `dev`, not
+  cancelled as a whole, red or green. A green run is how an issue closes,
+  so a condition that runs the reporter only on red leaves every issue
+  open; a run superseded by a newer merge is cancelled as a whole and
+  reports nothing. An exact match, because a check for the parts would
+  pass the same parts joined by `||`.
+
+`gui-drift.yml` and `chain-forge.yml` are the scheduled subjects: the
+first's nightly holds the GUI wallet's pinned shekyl-core edges to the
+wallet's manifest (CHAIN_FORGE.md CF-R26), the second's forges the small
+plan at dev's HEAD and holds it to the committed chain (CHAIN_FORGE.md §9),
+so their reporters' `if` is exactly `SCHEDULE_CONDITION`, the same shape on
+a scheduled run.
+
+Rule 47: the workflows are named here, so a renamed or deleted one,
+or a reporter removed from one of them, fails by name rather than
+leaving nothing to grade.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import yaml
+
+from check_workflows_parse import StrictLoader
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+REPORTER = "./.github/workflows/report-dev-red.yml"
+CONDITION = "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}"
+# gui-drift.yml's nightly holds the GUI wallet's pin to its manifest
+# (CHAIN_FORGE.md CF-R26), and chain-forge.yml's holds the small plan to the
+# committed chain (§9); their reds reach the reporter from the schedule.
+SCHEDULE_CONDITION = "${{ !cancelled() && github.event_name == 'schedule' }}"
+# Each subject workflow, and the exact condition its reporter runs under.
+SUBJECTS = {
+    "build.yml": CONDITION,
+    "rust-audit-test.yml": CONDITION,
+    "benchmarks.yml": CONDITION,
+    "fuzz-harness.yml": CONDITION,
+    "gui-drift.yml": SCHEDULE_CONDITION,
+    "chain-forge.yml": SCHEDULE_CONDITION,
+}
+
+
+def problems_in(filename: str, doc: object, condition: str = CONDITION) -> list[str]:
+    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        return [f"{filename}: no jobs mapping"]
+    jobs = doc["jobs"]
+    callers = [n for n, j in jobs.items() if isinstance(j, dict) and j.get("uses") == REPORTER]
+    if len(callers) != 1:
+        return [f"{filename}: {len(callers)} jobs call {REPORTER}, not exactly one"]
+    name = callers[0]
+    job = jobs[name]
+    problems = []
+    needs = job.get("needs", [])
+    needs = {needs} if isinstance(needs, str) else set(needs)
+    others = set(jobs) - {name}
+    if missing := sorted(others - needs):
+        problems.append(
+            f"{filename}: {name} does not need {', '.join(missing)}; "
+            "a red there on dev would open no issue"
+        )
+    if extra := sorted(needs - others):
+        problems.append(f"{filename}: {name} needs {', '.join(extra)}, which is not a job here")
+    if job.get("if") != condition:
+        problems.append(
+            f"{filename}: {name}'s `if` is {job.get('if')!r}, not the "
+            f"reporting condition {condition!r}"
+        )
+    return problems
+
+
+def selftest() -> int:
+    good = {
+        "jobs": {
+            "a": {"runs-on": "x"},
+            "b": {"needs": "a", "runs-on": "x"},
+            "r": {
+                "needs": ["a", "b"],
+                "if": CONDITION,
+                "uses": REPORTER,
+            },
+        }
+    }
+    cases = [("a reporter needing every job", good, 0)]
+
+    def variant(edit):
+        doc = yaml.safe_load(yaml.safe_dump(good))
+        edit(doc["jobs"])
+        return doc
+
+    cases += [
+        ("a job left out of needs", variant(lambda j: j["r"].__setitem__("needs", ["a"])), 1),
+        ("a need that is not a job", variant(lambda j: j["r"].__setitem__("needs", ["a", "b", "c"])), 1),
+        ("no reporter", variant(lambda j: j.pop("r")), 1),
+        ("two reporters", variant(lambda j: j.__setitem__("s", dict(j["r"]))), 1),
+        ("a reporter that reports PR runs too", variant(lambda j: j["r"].__setitem__(
+            "if", CONDITION.replace("github.event_name == 'push' && ", ""))), 1),
+        ("a reporter that runs only on red, so no issue closes", variant(lambda j: j["r"].__setitem__(
+            "if", "${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}")), 1),
+        ("a reporter that runs when the run was superseded", variant(lambda j: j["r"].__setitem__(
+            "if", CONDITION.replace("!cancelled()", "always()"))), 1),
+        ("the same parts joined by ||", variant(lambda j: j["r"].__setitem__(
+            "if", CONDITION.replace("github.event_name == 'push' &&", "github.event_name == 'push' ||"))), 1),
+        ("no condition", variant(lambda j: j["r"].pop("if")), 1),
+    ]
+    bad = []
+    scheduled = variant(lambda j: j["r"].__setitem__("if", SCHEDULE_CONDITION))
+    for label, doc, condition, want in (
+        ("a scheduled subject's reporter on the schedule condition", scheduled,
+         SCHEDULE_CONDITION, 0),
+        ("a scheduled subject's reporter on the push condition", good, SCHEDULE_CONDITION, 1),
+        ("a push subject's reporter on the schedule condition", scheduled, CONDITION, 1),
+    ):
+        got = len(problems_in("fixture.yml", doc, condition))
+        if got != want:
+            bad.append(f"{label}: {got} problem(s), expected {want}")
+    for label, doc, want in cases:
+        got = len(problems_in("fixture.yml", doc))
+        if got != want:
+            bad.append(f"{label}: {got} problem(s), expected {want}")
+    if bad:
+        for b in bad:
+            print(f"SELFTEST FAIL: {b}")
+        return 1
+    print(
+        "SELFTEST PASS: a reporter needing every job passes; a missing or extra "
+        "need, no reporter, two reporters, and any condition but the reporting "
+        "one (PR runs, red only, superseded runs, joined by ||, absent) each fail; a "
+        "scheduled subject takes the schedule condition and no other"
+    )
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--selftest"]:
+        return selftest()
+    if argv:
+        print("usage: check_dev_red_reporter.py [--selftest]", file=sys.stderr)
+        return 2
+    problems = []
+    for filename, condition in SUBJECTS.items():
+        path = os.path.join(WORKFLOWS, filename)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = yaml.load(f, Loader=StrictLoader)
+        except (OSError, yaml.YAMLError) as e:
+            problems.append(f"{filename}: cannot read it: {e}")
+            continue
+        problems += problems_in(filename, doc, condition)
+    if problems:
+        for p in problems:
+            print(f"FAIL: {p}")
+        return 1
+    print(
+        f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
+        "that needs every other job and runs on every push run on dev, red or "
+        "green (gui-drift.yml, chain-forge.yml: on their scheduled runs)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

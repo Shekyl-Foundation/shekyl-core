@@ -133,7 +133,7 @@ Shekyl ships RandomX v2 from genesis. The category is **not empty**.
 | `src/crypto/jh.{c,h}` | JH (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/skein.c`, `src/crypto/skein_port.h` | Skein (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/hash-extra-blake.c`, `src/crypto/hash-extra-groestl.c`, `src/crypto/hash-extra-jh.c`, `src/crypto/hash-extra-skein.c` | CryptoNight component-hash extras | **DELETED 2026-09-15** |
-| [`src/fcmp/bulletproofs.{cc,h}`](../src/fcmp/bulletproofs.cc) | Legacy (non-plus) Bulletproof — already empty stub | **RESIDUE (FCMP, not PoW).** `.cc` is `#include "bulletproofs.h"` only. `RCTTypeBulletproof` is gone at consensus; the stub is not an FFI wrapper (not F.C++-4) and is not this PoW workstream's delete. |
+| `src/fcmp/bulletproofs.{cc,h}` at `ac3836de90` | Legacy (non-plus) Bulletproof — already empty stub | **RESIDUE (FCMP, not PoW).** `.cc` is `#include "bulletproofs.h"` only. `RCTTypeBulletproof` is gone at consensus; the stub is not an FFI wrapper (not F.C++-4) and is not this PoW workstream's delete. |
 
 **Workstream attribution.** A-4/A-5/A-7/A-8 PoW workstream (paired with
 RandomX-v2-from-genesis + LWMA-1 difficulty replacement). Per
@@ -157,12 +157,12 @@ handles the F.C++-1 deletion set).
 
 | File | Inherited role | Why kept at V3.0 |
 | --- | --- | --- |
-| [`src/crypto/keccak.{c,h}`](../src/crypto/keccak.c) | Keccak-f[1600] permutation | `cn_fast_hash` + general Keccak hashing; load-bearing for transitional period; subsumed by Rust `shekyl-crypto-pq` long-term |
-| [`src/crypto/hash.{c,h}`](../src/crypto/hash.c), `src/crypto/hash-ops.h` | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
-| [`src/crypto/crypto.{cpp,h}`](../src/crypto/crypto.cpp), [`src/crypto/crypto-ops.{c,h}`](../src/crypto/crypto-ops.c), `src/crypto/crypto-ops-data.c`, `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation + precomputed tables | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
+| `src/crypto/keccak.{c,h}` at `ac3836de90` | Keccak-f[1600] permutation | `cn_fast_hash` + general Keccak hashing; load-bearing for transitional period; subsumed by Rust `shekyl-crypto-pq` long-term |
+| `src/crypto/hash.{c,h}` at `ac3836de90`, `src/crypto/hash-ops.h` | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
+| `src/crypto/crypto.{cpp,h}` at `ac3836de90`, `src/crypto/crypto-ops.{c,h}` at `ac3836de90`, `src/crypto/crypto-ops-data.c`, `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation + precomputed tables | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
 | `src/crypto/generators.{cpp,h}` | Group generators (Ed25519 G, H, T) | Shared between C++ and Rust via FFI; canonical generator constants |
-| [`src/crypto/pow_randomx.cpp`](../src/crypto/pow_randomx.cpp) | RandomX v2 PoW dispatch (`hash_pow_randomx`) | Load-bearing for V3.0 RandomX-v2-from-genesis; `IPowSchema` / `pow_registry` deleted 2026-09-15 |
-| [`src/crypto/random.{c,h}`](../src/crypto/random.c) | CSPRNG source (`/dev/urandom` + `CryptGenRandom`) | Lens F F.8 verified: production randomness routes through this on the C++ side; corresponds to Rust `OsRng` discipline |
+| `src/crypto/pow_randomx.cpp` (deleted with the C++ chain, DRS-X #1212) | RandomX v2 PoW dispatch (`hash_pow_randomx`) | The PoW is the Rust ingest's (`shekyl_pow_randomx_v2_hash` stays exported for the parity gate); `IPowSchema` / `pow_registry` deleted 2026-09-15 |
+| `src/crypto/random.{c,h}` at `ac3836de90` | CSPRNG source (`/dev/urandom` + `CryptGenRandom`) | Lens F F.8 verified: production randomness routes through this on the C++ side; corresponds to Rust `OsRng` discipline |
 | `src/crypto/c_threads.h`, `src/crypto/duration.h`, `src/crypto/generic-ops.h`, `src/crypto/initializer.h` | C utility headers (threading shims, timing primitives, generic-operator macros, constructor-priority macros) | Used across the kept-set; no replacement warranted at V3.0; deletion would require auditing every cross-component consumer |
 
 **Workstream attribution.** Optional docstring sweep folded into
@@ -183,7 +183,7 @@ re-verification subsection below.
 | --- | --- | --- |
 | `src/crypto/chacha.{h,cpp}` | ChaCha20 stream cipher (used by wallet2 encrypt/decrypt) | **DELETED.** No C++ production caller after the CN-KDF / `account_keys` encrypt cut; wallet AEAD is Rust XChaCha20-Poly1305. |
 | `src/crypto/hmac-keccak.{h,c}` | HMAC-Keccak (used by ChaCha cipher integrity check) | **DELETED.** Sole remaining callers were the unit tests; no production C++ consumer after the C++ chacha cut. |
-| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Live C++ callers are `ct_semantics.cpp` VERIFY (lines 135, 142) plus unit-test PROVE sites; `wallet2.cpp` is **DELETED** (Phase 5) and the Trezor caller is **Retired 2026-08-18**. The F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those remaining sites call. |
+| `src/fcmp/bulletproofs_plus.cc` at `ac3836de90`, `src/fcmp/multiexp.{cc,h}` at `ac3836de90` | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Live C++ callers are `ct_semantics.cpp` VERIFY (lines 135, 142) plus unit-test PROVE sites; `wallet2.cpp` is **DELETED** (Phase 5) and the Trezor caller is **Retired 2026-08-18**. The F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those remaining sites call. |
 
 **Workstream attribution.** B-3 architectural workstream. ChaCha/hmac are
 **DELETED**; the remaining BP+ row is still transitional. The wallet2 cluster
@@ -192,12 +192,12 @@ collapses the remaining C++ prover when Rust holds the canonical path.
 
 ### `bulletproofs_plus` re-verification (inventory-triggered finding)
 
-The F.C++-4 entry for [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h)
+The F.C++-4 entry for `src/fcmp/bulletproofs_plus.h` at `ac3836de90`
 (below) describes the file as Rust-FFI-routed: "Type declaration
 consumed by `ct_semantics.cpp`; underlying proof generation/verification
 routes through Rust `shekyl-proofs` / `crypto/generalized-bulletproofs`."
 This claim was surfaced during PR #46 Copilot review as needing
-verification, because [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc)
+verification, because `src/fcmp/bulletproofs_plus.cc` at `ac3836de90`
 exists as a ~1000-line C++ implementation with active callers:
 
 - ~~`src/wallet/wallet2.cpp` `bulletproof_plus_PROVE`.~~ **DELETED with Phase 5:** `src/wallet/`
@@ -206,7 +206,7 @@ exists as a ~1000-line C++ implementation with active callers:
   `bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
   backend is deleted (no PQC firmware support), so this caller no
   longer exists.
-- [`src/fcmp/ct_semantics.cpp`](../src/fcmp/ct_semantics.cpp) `bulletproof_plus_VERIFY`
+- `src/fcmp/ct_semantics.cpp` at `ac3836de90` `bulletproof_plus_VERIFY`
   (the `make_dummy_bulletproof_plus` helper is the
   transaction-construction-shape stand-in the F.C++-4 entry referred to,
   not the actual prove/verify path). An older census also named a bond-post
@@ -248,9 +248,9 @@ construction surfaces that remain in C++ at V3.0.
 
 | File | Wrapped Rust surface | Verification |
 | --- | --- | --- |
-| [`src/fcmp/ct_semantics.{cpp,h}`](../src/fcmp/ct_semantics.cpp) | FCMP++ signature construction + verification (Rust `shekyl-fcmp` / `shekyl-proofs`) | Confirmed Rust-FFI wrapper: `#include "shekyl/shekyl_ffi.h"` at `ct_semantics.cpp:40`; `make_dummy_bulletproof_plus` is a transaction-construction-shape stand-in pattern, not a parallel implementation |
-| [`src/fcmp/ct_ops.{cpp,h}`](../src/fcmp/ct_ops.cpp), [`src/fcmp/ct_types.{cpp,h}`](../src/fcmp/ct_types.cpp), [`src/fcmp/ct_crypto_ops.c`](../src/fcmp/ct_crypto_ops.c) | Confidential-transaction data types + crypto-ops wrappers | Supporting layer for `ct_semantics.{cpp,h}`; same Rust-FFI consumer status |
-| [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h) | Bulletproofs+ proof shape declaration | **Re-verification pending** — see F.C++-3's "bulletproofs_plus re-verification" subsection above. The `make_dummy_bulletproof_plus` pattern in `ct_semantics.cpp` is the transaction-construction-shape stand-in this row originally described, but `bulletproof_plus_PROVE` / `bulletproof_plus_VERIFY` call sites resolve to the C++ implementation in `bulletproofs_plus.cc`, not a Rust-FFI shim. Categorization re-evaluated when the per-call-site walk lands |
+| `src/fcmp/ct_semantics.{cpp,h}` at `ac3836de90` | FCMP++ signature construction + verification (Rust `shekyl-fcmp` / `shekyl-proofs`) | Confirmed Rust-FFI wrapper: `#include "shekyl/shekyl_ffi.h"` at `ct_semantics.cpp` at `ac3836de90` (line 40); `make_dummy_bulletproof_plus` is a transaction-construction-shape stand-in pattern, not a parallel implementation |
+| `src/fcmp/ct_ops.{cpp,h}` at `ac3836de90`, `src/fcmp/ct_types.{cpp,h}` at `ac3836de90`, `src/fcmp/ct_crypto_ops.c` at `ac3836de90` | Confidential-transaction data types + crypto-ops wrappers | Supporting layer for `ct_semantics.{cpp,h}`; same Rust-FFI consumer status |
+| `src/fcmp/bulletproofs_plus.h` at `ac3836de90` | Bulletproofs+ proof shape declaration | **Re-verification pending** — see F.C++-3's "bulletproofs_plus re-verification" subsection above. The `make_dummy_bulletproof_plus` pattern in `ct_semantics.cpp` is the transaction-construction-shape stand-in this row originally described, but `bulletproof_plus_PROVE` / `bulletproof_plus_VERIFY` call sites resolve to the C++ implementation in `bulletproofs_plus.cc`, not a Rust-FFI shim. Categorization re-evaluated when the per-call-site walk lands |
 
 **Workstream attribution.** None (no migration work scheduled). These
 files stay as Rust-FFI consumers as long as the transaction-construction
@@ -266,8 +266,8 @@ each file in this category must have a verifiable Rust-FFI routing
 chain. The pattern to look for is `#include "shekyl/shekyl_ffi.h"`
 (or transitively included via a sibling header) and per-function
 delegation to the Rust FFI entry points declared in
-[`rust/shekyl-ffi/src/lib.rs`](../rust/shekyl-ffi/src/lib.rs) and
-[`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h). Any file in
+`rust/shekyl-ffi/src/lib.rs` at `ac3836de90` and
+`src/shekyl/shekyl_ffi.h` at `ac3836de90`. Any file in
 this category that has a function body containing parallel C++
 cryptographic computation (rather than FFI delegation) is a
 categorization error and must move to F.C++-2 or F.C++-3.

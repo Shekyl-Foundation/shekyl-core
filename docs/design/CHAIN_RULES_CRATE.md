@@ -101,9 +101,7 @@ this worktree (`feat/drs-e6-inc1-chain-rules-scaffold`, stacked on
 
 **Explicitly not reused:** `shekyl-curve-tree::BlockHeight` (the crate depends
 on `redb` — G1 forbids the edge; `shekyl-types::BlockHeight` is the canonical
-one anyway); `shekyl-consensus::{ChainState, BlockHeader}` (the pluggable-proof
-crate's own types — the handoff names them as a confusion hazard; they are
-`u64`/`[u8; 32]`-shaped and not the wire header); `shekyl-types::
+one anyway); `shekyl-types::
 {GlobalOutputIndex, OutputIndexInTx}` (no view method reads them — §3.3).
 
 ### 3.2 `shekyl-wire` candidate-type verdict: **SUITABLE**, with two recorded deltas
@@ -118,7 +116,7 @@ crate's own types — the handoff names them as a confusion hazard; they are
   under rule 94 §6; the E6 lane re-verified at `dev` = `51d7f2416` the same
   day: coverage record unchanged, crate tests green, stamp moved in
   [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).)*
-- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, attestation_root: AttestationRoot }`.
+- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, section_root: SectionRoot }`.
 - `Transaction::hash() -> TxHash`, `prefix_hash() -> PrefixHash`, `pqc_signing_payload_hashes() -> Vec<[u8; 32]>` (per-input signing messages, not identities — allowlisted in `check_wire_raw_hash_surface.py`).
 - `Input` is an `enum` — L5's whitelist dissolves into match exhaustiveness.
 - Dependency graph: `shekyl-crypto-hash`, `shekyl-curve-generators` directly.
@@ -139,7 +137,7 @@ problem for the crate (exhaustive `match` is the point), recorded so the
 handoff's count is not copied into a doc.
 
 **Delta 2 — bare arrays at the wire edge.** `previous`, `curve_tree_root`,
-`attestation_root`, `transaction_hashes[i]`, `Input::ToKey.key_image` are
+`section_root`, `transaction_hashes[i]`, `Input::ToKey.key_image` are
 `[u8; 32]`, and `timestamp` is `u64`. The crate lifts them into the typed
 domain at *its* edge (`BlockHash::from_bytes`, `TxHash::from_bytes`,
 `KeyImage::from_canonical_bytes`, `CurveTreeRoot::from_bytes`) and never passes
@@ -316,17 +314,17 @@ impl RuleSetId {
 pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule,
                      mined_money_unlock_window: BlockCount, reorg_cap: BlockCount, tx_spendable_age: BlockCount,
                      settlement_schedule: SettlementSchedule }   // the archival epoch geometry is rule-set data (DRS-E4 ARW-15, 2026-09-30)
-pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
-/// Fakechain's two schedule levers as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins.
-pub struct FakechainSchedule { settlement: SettlementEpochBlocks, reorg_cap: BlockCount }
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::with_levers(..)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
+/// The settlement epoch and the reorg cap as one validated pair, `0 < reorg_cap < settlement` (SPR-9); `PRODUCTION` is the genesis pins. Every network carries it; a levered pair is `with_levers`.
+pub struct CappedEpoch { settlement: SettlementSchedule, reorg_cap: BlockCount }
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
-    /// Fakechain only: GENESIS with `Fixed(d)` for `Some(d)` and the pair's epoch and cap;
-    /// `fakechain(None, FakechainSchedule::PRODUCTION) == GENESIS`.
-    pub const fn fakechain(fixed: Option<NonZeroU128>, schedule: FakechainSchedule) -> Self;
+    /// `GENESIS` under the levers: `Fixed(d)` for `Some(d)`, and the pair's epoch and cap.
+    /// `GENESIS.with_levers(None, CappedEpoch::PRODUCTION) == GENESIS`. Which network may pull a lever is `ChainRules::new` (NI-R6), not this function.
+    pub const fn with_levers(self, fixed: Option<NonZeroU128>, schedule: CappedEpoch) -> Self;
     pub const fn id(&self) -> RuleSetId;
     /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
@@ -334,11 +332,11 @@ impl RuleSet {
     pub const fn settlement_schedule(&self) -> SettlementSchedule;    // what `archival::transition` and the store's connect belt read
 }
 
-/// Height → rule set, per network. Nettype selects **data** (rule 71): three
-/// schedule values, one `rules_at`, no `match network` anywhere a rule runs.
+/// Height → rule set, per network. Nettype selects **data** (rule 71): one
+/// schedule per network, one `rules_at`, no `match network` anywhere a rule runs.
 /// The schedule is the identity: every network, every height → `GENESIS`.
 /// There is no fork table. A later activation is a design document before a
-/// step is added ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5).
+/// step is added ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuleSchedule {
     genesis: RuleSetId,                                // in force from ZERO — not optional
@@ -602,7 +600,7 @@ pub struct ValidatedBlock {
     drain: Option<Drain>,                        // what matured here and the growth it produced (E3)
     weights: Weights,                            // weight, long-term weight, the two medians (G6/G6b; slice 7 commit 4)
     emission: PaidEmission,                      // paid, split, fee_burn, owed, accrual, coins_generated (F14b/F16/F17/G11/G12/G13; slice 7 commits 5 and 9)
-    archival: ArchivalDelta,                     // record writes, serve credits, slashes, the accrual row, the close (L7; DRS-E4 commit 4, ARW-Q1)
+    archival: ArchivalDelta,                     // record writes, settlements, slashes, the accrual row, the close (L7; DRS-E4 commit 4, ARW-Q1)
 }
 impl ValidatedBlock {
     pub const fn hash(&self) -> BlockHash;
@@ -660,7 +658,11 @@ the CEN-D6 verdict. So the test has a third outcome beside "fold into a type"
 and "keep the refusal": **re-classify** — a refusal reachable from valid
 inputs belongs to the rules, not to the store's belts, and mis-filing it as
 corruption would have halted the writer on a chain the C++ merely refuses a
-block on.
+block on. **And the rule may itself be wrong (ruled 2026-11-07):** a refusal
+of zero refused every successor, so the chain died; LWMA-1 now floors at one
+(`DAA_LWMA1.md` §5.3 step 10), `Difficulty` is non-zero by construction, and
+CEN-D6 is folded into the type after all — because the algorithm changed so
+that no input produces zero, not because the arm was declared unreachable.
 
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
@@ -759,8 +761,9 @@ the header rows, the longhash, CEN-D1 against a **claimed target**, then
 `tx_form` at the miner slot and every listed slot, then CEN-H19's batch.
 `form` runs on the pipeline's parallel workers; `validate` runs inside the
 write transaction on the single connect actor and judges only what reads
-the chain (the header ladder's view-bound rows, B5, B4, G1, `tx_against` at
-every slot, L1, G7/G9/G10, the reward chain, the archival transition).
+the chain (the header ladder's view-bound rows, B5, the bundle section, G1,
+`tx_against` at every slot, L1, G9/G10, the reward chain, the archival
+transition).
 CEN-D1 needs D4's target, which is chain-derived, so the target is a
 **claim** beside the seed: the caller derives it from the header chain
 ahead of connect through `target_claim` (the one derivation, as
@@ -889,31 +892,26 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
 
 /// What this node takes on the release's word — orthogonal to `RuleSet`
-/// (PDM-Q5 / PDM-Q-F27; slice 3 Q1). Carries the release anchors (CEN-E1
-/// reads them per block); slice 6 adds the posture arm by a second
-/// constructor, `Trust::below_anchor(anchors)` (PDM-Q5 :293: band 1's
-/// skeleton), and no existing caller changes.
-pub struct Trust { anchors: ReleaseAnchors /* , posture — slice 6 */ }
-impl Trust { pub const UNANCHORED: Self; pub const fn full(anchors: ReleaseAnchors) -> Self; pub const fn anchors(&self) -> &ReleaseAnchors; }
+/// (slice 3 Q1). Carries the genesis pin (CEN-E1 reads it per block). No
+/// coded checkpoints (S1, 2026-11-03), so there is no posture arm.
+pub struct Trust { genesis: GenesisPin }
+impl Trust { pub const UNPINNED: Self; pub const fn full(genesis: GenesisPin) -> Self; pub const fn genesis_pin(&self) -> &GenesisPin; }
 
-/// The release-carried anchor table, per network — `const` data shipped with
-/// the binary (PDM-Q5 "trusted with the binary"; never an operator-editable
-/// carrier), strictly ascending, const-asserted well formed. Empty on every
-/// network today (`no_release_has_shipped_an_anchor_yet` pins it).
-pub struct Anchor { pub height: BlockHeight, pub hash: BlockHash }
-pub struct ReleaseAnchors { entries: &'static [Anchor] }
-impl ReleaseAnchors {
-    pub const EMPTY: Self;
+/// The release-carried genesis pin, per network — `const` data shipped with
+/// the binary, never an operator-editable carrier. `FAKECHAIN` is the block a
+/// regtest node connects; `NONE` pins nothing (harness chains).
+pub struct GenesisPin { genesis: Option<BlockHash> }
+impl GenesisPin {
+    pub const NONE: Self;
+    pub const FAKECHAIN: Self;
     pub const fn for_network(network: Network) -> Self;
-    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read
-    pub const fn current(&self) -> Option<Anchor>;                           // `C`
-    pub fn covers(&self, height: BlockHeight) -> bool;                       // band 1: `height ≤ C`
-    /// CEN-E5, run once by the writer at open; the remedy is the writer's.
-    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<AnchorConflict>, H::Fault>;   // `HeaderView` since DRS-E5 a2
+    pub fn expected_at(&self, height: BlockHeight) -> Option<BlockHash>;   // CEN-E1's read: genesis at 0, nothing above
+    /// CEN-E5's comparison. `None` is an empty file, which contradicts nothing.
+    pub fn conflict(&self, recorded: Option<BlockHash>) -> Option<GenesisConflict>;
+    /// [`conflict`](GenesisPin::conflict) over a view: reads block 0 and calls it.
+    pub fn conflict_with<'id, H: HeaderView<'id>>(&self, view: &H) -> Result<Option<GenesisConflict>, H::Fault>;
 }
-pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
-impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
-pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
+pub struct GenesisConflict { pub expected: BlockHash, pub recorded: BlockHash }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale {
@@ -924,7 +922,7 @@ pub enum Stale {
 pub struct ReferenceMismatch { pub claimed: Option<ReferenceClaim>, pub expected: ReferenceClaim }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
 pub enum Corrupt {
-    CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
+    CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // no ZeroTarget: Difficulty is non-zero (DAA_LWMA1.md §5.3 step 10)
     TxCountNotMonotone { at },                                             // slice 6
     BurnExceedsEmission { coins_generated, total_burned },                 // slice 7 wave B: the R9 register above the parent's emission (FL-R16c) — the store halts on the register
 }
@@ -983,16 +981,16 @@ trait without this crate naming it. Inside a rule, `?` propagates that rule's
 error and only that error; a refusal is always written out as `Ok(Err(InvalidBlock {
 rule, locus }))` at the site that judged — the row is named where the decision
 is made. A block rule's error is a `ViewRead` (2026-10-07): `?` on a view
-method lifts `V::Fault` into `ViewRead::View`, and a parent-side hole or a
-stored bond key that is not canonical is `ViewRead::Corrupt`. `validate`
+method lifts `V::Fault` into `ViewRead::View`, and a parent-side hole is
+`ViewRead::Corrupt`. `validate`
 maps that into `Fault` once (`Fault::from`). The type over-claims — every
-block rule *can* halt the writer by its signature, and only B4 does — so the
+block rule *can* halt the writer by its signature, and none does — so the
 claim is held by a falsifier rather than a comment:
 `scripts/ci/check_block_rule_corrupt_sites.py` (§6.6) reads each rule impl
 body — `impl BlockRule for X` and `impl HeaderRule for X` alike, the trait
 set derived from the blanket impl rather than listed — for a way `Corrupt`
 can enter its error and refuses unless the set with a site is exactly
-`{B4}`. A rule that reads header facts only is a `HeaderRule`
+`CORRUPT_CAPABLE`, which is empty. A rule that reads header facts only is a `HeaderRule`
 (`check<'id, H: HeaderView<'id>>(cx, view) -> Result<Verdict<()>,
 ViewRead<H::Fault>>`), made a `BlockRule` by `impl<R: HeaderRule> BlockRule
 for R` so `run` composes it unchanged (DRS-E5 a2, 2026-10-10: D1, C1, C2,
@@ -1026,14 +1024,12 @@ the Spend flip (I13 depth, I15 verify) its twelfth and J27 its last,
 2026-10-08 — *records-was:* until then the depth step was staged off on
 a spend and **the bond post's funding spends did not pass through it**,
 CEN-H21's finding) and `judge_signatures` (I17 yields every input's
-signing hash, I18 verifies over it), with `judge_serve_credit_bond`
-and `judge_bond_post` **before** `judge_reference` (the C++'s order
+signing hash, I18 verifies over it), with `judge_bond_post` **before**
+`judge_reference` (the C++'s order
 within the bond arm: `check_archival_bond_post_input` :3616, the funding
 half :3654, so a post refused against its record is those rows'
-refusal whatever its proof says) — `judge_serve_credit_bond` makes one
-`bond_record` read per serve-credit vin feeding J4, J5, J6 (the C++
-`check_tx_inputs` arm's order; `rules/tx_bond.rs`, slice 8) and
-`judge_bond_post` (one `bond_record` read per bond-post vin feeding the
+refusal whatever its proof says) — `judge_bond_post` (`rules/tx_bond.rs`,
+slice 8; one `bond_record` read per bond-post vin feeding the
 kind's verify and J13 in the C++ arm's order — JoinMarket J14 → J13,
 Release J13 over the record → J16, Reinstate J18 → J13; J13: which key
 the slot must carry — the record's `bond_spend_pk` on a Release through
@@ -1072,24 +1068,12 @@ D2, judges CEN-D1 against the claimed target, runs `tx_form` at every
 slot, then CEN-H19's batch; `validate` verifies the claims (the rule set,
 D3's seed, and the target — a mismatch is `Stale::Target`, not a second
 D1), derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
-**B4** (slice 8 row 10, 2026-10-06: `rules::attestation::B4` over
-`Candidate::attestation_witness`, always in coverage — **`None` is the
-empty preimage against the header's `attestation_root`**, never a
-vacuous pass and never a gap; `Some(w)` is the recompute over the
-coinbase's record field paired with the witness plus every record's
-countersignature under the SF-D8 window, through the retention crate's
-`attestation_admission::AttestationSet`, the body the C++ shim marshals
-to; a non-empty root with nothing supplied refuses as B4, which is why
-CEN-A3 has no Rust rule of its own; and the empty set has **one**
-carrier — `None`, no store row — because the wire codec gives it no
-bytes and refuses a zero count (`WitnessError::ZeroCount`, 2026-10-07,
-review on #983), so a sidecar spelling it as eight zero bytes refuses
-as B4 instead of recording a row its peers do not; a hole below the
-predecessor, and a stored bond hybrid key that is not canonical, are
-`Corrupt` — `HoleBelowTip` on the block row and `BondHybridKeyMalformed`
-on `archival_bond` — because a conforming writer cannot produce either,
-so neither is a B4 refusal; a persona with no record stays the refusal),
-E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
+the **bundle section** (CEN-J29–J37, `rules::bundle_admission::admit`
+over the header's `section_root` and `Candidate::bundle_references`, in the
+slot the deleted CEN-B4 held — a block with no references is checked
+against `empty_section_root()`, never a vacuous pass and never a gap; a
+non-empty root with nothing supplied refuses as J29, which is why CEN-A3
+has no Rust rule of its own), E1, F4–F6, G1, then the slot loop. `StructurallyValid` carries the clock
 reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
 leg go stale silently, so the instant is carried, not forgotten.
@@ -1171,8 +1155,8 @@ a block costs no proof work — a probe counts the batch not run), and after
 every slot's `tx_form` (so H19's layout half and CEN-I4's input cap have
 bounded the work). It reads no view, so it runs on the parallel workers,
 not on the single writer (#1081's review, item 1). `run_form` records H19
-only once the batch has decided. A block with no proof (coinbase-only, or
-serve credits only) records it vacuously, which `ChainValid::mint`
+only once the batch has decided. A block with no proof (coinbase-only)
+records it vacuously, which `ChainValid::mint`
 requires of an `implemented` row. Every view-bound row, L1 included, runs
 later, in `validate`. F14's cap — weight at most twice the effective
 median — is one of them: the median is derived from the chain and grows
@@ -1324,7 +1308,7 @@ the same machine and load):
 An invalid block also pays the locus walk, one batch of one per proof: at
 `limit-full`'s density that is about 45 × 4.7 ms beside the 98 ms batch.
 For scale, GAP-7's dev-box per-transaction admission term is 22.8 ms at
-shape 1/2 (`shekyl-ffi` `benches/block_connect_verify.rs`, an uncontended
+shape 1/2 (`shekyl-verify-cost` `benches/block_connect_verify.rs`, an uncontended
 run), so the range proof is the smaller per-transaction term. That bench
 timed the same verifier with an `OsRng` weight at 2.82 ms per two-output
 proof, so contention likely accounts for most of the gap to this run's
@@ -1348,7 +1332,7 @@ header alone. None of these mint a `ChainValid`.
 | `form_header` | B1, B2, B6, D2, D1, in `form`'s order | every body row |
 | `judge_header_cheap` | `derive` (D3, D4, D1b), then A2, C1, C2, E1 | D1, and F4, F5, F6 |
 | `judge_header` | the cheap rows, over a header D1 has accepted | F4, F5, F6 |
-| `bind_body` | B6, G2, B4's parse-and-root half | B4's countersignatures |
+| `bind_body` | B6, G2, the bundle section's root and J31's stateless half (`bind_section`) | the bundle section's view-bound rows |
 
 `HeaderJudged` is sealed: private fields, built only by `judge_header`,
 and it carries the proof. `bind_body` takes that value. `form` and
@@ -1375,9 +1359,11 @@ header path calls `anchor` only: F4–F6 read the coinbase, and a header
 has none. `CoinbaseRule::check` takes a `BlockContext`, so a body rule
 cannot be called on the header path.
 
-B4 is split the same way. `B4::bind_root` is the stateless half
-(`bind_body` calls it). `validate` then runs the countersignatures when
-the set is non-empty. The empty set returns after the root check (A3).
+The bundle section is split the same way. `bind_section` is the stateless
+half (`bind_body` calls it): the header's root against the references, and
+J31's window over the connecting height. `validate` then admits the
+section through `admit`. An empty section returns after the root check
+(A3).
 
 ---
 
@@ -1692,9 +1678,8 @@ together.
 ### 6.6 The Corrupt-site gate — `scripts/ci/check_block_rule_corrupt_sites.py` (B4, review on #983)
 
 Added 2026-10-07 when `BlockRule::check` widened to `ViewRead<V::Fault>`
-(§4.6). The signature now admits a `Corrupt` from every block rule while the
-only rule that produces one is B4 (`anchor_window` through `recorded`,
-`committed_hybrid_key` for the bond key). A comment saying so is the kind of
+(§4.6). The signature admits a `Corrupt` from every block rule, and no rule
+produces one. A comment saying so is the kind of
 claim `16-architectural-inheritance` demotes; this gate is the check. It
 strips `//` comments, collects every function whose return type is
 `Result<…, ViewRead<…>>` (the lifting functions; `recorded` must be among
@@ -1725,9 +1710,8 @@ something that is not a call is counted, since the gate cannot see its
 type), and a bare outer `Err(` that is neither the inner half of `Ok(Err(`
 nor wraps `InvalidBlock` nor is a match-arm pattern. `map_err(ViewRead::View)`
 is not a site. The set of rules with at least one site must equal
-`CORRUPT_CAPABLE = {B4}`, whose entry names the read the halt comes from
-(`anchor_window` through `recorded`; `committed_hybrid_key`): a second rule
-with a site is a finding naming the site, and a listed rule with no site (or
+`CORRUPT_CAPABLE`, which is empty; an entry would name the read the halt
+comes from. A rule with a site is a finding naming the site, and a listed rule with no site (or
 no `impl`) is a stale entry and refuses too. The finding leads with the rule
 the gate enforces — *a block rule may propagate `Corrupt`, never consume it*
 — because the gate sees capability, not intent: a rule that swallows a
@@ -1949,8 +1933,7 @@ row cannot be re-keyed to a test that only passes programs.
   finding, not a fixture error. The view-bound half is not judged there
   and cannot be (since PR #1003, 2026-10-08): a fixture spend carries a
   named image and no membership proof, so I13/I15 refuse it on any view,
-  a fixture join's funding spend likewise under J27, and a serve credit
-  needs a record the mock holds none of (J4); the one well-formed block a
+  and a fixture join's funding spend likewise under J27; the one well-formed block a
   `MockChain` holds is coinbase-only. Each listed shape's `validate`
   witness is a driven chain in `shekyl-chain-ingest` (`scenario_spend_tests`,
   `scenario_join_tests`, `scenario_archival_tests`).
@@ -1958,15 +1941,14 @@ row cannot be re-keyed to a test that only passes programs.
   Q1): every refusal site of `shekyl-wire/src/transaction.rs` — every
   `io::Error::other` construction however spelled, plus `Err(PrunedError)`
   — is a row of one table checked against the file itself; four arms pinned
-  `(parse 16, rule 40, policy 1, invariant 5)` over 62 sites (records-was:
-  `(15, 38, 1, 5)` over the 59 `Err(` sites the first key found). An in-memory rule arm carries
+  `(parse 14, rule 39, policy 1, invariant 4)` over 58 sites. An in-memory rule arm carries
   the transaction that trips **it** and the crate is held to the row by the
   row's registry status — implemented → refused on the row; by construction
   → the value does not round-trip; pending → nothing yet, and the assertion
   **arms itself** when the row flips. *Why the table has arms for rows the
   crate has not implemented:* that is the design — the fourteen pending-row
   arms begin asserting the day their row lands, with no pin to update. The
-  baseline (coinbase, two-output spend, serve-credit) passes both copies.
+  baseline (coinbase, two-output spend) passes both copies.
 - `tx_against` — *records-was:* returned `Ok(Ok(EMPTY))` until 4.I landed
   (slice 6, #864, 2026-09-26); its rules' tests are `rules/tx_against_tests.rs`
   and the captured-chain witness `shekyl-chain-ingest`'s `vectors_tests`.
@@ -2134,11 +2116,11 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
   `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
   `rust-audit-test.yml` belt script (same correction as §6.5).
-- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the graded-oracle
-  hook (E2's replay harness routes disagreement through
-  `shekyl_chain_store::conformance::grade` keyed by `CenRow::as_str()`; this
-  crate never imports it), the consumer map (connect, pool via `PoolView`), the
-  fault channel.
+- Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the replay hook
+  (E2's replay holds every captured block to the chain's Rust baseline; the
+  graded oracle through `shekyl_chain_store::conformance::grade` it first
+  named left with the C++ side, `DAEMON_REDB_STORE.md` §12.1), the consumer
+  map (connect, pool via `PoolView`), the fault channel.
 
 ---
 
@@ -2150,7 +2132,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q2 | Root type on `root_at` — bare array, mint in `shekyl-types`, or here? | **RULED 2026-09-15 — override:** mint `CurveTreeRoot` in `shekyl-types` now. "Rule 18's home is the redb-bearing curve-tree crate" is the reason to reject the default — the rules crate would depend on a store-bearing crate to *name a value*, the inversion R8 banned arriving through a type. Computation stays in the tree crate. |
 | Q3 | Payloads of `block_at` / `output_at` | **RULED 2026-09-15 — default, with a binding condition:** every field is justified by a named CEN row when introduced; `ChainView`'s narrowness is what keeps rules mockable and the mock smaller than the store. **Applied (round 2):** `output_at` has no justifiable field and is dropped (§3.3); `has_output_key` is the shape the output-key row will need. |
 | Q4 | Policy rows — same enum + `Flag`, or sibling enum? | **RULED 2026-09-15 — override:** sibling enums. A `Flag` field is a check someone can forget; two enums make proximity promotion unrepresentable; two coverage bitsets and two denominators are exactly the two-line record. §7.5.1's gate bullet names the hazard ("a policy row counted toward consensus coverage is proximity promotion arriving through the instrument"). |
-| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
+| Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 was then true only because the hardfork table had one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the distinction, equality erases it. **UPDATE 2026-10-09:** that table is deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). The 1:1 remains because there is one rule set and one block version, not because a table has one row. |
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). **DISCHARGED 2026-09-15:** #751 merged; `scripts/ci/_census.py` extracted in this PR, both gates import it (§6.1). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |
@@ -2272,10 +2254,12 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `connector.rs:271`, PR #806). **LANDED as the parameter, slice 3 c3
   (2026-09-20):** `Trust { anchors }`, `Trust::full` / `Trust::UNANCHORED`,
   `validate(formed, view, rule_set, trust)`; CEN-E1 is its first reader.
-  **Still owed to slice 6:** the posture arm (`Trust::below_anchor`, band 1
-  per `PDM-Q5` `:293`), the 4.I skip it governs, and this item's falsifier —
-  which needs a proof row to skip and a **skeleton candidate type** a
-  band-1 block can be (slice 3 F10; `Candidate` holds full transactions).
+  **REJECTED with the checkpoints (S1, design review 2026-11-03):** the
+  posture arm (`Trust::below_anchor`, band 1 per `PDM-Q5` `:293`), the 4.I
+  skip it would have governed, and this item's falsifier. Nothing is
+  assumed. `Trust` carries only the genesis pin (`full` / `UNPINNED`).
+  Reopen only if a later design names a reason to skip proof rows that is
+  not a coded checkpoint.
 - **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
@@ -2283,10 +2267,10 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `TxIdentity`, populated from `Transaction::txid_parts()` (one
   construction: each discardable region hashed once, the txid mixed from
   those values); and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
-  (`None` ⇔ the txid is 3-part) plus the two-supplied form
-  `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
-  is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
-  one-supplied mixer. The mixer's arity is the `Option` after
+  (`None` ⇔ the txid is 3-part) plus the one supplied form
+  `hash_with_supplied_components(pqc_auth, prunable, archival_len)`, of
+  which `hash()` is `txid_parts().hash` as bytes; there is no
+  one-supplied form. The mixer's arity is the `Option` after
   `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry,
   so a supplied component on a 3-part prefix is dropped, not mixed, and
   the skeleton (`PDM-Q-F28`: neither region held)

@@ -10,9 +10,10 @@
 //! never added here (rule 83). The REJECTED and RESERVED rows are contract
 //! entries (IG-10): never accepted, never in help, and never deleted as dead.
 
+use shekyl_network::{Lever, Staging};
 use shekyl_options::{
-    Default, Dimension, EndpointRule, Grant, KeyRule, Kind, PeerRule, Row, Surface, Table,
-    Visibility,
+    Default, DevGate, Dimension, EndpointRule, Grant, KeyRule, Kind, NameRule, PeerRule, Row,
+    Surface, Table, Visibility,
 };
 
 /// The five log levels, as `log-level` and `log-category` spell them.
@@ -44,29 +45,56 @@ pub fn runtime_owner(name: &str) -> Option<RuntimeOwner> {
     }
 }
 
-const LEVEL: Kind = Kind::OneOf(LEVELS);
+/// The kind of `log-level`, which every binary's logging rows share.
+pub const LEVEL: Kind = Kind::OneOf(LEVELS);
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
+/// A loopback listener whose address may come without a port: the view
+/// listener takes the network's view port then (Rick, 2026-11-17).
+const LOOPBACK_LISTEN: Kind = Kind::Listen(EndpointRule::Loopback);
 const GLOBAL: Kind = Kind::Endpoint(EndpointRule::GlobalUnicast);
 const PEER: Kind = Kind::PeerEndpoint(PeerRule::Any);
+/// The instance-name rule is the channel crate's, where the name is hashed
+/// into the rendezvous (`RPC_CHANNEL.md` §7.1, IG-Q103).
+const INSTANCE: Kind = Kind::Name(NameRule {
+    describe: "an instance name",
+    check: |name| {
+        shekyl_rpc_rendezvous::InstanceName::parse(name)
+            .map(drop)
+            .map_err(shekyl_rpc_rendezvous::InstanceNameError::rule)
+    },
+});
 const ORIGIN: Kind = Kind::Origin;
+/// `config-file`: an absolute path, or `none` so no file is read.
+const CONFIG_FILE: Kind = Kind::Path {
+    keywords: &["none"],
+};
 const RATE: Kind = Kind::Quantity {
     dimension: Dimension::Rate,
     min: 1,
     keywords: &["unlimited"],
 };
-const BYTES: Kind = Kind::Quantity {
+/// The kind of a byte budget (`log-size-max`), which every binary's logging
+/// rows share.
+pub const BYTES: Kind = Kind::Quantity {
     dimension: Dimension::Bytes,
     min: 1,
     keywords: &[],
+};
+
+/// The kind of `log-category`, which every binary's logging rows share: a
+/// level for each log subsystem.
+pub const LOG_CATEGORY: Kind = Kind::Map {
+    keys: KeyRule {
+        describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
+        check: shekyl_logging::subsystem::is_subsystem,
+    },
+    value: &LEVEL,
 };
 const COUNT: Kind = Kind::Integer {
     min: 1,
     keywords: &[],
 };
-
-const TEST_NETWORKS: &[&str] = &["testnet", "stagenet", "regtest"];
-const REGTEST: &[&str] = &["regtest"];
 
 const fn public(
     name: &'static str,
@@ -100,11 +128,14 @@ const fn runtime(name: &'static str, kind: Kind, default: &'static str, help: &'
     }
 }
 
+/// A development row, admitted where the network's row admits `gate`
+/// (`NETWORK_IDENTITY.md` NI-R6, NI-R9). The row decides; this table never
+/// names a network.
 const fn dev(
     name: &'static str,
     kind: Kind,
     default: Default,
-    networks: &'static [&'static str],
+    gate: DevGate,
     help: &'static str,
 ) -> Row {
     Row {
@@ -114,7 +145,7 @@ const fn dev(
         surface: Surface::Both,
         runtime: false,
         grant: Grant::Config,
-        visibility: Visibility::Dev { networks },
+        visibility: Visibility::Dev { gate },
         help,
     }
 }
@@ -137,6 +168,9 @@ const SYNC_HASHER_BUDGET: &str = "the shared hasher budget sets it, derived from
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";
 const NO_BOOTSTRAP: &str = "no proxying to a third-party daemon";
+const NO_LOCAL_PRUNING: &str = "every daemon discards the same transaction bodies at the same boundary (ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q2, PDM-Q9); there is no node-local retention to choose (PDM-Q7). Bodies below the horizon are held by no daemon; the archive serves them (DRS_SB_BELOW_HORIZON.md SB-Q6)";
+const NO_PRUNED_SYNC_FLAG: &str = "trust-the-txid with no anchor; the skeleton band below the checkpoint is the sync protocol's (ARCHIVAL_PRUNED_DAEMON_MODE.md PDM-Q5) and needs no flag (DRS_SB_BELOW_HORIZON.md SB-Q6)";
+const POOL_CAP_FROM_CHAIN: &str = "the pool's cap derives from the chain (CEN-M10): REFERENCE_BLOCK_MAX_AGE blocks at the block weight limit (DRS_E5_POOL_ALT_PRUNE.md, INPUT_GRAMMAR.md IG-Q11)";
 const NO_BG_MINING: &str =
     "background mining was Monero's; the daemon mines when told to (DAEMON_CONFIG_CUTOVER.md §4)";
 
@@ -144,6 +178,7 @@ const ROWS: &[Row] = &[
     // Network, paths, logging
     public("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),
     public("version", Kind::Switch, Default::Unset, Surface::Cli, "Print the version and the operating system, and exit."),
+    public("rpc-console-key-reset", Kind::Switch, Default::Unset, Surface::Cli, "Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrollment. Service mode only; refused while the daemon runs."),
     public("config-verify", Kind::Switch, Default::Unset, Surface::Cli, "Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own."),
     public("network", Kind::OneOf(NETWORKS), Default::Value("mainnet"), Surface::Cli, "The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file."),
     Row {
@@ -153,24 +188,24 @@ const ROWS: &[Row] = &[
         surface: Surface::Cli,
         runtime: false,
         grant: Grant::Config,
-        visibility: Visibility::Reserved {
-            reason: "the Windows service run mode (RPC_CHANNEL.md RT-16), accepted once RT-W14 builds the service-manager dispatcher",
-        },
-        help: "",
+        // IG-Q105: one row on every platform. On Windows the switch also
+        // answers the service manager, and that dispatcher is RT-W14's, so
+        // a Windows start refuses it until then (`sections::build`).
+        visibility: Visibility::Public,
+        help: "Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14).",
     },
-    public("config-file", Kind::Path, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused."),
-    public("data-dir", Kind::Path, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
-    public("log-file", Kind::Path, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
+    // IG-Q106: the end of a connected pair the starting process handed this
+    // one. The number names a descriptor of this process start only, so the
+    // command line is its one surface; 0 to 2 are the standard streams.
+    public("owning-connection", Kind::Integer { min: 3, keywords: &[] }, Default::Unset, Surface::Cli, "The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service."),
+    public("instance", INSTANCE, Default::Unset, Surface::Both, "This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir."),
+    public("config-file", CONFIG_FILE, Default::Derived("/etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows"), Surface::Cli, "The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone."),
+    public("data-dir", Kind::PATH, Default::Derived("the daemon's root and the network's subdirectory"), Surface::Both, "The data directory. An explicit path is used as given."),
+    public("log-file", Kind::PATH, Default::Derived("the daemon's root, logs/shekyld-<network>.log"), Surface::Both, "The log file."),
     runtime("log-level", LEVEL, "warn", "The log level: error, warn, info, debug or trace."),
     runtime(
         "log-category",
-        Kind::Map {
-            keys: KeyRule {
-                describe: "a log subsystem: daemon, p2p, sync, chain, store, txpool, relay, rpc, tor, miner, notify or archival",
-                check: shekyl_logging::subsystem::is_subsystem,
-            },
-            value: &LEVEL,
-        },
+        LOG_CATEGORY,
         "none",
         "A log level for one subsystem, as subsystem=level; `none` is no overrides.",
     ),
@@ -183,12 +218,12 @@ const ROWS: &[Row] = &[
     public("tor-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for tor-socks."),
     public("tor-onion", Kind::PeerEndpoint(PeerRule::OnionOnly), Default::Unset, Surface::Both, "This node's onion service and virtual port, on the operator's Tor."),
     public("tor-onion-listen", ENDPOINT, Default::Unset, Surface::Both, "The local endpoint the operator's Tor forwards tor-onion to; required with it."),
-    public("tor-file", Kind::Path, Default::Derived("tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix"), Surface::Both, "The managed Tor binary; tor = managed only. It is verified against the pin wherever it is."),
+    public("tor-file", Kind::PATH, Default::Derived("tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix"), Surface::Both, "The managed Tor binary; tor = managed only. It is verified against the pin wherever it is."),
     public("clearnet-socks", ENDPOINT, Default::Unset, Surface::Both, "A SOCKS proxy for clearnet dials."),
     public("clearnet-socks-username", Kind::Secret, Default::Unset, Surface::File, "The SOCKS username for clearnet-socks."),
     public("clearnet-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for clearnet-socks."),
-    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet."),
-    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family."),
+    public("clearnet-listen", Kind::List(&ENDPOINT), Default::Derived("0.0.0.0 and the network's p2p port"), Surface::Both, "The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it."),
+    public("clearnet-advertise", Kind::List(&GLOBAL), Default::Unset, Surface::Both, "The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it."),
     public("p2p-local", Kind::Switch, Default::Unset, Surface::Both, "Accept peers at private addresses, for a private test network."),
     Row {
         name: "p2p-peer",
@@ -213,7 +248,7 @@ const ROWS: &[Row] = &[
     public("p2p-disclose-early", Kind::Switch, Default::Unset, Surface::Both, "Disclose known peers and this node's address below the white-diversity floor, for bootstrapping a small network."),
     Row {
         name: "p2p-ban-file",
-        kind: Kind::Path,
+        kind: Kind::PATH,
         default: Default::Unset,
         surface: Surface::Both,
         runtime: false,
@@ -229,21 +264,22 @@ const ROWS: &[Row] = &[
     rejected("out-peers", "the outbound degree is a protocol constant"),
     rejected("in-peers", "no operator inbound cap: the descriptor safety bound is the only inbound bound, and the rate rows bound what an operator pays (INPUT_GRAMMAR.md IG-Q40)"),
     rejected("tos-flag", "a traffic-class marking is a label any on-path observer can classify Shekyl traffic by"),
-    dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, TEST_NETWORKS, "Encrypt the clearnet transport; deleted at the Noise flip."),
-    dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), REGTEST, "Chain synchronisation with peers."),
-    dev("dev-relay-cover", Kind::Switch, Default::Unset, TEST_NETWORKS, "The relay's development cover carrier."),
-    dev("dev-rpc", Kind::Switch, Default::Unset, TEST_NETWORKS, "Serve the armed test levers to the host's administrator."),
+    dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, DevGate::Staging(Staging::ClearnetEncrypt), "Encrypt the clearnet transport; deleted at the Noise flip."),
+    dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), DevGate::Lever(Lever::Sync), "Chain synchronisation with peers."),
+    dev("dev-relay-cover", Kind::Switch, Default::Unset, DevGate::Staging(Staging::RelayCover), "The relay's development cover carrier."),
+    dev("dev-rpc", Kind::Switch, Default::Unset, DevGate::Lever(Lever::DevRpc), "Serve the armed test levers to the host's administrator."),
     // Core, pool, notify, mine
-    dev("dev-difficulty", COUNT, Default::Unset, REGTEST, "A fixed difficulty."),
+    dev("dev-difficulty", COUNT, Default::Unset, DevGate::Lever(Lever::Difficulty), "A fixed difficulty."),
     rejected("span-limit", SYNC_PROTOCOL_BUDGETS),
     rejected("block-sync-size", SYNC_PROTOCOL_BUDGETS),
     rejected("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
     rejected("prep-blocks-threads", SYNC_HASHER_BUDGET),
-    public("txpool-weight-max", BYTES, Default::Value("648000000B"), Surface::Both, "The transaction pool's weight bound."),
+    rejected("txpool-weight-max", POOL_CAP_FROM_CHAIN),
     public("notify-block", Kind::Command { placeholders: &["height", "hash"] }, Default::Unset, Surface::File, "A command to run on a new block, with {height} and {hash}."),
     public("notify-reorg", Kind::Command { placeholders: &["split-height", "height", "added", "removed"] }, Default::Unset, Surface::File, "A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}."),
     public("notify-block-rate", Kind::Command { placeholders: &["window", "observed", "expected"] }, Default::Unset, Surface::File, "A command to run on a block-rate warning, with {window}, {observed} and {expected}."),
-    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "Mine to this address from start."),
+    public("mine", Kind::OneOf(&["on", "off"]), Default::Value("off"), Surface::Both, "Start the miner at start, to mine-address."),
+    public("mine-address", Kind::Address, Default::Unset, Surface::Both, "The address the miner pays."),
     public("mine-threads", Kind::Integer { min: 1, keywords: &["auto"] }, Default::Value("auto"), Surface::Both, "The mining thread count, or `auto`."),
     rejected("bg-mining-enable", NO_BG_MINING),
     rejected("bg-mining-ignore-battery", NO_BG_MINING),
@@ -251,20 +287,12 @@ const ROWS: &[Row] = &[
     rejected("bg-mining-idle-threshold", NO_BG_MINING),
     rejected("bg-mining-miner-target", NO_BG_MINING),
     // RPC
-    Row {
-        name: "rpc-listen",
-        kind: Kind::List(&ENDPOINT),
-        default: Default::Unset,
-        surface: Surface::Both,
-        runtime: false,
-        grant: Grant::Config,
-        visibility: Visibility::Reserved {
-            reason: "the authenticated channel listener (RPC_CHANNEL.md RT-W10)",
-        },
-        help: "",
-    },
+    // The channel listener (RT-W10 step 4): any address, a wildcard
+    // included (RT-14); no channel port is ruled, so unset is no listener.
+    public("rpc-listen", Kind::List(&ENDPOINT), Default::Value("none"), Surface::Both, "The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener."),
+    public("rpc-socket-dir", Kind::PATH, Default::Unset, Surface::Both, "The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory."),
     public("rpc-admin-listen", Kind::List(&LOOPBACK), Default::Derived("127.0.0.1 and the network's rpc port"), Surface::Both, "The plaintext full-access listeners, loopback only; `none` is no admin listener."),
-    public("rpc-view-listen", Kind::List(&LOOPBACK), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only."),
+    public("rpc-view-listen", Kind::List(&LOOPBACK_LISTEN), Default::Value("none"), Surface::Both, "The plaintext view listeners, loopback only; an address with no port takes the network's view port."),
     public("rpc-cors-origin", Kind::List(&ORIGIN), Default::Value("none"), Surface::Both, "Web origins allowed to call the RPC; `none` denies all. `*` is refused."),
     public("rpc-connections-max", COUNT, Default::Value("25"), Surface::Both, "The RPC connection cap."),
     rejected("rpc-login", NO_TLS),
@@ -279,14 +307,14 @@ const ROWS: &[Row] = &[
     rejected("bootstrap-daemon-login", NO_BOOTSTRAP),
     rejected("bootstrap-daemon-proxy", NO_BOOTSTRAP),
     rejected("public-node", "no public-node advertisement"),
+    rejected("prune-blockchain", NO_LOCAL_PRUNING),
+    rejected("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG),
     rejected("max-connections-per-ip", "no per-host inbound cap: a host is not an operator, and the measured inbound adversary opens one edge per victim (SHEKYL_P2P_PROTOCOL.md PWD-I7)"),
-    // Session
-    public("console", Kind::Switch, Default::Unset, Surface::Cli, "Run the interactive console."),
     // Development levers that were environment variables (IG-8)
-    dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch length, in blocks."),
-    dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, REGTEST, "The RandomX seed epoch lag, in blocks."),
-    dev("dev-settlement-epoch-blocks", COUNT, Default::Unset, REGTEST, "The settlement epoch length, in blocks."),
-    dev("dev-archival-reorg-depth", COUNT, Default::Unset, REGTEST, "The archival reorg depth, in blocks."),
+    dev("dev-pow-seed-epoch-blocks", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochBlocks), "The RandomX seed epoch length, in blocks."),
+    dev("dev-pow-seed-epoch-lag", COUNT, Default::Unset, DevGate::Lever(Lever::PowSeedEpochLag), "The RandomX seed epoch lag, in blocks."),
+    dev("dev-settlement-epoch-blocks", COUNT, Default::Unset, DevGate::Lever(Lever::SettlementEpochBlocks), "The settlement epoch length, in blocks."),
+    dev("dev-archival-reorg-depth", COUNT, Default::Unset, DevGate::Lever(Lever::ArchivalReorgDepth), "The archival reorg depth, in blocks."),
     rejected("detach", NO_DAEMONIZE),
     rejected("pidfile", NO_DAEMONIZE),
     rejected("install-service", NO_DAEMONIZE),
@@ -319,40 +347,81 @@ mod tests {
             .find(|r| r.name == "dev-relay-cover")
             .expect("the row");
         match row.visibility {
-            shekyl_options::Visibility::Dev { networks } => {
-                assert!(!networks.contains(&"mainnet"), "{networks:?}");
-                assert!(!networks.is_empty());
+            shekyl_options::Visibility::Dev { gate } => {
+                assert_eq!(gate, DevGate::Staging(Staging::RelayCover));
+                assert!(!gate.admits(shekyl_network::Network::Mainnet));
             }
             other => panic!("dev-relay-cover is a dev row, not {other:?}"),
         }
     }
 
+    /// IG-10: `name` is refused from the command line and from a file, with
+    /// `reason`, and the rendered text carries that reason.
+    #[track_caller]
+    fn name_is_refused(name: &str, reason: &str) {
+        use shekyl_options::{Code, Source};
+        let file = Source::File {
+            path: std::path::PathBuf::from("shekyld.toml"),
+            line: 1,
+        };
+        for source in [&Source::Cli, &file] {
+            let refusal = TABLE.live(name, source).unwrap_err();
+            assert_eq!(refusal.code, Code::NameRejected, "{name}");
+            assert_eq!(refusal.option.as_deref(), Some(name), "{name}");
+            assert_eq!(&refusal.source, source, "{name}");
+            assert_eq!(refusal.get("reason"), Some(reason), "{name}");
+            let rendered = refusal.render();
+            assert!(rendered.contains(reason), "{name}: {rendered}");
+        }
+    }
+
+    /// IG-Q11: the pool's cap is CEN-M10, `REFERENCE_BLOCK_MAX_AGE` blocks
+    /// at the block weight limit. The name is refused with that reason.
+    #[test]
+    fn the_pool_weight_option_is_refused_naming_cen_m10() {
+        name_is_refused("txpool-weight-max", POOL_CAP_FROM_CHAIN);
+    }
+
     /// CS-Q12 (Rick, 2026-10-18): none of chain sync's four options
     /// survives. The three budget names share one reason; the hasher count
-    /// has its own. Each is refused from the command line and from the file
-    /// (IG-10), with that reason, not as an unknown name.
+    /// has its own.
     #[test]
     fn the_four_chain_sync_options_are_refused_with_cs_q12() {
+        for (name, reason) in [
+            ("span-limit", SYNC_PROTOCOL_BUDGETS),
+            ("block-sync-size", SYNC_PROTOCOL_BUDGETS),
+            ("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
+            ("prep-blocks-threads", SYNC_HASHER_BUDGET),
+        ] {
+            name_is_refused(name, reason);
+        }
+    }
+
+    /// SB-Q6 (Rick, 2026-10-31): the body horizon is a rule of the epoch
+    /// calendar, so `prune-blockchain` and `sync-pruned-blocks` are refused
+    /// with the decision, from the command line and from the file (IG-10),
+    /// never as an unknown name pointing at the nearest live option. The
+    /// refusal is `config.name.rejected`, which exits 2 (IG-11).
+    #[test]
+    fn the_pruning_flags_are_refused_with_sb_q6() {
         use shekyl_options::{Code, Source};
         let file = Source::File {
             path: std::path::PathBuf::from("shekyld.toml"),
             line: 1,
         };
         let cases = [
-            ("span-limit", SYNC_PROTOCOL_BUDGETS),
-            ("block-sync-size", SYNC_PROTOCOL_BUDGETS),
-            ("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
-            ("prep-blocks-threads", SYNC_HASHER_BUDGET),
+            ("prune-blockchain", NO_LOCAL_PRUNING, "PDM-Q7"),
+            ("sync-pruned-blocks", NO_PRUNED_SYNC_FLAG, "PDM-Q5"),
         ];
-        for (name, reason) in cases {
+        for (name, reason, decision) in cases {
             for source in [&Source::Cli, &file] {
                 let refusal = TABLE.live(name, source).unwrap_err();
                 assert_eq!(refusal.code, Code::NameRejected, "{name}");
                 assert_eq!(refusal.option.as_deref(), Some(name), "{name}");
-                assert_eq!(&refusal.source, source, "{name}");
                 assert_eq!(refusal.get("reason"), Some(reason), "{name}");
                 let rendered = refusal.render();
-                assert!(rendered.contains(reason), "{name}: {rendered}");
+                assert!(rendered.contains(decision), "{name}: {rendered}");
+                assert!(rendered.contains("SB-Q6"), "{name}: {rendered}");
             }
         }
     }
@@ -362,13 +431,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 50 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 55 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 50);
+        assert_eq!(live, 55);
         let levers = TABLE
             .rows
             .iter()
@@ -427,14 +496,7 @@ mod tests {
                 assert_eq!(r.surface, Surface::File, "{}", r.name);
             }
         }
-        for name in [
-            "help",
-            "version",
-            "config-verify",
-            "network",
-            "config-file",
-            "console",
-        ] {
+        for name in ["help", "version", "config-verify", "network", "config-file"] {
             assert_eq!(TABLE.row(name).unwrap().surface, Surface::Cli, "{name}");
         }
     }
@@ -451,10 +513,36 @@ mod tests {
     #[test]
     fn mainnet_never_accepts_a_development_lever() {
         for r in TABLE.rows {
-            if let Visibility::Dev { networks } = r.visibility {
-                assert!(!networks.contains(&"mainnet"), "{}", r.name);
+            if let Visibility::Dev { gate } = r.visibility {
+                assert!(!gate.admits(shekyl_network::Network::Mainnet), "{}", r.name);
                 assert!(r.name.starts_with("dev-"), "{}", r.name);
             }
+        }
+    }
+
+    /// NI-R6, NI-R9: each development row names its own gate, and every
+    /// configurable lever and staging flag has a row. The two corpus replay
+    /// writes are levers with no option: a captured chain replays through
+    /// them, and nothing sets them from a configuration.
+    #[test]
+    fn every_gate_has_exactly_one_row() {
+        let gates: Vec<DevGate> = TABLE
+            .rows
+            .iter()
+            .filter_map(|r| match r.visibility {
+                Visibility::Dev { gate } => Some(gate),
+                _ => None,
+            })
+            .collect();
+        for (i, gate) in gates.iter().enumerate() {
+            assert!(!gates[..i].contains(gate), "{gate:?} has two rows");
+        }
+        let configurable = Lever::ALL
+            .into_iter()
+            .map(DevGate::Lever)
+            .chain(Staging::ALL.into_iter().map(DevGate::Staging));
+        for gate in configurable {
+            assert!(gates.contains(&gate), "{gate:?} has no row");
         }
     }
 }

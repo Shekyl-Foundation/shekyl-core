@@ -28,6 +28,7 @@ use rand_core::SeedableRng;
 
 use crate::proof::{KeyImage, ShekylFcmpProof};
 use crate::MAX_INPUTS;
+use shekyl_types::{CurveTreeRoot, TxSignableHash};
 
 /// The cSHAKE256 customization for a full FCMP++ verify's batch-weight seed
 /// (CEN-I15's body; ruling R3, 2026-10-15). Registered in
@@ -68,8 +69,8 @@ pub(crate) struct BatchWeights<'a> {
     /// The tree depth the verify was given. The caller has already required
     /// it equal the proof's own depth.
     pub(crate) layers: u8,
-    pub(crate) tree_root: &'a [u8; 32],
-    pub(crate) signable_tx_hash: &'a [u8; 32],
+    pub(crate) tree_root: &'a CurveTreeRoot,
+    pub(crate) signable_tx_hash: &'a TxSignableHash,
     pub(crate) kind: BatchKind<'a>,
     /// Each PQC key point, compressed.
     pub(crate) pqc_key_points: &'a [[u8; 32]],
@@ -121,8 +122,8 @@ impl BatchWeights<'_> {
         preimage.extend_from_slice(&self.proof.data);
         preimage.extend_from_slice(&self.proof.num_inputs.to_le_bytes());
         preimage.push(self.layers);
-        preimage.extend_from_slice(self.tree_root);
-        preimage.extend_from_slice(self.signable_tx_hash);
+        preimage.extend_from_slice(self.tree_root.as_bytes());
+        preimage.extend_from_slice(self.signable_tx_hash.as_bytes());
         if let BatchKind::Full { key_images } = self.kind {
             preimage.extend_from_slice(&le4(key_images.len()));
             for key_image in key_images {

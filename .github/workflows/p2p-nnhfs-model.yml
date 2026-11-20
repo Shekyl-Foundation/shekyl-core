@@ -24,15 +24,12 @@
 # symmetric state). The model does not read the Rust, so a code change
 # cannot move a verdict by itself; those files are on the list because
 # that is the moment to ask whether the model still describes the code.
-# Like the sibling job it carries no merge_group trigger: an uncached
-# ProVerif build is a quarter of an hour, and this is not a required
-# check (06-branching.mdc).
 
 name: ci/p2p-nnhfs-model
 
 on:
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       - "docs/formal/proverif/**"
       - "rust/shekyl-p2p-transport/src/noise.rs"

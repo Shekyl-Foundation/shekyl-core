@@ -26,20 +26,35 @@ shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
 # The sync state the follower posts on: chain sync's own type, so its
 # cutover plugs a publisher in and changes nothing else (DX-Q3, Q13).
 shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # The coinbase keys the node's one template pays (N2).
 shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
-shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+# The budget the node's one hasher takes its permits from: the node
+# starts the hasher over it and hands every consumer the hasher, never the
+# budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The one owner of every RandomX cache in the daemon
+# (RANDOMX_CACHE_ACTOR.md).
+shekyl-hasher = { path = "../shekyl-hasher" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-miner = { path = "../shekyl-miner" }
+# Hostnames the connection list renders from a dialed onion's service key.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+# The network the node builds and stops (P2P_3_REMNANT_CUTOVER_BRIEF.md
+# section 2): the one way sockets, sessions and the relay are reached.
+shekyl-p2p = { path = "../shekyl-p2p" }
+# The handshake network id from the pinned genesis (PWD-B1).
+shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-relay = { path = "../shekyl-relay" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-units = { path = "../shekyl-units" }
@@ -53,6 +68,13 @@ tracing = "0.1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# The Tor status a node test hands `daemon_status`, as the daemon's supervisor
+# would answer it.
+shekyl-tor-status = { path = "../shekyl-tor-status" }
+# The follower tests ask the sync owner to publish. Dev edge only;
+# check_test_only_features.py holds that the normal dependency above
+# leaves it off.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime", features = ["publish-for-test"] }
 # The flush-fault test refuses the pool file's next commit
 # (`pool-commit-fault`). Dev edge only; check_test_only_features.py holds
 # that the normal dependency above leaves it off.
@@ -63,7 +85,6 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-options = { path = "../shekyl-options" }
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 shekyl-store-codec = { path = "../shekyl-store-codec" }
 tempfile = "3"
 redb = { workspace = true }

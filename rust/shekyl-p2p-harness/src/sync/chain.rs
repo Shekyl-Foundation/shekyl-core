@@ -7,7 +7,7 @@
 //! through a real ingest service into a real store, and header chains
 //! built on one.
 //!
-//! A corpus is connected the way `submit_block` connects a block: through
+//! A corpus is connected the way `block_submit` connects a block: through
 //! the door, from this node, one block at a time, each formed and judged.
 //! That is the store an honest peer serves and the store a node starts
 //! from. A header chain is a fork only a header path judges: each header
@@ -15,6 +15,7 @@
 //! the corpus's fixed target, so its proof is one real hash and its body
 //! is never offered.
 
+use std::collections::BTreeSet;
 use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,13 +24,10 @@ use std::sync::Arc;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalTag, Follow, Origin, Reply, Service, ServiceConfig,
 };
-use shekyl_chain_ingest::{
-    ChainRules, CorpusReader, IngestEvent, Inject, ProductionSubstrate, ServeCredit, Source,
-};
-use shekyl_chain_rules::{AtHeight, FakechainSchedule, SettlementEpochBlocks};
+use shekyl_chain_ingest::{ChainRules, CorpusSource, IngestEvent, ProductionPow, Source};
+use shekyl_chain_rules::{AtHeight, CappedEpoch, SettlementEpochBlocks};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{ChainStore, Horizons};
-use shekyl_hash_budget::Budget;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
@@ -46,18 +44,13 @@ pub struct Corpus {
     pub tip_height: u64,
 }
 
-/// One step of a corpus.
+/// One step of a corpus: a block and its listed bodies.
 #[derive(Clone, Debug)]
-pub enum Step {
-    /// A block and its listed bodies.
-    Block {
-        /// The block blob.
-        block: Vec<u8>,
-        /// The listed bodies, in the block's order.
-        bodies: Vec<Vec<u8>>,
-    },
-    /// The out-of-band serve credit the capture wrote at the tip.
-    Inject(ServeCredit),
+pub struct Step {
+    /// The block blob.
+    pub block: Vec<u8>,
+    /// The listed bodies, in the block's order.
+    pub bodies: Vec<Vec<u8>>,
 }
 
 impl Corpus {
@@ -88,6 +81,35 @@ impl Corpus {
         }
     }
 
+    /// The corpus's rules with the reorg cap at `depth`: what a regtest
+    /// node started with `--dev-archival-reorg-depth depth` runs (regtest's
+    /// `ArchivalReorgDepth` permit, `NETWORK_IDENTITY.md` NI-R6). Only the
+    /// constant moves; the switch, the cap check and the latch are the
+    /// production ones.
+    ///
+    /// # Panics
+    ///
+    /// `depth` is not strictly inside the corpus's settlement epoch.
+    #[must_use]
+    pub fn rules_under_reorg_depth(&self, depth: u64) -> ChainRules {
+        self.rules_with(self.fixed_difficulty, depth)
+    }
+
+    /// The corpus's epoch, at `difficulty` and reorg cap `cap`.
+    fn rules_with(&self, difficulty: u128, cap: u64) -> ChainRules {
+        let schedule = CappedEpoch::new(
+            SettlementEpochBlocks::new(self.epoch).expect("a captured epoch"),
+            BlockCount::from_raw(cap),
+        )
+        .expect("a reorg cap inside the epoch");
+        ChainRules::new(
+            shekyl_network::Network::Regtest,
+            Some(NonZeroU128::new(difficulty).expect("non-zero")),
+            schedule,
+        )
+        .expect("regtest's row permits its levers")
+    }
+
     /// The rules the corpus was mined under.
     #[must_use]
     pub fn rules(&self) -> ChainRules {
@@ -102,32 +124,21 @@ impl Corpus {
     /// `difficulty` is zero, or the manifest's pair is not a schedule.
     #[must_use]
     pub fn rules_at(&self, difficulty: u128) -> ChainRules {
-        let schedule = FakechainSchedule::new(
-            SettlementEpochBlocks::new(self.epoch).expect("a captured epoch"),
-            BlockCount::from_raw(self.cap),
-        )
-        .expect("a captured schedule");
-        ChainRules::Regtest {
-            fixed_difficulty: Some(NonZeroU128::new(difficulty).expect("non-zero")),
-            schedule,
-        }
+        self.rules_with(difficulty, self.cap)
     }
 
     /// Every step, in order.
     ///
     /// # Panics
     ///
-    /// The corpus does not read, or a block carries an attestation
-    /// witness: the door's arrival does not carry one, so such a corpus is
-    /// not connected this way.
+    /// The corpus does not read, or a block carries bundle references:
+    /// these steps offer none, so such a corpus is not connected this way.
     #[must_use]
     pub fn steps(&self) -> Vec<Step> {
         self.steps_through(self.tip_height)
     }
 
-    /// The steps through the block at `last`. A corpus read past a block
-    /// its reader refuses (a retired transaction kind) is read only this
-    /// far.
+    /// The steps through the block at `last`.
     ///
     /// # Panics
     ///
@@ -135,7 +146,7 @@ impl Corpus {
     #[must_use]
     pub fn steps_through(&self, last: u64) -> Vec<Step> {
         let bytes = std::fs::read(self.dir.join("corpus.e2")).expect("the corpus");
-        let mut reader = CorpusReader::open(std::io::Cursor::new(bytes)).expect("a corpus");
+        let mut reader = CorpusSource::open(std::io::Cursor::new(bytes)).expect("a corpus");
         let mut steps = Vec::new();
         let mut blocks = 0u64;
         while blocks <= last {
@@ -146,11 +157,11 @@ impl Corpus {
                 IngestEvent::Extend(candidate) => {
                     blocks += 1;
                     assert!(
-                        candidate.attestation_witness.is_none(),
-                        "{}: a block with a witness",
+                        candidate.bundle_references.is_none(),
+                        "{}: a block with bundle references",
                         self.shape
                     );
-                    steps.push(Step::Block {
+                    steps.push(Step {
                         block: candidate.block.serialize(),
                         bodies: candidate
                             .transactions
@@ -159,20 +170,11 @@ impl Corpus {
                             .collect(),
                     });
                 }
-                IngestEvent::Inject(credit) => steps.push(Step::Inject(credit)),
                 IngestEvent::Rewind { .. } => panic!("{}: a rewind in a corpus", self.shape),
             }
         }
         steps
     }
-}
-
-/// A unique directory for one store.
-#[must_use]
-pub fn store_path(tag: &str) -> PathBuf {
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("shekyl-cs3-{tag}-{}-{n}", std::process::id()))
 }
 
 /// A store under the schedule `rules` names at genesis.
@@ -186,45 +188,108 @@ pub fn open_store(path: &Path, rules: ChainRules) -> ChainStore {
     ChainStore::with_horizons(path, ApplyPolicy::Full, horizons).expect("the store")
 }
 
+/// A hasher of a node's own, and the boundary over it.
+pub struct OwnHasher {
+    /// The boundary the service and the executor form and prove through.
+    pub pow: ProductionPow,
+    /// The hasher, for its `resident()` watch.
+    pub hasher: shekyl_hasher::Hasher,
+    /// The sink the boundary records into.
+    pub metrics: Arc<shekyl_chain_ingest::Metrics>,
+    _owner: shekyl_hasher::Owner,
+}
+
+/// How long a stopping chain's hasher may take to come to rest on its
+/// list: the ranker's last list, and at most three derives.
+const QUIET_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Start a hasher over a budget of `permits`.
+///
+/// # Panics
+///
+/// `permits` is zero, or the builder thread does not start.
+#[must_use]
+pub fn own_hasher(permits: usize) -> OwnHasher {
+    let budget =
+        shekyl_hash_budget::Budget::new(NonZeroUsize::new(permits).expect("non-zero permits"));
+    let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
+    let metrics = Arc::new(shekyl_chain_ingest::Metrics::new());
+    OwnHasher {
+        pow: ProductionPow::new(hasher.clone(), Arc::clone(&metrics)),
+        hasher,
+        metrics,
+        _owner: owner,
+    }
+}
+
 /// A real store with its ingest service running.
 pub struct Chain {
     /// The store.
     pub store: Arc<ChainStore>,
     /// The service that alone writes it.
-    pub service: Service<ProductionSubstrate>,
+    pub service: Service<ProductionPow>,
     /// The rules it connects under.
     pub rules: ChainRules,
-    path: PathBuf,
+    /// This chain's own hasher, as each daemon has its own: its own cap
+    /// and its own ranked list. After the service, so the service's jobs
+    /// have ended before the hasher stops.
+    pub own: OwnHasher,
+    /// The header frontier a sync owner over this chain publishes, which
+    /// the service's ranker reads. `None` is published by a chain with no
+    /// owner.
+    pub frontier: tokio::sync::watch::Sender<Option<shekyl_chain_ingest::service::Frontier>>,
     next_tag: AtomicU64,
+    /// The store's directory: a fresh one under the system temp directory,
+    /// removed with the store and the files beside it when this drops,
+    /// after the service and the store above.
+    _dir: tempfile::TempDir,
 }
 
 impl Chain {
     /// An empty store and its service. Call from inside a runtime.
     #[must_use]
-    pub fn empty(
+    pub fn empty(tag: &str, rules: ChainRules, own: OwnHasher) -> Self {
+        Self::empty_following(tag, rules, own, Follow::default())
+    }
+
+    /// An empty store and its service, with `follow` seated on the tip
+    /// follower. Call from inside a runtime.
+    #[must_use]
+    pub fn empty_following(
         tag: &str,
         rules: ChainRules,
-        substrate: Arc<ProductionSubstrate>,
-        budget: Budget,
+        own: OwnHasher,
+        mut follow: Follow,
     ) -> Self {
-        let path = store_path(tag);
-        let store = Arc::new(open_store(&path, rules));
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("shekyl-cs3-{tag}-"))
+            .tempdir()
+            .expect("the store's directory");
+        let store = Arc::new(open_store(&dir.path().join("chain.redb"), rules));
+        // The frontier channel exists before either service starts, as
+        // the daemon's node makes it.
+        let (frontier, listening) = tokio::sync::watch::channel(None);
+        follow.frontier = Some(listening);
+        // The boundary's sink, which the executor shares, as the daemon's
+        // node wires it: the per-block profile's phases in one place.
+        follow.metrics = Some(Arc::clone(&own.metrics));
         let service = Service::start(
             Arc::clone(&store),
             rules,
-            substrate,
+            Arc::new(own.pow.clone()),
             ServiceConfig {
                 room: NonZeroUsize::new(64).expect("non-zero"),
             },
-            budget,
-            Follow::default(),
+            follow,
         );
         Self {
             store,
             service,
             rules,
-            path,
+            own,
+            frontier,
             next_tag: AtomicU64::new(1),
+            _dir: dir,
         }
     }
 
@@ -235,35 +300,26 @@ impl Chain {
     /// A block did not connect: the corpus is the chain these rules accept.
     pub async fn apply(&self, steps: &[Step]) {
         let door = self.service.door();
-        for step in steps {
-            match step {
-                Step::Block { block, bodies } => {
-                    let tag = ArrivalTag(self.next_tag.fetch_add(1, Ordering::Relaxed));
-                    let ticket = loop {
-                        match door.offer(Arrival {
-                            tag,
-                            origin: Origin::Local,
-                            block: block.clone(),
-                            bodies: bodies.clone(),
-                        }) {
-                            Ok(ticket) => break ticket,
-                            Err(_) => tokio::task::yield_now().await,
-                        }
-                    };
-                    let reply = ticket.reply().await.reply;
-                    assert!(
-                        matches!(reply, Reply::Connected { .. } | Reply::AlreadyHeld),
-                        "a corpus block did not connect: {reply:?}"
-                    );
+        for Step { block, bodies } in steps {
+            let tag = ArrivalTag(self.next_tag.fetch_add(1, Ordering::Relaxed));
+            let ticket = loop {
+                match door.offer(Arrival {
+                    tag,
+                    origin: Origin::Local,
+                    block: block.clone(),
+                    bodies: bodies.clone(),
+                    bundle_references: Vec::new(),
+                    bundle_bodies: Vec::new(),
+                }) {
+                    Ok(ticket) => break ticket,
+                    Err(_) => tokio::task::yield_now().await,
                 }
-                Step::Inject(credit) => {
-                    self.service
-                        .connector()
-                        .ask(Inject(*credit))
-                        .await
-                        .expect("the credit is written");
-                }
-            }
+            };
+            let reply = ticket.reply().await.reply;
+            assert!(
+                matches!(reply, Reply::Connected { .. } | Reply::AlreadyHeld),
+                "a corpus block did not connect: {reply:?}"
+            );
         }
     }
 
@@ -301,12 +357,57 @@ impl Chain {
         let Self {
             store,
             service,
-            path,
+            own,
+            frontier,
+            rules,
+            _dir: dir,
             ..
         } = self;
+        // Whatever published the frontier has stopped: the service ranks
+        // without one. Then HA-R5 on this node's production path
+        // (`RANDOMX_CACHE_ACTOR.md` §8): the hasher comes to rest holding
+        // exactly the seeds the store's list names.
+        //
+        // The service's ranker runs on its own task and sends the list
+        // after it sees the frontier close, so the hasher can read quiet
+        // once on the list before that one. The wait is for the state HA-R5
+        // names, quiet and holding the list's seeds; a hasher that never
+        // reaches it fails here with what it holds.
+        drop(frontier);
+        let list = {
+            let snap = store.begin_read().expect("the store reads");
+            shekyl_chain_ingest::service::ranked_on(&snap, rules, None).expect("the store ranks")
+        };
+        let named: BTreeSet<[u8; 32]> = list
+            .iter()
+            .flat_map(shekyl_hasher::Ranked::seeds)
+            .map(|seed| *seed.as_bytes())
+            .collect();
+        let held = |resident: &shekyl_hasher::Resident| -> BTreeSet<[u8; 32]> {
+            resident
+                .caches
+                .iter()
+                .map(|(seed, _)| *seed.as_bytes())
+                .collect()
+        };
+        let mut resident = own.hasher.resident();
+        let rested = tokio::time::timeout(
+            QUIET_WITHIN,
+            resident.wait_for(|resident| resident.quiet && held(resident) == named),
+        )
+        .await
+        .is_ok_and(|waited| waited.is_ok());
+        if !rested {
+            let now = resident.borrow().clone();
+            panic!(
+                "the hasher did not come to rest on its list (HA-R5): it holds {now:?}, the \
+                 list names {list:?}"
+            );
+        }
         let _stopped = service.stop().await;
         drop(store);
-        let _removed = std::fs::remove_dir_all(&path);
+        drop(own);
+        dir.close().expect("remove the store's directory");
     }
 }
 

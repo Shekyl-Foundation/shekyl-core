@@ -53,19 +53,20 @@
 //!
 //! The crate controls the *gap*. The *anchor* (when the actor acts) is entirely
 //! consumer-side and **consensus-unenforceable** — funding is FCMP++-hidden, so
-//! nothing on-chain can police the draw. The [`conformance`] instruments are
+//! nothing on-chain can police the draw. The `conformance` instruments are
 //! therefore a demonstration plus a wallet **self-certification** tool ("here is
 //! the tool you run to prove your CSPRNG is good", paired with operator
 //! education), not something the crate prevents. The grade is on the
 //! **property** (uniform, fair, serially independent), not on emitting any
 //! particular sequence: the fixed seed in the KAT is *reference determinism*,
 //! not a PRNG mandate.
+#![deny(unsafe_code)]
 
 pub mod cover;
 pub mod draw;
 pub mod reserve;
 
-pub use cover::{draw_cover_amount, COVER_RUNG_ATOMIC};
+pub use cover::draw_cover_amount;
 pub use draw::{bounded_uniform, draw_entry_gap, GapRng, DEFAULT_ENTRY_GAP_WINDOW};
 pub use reserve::EXIT_FEE_RESERVE_ATOMIC;
 

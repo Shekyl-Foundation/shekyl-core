@@ -75,7 +75,7 @@
 //! # Measurement-region discipline
 //!
 //! Per §4.2: the [`build_local_keys_fixture`] work
-//! (`generate_account_from_raw_seed` KDF + ML-KEM keygen + cached
+//! (`account_from_seed` KDF + ML-KEM keygen + cached
 //! `AccountPublicAddress` construction) is **setup**, held outside
 //! `b.iter`. Only the `KeyEngine::account_public_address` trait call
 //! is measured.

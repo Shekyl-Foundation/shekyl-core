@@ -7,7 +7,7 @@
 //! confidential vouts to `P`'s base, and the bond slot signed by the
 //! caller's key.
 //!
-//! [`AssembleBond`] and [`AssembleRelease`] are debit/credit twins of one
+//! [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond) and [`AssembleRelease`](crate::engine::stake_engine::release::AssembleRelease) are debit/credit twins of one
 //! wire shape. The prove / phase-1 / spend-slot / encode sequence is
 //! [`shekyl_tx_builder::open_spend`]. What stays here is the bond-post
 //! policy: the funding floor, which term is a debit and which a credit,
@@ -19,13 +19,9 @@
 //! exists to keep visible: a debit signs with `bond_spend_sk`, a credit with
 //! `hybrid_sign_sk`.
 
-use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::Scalar;
-use rand_core::RngCore as _;
 use shekyl_archival_retention::bond_post::bond_post_funding_floor_met;
 use shekyl_archival_retention::bond_wire::ArchivalBondPostVin;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
-use shekyl_scanner::extra::Extra;
 use shekyl_tx_builder::{
     open_spend, sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra, AuthSlots,
     InputTerm, OutputTerm, SpendLayout, TreeContext,
@@ -33,7 +29,6 @@ use shekyl_tx_builder::{
 use shekyl_types::{GlobalOutputIndex, PCanonicalId, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
-use zeroize::Zeroizing;
 
 use super::helpers::{construct_vouts_to_base, prepare_funding_inputs, ConstructedVouts};
 use crate::engine::bond_assembly::{
@@ -70,6 +65,9 @@ pub(crate) struct BondPostAssembleArgs<'a> {
     pub bond_auth_pk: Vec<u8>,
     /// Failure-site label for vout construction.
     pub output_site: &'static str,
+    /// The id of the network the bond post is for; every input's signature
+    /// hash binds it (`NETWORK_IDENTITY.md` NI-Q4).
+    pub network: shekyl_network::NetworkId,
 }
 
 /// Persona-bound wire bytes plus the spent funding gindexes.
@@ -102,27 +100,24 @@ pub(crate) async fn assemble_signed_bond_post(
 ) -> Result<AssembledBondPostTx, BondAssemblyError> {
     require_funding_inputs(args.funding.len())?;
 
-    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-    rand_core::OsRng.fill_bytes(tx_key_secret.as_mut());
-    let tx_pubkey = &Scalar::from_bytes_mod_order(*tx_key_secret) * ED25519_BASEPOINT_TABLE;
+    let tx_key = shekyl_crypto_pq::TxKey::random()
+        .map_err(|e| BondAssemblyError::build("bond-post transaction key", e))?;
 
     let ConstructedVouts {
         output_infos,
         output_keys,
         view_tags,
-        kem_blobs,
-        leaf_entry_blob,
+        tx_extra,
+        // Every bond-post vout is confidential change to `P`: their places
+        // name nothing.
+        positions: _,
     } = construct_vouts_to_base(
         args.keys,
-        &tx_key_secret,
+        &tx_key,
         &args.amounts,
         args.output_site,
         |_, _| {},
     )?;
-
-    let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_entry_blob);
-    let tx_extra = extra.serialize();
 
     let prepared = prepare_funding_inputs(args.keys, args.funding)?;
     let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
@@ -152,8 +147,10 @@ pub(crate) async fn assemble_signed_bond_post(
     let fee = args.fee;
     let extra_input_terms = args.extra_input_terms;
     let extra_output_terms = args.extra_output_terms;
+    let network_id = args.network;
     let (signed, spend_inputs) = tokio::task::spawn_blocking(move || {
         sign_transaction_with_terms(
+            &network_id,
             prefix_hash,
             &spend_inputs,
             &outputs_for_prove,
@@ -185,6 +182,7 @@ pub(crate) async fn assemble_signed_bond_post(
                 extra: vec![args.bond_auth_pk],
             },
         },
+        &args.network,
     )
     .map_err(|e| BondAssemblyError::build("open spend", e))?;
     let bond_sig = {

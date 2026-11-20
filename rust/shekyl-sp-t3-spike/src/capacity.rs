@@ -41,9 +41,7 @@
 
 use std::time::Duration;
 
-use shekyl_archival_retention::constants::{
-    CHALLENGES_PER_PAIR_PER_EPOCH, SETTLEMENT_EPOCH_BLOCKS,
-};
+use shekyl_archival_retention::archival_params;
 use shekyl_difficulty::T_SECONDS;
 use shekyl_types::archival::MAX_HOLDINGS_SHARDS;
 
@@ -52,10 +50,13 @@ use crate::measure::{FailureKind, Observation};
 
 /// One settlement epoch of wall-clock time: its blocks at the target block
 /// time.
-pub const EPOCH: Duration = Duration::from_secs(SETTLEMENT_EPOCH_BLOCKS * T_SECONDS);
+pub const EPOCH: Duration =
+    Duration::from_secs(archival_params().settlement_epoch_blocks * T_SECONDS);
 
-/// Challenge reads one drawable pair draws per epoch.
-pub const CHALLENGE_READS_PER_PAIR: u32 = CHALLENGES_PER_PAIR_PER_EPOCH;
+/// Draws one drawable pair is issued per epoch at the count rule's target:
+/// the counted draws ([`shekyl_types::archival::COUNTED_DRAWS`]).
+#[allow(clippy::cast_possible_truncation)] // COUNTED_DRAWS is 3.
+pub const CHALLENGE_READS_PER_PAIR: u32 = shekyl_types::archival::COUNTED_DRAWS as u32;
 
 /// The list bound on one record's holdings (`MAX_HOLDINGS_SHARDS`). A row of
 /// the table, never its anchor.

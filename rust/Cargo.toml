@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "shekyl-ffi",
     "shekyl-fcmp",
 
     # V3.1 multisig — Option E′ (MS-5). The FROST spend-ceremony FSM, blob
@@ -12,6 +11,9 @@ members = [
     "shekyl-chacha",
     "shekyl-crypto-pq",
     "shekyl-crypto-hash",
+    # The one network table (NETWORK_IDENTITY.md, NI-Q3): every network's
+    # name, code, prefixes, ports, genesis and permitted levers.
+    "shekyl-network",
     "shekyl-consensus",
 
     # DISPOSABLE measurement spike (SP-T3 / PD-F-2): the Tor-borne shard-fetch
@@ -27,6 +29,12 @@ members = [
     # the production graph may depend on it; `scripts/ci/check_bench_not_a_dependency.py`
     # is what enforces that.
     "shekyl-wss-q1b-bench",
+
+    # Verification-cost instruments (GAP-7 connect, §72 admission). NOT a
+    # spike: the floor gate and the instruction-count drift gate re-run
+    # these, so the crate must keep compiling. Nothing in the production
+    # graph may depend on it; the same gate enforces that.
+    "shekyl-verify-cost",
 
     # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
     # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
@@ -55,6 +63,10 @@ members = [
     # by the ingest service's form workers, the miner and calc_pow, granted
     # by priority class. See docs/design/DRS_X_STORE_FLIP.md.
     "shekyl-hash-budget",
+
+    # The one owner of every RandomX cache (docs/design/RANDOMX_CACHE_ACTOR.md,
+    # HA-R1…HA-R8): three places, jobs before warm residency.
+    "shekyl-hasher",
 
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
@@ -100,7 +112,7 @@ members = [
     # draws + the stem map), derived from the paper rather than inherited as
     # `#define`s. The default build's one dependency is `shekyl-draw-rng`.
     # Its `conformance` feature pulls `shekyl-stats`, the same grader split
-    # as `shekyl-standoff`. The C++ relay path is still the daemon's.
+    # as `shekyl-standoff`. The relay owner (`shekyl-relay`) consumes it.
     "shekyl-relay-privacy",
 
     # Live daemon relay scheduler (RP-3a): owns the Dandelion++ zone state and
@@ -146,10 +158,9 @@ members = [
 
     # Levin p2p framing layer (bucket header, fragments, noise) — the
     # byte-exact Rust skeleton of docs/LEVIN_PROTOCOL.md, KAT'd against the
-    # C++ epee::levin oracle. Framing only: no portable_storage, no sockets.
-    # Ingress policy and the white-noise emitters are production-live
-    # through shekyl-ffi's shekyl_levin_* exports; the reader is inert until
-    # the scheduled p2p cutover (IMPLEMENTATION_INDEX.md LV row).
+    # pinned C++ epee::levin vectors. Framing and the portable-storage maps;
+    # no sockets. The session layer (`shekyl-p2p-session`) is its one
+    # production reader and writer since the p2p cutover (2026-11-05).
     "shekyl-levin",
 
     # LV-2a: binary portable_storage codec. Limits are a parameter so HTTP
@@ -181,10 +192,11 @@ members = [
     # (docs/design/ARCHIVAL_BOND_CONSTRUCTION.md §7)
     "shekyl-archival-bond-builder",
 
-    # Link-image crate: the daemon's single Rust archive (shekyl-ffi +
-    # shekyl-daemon-rpc → one tracing-core dispatcher). No logic; see
-    # its crate docs and src/daemon/CMakeLists.txt's nm gate.
-    "shekyl-daemon-image",
+    # The daemon binary (DAEMON_CONFIG_CUTOVER.md DC-Q19): a Rust `main`
+    # over `shekyl-daemon`'s sequence. It links no C++.
+    # One Rust dependency graph, so one tracing-core dispatcher: one cargo
+    # link resolves one `tracing-core` (`scripts/ci/check_binary_hardening.sh`).
+    "shekyld",
     "shekyl-encoding",
     "shekyl-address",
     "shekyl-difficulty",
@@ -225,6 +237,18 @@ members = [
     # or redb is in its closure — the spending half is a sibling crate.
     "shekyl-harness-wallet",
     "shekyl-harness-spender",
+    # The chain forge (CHAIN_FORGE.md §11): its library is the plan schema,
+    # the seed derivation, the manifest and blocks.txt; its executor is a
+    # test-kind target (an example and an integration test) over the
+    # scenario driver. NOT_SHIPPED: no shipped build links it.
+    "shekyl-chain-forge",
+
+    # The corpus artifact's codec (docs/design/CORPUS_CODEC.md): its magic,
+    # its layout version, and the one writer and one reader of its records.
+    # Below shekyl-chain-ingest (whose replay Source wraps it) and below the
+    # store's tests, which read a forged chain's corpus and cannot depend on
+    # the ingest crate (it depends on the store). No pipeline, no store.
+    "shekyl-corpus",
 
     # The daemon's block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1):
     # Source → form → sequence → validate+connect → sinks. Production code
@@ -249,6 +273,11 @@ members = [
     # Foundational state-shaped domain newtypes — heights, indices, hashes,
     # timestamps (docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md PR 0)
     "shekyl-types",
+
+    # The build identity (version, release flag, release name) read from the
+    # environment cmake/Version.cmake sets, and the protocol version
+    # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
+    "shekyl-version",
 
     # First-party crates relocated out of the vendored shekyl-oxide tree in the
     # un-vendor slice-2 Track B (docs/design/SHEKYL_OXIDE_UNVENDOR.md §6 B2): the
@@ -295,6 +324,7 @@ members = [
     # ClassedRecord, for hyper and axum (RPC_CHANNEL.md section 4.4, RT-W9
     # step 5b). Depends on shekyl-noise, never on the handshake.
     "shekyl-rpc-stream",
+    "shekyl-rpc-tunnel",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
@@ -311,7 +341,7 @@ members = [
     "shekyl-peerlist",
     # The outbound dialer: the fill rule, the wake spacing, the failed-address
     # memory and the self-connection nonces, over `shekyl-peerlist`
-    # (P2P-3 slice 3). The C++ reaches it only through `shekyl-ffi`.
+    # (P2P-3 slice 3). The peers owner's dialing half, under `shekyl-p2p`.
     "shekyl-dialer",
     # SOCKS5 CONNECT, no authentication. Clearnet's --proxy and the Tor
     # connector share it. It does not know which connector is calling.
@@ -327,9 +357,15 @@ members = [
     # the blocking pool. Dial is SOCKS5 through shekyl-socks. Inbound is
     # accept_tor, then the gap timer. See P2P_TRANSPORT_LAYER.md.
     "shekyl-tor",
-    # The seam: SocketId, one cause, posts onto the connection strand.
-    # epee's TCP server is deleted (D13).
-    "shekyl-seam",
+    # The session layer: the Levin handshake both ways, the self-connection
+    # nonces, timed sync, the dispatch table over `Command`, the board
+    # (P2P_3_REMNANT_CUTOVER_BRIEF.md §7). Replaced shekyl-seam.
+    "shekyl-p2p-session",
+    # The network composition: connectors per configuration, the session
+    # layer and its owners, the process engine and transport runtime, the
+    # stop order, the RPC's facts from the board (brief §2). The node builds
+    # one `Network`.
+    "shekyl-p2p",
     # P2P conformance harness (P2P_DIFFERENTIAL_HARNESS.md). The scripted
     # peer, the seam host, the transcript comparator, and check-goldens.
     # Nothing in the production graph depends on it. The epee recording
@@ -363,8 +399,8 @@ members = [
     "shekyl-p-loopback",
 
     # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
-    # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC
-    # crate (`check_p_fetch_dep_cut.py`).
+    # from the `shekyld` binary crate only — never from an RPC crate
+    # (`check_p_fetch_dep_cut.py`).
     "shekyl-archival-fetch-sched",
 
     # The serve-credit bundle producer (SO-D12 increment 4c): the witness
@@ -381,6 +417,19 @@ members = [
     # two Tor *instances* stay separate; this is the one transform).
     "shekyl-onion-v3",
 
+    # RFC 8032 expansion of a v3 onion seed: the `ED25519-V3` blob and its
+    # public key. Secret-byte operations live here (rule 36), so the Tor
+    # control client can mint a key without compiling the account stack.
+    # A persona seed is still derived in `shekyl-crypto-pq`
+    # (`derive_p_onion_keypair`); this crate expands a seed it is given.
+    "shekyl-onion-key",
+
+    # A fixed-length secret at one heap address, wiped there on drop.
+    # `shekyl-crypto-pq` (an FN-DSA secret) and `shekyl-onion-key` (an
+    # expanded onion secret) both hold one, and neither takes the other's
+    # crate to do it.
+    "shekyl-heap-secret",
+
     # Capability families (PWD-E9): the client speaks the protocol for any
     # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
     # the daemon crate is the P2P overlay's ephemeral-per-boot instance
@@ -388,7 +437,26 @@ members = [
     # wallet and daemon never name each other.
     "shekyl-tor-control-wallet",
     "shekyl-tor-control-client",
+    # Spawning a child that inherits one end of a connected pair: the one spawn
+    # lock, the child's descriptor hygiene, and the pair with its window. A
+    # leaf (std, libc, windows-sys): the Tor launcher, the daemon's owning
+    # connection and the GUI's launch share it.
+    "shekyl-spawn",
+    # The operating-system account: its effective user id, its session
+    # directory, its root for a rendezvous, and the account at the other end
+    # of a local socket. A leaf with no network stack (libc; shekyl-win-sec on
+    # Windows): the daemon's process crate and the transport share it.
+    "shekyl-os-account",
+    # A daemon's local rendezvous: its derived name (network and instance),
+    # the instance rule, the rendezvous file and the Windows record. One
+    # dependency, shekyl-crypto-hash: the daemon, its configuration and the
+    # clients that find it read the names without the channel's handshake.
+    "shekyl-rpc-rendezvous",
     "shekyl-tor-control-daemon",
+    # The Tor status as it crosses the wire, and the one renderer that
+    # turns it into words (`docs/design/TOR_STATUS_CRATE.md`). No I/O;
+    # serde only. The supervisor, the RPC types and the CLI depend on it.
+    "shekyl-tor-status",
 
     # The operator alarm channel (OA-1): the snapshot a human reads when a
     # guarantee the wallet cannot restore by itself has been lost. A leaf on
@@ -435,18 +503,22 @@ members = [
     # the table, precedence, the file, the lock, the marker, the sections.
     "shekyl-daemon-config",
 
+    # The daemon's process: hardening (DC-Q21), the panic hook, the account's
+    # roots from the operating system (IG-13).
+    "shekyl-process",
+
     # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
-    # §2.2); the C++ remnant is a run/stop pair it drives. Exported through
-    # shekyl-daemon-image.
+    # §2.2). Called by the `shekyld` binary crate (DC-Q19).
     "shekyl-daemon",
 
     # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the
     # ingest service, the pool, the hasher budget, the job board and the
-    # socket table. Nothing is routed from C++ until the store flip.
+    # socket table. Opens the `Network` (`shekyl-p2p`); the daemon builds it.
     "shekyl-node",
 
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
-    # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
+    # RANDOMX_V2_RUST.md). Light and cache-only: the daemon's crates and
+    # `shekyl-miner` hash through it; fast mining is an external miner's job.
     "shekyl-pow-randomx",
 
     # Phase 2g Rust/C differential harness substrate: hand-written
@@ -508,7 +580,7 @@ version = "3.1.0"
 edition = "2021"
 # MSRV binding constraints (workspace floor = max of consumers):
 #   - `kameo = "=0.20.0"`: 1.88.0 (crates.io index, 2026-05-29)
-#   - `redb = "4.1.0"` (CT-1 LeafStore): 1.89.0
+#   - `redb = "4.4.0"` (CT-1 LeafStore, the daemon store): 1.90
 #   - `shekyl-pow-randomx`: `Box::new_zeroed_slice` (stable 1.92.0)
 # Workspace pins 1.94.0 intentionally (RandomX PoW + CT-1 redb) and
 # aligns with `shekyl-gui-wallet/src-tauri/
@@ -616,23 +688,47 @@ sha2 = "0.10"
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
 
+# A test's own temp directory, removed when it drops: every store the
+# chain-store, chain-ingest and p2p-harness tests open lives in one, and the
+# RT-W10 harnesses write their scratch output to one (`shekyl-chain-store`
+# `store/rt_w10_cost.rs`, `shekyl-wire` `tests/rt_w10_tx_parse.rs`). Dev-only,
+# except in `shekyl-p2p-harness` (`publish = false`, no dependents). Verified
+# at source (3.27.0, rule 17): `Builder::tempdir` makes the directory with a
+# non-recursive `DirBuilder::create` under a random name, retrying a name
+# that exists, so a planted path or symlink is never written into or
+# deleted; `TempDir::close` removes it and reports the error, and `Drop`
+# removes it on a panic. Already in Cargo.lock at this version (through
+# proptest), so the edge adds no crate.
+tempfile = "3.27"
+
 # CT-1 `shekyl-curve-tree` LeafStore persistence (`docs/design/CT1_ROUND1_PINS.md`).
 # Verified at source (redb 4.1.0): `Database::create`, `begin_write`/`begin_read`,
 # `TableDefinition`, `ReadableTable` range scan; public chain data only — no
 # `Zeroize` requirement (`17-dependency-discipline.mdc`). Pre-genesis greenfield:
 # v3 file format only (no v2 migration path).
-redb = "4.1.0"
+# 4.4.0 (released 2026-10-13; the PB-S2 pin, verified 2026-11-01). 4.1.0
+# asserts at open that the file is at least as long as the header's layout
+# (`page_manager.rs:231`), and a power loss
+# inside a grow's `fdatasync` leaves the grown layout's header write on disk
+# before the journal commit that grows the file: every later open aborts the
+# daemon. From 4.2.0 a recovery rebuilds the layout from the file length and
+# the immutable region geometry instead (`header.rs` `finalize`). Verified at
+# source: the file format is unchanged across 4.1-4.4 (the 4.3 key
+# separators and the 4.4 niches change no existing table's encoding: the
+# built-in types existing tables use declare a niche only under
+# `experimental-niches`, and the `NonZero` integer types, which 4.4 adds and
+# which do declare one unconditionally, key or store no table here).
+redb = "4.4.0"
 
-# `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
-# "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
-# the 2026-04-27 *Engine binary boundary* decision in
-# `docs/V3_WALLET_DECISION_LOG.md`). Verified at source via the
+# `kameo` actor framework — pinned per the 2026-04-27 *Engine binary
+# boundary* decision in
+# `docs/V3_WALLET_DECISION_LOG.md`. Verified at source via the
 # crates.io index 2026-05-29: 0.20.0 is the newest stable (released
 # 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
 # the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
 # this project's topology depends on. Crate MSRV 1.88.0 (below the
 # workspace floor). Pinned with an exact
-# patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
+# patch-level cap (`=0.20.0`): an actor
 # framework is a coordination-load-bearing dependency where a silent
 # minor bump could alter mailbox/supervision semantics under us.
 #
@@ -689,7 +785,7 @@ shekyl-economics = { opt-level = 3 }
 shekyl-block-template = { opt-level = 3 }
 shekyl-tx-weight = { opt-level = 3 }
 # RandomX is hash-bound the same way: every real-RandomX test (the scenario
-# chains under the production substrate, the miner loop) derives a 256 MiB
+# chains under the production proof-of-work boundary, the miner loop) derives a 256 MiB
 # cache and hashes in light mode, and an unoptimised verifier made the
 # miner's one default-lane test take 158 s of every debug `cargo test` run.
 # Optimisation does not change the hash: the crate is spec-vector tested
@@ -700,6 +796,24 @@ shekyl-pow-randomx = { opt-level = 3 }
 argon2 = { opt-level = 3 }
 blake2 = { opt-level = 3 }
 aes = { opt-level = 3 }
+# The hybrid signature and KEM arms and the hash under them are lattice and
+# Keccak arithmetic: ML-KEM (`fips203`), ML-DSA (`fips204`), FN-DSA (the
+# `fn-dsa` crates) and SHA-3 (`sha3` over `keccak`). Unoptimised, they set
+# the length of the crypto-pq round-trip suite and of every chain test that
+# signs or verifies. `overflow-checks` stays on: `[profile.dev]` sets it for
+# every package, and an `opt-level` override does not change that.
+fips203 = { opt-level = 3 }
+fips204 = { opt-level = 3 }
+fn-dsa = { opt-level = 3 }
+fn-dsa-comm = { opt-level = 3 }
+fn-dsa-kgen = { opt-level = 3 }
+fn-dsa-sign = { opt-level = 3 }
+fn-dsa-vrfy = { opt-level = 3 }
+sha3 = { opt-level = 3 }
+keccak = { opt-level = 3 }
+# Every chain-store and chain-ingest test runs on redb; an unoptimised
+# B-tree is the floor under each of them.
+redb = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

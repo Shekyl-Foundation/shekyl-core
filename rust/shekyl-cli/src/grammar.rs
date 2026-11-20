@@ -13,8 +13,10 @@
 use crate::catalog::{self, split_flags, usage, CommandId, Split, Walk};
 use crate::resolve::{
     diag, parse_flag_str, parse_invoice_expiry, raw_remainder, reject_removed_command,
-    reject_removed_flags, unix_now, FeePriority, FlagValue, RequestFilter, ResolvedCommand,
+    reject_removed_flags, unix_now, BlockRef, Enroll, FeePriority, FlagValue, RequestFilter,
+    ResolvedCommand, View,
 };
+use shekyl_rpc_types::wire::rpc::CeilingWord;
 
 /// How a free-form tail is recovered.
 ///
@@ -104,6 +106,57 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Balance => bare(id, args, ResolvedCommand::Balance),
         Status => bare(id, args, ResolvedCommand::Status),
         Chain => bare(id, args, ResolvedCommand::ChainHealth),
+        ChainHeight => bare(id, args, ResolvedCommand::Daemon(View::ChainHeight)),
+        ChainDifficulty => bare(id, args, ResolvedCommand::Daemon(View::ChainDifficulty)),
+        ChainStats => parse_chain_stats(args),
+        ChainAlt => bare(id, args, ResolvedCommand::Daemon(View::ChainAlt)),
+        ChainSpent => one_word(id, args, parse_chain_spent),
+        ChainCoinbaseSum => parse_header_span(CommandId::ChainCoinbaseSum, args, |from, to| {
+            View::ChainCoinbaseSum { from, to }
+        }),
+        BlockShow => one_word(id, args, parse_block_show),
+        BlockHeaderList => parse_header_list(args),
+        PeerList => parse_peer_list(args),
+        PeerStats => bare(id, args, ResolvedCommand::Daemon(View::PeerStats)),
+        PeerConnections => bare(id, args, ResolvedCommand::Daemon(View::PeerConnections)),
+        P2pStats => bare(id, args, ResolvedCommand::Daemon(View::P2pStats)),
+        SyncStatus => bare(id, args, ResolvedCommand::Daemon(View::SyncStatus)),
+        DaemonStatus => bare(id, args, ResolvedCommand::Daemon(View::DaemonStatus)),
+        TxpoolStats => bare(id, args, ResolvedCommand::Daemon(View::TxpoolStats)),
+        TxpoolList => parse_txpool_list(args),
+        TxpoolFlush => parse_txpool_flush(args),
+        BanList => bare(id, args, ResolvedCommand::Daemon(View::BanList)),
+        BanAdd => parse_ban_add(args),
+        BanRemove => one_word(id, args, |ip| {
+            parse_host(ip, View::BanRemove { ip: ip.to_owned() })
+        }),
+        BanShow => one_word(id, args, |ip| {
+            parse_host(ip, View::BanShow { ip: ip.to_owned() })
+        }),
+        OptionSet => parse_option_set(args),
+        OptionShow => parse_option_show(args),
+        RpcClientAdd => parse_client_ceiling(RpcClientAdd, args, |fingerprint, ceiling| {
+            Enroll::ClientAdd {
+                fingerprint,
+                ceiling,
+            }
+        }),
+        RpcClientSet => parse_client_ceiling(RpcClientSet, args, |fingerprint, ceiling| {
+            Enroll::ClientSet {
+                fingerprint,
+                ceiling,
+            }
+        }),
+        RpcClientRemove => one_word(id, args, |word| match parse_hash(word) {
+            Ok(fingerprint) => ResolvedCommand::Enroll(Enroll::ClientRemove { fingerprint }),
+            Err(message) => diag(message),
+        }),
+        RpcClientList => bare(id, args, ResolvedCommand::Enroll(Enroll::ClientList)),
+        RpcBundleShow => bare(id, args, ResolvedCommand::Enroll(Enroll::BundleShow)),
+        RpcKeyCreate => bare(id, args, ResolvedCommand::Enroll(Enroll::KeyCreate)),
+        RpcKeyShow => bare(id, args, ResolvedCommand::Enroll(Enroll::KeyShow)),
+        DaemonStop => bare(id, args, ResolvedCommand::Daemon(View::DaemonStop)),
+        TxRelay => one_word(id, args, parse_tx_relay),
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
@@ -122,11 +175,13 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Fee => parse_fee(args),
         Send => parse_send(args),
         TxList => parse_tx_list(args),
-        TxShow => one_word(id, args, |txid| ResolvedCommand::ShowTransfer {
-            txid: txid.to_string(),
-        }),
+        TxShow => parse_tx_show(id, args),
         TxNote => parse_tx_note(tail, args),
         TxAbandon => one_word(id, args, |txid| ResolvedCommand::Abandon {
+            txid: txid.to_string(),
+        }),
+        TxAlarm => bare(id, args, ResolvedCommand::TxAlarm),
+        TxResend => one_word(id, args, |txid| ResolvedCommand::TxResend {
             txid: txid.to_string(),
         }),
         RequestNew => parse_request_new(args),
@@ -165,10 +220,249 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Verify => parse_verify(tail, args),
         // Subjects. `walk` asks for a verb before this match; the arm keeps
         // the match exhaustive if that ever changes.
-        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check => {
-            diag(catalog::need_verb(id))
+        Tx | Request | Uri | Shard | ShardList | Mine | Prove | Check | Block | BlockHeader
+        | Peer | P2p | Sync | Daemon | Txpool | ChainCoinbase | Ban | Option | Rpc | RpcClient
+        | RpcBundle | RpcKey => diag(catalog::need_verb(id)),
+    }
+}
+
+/// 64 hexadecimal characters, [`shekyl_options::Kind::Hash`] (IG-Q23).
+fn parse_hash(word: &str) -> Result<String, String> {
+    match shekyl_options::Kind::Hash.parse_text(word) {
+        Ok(shekyl_options::Value::Hash(hash)) => Ok(hash),
+        _ => Err(format!("{word:?} is not a hash")),
+    }
+}
+
+/// A height or a count: a `u64`, with no sign.
+fn parse_u64(name: &str, word: &str) -> Result<u64, String> {
+    word.parse::<u64>()
+        .map_err(|_| format!("{name} takes an integer"))
+}
+
+fn parse_chain_stats(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::ChainStats, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::ChainStats));
+    }
+    let Some(value) = split.value("--last") else {
+        return diag(usage(CommandId::ChainStats));
+    };
+    match parse_u64("--last", value) {
+        Ok(last) => ResolvedCommand::Daemon(View::ChainStats { last }),
+        Err(message) => diag(message),
+    }
+}
+
+fn parse_chain_spent(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::ChainSpent { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_block_show(word: &str) -> ResolvedCommand {
+    if word.len() == 64 {
+        return match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Hash(hash))),
+            Err(_) => diag(format!("{word:?} is not a block hash or a block number")),
+        };
+    }
+    match parse_u64("block show", word) {
+        Ok(height) => ResolvedCommand::Daemon(View::BlockShow(BlockRef::Height(height))),
+        Err(_) => diag(format!("{word:?} is not a block hash or a block number")),
+    }
+}
+
+fn parse_header_list(args: &[&str]) -> ResolvedCommand {
+    parse_header_span(CommandId::BlockHeaderList, args, |from, to| {
+        View::BlockHeaderList { from, to }
+    })
+}
+
+fn parse_header_span(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(u64, u64) -> View,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(id));
+    }
+    let (Some(from), Some(to)) = (split.value("--from"), split.value("--to")) else {
+        return diag(usage(id));
+    };
+    let from = match parse_u64("--from", from) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    let to = match parse_u64("--to", to) {
+        Ok(height) => height,
+        Err(message) => return diag(message),
+    };
+    if from > to {
+        return diag("--from is after --to".to_owned());
+    }
+    ResolvedCommand::Daemon(build(from, to))
+}
+
+fn parse_tx_relay(word: &str) -> ResolvedCommand {
+    match parse_hash(word) {
+        Ok(hash) => ResolvedCommand::Daemon(View::TxRelay { hash }),
+        Err(_) => diag(format!("{word:?} is not a hash")),
+    }
+}
+
+fn parse_txpool_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::TxpoolList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::TxpoolList));
+    }
+    ResolvedCommand::Daemon(View::TxpoolList {
+        short: split.has("--short"),
+    })
+}
+
+fn parse_txpool_flush(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::TxpoolFlush { id: None }),
+        [word] => match parse_hash(word) {
+            Ok(hash) => ResolvedCommand::Daemon(View::TxpoolFlush { id: Some(hash) }),
+            Err(_) => diag(format!("{word:?} is not a hash")),
+        },
+        _ => diag(usage(CommandId::TxpoolFlush)),
+    }
+}
+
+fn parse_host(word: &str, view: View) -> ResolvedCommand {
+    if host_token(word) {
+        ResolvedCommand::Daemon(view)
+    } else {
+        diag(format!("{word:?} is not an IP address"))
+    }
+}
+
+fn host_token(word: &str) -> bool {
+    word.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// `rpc client add|set <fingerprint> --ceiling <word>...` (IG-Q87): the
+/// fingerprint a hash, the ceiling one or more grant or preset keywords,
+/// the flag repeated (IG-6).
+fn parse_client_ceiling(
+    id: CommandId,
+    args: &[&str],
+    build: impl FnOnce(String, Vec<CeilingWord>) -> Enroll,
+) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [fingerprint] = split.positional.as_slice() else {
+        return diag(usage(id));
+    };
+    let fingerprint = match parse_hash(fingerprint) {
+        Ok(fingerprint) => fingerprint,
+        Err(message) => return diag(message),
+    };
+    let words = split.values("--ceiling");
+    if words.is_empty() {
+        return diag(usage(id));
+    }
+    let mut ceiling = Vec::with_capacity(words.len());
+    for word in words {
+        match CeilingWord::from_name(word) {
+            Some(known) => ceiling.push(known),
+            None => {
+                return diag(format!(
+                    "{word:?} is not a grant or a preset; one of: {}",
+                    CeilingWord::ALL
+                        .iter()
+                        .map(|known| known.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            }
         }
     }
+    ResolvedCommand::Enroll(build(fingerprint, ceiling))
+}
+
+fn parse_ban_add(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::BanAdd, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [ip] = split.positional.as_slice() else {
+        return diag(usage(CommandId::BanAdd));
+    };
+    if !host_token(ip) {
+        return diag(format!("{ip:?} is not an IP address"));
+    }
+    let duration = match split.value("--duration") {
+        None => None,
+        Some(value) => match crate::resolve::parse_ig6_duration_secs(value) {
+            Ok(seconds) => Some(seconds),
+            Err(message) => return diag(message),
+        },
+    };
+    ResolvedCommand::Daemon(View::BanAdd {
+        ip: (*ip).to_owned(),
+        duration,
+    })
+}
+
+fn parse_option_set(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [name, value] => ResolvedCommand::Daemon(View::OptionSet {
+            name: (*name).to_owned(),
+            value: (*value).to_owned(),
+        }),
+        _ => diag(usage(CommandId::OptionSet)),
+    }
+}
+
+fn parse_option_show(args: &[&str]) -> ResolvedCommand {
+    match args {
+        [] => ResolvedCommand::Daemon(View::OptionShow { name: None }),
+        [name] => ResolvedCommand::Daemon(View::OptionShow {
+            name: Some((*name).to_owned()),
+        }),
+        _ => diag(usage(CommandId::OptionShow)),
+    }
+}
+
+fn parse_peer_list(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::PeerList, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    if !split.positional.is_empty() {
+        return diag(usage(CommandId::PeerList));
+    }
+    let mut white = split.has("--white");
+    let mut gray = split.has("--gray");
+    if !white && !gray {
+        white = true;
+        gray = true;
+    }
+    let max = match split.value("--max") {
+        Some(value) => match parse_u64("--max", value) {
+            Ok(max) => Some(max),
+            Err(message) => return diag(message),
+        },
+        None => None,
+    };
+    ResolvedCommand::Daemon(View::PeerList { white, gray, max })
 }
 
 fn bare(id: CommandId, args: &[&str], command: ResolvedCommand) -> ResolvedCommand {
@@ -330,14 +624,15 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
         Err(command) => return command,
     };
     let priority = match split.value("--priority") {
-        None | Some("standard") => FeePriority::Standard,
-        Some("economy") => FeePriority::Economy,
-        Some("high") => FeePriority::High,
-        Some(word) => {
-            return diag(format!(
-                "send: --priority expects economy, standard, or high, got {word:?}"
-            ));
-        }
+        None => FeePriority::default(),
+        Some(word) => match FeePriority::from_name(word) {
+            Some(tier) => tier,
+            None => {
+                return diag(format!(
+                    "send: --priority expects economy, standard, or high, got {word:?}"
+                ));
+            }
+        },
     };
     match split.positional.as_slice() {
         [amount, dest] => match crate::commands::parse_amount(amount) {
@@ -350,6 +645,20 @@ fn parse_send(args: &[&str]) -> ResolvedCommand {
             None => diag(format!("send: invalid amount {amount:?}")),
         },
         _ => diag("send: need <amount> <address>"),
+    }
+}
+
+fn parse_tx_show(id: CommandId, args: &[&str]) -> ResolvedCommand {
+    let split = match flags(id, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    match split.positional.as_slice() {
+        [txid] => ResolvedCommand::ShowTransfer {
+            txid: (*txid).to_string(),
+            body: split.has("--body"),
+        },
+        _ => diag(usage(id)),
     }
 }
 
@@ -400,13 +709,13 @@ fn parse_request_new(args: &[&str]) -> ResolvedCommand {
             Some(ts) => Some(ts),
             None => {
                 return diag(format!(
-                    "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                    "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
                 ));
             }
         },
         FlagValue::Invalid(raw) => {
             return diag(format!(
-                "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                "request new: --expiry expects unix seconds or a duration (1h, 5min, 7d), got {raw:?}"
             ));
         }
     };
@@ -670,6 +979,116 @@ fn parse_verify(tail: Tail<'_>, args: &[&str]) -> ResolvedCommand {
 mod tests {
     use super::*;
 
+    /// The enrollment words (IG-Q87): a ceiling is the flag repeated
+    /// (IG-6), each a grant or a preset, and at least one; the fingerprint
+    /// a hash. Red edit: let `record` refuse a repeated `List` flag, and the
+    /// two-word ceiling is "given twice".
+    #[test]
+    fn the_enrollment_words_take_a_hash_and_a_repeated_ceiling() {
+        let fingerprint = "ab".repeat(32);
+        match parse(&format!(
+            "rpc client add {fingerprint} --ceiling view --ceiling submit"
+        )) {
+            ResolvedCommand::Enroll(Enroll::ClientAdd {
+                fingerprint: got,
+                ceiling,
+            }) => {
+                assert_eq!(got, fingerprint);
+                assert_eq!(ceiling, vec![CeilingWord::View, CeilingWord::Submit]);
+            }
+            other => panic!("expected rpc client add, got {other:?}"),
+        }
+        assert!(matches!(
+            parse(&format!("rpc client set {fingerprint} --ceiling admin")),
+            ResolvedCommand::Enroll(Enroll::ClientSet { .. })
+        ));
+        assert!(matches!(
+            parse(&format!("rpc client remove {fingerprint}")),
+            ResolvedCommand::Enroll(Enroll::ClientRemove { .. })
+        ));
+        for words in [
+            "rpc client list",
+            "rpc bundle show",
+            "rpc key create",
+            "rpc key show",
+        ] {
+            assert!(
+                matches!(parse(words), ResolvedCommand::Enroll(_)),
+                "{words}"
+            );
+        }
+        for refused in [
+            format!("rpc client add {fingerprint}"),
+            format!("rpc client add {fingerprint} --ceiling viewer"),
+            "rpc client add abc --ceiling view".to_owned(),
+            "rpc client".to_owned(),
+        ] {
+            assert!(
+                !matches!(parse(&refused), ResolvedCommand::Enroll(_)),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn tx_alarm_and_tx_resend_parse() {
+        assert!(matches!(parse("tx alarm"), ResolvedCommand::TxAlarm));
+        match parse("tx resend abcdef") {
+            ResolvedCommand::TxResend { txid } => assert_eq!(txid, "abcdef"),
+            other => panic!("expected tx resend, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tx_show_takes_the_id_and_an_optional_body() {
+        match parse("tx show abcdef --body") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected tx show, got {other:?}"),
+        }
+        match parse("tx show --body abcdef") {
+            ResolvedCommand::ShowTransfer { txid, body } => {
+                assert_eq!(txid, "abcdef");
+                assert!(body);
+            }
+            other => panic!("expected the flag before the id, got {other:?}"),
+        }
+        match parse("tx show abcdef") {
+            ResolvedCommand::ShowTransfer { body, .. } => assert!(!body),
+            other => panic!("expected tx show without --body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_daemon_word_keeps_the_renderers_path_and_chain_alone_stays_the_wallet() {
+        match parse("chain") {
+            ResolvedCommand::ChainHealth => {}
+            other => panic!("bare chain is the wallet's report, got {other:?}"),
+        }
+        match parse("chain height") {
+            ResolvedCommand::Daemon(View::ChainHeight) => {}
+            other => panic!("expected chain height, got {other:?}"),
+        }
+        match parse("block header list --to 3 --from 1") {
+            ResolvedCommand::Daemon(View::BlockHeaderList { from: 1, to: 3 }) => {}
+            other => panic!("expected the header list, got {other:?}"),
+        }
+        match parse("peer list --max 4") {
+            ResolvedCommand::Daemon(View::PeerList {
+                white: true,
+                gray: true,
+                max: Some(4),
+            }) => {}
+            other => panic!("expected peer list, got {other:?}"),
+        }
+        match parse("chain stats") {
+            ResolvedCommand::Diagnostic { .. } => {}
+            other => panic!("chain stats needs --last, got {other:?}"),
+        }
+    }
+
     #[test]
     fn transfer_retires_to_send() {
         match parse("transfer 1.0 addr") {
@@ -699,6 +1118,27 @@ mod tests {
             parse("send 1 addr --priority 2"),
             ResolvedCommand::Diagnostic { .. }
         ));
+        // One spelling per tier (IG-1): the uppercase names and the retired
+        // `priority` are no tier.
+        for word in ["HIGH", "Standard", "priority", "PRIORITY"] {
+            assert!(
+                matches!(
+                    parse(&format!("send 1 addr --priority {word}")),
+                    ResolvedCommand::Diagnostic { .. }
+                ),
+                "{word}"
+            );
+        }
+        for (word, tier) in [
+            ("economy", FeePriority::Economy),
+            ("standard", FeePriority::Standard),
+            ("high", FeePriority::High),
+        ] {
+            match parse(&format!("send 1 addr --priority {word}")) {
+                ResolvedCommand::Transfer { priority, .. } => assert_eq!(priority, tier),
+                other => panic!("{word}: {other:?}"),
+            }
+        }
         assert!(matches!(
             parse("send 1 addr typo"),
             ResolvedCommand::Diagnostic { .. }
@@ -889,6 +1329,22 @@ mod tests {
                 matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
                 "{line}"
             );
+        }
+    }
+
+    /// The user-freeze commands a Monero user would type are REJECTED: each
+    /// is refused with its reason and the decision (2026-11-15), never sent
+    /// to the server or read as an unknown command.
+    #[test]
+    fn the_user_freeze_commands_are_refused_with_their_reason() {
+        for line in ["freeze", "thaw 0", "frozen"] {
+            match parse(line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains("no user-set hold"), "{line}: {message}");
+                    assert!(message.contains("2026-11-15"), "{line}: {message}");
+                }
+                other => panic!("{line}: {other:?}"),
+            }
         }
     }
 

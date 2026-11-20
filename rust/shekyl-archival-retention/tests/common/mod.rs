@@ -29,7 +29,6 @@ use shekyl_archival_retention::{
 /// borrows them — decode into this, then [`bonds_as_slice`] to borrow.
 pub struct BondOwned {
     pub join: u64,
-    pub complete: bool,
     pub bad: Vec<BadInterval>,
 }
 
@@ -37,7 +36,6 @@ impl BondOwned {
     pub fn as_bond(&self) -> EpochCloseBond<'_> {
         EpochCloseBond {
             join_settlement_epoch: self.join,
-            is_support_complete_tree: self.complete,
             bad_intervals: &self.bad,
         }
     }
@@ -65,7 +63,6 @@ pub fn parse_bonds(v: &Value) -> Vec<BondOwned> {
         .iter()
         .map(|b| BondOwned {
             join: b["join_epoch"].as_u64().expect("join_epoch"),
-            complete: b["complete_tree"].as_bool().expect("complete_tree"),
             bad: parse_bad_intervals(&b["bad_intervals"]),
         })
         .collect()

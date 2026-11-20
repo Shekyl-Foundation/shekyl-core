@@ -1,0 +1,17 @@
+error: lifetime may not live long enough
+  --> tests/trybuild/a_job_returns_its_lent.rs:15:64
+   |
+15 |     let _escaped = hasher.run(Class::Chain, seed, stop, |lent| lent);
+   |                                                          ----- ^^^^ returning this value requires that `'1` must outlive `'2`
+   |                                                          |   |
+   |                                                          |   return type of closure is &'2 Lent<'_>
+   |                                                          has type `&'1 Lent<'_>`
+
+error: lifetime may not live long enough
+  --> tests/trybuild/a_job_returns_its_lent.rs:15:64
+   |
+15 |     let _escaped = hasher.run(Class::Chain, seed, stop, |lent| lent);
+   |                                                          ----- ^^^^ returning this value requires that `'3` must outlive `'4`
+   |                                                          |   |
+   |                                                          |   return type of closure is &Lent<'4>
+   |                                                          has type `&Lent<'3>`

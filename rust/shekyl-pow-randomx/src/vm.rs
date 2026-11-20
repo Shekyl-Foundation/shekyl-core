@@ -1205,10 +1205,10 @@ impl VmState {
     /// # Allocation breakdown
     ///
     /// - One [`RANDOMX_SCRATCHPAD_L3`]-sized heap allocation
-    ///   (2 MiB) for [`scratchpad`], zero-initialized via the
+    ///   (2 MiB) for [`scratchpad`](crate::vm::VmState::scratchpad), zero-initialized via the
     ///   [`alloc_zeroed_scratchpad`] carve-out.
     /// - One `size_of::<Program>()`-sized heap allocation (3 KiB)
-    ///   for [`program`], constructed via [`Program::default`]
+    ///   for [`program`](crate::vm::VmState::program), constructed via [`Program::default`]
     ///   ([`core::array::from_fn`] of [`Instruction::default`]) and
     ///   moved into a [`Box`].
     /// - All other fields are inlined into the [`VmState`] struct
@@ -2123,9 +2123,8 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 /// `randomx_calculate_hash` at pin `aaafe71`.
 ///
 /// This is the **single hash-producing entry point** of the
-/// `shekyl-pow-randomx` crate — the public surface the
-/// [`shekyl-ffi`](../../../rust/shekyl-ffi) FFI shim (Phase 3a) and
-/// the daemon's block-validation path consume. No other `pub fn`
+/// `shekyl-pow-randomx` crate — the public surface the daemon's
+/// block-validation path consumes. No other `pub fn`
 /// produces a RandomX hash; no internal API circumvents this
 /// function's chain-of-Blake2b + scratchpad + program-iteration
 /// composition.
@@ -2435,7 +2434,7 @@ pub(crate) fn compute_hash_inner(
 }
 
 /// Feed the 256-byte register-file (`r[0..8] || f[0..4] || e[0..4] ||
-/// a[0..4]`) to a [`Digest`] hasher, matching the C reference's
+/// a[0..4]`) to a [`Digest`](blake2::Digest) hasher, matching the C reference's
 /// `blake2b(..., &reg, sizeof(RegisterFile), ...)` byte-for-byte.
 ///
 /// The C `RegisterFile` struct layout per
@@ -3344,6 +3343,26 @@ mod tests {
         PREPARED.get_or_init(|| {
             crate::PreparedCache::derive(Seedhash::from_bytes(CANONICAL_SEEDHASH_BYTES))
         })
+    }
+
+    /// The Phase 3a canonical known answer: under seed `0x01..=0x20`, the
+    /// verifier hashes the ASCII blob below to `34f8b017…`, the value the
+    /// release parity gate anchors against the C library's full dataset,
+    /// the mode miners run.
+    #[test]
+    fn the_verifier_reproduces_the_canonical_known_answer() {
+        assert_eq!(
+            CANONICAL_SEEDHASH_BYTES,
+            core::array::from_fn::<u8, 32, _>(|i| u8::try_from(i + 1).expect("32 fits u8")),
+            "the known answer's seed is 0x01..=0x20"
+        );
+        let blob = b"Shekyl RandomX v2 full-dataset parity KAT (Phase 3a, pin aaafe71)";
+        let expected: [u8; 32] = [
+            0x34, 0xf8, 0xb0, 0x17, 0x91, 0x59, 0xd8, 0x37, 0xe4, 0x63, 0xc1, 0x7c, 0x86, 0x92,
+            0xc1, 0x06, 0xd2, 0xd3, 0x53, 0x6f, 0x7d, 0xa3, 0x25, 0xae, 0xef, 0xeb, 0x3e, 0x22,
+            0xa1, 0x36, 0xb6, 0x51,
+        ];
+        assert_eq!(compute_hash(canonical_prepared_cache(), blob), expected);
     }
 
     /// T6 spec-vector: post-mask `(sp_addr0, sp_addr1)` pairs across

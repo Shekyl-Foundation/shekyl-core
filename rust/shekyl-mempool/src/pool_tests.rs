@@ -13,17 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 
 use super::{Admission, Arrival, Duplicate, Pool, Step1};
 use crate::door::Judged;
-
-fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "shekyl-mempool-{name}-{}-{:?}.redb",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&p));
-    p
-}
+use crate::test_paths::tmp;
 
 /// CEN-M1 answers before the door: a transaction the chain holds is a
 /// duplicate even when its bytes would be refused — nothing is judged.
@@ -39,6 +29,7 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -52,11 +43,37 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
         .unwrap()
     });
     assert_eq!(admission, Admission::Duplicate(Duplicate::OnChain));
-    drop(std::fs::remove_file(&path));
 }
 
 /// A refusal is the door's answer and leaves nothing: not in memory, not
 /// in the file — a reopen finds an empty pool.
+/// The door's question before it verifies: a transaction the chain carries
+/// is a duplicate, one it does not is not. Neither answer judges anything.
+#[test]
+fn duplicate_names_a_transaction_the_chain_carries_and_nothing_else() {
+    let path = tmp("m1-duplicate");
+    let base = spendable_chain();
+    let tx = listed_on(&base, [0x42; 32]);
+    let txid = tx.txid_parts().hash;
+    let chain = base.clone().with_transaction(txid);
+    let (carried, absent) = chain.with_view(|view| {
+        let (pool, _, _) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
+        let carried = pool.duplicate(&txid, &view).unwrap();
+        let absent = base.with_view(|bare| pool.duplicate(&txid, &bare).unwrap());
+        (carried, absent)
+    });
+    assert_eq!(carried, Some(Duplicate::OnChain));
+    assert_eq!(absent, None);
+}
+
 #[test]
 fn a_refused_transaction_leaves_no_trace() {
     let path = tmp("refused");
@@ -68,6 +85,7 @@ fn a_refused_transaction_leaves_no_trace() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -95,13 +113,13 @@ fn a_refused_transaction_leaves_no_trace() {
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
         assert!(pool.is_empty());
         assert_eq!(reconciled, crate::reconcile::Reconciled::default());
     });
-    drop(std::fs::remove_file(&path));
 }
 
 fn marker(height: u64, byte: u8, work: u128) -> super::JudgedTip {

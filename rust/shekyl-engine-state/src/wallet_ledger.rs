@@ -142,7 +142,22 @@ use crate::{
 ///
 /// `22` (2026-10-18): `SendRecipient::destination` — the nested send-journal
 /// block went to version 5.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 22;
+///
+/// `23` (2026-11-06): `ReorgBlocks` hashes and `BlockchainTip.tip_hash`
+/// retype to [`shekyl_types::BlockHash`] (`LEDGER_BLOCK_VERSION` 13).
+///
+/// `24` (2026-11-09): [`crate::transfer::UnspendableReason`] names each
+/// multisig receive refusal (`LEDGER_BLOCK_VERSION` 14). A version-23
+/// wallet file is refused; pre-genesis does not migrate it.
+///
+/// `25` (2026-11-12, A19): `SendRecord::tx_bytes` — the send journal saves
+/// each send's signed bytes at dispatch (`SEND_JOURNAL_BLOCK_VERSION` 6).
+/// A version-24 wallet file is refused; pre-genesis does not migrate it.
+///
+/// `26` (2026-11-15): `TransferDetails::frozen` is removed, with the user
+/// freeze (`LEDGER_BLOCK_VERSION` 15). A version-25 wallet file is refused;
+/// pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 26;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -305,23 +320,23 @@ impl WalletLedger {
         Ok(self.tx_meta.set_note(txid, note)?)
     }
 
-    /// Unspent, unfrozen transfers not under an F14 lock — journal and
+    /// Unspent transfers not under an F14 lock — journal and
     /// ledger consulted together (C7: locks live on the journal).
     #[must_use]
     pub fn unspent_transfers(&self) -> Vec<&TransferDetails> {
         self.ledger.unspent_transfers(&self.spend_locks())
     }
 
-    /// Spendable outputs at `current_height`, with journal-derived F14
-    /// locks applied. Prefer this over threading `spend_locks` by hand.
+    /// The outputs a send could use at `horizon`, with journal-derived
+    /// F14 locks applied. Prefer this over threading `spend_locks` by hand.
     #[must_use]
     pub fn spendable_outputs(
         &self,
-        current_height: shekyl_types::BlockHeight,
+        horizon: crate::output_state::SpendHorizon,
         min_amount: Option<shekyl_units::AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.ledger
-            .spendable_outputs(current_height, min_amount, &self.spend_locks())
+            .spendable_outputs(horizon, min_amount, &self.spend_locks())
     }
 
     /// Serialize the full bundle to postcard bytes.
@@ -414,10 +429,21 @@ impl WalletLedger {
         fee: u64,
         recipients: Vec<SendRecipient>,
         inputs: Vec<SendInputRef>,
+        tx_bytes: Vec<u8>,
     ) {
         let height = self.ledger.height();
         self.send_journal
-            .record_dispatched(txid, height, fee, recipients, inputs);
+            .record_dispatched(txid, height, fee, recipients, inputs, tx_bytes);
+    }
+
+    /// Undo a dispatch whose save failed, before its bytes left: the
+    /// journal row and the retained secret go, and the pending reference
+    /// [`Self::record_retained_tx_key`] added goes with them. Runs under
+    /// the same write guard as the record and the failed save, so no
+    /// other path can have advanced the row in between.
+    pub fn undo_unsaved_dispatch(&mut self, txid: &[u8; 32]) {
+        self.send_journal.undo_dispatch(txid);
+        self.retire_retained_tx_key(txid);
     }
 
     /// Accepting-verdict write for the journal (`WALLET_SEND_RECORD.md`
@@ -1076,7 +1102,6 @@ mod tests {
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(block_height)
                 + crate::transfer::SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
@@ -1087,9 +1112,9 @@ mod tests {
         w.tx_meta.tx_keys.insert(
             txid,
             crate::tx_meta_block::TxSecretKeys {
-                primary: crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new(
-                    [0x5A; 32],
-                )),
+                primary: crate::tx_meta_block::TxSecretKey::new(
+                    shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store(),
+                ),
             },
         );
     }
@@ -1195,12 +1220,16 @@ mod tests {
         let mut w = WalletLedger::empty();
         w.record_retained_tx_key(
             txid,
-            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5A; 32])),
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store(),
+            ),
         );
         w.check_invariants().expect("record is I-2-atomic");
         w.record_retained_tx_key(
             txid,
-            crate::tx_meta_block::TxSecretKey::new(zeroize::Zeroizing::new([0x5B; 32])),
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5B; 32]).store(),
+            ),
         );
         assert_eq!(
             w.sync_state.pending_tx_hashes,
@@ -1240,6 +1269,7 @@ mod tests {
                     }],
                     lock_baseline: Some(25),
                     state: SendState::Dispatched,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1274,6 +1304,7 @@ mod tests {
                 inputs: vec![SendInputRef { gindex, amount: 1 }],
                 lock_baseline: Some(25),
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
     }
@@ -1404,6 +1435,7 @@ mod tests {
                     ],
                     lock_baseline: Some(25),
                     state: SendState::Dispatched,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1440,6 +1472,34 @@ mod tests {
     /// sole write (C2) — the derived lock view arms with it, and
     /// nothing is written to any ledger row. This is the site both
     /// fresh accept and AlreadyInChain share.
+    /// A dispatch whose save failed is undone whole under the same
+    /// guard: no journal row, no retained secret, no pending reference —
+    /// so the next unrelated save cannot write a send the user was told
+    /// did not go.
+    #[test]
+    fn undo_unsaved_dispatch_removes_row_secret_and_pending_reference() {
+        let txid = [0x46; 32];
+        let mut w = WalletLedger::empty();
+        w.record_retained_tx_key(
+            txid,
+            crate::tx_meta_block::TxSecretKey::new(
+                shekyl_crypto_pq::TxKey::seeded([0x5C; 32]).store(),
+            ),
+        );
+        w.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), vec![0xAA]);
+        assert!(w.send_journal.rows.contains_key(&txid));
+        assert!(w.tx_meta.tx_keys.contains_key(&txid));
+        assert!(w.sync_state.pending_tx_hashes.contains(&txid));
+
+        w.undo_unsaved_dispatch(&txid);
+
+        assert!(!w.send_journal.rows.contains_key(&txid));
+        assert!(!w.tx_meta.tx_keys.contains_key(&txid));
+        assert!(!w.sync_state.pending_tx_hashes.contains(&txid));
+        w.check_invariants()
+            .expect("an undone dispatch leaves no orphan");
+    }
+
     #[test]
     fn stamp_send_lock_baseline_arms_the_derived_view() {
         use crate::send_journal_block::{SendInputRef, SendRecipient};
@@ -1464,6 +1524,7 @@ mod tests {
                 gindex: 300,
                 amount: 10,
             }],
+            vec![0xAA],
         );
         assert!(
             w.spend_locks().is_empty(),
@@ -1482,7 +1543,10 @@ mod tests {
         );
         assert_eq!(w.send_journal.rows[&txid].lock_baseline, Some(25));
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the armed lock excludes the carried input from selection"
         );
         w.check_invariants().expect("invariants hold after stamp");
@@ -1535,6 +1599,7 @@ mod tests {
                 ],
                 lock_baseline: Some(25),
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
 
@@ -1547,11 +1612,17 @@ mod tests {
             );
         }
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "unspent carried input is excluded from selection"
         );
         assert!(
-            !w.ledger.transfers[1].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[1].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "spent input stays unspendable via `spent`, not the lock"
         );
         assert_eq!(locks, w.spend_locks(), "derivation is pure");
@@ -1583,6 +1654,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state: SendState::PresumedDead,
+                tx_bytes: None,
             },
         );
         w.check_invariants().expect("pre-abandon shape is valid");
@@ -1641,6 +1713,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state: SendState::Dispatched,
+                tx_bytes: None,
             },
         );
 
@@ -1680,6 +1753,7 @@ mod tests {
                 state: SendState::Confirmed {
                     height: BlockHeight::from_raw(30),
                 },
+                tx_bytes: None,
             },
         );
 
@@ -1729,6 +1803,7 @@ mod tests {
                     inputs: vec![SendInputRef { gindex, amount: 1 }],
                     lock_baseline: baseline,
                     state: SendState::Abandoned,
+                    tx_bytes: None,
                 },
             );
         }
@@ -1747,11 +1822,17 @@ mod tests {
             "a released abandoned row (baseline None) derives no lock"
         );
         assert!(
-            !w.ledger.transfers[0].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            !w.ledger.transfers[0].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the armed abandoned row's input stays excluded from selection"
         );
         assert!(
-            w.ledger.transfers[1].is_spendable(shekyl_types::BlockHeight::from_raw(30), &locks),
+            w.ledger.transfers[1].is_spendable(
+                crate::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(u64::MAX)),
+                &locks
+            ),
             "the released row's input is selectable again"
         );
         w.check_invariants().expect("invariants hold");
@@ -1785,6 +1866,7 @@ mod tests {
                 inputs: Vec::new(),
                 lock_baseline: None,
                 state: SendState::Abandoned,
+                tx_bytes: None,
             },
         );
 
@@ -1828,6 +1910,7 @@ mod tests {
                 inputs: Vec::new(),
                 lock_baseline: None,
                 state: SendState::PresumedDead,
+                tx_bytes: None,
             },
         );
 

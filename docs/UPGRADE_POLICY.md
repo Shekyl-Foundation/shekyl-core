@@ -2,7 +2,7 @@
 
 Shekyl ships a change when the feature is ready, not on a calendar.
 **There is no hard-fork mechanism** (RULED 2026-10-06, executed 2026-10-08,
-`design/CXX_VERSION_GATES.md` §5). Block version is the constant 1.0 on
+`completed/CXX_VERSION_GATES.md` §5). Block version is the constant 1.0 on
 every network. A consensus change is a design document before any code,
 and nothing in the tree votes one on or steps a table.
 

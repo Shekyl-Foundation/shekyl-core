@@ -41,24 +41,21 @@
 //!
 //! The scan judges a snapshot taken as the epoch's scan begins and slashes
 //! the live post-image (P2B-9 Pin 5). Record-shaped failures of that fold
-//! are [`Corrupt`](crate::Corrupt), not refusals of the block.
+//! are [`Corrupt`], not refusals of the block.
 
 use core::num::NonZeroU64;
 use std::collections::BTreeMap;
 
-use shekyl_archival_retention::settlement_select::{
-    issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
-};
+use shekyl_archival_retention::settlement_select::{issued_draw_term, settle_pair};
 use shekyl_archival_retention::{
     good_through, holds_shard_at, settle_support, settlement_window_slashable,
-    slash_open_interval_to_append, SupportSettlementKey, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    MAX_BOND_BAD_INTERVALS,
+    slash_open_interval_to_append, SupportSettlementKey, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
     SettlementRow, SlashLogEntry, SlashedHolding,
 };
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
@@ -118,7 +115,8 @@ pub(crate) fn apply_slash(
         }
         record.bad_intervals.push(open);
     }
-    let burned = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
+    let burned =
+        AtomicUnits::from_raw(shekyl_archival_retention::archival_params().bond_floor_atomic);
     record.bonded_total = record
         .bonded_total
         .checked_sub(burned)
@@ -388,7 +386,7 @@ impl super::Transition {
         &self,
         view: &V,
         epoch: SettlementEpoch,
-    ) -> Result<[u8; SETTLEMENT_BEACON_LEN], ViewRead<V::Fault>> {
+    ) -> Result<BlockHash, ViewRead<V::Fault>> {
         let window = self
             .schedule
             .challenge_response_blocks()
@@ -403,8 +401,7 @@ impl super::Transition {
                 check: SettlementCheck::BeaconNotRecorded,
             }));
         }
-        let beacon = recorded(view, BlockHeight::from_raw(at))?.header.hash;
-        Ok(*beacon.as_bytes())
+        Ok(recorded(view, BlockHeight::from_raw(at))?.header.hash)
     }
 
     /// The slashes logged against `persona` strictly above `height`: the
@@ -519,6 +516,7 @@ impl super::Transition {
                     .map_err(ViewRead::View)
                     .map(|row| row.map(SettlementRow::outcome))
             },
+            shekyl_archival_retention::archival_params(),
         )
     }
 
@@ -582,6 +580,7 @@ impl super::Transition {
             floor,
             |earlier| in_standing(record, earlier),
             |earlier| self.outcome(view, persona, shard, earlier),
+            shekyl_archival_retention::archival_params(),
         )
     }
 
@@ -662,6 +661,20 @@ mod support_settlement_tests {
     }
 
     impl<'id> ChainView<'id> for SupportIndex<'_, 'id> {
+        type Bundles<'m>
+            = crate::harness::NoBundleRows<Infallible>
+        where
+            Self: 'm;
+
+        fn bundles<'m>(
+            &'m self,
+            _: &'m crate::DrawableMemo,
+            _: BlockHeight,
+            _: shekyl_archival_retention::SettlementSchedule,
+        ) -> Self::Bundles<'m> {
+            crate::harness::NoBundleRows::new()
+        }
+
         fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
             self.inner.has_key_image(key_image)
         }
@@ -717,19 +730,22 @@ mod support_settlement_tests {
             self.inner.outputs_at(height)
         }
 
-        fn support_issued(
+        crate::archival_reads!(delegate inner, support_issued from planted_support);
+    }
+
+    impl SupportIndex<'_, '_> {
+        /// The planted support draws of the one epoch this view holds.
+        fn planted_support(
             &self,
             epoch: SettlementEpoch,
             _floor: EpochFloor<Settling>,
-        ) -> Result<Vec<IndexedDraw>, Infallible> {
+        ) -> Vec<IndexedDraw> {
             if epoch == self.epoch {
-                Ok(self.draws.clone())
+                self.draws.clone()
             } else {
-                Ok(Vec::new())
+                Vec::new()
             }
         }
-
-        crate::archival_reads!(delegate inner);
     }
 
     /// The shortest epoch that still has a response window. `W₂` is one
@@ -769,6 +785,7 @@ mod support_settlement_tests {
                     None
                 })
             },
+            shekyl_archival_retention::archival_params(),
         )
         .expect("the rows answer")
     }

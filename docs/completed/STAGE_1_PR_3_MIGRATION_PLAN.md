@@ -218,7 +218,7 @@ that Round 3 surfaced. Resolutions:
 
 The closures land as a single commit on `dev` (parent of M3a's
 feat branch). Per
-[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)'s
 4–6-rounds-before-implementation rule for crypto-critical trait
 migrations, the pre-flight investigation discharges the
 round-budget work the migration plan deliberately separates from

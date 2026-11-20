@@ -19,7 +19,7 @@
 //!    where `D` is;
 //! 3. starts every read whose height has come, while the client has a
 //!    free slot, each through the one fetch path
-//!    ([`ProducerSeat::read`](crate::bundle_producer::ProducerSeat::read)),
+//!    ([`ReadFn`](crate::producer_seat::ReadFn)),
 //!    after its start delay, and feeds each outcome back;
 //! 4. offers every block that is ready to the queue
 //!    ([`OfferBundle`](crate::connector::OfferBundle)).
@@ -29,35 +29,31 @@
 //!
 //! # What is logged
 //!
-//! A filing, with its height, draws and passes; once per block, "no
-//! receipt scheme on the serving side yet" when a read met the identity
-//! scheme (the live serving host until 4b); a refusal of this daemon's own
+//! A filing, with its height, draws and passes; each read that did not
+//! pass, with its height, draw, attempt and the answer that ended it
+//! (`ReadFailure`'s message, which never names the endpoint); once per
+//! block, "no receipt scheme on the serving side yet" when a read met the
+//! identity scheme (the live serving host until 4b); a refusal of this daemon's own
 //! bundle, which is a producer defect, with its row; each block lost; and
 //! at stop, one line per block in flight, whose draws expire in flight
 //! because the ring is memory only. Never a seed, a nonce or a key
 //! (`scripts/ci/check_bundle_producer_secrets.py`).
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use shekyl_archival_fetch_sched::{FetchScheduler, HolderSource, ShardFacts};
 use shekyl_bundle_producer::{
     DueRead, Filing, Lost, Producer, ReadKey, ReadOutcome, Recorded, TipPublication, Window,
-    WitnessRing,
 };
 use shekyl_chain_store::store::ReadSnapshot;
+
+use crate::producer_seat::{ProducerSeat, ReadFn};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::tx_extra::TxExtraField;
 use tokio::sync::{mpsc, watch};
 
-use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, OfferBundle, TipChanged};
+use crate::connector::{BundleOffered, Connector, LearnDraws, Learned, TipChanged};
 use crate::schedule::ChainRules;
-
-/// One read through the daemon's fetch path: the due read in, its outcome
-/// out. Built over the node's fetch scheduler by [`read_through`].
-pub type ReadFn =
-    Arc<dyn Fn(DueRead) -> Pin<Box<dyn Future<Output = ReadOutcome> + Send>> + Send + Sync>;
 
 /// What the task drives the producer with: the single writer, the store
 /// it writes (read here through snapshots only), and the rules in force.
@@ -65,6 +61,8 @@ pub type ReadFn =
 pub struct ProducerParts {
     /// The connector: the draws and the queue's admission.
     pub connector: kameo::actor::ActorRef<Connector>,
+    /// Where a queued bundle is published for the sync owner to relay.
+    pub filed: tokio::sync::broadcast::Sender<crate::connector::FiledBundle>,
     /// The store, read for the blocks near the tip.
     pub store: Arc<shekyl_chain_store::store::ChainStore>,
     /// The rules by height.
@@ -83,18 +81,6 @@ pub struct ProducerProgress {
     pub reading: usize,
 }
 
-/// What a node that produces bundles hands the service.
-pub struct ProducerSeat {
-    /// The ring the node's templates draw from: the job seat's own.
-    pub witness: Arc<WitnessRing>,
-    /// The challenge read.
-    pub read: ReadFn,
-    /// The spread each read's start delay is drawn below:
-    /// `shekyl_bundle_producer::READ_START_SPREAD` in the node, the value
-    /// the read ceiling is derived with.
-    pub start_spread: std::time::Duration,
-}
-
 /// The read through `scheduler`: the scheduler's nonce read over a
 /// receipt-key holder, under the challenge budget
 /// (`shekyl_bundle_producer::read`). The scheduler's client is built with
@@ -111,8 +97,12 @@ where
             let key = due.key;
             match shekyl_bundle_producer::read::attempt_due(&scheduler, &due).await {
                 Ok(record) => ReadOutcome::Pass(Box::new(record)),
+                // At `info`, beside the filing line: that line says how many
+                // draws passed, this one why a read did not. A draw is read
+                // at most `CHALLENGE_READS` times, so this is a few lines an
+                // epoch, and a node logging at its default level keeps them.
                 Err(failure) => {
-                    tracing::debug!(
+                    tracing::info!(
                         h = key.h.to_raw(),
                         draw = key.draw,
                         attempt = key.attempt,
@@ -150,24 +140,50 @@ pub(crate) fn recorded_at(snap: &ReadSnapshot<'_>, h: BlockHeight) -> Option<Rec
 }
 
 /// Run the producer until `stop` reads true or the tip watch closes
-/// (module docs).
+/// (module docs). Its read plans and start delays draw from the OS.
 pub async fn run(
     parts: ProducerParts,
-    mut tips: watch::Receiver<TipChanged>,
-    mut stop: watch::Receiver<bool>,
+    tips: watch::Receiver<TipChanged>,
+    stop: watch::Receiver<bool>,
     seat: ProducerSeat,
     progress: watch::Sender<ProducerProgress>,
 ) {
     use rand::SeedableRng;
     let rng = rand::rngs::StdRng::from_entropy();
+    run_with(parts, tips, stop, seat, progress, Box::new(rng)).await;
+}
+
+/// [`run`] with its read plans and start delays drawn from `rng`: the chain
+/// forge's producer plan (`CHAIN_FORGE.md` §4, the producer audit). Only
+/// under the TEST_ONLY `forge` feature; every node's producer is [`run`]'s.
+#[cfg(feature = "forge")]
+pub async fn run_drawing(
+    parts: ProducerParts,
+    tips: watch::Receiver<TipChanged>,
+    stop: watch::Receiver<bool>,
+    seat: ProducerSeat,
+    progress: watch::Sender<ProducerProgress>,
+    rng: Box<dyn rand::RngCore + Send>,
+) {
+    run_with(parts, tips, stop, seat, progress, rng).await;
+}
+
+/// [`run`]'s body, over the RNG its caller chose.
+async fn run_with(
+    parts: ProducerParts,
+    mut tips: watch::Receiver<TipChanged>,
+    mut stop: watch::Receiver<bool>,
+    seat: ProducerSeat,
+    progress: watch::Sender<ProducerProgress>,
+    rng: Box<dyn rand::RngCore + Send>,
+) {
     let mut producer = Producer::new(
         Arc::clone(&seat.witness),
-        Box::new(rng),
+        rng,
         shekyl_bundle_producer::read::READS_AT_ONCE,
         seat.start_spread,
     );
     let (done_tx, mut done_rx) = mpsc::unbounded_channel::<(ReadKey, ReadOutcome)>();
-    let mut scheme_logged = SchemeLine::default();
     tracing::info!("the bundle producer is running: the witness ring starts empty");
     loop {
         // A read that ended leaves the count only once the wake it caused
@@ -202,7 +218,6 @@ pub async fn run(
             TipPublication::from_seq(published.seq),
             window,
             &done_tx,
-            &mut scheme_logged,
             &progress,
         )
         .await;
@@ -219,18 +234,6 @@ pub async fn run(
             h.to_raw(),
             draws
         );
-    }
-}
-
-/// The blocks the serving-scheme line was logged for: once per block.
-#[derive(Default)]
-pub(crate) struct SchemeLine(std::collections::BTreeSet<BlockHeight>);
-
-impl SchemeLine {
-    /// Whether `h`'s line is due now: the first filing of `h` that met the
-    /// identity scheme. Later offers of the same block log nothing.
-    pub(crate) fn due(&mut self, h: BlockHeight, absent: bool) -> bool {
-        absent && self.0.insert(h)
     }
 }
 
@@ -258,7 +261,6 @@ async fn step(
     published: TipPublication,
     window: Window,
     done: &mpsc::UnboundedSender<(ReadKey, ReadOutcome)>,
-    scheme_logged: &mut SchemeLine,
     progress: &watch::Sender<ProducerProgress>,
 ) {
     let observed = match parts.store.begin_read() {
@@ -321,7 +323,7 @@ async fn step(
         );
     }
     for filing in filings {
-        offer(parts, filing, scheme_logged).await;
+        offer(parts, filing).await;
     }
 }
 
@@ -362,23 +364,16 @@ pub(crate) fn spawn_read(
     });
 }
 
-async fn offer(parts: &ProducerParts, filing: Filing, scheme_logged: &mut SchemeLine) {
+async fn offer(parts: &ProducerParts, filing: Filing) {
     let Filing {
         h,
         reference,
         body,
         draws,
         passes,
-        serving_scheme_absent,
     } = filing;
-    if scheme_logged.due(h, serving_scheme_absent) {
-        tracing::info!(
-            h = h.to_raw(),
-            "block {}: no receipt scheme on the serving side yet; filed with no passes",
-            h.to_raw()
-        );
-    }
-    let offered = parts.connector.ask(OfferBundle { reference, body }).await;
+    let offered =
+        crate::connector::file_bundle(&parts.connector, &parts.filed, reference, body).await;
     match offered {
         Ok(BundleOffered::Queued { tip_height, .. }) => tracing::info!(
             h = h.to_raw(),

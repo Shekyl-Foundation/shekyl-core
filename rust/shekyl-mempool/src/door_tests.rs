@@ -26,6 +26,7 @@ fn judged(tx: &shekyl_wire::Transaction) -> Judged {
             &view,
             &KeyImages::default(),
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
             None,
         ) {

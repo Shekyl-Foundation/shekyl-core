@@ -49,6 +49,7 @@ Total bytes for this vector: 256.
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t4)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t4 > t4_vm_register_init.bin
 output_size = 256 bytes

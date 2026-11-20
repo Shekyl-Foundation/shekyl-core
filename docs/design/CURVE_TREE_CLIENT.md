@@ -21,8 +21,8 @@ test fixtures only). **What REMAINS** (per
 (a) per-input reconstruction reuse — **DISCHARGED in code 2026-09-24 (PR #842,
 `CT-6` increment 3)**: `assemble_paths` reconstructs the drained leaves and
 their layers once per transaction and indexes the `gindex` positions, so the
-`k · n` this row was opened against is now `n + k`. `assemble_path` remains as
-the one-input case, delegating. *The row is kept rather than deleted because it
+`k · n` this row was opened against is now `n + k`, and a transaction's paths
+are one sealed batch (`AssembledPaths`, R-26). *The row is kept rather than deleted because it
 is what `CT-6` was opened to discharge, and a reader arriving from
 [`CT5_SERIES_CLOSEOUT.md`](../completed/CT5_SERIES_CLOSEOUT.md) §5 — which is a
 completed record and stays as written — needs the forward pointer;*
@@ -275,11 +275,30 @@ the Tier-2 `chunk_replace_*` / `undeepen_*` / `reorg_*` tests (§7.7) exercise t
 /// `shekyl-tx-builder` dependency); the duplicated public `ChunkLeaf` /
 /// `TreeContext` reverts to a shared low-level types crate only if the
 /// duplication causes drift (`21-reversion-clause-discipline.mdc`).
+///
+/// Sealed (R-25): the fields are private, read through `leaf_chunk()`,
+/// `c1_layers()`, `c2_layers()` and the consuming `into_parts()`. The one
+/// constructor is the assembler's sealing step, reached only inside a
+/// batch, so every path has passed both checks: its branches fold to the
+/// batch's root (`PathRootMismatch`), and that root is the reference
+/// block's header root as the wallet's own tree computes it
+/// (`RootMismatch`). A path holds no tree of its own.
 pub struct AssembledPath {
-    pub leaf_chunk:  Vec<ChunkLeaf>,     // the path leaf node's outputs, incl. target
-    pub c1_layers:   Vec<Vec<[u8; 32]>>, // Selene-node chunks, x-coords, bottom→top
-    pub c2_layers:   Vec<Vec<[u8; 32]>>, // Helios-node chunks, x-coords, bottom→top
-    pub tree:        TreeContext,        // { reference_block, tree_root, tree_depth }
+    leaf_chunk:  Vec<ChunkLeaf>,         // the path leaf node's outputs, incl. target
+    c1_layers:   Vec<Vec<[u8; 32]>>,     // Selene-node chunks, x-coords, bottom→top
+    c2_layers:   Vec<Vec<[u8; 32]>>,     // Helios-node chunks, x-coords, bottom→top
+}
+
+/// One transaction's paths (R-26), built only by `assemble_paths`: the
+/// block they were assembled against, the tree's depth there, and each
+/// input's path beside the input asked for, in that order. Every path is to
+/// the one tree `tree()` returns (`{ reference_block, tree_root,
+/// tree_depth }`). Tests write one from parts only under the TEST_ONLY
+/// `test-paths` feature.
+pub struct AssembledPaths {
+    reference:   ReferenceBlock,         // { height, curve_tree_root, block_hash }
+    tree_depth:  u8,
+    paths:       Vec<(AssembleInput, AssembledPath)>,
 }
 
 /// One output in the path's Selene leaf chunk. Mirrors the field names of
@@ -311,24 +330,28 @@ mod reference {
     /// Canonical reference height for a proof built at `tip`:
     /// `tip − REF_ANCHOR_AGE` (§5.1). `None` in the pre-maturity window.
     pub fn select_reference_height(tip: u64) -> Option<u64>;
-    /// `tip_now − reference_height`; `None` if the ref is above the tip (reorg).
+    /// Tip age `tip_now − reference_height`; `None` if the ref is above the tip (reorg).
     pub fn reference_block_age(tip_now: u64, reference_height: u64) -> Option<u64>;
-    /// In the daemon acceptance window `MIN_AGE ≤ age ≤ MAX_AGE` (§5.2).
+    /// In CEN-I11's window: connecting age `tip_now + 1 − reference_height`
+    /// in `[MIN_AGE, MAX_AGE]` (§5.2).
     pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool;
-    /// Aged past `MAX_AGE` (or ref above tip) — daemon rejects as too stale.
+    /// Connecting age past `MAX_AGE`. A reference above the tip is not expiry.
     pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool;
     /// Reached `REBUILD_AT` (or ref above tip) — re-anchor proactively (§5.2).
     pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool;
 }
 
 impl CurveTreeClient {
-    /// Assemble the path for one owned output at a chosen reference block.
-    /// `c1_layers.len() + c2_layers.len() + 1 == tree.tree_depth` on success.
-    pub fn assemble_path(
+    /// Assemble every membership path of one transaction at a chosen
+    /// reference block, as one sealed batch: the reference block, the
+    /// tree's depth there, and each input's path in the order asked for.
+    /// `c1_layers.len() + c2_layers.len() + 1 == tree().tree_depth` for
+    /// every path on success.
+    pub fn assemble_paths(
         &self,
-        id: &OutputIdentity,
+        inputs: &[AssembleInput],
         reference: &ReferenceBlock,
-    ) -> Result<AssembledPath, ClientError>;
+    ) -> Result<AssembledPaths, ClientError>;
 }
 ```
 
@@ -341,8 +364,14 @@ not carried on `ReferenceBlock`, and packed into `TreeContext`. The C3 invariant
 `c1_layers.len() + c2_layers.len() + 1 == tree_depth` is then a self-check (the
 leaf layer is the `+1`; the root layer is excluded — it is the prover's
 `TreeRoot`). In 2A tests this contract is satisfied by **synthetic vectors**; in
-production by this client. The C1 single-snapshot guarantee is preserved because
-all inputs of one tx call `assemble_path` with the **same** `ReferenceBlock`.
+production by this client. The C1 single-snapshot guarantee is a property of the
+batch (R-26): `AssembledPaths` is built only by `assemble_paths`, which the
+curve-tree actor alone calls, against one `ReferenceBlock`, and it holds that
+block and the depth once (`AssembledPaths::tree`) while no path carries a tree
+of its own, so a reader has no agreement between paths to check. A multisig
+member matches the batch to the intent it signs once, in `SpendPaths::new`
+(the batch's block is the intent's reference block, and it holds exactly the
+intent's inputs).
 
 **CT-4 design round (pinned at source).** The membership-path format is the
 FCMP++ prover's `Path` (`shekyl-oxide/crypto/fcmps/src/prover/mod.rs`; canonical
@@ -544,9 +573,15 @@ A leaf is in the tree at the reference block iff its insertion (drain) height
 side-effect-free arithmetic over heights (`select_reference_height`,
 `reference_block_age`, `proof_submittable`, `proof_expired`,
 `should_reanchor`) plus the constants `REF_ANCHOR_AGE` (6),
-`PROOF_VALIDITY_HORIZON` (94 — the proof stays submittable through
-`tip_build + 94` inclusive, where the age is exactly `MAX_AGE`), and
-`REBUILD_AT` (50).
+`PROOF_VALIDITY_HORIZON` (94 — the proof can be listed in the blocks
+connecting at `tip_build + 1` through `tip_build + 94`), and
+`REBUILD_AT` (50). The consensus predicates (`proof_submittable`,
+`proof_expired`) measure the reference's age from the connecting height,
+as CEN-I11 does, and a test sweeps them against
+`shekyl_chain_rules::admissible_references`. `proof_expired` is that age
+past `MAX_AGE` only: a reference above the tip has no connecting age, so
+it is not expiry, and `should_reanchor` is what that case asks for.
+`select_reference_height` and `should_reanchor` read the wallet's tip age.
 `REFERENCE_BLOCK_{MIN,MAX}_AGE` are emitted from
 `config/consensus_constants.json` by the crate's `build.rs` (same JSON
 authority as the C++ header), with const-eval sentinels guarding the
@@ -561,13 +596,16 @@ binding a height to a consensus root stays the caller's responsibility
 **Rule:** `reference_height = tip − REF_ANCHOR_AGE`, with
 `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`.
 
-- One block deeper than the bare `MIN_AGE` floor. (It also matched the anchor the
+- Six blocks below the tip, so the block that lists the spend sees a
+  connecting age of 7: two blocks below the newest admissible reference
+  (`MIN_AGE`, measured from the connecting height, CEN-I11), which gives one
+  block of reorg slack. (It also matched the anchor the
   daemon's `get_curve_tree_path` used before that RPC was removed — `SOK-10` Q7 →
   A, 2026-09-18; there is no daemon-assembled path to agree with any more, and
   the offset stands on its own reorg-safety and privacy-canonical grounds.)
 - Reorg-safe: ≥ `MIN_AGE` deep, so the reference block is unlikely to be
   reorged out (and §5.3 handles the residual).
-- Maximizes the submit window (§5.2): closest legal block to the tip.
+- Leaves all but two blocks of the window as submit time (§5.2).
 
 **Why canonical, not free choice (privacy).** The reference-block age is
 observable on every tx (the verifier sees `reference_height`). If wallets chose
@@ -575,7 +613,8 @@ different offsets, the offset would **fingerprint the wallet** — the same
 uniformity logic as dust `K_DUST` and the `enc_label` slot
 (`PHASE_2A_SEND_PATH.md` §3.8.5, §3.10.2). So every honest wallet computes the
 **identical** offset. This **cannot** be consensus-enforced (the daemon accepts
-any `reference_height ∈ [tip−MAX_AGE, tip−MIN_AGE]`); the strongest available
+any `reference_height ∈ [C−MAX_AGE, C−MIN_AGE]` for the connecting height
+`C = tip + 1`); the strongest available
 form is canonical convention — the ceiling privacy sets, not a gap to close.
 
 **Reversion clause:** `REF_ANCHOR_AGE` is re-derived only if the observed reorg
@@ -585,12 +624,14 @@ event). Not a per-wallet knob.
 
 ### 5.2 Proof validity horizon (the proactive bound)
 
-A built proof is submittable while its reference block satisfies
-`tip_now − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)` (inclusive).
-Built at `tip_build` with `reference_height = tip_build − 6`, the reference
-age is `6 + N` after `N` blocks, so the proof stays submittable **through**
-`tip_build + 94` inclusive (age exactly `MAX_AGE`) and is rejected as too
-stale only at `tip_build + 95` (age `101`):
+Consensus measures the reference block's age from the height of the block
+that lists the spend (CEN-I11): a block connecting at `C` admits
+`C − reference_height ≤ FCMP_REFERENCE_BLOCK_MAX_AGE (100)` (inclusive).
+Built at `tip_build` with `reference_height = tip_build − 6`, the proof can
+be listed in the blocks connecting at `tip_build + 1` through
+`tip_build + 94` (connecting age exactly `MAX_AGE`), so the last wallet tip
+that can submit it is `tip_build + 93`; at tip `tip_build + 94` it is
+expired:
 
 ```text
 horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
@@ -600,7 +641,7 @@ horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
 §9 #5 of 2A left "unbounded in Round 0."
 
 **Proactive rebuild rule:** if a built-but-unconfirmed tx reaches a **rebuild
-threshold** of `REBUILD_AT = MAX_AGE / 2 = 50` blocks of reference-block age, the
+threshold** of `REBUILD_AT = MAX_AGE / 2 = 50` blocks of tip age, the
 wallet **re-anchors** (re-selects the reference block at the current tip,
 re-assembles paths, re-proves) rather than risk a `MAX_AGE` rejection mid-flight.
 The half-`MAX_AGE` margin leaves room for propagation + a confirmation attempt.
@@ -760,7 +801,7 @@ vacuous on the proving path.
 
 ### 7.5 `assemble_tree_path_for_output` reconciliation — RESOLVED (`SOK-10` Q7 → A)
 
-The wallet is the system's **only** path assembler: `assemble_path` (§3.5,
+The wallet is the system's **only** path assembler: `assemble_paths` (§3.5,
 CT-4). The daemon's per-output assembler (`get_curve_tree_path`) was deleted
 2026-09-18 as spend-revealing (`SOK-10` Q7 → A; `PHASE_2A_SEND_PATH.md` §3.0.1),
 and there is no staker-served path RPC. The name
@@ -1159,8 +1200,8 @@ before any schema lands; a G2-shaped finding does not. CT-1/CT-2 are then pure-R
 synthetic-testable (no daemon dependency), mirroring 2A's split: the
 crypto/assembly lands and is KAT-gated before the daemon endpoint exists. The
 archival serving store is not this crate's — it is `P`'s body store (`WSS-Q1`
-(a), §7.6). The pin/serve seam CT-1 shipped (`pin_serve_set`, `ServingReader`)
-is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE.md`
+(a), §7.6). The pin/serve seam CT-1 shipped (`pin_serve_set`; `ServingReader`
+until its deletion on 2026-11-02, §11) is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE.md`
 §8 (ii): the serve-set concept survives, its leaf key does not).
 
 ---
@@ -1197,6 +1238,251 @@ is landed code the `WSS-13` unwind re-keys to the shard unit (`WALLET_SIDE_STORE
   `ArchivalEngine` seam) are retired with it. §7.5 stands resolved: the wallet
   is the only path assembler (`SOK-10` Q7 → A). §3.4's landed freeze-lag
   behaviour is record until the `WSS-13` unwind.
+
+---
+
+## 11. The curve-tree store, owned by one actor — RULED 2026-11-02 (Rick); LANDED 2026-11-02 (#1261)
+
+**The problem.** A wallet's curve-tree store is one redb file, locked for as
+long as its `Database` lives. Today that `Database` sits in a `LeafStore`
+shared as `Arc<LeafStore>` by three holders: the writer client inside the
+`CurveTreeActor` task, the `WriterRecovery` carried by every
+`CurveTreeHandle` clone, and the `ServingReader`s inside the stake engine's
+serving tasks. The file is free only when the last of them drops, and two
+of them are tasks that end after the engine that owned them has gone. A
+reopen straight after a close can meet `DatabaseAlreadyOpen`, so
+`open_and_spawn` retries for up to `REOPEN_LOCK_RELEASE_TIMEOUT` (2 s,
+`c82b07a291`, `f5565b5d1b`). That is a timer doing an event's job, never
+derived at the floor device; it ran out once under load
+(`persistence_trait_save_state_round_trip`, 2026-10-31).
+
+The defect is shared ownership, not the timer. A resource that several
+tasks hold has no owner whose stop can be awaited, so nobody can say when
+it is released, and the code is left guessing. A6 (`RefreshHandle::join`
+returning while its producer still held the engine `Arc`) was the same
+defect on a different resource.
+
+**The rule is not new.** It is the wallet's architecture since the
+redesign (`V3_WALLET_DECISION_LOG.md`, 2026-04-27, "Engine architecture:
+actor model with staged migration from composition", and its Path B entry,
+"pure message-passing over shared handle"): subsystems are actors with
+private state reached by typed messages. Applied to a resource: *a resource
+whose release matters has exactly one owning actor; others reach it by
+message, never by a shared handle; and the owner's stop is awaited.* When
+the await returns, the resource is gone. The shared `Arc<LeafStore>` is a
+departure from that rule, not a gap in it.
+
+**What kameo guarantees** (read at source, `kameo` 0.20.0,
+`src/actor/spawn.rs` and `src/actor/actor_ref.rs`; rule 17). The actor loop
+ends; linked children are told to stop and their mailboxes awaited closed;
+the actor's own mailbox is handed to `notify_links` and closes; `on_stop`
+runs; then `shutdown_result` is set; the actor value is dropped only after
+that. `wait_for_shutdown` waits for the mailbox to close, so it can return
+before `on_stop` has run; `wait_for_shutdown_result` waits for
+`shutdown_result`. So:
+
+- anything the actor releases **in `on_stop`** is released before
+  `wait_for_shutdown_result` returns, and possibly after
+  `wait_for_shutdown` does;
+- anything it releases in its own `Drop` is not (today's polling exists
+  for exactly this);
+- a supervision tree does not extend the guarantee to children: a child's
+  mailbox closes before the child's own `on_stop` runs (`notify_links`
+  takes it first), so a parent can outrun a child's cleanup. A resource
+  shared between a parent and its children is shared ownership again.
+
+**The design.**
+
+- **One owner.** The `CurveTreeActor` owns the `LeafStore` and the writer
+  client outright. No `Arc<LeafStore>` leaves it. `WriterRecovery` and
+  `ServingReader` as shared handles are deleted.
+- **Recovery inside the owner.** On `ClientError::Poisoned` the actor
+  rebuilds the in-memory tree from the store it already holds and keeps
+  running. The external respawn (`kill` → `wait_for_shutdown` →
+  `WriterRecovery::resume` → swap into the shared `Arc<Mutex<ActorRef>>`
+  cell) is deleted with the cell; a handle is a plain `ActorRef`. This
+  loses nothing: the workspace builds with `panic = "abort"`, so a panic
+  ends the process and the respawn path only ever served returned errors.
+- **Serving reads are messages.** In production the `ServingReader` carries
+  no body reads at all: bodies are served from the persona's own store
+  (`shekyl-p-store`), and `open_frozen_segment_body` has no production
+  caller. Its holders, the serve-set witness in `shekyl-p-host` and the
+  stake engine's serving task, read only store facts (`sync_tip_height`,
+  `members_missing_pins`, `prune_disabled`, `next_freeze_seg`) and compare
+  store identity (`same_store`). Those become asks to the actor; the facts
+  a pin needs ride the pin's own reply, read in the same handler as the
+  pin. *Records-was (this section's proposal, 2026-11-02):* serving reads
+  were described as shard-body copies of up to 3.33 MB.
+- **Close is a message, and it is awaited.** `Engine::close` becomes
+  `async`: it stops the actor and awaits `wait_for_shutdown_result`. `on_stop`
+  takes the client out (`Option::take`) and drops it, so the `Database` and
+  the file lock are gone before the await returns. The wallet RPC's close
+  awaits it instead of `drop(engine)`.
+- **Reopen has no retry.** `DatabaseAlreadyOpen` now means another process,
+  or a live engine in this one, holds the file. Both are refused at once
+  (`LockedElsewhere`, whose doc becomes true). Deleted:
+  `open_polling_lock_release`, `REOPEN_LOCK_RELEASE_TIMEOUT`,
+  `REOPEN_LOCK_RELEASE_POLL`, and `open_and_spawn`. Opening and spawning
+  were one step, so a later failure dropped a live `ActorRef` and the
+  next open was told the wallet was open elsewhere.
+- **A failed open does not spawn.** The curve-tree client stays a value
+  until the body store has opened and the persona bundles are derived.
+  Drop of that value closes the file. The actors are spawned only after
+  those opens succeed. The conformance self-cert is the one fallible step
+  left, and its failure awaits the same shutdown `Engine::release` does
+  before the error returns.
+- **An engine dropped without `close`** still stops its actor when its
+  last `ActorRef` drops, asynchronously. A reopen that races that is
+  refused with `LockedElsewhere`, not waited on; every production close
+  path awaits `close`.
+
+**Tests that can fail** (rule 47):
+
+- close, then reopen at once, passes with no retry anywhere, on a loaded
+  multi-thread runtime (the case the 2 s timer lost);
+- a serve read and an ingest interleave: a serve request returns owned
+  bytes while a block ingests, and the bytes match the pinned body;
+- a poisoned client is rebuilt inside the actor, and the next ingest
+  succeeds through the same `ActorRef`;
+- a second open while an engine is live is refused at once.
+
+*As landed (2026-11-02, #1261).* The first is
+`a_closed_wallet_has_closed_its_stores` (engine) and
+`an_awaited_shutdown_closes_the_store_for_an_immediate_reopen` (actor);
+each fails with `DatabaseAlreadyOpen` when the wait is removed. They open
+the files themselves after the close: a whole-engine reopen does enough
+work before it reaches the store to outrun the race. The second is
+superseded by the Q2 finding (no curve-tree body is served); owned body
+copies are §11.1's. The third is
+`a_poisoned_client_recovers_in_place_for_every_clone`. The fourth is
+`a_store_held_open_is_locked_elsewhere`; with the retry gone nothing
+waits, so it needs no timing check. New: the witness refuses a store
+reading from any other store (`a_reading_of_another_store_is_refused`).
+
+**Scope and what it touches.** `shekyl-curve-tree` (ownership of
+`LeafStore`; `ServingReader` and `WriterRecovery` removed),
+`shekyl-engine-core` (`curve_tree_actor.rs`, `Engine::close`, the stake
+engine's serving tasks), `shekyl-p-host` (the serve-set witness reads store
+facts through its pinner), `shekyl-wallet-rpc` (awaited close), and the GUI
+wallet, which ran `persist_for_close` and then dropped the engine
+(`engine_session.rs:304`, `:450`) as the wallet RPC did, and must await the
+release instead (a cross-repo change, its own repository's PR). *Records-was
+(the proposal, 2026-11-02):* this paragraph called the work a design round
+with its own PRs; Q3 ruled one PR.
+
+**Rulings (Rick, 2026-11-02).**
+
+- **Q1 — the rule's reach: it is the wallet's rule, period**, and has been
+  since the redesign (the decision-log entry above). This store is brought
+  back to it; nothing new is adopted.
+- **Q2 — the serve copy: yes.** One owned copy per serve, measured at the
+  floor device in testing; if it proves too costly there, the reader actor
+  is the fallback and is designed then. *Finding after the ruling
+  (2026-11-02):* no curve-tree body is served in production (above), so
+  no copy arises here; the serving side's reads of this store are store
+  facts. The bodies are the persona store's, where the copy does arise:
+  §11.1, which also records the granularity ruled for it.
+- **Q3 — both together, in one PR.** The awaited close and the
+  message-based serving reads land as one PR, as many commits as the work
+  needs; only the PR's end state has to hold the property.
+
+**Commit plan (one PR; only its end state holds the property).**
+
+1. `shekyl-curve-tree`: the client reads its own store facts and rebuilds
+   its in-memory tree in place over the store it holds.
+2. The actor: `Option<CurveTreeClient>` released in `on_stop`; a `Recover`
+   message replaces the external respawn; store-fact messages; the handle
+   becomes a plain `ActorRef` (the shared cell goes); an awaited
+   `shutdown`.
+3. `shekyl-p-host`: the witness reads store facts through the
+   `ServeSetPinner` trait instead of a `ServingReader`; store identity is a
+   value, not `Arc` pointer equality. *As landed:* the facts are their own
+   pinner call rather than riding the pin reply, so a report's claims are
+   still checked against a separate reading of the store.
+4. The stake engine implements that trait over the actor handle. *As
+   landed:* in one commit with step 3, since neither builds alone.
+5. `shekyl-curve-tree`: `ServingReader`, `WriterRecovery` and their minting
+   methods are deleted; no `Arc<LeafStore>` leaves the client.
+6. The persona body store gets its owning actor (§11.1).
+7. `Engine` close is awaited and stops every store-owning actor; the reopen
+   retry and its two constants are deleted.
+8. The wallet RPC awaits the close; tests, docs and the changelog.
+
+The GUI wallet's close (persist, then drop) moves to the awaited close in
+its own repository's PR.
+
+*Records-was (2026-11-02, the same day):* a first draft proposed a
+process-wide residency table with owner leases and a condition variable;
+Rick rejected it as a state machine beside an actor.
+
+Timeframes (`05-system-thinking.mdc`): now only. The store's format, the
+chain and V4 are untouched.
+
+### 11.1 The persona body store, the same defect — RULED 2026-11-02 (Rick); LANDED 2026-11-02 (#1261)
+
+**The problem.** A staker's `.pstore` (`shekyl-p-store`) is a redb file
+too. Its `BodyStore` held the database behind an `Arc` shared with every
+`BodyStoreReader`, and the stake engine handed one to the serving host,
+whose provider read and **decrypted** bodies with it. So the file had two
+holders with unawaited stops, as the curve-tree store did, and the serving
+path held the store key: `WALLET_SIDE_STORE.md` `WSS-Q13` (RULED
+2026-09-19: "the store's owning actor decrypts, the serving path receives
+bodies, and the key never leaves the actor") was unmet. The stake actor's
+own field doc recorded why the decrypt had not moved onto it: a per-chunk
+ask there would stall bond signing behind bulk redb reads.
+
+**Rulings (Rick, 2026-11-02).**
+
+- **In this PR, fully.** Not only the awaited close: serving body reads
+  move off the shared reader onto messages.
+- **The copy is per chunk.** `serve.rs` records that whole-body copies make
+  `MAX_INFLIGHT` (64) × 3.33 MB = 213 MB resident, which does not fit the
+  rule-76 floor. So the owner hands out one storage chunk (≤ 64 KiB) per
+  reply, an owned copy: resident cost stays one chunk per connection, at
+  about 52 round trips per shard. This narrows Q2's whole-body copy to the
+  granularity the floor allows.
+
+**The design.**
+
+- **One owner, and not the stake actor.** A body-store actor owns the
+  `BodyStore` and its key outright, answers open, read-chunk and erase by
+  message, and drops the store in `on_stop`. One job per actor (rule 05):
+  the reads queue on it, not on bond signing.
+- **What crosses is plain data.** Opening a held shard returns its length
+  and chunk count and nothing that reaches the store; each chunk is an
+  owned plaintext copy. The bodies are public, so this is key locality, as
+  `WSS-Q13` says, not a confidentiality boundary.
+- **The serving path holds a weak handle.** It reaches the owner while the
+  wallet is open and never keeps it alive; a read after the owner stopped
+  is a store fault (the bare 503).
+- **The stake engine erases by message** to the same owner (`WSS-Q8`).
+- **Close awaits it.** The stake engine's shutdown stops the stake actor,
+  then the body-store actor, each awaited with `wait_for_shutdown_result`
+  (a supervision link would not do: §11's kameo note).
+- **Its store work runs at serving priority.** The synchronous redb and
+  chunk decrypt run on a one-worker runtime whose threads call
+  `lower_current_thread` at start (`ARCHIVAL_CHALLENGE_MECHANISM.md`
+  §9.8). That runtime is not the serving host's: the store lives for the
+  whole session, including while nothing is served, and erase is asked
+  from the engine side. The key stays in the actor. The serving host's
+  threads only wait. Drop of the handle retires the runtime; it does not
+  await `on_stop`. Shutdown does, and it returns before the runtime goes.
+
+**Tests that can fail** (rule 47): a held shard served through the actor
+returns the stored bytes chunk by chunk; after the owner stops, a serve
+read is refused and the `.pstore` path reopens at once; erase through the
+stake engine reaches the store; the owner's worker, asked for its own
+nice value, reads serving nice. *As landed (#1261):*
+`engine::stake_engine::body_store_actor::tests`, of which the two reopen
+tests fail with `DatabaseAlreadyOpen` when the store is not dropped in
+`on_stop`, and `a_closed_wallet_has_closed_its_stores` checks the `.pstore`
+first after each engine close.
+
+**Scope.** `shekyl-p-store` (the reader and its `Arc`-holding body cursor
+are deleted), `shekyl-p-serve` (the provider reads through a source trait),
+`shekyl-p-host` (the serving identity carries that source), and the stake
+engine (the owning actor). Timeframes: now only; the store's format is
+untouched.
 
 ---
 

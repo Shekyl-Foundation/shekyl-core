@@ -30,6 +30,14 @@ import subprocess
 import sys
 import tempfile
 
+# Git exports GIT_DIR and its kin into hooks. A throwaway repository built
+# here must not inherit them, or `git init --bare` and `git config` act on the
+# caller's real repository (a pre-push hook's run once made it bare and gave
+# it a test author, 2026-11-15). Git finds a repository from the working
+# directory without them.
+for _name in [_k for _k in os.environ if _k.startswith("GIT_")]:
+    del os.environ[_name]
+
 GATE = pathlib.Path(__file__).resolve().parent / "check_doc_claims.py"
 
 # ── outcome coverage ──────────────────────────────────────────────────────────
@@ -826,6 +834,14 @@ def main() -> None:
                                (t / "docs" / "completed" / "old.md").write_text(
                                    "# Closed round\n\nIt held XX-W1…XX-W2 then.\n",
                                    encoding="utf-8"))),
+        # negative control: a CHANGELOG entry waiting for the release cut is
+        # the same record as one already in CHANGELOG.md, so neither its stale
+        # range nor its citation of a since-deleted file fails the gate.
+        green("changelog entry before the cut is not a live claim",
+              extra=lambda t: ((t / "docs" / "changelog.d").mkdir(exist_ok=True),
+                               (t / "docs" / "changelog.d" / "fix-x.md").write_text(
+                                   "- **X.** It held XX-W1…XX-W2; see `src/gone.cpp:1`.\n",
+                                   encoding="utf-8"))),
         # negative control: a POPULATED submodule is ordinary tree, and its
         # citations resolve. Without this, "skip everything under a submodule"
         # would pass the matrix while silently retiring the leg for external/.
@@ -1194,6 +1210,7 @@ def main() -> None:
     # as a failure path — a matrix that miscounts its own cases is the first
     # thing a reader stops trusting.
     controls = {"historical restatement is not a live claim",
+                "changelog entry before the cut is not a live claim",
                 "populated submodule resolves normally",
                 "lowering the baseline against the base revision is allowed",
                 "deleting a document releases its registry line",

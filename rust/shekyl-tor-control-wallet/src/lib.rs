@@ -22,6 +22,7 @@
 //! signatures (`OnionIdentity`, `EventSink`, `ControlError`, `ServiceId`, …)
 //! are re-exported from [`service`] so wallet consumers do not take the client
 //! crate — and therefore cannot spawn a second Tor — just to name a field.
+#![deny(unsafe_code)]
 
 pub mod onion_service;
 pub mod service;

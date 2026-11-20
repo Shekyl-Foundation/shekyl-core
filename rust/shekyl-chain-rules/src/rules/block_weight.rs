@@ -19,7 +19,7 @@
 //! - **CEN-G6b** — the remainder: the effective median is the short-term
 //!   median over the last `min(W_short, h)` weights clamped to
 //!   `[LTEM, S · LTEM]` (`shekyl_economics::effective_median`, the ratified
-//!   `S = 4`); the block-weight limit is twice it; and the connecting
+//!   `S = 3`); the block-weight limit is twice it; and the connecting
 //!   block's **long-term weight** is its weight clamped to
 //!   `[LTEM · 10/17, LTEM · 1.7]` (`shekyl_economics::long_term_weight`).
 //!   Recorded by [`Weights::derive`], which needs the block's weight and so
@@ -126,11 +126,16 @@ pub struct EffectiveMedian {
 }
 
 impl EffectiveMedian {
-    /// The block-weight limit: twice the effective median (`blockchain.cpp:
-    /// 6100`). Saturating — a limit that wrapped would refuse every block.
+    /// The block-weight limit: the set's limit multiple of the effective
+    /// median ([`shekyl_economics::block_weight_limit`], twice it at the
+    /// shipped parameters). Saturating — a limit that wrapped would refuse
+    /// every block.
     #[must_use]
-    pub const fn limit(&self) -> BlockWeight {
-        BlockWeight::from_raw(self.effective_median.to_raw().saturating_mul(2))
+    pub fn limit(&self, params: &EconomicParams) -> BlockWeight {
+        BlockWeight::from_raw(shekyl_economics::block_weight_limit(
+            self.effective_median.to_raw(),
+            params,
+        ))
     }
 }
 
@@ -193,6 +198,7 @@ impl Weights {
         let long_term = long_term_weight(
             medians.0.long_term_effective_median.to_raw(),
             weight.to_raw(),
+            super::miner::economics(),
         );
         coverage.insert(G6b::ROW);
         Self {
@@ -243,11 +249,29 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
 ) -> Result<EffectiveMedian, ViewRead<V::Fault>> {
+    effective_median_at_windows::<BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW, V>(
+        view, connecting,
+    )
+}
+
+/// [`effective_median_at`] at a long and a short window length. Production
+/// passes [`BLOCK_WEIGHT_LONG_TERM_WINDOW`] and
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]; the lengths are const generics, not
+/// parameter-set fields, so a window is sized at compile time and never read
+/// from a runtime value (ESR-16 completion, G7). EUP-5's window-length
+/// stress instantiates another pair, and the sim's rolling window
+/// (`shekyl-economics-sim`'s `MedianWindow`) is parameterised by the same
+/// two.
+///
+/// # Errors
+///
+/// [`effective_median_at`]'s.
+pub fn effective_median_at_windows<'id, const LONG: u64, const SHORT: u64, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<EffectiveMedian, ViewRead<V::Fault>> {
     let window = match view
-        .weights_window(
-            connecting,
-            BlockCount::from_raw(BLOCK_WEIGHT_LONG_TERM_WINDOW),
-        )
+        .weights_window(connecting, BlockCount::from_raw(LONG))
         .map_err(ViewRead::View)?
     {
         AtHeight::Recorded(window) => window,
@@ -260,7 +284,25 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
             }))
         }
     };
-    Ok(medians_over(&window, super::miner::economics()))
+    Ok(medians_over_window::<SHORT>(
+        &window,
+        super::miner::economics(),
+    ))
+}
+
+/// The block-weight limit in force for `connecting`: the limit of
+/// [`effective_median_at`]'s medians under the validator's parameter set.
+/// A caller that holds no parameter set of its own (the pool's capacity)
+/// asks the validator for the limit it judges blocks against.
+///
+/// # Errors
+///
+/// [`effective_median_at`]'s.
+pub fn block_weight_limit_at<'id, V: ChainView<'id>>(
+    view: &V,
+    connecting: BlockHeight,
+) -> Result<BlockWeight, ViewRead<V::Fault>> {
+    Ok(effective_median_at(view, connecting)?.limit(super::miner::economics()))
 }
 
 /// CEN-G6/G6b over one window of recorded weights, in height order. The
@@ -270,9 +312,21 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
 /// pinned in `block_weight_tests`.
 #[must_use]
 pub fn medians_over(window: &[RecordedWeights], params: &EconomicParams) -> EffectiveMedian {
+    medians_over_window::<BLOCK_WEIGHT_SHORT_TERM_WINDOW>(window, params)
+}
+
+/// [`medians_over`] at a short-window length. Production passes
+/// [`BLOCK_WEIGHT_SHORT_TERM_WINDOW`]; the long window is the slice, cut by
+/// [`effective_median_at_windows`]' read. EUP-5's window-length stress
+/// builds another (`ECONOMICS_SIM_PHASE0.md`, the const-generic window).
+#[must_use]
+pub fn medians_over_window<const SHORT: u64>(
+    window: &[RecordedWeights],
+    params: &EconomicParams,
+) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
     // Total: a window longer than the address space is the whole slice.
-    let short_len = usize::try_from(BLOCK_WEIGHT_SHORT_TERM_WINDOW)
+    let short_len = usize::try_from(SHORT)
         .unwrap_or(usize::MAX)
         .min(window.len());
     let mut short_term: Vec<u64> = window[window.len() - short_len..]
@@ -299,7 +353,7 @@ pub fn medians_from(
     params: &EconomicParams,
 ) -> EffectiveMedian {
     let long_term_effective = long_term_median.max(params.full_reward_zone);
-    let effective = effective_median(long_term_effective, short_term_median);
+    let effective = effective_median(long_term_effective, short_term_median, params);
     EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(long_term_effective),
         effective_median: BlockWeight::from_raw(effective),

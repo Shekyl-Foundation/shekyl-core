@@ -352,13 +352,12 @@ fn client_reconstructs_consensus_root_at_every_height() {
     }
 }
 
-/// Producer-side twin of the test above: `next_block_root` — the read the
-/// C++ test generator fills headers from through `shekyl-ffi`'s replica
-/// surface — equals the consensus header root of the block about to be
-/// built, at every height, *before* that block is ingested. Height 0 is the
-/// empty-tree sentinel (the genesis header). This pins the one-past-tip
-/// read to the same fixture that pins `root_at`, so the two can never name
-/// different states.
+/// Producer-side twin of the test above: `next_block_root` — the
+/// one-past-tip read a block producer fills a header from — equals the
+/// consensus header root of the block about to be built, at every height,
+/// *before* that block is ingested. Height 0 is the empty-tree sentinel (the
+/// genesis header). This pins the one-past-tip read to the same fixture that
+/// pins `root_at`, so the two can never name different states.
 #[test]
 fn next_block_root_is_the_header_of_the_block_about_to_be_built() {
     let f = fixture();

@@ -5,21 +5,21 @@
 
 //! Snapshot well-formedness for daemon fee estimates.
 //!
-//! The daemon serves three rungs, economy / standard / priority, in the
-//! multiples `1 : 4 : 2M/w_ref` (FL-C5): priority is 200× economy at the
+//! The daemon serves three rungs, economy / standard / high, in the
+//! multiples `1 : 4 : 2M/w_ref` (FL-C5): high is 200× economy at the
 //! penalty-free zone and grows with the long-term median `M`. So no fixed
-//! "priority ≤ k× economy" bound is a sanity ceiling — at a wide enough
-//! median it bans the honest Priority tier — and none is enforced. A
+//! "high ≤ k× economy" bound is a sanity ceiling — at a wide enough
+//! median it bans the honest High tier — and none is enforced. A
 //! historical median-multiple ceiling is the V3.x `WalletSideEstimator`'s
 //! job (`FOLLOWUPS.md` §"wallet-side fee estimation").
 //!
 //! What *is* snapshot-shaped, and is enforced here once:
 //!
-//! 1. **Tier band monotonic** — `economy ≤ standard ≤ priority`. An
+//! 1. **Tier band monotonic** — `economy ≤ standard ≤ high`. An
 //!    inversion is a defect or a lie, not a market condition.
 //! 2. **Absolute cap on the per-weight rate** — for each named tier,
 //!    `per_weight ≤` [`absolute_fee_rate_cap()`]: the exact structural
-//!    maximum of the served priority rung, every factor at its own
+//!    maximum of the served high rung, every factor at its own
 //!    extreme, derived from the parameters and KAT-pinned. The rate is the
 //!    whole of what the daemon serves: the lattice a fee is rounded up to
 //!    (`shekyl_economics::FEE_QUANTIZATION_MASK`) is a Rust constant the
@@ -27,25 +27,20 @@
 //!    daemon-controlled rounding for a cap to bound.
 //!
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
-//! both go through it; Custom band-checks run later, against a snapshot
-//! that has already been accepted.
-//!
-//! `Custom` is bounded by those two facts and nothing else — at or
-//! above the snapshot's economy floor, at or below the same absolute
-//! cap, both read on the per-weight rate. It gets no relative ceiling of
-//! its own: economy is the market floor, so an economy multiple cannot
-//! separate a user's typo from an honest top tier, and one anchored on
-//! `priority` would be a free parameter. See [`CustomFeeBand`].
+//! both go through it, and a payer's rate is one of its three rungs
+//! ([`ValidatedFeeEstimates::rate`]): there is no per-wallet rate
+//! (`FEE_LADDER_DERIVATION.md` W3).
 
+use shekyl_economics::FeePriority;
 use shekyl_rpc_client::FeeRate;
 
 use super::traits::FeeEstimates;
 
-/// Absolute cap (atomic units per weight) on every named tier's — and
-/// `Custom`'s — per-weight rate: the maximum fee rate an honest daemon can
+/// Absolute cap (atomic units per weight) on every tier's per-weight
+/// rate: the maximum fee rate an honest daemon can
 /// quote over the whole emission era.
 ///
-/// A **structural bound**, not a swept maximum: the served priority rung is
+/// A **structural bound**, not a swept maximum: the served high rung is
 /// `2·R·C/M`, a product whose factors peak at different ages — `R` is
 /// largest at genesis, while `C` grows as `σ` decays and the burn fraction
 /// rises with the supply ratio — so its maximum over the chain's life is
@@ -60,7 +55,7 @@ use super::traits::FeeEstimates;
 ///         at canonical parameters, with no rounding on top.
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
-/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max).priority
+/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max, shekyl_economics::relay_policy()).high
 /// ```
 ///
 /// The bound is loose against the reachable maximum by design: a cap exists
@@ -82,17 +77,18 @@ use super::traits::FeeEstimates;
 /// those docs must be able to follow the link to the derivation.
 #[must_use]
 pub fn absolute_fee_rate_cap() -> u64 {
-    let params = shekyl_economics::params::EconomicParams::default();
+    let params = shekyl_economics::economic_params().clone();
     let r0 = shekyl_economics::emission::base_block_reward(0, &params)
         .expect("genesis reward is defined for already_generated = 0");
     shekyl_economics::corrected_fee_ladder(
         r0,
         params.full_reward_zone,
-        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        shekyl_economics::relay_policy().ref_tx_weight,
         shekyl_economics::FeeCorrection::from_scaled(structural_max_correction(&params)),
         &params,
+        shekyl_economics::relay_policy(),
     )
-    .priority
+    .high
 }
 
 /// The largest SCALE-unit multiplier the served ladder can carry: raw `C`
@@ -131,11 +127,6 @@ pub enum FeeEstimatorError {
     /// Well-formed snapshot, refused by the sanity ceiling.
     #[error("fee estimator: daemon fee unreasonable ({0})")]
     DaemonFeeUnreasonable(CeilingViolation),
-
-    /// The caller's `Custom` rate is outside the accepted band — a
-    /// request error, not a daemon defect (RPC `-32602`).
-    #[error("custom fee rate out of range ({0})")]
-    CustomFeeOutOfRange(CustomFeeBand),
 }
 
 /// Snapshot-shaped ceiling violation. Wire `data` is `{reason, rate, bound}`
@@ -143,17 +134,15 @@ pub enum FeeEstimatorError {
 /// carries all three tiers so the pair is never a lie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CeilingViolation {
-    /// `economy ≤ standard ≤ priority` failed.
-    #[error(
-        "tier band not monotonic (economy={economy}, standard={standard}, priority={priority})"
-    )]
+    /// `economy ≤ standard ≤ high` failed.
+    #[error("tier band not monotonic (economy={economy}, standard={standard}, high={high})")]
     NonMonotonic {
         /// Per-weight economy rate.
         economy: u64,
         /// Per-weight standard rate.
         standard: u64,
-        /// Per-weight priority rate.
-        priority: u64,
+        /// Per-weight high rate.
+        high: u64,
     },
     /// A named tier's per-weight rate exceeds [`absolute_fee_rate_cap()`].
     #[error("tier above the absolute per-weight cap (rate {rate})")]
@@ -196,46 +185,24 @@ impl CeilingViolation {
     /// Bound the offending rate violated.
     ///
     /// For [`Self::NonMonotonic`], the value the left-hand side should
-    /// have been `≤` (`standard` if `economy > standard`, else `priority`).
+    /// have been `≤` (`standard` if `economy > standard`, else `high`).
     #[must_use]
     pub fn bound(self) -> u64 {
         match self {
             Self::NonMonotonic {
                 standard,
-                priority,
+                high,
                 economy,
             } => {
                 if economy > standard {
                     standard
                 } else {
-                    priority
+                    high
                 }
             }
             Self::AboveAbsoluteCap { .. } => absolute_fee_rate_cap(),
         }
     }
-}
-
-/// Why a caller-pinned `Custom` rate was refused.
-///
-/// The band is exactly the policy every *named* tier obeys — no more,
-/// no less. There is no `Custom`-only relative ceiling: economy is the
-/// market *floor*, and the honest priority / economy ratio is `2M/w_ref`
-/// — 200× at the zone, growing with the median — so any economy multiple
-/// would refuse `Custom` at the snapshot's own Priority rate while
-/// `FeePriority::Priority` succeeds at that identical rate. The
-/// 2026-08-16 ruling names one bound for `Custom` — the absolute cap —
-/// and that is what is enforced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum CustomFeeBand {
-    /// Below the snapshot's economy floor — the daemon's own cheapest
-    /// tier. Not paternalism: below it the transaction does not clear.
-    #[error("custom feerate below economy floor")]
-    BelowEconomyFloor,
-    /// Per-weight rate above [`absolute_fee_rate_cap()`], the same bound
-    /// [`ValidatedFeeEstimates`] applies to every named tier.
-    #[error("custom feerate above the absolute per-weight cap")]
-    AboveAbsoluteCap,
 }
 
 /// A daemon fee snapshot that passed `try_new`.
@@ -261,22 +228,22 @@ impl ValidatedFeeEstimates {
     pub(crate) fn try_new(snapshot: FeeEstimates) -> Result<Self, FeeEstimatorError> {
         let economy = snapshot.economy.per_weight();
         let standard = snapshot.standard.per_weight();
-        let priority = snapshot.priority.per_weight();
+        let high = snapshot.high.per_weight();
 
-        if economy > standard || standard > priority {
+        if economy > standard || standard > high {
             return Err(FeeEstimatorError::DaemonFeeUnreasonable(
                 CeilingViolation::NonMonotonic {
                     economy,
                     standard,
-                    priority,
+                    high,
                 },
             ));
         }
-        // The band is monotone, so the priority rate is the largest; one
+        // The band is monotone, so the high rate is the largest; one
         // comparison caps all three.
-        if priority > absolute_fee_rate_cap() {
+        if high > absolute_fee_rate_cap() {
             return Err(FeeEstimatorError::DaemonFeeUnreasonable(
-                CeilingViolation::AboveAbsoluteCap { rate: priority },
+                CeilingViolation::AboveAbsoluteCap { rate: high },
             ));
         }
         Ok(Self { inner: snapshot })
@@ -294,10 +261,20 @@ impl ValidatedFeeEstimates {
         self.inner.standard
     }
 
-    /// Priority tier.
+    /// High tier.
     #[must_use]
-    pub fn priority(self) -> FeeRate {
-        self.inner.priority
+    pub fn high(self) -> FeeRate {
+        self.inner.high
+    }
+
+    /// The rate a payer at `priority` pays: one of the three rungs.
+    #[must_use]
+    pub fn rate(self, priority: FeePriority) -> FeeRate {
+        match priority {
+            FeePriority::Economy => self.inner.economy,
+            FeePriority::Standard => self.inner.standard,
+            FeePriority::High => self.inner.high,
+        }
     }
 }
 
@@ -310,7 +287,7 @@ mod tests {
         FeeEstimates {
             economy: FeeRate::new(e).expect("economy"),
             standard: FeeRate::new(s).expect("standard"),
-            priority: FeeRate::new(p).expect("priority"),
+            high: FeeRate::new(p).expect("high"),
         }
     }
 
@@ -325,7 +302,7 @@ mod tests {
                     CeilingViolation::NonMonotonic {
                         economy: 20,
                         standard: 10,
-                        priority: 50,
+                        high: 50,
                     }
                 );
                 assert_eq!(v.reason(), "tier band not monotonic");
@@ -348,18 +325,18 @@ mod tests {
     #[test]
     fn served_ladder_kat_rows_are_well_formed() {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
-        // mapped economy=fees[0], standard=fees[1], priority=fees[2].
+        // mapped economy=fees[0], standard=fees[1], high=fees[2].
         //
         // These MIRROR that file's rows (the served ladder at `C` = 1, no
         // rounding step, `standard` = 4F exactly), so they move when it
         // moves — which is the only thing that makes a mirrored constant a
         // cross-check rather than a second copy free to drift.
         ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
-            .expect("10 SKL / 300k-zone priority 66666 is 200× economy and must pass");
+            .expect("10 SKL / 300k-zone high 66666 is 200× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
-            .expect("10 SKL / 1.5M-median priority 13333 is 1025× economy and must pass");
+            .expect("10 SKL / 1.5M-median high 13333 is 1025× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
-            .expect("no economy-multiple bound refuses a 10.1× priority");
+            .expect("no economy-multiple bound refuses a 10.1× high");
     }
 
     /// A saturated rate is an over-cap refusal, not a malformed response:
@@ -393,7 +370,7 @@ mod tests {
     /// and this pins its value so a parameter change moves it loudly.
     #[test]
     fn absolute_cap_is_the_structural_bound() {
-        let p = shekyl_economics::params::EconomicParams::default();
+        let p = shekyl_economics::economic_params().clone();
         assert_eq!(
             structural_max_correction(&p),
             13 * shekyl_economics::params::SCALE,
@@ -410,7 +387,7 @@ mod tests {
     }
 
     /// The bound must actually bound. This walks emission trajectories
-    /// and, at every registered chain age, evaluates the served priority
+    /// and, at every registered chain age, evaluates the served high
     /// rung across the reachable volume grid; the maximum it finds must sit
     /// at or under the cap.
     ///
@@ -429,7 +406,7 @@ mod tests {
     #[test]
     fn absolute_cap_bounds_the_swept_reachable_maximum() {
         use shekyl_economics::params::SCALE;
-        let p = shekyl_economics::params::EconomicParams::default();
+        let p = shekyl_economics::economic_params().clone();
         let zm = p.full_reward_zone;
         let cap = absolute_fee_rate_cap();
 
@@ -463,11 +440,12 @@ mod tests {
                         let prio = shekyl_economics::corrected_fee_ladder(
                             base,
                             zm,
-                            shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+                            shekyl_economics::relay_policy().ref_tx_weight,
                             c,
                             &p,
+                            shekyl_economics::relay_policy(),
                         )
-                        .priority;
+                        .high;
                         if prio > worst.0 {
                             worst = (prio, h / shekyl_economics::BLOCKS_PER_YEAR, v, m_r);
                         }

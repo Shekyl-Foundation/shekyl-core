@@ -1,0 +1,40 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-rpc-rendezvous"
+description = "A daemon's local rendezvous: the name it is found under (network and instance), the instance rule, and the rendezvous file and Windows record. No handshake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# One dependency on every platform (Rick, 2026-11-14), and one more on
+# Windows (2026-11-18): the daemon, its configuration and every
+# client that resolves "this computer" read the names here without the RPC
+# channel's handshake stack.
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The per-account root's name (rule 83 IG-13), which a Windows account's
+# rendezvous directory sits in: one owner, the account leaf.
+shekyl-os-account = { path = "../shekyl-os-account" }
+
+[target.'cfg(windows)'.dependencies]
+# `%ProgramData%`, the root of the service's rendezvous directory on
+# Windows (`place::service_rendezvous`). A leaf: it has no workspace
+# dependency of its own, so there is no cycle (Rick, 2026-11-18).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
+[dev-dependencies]
+# The known-answer vectors are JSON with hex fields.
+serde_json = "1"
+hex = "0.4"
+# Read only to hold the network id's length equal to its owner's. Not a
+# production edge.
+shekyl-network = { path = "../shekyl-network" }
+
+[lints]
+workspace = true

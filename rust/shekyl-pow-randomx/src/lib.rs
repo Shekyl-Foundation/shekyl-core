@@ -5,16 +5,18 @@
 
 //! Pure-software RandomX v2 verifier for Shekyl daemon block validation.
 //!
-//! The daemon's one RandomX: `shekyl-ffi` exports it for the C++
-//! validator and the built-in C++ miner's hash
-//! (`DRS_X_STORE_FLIP.md` DX-Q4), the ingest pipeline's production
-//! substrate verifies with it, and `shekyl-miner`'s loop hashes with it.
-//! It is the light, cache-only mode throughout. `calc_pow` and the Rust
-//! miner call [`CacheStore::lookup`] and never derive: a derivation
-//! publishes into the transient slot and evicts the validator's spare,
-//! and both run on a seed they did not pin. [`CacheStore::pin_canonical`]
-//! is the fill the validator's epoch switch owns. Fast mining is an external
-//! miner's job: the Monero RandomX C/C++ library at `external/randomx-v2/`
+//! The daemon's one RandomX, light and cache-only throughout. This crate
+//! derives a cache ([`PreparedCache::derive`]) and hashes under one
+//! ([`compute_hash`]); it does not decide which caches exist. In the
+//! daemon one owner does: `shekyl-hasher`, which sits above this crate,
+//! builds every cache, lends it to a job and frees it
+//! (`docs/design/RANDOMX_CACHE_ACTOR.md`). The ingest, chain sync, `pow`
+//! and `shekyl-miner` hash through its jobs and hold no cache. A CI gate
+//! holds the identifier `PreparedCache` to that crate,
+//! this one, the differential harness and the cost benches
+//! (`scripts/ci/check_randomx_cache_owner.sh`). Fast mining is an
+//! external miner's job: the Monero RandomX C/C++ library at
+//! `external/randomx-v2/`
 //! (pinned at fork commit `aaafe71`, v2.0.1) is that reference, built only
 //! for the differential harness and never linked into `shekyld`. See
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)'s
@@ -57,8 +59,8 @@
 //!
 //! - `src/seedhash.rs` — `pub Seedhash` newtype wrapping the
 //!   32-byte seedhash. Per Phase 2F §1.1 Round 2, the type is
-//!   the typed key consumed by [`PreparedCache::derive`] and
-//!   indexed by the (Phase 2F) `CacheStore`'s slot map; the
+//!   the typed key consumed by [`PreparedCache::derive`], and the
+//!   name `shekyl-hasher` knows a cache by; the
 //!   newtype distinguishes seedhash bytes from arbitrary 32-byte
 //!   buffers (output hashes, candidate digests) at every call
 //!   site.
@@ -90,16 +92,6 @@
 //!   below describe the Phase-2c-era T3-T8 vectors as they were
 //!   originally generated; the end-to-end real-dispatch parity
 //!   vector is T16 per Phase 2d.
-//! - `src/cache_store.rs` — `pub CacheStore` capacity-2
-//!   sticky-canonical store landed by Phase 2F §3.1 Round 2.
-//!   Two slots ([`PreparedCache`]-typed canonical + transient)
-//!   plus an in-flight derivation map close the F1 (cache-
-//!   derivation DoS amplification) and F3 (thundering-herd) attack
-//!   classes; cleanup-on-publish closes F4 (unbounded in-flight
-//!   map growth). Internal synchronization uses per-slot
-//!   `RwLock<Option<Arc<PreparedCache>>>` plus
-//!   `Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>` (no new
-//!   workspace dependency added).
 //! - `tests/vectors/reference/cache/` + `tests/vectors/reference/vm/`
 //!   — 8 Phase-2c reference vectors (T1: cache fingerprint; T2:
 //!   dataset item batch; T3-T8: VM scratchpad init, register init,
@@ -140,8 +132,7 @@
 //!   `vm.rs` (no trait wiring, no impl swap, no signature change to
 //!   `compute_hash`). T16 reference vector locks end-to-end parity
 //!   against the C fork at pin `aaafe71`.
-//! - **2f (landed):** `CacheStore` (the capacity-2 sticky-canonical
-//!   store + in-flight derivation map described above), the cfg-
+//! - **2f (landed):** the cfg-
 //!   gated `VmStatePool` (`#[doc(hidden)] pub` under `test` /
 //!   `internal-pool-bench`), and `scripts/ci/check_randomx_crate_invariants.sh`
 //!   — the §7.2 isolation invariants now have mechanical CI grep
@@ -152,9 +143,6 @@
 //!   present. 2g also populates the
 //!   `tests/perf/per_hash_latency.rs` placeholder landed by Phase
 //!   2c.
-//!
-//! Phase 3 then exposes the verifier through `shekyl-ffi` and rewires
-//! the C++ daemon to it; Phase 4 deletes the C++ verifier path.
 //!
 //! # Scope: public-input verification only
 //!
@@ -177,14 +165,12 @@ mod aes;
 mod argon2d;
 mod blake2_generator;
 mod cache;
-mod cache_store;
 pub(crate) mod fpu_rounding;
 mod prepared_cache;
 // The seed-epoch *schedule* (`seedheight`, the 2048/64 constants) is
 // consensus arithmetic the validator evaluates, and lives in
 // `shekyl_difficulty::seed_epoch` since 2026-09-19 (DRS-E6 slice 2,
-// CEN-D3); this crate never called it. The env-override clamps live at the
-// FFI boundary that reads the environment (`shekyl-ffi::pow_randomx_ffi`).
+// CEN-D3); this crate never calls it.
 mod seedhash;
 pub(crate) mod superscalar;
 mod vm;
@@ -198,7 +184,6 @@ mod vm;
 mod vm_pool;
 
 pub(crate) use cache::Cache;
-pub use cache_store::{CacheOutcome, CacheStore};
 pub use prepared_cache::PreparedCache;
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;

@@ -2,9 +2,13 @@
 |--------|------|---------|-------|---------|-------------|
 | `help` | switch | — | command line | no | Print the options and exit. |
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `rpc-console-key-reset` | switch | — | command line | no | Replace a service's console key and exit without starting: takes the data directory's lock, writes the new key's private half, and touches no other enrollment. Service mode only; refused while the daemon runs. |
 | `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
-| `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
+| `service` | switch | — | command line | no | Run as this machine's service instance, started by the service manager under the daemon's own account. Serves no owner socket. On Windows it arrives with the service-manager dispatcher (RT-W14). |
+| `owning-connection` | integer ≥ 3 | — | command line | no | The descriptor (a socket handle on Windows) of one end of a connected stream socket pair the starting process created for this daemon. The daemon writes a ready line on it once its owner's socket is served, and stops when the other end closes. For a wallet that starts its own daemon; not with service. |
+| `instance` | name (an instance name) | — | both | no | This node's name, for a second node of the same network on this machine: 1 to 16 lower-case letters, digits or hyphens. Unset is the default instance. A named instance needs its own data-dir. |
+| `config-file` | absolute path, or `none` | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused; `none` reads no file, for a program that starts its own daemon on the command line alone. |
 | `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
 | `log-file` | absolute path | the daemon's root, logs/shekyld-<network>.log | both | no | The log file. |
 | `log-level` | `error` / `warn` / `info` / `debug` / `trace` | `warn` | both | yes | The log level: error, warn, info, debug or trace. |
@@ -21,8 +25,8 @@
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
 | `clearnet-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for clearnet-socks. |
-| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. |
-| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. |
+| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. Beside `clearnet off`, `none` confirms it. |
+| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. Beside `clearnet off`, `none` confirms it. |
 | `p2p-local` | switch | — | both | no | Accept peers at private addresses, for a private test network. |
 | `p2p-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | Peers to connect to, by IP or onion. |
 | `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |
@@ -30,15 +34,16 @@
 | `p2p-ban-file` | absolute path | — | both | no | A file of addresses to refuse, one per line. |
 | `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. |
 | `p2p-download-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The download rate limit, or `unlimited`. |
-| `txpool-weight-max` | bytes, such as `512MiB` (at least 1) | `648000000B` | both | no | The transaction pool's weight bound. |
 | `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
 | `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
 | `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
-| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine` | `on` / `off` | `off` | both | no | Start the miner at start, to mine-address. |
+| `mine-address` | Shekyl address | — | both | no | The address the miner pays. |
 | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The authenticated channel's listeners: enrolled clients reach the node here over the Noise channel, from this host or another. Any address, a wildcard included; `none` is no channel listener. |
+| `rpc-socket-dir` | absolute path | — | both | no | The directory for the owner's socket, where the account has no session directory (a test host). It must be local, owned by this account, with mode 0700. Unset uses the session directory. |
 | `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
-| `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
+| `rpc-view-listen` | list of IP address, with or without a port (`address[:port]`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only; an address with no port takes the network's view port. |
 | `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
 | `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
-| `console` | switch | — | command line | no | Run the interactive console. |
-<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
+<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-rpc (regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->

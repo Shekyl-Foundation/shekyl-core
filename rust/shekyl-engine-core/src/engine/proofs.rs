@@ -14,8 +14,9 @@
 //!   source ciphertexts; OUTBOUND signs with the retained per-tx secret
 //!   (`TxMetaBlock.tx_keys`) engine-side — see
 //!   [`super::proof_bridge`]'s module docs for the split rationale.
-//! - **`get_reserve_proof`** — selects unspent matured outputs
-//!   (largest-first — the contract's fewest-beacons choice) and signs
+//! - **`get_reserve_proof`** — selects from every on-chain output in the
+//!   balance: spendable and incoming (`reserve_candidates`),
+//!   largest-first — the contract's fewest-beacons choice — and signs
 //!   inside the key actor. Every wallet is FULL (rule 23), so there is
 //!   no capability gate.
 //! - **`check_tx_proof` / `check_reserve_proof`** — WALLET-LESS: free
@@ -50,13 +51,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use zeroize::Zeroizing;
-
 use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::kem::{HybridCiphertext, SharedSecret};
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
-use shekyl_crypto_pq::output::rederive_combined_ss;
+use shekyl_crypto_pq::tx_key::StoredKeyError;
+use shekyl_crypto_pq::TxKey;
 use shekyl_encoding::{decode_blob, encode_blob, HRP_RESERVE_PROOF, HRP_TX_PROOF};
 use shekyl_proofs::error::ProofError;
 use shekyl_proofs::reserve_proof::{verify_reserve_proof, ReserveOnChainOutput};
@@ -80,7 +80,7 @@ use super::proofs_chain_facts::{
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
-use shekyl_rpc_types::KeyImageStatus;
+use shekyl_rpc_types::wire::chain::Spent;
 
 // ── Wire-framing constants (contract "Proofs" section) ──────────────
 
@@ -123,6 +123,12 @@ pub enum ProofsError {
     /// copy sent it). Contract `-29301 PROOF_TX_SECRET_UNAVAILABLE`.
     #[error("no retained tx secret for this transaction (not sent by this wallet)")]
     TxSecretUnavailable,
+    /// `get_tx_proof` OUTBOUND: the retained per-tx secret is present but
+    /// does not open as a transaction key (`TxKey::open`): the record was
+    /// not written by this wallet's key mint. An internal failure, not a
+    /// contract code of its own.
+    #[error("the retained tx secret does not open: {0}")]
+    TxSecretUnreadable(#[from] StoredKeyError),
 
     /// Nothing to prove: INBOUND with no owned outputs in the tx,
     /// OUTBOUND where no output derives to the given address under the
@@ -323,7 +329,13 @@ pub enum CheckedReserveProof {
 // ── Canonical address bytes ──────────────────────────────────────────
 
 /// The canonical decoded-address byte form both proof sides bind to:
-/// `network[1] ‖ spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
+/// `spend_key[32] ‖ view_key[32] ‖ ml_kem_encap_key`.
+///
+/// An address, and only an address: the network a proof is valid on is
+/// the envelope's binding, the address network's genesis-derived id at
+/// position 0 of the frame each proof signs (the signing envelope §2.3;
+/// `NETWORK_IDENTITY.md` NI-R15). Proof version 2 carried the id inside
+/// these bytes, which made them mean two things.
 ///
 /// This is **payment identity**, not the full address string.
 /// `msg_sign_pk` is the message-signing anchor (SM-R-8); it is not a
@@ -341,8 +353,7 @@ pub enum CheckedReserveProof {
 /// same address (a string binding would let re-encodings break
 /// verification of an honest proof).
 pub fn canonical_address_bytes(address: &ShekylAddress) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + 32 + 32 + address.ml_kem_encap_key.len());
-    out.push(address.network.as_u8());
+    let mut out = Vec::with_capacity(32 + 32 + address.ml_kem_encap_key.len());
     out.extend_from_slice(&address.spend_key);
     out.extend_from_slice(&address.view_key);
     out.extend_from_slice(&address.ml_kem_encap_key);
@@ -437,6 +448,7 @@ async fn generate_inbound<D: Rpc>(
     let proof_bytes = ctx
         .key
         .generate_inbound_proof(InboundProofRequest {
+            network_id: ctx.primary_address.network.network_id(),
             txid: txid.to_bytes(),
             address_bytes: canonical_address_bytes(&ctx.primary_address),
             message: message.as_bytes().to_vec(),
@@ -462,12 +474,12 @@ async fn generate_outbound<D: Rpc>(
     counterparty: &ShekylAddress,
     message: &str,
 ) -> Result<GeneratedTxProof, ProofsError> {
-    // Short read guard; the secret is copied into a Zeroizing buffer
+    // Short read guard; the stored key is opened into its own wiped cell
     // so the guard is not held across the daemon fetch.
-    let tx_key: Zeroizing<[u8; 32]> = {
+    let tx_key: TxKey = {
         let state = ctx.ledger.read();
         match state.ledger.tx_meta.tx_keys.get(txid.as_bytes()) {
-            Some(keys) => Zeroizing::new(*keys.primary.as_bytes()),
+            Some(keys) => TxKey::open(keys.primary.stored())?,
             None => return Err(ProofsError::TxSecretUnavailable),
         }
     };
@@ -490,6 +502,7 @@ async fn generate_outbound<D: Rpc>(
     }
 
     let proof_bytes = generate_outbound_proof_with_secrets(
+        &counterparty.network.network_id(),
         &tx_key,
         &txid.to_bytes(),
         &canonical_address_bytes(counterparty),
@@ -516,7 +529,7 @@ async fn generate_outbound<D: Rpc>(
 /// `SharedSecret` is `ZeroizeOnDrop`; non-matching derivations drop —
 /// and wipe — inside the loop.
 fn discover_recipient_outputs(
-    tx_key: &[u8; 32],
+    tx_key: &TxKey,
     recipient_x25519_pk: &[u8; 32],
     recipient_ml_kem_ek: &[u8],
     on_chain: &[OnChainOutput],
@@ -525,7 +538,7 @@ fn discover_recipient_outputs(
     for (i, out) in on_chain.iter().enumerate() {
         let idx = i as u64;
         let Ok((ss, eph_pk, ml_kem_ct)) =
-            rederive_combined_ss(tx_key, recipient_x25519_pk, recipient_ml_kem_ek, idx)
+            tx_key.rederive_combined_ss(recipient_x25519_pk, recipient_ml_kem_ek, idx)
         else {
             continue;
         };
@@ -556,6 +569,41 @@ struct ReserveCandidate {
     output_key: [u8; 32],
 }
 
+/// The outputs a reserve proof may disclose: every on-chain output in the
+/// balance (A17) — spendable, and incoming, which is on chain and
+/// not yet in the reference block's tree. A reserve proof shows money held:
+/// it needs each output's key image and location, not membership in a
+/// reference tree. An in-flight send's inputs are out (their money is that
+/// send's outgoing and change), as are unspendable outputs and spent ones.
+/// Rows missing a key image or a source ciphertext cannot be disclosed and
+/// are skipped rather than failing the proof.
+fn reserve_candidates(
+    transfers: &[shekyl_engine_state::TransferDetails],
+    horizon: shekyl_engine_state::SpendHorizon,
+    locks: &shekyl_engine_state::InFlightSpendLocks,
+) -> Vec<ReserveCandidate> {
+    use shekyl_engine_state::OutputState;
+    transfers
+        .iter()
+        .filter(|td| {
+            matches!(
+                td.state(horizon, locks),
+                OutputState::Spendable | OutputState::Incoming
+            )
+        })
+        .filter_map(|td| {
+            Some(ReserveCandidate {
+                txid: td.tx_hash.to_bytes(),
+                vout: u32::try_from(td.internal_output_index.to_raw()).ok()?,
+                amount: td.amount(),
+                ciphertext: td.source_ciphertext.clone()?,
+                key_image: td.key_image?,
+                output_key: td.key.compress().to_bytes(),
+            })
+        })
+        .collect()
+}
+
 /// Prove control of unspent balance (contract `GetReserveProofParams`).
 /// `amount = None` proves every eligible output (prove-all, capped at
 /// [`MAX_RESERVE_PROOF_LOCATORS`] largest); `Some` selects a minimal
@@ -568,25 +616,13 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
-        let height = state.ledger.ledger.tip.synced_height;
-        state
-            .ledger
-            .spendable_outputs(height, None)
-            .into_iter()
-            .filter_map(|(_, td)| {
-                // key_image and source_ciphertext are populated on every
-                // claimed spendable output; rows missing either cannot be
-                // disclosed and are skipped rather than failing the proof.
-                Some(ReserveCandidate {
-                    txid: td.tx_hash.to_bytes(),
-                    vout: u32::try_from(td.internal_output_index.to_raw()).ok()?,
-                    amount: td.amount(),
-                    ciphertext: td.source_ciphertext.clone()?,
-                    key_image: td.key_image?,
-                    output_key: td.key.compress().to_bytes(),
-                })
-            })
-            .collect()
+        let horizon =
+            shekyl_engine_state::SpendHorizon::at_tip(state.ledger.ledger.tip.synced_height);
+        reserve_candidates(
+            state.ledger.ledger.transfers(),
+            horizon,
+            &state.ledger.spend_locks(),
+        )
     };
 
     let (selected, total) = select_reserve_outputs(candidates, amount)?;
@@ -594,6 +630,7 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     let proof_bytes = ctx
         .key
         .generate_reserve_proof(ReserveProofRequest {
+            network_id: ctx.primary_address.network.network_id(),
             address_bytes: canonical_address_bytes(&ctx.primary_address),
             message: message.as_bytes().to_vec(),
             outputs: selected
@@ -704,11 +741,13 @@ pub async fn check_tx_proof<R: Rpc>(
     let fetched = chain.tx(rpc, txid).await?;
     let on_chain = on_chain_outputs_of(&fetched.tx)?;
     let address_bytes = canonical_address_bytes(address);
+    let network_id = address.network.network_id();
 
     let verify_result = match direction {
         TxProofDirection::Outbound => {
             let recipient_x25519 = address_x25519_pk(address)?;
             verify_outbound_proof(
+                &network_id,
                 proof_bytes,
                 &txid,
                 &address_bytes,
@@ -720,6 +759,7 @@ pub async fn check_tx_proof<R: Rpc>(
             )
         }
         TxProofDirection::Inbound => verify_inbound_proof(
+            &network_id,
             proof_bytes,
             &txid,
             &address_bytes,
@@ -831,6 +871,7 @@ pub async fn check_reserve_proof<R: Rpc>(
 
     let address_bytes = canonical_address_bytes(address);
     let verified = match verify_reserve_proof(
+        &address.network.network_id(),
         proof_bytes,
         &address_bytes,
         message.as_bytes(),
@@ -863,11 +904,11 @@ pub async fn check_reserve_proof<R: Rpc>(
     // Spent-set query: a proof over spent outputs verifies
     // cryptographically, but the spent portion is reported so the
     // verifier can subtract it.
-    let key_images_hex: Vec<String> = verified
+    let key_images = verified
         .iter()
-        .map(|v| hex::encode(v.key_image.as_bytes()))
+        .map(|v| shekyl_rpc_types::hash::HashHex::from_bytes(*v.key_image.as_bytes()))
         .collect();
-    let statuses = chain.key_image_status(rpc, key_images_hex).await?;
+    let statuses = chain.key_image_status(rpc, key_images).await?;
 
     let mut total = AtomicUnits::ZERO;
     let mut spent = AtomicUnits::ZERO;
@@ -878,7 +919,7 @@ pub async fn check_reserve_proof<R: Rpc>(
             .ok_or(ProofsError::AmountOverflow)?;
         // Typed: a fourth value is a malformed reply refused at the boundary,
         // not an integer this comparison has to guess about.
-        if status != KeyImageStatus::Unspent {
+        if status != Spent::Unspent {
             spent = spent
                 .checked_add(amount)
                 .ok_or(ProofsError::AmountOverflow)?;
@@ -905,13 +946,13 @@ fn sealed_reserve_verdict(
 
 // ── Framing helpers ──────────────────────────────────────────────────
 
-/// Bech32m-decode a proof string, pin the HRP (case-insensitively —
-/// Bech32m admits an all-uppercase encoding), and enforce the decoded
+/// Bech32m-decode a proof string (its one canonical spelling, which
+/// `decode_blob` alone accepts), pin the HRP, and enforce the decoded
 /// payload size cap before anything downstream runs.
 fn decode_proof_payload(proof: &str, expected_hrp: &str) -> Result<Vec<u8>, ProofsError> {
     let (hrp, data) = decode_blob(proof)
         .map_err(|e| ProofsError::Malformed(format!("bech32m decode failed: {e}")))?;
-    if !hrp.eq_ignore_ascii_case(expected_hrp) {
+    if hrp != expected_hrp {
         return Err(ProofsError::Malformed(format!(
             "wrong HRP '{hrp}', expected '{expected_hrp}'"
         )));

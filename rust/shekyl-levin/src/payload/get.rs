@@ -98,14 +98,6 @@ pub(crate) fn opt_bool(section: &Section, key: &'static str, default: bool) -> R
     }
 }
 
-pub(crate) fn opt_bytes(section: &Section, key: &'static str) -> Result<Vec<u8>, Error> {
-    match section.get(key) {
-        None => Ok(Vec::new()),
-        Some(Value::Bytes(b)) => Ok(b.clone()),
-        Some(_) => Err(mismatch(key, "string")),
-    }
-}
-
 pub(crate) fn insert_opt_u64(section: &mut Section, key: &'static str, value: u64, default: u64) {
     if value != default {
         section.insert(key, Value::UInt64(value));
@@ -120,12 +112,6 @@ pub(crate) fn insert_opt_bool(
 ) {
     if value != default {
         section.insert(key, Value::Bool(value));
-    }
-}
-
-pub(crate) fn insert_opt_bytes(section: &mut Section, key: &'static str, value: &[u8]) {
-    if !value.is_empty() {
-        section.insert(key, Value::Bytes(value.to_vec()));
     }
 }
 

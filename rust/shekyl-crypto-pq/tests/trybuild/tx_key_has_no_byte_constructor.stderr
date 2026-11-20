@@ -1,0 +1,28 @@
+error[E0599]: no function or associated item named `from_bytes` found for struct `TxKey` in the current scope
+  --> tests/trybuild/tx_key_has_no_byte_constructor.rs:13:12
+   |
+13 |     TxKey::from_bytes(bytes)
+   |            ^^^^^^^^^^ function or associated item not found in `TxKey`
+   |
+note: if you're trying to build a new `TxKey` consider using one of the following associated functions:
+      TxKey::random
+      TxKey::from_genesis_seed
+      TxKey::from_intent_seed
+      TxKey::seeded
+      TxKey::open
+  --> src/tx_key.rs
+   |
+   |     pub fn random() -> Result<Self, RandomnessUnavailable> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub fn from_genesis_seed(name: &NameId, recipients: &[u8]) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub fn from_intent_seed(seed: &IntentSeed) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub fn seeded(bytes: [u8; TX_KEY_LEN]) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub fn open(stored: &StoredTxKey) -> Result<Self, StoredKeyError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

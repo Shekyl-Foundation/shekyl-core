@@ -11,15 +11,13 @@ use std::time::{Duration, Instant};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
-    form_header, judge_header, seed_height, target_claim, AtHeight, FakechainSchedule, FormAttempt,
+    form_header, judge_header, seed_height, target_claim, AtHeight, CappedEpoch, FormAttempt,
     FormedHeader, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
 use shekyl_difficulty::{CumulativeDifficulty, N};
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{PortableMap, ResponseHeaders, HEADERS_RESPONSE_BYTES};
-use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot,
-};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, SectionRoot};
 use shekyl_wire::{BlockHeader, PowBlob};
 
 use crate::model::{Event, Proved, Sync, SYNC_RATE_FLOOR};
@@ -32,8 +30,8 @@ fn issued(_: BlockHeight) -> RuleSet {
 fn cap(blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
-    RuleSet::fakechain(None, schedule)
+        CappedEpoch::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(None, schedule)
 }
 
 fn wide(_: BlockHeight) -> RuleSet {
@@ -70,7 +68,7 @@ fn header_record(hash: BlockHash, work: CumulativeDifficulty, previous: BlockHas
             previous,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
-            attestation_root: AttestationRoot::from_bytes([0; 32]),
+            section_root: SectionRoot::from_bytes([0; 32]),
         },
         cumulative_difficulty: work,
     }
@@ -157,7 +155,7 @@ fn extension(len: u64) -> Extension {
     .expect("the mock answers")
     .expect("the header forms");
     let judged = chain.with_view(|view| {
-        match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view") {
+        match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view") {
             Ok(judged) => judged,
             Err(refused) => panic!("judge refused: {refused:?}"),
         }
@@ -273,7 +271,7 @@ fn a_heavier_tip_within_the_cap_displaces() {
     let built = extension(19);
     let header = built.hash;
     let work = built.work;
-    let mut sync = Sync::new(Trust::UNANCHORED, wide);
+    let mut sync = Sync::new(Trust::UNPINNED, wide);
     observe_tall(
         &mut sync,
         built.fork.to_raw() + 2,
@@ -290,7 +288,7 @@ fn an_equal_work_tip_does_not_displace() {
     let height = built.fork.to_raw() + 2;
     let local = Counted::hash_of(BlockHeight::from_raw(height));
     let work = built.work;
-    let mut sync = Sync::new(Trust::UNANCHORED, wide);
+    let mut sync = Sync::new(Trust::UNPINNED, wide);
     observe_tall(&mut sync, height, work);
     prove(&mut sync, built);
     assert_eq!(sync.selected().hash, local);
@@ -303,7 +301,7 @@ fn a_heavier_tip_past_the_cap_does_not_displace() {
     let height = built.fork.to_raw() + 2;
     let local = Counted::hash_of(BlockHeight::from_raw(height));
     assert!(height - built.fork.to_raw() > 1);
-    let mut sync = Sync::new(Trust::UNANCHORED, tight);
+    let mut sync = Sync::new(Trust::UNPINNED, tight);
     observe_tall(&mut sync, height, CumulativeDifficulty::from_raw(1));
     prove(&mut sync, built);
     assert_eq!(sync.selected().hash, local);
@@ -317,7 +315,7 @@ fn the_locator_reads_logarithmically() {
         reads: Cell::new(0),
         anchors: Vec::new(),
     };
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     let mut out = Vec::new();
     sync.handle(
         Event::SessionOpened {
@@ -354,7 +352,7 @@ fn selection_reads_one_header_per_candidate_tip() {
     let first = extension(19);
     let second = extension(15);
     let anchors = vec![(first.fork, first.parent), (second.fork, second.parent)];
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     observe_tall(
         &mut sync,
         first.fork.to_raw() + 2,
@@ -409,7 +407,7 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
         reads: Cell::new(0),
         anchors: Vec::new(),
     };
-    let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    let mut sync = Sync::new(Trust::UNPINNED, issued);
     let mut out = Vec::new();
     let now = Instant::now();
     sync.handle(
@@ -446,9 +444,8 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
 
 fn fixed_rules() -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
-    let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(64)).expect("cap inside the epoch");
-    RuleSet::fakechain(core::num::NonZeroU128::new(1_000), schedule)
+    let schedule = CappedEpoch::new(epoch, BlockCount::from_raw(64)).expect("cap inside the epoch");
+    RuleSet::GENESIS.with_levers(core::num::NonZeroU128::new(1_000), schedule)
 }
 
 /// The next header on `view`, whose tip is `parent`. The seed and the
@@ -475,9 +472,7 @@ where
             AtHeight::AboveTip => panic!("the seed height is on the branch"),
         },
     };
-    let target = target_claim(view, connecting, rules)
-        .expect("the view answers")
-        .expect("the window has a target");
+    let target = target_claim(view, connecting, rules).expect("the view answers");
     let pow = PowBlob::read(&block.pow_blob()).expect("preimage");
     form_header(
         &pow,
@@ -589,7 +584,7 @@ fn an_unverified_header_run_above_a_fixed_main_chain_joins_the_tree() {
     let rules = cap(64);
     let main = chain_of(101);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let mut hashes = Vec::with_capacity(usize::try_from(RUN).expect("the run fits"));
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
@@ -677,7 +672,7 @@ fn adopting_ten_thousand_unverified_headers_does_not_walk_the_branch() {
     let rules = fixed_rules();
     let main = chain_of(101);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();
@@ -734,7 +729,7 @@ fn a_fork_below_the_tip_enters_when_it_is_heavier() {
     let main = chain_of(21);
     let fork = chain_of(11);
     let mut block = candidate_on(&fork, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();
@@ -792,7 +787,7 @@ fn a_header_judged_against_the_wrong_view_is_recorded() {
     let rules = cap(64);
     let main = chain_of(101);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         let mut out = Vec::new();
@@ -835,7 +830,7 @@ fn a_heavier_unverified_branch_takes_the_long_run_slot() {
     // Below `N` every block has the genesis difficulty, so the two
     // branches cannot diverge. The fork sits above the window.
     let main = chain_of(N + 20);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let view = HeavyTip(view);
         let tip = view.tip().expect("main answers").expect("a tip");
@@ -885,13 +880,13 @@ fn a_heavier_unverified_branch_takes_the_long_run_slot() {
         let fast = branch_pows(&main, &parent, &[30, 30]);
         mock_headers(&mut sync, &view, 1, slow);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(1),
             "the first budget took the slot"
         );
         mock_headers(&mut sync, &view, 2, fast);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(2),
             "the heavier unverified branch did not take the slot"
         );

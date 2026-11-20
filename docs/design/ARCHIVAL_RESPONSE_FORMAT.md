@@ -29,7 +29,7 @@ predecessor `h`, rebuilds the transcript with the connecting chain's hash
 at that height, and refuses every pass record while `h < 720 + L` (724).
 `verify_pass_countersignature` verifies that message: the
 verify context carries `predecessor_height` and the `L + 1` anchor hashes
-(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window`)
+(`anchor_hashes_ptr/len`, sized through `shekyl_archival_pass_anchor_window` (deleted, `DEL-008`))
 and no longer carries `cb_out_key`, `cb_out_key_readable`, or
 `prev_block_hash`; verdict codes 8 (`CBKEY_UNREADABLE`) and 12
 (`PREVHASH_UNPOPULATED`) are RETIRED, never reused; 13, 14, 15 are minted
@@ -795,7 +795,7 @@ checking explicitly on any future field change rather than discovering it after
 a bulk regeneration.
 
 **Landed 2026-08-20, and the FFI confirmed the premise before a line changed.**
-`shekyl_archival_verify_serve_credit_vin` already received the registry's
+`shekyl_archival_verify_serve_credit_vin` (deleted, `DEL-008`) already received the registry's
 `R_k` from C++ (`ctx.registry_segment_subroot_rk`, populated at
 `blockchain.cpp:5455`) and **compared the wire value against it**; it likewise
 checked the wire leaf index against `challenge_leaf_index`. Both checks could
@@ -844,8 +844,8 @@ fixed message, is untouched. Kept side after all four removals: `p_id` 32 ‖
 ### `RF-D10` — RULED 2026-08-20: the C++ side holds an opaque blob, not a typed struct
 
 **The question that produced it:** *why is this going into C++ instead of
-Rust?* The answer is that it should not have been. [Rule 20](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
-and [rule 40](../../.cursor/rules/40-ffi-discipline.mdc) say new code advances
+Rust?* The answer is that it should not have been. [Rule 20](../completed/RULE_20_RUST_VS_CPP.md)
+and [rule 40](../completed/RULE_40_FFI_DISCIPLINE.md) say new code advances
 the FFI boundary rather than thickening C++, and the codebase already had the
 pattern: `txin_archival_reward_emission` is an **opaque `canonical_bytes`
 blob** whose only parser is Rust — C++ never reads inside, and consensus code
@@ -862,7 +862,7 @@ migration would ever have.
 | `txin_archival_serve_credit_response` | nine typed fields, C++ codec | `std::vector<uint8_t> canonical_bytes` (tag included), transport guard only |
 | pruned half | — | `CtSigPrunable::serve_credit_pruned: vector<vector<uint8_t>>`, one opaque record per serve-credit vin, each length-prefixed |
 | `(P, shard, E)` for DB bits, pool keys, block-unique keys | field reads at four sites | one helper, `get_archival_serve_credit_key`, over `shekyl_archival_serve_credit_extract` — given the **tagged blob whole**, as the emission extract is; C++ never slices the tag off, and an empty blob is a wire error, not a null-pointer error (review, 2026-08-21) |
-| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (RF-D6) |
+| challenge leaf index | read off the vin | `shekyl_archival_challenge_leaf_index` (deleted, `DEL-008`) (RF-D6) |
 | admission | C++ path-bound checks + typed re-serialisation into the FFI | `shekyl_archival_verify_serve_credit_vin(kept, pruned, ctx)` — every structural bound is the Rust parser's |
 | JSON / boost archives | field-by-field | the blob, as for the emission vin |
 
@@ -1035,7 +1035,7 @@ Nothing is lost that the design claimed to have: service evidence is
 ruling was reaching for a forensic property the mechanism had already ruled out.
 
 **This also settles a question two rounds treated as open.**
-[`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §2's deletion surface —
+[`ARCHIVAL_CREDIT_WIRE.md`](../completed/ARCHIVAL_CREDIT_WIRE.md) §2's deletion surface —
 which lists `challenge_leaf_index`, `SegmentPathOpening` and `verify_segment_path`
 — is **correct as written**, not stale. §9.5.1's *"restores the per-challenge
 binding"* refers to pinning responses to their **assignment blocks**, not to a
@@ -1056,7 +1056,7 @@ pqc_auths.size() == vin.size()  -> serialize = 1   blob = 3636  unprunable = 363
 
 | Site | Requires |
 | --- | --- |
-| `cryptonote_basic.h:621` (write path) | `pqc_auths.size() == vin.size()` |
+| `cryptonote_basic.h` at `ac3836de90` (line 621) (write path) | `pqc_auths.size() == vin.size()` |
 | `tx_verification_utils.cpp:118` (verify) | `tx.pqc_auths.empty()` |
 | `blockchain.cpp:3746` (verify) | serve-credit `pqc_auths` **must be empty** |
 

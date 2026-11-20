@@ -145,7 +145,7 @@ overlay-zone identity, which PWD-I2 already closed.
 | Input | Source | Status |
 |---|---|---|
 | `peer_id` leaves the wire | PWD-I1 | RULED, unimplemented |
-| Overlay zones announce a sentinel, never a per-node id | PWD-I2; `ANON_ZONE_SENTINEL_PEER_ID` at `src/p2p/net_node.h:180` | RULED |
+| Overlay zones announce a sentinel, never a per-node id | PWD-I2; `ANON_ZONE_SENTINEL_PEER_ID` at line 180 of `src/p2p/net_node.h` at `e8838b0095` | RULED |
 | White means *this process dialled it and it answered* | PR #637 amendment | IN REVIEW |
 | `--p2p-external-port` is kept | Rick, 2026-09-06: *"leave the external port specifier on there, because it really is user-configurable, even if it usually isn't"* | RULED — see PWD-E6 |
 | An endpoint is not an identity | PW-19a | RULED |
@@ -186,7 +186,7 @@ that check is empty exactly where job 1 is needed.**
 | `UPNP_GetSpecificPortMappingEntry` | `upnpcommands.h:237` | unused |
 | IGD `controlURL` + `servicetype` in scope | `net_node.inl:3228`, used at `:3239` | used only to add a mapping |
 | `socket().local_endpoint()` | `contrib/epee/include/net/abstract_tcp_server2.inl:1098` | read, discarded into a log line |
-| an `addr_you` echo field | — | `basic_node_data` is `network_id`, `my_port`, `peer_id`, `support_flags` only (`src/p2p/p2p_protocol_defs.h:141-153`) |
+| an `addr_you` echo field | — | `basic_node_data` is `network_id`, `my_port`, `peer_id`, `support_flags` only (lines 141 to 153 of `src/p2p/p2p_protocol_defs.h` at `e8838b0095`) |
 | `--p2p-external-ip` | — | does not exist; only `--p2p-external-port` (`net_node.cpp:151`) |
 
 The announcement is `node_data.my_port = m_external_port ? m_external_port : m_listening_port` (`:2172`) — **a port announced for an address never determined.** `UPNP_AddPortMapping` is called with the same port string as both external and internal port (`:3239`), i.e. it *requests* equality and never reads back what it got; on failure it logs and continues (`:3240-3244`).
@@ -386,7 +386,7 @@ do not cite it as current.
 | (c) **Neither — `id` becomes a dead wire field that every consumer still reads** | this is the likeliest outcome of the field set as currently scoped | — | a lane that strips `id` from the gossiped peerlist too |
 
 **(c) is the state to design against, and it is not hypothetical.** `id` is a
-field of `peerlist_entry_base` (`src/p2p/p2p_protocol_defs.h:62`), which is a
+field of `peerlist_entry_base` (line 62 of `src/p2p/p2p_protocol_defs.h` at `e8838b0095`), which is a
 *separate* structure from `basic_node_data` (`:141-153`) — and
 `p2p/basic-node-data-address`'s lane names `basic_node_data` only. In that
 field set `peer_id` leaves the handshake while a gossiped `id` stays on every

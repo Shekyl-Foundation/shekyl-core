@@ -128,6 +128,18 @@ impl Proxy {
         }
     }
 
+    /// A proxy that asks for a pair the caller holds for its own purpose,
+    /// and presents again on each use. The pair is shared, not copied: a
+    /// fixed per-boot isolation username (`TOR_SUPERVISOR.md` §4.5) is
+    /// minted once and read here at every dial.
+    #[must_use]
+    pub fn authenticated_shared(at: SocketAddr, pair: Arc<SocksUsername>) -> Self {
+        Self {
+            at,
+            pair: Some(pair),
+        }
+    }
+
     /// The proxy's address.
     #[must_use]
     pub fn at(&self) -> SocketAddr {

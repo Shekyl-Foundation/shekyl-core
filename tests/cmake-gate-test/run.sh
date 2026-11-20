@@ -14,10 +14,9 @@
 #   - exit 0  → gate fired correctly (EXPECTED; CI job passes).
 #   - exit 1  → gate is broken (REGRESSION; CI job fails).
 #
-# Matching gates (defense-in-depth; all four must be defeated to ship a
+# Matching gates (defense-in-depth; all three must be defeated to ship a
 # 32-bit build):
 #   - rust/shekyl-crypto-pq/src/lib.rs   (Tripwire A, primary)
-#   - rust/shekyl-ffi/src/lib.rs         (Tripwire B, structural-not-observable)
 #   - rust/shekyl-tx-builder/src/lib.rs  (Tripwire C, direct fips204 consumer)
 #   - CMakeLists.txt                     (Tripwire D, exercised here)
 #

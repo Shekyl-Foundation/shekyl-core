@@ -100,7 +100,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 - [shekyl-staking](rust/shekyl-staking/), [shekyl-economics](../../rust/shekyl-economics): consensus and fee maths.
 - [shekyl-daemon-rpc](../../rust/shekyl-daemon-rpc): client to `shekyld`.
 - [shekyl-cli](../../rust/shekyl-cli), [shekyl-wallet-rpc](../../rust/shekyl-wallet-rpc): the two wallet binaries. (The transitional `shekyl-engine-rpc` wallet2-FFI bridge that sat here is deleted — roadmap B1.)
-- [shekyl-ffi](../../rust/shekyl-ffi) typed wallet-ledger surface ([wallet_ledger_ffi.rs](rust/shekyl-ffi/src/wallet_ledger_ffi.rs)) — kept as the SHKW1 contract; the C++ side that consumed it is deleted in this plan.
+- shekyl-ffi (`rust/shekyl-ffi` at `ac3836de90`) typed wallet-ledger surface ([wallet_ledger_ffi.rs](rust/shekyl-ffi/src/wallet_ledger_ffi.rs)) — kept as the SHKW1 contract; the C++ side that consumed it is deleted in this plan.
 
 ### Gap
 

@@ -8,7 +8,7 @@
 //! rows: the `SHT-Q2` fold, per-transaction `txid_parts`, and tip bond
 //! holdings. They are the scheduler's production [`ShardFacts`] and
 //! [`HolderSource`], read by both of the scheduler's daemon callers: the
-//! shard view (`shekyl-daemon-image`'s `shard_view`, which maps a view onto
+//! shard view (the `shekyld` crate's `shard_view`, which maps a view onto
 //! the RPC) and the bundle producer's challenge reads (`SO-D12` increment
 //! 4c), which the node composes. Here, behind the `producer` feature,
 //! because this crate is where the node's store and the scheduler meet; the
@@ -22,7 +22,7 @@ use shekyl_archival_fetch_sched::{
 };
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, ErrorClass, ReadSnapshot, ShardFold, StoreError};
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_types::archival::Holdings;
 use shekyl_types::{BlockHash, BlockHeight, ShardId};
 
@@ -92,7 +92,7 @@ impl HolderSource for StoreHolderSource {
             if !holds_drawn(&record.holdings, shard_id) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,
@@ -112,7 +112,7 @@ impl HolderSource for StoreHolderSource {
             if !matches!(record.holdings, Holdings::CompleteTree) {
                 continue;
             }
-            let verifying_key = HybridPublicKey::from_canonical_bytes(&record.hybrid_pubkey)
+            let verifying_key = FnDsaHybridPublicKey::from_receipt_sign_pk(&record.receipt_sign_pk)
                 .map_err(|_| FactsFault::Inconsistent)?;
             holders.push(Holder {
                 id,
@@ -178,15 +178,18 @@ mod tests {
     use shekyl_types::archival::SettlementEpochBlocks;
     use shekyl_types::ArchivalLength;
 
-    fn empty_store() -> (StoreShardFacts, StoreHolderSource, std::path::PathBuf) {
-        let path = std::env::temp_dir().join(format!(
-            "shekyl-sv-d9-{}-{}.redb",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
+    use crate::test_support::{tmp, TestPath};
+
+    /// Facts and holders over one empty store. The directory is last, so
+    /// it drops after both handles. They share the store.
+    struct EmptyStore {
+        facts: StoreShardFacts,
+        holders: StoreHolderSource,
+        _path: TestPath,
+    }
+
+    fn empty_store() -> EmptyStore {
+        let path = tmp("sv-d9");
         let store = Arc::new(
             ChainStore::create(
                 &path,
@@ -194,16 +197,18 @@ mod tests {
             )
             .expect("create empty store"),
         );
-        (
-            StoreShardFacts::new(Arc::clone(&store)),
-            StoreHolderSource::new(store),
-            path,
-        )
+        EmptyStore {
+            facts: StoreShardFacts::new(Arc::clone(&store)),
+            holders: StoreHolderSource::new(store),
+            _path: path,
+        }
     }
 
     #[test]
     fn an_empty_store_has_an_open_tip_shard_and_no_holders() {
-        let (facts, holders, path) = empty_store();
+        let opened = empty_store();
+        let facts = &opened.facts;
+        let holders = &opened.holders;
         assert_eq!(facts.tip_height().expect("tip"), BlockHeight::ZERO);
         assert_eq!(facts.block_hash_at(BlockHeight::ZERO).expect("hash"), None);
         match facts.shard(ShardId::from_raw(0)).expect("standing") {
@@ -220,8 +225,5 @@ mod tests {
             .holders_of(ShardId::from_raw(0))
             .expect("holders")
             .is_empty());
-        drop(facts);
-        drop(holders);
-        std::fs::remove_file(path).expect("remove temp store");
     }
 }

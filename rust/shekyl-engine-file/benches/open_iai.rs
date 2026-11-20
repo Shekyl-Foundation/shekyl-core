@@ -33,19 +33,16 @@ const BENCH_PASSWORD: &[u8] = b"correct horse battery staple";
 fn prepared_wallet() -> (TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path().join("bench.wallet");
-    let master_seed = [0x11u8; 64];
+    let master_seed = [0x11u8; 32];
     let mut address = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
     address[0] = 0x01;
 
-    let cap = CapabilityContent::Full {
-        master_seed_64: &master_seed,
-    };
+    let cap = CapabilityContent::Full { seed: &master_seed };
     let ledger = WalletLedger::empty();
     let params = CreateParams {
         base_path: &base,
         password: BENCH_PASSWORD,
         network: BENCH_NETWORK,
-        seed_format: 0x00,
         capability: &cap,
         creation_timestamp: 0x6000_0000,
         restore_height_hint: 0,

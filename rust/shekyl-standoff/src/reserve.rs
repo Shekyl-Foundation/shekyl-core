@@ -16,11 +16,11 @@
 //!
 //! Spend-time invariant only: the cover **draw** ([`crate::cover`]) is never
 //! consulted or narrowed by it (`ARCHIVAL_COVER_DRAW.md` §1.9 DQ4). Kept in
-//! this crate — the single source for `P`-lane wallet-side amount constants,
-//! beside [`COVER_RUNG_ATOMIC`] — so the sizing relation between the reserve
-//! and the cover draw's bound is asserted at the one site that sees both.
-
-use crate::cover::COVER_RUNG_ATOMIC;
+//! this crate — the single source for `P`-lane wallet-side amount
+//! constants, beside the cover draw. The cover draw's bound is the archival
+//! bond floor, a consensus parameter this crate does not read, so the sizing
+//! relation between the reserve and that bound is asserted in
+//! `shekyl-engine-core`, the one site that sees both.
 
 /// The exit-fee reserve in atomic units (1 SKL = 1_000_000_000 atomic).
 ///
@@ -48,10 +48,11 @@ use crate::cover::COVER_RUNG_ATOMIC;
 ///   re-run rather than silently under-covering.
 ///
 /// **Bounds for safe adjustment** (rule 75). Must satisfy
-/// `0 < EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC` (asserted below).
+/// `0 < EXIT_FEE_RESERVE_ATOMIC < rung`, the rung the archival bond floor
+/// (asserted below and, against the floor, in `shekyl-engine-core`).
 /// Re-grounded against the tiling cover model (`ARCHIVAL_COVER_DRAW.md`,
 /// 2026-07-21, which retired the runway floor): the protocol **always** adds a
-/// cover draw to a derived bond amount — uniform over `[1, COVER_RUNG_ATOMIC)`,
+/// cover draw to a derived bond amount — uniform over `[1, rung)`,
 /// spreading every funded bond across a rung so no tx is identifiable as a
 /// bond by amount — but the draw has an exclusive upper bound and **no floor**,
 /// so the old absolute "a fresh pool always clears the reserve" guarantee is
@@ -69,13 +70,12 @@ use crate::cover::COVER_RUNG_ATOMIC;
 /// not fatal, by the same §7.2 destitute-corner escape.
 pub const EXIT_FEE_RESERVE_ATOMIC: u64 = 50_000_000;
 
-/// Pinned sizing assert (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2's dominance
-/// assert, re-grounded after `ARCHIVAL_COVER_DRAW.md` retired the runway
-/// floor): the reserve stays strictly below one cover rung — the tiling draw's
-/// exclusive upper bound — so a fresh cover draw clears the reserve with high
-/// probability, and the fully-inverted sizing (reserve ≥ rung: **every** fresh
-/// pool below the reserve, every fresh live drain blocked) cannot compile.
-const _: () = assert!(EXIT_FEE_RESERVE_ATOMIC < COVER_RUNG_ATOMIC);
+// The dominance relation (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2, re-grounded
+// after `ARCHIVAL_COVER_DRAW.md` retired the runway floor) — the reserve
+// strictly below one cover rung, the tiling draw's exclusive upper bound — is
+// asserted where the rung is visible: `shekyl-engine-core`'s
+// `the_exit_fee_reserve_is_below_one_cover_rung`, against the archival bond
+// floor. This crate reads no consensus constant.
 
 /// The reserve is nonzero (a zero reserve would silently disable the spend-time
 /// floor for every live-persona mid-life constructor).

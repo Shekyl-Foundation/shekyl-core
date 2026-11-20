@@ -40,6 +40,7 @@ use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT as G, edwards::EdwardsPoint, scalar::Scalar,
 };
 use sha2::{Digest, Sha512};
+use shekyl_network::envelope::Framed32;
 use zeroize::Zeroize;
 
 const DOMAIN_SEPARATOR: &[u8] = b"shekyl-reserve-proof-dleq-v1";
@@ -87,7 +88,7 @@ fn challenge_hash(
     r2: &EdwardsPoint,
     pub1: &EdwardsPoint,
     pub2: &EdwardsPoint,
-    msg: &[u8],
+    msg: &Framed32,
 ) -> Scalar {
     let mut hasher = Sha512::new();
     hasher.update(DOMAIN_SEPARATOR);
@@ -97,7 +98,7 @@ fn challenge_hash(
     hasher.update(r2.compress().as_bytes());
     hasher.update(pub1.compress().as_bytes());
     hasher.update(pub2.compress().as_bytes());
-    hasher.update(msg);
+    hasher.update(msg.as_bytes());
     Scalar::from_hash(hasher)
 }
 
@@ -116,7 +117,7 @@ pub fn prove_dleq(
     base2: &EdwardsPoint,
     pub1: &EdwardsPoint,
     pub2: &EdwardsPoint,
-    msg: &[u8],
+    msg: &Framed32,
 ) -> DleqProof {
     let mut k = hedged_nonce(x, base2, pub1, pub2, msg);
     let r1 = k * G;
@@ -140,7 +141,7 @@ fn hedged_nonce(
     base2: &EdwardsPoint,
     pub1: &EdwardsPoint,
     pub2: &EdwardsPoint,
-    msg: &[u8],
+    msg: &Framed32,
 ) -> Scalar {
     let mut fresh = shekyl_crypto_pq::rng::hedged_fresh32();
     let k = nonce_from_fresh(x, base2, pub1, pub2, msg, &fresh);
@@ -157,7 +158,7 @@ fn nonce_from_fresh(
     base2: &EdwardsPoint,
     pub1: &EdwardsPoint,
     pub2: &EdwardsPoint,
-    msg: &[u8],
+    msg: &Framed32,
     fresh: &[u8; 32],
 ) -> Scalar {
     let mut hasher = Sha512::new();
@@ -168,7 +169,7 @@ fn nonce_from_fresh(
     hasher.update(base2.compress().as_bytes());
     hasher.update(pub1.compress().as_bytes());
     hasher.update(pub2.compress().as_bytes());
-    hasher.update(msg);
+    hasher.update(msg.as_bytes());
     hasher.update(fresh);
     Scalar::from_hash(hasher)
 }
@@ -187,7 +188,7 @@ pub fn verify_dleq(
     base2: &EdwardsPoint,
     pub1: &EdwardsPoint,
     pub2: &EdwardsPoint,
-    msg: &[u8],
+    msg: &Framed32,
     proof: &DleqProof,
 ) -> bool {
     let c: Scalar = match Option::from(Scalar::from_canonical_bytes(proof.c)) {
@@ -212,13 +213,21 @@ mod tests {
     use super::*;
     use rand_core::OsRng;
 
+    /// A context as production makes one: the reserve proof's DLEQ frame.
+    fn ctx(label: &[u8]) -> Framed32 {
+        crate::reserve_proof::RESERVE_DLEQ_CONTEXT.frame(
+            &shekyl_network::Network::Testnet.network_id(),
+            [label, b"", b""],
+        )
+    }
+
     #[test]
     fn dleq_round_trip() {
         let x = Scalar::random(&mut OsRng);
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = x * base2;
-        let msg = b"test-message";
+        let msg = &ctx(b"test-message");
 
         let proof = prove_dleq(&x, &base2, &pub1, &pub2, msg);
         assert!(
@@ -239,7 +248,7 @@ mod tests {
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = x * base2;
-        let msg = b"same statement";
+        let msg = &ctx(b"same statement");
 
         let a = prove_dleq(&x, &base2, &pub1, &pub2, msg);
         let b = prove_dleq(&x, &base2, &pub1, &pub2, msg);
@@ -262,8 +271,8 @@ mod tests {
         let pub1 = x * G;
         let pub2 = x * base2;
         let pub2_alt = x * base2_alt;
-        let msg = b"ctx-a";
-        let msg_alt = b"ctx-b";
+        let msg = &ctx(b"ctx-a");
+        let msg_alt = &ctx(b"ctx-b");
 
         let base = nonce_from_fresh(&x, &base2, &pub1, &pub2, msg, &zero);
         // Same statement → same k (stable deterministic form).
@@ -303,7 +312,7 @@ mod tests {
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = x * base2;
-        let msg = b"test-message";
+        let msg = &ctx(b"test-message");
 
         let bad_proof = prove_dleq(&x_wrong, &base2, &pub1, &pub2, msg);
         assert!(
@@ -319,9 +328,9 @@ mod tests {
         let pub1 = x * G;
         let pub2 = x * base2;
 
-        let proof = prove_dleq(&x, &base2, &pub1, &pub2, b"msg-a");
+        let proof = prove_dleq(&x, &base2, &pub1, &pub2, &ctx(b"msg-a"));
         assert!(
-            !verify_dleq(&base2, &pub1, &pub2, b"msg-b", &proof),
+            !verify_dleq(&base2, &pub1, &pub2, &ctx(b"msg-b"), &proof),
             "DLEQ with different message must fail"
         );
     }
@@ -333,7 +342,7 @@ mod tests {
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = y * base2; // different DL
-        let msg = b"test";
+        let msg = &ctx(b"test");
 
         let proof = prove_dleq(&x, &base2, &pub1, &pub2, msg);
         assert!(
@@ -348,7 +357,7 @@ mod tests {
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = x * base2;
-        let msg = b"ser-test";
+        let msg = &ctx(b"ser-test");
 
         let proof = prove_dleq(&x, &base2, &pub1, &pub2, msg);
         let bytes = proof.to_bytes();
@@ -367,7 +376,7 @@ mod tests {
         let base2 = Scalar::random(&mut OsRng) * G;
         let pub1 = x * G;
         let pub2 = x * base2;
-        let msg = b"tamper-test";
+        let msg = &ctx(b"tamper-test");
 
         let proof = prove_dleq(&x, &base2, &pub1, &pub2, msg);
         let mut bytes = proof.to_bytes();

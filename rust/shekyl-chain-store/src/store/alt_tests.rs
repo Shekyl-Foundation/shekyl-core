@@ -13,7 +13,7 @@
 
 use shekyl_chain_rules::{alt_against, AltValid, RuleSet, Trust};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::archival::AttestationWitness;
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight, BlockWeight};
 
 use shekyl_chain_rules::harness::fixture;
@@ -25,7 +25,7 @@ use super::connect_fixtures::{
     at, candidate, candidate_over, connect_chain, formed, judge, priced_on, root_going_into, spend,
     spendable_prefix, FIRST_SPEND_HEIGHT,
 };
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH, PROBE};
 use super::*;
 use crate::codec::{forged, AltBlock, AltBlockFacts, AltBodies, Canonical, CodecError, Encoded};
 use crate::lmdb_order::LmdbHashKey;
@@ -39,7 +39,11 @@ pub(super) const fn h(n: u64) -> BlockHeight {
 /// A row from bare facts, for planting around AL1 (`AltBlock::checked`;
 /// AL1 itself takes no row). The facts are fixture literals: a planted
 /// row's bookkeeping is whatever the test needs it to be.
-pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -> AltBlock {
+pub(super) fn alt(
+    height: BlockHeight,
+    block: &[u8],
+    references: Option<BundleReferences>,
+) -> AltBlock {
     let raw = height.to_raw();
     AltBlock::checked(
         AltBlockFacts {
@@ -52,7 +56,7 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             },
         },
         block,
-        witness,
+        references,
     )
     .expect("fixture record")
 }
@@ -107,12 +111,16 @@ pub(super) fn side_block(
     (cand.block.hash(), cand.block.serialize())
 }
 
-/// `candidate` carrying `witness` as its attestation sidecar (CW-2: the
-/// witness rides in the alt row the tier's verdict becomes).
-pub(super) fn with_witness(candidate: Candidate, witness: &[u8]) -> Candidate {
-    candidate.with_attestation_witness(Some(
-        AttestationWitness::new(witness.to_vec()).expect("a fixture witness is well-formed"),
-    ))
+/// A one-reference section of `fill` bytes: the tier carries a sidecar
+/// unopened, so its bytes need only be a section.
+pub(super) fn references(fill: u8) -> BundleReferences {
+    BundleReferences::new(vec![vec![fill; 80]]).expect("a fixture section")
+}
+
+/// `candidate` carrying [`references`] of `fill` as its sidecar (CW-2: the
+/// references ride in the alt row the tier's verdict becomes).
+pub(super) fn with_references(candidate: Candidate, fill: u8) -> Candidate {
+    candidate.with_bundle_references(Some(references(fill)))
 }
 
 /// The cheap tier over `snap` — what AL1 takes. CEN-K2's walk from the
@@ -130,7 +138,7 @@ pub(super) fn admitted<'s>(
         .expect("the fixture's parent links to the recorded chain");
     let view = AltView::new(snap, chain);
     let formed = formed(&view, candidate).expect("the stitched view answers the seed");
-    match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+    match alt_against(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
         Ok(Ok(valid)) => valid,
         Ok(Err(refused)) => panic!("the fixture satisfies every row of the tier: {refused}"),
         Err(fault) => panic!("the stitched view answers: {fault}"),
@@ -177,12 +185,12 @@ fn insert_read_enumerate_remove_and_drop() {
     let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
     let a_cand = side_candidate(h(1), main[0], 3);
     let (a, a_bytes) = (a_cand.block.hash(), a_cand.block.serialize());
-    let witness = vec![0xA5; 40];
+    let section = references(0xA5);
 
     // `a` first: `b`'s chain walks through `a`'s row, so `b` is judged on a
     // snapshot that holds it (K2 — the tier reads what the store holds).
     insert_admitted(&store, a_cand).expect("insert a");
-    let b_cand = with_witness(side_candidate(h(2), a, 4), &witness);
+    let b_cand = with_references(side_candidate(h(2), a, 4), 0xA5);
     let b = b_cand.block.hash();
     let judged = store.begin_read().expect("read");
     let b_valid = admitted(&judged, b_cand);
@@ -196,8 +204,8 @@ fn insert_read_enumerate_remove_and_drop() {
             batch
                 .alt_block(&b)?
                 .as_ref()
-                .and_then(AltBlock::attestation_witness),
-            Some(witness.as_slice())
+                .and_then(AltBlock::bundle_references),
+            Some(&section)
         );
         Ok(())
     });
@@ -218,7 +226,7 @@ fn insert_read_enumerate_remove_and_drop() {
             "handed out parsed, not as bytes"
         );
         assert_eq!(got.block().hash(), a, "the key is the block's identity");
-        assert_eq!(got.attestation_witness(), None);
+        assert_eq!(got.bundle_references(), None);
         assert_eq!(got.height(), BlockHeight::from_raw(1));
         assert!(
             got.block_weight().to_raw() > 0,
@@ -229,10 +237,10 @@ fn insert_read_enumerate_remove_and_drop() {
         assert_eq!(all.len(), 2);
         assert!(all
             .iter()
-            .any(|e| e.id == a && e.block.attestation_witness().is_none()));
+            .any(|e| e.id == a && e.block.bundle_references().is_none()));
         assert!(all
             .iter()
-            .any(|e| e.id == b && e.block.attestation_witness() == Some(witness.as_slice())));
+            .any(|e| e.id == b && e.block.bundle_references() == Some(&section)));
         // Key order is the table's, never insertion order.
         let keys: Vec<LmdbHashKey> = all
             .iter()
@@ -265,7 +273,6 @@ fn insert_read_enumerate_remove_and_drop() {
         store.connect_state().is_live(),
         "alt writes are not chain work; nothing halts"
     );
-    cleanup(&path);
 }
 
 /// Plant `bodies` under `key` in `alt_block_bodies` alone, around AL1.
@@ -386,7 +393,6 @@ fn the_bodies_are_written_read_and_removed_with_the_row() {
         snap.alt_block_bodies(&stray).expect_err("no row"),
         "alt_blocks"
     ));
-    cleanup(&path);
 }
 
 /// A removal takes the closure — the rows it selects and every row built
@@ -460,7 +466,73 @@ fn a_removed_row_takes_every_row_built_on_it() {
         .alt_block(&e_id)
         .expect("read")
         .is_none());
-    cleanup(&path);
+}
+
+/// The alt table's replies come from its key order and its heights, never
+/// from a hash seed (`CHAIN_FORGE.md` §5.2: a forged chain's store and trace
+/// are byte for byte the same in every process). Two stores hold the same
+/// wide branch, six siblings at one height each with a child, and each
+/// store's reads run under their own hash seeds (every `RandomState` a
+/// reader might build draws fresh keys). The stored chains' listing and a
+/// removal's reply are equal between the two stores, and the reply climbs
+/// by height with the table's key order breaking a tie. A reader that walked
+/// a hash collection's order would give the two stores different orders.
+#[test]
+fn the_listing_and_a_removal_are_the_same_under_two_hash_seeds() {
+    let build = |name: &str| {
+        let path = tmp(name);
+        let store = ChainStore::create(&path, EPOCH).expect("create");
+        let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+        let a = side_candidate(h(1), main[0], 3);
+        let a_id = a.block.hash();
+        insert_admitted(&store, a).expect("a");
+        // Key images 4..=9 for the siblings and 10..=15 for their children:
+        // the fixture's pinned points stop at sixteen.
+        for tag in 4..10 {
+            let sibling = side_candidate(h(2), a_id, tag);
+            let sibling_id = sibling.block.hash();
+            insert_admitted(&store, sibling).expect("sibling");
+            insert_admitted(&store, side_candidate(h(3), sibling_id, tag + 6)).expect("child");
+        }
+        (path, store, a_id)
+    };
+    let (_first_dir, first, a) = build("alt-seed-first");
+    let (_second_dir, second, a_again) = build("alt-seed-second");
+    assert_eq!(a, a_again, "the fixtures are the same blocks");
+
+    let listing = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .alternate_chains()
+            .expect("listing")
+    };
+    let listed = listing(&first);
+    assert_eq!(listed.len(), 6, "one chain per sibling's child");
+    assert_eq!(listed, listing(&second));
+
+    let remove = |store: &ChainStore| -> Vec<BlockHash> {
+        let out: Result<Vec<BlockHash>, TestErr> =
+            store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+        out.expect("the branch")
+    };
+    let removed = remove(&first);
+    assert_eq!(removed.len(), 13);
+    assert_eq!(removed, remove(&second));
+    let heights: Vec<BlockHeight> = removed
+        .iter()
+        .map(|id| {
+            listed
+                .iter()
+                .flat_map(super::alt_view::AltChain::entries)
+                .find(|entry| entry.id == *id)
+                .map_or(h(1), |entry| entry.block.height())
+        })
+        .collect();
+    assert!(
+        heights.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the reply climbs by height: {heights:?}"
+    );
 }
 
 /// A block id has one home (module docs): AL1 refuses a hash the main
@@ -487,7 +559,6 @@ fn a_recorded_block_is_refused_as_an_alt_row() {
     );
     drop(snap);
     assert_eq!(alt_count(&store), 0);
-    cleanup(&path);
 }
 
 /// The connect's half: a block the alt table holds leaves it in the write
@@ -530,7 +601,6 @@ fn a_connect_takes_its_block_out_of_the_alt_table() {
         "the child hangs from the main chain"
     );
     drop(snap);
-    cleanup(&path);
 }
 
 #[test]
@@ -572,7 +642,6 @@ fn insert_of_a_held_hash_and_remove_of_an_absent_one_are_refusals() {
     let snap = store.begin_read().expect("read");
     assert!(snap.has_alt_block(&a).expect("has"));
     assert!(store.connect_state().is_live());
-    cleanup(&path);
 }
 
 #[test]
@@ -615,7 +684,6 @@ fn a_row_that_does_not_decode_is_si7_on_both_readers() {
         store.connect_state().is_live(),
         "alt corruption aborts the batch and does not halt the writer"
     );
-    cleanup(&path);
 }
 
 /// A well-formed row planted under a key that is not the block's hash.
@@ -669,7 +737,6 @@ fn a_row_whose_block_does_not_hash_to_its_key_is_si7() {
         store.connect_state().is_live(),
         "a mis-keyed alt row does not halt the writer"
     );
-    cleanup(&path);
 }
 
 /// SAL-1: pop to the split, demote, promote, remove — one closure. Then the
@@ -736,13 +803,13 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         "the fixture's coinbase is one `repay` prices"
     );
     let alt_top = alt_cand.block.hash();
-    let alt_witness = vec![0x5A; 40];
-    // top' through the tier, carrying its witness (CW-2): the alt row is
+    let alt_references = references(0x5A);
+    // top' through the tier, carrying its references (CW-2): the alt row is
     // the verdict. Its parent is recorded, so the chain has no entries and
     // the fork pops one block.
     // The snapshot stays live through the write: the verdict borrows it.
     let judged = store.begin_read().expect("read");
-    let alt_valid = admitted(&judged, with_witness(alt_cand.clone(), &alt_witness));
+    let alt_valid = admitted(&judged, with_references(alt_cand.clone(), 0x5A));
     assert_eq!(alt_valid.hash(), alt_top);
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(alt_valid)?));
     out.expect("hold top'");
@@ -757,7 +824,7 @@ fn a_switch_is_one_transaction_or_none_of_it() {
     assert_eq!(demoted.hash(), main_top_hash);
 
     // The switch to top': demote top, promote top'.
-    let out: Result<Vec<u8>, TestErr> = store.write(|batch| {
+    let out: Result<BundleReferences, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         // Read what the switch is about to change, through the batch.
         let promoted = batch.alt_block(&alt_top)?.expect("top' is held");
@@ -767,12 +834,12 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         // The connect takes the promoted block's own row (one home per id).
         let connected = batch.connect(judge(&view, alt_cand.clone())?, RuleSet::GENESIS)?;
         assert!(connected.left_alt);
-        Ok(promoted.attestation_witness().expect("witness").to_vec())
+        Ok(promoted.bundle_references().expect("references").clone())
     });
     assert_eq!(
         out,
-        Ok(alt_witness),
-        "the promoted block's witness travels out of the switch"
+        Ok(alt_references),
+        "the promoted block's references travel out of the switch"
     );
     assert_eq!(tip_height(&store), Some(top));
     assert_eq!(hash_at(&store, top), Some(alt_top));
@@ -832,18 +899,17 @@ fn a_switch_is_one_transaction_or_none_of_it() {
         "the insert did not land"
     );
     assert!(store.connect_state().is_live(), "a refusal is not a halt");
-    cleanup(&path);
 }
 
 /// SAL-15: the alt surface is *not chain state* (§11.2) — a fact every
-/// digest declared and, for `alt_blocks` and its witness, nothing enforced
+/// digest declared and, for `alt_blocks` and its sidecar, nothing enforced
 /// (`LMDB_WRITE_ATOMICITY_AUDIT.md`, non-canonical class: "declared, not
-/// enforced"). With the witness a field of the alt row there is one table
-/// to test: an AL1 carrying a witness must move no digest. This test exists
+/// enforced"). With the sidecar a field of the alt row there is one table
+/// to test: an AL1 carrying references must move no digest. This test exists
 /// because the fold made the boundary testable, not because the fold was
 /// made to close the audit row.
 #[test]
-fn an_alt_block_with_a_witness_moves_no_digest() {
+fn an_alt_block_with_references_moves_no_digest() {
     let path = tmp("alt-digest-boundary");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let main = connect_chain(&store, &spendable_prefix(vec![vec![spend()]])).hashes;
@@ -856,7 +922,7 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
     let judged = store.begin_read().expect("read");
     let a_valid = admitted(
         &judged,
-        with_witness(side_candidate(h(1), main[0], 6), &[0xC3; 40]),
+        with_references(side_candidate(h(1), main[0], 6), 0xC3),
     );
     let a = a_valid.hash();
     let out: Result<(), TestErr> = store.write(|batch| Ok(batch.insert_alt_block(a_valid)?));
@@ -867,7 +933,7 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
     assert_eq!(
         snap.logical_state_digest_v0().expect("digest"),
         before,
-        "an alt block and its witness are outside the digest's domain"
+        "an alt block and its references are outside the digest's domain"
     );
 
     // And the removal moves nothing either — the boundary holds in both
@@ -883,5 +949,44 @@ fn an_alt_block_with_a_witness_moves_no_digest() {
             .expect("digest"),
         before
     );
-    cleanup(&path);
+}
+
+/// SI-27's arm: a demotion the cheap tier refused halts the writer at that
+/// height on that row, every later write is refused, and reads stay open.
+/// The switch arms it (`shekyl-chain-ingest`'s demotion tier, whose own
+/// test reaches it through a recorded chain that fails its timestamp rule).
+/// Red if `refuse_demotion` returns the error without arming the halt.
+#[test]
+fn a_refused_demotion_halts_the_writer_si27() {
+    let path = tmp("alt-si27");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![]]);
+    let height = BlockHeight::from_raw(1);
+    let want = StoreInvariant::DemotedBlockRefused { height };
+    let out: Result<(), TestErr> =
+        store.write(|batch| Err(TestErr::Store(batch.refuse_demotion(height).to_string())));
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: height,
+            row: want,
+        }
+    );
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(PROBE)?.upsert("k", &1)?;
+        Ok(())
+    });
+    assert_eq!(
+        refused,
+        Err(TestErr::Store(
+            StoreError::from(StoreCannot::WriterHalted {
+                at_height: 1,
+                row: want,
+            })
+            .to_string()
+        ))
+    );
+    assert!(store.begin_read().is_ok(), "reads stay open");
+    drop(store);
 }

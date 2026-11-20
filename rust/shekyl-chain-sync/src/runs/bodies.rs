@@ -14,17 +14,21 @@ use shekyl_levin::{BodiesFormFault, RequestBodies, ResponseBodies, MAX_OBJECT_RE
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
-use crate::model::{
-    body_deadline, BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT,
-};
-use crate::peer::{BodySpan, Dispute};
+use crate::model::{BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT};
+use crate::peer::{rate, BodySpan, Dispute};
 
 impl<K, R> Sync<K, R>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
-    pub(crate) fn on_bodies(&mut self, session: K, bytes: &[u8], out: &mut Vec<Command<K>>) {
+    pub(crate) fn on_bodies(
+        &mut self,
+        session: K,
+        bytes: &[u8],
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
         if !self.peers.contains_key(&session) {
             return;
         }
@@ -39,6 +43,9 @@ where
         else {
             return;
         };
+        if let Some(peer) = self.peers.get_mut(&session) {
+            peer.rate = Some(rate(bytes.len(), request.sent, now));
+        }
         let hashes: Vec<[u8; 32]> = request.hashes.iter().map(|hash| *hash.as_bytes()).collect();
         if let Err(fault) = response.check_form(&hashes) {
             if fault != BodiesFormFault::RequestRepeated {
@@ -91,19 +98,23 @@ where
             };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
-            self.held.insert(BoundArrival {
-                tag,
-                session,
-                header: judged,
-                body: offered,
-                solicited: true,
-            });
+            self.hold_or_await(
+                BoundArrival {
+                    tag,
+                    session,
+                    header: judged,
+                    body: offered,
+                    solicited: true,
+                },
+                now,
+                out,
+            );
         }
         self.flush_offers(out);
     }
 
     pub(crate) fn plan_bodies(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
-        if self.unreadable {
+        if self.unreadable || !self.requests() {
             return;
         }
         let Some(seats) = self.seats else {
@@ -134,7 +145,10 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
-            let reserved = self.body_accounted(hash);
+            // A waiting block's body is here and its bundle bodies are
+            // asked for. Asked for again, the same body would come back
+            // without them on every plan while the wait lasts.
+            let reserved = self.body_accounted(hash) || self.awaiting.contains_key(&hash);
             if !reserved {
                 hashes.push(hash);
             }
@@ -155,10 +169,11 @@ where
             .get(&session)
             .map(|s| s.transit)
             .unwrap_or_default();
+        let span = BodySpan::new(id, hashes, now, transit);
+        let deadline = span.deadline;
         if let Some(peer) = self.peers.get_mut(&session) {
-            peer.span = Some(BodySpan { id, hashes });
+            peer.span = Some(span);
         }
-        let deadline = body_deadline(now, transit);
         out.push(Command::RequestBodies {
             session,
             id,
@@ -241,7 +256,7 @@ where
     fn find_source(&self, end: BlockHash, skip_unavailable: bool) -> Option<K> {
         let end_height = self.tree.connecting(end)?;
         self.peers.iter().find_map(|(key, state)| {
-            if state.gates.body_excluded || state.inventory.skeleton.contains(&end) {
+            if state.bodies.excluded() || state.inventory.skeleton.contains(&end) {
                 return None;
             }
             if state.span.is_some() {
@@ -267,7 +282,11 @@ where
     }
 
     /// Held, in flight, offered, or already accepted by the entry.
-    fn body_accounted(&self, hash: BlockHash) -> bool {
+    ///
+    /// A block waiting for its bundle bodies is not counted: a copy that
+    /// carries them, announced by another session, completes it at once
+    /// (`runs::awaiting`). Only the span planner leaves it out as well.
+    pub(in crate::runs) fn body_accounted(&self, hash: BlockHash) -> bool {
         self.accepted.contains(&hash)
             || self.span_has(hash)
             || self.held.contains(hash)
@@ -384,8 +403,6 @@ where
         {
             return false;
         }
-        peer.gates.header_quiet
-            || peer.gates.past_cap_followed
-            || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
+        peer.draw.headers_finished() || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
     }
 }

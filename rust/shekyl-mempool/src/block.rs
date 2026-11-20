@@ -86,7 +86,7 @@ impl Pool {
     }
 
     /// Offer each of `transactions` to [`Pool::admit`], every one whatever
-    /// the one before it answered.
+    /// the one before it answered. Judged on this pool's network.
     fn offer<'id, V: ChainView<'id>>(
         &mut self,
         transactions: Vec<Transaction>,

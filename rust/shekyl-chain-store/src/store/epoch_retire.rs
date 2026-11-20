@@ -20,9 +20,9 @@ use shekyl_types::{BlockHeight, SettlementEpoch};
 use crate::apply_policy::ArchivalFamily;
 use crate::ids::{IssuedDrawKey, IssuedDrawTuple, SupportIssuedKey, SupportIssuedTuple};
 use crate::schema::{
-    ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
-    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_BUDGET, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW,
+    ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::error::{EngineError, StoreError};
@@ -34,8 +34,7 @@ use super::write::WriteBatch;
 /// rows to retire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EpochFloors {
-    /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
-    /// `archival_settlement`.
+    /// `archival_sigma_work`, `archival_budget`, `archival_settlement`.
     pub claimable: EpochFloor<Claimable>,
     /// `archival_issued_draw`, `archival_issued_digest`,
     /// `archival_drawable_digest`, `archival_slash_applied`.
@@ -87,7 +86,6 @@ impl WriteBatch<'_, '_> {
         if let Some(kept) = floors.claimable.kept_from().map(SettlementEpoch::to_raw) {
             if policy.applies(ArchivalFamily::SigmaWork) {
                 retire_epochs_below(txn, ARCHIVAL_SIGMA_WORK, kept)?;
-                retire_epochs_below(txn, ARCHIVAL_COMPLETE_TREES, kept)?;
             }
             if policy.applies(ArchivalFamily::Budget) {
                 retire_epochs_below(txn, ARCHIVAL_BUDGET, kept)?;

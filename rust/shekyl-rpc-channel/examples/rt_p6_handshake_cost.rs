@@ -59,7 +59,8 @@ mod linux {
 
     /// Message 3 and message 4 payloads. RT-W10's encoding is fixed-length
     /// (§6.2). Registered at 64 bytes.
-    const PAYLOAD_LEN: usize = 64;
+    // RT-O31: one length for every grant set.
+    const PAYLOAD_LEN: usize = shekyl_rpc_channel::handshake::PAYLOAD_LEN;
     const PAYLOAD_BYTE: u8 = 0x5a;
     const PAYLOAD: [u8; PAYLOAD_LEN] = [PAYLOAD_BYTE; PAYLOAD_LEN];
 
@@ -501,7 +502,7 @@ mod linux {
         // mac1 and reaches them.
         let tag_start = MESSAGE1_LEN - TAG_LEN;
         body[tag_start + TAG_LEN - 1] ^= TAG_BYTE_FLIP;
-        let mac1 = daemon_id.public().mac1(&body[..MESSAGE1_LEN]);
+        let mac1 = daemon_id.mac1(&body[..MESSAGE1_LEN]);
         body[MESSAGE1_LEN..].copy_from_slice(&mac1);
         body
     }

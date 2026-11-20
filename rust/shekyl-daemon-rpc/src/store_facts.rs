@@ -4,10 +4,10 @@
 // BSD-3-Clause
 
 //! The store-backed facts: [`ChainFacts`] and [`InfoFacts`] over the Rust
-//! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7's second
-//! implementation). **Staged:** built and tested here, connected at the
-//! flip. The server keeps [`FfiChainFacts`](crate::chain_facts::FfiChainFacts)
-//! and [`FfiInfoFacts`](crate::info_facts::FfiInfoFacts) until then.
+//! chain store (`DRS_X_STORE_FLIP.md` DX-Q3; RK-D7). The handlers and the
+//! in-process console call this. The C++ chain-facts shim is gone. The
+//! network's reads come from the node's
+//! [`P2pFacts`](crate::chain_facts::P2pFacts) handle.
 //!
 //! **One snapshot per facts call.** Every method opens one
 //! [`ReadSnapshot`] and reads everything it returns from it, so a reply
@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use shekyl_chain_rules::{
     effective_median_at, fee_ladder_at, mtp_median_at, target_claim, tx_volume_window, AtHeight,
-    Fault, RuleSet, ViewRead,
+    BlockDrawsFloor, Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
@@ -54,6 +54,7 @@ use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
     PoolState, SessionCounts,
 };
+use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 
 /// The node's state that the chain store does not hold, read per call.
 ///
@@ -63,6 +64,8 @@ use crate::info_facts::{
 pub trait NodeFacts: Send + Sync {
     /// The sync owner's view (DRS-X PR 2's `TipChanged` consumer).
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
+    /// Chain sync's whole view (CS-5 §7): what `sync_status` renders.
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault>;
     /// The pool's population (PR-b's Rust pool), or
     /// [`PoolState::Retired`].
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
@@ -92,7 +95,7 @@ pub trait NodeFacts: Send + Sync {
     fn now(&self) -> u64;
 }
 
-/// A pool entry's body, as `get_transactions` reads it.
+/// A pool entry's body, as `tx_list` reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolBody {
     /// The transaction, serialized whole.
@@ -122,7 +125,7 @@ pub struct SyncFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeIdentity {
     /// The network this daemon runs.
-    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    pub nettype: shekyl_rpc_types::Network,
     /// Whether this is a release build.
     pub release_build: bool,
     /// The build's version string.
@@ -156,24 +159,25 @@ pub struct StoreFacts {
     rules: Arc<dyn RulesAt>,
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
-    caches: Arc<shekyl_pow_randomx::CacheStore>,
-    /// The daemon's one hasher budget: `calc_pow` hashes under a permit.
-    budget: shekyl_hash_budget::Budget,
+    /// The node's one hasher: `pow` hashes on a warm loan from it, and
+    /// `daemon_status` reads its live-cache count.
+    pub(crate) hasher: shekyl_hasher::Hasher,
+    /// `pow`'s loan has no stop of its own: the hasher's stop ends it.
+    pub(crate) never_stops: std::sync::atomic::AtomicBool,
 }
 
 impl StoreFacts {
-    /// The facts over `store`, whose data file is `store_file`. `calc_pow`
-    /// hashes under the caches `caches` already holds — the daemon's one
-    /// cache store, the validator's — and never derives one, each hash
-    /// under a permit from `budget` in `calc_pow`'s class (PR2-Q3).
+    /// The facts over `store`, whose data file is `store_file`. `pow`
+    /// hashes on a warm loan from `hasher`, the node's one owner of
+    /// caches: it builds none, and each hash takes a permit in `pow`'s
+    /// class (PR2-Q3).
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
         rules: Arc<dyn RulesAt>,
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
-        caches: Arc<shekyl_pow_randomx::CacheStore>,
-        budget: shekyl_hash_budget::Budget,
+        hasher: shekyl_hasher::Hasher,
     ) -> Self {
         Self {
             store,
@@ -181,8 +185,8 @@ impl StoreFacts {
             rules,
             node,
             identity,
-            caches,
-            budget,
+            hasher,
+            never_stops: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -235,6 +239,27 @@ fn claim_fault(fault: Fault<StoreError>) -> FactsFault {
             FactsFault::Internal
         }
     }
+}
+
+/// `count(h)` of the main-chain block at `height`, while this node holds
+/// its row: at or above the draw rows' floor in force for the next block
+/// (`BlockDrawsFloor::in_force`; a read below it is SI-34, and the row is
+/// gone), and written (a height the rule has not run for has none).
+fn held_draws(
+    snap: &ReadSnapshot<'_>,
+    tip: BlockHeight,
+    height: BlockHeight,
+    rules: &dyn RulesAt,
+) -> Result<Option<u32>, FactsFault> {
+    let next = connecting(tip);
+    let floor = BlockDrawsFloor::in_force(next, rules.in_force(next).settlement_schedule());
+    if floor.height().is_some_and(|first| height < first) {
+        return Ok(None);
+    }
+    Ok(snap
+        .block_draws(height, floor)
+        .map_err(store_fault)?
+        .map(|row| row.count))
 }
 
 /// The snapshot's tip: its height and identity. An empty store is a daemon
@@ -408,7 +433,7 @@ fn header_facts(
         prev_hash: block.header.previous,
         miner_tx_hash: block.miner_transaction.hash(),
         curve_tree_root: block.header.curve_tree_root,
-        attestation_root: block.header.attestation_root,
+        section_root: block.header.section_root,
         pow_hash: place.pow_hash,
         height: place.height,
         depth: place.depth,
@@ -450,7 +475,7 @@ fn header_for(
     }
 }
 
-/// The adjusted time `get_info` reports for the block connecting at
+/// The adjusted time `daemon_status` reports for the block connecting at
 /// `connecting`: the newer of nothing and the older of the projected median
 /// and the tip's timestamp plus one target, as the C++ `get_adjusted_time`
 /// defined it — a report, not a rule. Before the window fills there is no
@@ -480,12 +505,19 @@ impl ChainFacts for StoreFacts {
         let snap = self.snapshot()?;
         let (height, hash) = tip_of(&snap)?;
         let sync = self.node.sync()?;
+        let halt = match self.store.connect_state() {
+            shekyl_chain_store::store::ConnectState::Live => None,
+            shekyl_chain_store::store::ConnectState::Halted { at_height, row } => {
+                Some((at_height, row.row()))
+            }
+        };
         Ok(ChainTip {
             chain_height: count_at(height),
             top_hash: hash,
             target_height: sync.target,
             synchronized: sync.synchronized,
             release_build: self.identity.release_build,
+            halt,
         })
     }
 
@@ -533,7 +565,7 @@ impl ChainFacts for StoreFacts {
         let view = SnapshotView::new(&snap);
         match fee_ladder_at(&view, connecting(tip)).map_err(derivation_fault)? {
             AtHeight::Recorded(ladder) => Ok(FeeEstimate {
-                fees: [ladder.economy, ladder.standard, ladder.priority],
+                fees: [ladder.economy, ladder.standard, ladder.high],
             }),
             // The connecting height is the tip's successor on this same
             // snapshot; it cannot be above the tip.
@@ -544,19 +576,61 @@ impl ChainFacts for StoreFacts {
     fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
         let snap = self.snapshot()?;
         let (tip, _) = tip_of(&snap)?;
-        let block = header_for(&snap, tip, at, fill_pow_hash)?.map(|(header, block)| {
-            let tx_hashes: Vec<TxHash> = block.transaction_hashes.clone();
-            BlockFacts {
-                header,
-                blob: block.serialize(),
-                json: None,
-                tx_hashes,
+        let Some((header, block)) = header_for(&snap, tip, at, fill_pow_hash)? else {
+            return Ok(BlockAt {
+                block: None,
+                chain_height: count_at(tip),
+            });
+        };
+        // The block's own section: an alt block carries it in its record;
+        // a main-chain block's is the row at its height.
+        let references = if header.orphan_status {
+            snap.alt_block(&header.hash)
+                .map_err(store_fault)?
+                .and_then(|alt| alt.bundle_references().cloned())
+        } else {
+            match snap
+                .bundle_references_at(header.height)
+                .map_err(store_fault)?
+            {
+                AtHeight::Recorded(section) => section,
+                AtHeight::AboveTip => return Err(FactsFault::Inconsistent),
             }
+        };
+        let bundle_bodies = snap
+            .held_section_bodies(references.as_ref())
+            .map_err(store_fault)?
+            .iter()
+            .map(|body| body.as_bytes().to_vec())
+            .collect();
+        // An alternative block has no draws row: the count rule writes it
+        // when a block connects.
+        let draws = if header.orphan_status {
+            None
+        } else {
+            held_draws(&snap, tip, header.height, self.rules.as_ref())?
+        };
+        let block = Some(BlockFacts {
+            tx_hashes: block.transaction_hashes.clone(),
+            blob: block.serialize(),
+            json: None,
+            header,
+            bundle_references: references
+                .map(shekyl_types::archival::BundleReferences::into_inner)
+                .unwrap_or_default(),
+            bundle_bodies,
+            draws,
         });
         Ok(BlockAt {
             block,
             chain_height: count_at(tip),
         })
+    }
+}
+
+impl SyncViewRead for StoreFacts {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
+        self.node.sync_view()
     }
 }
 
@@ -570,16 +644,10 @@ impl InfoFacts for StoreFacts {
         };
         let view = SnapshotView::new(&snap);
         let next = connecting(tip);
-        let difficulty =
-            match target_claim(&view, next, &self.rules.in_force(next)).map_err(claim_fault)? {
-                Ok(target) => target.difficulty().to_raw(),
-                Err(refused) => {
-                    // CEN-D6 on the chain's own headers: the next block has no
-                    // target, which no conforming chain derives.
-                    tracing::error!(%refused, "the next block's target does not derive");
-                    return Err(FactsFault::Inconsistent);
-                }
-            };
+        let difficulty = target_claim(&view, next, &self.rules.in_force(next))
+            .map_err(claim_fault)?
+            .difficulty()
+            .to_raw();
         let medians = effective_median_at(&view, next).map_err(derivation_fault)?;
         let sync = self.node.sync()?;
         Ok(InfoChainFacts {
@@ -589,7 +657,7 @@ impl InfoFacts for StoreFacts {
             cumulative_difficulty: info.cumulative_difficulty.to_raw(),
             difficulty_target: shekyl_difficulty::T_SECONDS,
             total_transactions: snap.tx_count().map_err(store_fault)?,
-            block_weight_limit: medians.limit().to_raw(),
+            block_weight_limit: medians.limit(shekyl_economics::economic_params()).to_raw(),
             block_weight_median: medians.effective_median.to_raw(),
             adjusted_time: adjusted_time(&view, next, info.timestamp.to_raw(), self.node.now())?,
             already_generated_coins: info.coins_generated,
@@ -619,6 +687,8 @@ impl InfoFacts for StoreFacts {
             free_space: self.node.free_space()?,
             alt_blocks_count: snap.alt_block_count().map_err(store_fault)?,
             version: self.identity.version.clone(),
+            randomx_cache_places: u64::try_from(self.hasher.resident().borrow().caches.len())
+                .unwrap_or(u64::MAX),
         })
     }
 

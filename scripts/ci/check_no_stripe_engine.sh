@@ -19,7 +19,7 @@
 #
 # Two invariants, both at source level:
 #
-#   1. No stripe-engine identifier in code (C++ or Rust). Comment-only
+#   1. No stripe-engine identifier in Rust code. Comment-only
 #      mentions are allowed — the structs that lost the field document
 #      why, and a deletion that may not name what it deleted is the
 #      "comment that outlived its architecture" failure inverted.
@@ -46,19 +46,16 @@ cd "$REPO_ROOT"
 
 FAIL=0
 
-# Populations. `rust/target` is a build product; `docs/` is where the
-# deletion is recorded and may say the word.
-ROOTS=(src tests contrib/epee rust)
+# Populations. `rust/` holds every source the stripe engine could return
+# in; `rust/target` is a build product; `docs/` is where the deletion is
+# recorded and may say the word.
+ROOTS=(rust)
 EXCLUDES=(
   -g '!rust/target/**' -g '!**/target/**'
-  # The two negative tests that pin the deletion by spelling the key and
-  # asserting it is ignored / subtracted. They are this gate's own
-  # negative control, not residue.
+  # The negative test that pins the deletion by spelling the key and
+  # asserting it is ignored. It is this gate's own negative control, not
+  # residue.
   -g '!rust/shekyl-levin/tests/payload_kats.rs'
-  -g '!rust/shekyl-rpc-types/tests/rpc_parity.rs'
-  # Retained oracle captures the parity suite derives from (records-was).
-  -g '!rust/shekyl-rpc-types/tests/vectors/rpc/*_v1.json'
-  -g '!rust/shekyl-rpc-types/tests/vectors/rpc/*_v2.json'
 )
 # A comment line: leading whitespace then `//`, `///`, `//!`, `*` or `#`.
 COMMENT_LINE='^[^:]+:[0-9]+:\s*(//|\*|#)'
@@ -88,12 +85,12 @@ drop_comment_lines() {
 }
 
 # ---- Rule 47 positive controls ----------------------------------------
-# The population must contain the structs the field was deleted from, in
-# both languages. If any is missing the tree is not the one this gate was
-# written against, and "no residue" would mean nothing.
+# The population must contain the structs the field was deleted from. (The
+# C++ pair, `peerlist_entry_base` and `CORE_SYNC_DATA`, went with the C++
+# host on 2026-11-05; the Rust codec is the only wire.) If either is
+# missing the tree is not the one this gate was written against, and "no
+# residue" would mean nothing.
 for control in \
-  'struct peerlist_entry_base|src/p2p/p2p_protocol_defs.h' \
-  'struct CORE_SYNC_DATA|src/cryptonote_protocol/cryptonote_protocol_defs.h' \
   'pub struct PeerlistEntry|rust/shekyl-levin/src/payload/types.rs' \
   'pub struct CoreSyncData|rust/shekyl-levin/src/payload/types.rs' ; do
   pat="${control%%|*}"; file="${control##*|}"

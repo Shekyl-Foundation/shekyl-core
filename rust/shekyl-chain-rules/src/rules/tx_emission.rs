@@ -12,7 +12,7 @@
 //! with the emission vin removed (CEN-J22), and the **reward commit set** is
 //! the loud vouts in vout order with their checked sum (CEN-J24). The two
 //! definition rows yield the operands of the verify crossing — CEN-J25,
-//! `shekyl_emission_vin_verify(…, signable_tx_hash, commits, count, …)` —
+//! the C++'s one verify crossing (deleted by `DEL-008`) —
 //! which is row 9's and reads them from here ([`J22::signable_hash`],
 //! [`J24::reward_commits`]), so the pool, the block and the verify cannot
 //! disagree on what the auths signed over.
@@ -47,7 +47,7 @@ use crate::verdict::{InvalidBlock, Verdict};
 /// `Emission`. H6 has refused a second archival vin before any rule here
 /// runs, so a class of `Emission` holds exactly one; its index is where the
 /// C++'s `archival_emission_index` points.
-pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8])> {
+pub(crate) fn the_emission<'tx, N>(cx: &TxContext<'tx, N>) -> Option<(usize, &'tx [u8])> {
     if !matches!(cx.class, TxClass::Emission { .. }) {
         return None;
     }
@@ -66,7 +66,7 @@ pub(crate) fn the_emission<'tx>(cx: &TxContext<'tx>) -> Option<(usize, &'tx [u8]
 
 /// CEN-J19: the emission vin's opaque bytes parse as an
 /// [`ArchivalRewardEmissionVin`] **and are consumed exactly** — the FFI
-/// extractor's parse (`shekyl_archival_emission_vin_extract`:
+/// extractor's parse (the C++ extract FFI, deleted by `DEL-008`:
 /// `ArchivalRewardEmissionVin::read` and an empty remainder). The census
 /// row's "claimed epochs, ≥ 1" is the codec's: `read` refuses an epoch
 /// count outside `1..=MAX_SETTLEMENT_EPOCHS_PER_EMISSION`, so the C++'s
@@ -109,7 +109,7 @@ impl TxRule for J19 {
 /// the vin's `P_canonical_id` — [`p_canonical_id_from_hybrid_pubkey`] over
 /// the slot's key equals it over the vin's `p_pubkey`, the id being the
 /// comparable because the vin's key stays inside the opaque blob (the C++:
-/// `shekyl_archival_p_canonical_id_from_pubkey(emission_auth.hybrid_public_key)
+/// `p_canonical_id_from_hybrid_pubkey(emission_auth.hybrid_public_key)
 /// == p_canonical_id`). The tx-wide hybrid signature over that slot
 /// (CEN-I17/I18) is then **P's**: the claim is signed by the persona whose
 /// record it draws on, the bond post's key-equality pin (CEN-J13) with the
@@ -153,12 +153,23 @@ impl TxRule for J20 {
 /// copy of the prefix and hashes it). The vin cannot be covered by the hash
 /// its own auths and backing proof sign — the circularity — and every
 /// property the exclusion loses is re-bound by the Q1 auth message (the
-/// vin's fields) and the reward commit set (CEN-J24); the tx-level hybrid
-/// auth (CEN-I17/I18) still covers the complete prefix. The hash itself is
-/// the wire's one derivation, [`shekyl_wire::TxPrefix::hash`], over the
-/// edited prefix — the same function the engine's claim assembler reaches
-/// through `tx_prefix_hash_from_parts_with_extra` and the row-7 differential
-/// pins (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+/// vin's fields) and the reward commit set (CEN-J24). The hash itself is
+/// the wire's one derivation, [`shekyl_wire::Transaction::signable_prefix_hash`]
+/// (the prefix hash over the edited prefix) — the same bytes the engine's
+/// claim assembler reaches through `tx_prefix_hash_from_parts_with_extra`
+/// and the row-7 differential pins
+/// (`the_drivers_assembly_and_the_handler_emit_identical_bytes`).
+///
+/// It is the prefix field of the transaction's one network-bound message,
+/// `tx_signable` (the signing envelope §2.2), which every SAL, both auths
+/// and the per-input hybrid auths (CEN-I17/I18, through the spend hash)
+/// prove over. The emission vin is therefore covered by its own two auths
+/// alone, byte for byte: every byte of it is either a field both auths sign
+/// (the vin's fields, and the backing's wire bytes as field 9 — the proof,
+/// `pseudo_out`, the backing key and the tree depth) or one of the two auth
+/// signatures, and those are verified strictly (canonical encodings only,
+/// both halves of the hybrid; CEN-J25). Changing any byte of the vin is
+/// refused (`emission_verify_kat::auth_refuses_any_changed_byte_of_the_input`).
 ///
 /// Nothing fails a definition. The row runs in `tx_form` so the derivation
 /// is exercised at both sites on every emission, and is recorded there;
@@ -172,11 +183,9 @@ impl Rule for J22 {
 
 impl J22 {
     /// The signable hash, if the class is `Emission`.
-    pub(crate) fn signable_hash(cx: &TxContext<'_>) -> Option<PrefixHash> {
-        let (index, _) = the_emission(cx)?;
-        let mut prefix = cx.tx.prefix.clone();
-        prefix.inputs.remove(index);
-        Some(prefix.hash())
+    pub(crate) fn signable_hash<N>(cx: &TxContext<'_, N>) -> Option<PrefixHash> {
+        the_emission(cx)?;
+        Some(cx.tx.signable_prefix_hash())
     }
 }
 
@@ -195,8 +204,8 @@ impl TxRule for J22 {
 /// amount) vouts in vout order, each as `(commitment, amount, one-time
 /// key)` — the 72-byte `mask ‖ amount_le8 ‖ key` entries the C++ flattens
 /// for the verify — and the reward total is their **checked sum**, the
-/// inflation-audit operand (`shekyl_checked_sum_amounts`: overflow
-/// refuses). Zero-amount vouts are ordinary confidential change and join
+/// inflation-audit operand (an overflow refuses; the C++'s checked-sum FFI
+/// went with `DEL-008`). Zero-amount vouts are ordinary confidential change and join
 /// neither. The one predicate the row states beyond the definition is the
 /// C++'s `outPk.size() == vout.size()`: a commitment per output, so the
 /// set is well-defined (CEN-H17's arity clause names it first in
@@ -216,7 +225,9 @@ impl J24 {
     /// The ordered reward commit set and its checked sum: `Ok(None)` off the
     /// emission class, `Err` under this row where the set is not
     /// well-defined.
-    pub(crate) fn reward_commits(cx: &TxContext<'_>) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
+    pub(crate) fn reward_commits<N>(
+        cx: &TxContext<'_, N>,
+    ) -> Verdict<Option<(Vec<RewardCommit>, u64)>> {
         if the_emission(cx).is_none() {
             return Ok(None);
         }

@@ -25,7 +25,33 @@ The project README documents build/run guidance for:
 - Linux and macOS
 - Windows (MSYS2/MinGW)
 - Raspberry Pi
-- FreeBSD, OpenBSD, NetBSD, Solaris
+- FreeBSD
+
+A platform is supported only if CI or gitian builds it: Linux, macOS, Windows
+and FreeBSD (Rick, 2026-11-17). OpenBSD, NetBSD, DragonFly BSD, illumos and
+Solaris are not supported. The daemon names no arm for them, so a build for any
+of them stops at the account walk's `compile_error!` in `shekyl-daemon-config`.
+The daemon has no iOS or Android arm either: no CI or gitian job builds a node
+for them.
+
+### Supported storage
+
+The wallet and the daemon keep their files on a local disk: a local NTFS
+volume on Windows, a local disk on Unix (Rick, 2026-11-19). Network shares
+are not a supported configuration.
+
+- **The wallet**, on any other storage (a FAT32 or exFAT drive, a network
+  share), still saves its files, but refuses to send or to stake: no save
+  there is confirmed to survive a power cut, so the transaction it would
+  need to remember could be lost after it left. The refusal is the
+  wallet RPC code for the cause (`SAVE_DURABILITY_UNCONFIRMED`,
+  `SAVE_ON_NETWORK_DRIVE`, and the others in `docs/api/wallet_rpc.yaml`),
+  and its message says why and what to change.
+- **The daemon**, on such storage, still starts. A file it replaces at
+  start (its network marker, its rendezvous record, its console key, the
+  service bundle) is written, but not confirmed to survive a power cut,
+  and the daemon logs a warning naming the file, why, and the supported
+  storage.
 
 ### Practical baseline
 
@@ -41,18 +67,15 @@ If you are starting fresh, prefer:
 
 The dependency matrix is maintained in `README.md` and includes:
 
-- compiler/tooling: GCC, CMake, pkg-config
-- core libs: Boost, OpenSSL, libsodium
-- optional libs/tools: libunwind, readline, gtest, ccache, doxygen/graphviz
+- the Rust toolchain `rust/rust-toolchain.toml` pins, with `cargo`;
+- CMake, and a C compiler for the crates whose build scripts compile C
+  (no C or C++ library is linked from the system: no Boost, OpenSSL,
+  libsodium or readline).
 
 ### Rust integration behavior
 
-Rust modules are integrated via `cmake/BuildRust.cmake`:
-
-- if `cargo` is found, Rust workspace under `rust/` is built and linked
-- if `cargo` is not found, build continues with Rust modules disabled
-
-Install Rust toolchain when you want full Rust-enabled builds:
+Every binary is Rust. `cmake/BuildRust.cmake` runs `cargo` for the
+workspace under `rust/`, so a build needs the Rust toolchain:
 
 ```bash
 curl https://sh.rustup.rs -sSf | sh
@@ -137,9 +160,7 @@ Open MSYS2 MinGW shell and install toolchain + dependencies (64-bit example):
 
 ```bash
 pacman -Syu
-pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake \
-  mingw-w64-x86_64-boost mingw-w64-x86_64-openssl \
-  mingw-w64-x86_64-libsodium
+pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake
 ```
 
 Then:
@@ -174,13 +195,14 @@ make release-static-win64
 
 The current CMake targets produce:
 
-- daemon: `shekyld` (C++)
+- daemon: `shekyld` (a Rust binary, `rust/shekyld`, that links the C++
+  core as a static library; `DAEMON_CONFIG_CUTOVER.md` DC-Q19)
 - CLI wallet: `shekyl-cli` (Rust)
 - wallet RPC: `shekyl-wallet-rpc` (Rust)
 
-The two wallet binaries are built from the Rust workspace by
-`cmake/BuildRust.cmake` as part of the ordinary CMake build — no separate
-`cargo` step is needed, and `cargo` is already a build prerequisite.
+All three are built from the Rust workspace by `cmake/BuildRust.cmake` as
+part of the ordinary CMake build — no separate `cargo` step is needed, and
+`cargo` is already a build prerequisite.
 
 **Platform note.** The wallet binaries are produced for Unix targets
 (Linux, macOS). They are **not built for Windows** — `BuildRust.cmake`
@@ -228,18 +250,75 @@ Start daemon in foreground:
 ```
 
 Run the daemon in the background via your platform's service manager
-(systemd on Linux, launchd on macOS, Task Scheduler on Windows). An
-shipped systemd unit lives at `contrib/packaging/linux/shekyld.service`,
-with `shekyl.slice` beside it; the `.deb` installs both, or copy both to
-`/etc/systemd/system/` and `systemctl enable --now shekyld`. The slice is
-the daemon's own top-level control group, weighed 4:1 against
-`user.slice` under contention, so a daemon that is syncing or verifying
-keeps about 80 % of the CPU while a wallet in a user session serves
-archival shards beside it (the wallet itself is never a system service).
-A daemon started by hand runs in your session and has no slice. `--detach`, `--pidfile`, and the Windows `--*-service`
-flags were removed in V3.1; the daemon now only runs in the foreground
-and is supervised externally. The GUI wallet embeds `shekyld` as a
-Tauri sidecar and does not require a separate service unit.
+(systemd on Linux, rc.d on FreeBSD, launchd on macOS, Task Scheduler on
+Windows). The shipped systemd unit is the template
+`contrib/packaging/linux/shekyld@.service`, one instance per network,
+with `shekyl.slice` beside it. The `.deb` and the `.rpm` install both,
+create the `shekyl` system account the unit runs as and `/etc/shekyl`,
+and place each public network's settings file,
+`/etc/shekyl/shekyld-<network>.toml`, when none is there: every option in
+it is commented out, so the daemon runs on its defaults. They refuse to install where
+an account named `shekyl` is already someone's login, because the daemon
+would run with that login's rights, and say how to rename it. They do not
+start the daemon. Set what you need in the network's file, then enable
+and start that network's instance; before every start it checks the file
+as the daemon's account:
+
+```bash
+sudo systemctl enable --now shekyld@testnet
+```
+
+Without a package, apply the same two declarations first, because
+systemd refuses to start a unit whose account does not exist. Check first
+that no login is named `shekyl` (`getent passwd shekyl`): the declaration
+keeps an account that already exists, and the daemon would run as it. Then install
+both units and enable the daemon; the unit runs `/usr/local/bin/shekyld`:
+
+```bash
+sudo cp contrib/packaging/linux/shekyl.sysusers /usr/lib/sysusers.d/shekyl.conf
+sudo cp contrib/packaging/linux/shekyl.tmpfiles /usr/lib/tmpfiles.d/shekyl.conf
+sudo systemd-sysusers shekyl.conf
+sudo systemd-tmpfiles --create shekyl.conf
+sudo cp contrib/packaging/linux/shekyld@.service \
+  contrib/packaging/linux/shekyl.slice /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shekyld@testnet
+```
+
+The slice is the daemon's own
+top-level control group, weighed 4:1 against `user.slice` under
+contention, so a daemon that is syncing or verifying keeps about 80 % of
+the CPU while a wallet in a user session serves archival shards beside
+it (the wallet itself is never a system service). A daemon started by
+hand runs in your session and has no slice, and it stops when your
+session ends; the shipped unit passes `--service`, which marks the
+machine's service instance.
+
+On FreeBSD the release archive carries the daemon binary and an rc.d
+script, `rc.d/shekyld` (in the tree at
+`contrib/packaging/freebsd/shekyld`). The script runs
+`/usr/local/bin/shekyld`, so install that binary from the archive, then
+the script:
+
+```bash
+install -m 0555 shekyld /usr/local/bin/shekyld
+pw useradd shekyl -d /nonexistent -s /usr/sbin/nologin -c "Shekyl daemon"
+install -m 0555 rc.d/shekyld /usr/local/etc/rc.d/shekyld
+sysrc shekyld_enable=YES
+service shekyld start
+```
+
+`sysrc shekyld_args="--network testnet"` selects another network. The
+script runs the daemon as `shekyl` with `--service`, creates
+`/var/run/shekyl`, `/var/db/shekyl` and `/var/log/shekyl` before each
+start, and restarts it 30 seconds after a failed exit. A clean stop
+stays stopped. A refused start is a failed exit, so it is retried, and
+the refusal is in syslog.
+
+`--detach`, `--pidfile`, and the Windows `--*-service` flags were
+removed in V3.1; the daemon now only runs in the foreground and is
+supervised externally. The GUI wallet embeds `shekyld` as a Tauri
+sidecar and does not require a separate service unit.
 
 RPC is operator-to-operator. Restricted RPC is a view-only listener for
 your own wallet, not a public remote node.

@@ -4,41 +4,108 @@
 // BSD-3-Clause
 
 //! The daemon's Rust `main()` (`docs/design/DAEMON_CONFIG_CUTOVER.md` §2.2,
-//! DC-Q13).
+//! DC-Q13, DC-Q19; `P2P_3_REMNANT_CUTOVER_BRIEF.md` §2).
 //!
-//! `shekyl-daemon-image` exports the one C symbol, `shekyl_daemon_main`,
-//! which calls [`run::main`] with the entry C++ built. Everything here is
-//! safe Rust: the C ABI types are plain data ([`entry`]), the remnant is
-//! reached through function pointers it handed over, and the platform
-//! probes come from `shekyl-ffi`.
+//! `shekyld` (`rust/shekyld`) is the binary: its `main` is Rust's, and it
+//! calls [`main`] with the process's argument vector. Everything here is
+//! safe Rust: the node and its network are `shekyl-node`'s, the process
+//! probes and hardening are `shekyl-process`'s, and nothing reaches an
+//! FFI.
 
 #![deny(unsafe_code)]
 
-pub mod entry;
 pub mod help;
+pub mod levers;
 pub mod network;
+pub mod notify;
 pub mod options;
 pub mod run;
 pub mod signals;
 pub mod tor;
 pub mod verify;
 
-pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
-pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
+pub use run::{EXIT_FAILED, EXIT_REFUSED};
 
 /// The entry with the real platform: the account's roots from the
-/// operating system, the network id's one derivation, and `args`, the
-/// argument vector the process entry resolved (IG-Q2).
+/// operating system, and `args`, the argument vector Rust's process entry
+/// resolved (IG-Q2). Returns the exit status; the binary exits with it.
+///
+/// The first statement is the process hardening (DC-Q21): no core, no
+/// same-account tracer, before an argument is read. A process that cannot
+/// apply it does not go on to hold anything worth protecting; it says so
+/// on standard error and exits [`EXIT_FAILED`].
 #[must_use]
-pub fn main(entry: &ShekylDaemonEntry, args: &[std::ffi::OsString]) -> i32 {
-    shekyl_ffi::panic_hook::install();
-    run::main(entry, args, &host())
+pub fn main(args: &[std::ffi::OsString]) -> i32 {
+    if let Err(e) = shekyl_process::harden::harden_process() {
+        // Before an argument is read: no log file is named yet.
+        return run::StartEnd::Stderr.fail(format!("process hardening {e}; not starting"));
+    }
+    shekyl_process::panic_hook::install();
+    run::main(args, &shekyl_process::platform::current())
 }
 
-/// This machine's platform facts and the network id derivation.
-pub(crate) fn host() -> Host {
-    Host {
-        platform: shekyl_ffi::platform::current(),
-        network_id_of: shekyl_ffi::network_id_ffi::network_id_of,
+/// A private session directory under `home` for a test's owner's socket:
+/// mode 0700, as the account's real one is (`RPC_CHANNEL.md` §7.1). `None`
+/// on Windows, whose owner leg is a pipe.
+#[cfg(test)]
+#[cfg_attr(
+    unix,
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "None on Windows, whose owner leg is a pipe"
+    )
+)]
+pub(crate) fn test_session_dir(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let dir = home.join("s");
+        if !dir.is_dir() {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&dir)
+                .expect("a session directory");
+        }
+        // The mode the daemon checks, set rather than left to the umask.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .expect("the session directory's mode");
+        Some(dir)
     }
+    #[cfg(not(unix))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+#[cfg(test)]
+/// What `f` writes to the log, one line per event, without times.
+pub(crate) fn logged(f: impl FnOnce()) -> String {
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self {
+            self.clone()
+        }
+    }
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(captured.clone())
+        .with_ansi(false)
+        .without_time()
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    tracing::subscriber::with_default(subscriber, f);
+    let bytes = captured.0.lock().expect("capture").clone();
+    String::from_utf8(bytes).expect("utf-8")
 }

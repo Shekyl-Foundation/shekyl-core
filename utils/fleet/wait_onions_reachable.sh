@@ -3,15 +3,14 @@
 #
 # Answer one question: CAN EVERY FLEET ONION BE REACHED FROM ANOTHER NODE'S TOR?
 #
-# Q12-R13. A node that fails to dial a peer once does not dial it again for
-# P2P_FAILED_ADDR_FORGET_SECONDS = 3600 (cryptonote_config.h:201). The address
-# goes into `m_conn_fails_cache` keyed on `host_str()` — the full onion — and
-# `is_addr_recently_failed` then filters it out of white-list selection
-# (net_node.inl:1439), the maintainer's candidate loop (:1698) and peerlist
-# appending (:2135). Nothing clears it short of a restart.
+# Q12-R13. A node that fails to dial a peer puts the address on a cooldown
+# before it draws it again: 2 min after the first failed test, doubling per
+# consecutive failure to a one-hour cap (`shekyl-transport-layer`'s
+# `profile::COOLDOWN`, the gray lifecycle; the C++ host this note first
+# described, deleted 2026-11-05, forgot a failed address for a flat hour).
 #
-# So one early dial suppresses that edge for an hour, on the exact quantity the
-# run measures. Q12-R8's "tor and hidden services up before daemons" is NOT
+# So early dials suppress that edge for minutes to an hour, on the exact
+# quantity the run measures. Q12-R8's "tor and hidden services up before daemons" is NOT
 # enough: the smoke test followed it exactly — three tor processes at
 # `Bootstrapped 100%` before any daemon started — and the first dial still timed
 # out, because a hidden service being PUBLISHED is not the same as its

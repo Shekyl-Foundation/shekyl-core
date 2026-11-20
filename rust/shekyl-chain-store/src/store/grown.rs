@@ -21,12 +21,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet};
+use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet, Trust};
+use shekyl_crypto_pq::held_key_image::HeldKeyImage;
+use shekyl_crypto_pq::CryptoError;
 use shekyl_harness_spender::{
     complete_tree, first_spending_height, Linked, MinerWallet, Persona, PostedBond, Spender,
 };
 use shekyl_harness_wallet::coinbase::repay;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, Ct, Input, Transaction};
 
@@ -54,11 +56,6 @@ pub(in super::super) enum Listed {
     /// `FIRST_SPEND_HEIGHT` there is one, and each block above it matures
     /// one more ([`prefix_maturing`]).
     Spend { fee: u64 },
-    /// `n` matured coinbases in **one** transaction, paying `fee`
-    /// ([`Grown::spend_many`]). A block that keeps adding spends until a
-    /// measured length is crossed realises one of these at a time
-    /// ([`Grown::stage`]).
-    Spends { n: usize, fee: u64 },
     /// A **real join**: the zero-fee spend [`Listed::Spend`] makes, with
     /// the `JoinMarket` post of the persona at `slot` ([`Persona::at`])
     /// riding it ([`Grown::join`]) — a complete-tree bond at
@@ -67,19 +64,17 @@ pub(in super::super) enum Listed {
     /// CEN-J27 judges that spend as CEN-I13/I15 judge any other, so a
     /// join's reference and proof are the chain's to make as a spend's are
     /// — it is listed, never held. It opens the persona's `archival_bond`
-    /// row; the credit for it is [`serve_credit`]'s ([`credited`] pairs
-    /// them).
+    /// row.
     Join { slot: u32 },
     /// A **real Release** of the persona at `slot`'s whole bond,
     /// `bonded_total`, riding the zero-fee spend a join rides
     /// ([`Grown::release`]). CEN-J16 judges it over the record the chain
     /// holds, so the persona must have joined in an earlier block.
     Release { slot: u32, bonded_total: u64 },
-    /// A body listed as given, anchored for its height ([`anchor`]): a
-    /// serve credit, an emission. Never a spend or a join — their
-    /// reference and proof are the chain's to make, not a value a test
-    /// holds before the chain exists.
-    Body(Transaction),
+    /// A **real compact join**: [`Listed::Join`] with the persona at
+    /// `slot` holding `shards` ([`Grown::join_shards`]). CEN-J15 judges
+    /// it: every shard must be closed, final and priced at the parent.
+    JoinShards { slot: u32, shards: Vec<u64> },
 }
 
 /// The endpoint every fixture join names. No landed rule reads a record's
@@ -99,63 +94,6 @@ pub(in super::super) const fn spend() -> Listed {
 /// coinbase.
 pub(in super::super) const fn spend_paying(fee: u64) -> Listed {
     Listed::Spend { fee }
-}
-
-/// [`Listed::Spends`]: `n` coinbases in one transaction, paying `fee`.
-pub(in super::super) const fn spends(n: usize, fee: u64) -> Listed {
-    Listed::Spends { n, fee }
-}
-
-/// A [`Listed::Body`].
-pub(in super::super) fn body(tx: Transaction) -> Listed {
-    Listed::Body(tx)
-}
-
-/// The serve credit for the persona at `slot`, for shard 0 in
-/// `settlement_epoch`: the spender persona's vin
-/// ([`Persona::serve_credit_vin`]) in the rules harness's CEN-H20 body
-/// (`fixture::serve_credit_only_with`) — the one legal listed shape with
-/// no key image and no `pqc_auths`, 3-part. The epoch is the caller's
-/// derivation: CEN-J5 admits a credit for epoch `E` only when `E ≥` the
-/// epoch the persona's join settled in `+ 1`.
-pub(in super::super) fn serve_credit(slot: u32, settlement_epoch: u64) -> Transaction {
-    fixture::serve_credit_only_with(Persona::at(slot).serve_credit_vin(0, settlement_epoch))
-}
-
-/// A serve credit **with the record it credits**: the [`Listed::Join`]
-/// that opens the `archival_bond` row of the persona at `slot` (a real
-/// spend funding the bond — 4-part, like every spend), and the credit for
-/// that persona ([`serve_credit`]). A credit for a persona with no record
-/// is refused (CEN-L7 since DRS-E4 commit 4; CEN-J4 is the row), so a
-/// credit connects only behind its join. The join spends, so it sits no
-/// lower than [`FIRST_SPEND_HEIGHT`], and the credit lists in the block
-/// **after** it:
-/// CEN-J4 reads the record off the view the block is judged against, which
-/// a join in the same block has not yet written — the C++ reads it so
-/// (`check_tx_inputs` runs before `add_block`), and a same-block pair is
-/// refused there. *Records-was:* until E6 slice 8 row 3 the pair was
-/// listed in one block, which the fold's in-block sequencing admitted
-/// (`archival/inputs.rs`, `apply_input`) and the C++ never did.
-///
-/// The credit is for settlement epoch 1, the first a persona joining in
-/// epoch 0 may serve (CEN-J5, `E ≥ join + 1`): under the genesis schedule
-/// (`GENESIS` rules) epoch 0 runs past every height a fixture chain here
-/// reaches, so a join at or above [`FIRST_SPEND_HEIGHT`] settles in epoch
-/// 0. A chain under a shorter schedule derives its own epoch and pairs
-/// [`Listed::Join`] with [`serve_credit`] itself (`prune_tests`). Which
-/// epoch a fixture chain is *in* when it lists the credit is CEN-J7's (E6
-/// slice C), not yet a Rust rule.
-///
-/// The credit is the harness's, in the **`RF-D1`** shape CEN-H20 requires:
-/// a prunable region holding one pruned pass record per serve-credit vin.
-/// Before that shape was required (`SHT-9`), a credit with no region
-/// connected and then halted the store ten heights later, on SI-7:
-/// its txid mixes the null hash where its `txs_prunable_hash` row is
-/// `keccak256("")`, so the drain's reconstruction named another
-/// transaction. `prune_tests` connects one past that age (its own
-/// `sized_credit`, the same shape with the record's length chosen).
-pub(in super::super) fn credited(slot: u32) -> (Listed, Transaction) {
-    (Listed::Join { slot }, serve_credit(slot, 1))
 }
 
 /// The first height at which a block may list a spend: the spender crate's
@@ -225,6 +163,80 @@ pub(in super::super) fn anchor(
     fixture::anchored_at(hashes, height.to_raw(), tx)
 }
 
+/// Key images of coinbases the harness miner holds.
+///
+/// `by_height[h]` is block `h`'s coinbase when the miner holds it, and
+/// `None` when the coinbase opened and the miner does not. `by_image` is
+/// the same fact from image to height, so a recorded block's listed image
+/// names the coinbase it spent. Noted in height order through the coinbases
+/// matured for the next block, and cut back by [`Grown::pop`]: the cache
+/// stays here, because a pop rebuilds the spender and would otherwise
+/// decapsulate every surviving coinbase again.
+struct HeldCoinbases {
+    by_height: Vec<Option<KeyImage>>,
+    by_image: BTreeMap<KeyImage, BlockHeight>,
+}
+
+impl HeldCoinbases {
+    fn new() -> Self {
+        Self {
+            by_height: Vec::new(),
+            by_image: BTreeMap::new(),
+        }
+    }
+
+    /// The height whose coinbase is noted next: one past the highest noted.
+    fn next(&self) -> BlockHeight {
+        BlockHeight::from_raw(self.by_height.len() as u64)
+    }
+
+    fn image_at(&self, height: BlockHeight) -> Option<KeyImage> {
+        self.by_height.get(at(height)).copied().flatten()
+    }
+
+    /// The coinbase `image` spends, when the miner holds that coinbase.
+    fn height_of(&self, image: KeyImage) -> Option<BlockHeight> {
+        self.by_image.get(&image).copied()
+    }
+
+    /// Note block `height`'s coinbase. Heights arrive in order. A coinbase
+    /// that does not open, or a second coinbase carrying an image already
+    /// noted, is a broken harness block: the fill stops, and the coinbase
+    /// is not recorded as unspent.
+    fn note(&mut self, height: BlockHeight, opened: Result<HeldKeyImage, CryptoError>) {
+        assert_eq!(
+            self.next(),
+            height,
+            "coinbase images are noted in height order"
+        );
+        let image = match opened {
+            Ok(HeldKeyImage::Held(image)) => Some(image),
+            Ok(HeldKeyImage::NotHeld) => None,
+            Err(error) => panic!("block {height}'s coinbase did not open: {error}"),
+        };
+        if let Some(image) = image {
+            let earlier = self.by_image.insert(image, height);
+            assert!(
+                earlier.is_none(),
+                "blocks {earlier:?} and {height} carry one coinbase key image"
+            );
+        }
+        self.by_height.push(image);
+    }
+
+    /// Forget the coinbases at `height` and above. A popped block's
+    /// coinbase pays another output when that height is mined again.
+    fn truncate_to(&mut self, height: BlockHeight) {
+        for image in self
+            .by_height
+            .drain(at(height).min(self.by_height.len())..)
+            .flatten()
+        {
+            self.by_image.remove(&image);
+        }
+    }
+}
+
 /// A chain as the store connected it, with the wallet-side tree a real
 /// spend is made in ([`Spender`]) kept in step with the store's: every
 /// block recorded asserts the two agree on the root going into it — the
@@ -256,11 +268,17 @@ pub(in super::super) struct Grown {
     /// rather than naming it.
     images: Vec<Vec<[u8; 32]>>,
     /// Spends built by [`Self::spend_posting`] and not yet recorded: the key
-    /// image each carries, to the coinbase height it spends. [`Self::spend`]
-    /// skips these coinbases too, so two spends for one block differ;
-    /// [`Self::record`] moves the ones the block listed to `spent` and
-    /// forgets the rest (built and dropped — not spent).
+    /// image each carries, to the coinbase height it reserves.
+    /// [`Self::spend`] skips these coinbases, so two spends for one block
+    /// differ. [`Self::record`] forgets the reservation. A spend the block
+    /// did not list was not spent. What a connected block did spend is its
+    /// listed image looked up in `held_coinbases`, whether or not this
+    /// chain built the spend.
     building: BTreeMap<[u8; 32], u64>,
+    /// Coinbases the harness miner holds, by key image. A replayed capture
+    /// ([`super::super::shard_fill::regrown`]) built none of its spends;
+    /// the listed image is how that capture names the coinbase it took.
+    held_coinbases: HeldCoinbases,
 }
 
 impl Grown {
@@ -269,12 +287,13 @@ impl Grown {
     pub(in super::super) fn new() -> Self {
         Self {
             hashes: Vec::new(),
-            spender: Spender::over::<Linked<'_>>(&[]),
+            spender: Spender::on::<Linked<'_>>(Trust::UNPINNED.network_id(), &[]),
             blocks: Vec::new(),
             spent: BTreeSet::new(),
             spent_at: Vec::new(),
             images: Vec::new(),
             building: BTreeMap::new(),
+            held_coinbases: HeldCoinbases::new(),
         }
     }
 
@@ -329,6 +348,19 @@ impl Grown {
         self.spend_posting(coinbase, 0, Some(&bond))
     }
 
+    /// A real compact join for the block connecting next —
+    /// [`Listed::JoinShards`]: [`Self::join`] with the persona at `slot`
+    /// holding `shards` in place of the complete tree.
+    pub(in super::super) fn join_shards(&mut self, slot: u32, shards: &[u64]) -> Transaction {
+        let coinbase = self.next_coinbase();
+        let persona = Persona::at(slot);
+        let bond = persona.join(
+            shekyl_harness_spender::shard_set(shards.to_vec()),
+            JOIN_ENDPOINT,
+        );
+        self.spend_posting(coinbase, 0, Some(&bond))
+    }
+
     /// A real Release for the block connecting next — [`Listed::Release`]:
     /// the persona at `slot`'s production Release of `bonded_total`
     /// ([`Persona::release`]), riding a zero-fee spend of the lowest
@@ -373,42 +405,28 @@ impl Grown {
         self.spend_posting(coinbase, fee, None)
     }
 
-    /// One real spend of the `n` lowest matured coinbases no block spent
-    /// and no spend built for this block took — the multi-input shape
-    /// ([`Spender::spend_coinbases`]), each input its own `pqc_auths`
-    /// slot, so a body's archival length grows by a hybrid key and
-    /// signature per input. This is how a chain reaches a shard boundary
-    /// with bytes every landed rule verifies; the prune tests' padded
-    /// serve-credit records are the cheap stand-in, and the `#[ignore]`d
-    /// nightly twin in `prune_tests` is this method's caller. Not
-    /// memoised: its chains are not shared across tests. Panics when fewer
-    /// than `n` have matured.
-    pub(in super::super) fn spend_many(&mut self, n: usize, fee: u64) -> Transaction {
-        let coinbases: Vec<u64> = self
-            .matured()
-            .into_iter()
-            .filter(|h| !self.building.values().any(|b| b == h))
-            .take(n)
-            .collect();
-        assert_eq!(
-            coinbases.len(),
-            n,
-            "{n} coinbases have matured unspent for height {}",
-            self.height()
-        );
-        let heights: Vec<BlockHeight> = coinbases
+    /// Watch `output_key`: when a block this chain records lists it, the
+    /// spender registers it ([`Spender::own`]) and
+    /// [`Self::spend_watched`] can spend it. Call before the block that
+    /// lists it is recorded.
+    pub(in super::super) fn watch(&mut self, output_key: [u8; 32]) {
+        self.spender.own(output_key);
+    }
+
+    /// One real spend of the watched outputs `keys` ([`Self::watch`]), all
+    /// the miner's, for the block connecting next, paying `fee` and the
+    /// rest back to the miner in two outputs ([`Spender::spend_owned`]).
+    /// Panics when a key was not listed by a recorded block.
+    pub(in super::super) fn spend_watched(&mut self, keys: &[[u8; 32]], fee: u64) -> Transaction {
+        let wallet = MinerWallet::harness();
+        let owner = shekyl_harness_spender::Owner::miner(wallet);
+        let connecting = self.height();
+        let sourced = keys
             .iter()
-            .map(|&c| BlockHeight::from_raw(c))
+            .map(|key| self.spender.owned_input(&owner, *key, connecting))
             .collect();
-        // The spender yields the coinbases in the body's input order
-        // (sorted by key image, CEN-I5), the order `key_images` reads.
-        let (tx, in_input_order) =
-            self.spender
-                .spend_coinbases(MinerWallet::harness(), &heights, self.height(), fee);
-        for (image, coinbase) in key_images(&tx).into_iter().zip(in_input_order) {
-            self.building.insert(image, coinbase.to_raw());
-        }
-        tx
+        self.spender
+            .spend_owned(sourced, connecting, fee, wallet.recipient())
     }
 
     /// [`Self::spend_of`] with a bond post riding the spend
@@ -468,28 +486,18 @@ impl Grown {
 
     /// `listed` realised for the block connecting next: each
     /// [`Listed::Spend`] built ([`Self::spend`]), each [`Listed::Join`]
-    /// built ([`Self::join`]), each [`Listed::Body`] anchored
-    /// ([`anchor`]).
+    /// built ([`Self::join`]), each [`Listed::Release`] built
+    /// ([`Self::release`]).
     pub(in super::super) fn realise(&mut self, listed: &[Listed]) -> Vec<Transaction> {
-        let height = self.height();
         listed
             .iter()
             .map(|entry| match entry {
                 Listed::Spend { fee } => self.spend(*fee),
-                Listed::Spends { n, fee } => self.spend_many(*n, *fee),
                 Listed::Join { slot } => self.join(*slot),
                 Listed::Release { slot, bonded_total } => self.release(*slot, *bonded_total),
-                Listed::Body(tx) => anchor(&self.hashes, height, tx.clone()),
+                Listed::JoinShards { slot, shards } => self.join_shards(*slot, shards),
             })
             .collect()
-    }
-
-    /// Realise one listing entry. A block that decides whether to add
-    /// another spend after measuring the one it just built uses this,
-    /// then [`Self::judge_listing`] once for the block.
-    pub(in super::super) fn stage(&mut self, entry: &Listed) -> Transaction {
-        let mut txs = self.realise(std::slice::from_ref(entry));
-        txs.pop().expect("one listing realises one body")
     }
 
     /// The candidate for the block connecting next on the committed
@@ -531,6 +539,36 @@ impl Grown {
         Ok(judged)
     }
 
+    /// [`Self::judge_listing_with_memo`] for a block carrying a bundle
+    /// section: `refs` as its references, under the root they make, and
+    /// `bodies` as their bodies in section order. `validate` admits them
+    /// (CEN-J29 through J37) and the verdict carries what it admitted.
+    pub(in super::super) fn judge_listing_with_section<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: &[Transaction],
+        memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
+        refs: &[shekyl_archival_retention::BundleRef],
+        bodies: Vec<shekyl_archival_retention::BundleBody>,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        let mut cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
+        let root = shekyl_archival_retention::section_root(refs).expect("a countable section");
+        cand.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
+        let section = shekyl_types::archival::BundleReferences::new(
+            refs.iter()
+                .map(shekyl_archival_retention::BundleRef::encode)
+                .collect(),
+        )
+        .expect("a non-empty section");
+        let cand = cand
+            .with_bundle_references(Some(section))
+            .with_bundle_bodies(bodies);
+        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
+        self.record(judged.block().block(), txs);
+        Ok(judged)
+    }
+
     /// Judge an empty block connecting next under `rules`, for a fixture
     /// that built a corrupt state on purpose: the validator's [`Corrupt`]
     /// comes back as a value. Records nothing — the block does not connect.
@@ -545,16 +583,25 @@ impl Grown {
 
     /// Record `block`, connected listing `listed`, on both trees — holding
     /// them to one root — and mark the coinbases its inputs spent.
+    ///
+    /// Every listed image is looked up in the held-coinbase map. The
+    /// reservation in `building` is not a second way to decide what the
+    /// block spent: a replayed capture built no spend here, and its listed
+    /// image is the same fact.
     pub(in super::super) fn record(&mut self, block: &Block, listed: &[Transaction]) {
         self.spender
             .push_agreeing(&Linked::new(block, listed), block.header.curve_tree_root);
         self.hashes.push(block.hash());
         let images: Vec<[u8; 32]> = listed.iter().flat_map(key_images).collect();
+        if !images.is_empty() {
+            self.note_held_coinbases();
+        }
         let mut took = Vec::new();
         for key_image in &images {
-            if let Some(coinbase) = self.building.remove(key_image) {
-                self.spent.insert(coinbase);
-                took.push(coinbase);
+            let image = KeyImage::from_canonical_bytes(*key_image);
+            if let Some(coinbase) = self.held_coinbases.height_of(image) {
+                self.spent.insert(coinbase.to_raw());
+                took.push(coinbase.to_raw());
             }
         }
         self.spent_at.push(took);
@@ -562,6 +609,29 @@ impl Grown {
         self.blocks.push((block.clone(), listed.to_vec()));
         // A spend built for this block and not listed was not spent.
         self.building.clear();
+    }
+
+    /// The key image the replay noted for block `height`'s coinbase, when
+    /// the harness miner holds it. This reads the map [`Self::record`]
+    /// filled; it does not open the coinbase again.
+    pub(in super::super) fn coinbase_key_image(&self, height: BlockHeight) -> Option<KeyImage> {
+        self.held_coinbases.image_at(height)
+    }
+
+    /// Note every coinbase matured for the block connecting next. A listed
+    /// spend of the block just recorded can name any of them, and the one
+    /// that matures for the next block is what a test reads back.
+    fn note_held_coinbases(&mut self) {
+        let Some(through) = self.height().to_raw().checked_sub(FIRST_SPEND_HEIGHT) else {
+            return;
+        };
+        let through = BlockHeight::from_raw(through);
+        let wallet = MinerWallet::harness();
+        while self.held_coinbases.next() <= through {
+            let height = self.held_coinbases.next();
+            let opened = self.spender.coinbase_key_image(wallet, height);
+            self.held_coinbases.note(height, opened);
+        }
     }
 }
 
@@ -579,6 +649,10 @@ impl Grown {
     pub(in super::super) fn pop(&mut self) {
         self.blocks.pop().expect("a block to pop");
         self.hashes.pop();
+        // The popped block's coinbase goes with it; a block mined at that
+        // height again pays another. The images of the blocks that remain
+        // stay: the spender is rebuilt over those same blocks.
+        self.held_coinbases.truncate_to(self.height());
         self.images.pop();
         for coinbase in self.spent_at.pop().expect("a block to pop") {
             self.spent.remove(&coinbase);
@@ -589,11 +663,11 @@ impl Grown {
             .iter()
             .map(|(block, listed)| Linked::new(block, listed))
             .collect();
-        self.spender = Spender::over(&linked);
+        self.spender = Spender::on(Trust::UNPINNED.network_id(), &linked);
     }
 }
 
-/// Price a genesis candidate's coinbase at [`GENESIS_ENDOWMENT`] with the
+/// Price a genesis candidate's coinbase at [`genesis_endowment`] with the
 /// wallet's [`repay`] — amount, commitment and ciphertext together — so it
 /// is a coinbase the miner's scan recovers and a spend can be built over.
 pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
@@ -602,7 +676,7 @@ pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
         repay(
             &mut genesis.block.miner_transaction,
             MinerWallet::harness().recipient(),
-            GENESIS_ENDOWMENT,
+            genesis_endowment(),
         ),
         "the fixture's genesis coinbase is one `repay` prices"
     );
@@ -703,7 +777,7 @@ static PROVED: Mutex<BTreeMap<ProvedKey, Transaction>> = Mutex::new(BTreeMap::ne
 /// into its height ([`batch_root_going_into`], the derived root of the
 /// previous connect — CEN-B5), so a caller lists [`spend`]s and the
 /// reference, the proof and the root are written where they are known.
-/// Genesis is **endowed** ([`GENESIS_ENDOWMENT`]): a coinbase built by
+/// Genesis is **endowed** ([`genesis_endowment`]): a coinbase built by
 /// `candidate_over` pays zero, genesis's stands as built (CEN-F11), and a
 /// zero-amount coinbase is not an input a spend can be signed over — so
 /// without the endowment the chain's first matured coinbase, the one
@@ -723,7 +797,9 @@ pub(in super::super) fn connect_chain(store: &ChainStore, listed: &[Vec<Listed>]
 /// curve still prices every later height) and enough for a one-coin fee to
 /// destroy a visible amount. The same endowment is what makes genesis's
 /// coinbase spendable at all ([`connect_chain`]).
-const GENESIS_ENDOWMENT: u64 = shekyl_economics::EMISSION_CURVE_ASYMPTOTE / 4;
+fn genesis_endowment() -> u64 {
+    shekyl_economics::economic_params().emission_curve_asymptote / 4
+}
 
 /// [`connect_chain`], also returning the burn the verdict derived for each
 /// block (CEN-F17 / G11's `actually_destroyed` — what `connect` wrote as

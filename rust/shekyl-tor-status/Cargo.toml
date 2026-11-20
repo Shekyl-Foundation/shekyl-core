@@ -1,0 +1,21 @@
+[package]
+name = "shekyl-tor-status"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The Tor status on the wire (INPUT_GRAMMAR.md §23, Part G) and its one renderer. No I/O."
+publish = false
+
+[dependencies]
+# The wire's encoding. Its only dependency (docs/design/TOR_STATUS_CRATE.md §2).
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# The round-trip and unknown-keyword tests read and write JSON, the RPC's
+# encoding. Already in the lockfile.
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

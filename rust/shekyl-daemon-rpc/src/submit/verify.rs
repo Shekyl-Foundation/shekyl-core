@@ -24,14 +24,14 @@ use std::fmt;
 
 use crate::submit::facts::SubmitFacts;
 use crate::submit::phase_a::ParsedSubmission;
-use shekyl_rpc_types::RejectCause;
+use shekyl_rpc_types::wire::tx::Rejection;
 
 /// Why Phase-C verification refused the transaction.
 ///
 /// The closed set of causes a verifier may emit — constraining the seam so
 /// an implementation cannot smuggle identity or transport dispositions
 /// into a verification failure. This is the wire-cause: [`From`] maps it
-/// onto [`RejectCause`] with no remainder (CB-5). The operator-facing
+/// onto [`Rejection`] with no remainder (CB-5). The operator-facing
 /// leg name lives on [`VerifyReject`]; a cause without a reason is not a
 /// [`TxVerifier`] error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,19 +46,18 @@ pub enum VerifyFailure {
     /// rebuild against a fresh root fixes: tree depth out of range
     /// (`TreeDepthTooLarge`) or a root-table inconsistency.
     StaleRoot,
-    /// An archival claim slot is already consumed (§8.7.1 rows BP3 / SC2:
-    /// a bond record already posted for this `P`; a serve-credit already
-    /// claimed for this `(P, shard, epoch)`) — the claim-slot leg of
+    /// An archival claim slot is already consumed (§8.7.1 row BP3: a bond
+    /// record already posted for this `P`) — the claim-slot leg of
     /// `DoubleSpendConflict`.
     DoubleSpendConflict,
 }
 
-impl From<VerifyFailure> for RejectCause {
+impl From<VerifyFailure> for Rejection {
     fn from(failure: VerifyFailure) -> Self {
         match failure {
-            VerifyFailure::Malformed => RejectCause::Malformed,
-            VerifyFailure::StaleRoot => RejectCause::StaleRoot,
-            VerifyFailure::DoubleSpendConflict => RejectCause::DoubleSpendConflict,
+            VerifyFailure::Malformed => Rejection::Malformed,
+            VerifyFailure::StaleRoot => Rejection::StaleRoot,
+            VerifyFailure::DoubleSpendConflict => Rejection::DoubleSpendConflict,
         }
     }
 }
@@ -66,7 +65,7 @@ impl From<VerifyFailure> for RejectCause {
 /// A Phase-C refusal: the wire-cause plus the daemon-side diagnostic.
 ///
 /// Mirrors [`crate::submit::PhaseAReject`]: the reason never crosses the
-/// RPC boundary (§2.2 / CB-5 — a submitter learns only [`RejectCause`]);
+/// RPC boundary (§2.2 / CB-5 — a submitter learns only [`Rejection`]);
 /// operators read the engine's one `info` line. Constructors are the only
 /// construction sites, and they refuse an empty reason, so a silent
 /// `Malformed` is unrepresentable at this seam.
@@ -131,7 +130,7 @@ impl From<VerifyReject> for VerifyFailure {
     }
 }
 
-impl From<VerifyReject> for RejectCause {
+impl From<VerifyReject> for Rejection {
     fn from(reject: VerifyReject) -> Self {
         reject.cause.into()
     }
@@ -142,16 +141,28 @@ pub trait TxVerifier {
     /// Verify `parsed` against the snapshot facts (root, tree depth,
     /// archival facts). Success is the engine's license to mint the
     /// [`crate::submit::VerificationCertificate`]; failure maps to a
-    /// [`RejectCause`] via [`VerifyReject::cause`]. The reason is for
+    /// [`Rejection`] via [`VerifyReject::cause`]. The reason is for
     /// the operator log, never the wire.
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject>;
+    /// `network` is the id of the node's network, which every input's
+    /// signature hash binds (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
+    fn verify(
+        &self,
+        parsed: &ParsedSubmission,
+        facts: &SubmitFacts,
+        network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject>;
 }
 
 // Forwarding impl, mirroring the `SubmitStateShim` one: shared-verifier
 // ownership (engine + assertion handle) without orphan-rule friction.
 impl<T: TxVerifier + ?Sized> TxVerifier for std::sync::Arc<T> {
-    fn verify(&self, parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyReject> {
-        (**self).verify(parsed, facts)
+    fn verify(
+        &self,
+        parsed: &ParsedSubmission,
+        facts: &SubmitFacts,
+        network: &shekyl_network::NetworkId,
+    ) -> Result<(), VerifyReject> {
+        (**self).verify(parsed, facts, network)
     }
 }
 
@@ -169,6 +180,6 @@ mod tests {
     fn from_strips_the_reason_at_the_wire() {
         let reject = VerifyReject::malformed("O6: degenerate output commitment");
         assert_eq!(reject.cause(), VerifyFailure::Malformed);
-        assert_eq!(RejectCause::from(reject), RejectCause::Malformed);
+        assert_eq!(Rejection::from(reject), Rejection::Malformed);
     }
 }

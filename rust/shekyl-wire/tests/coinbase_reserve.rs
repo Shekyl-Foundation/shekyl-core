@@ -80,9 +80,9 @@ fn the_maximal_coinbase_weighs_what_the_grammar_sums() {
         .prefix
         .parse_extra()
         .expect("the constructor parses");
-    fields.push(TxExtraField::ArchivalAttestation(vec![0xAB; 4]));
+    fields.push(TxExtraField::AdditionalPubKeys(vec![[0xAB; 32]]));
     assert!(
         check_tx_extra_shape(&fields, 1, ExtraSubject::Coinbase).is_err(),
-        "an attestation in a coinbase is refused"
+        "additional keys in a coinbase are refused"
     );
 }

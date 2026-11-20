@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
+use shekyl_network::Network;
 use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
@@ -57,6 +58,7 @@ fn causes() -> Recorded {
 }
 
 fn config(
+    network_id: [u8; 16],
     option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
@@ -66,7 +68,7 @@ fn config(
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         option,
         column: ConnectorId::Clearnet.column(),
-        network_id: ID,
+        network_id,
         ceiling,
         handshake_within: within,
         shutdown_timeout: Duration::from_millis(50),
@@ -87,6 +89,20 @@ fn start(
     Listener<MonotonicClock>,
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
+    start_on(Sockets::new(), ID, option, within, ceiling)
+}
+
+fn start_on(
+    sockets: Sockets,
+    network_id: [u8; 16],
+    option: ClearnetOption,
+    within: Tick,
+    ceiling: InboundCeiling,
+) -> (
+    EngineService<MonotonicClock>,
+    Listener<MonotonicClock>,
+    Arc<Mutex<Vec<CloseKind>>>,
+) {
     let engine = EngineService::start(MonotonicClock::new());
     let pool = runtime(harness_budget(), &name("sk-clearnet")).expect("runtime");
     let recorded = causes();
@@ -94,8 +110,8 @@ fn start(
     let listener = listen(
         pool,
         &engine.handle(),
-        Sockets::new(),
-        &config(option, within, ceiling, recorded.sink),
+        sockets,
+        &config(network_id, option, within, ceiling, recorded.sink),
     )
     .expect("listen");
     (engine, listener, seen)
@@ -113,6 +129,50 @@ async fn next_session(sessions: &mut mpsc::UnboundedReceiver<super::Session>) ->
         .await
         .expect("session wait")
         .expect("session")
+}
+
+/// Write `prefix` and read what comes back before the peer closes.
+/// Zero is a FIN with no payload.
+fn prefix_reply(client: &mut StdStream, prefix: &[u8]) -> usize {
+    client.write_all(prefix).expect("write");
+    let mut buf = [0u8; 8];
+    client.read(&mut buf).expect("read")
+}
+
+/// Spin until `seen` records `kind`.
+fn await_close_kind(seen: &Arc<Mutex<Vec<CloseKind>>>, kind: CloseKind, why: &str) {
+    let start = Instant::now();
+    while !seen.lock().expect("causes").contains(&kind) {
+        assert!(start.elapsed() < Duration::from_secs(2), "{why}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Open a sealed session under `network_id` and deliver `plain`.
+/// Returns what the listener's session read.
+fn sealed_plaintext(
+    listener: &mut Listener<MonotonicClock>,
+    client: &mut StdStream,
+    network_id: &[u8; 16],
+    plain: &[u8],
+) -> Vec<u8> {
+    let (initiator, message1) = Initiator::new(network_id).expect("initiator");
+    client.write_all(&prefix_for(network_id)).expect("prefix");
+    client.write_all(&message1).expect("message1");
+    let mut prefix = [0u8; PREFIX_LEN];
+    client.read_exact(&mut prefix).expect("prefix");
+    assert_eq!(prefix, prefix_for(network_id));
+    let mut message2 = vec![0u8; MESSAGE2_LEN];
+    client.read_exact(&mut message2).expect("message2");
+    let (mut send, _recv) = initiator
+        .read_message2(&message2)
+        .expect("message2")
+        .split();
+    let wire = send.seal(plain).expect("seal");
+    client.write_all(&wire).expect("record");
+    let handle = listener.runtime_handle().clone();
+    let mut session = handle.block_on(next_session(&mut listener.sessions));
+    handle.block_on(session.recv()).expect("plain")
 }
 
 #[test]
@@ -182,21 +242,58 @@ fn a_bad_prefix_is_fin_after_zero_bytes() {
         InboundCeiling::Bounded(4),
     );
     let mut client = connect(listener.local_addr());
-    client.write_all(&[0u8; PREFIX_LEN]).expect("write");
-    let mut buf = [0u8; 8];
-    let n = client.read(&mut buf).expect("read");
+    let n = prefix_reply(&mut client, &[0u8; PREFIX_LEN]);
     assert_eq!(n, 0);
-    let start = Instant::now();
-    while !seen
-        .lock()
-        .expect("causes")
-        .contains(&CloseKind::PrefixMismatch)
-    {
-        assert!(start.elapsed() < Duration::from_secs(2), "cause");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    await_close_kind(&seen, CloseKind::PrefixMismatch, "cause");
     listener.shutdown();
     drop(engine);
+}
+
+/// Lock 4 of the chain forge's identity test (`CHAIN_FORGE.md` §6): a node
+/// of one network does not take a session from another. For every pair of
+/// networks, a fresh listener under the listening network's id is offered
+/// the dialing network's prefix: another network's is closed after zero
+/// bytes with `PrefixMismatch`, and the listener's own opens a sealed
+/// session — the positive control, so a listener that refused everything
+/// fails here too. One listener per attempt, so the per-host accept rate
+/// (`AcceptRateExceeded`) never stands in for the prefix.
+#[test]
+fn a_listener_refuses_every_other_networks_prefix_and_takes_its_own() {
+    let mut refused = 0;
+    let mut sealed = 0;
+    for listening in Network::ALL {
+        for dialing in Network::ALL {
+            let id = listening.network_id();
+            let (engine, mut listener, seen) = start_on(
+                Sockets::new(),
+                id,
+                ClearnetOption::On,
+                Tick::new(5_000_000_000),
+                InboundCeiling::Bounded(4),
+            );
+            let mut client = connect(listener.local_addr());
+            if dialing == listening {
+                let got = sealed_plaintext(&mut listener, &mut client, &id, b"same network");
+                assert_eq!(got, b"same network", "{listening}");
+                sealed += 1;
+            } else {
+                let theirs = prefix_for(&dialing.network_id());
+                assert_ne!(theirs, prefix_for(&id), "{listening} and {dialing}");
+                let n = prefix_reply(&mut client, &theirs);
+                assert_eq!(n, 0, "{listening} answered {dialing}'s prefix");
+                await_close_kind(
+                    &seen,
+                    CloseKind::PrefixMismatch,
+                    &format!("{listening}: {dialing}'s close cause"),
+                );
+                refused += 1;
+            }
+            listener.shutdown();
+            drop(engine);
+        }
+    }
+    assert_eq!(sealed, Network::ALL.len());
+    assert_eq!(refused, Network::ALL.len() * (Network::ALL.len() - 1));
 }
 
 #[test]
@@ -207,23 +304,7 @@ fn option_on_seals_above_the_seam() {
         InboundCeiling::Bounded(4),
     );
     let mut client = connect(listener.local_addr());
-    let (initiator, message1) = Initiator::new(&ID).expect("initiator");
-    client.write_all(&prefix_for(&ID)).expect("prefix");
-    client.write_all(&message1).expect("message1");
-    let mut prefix = [0u8; PREFIX_LEN];
-    client.read_exact(&mut prefix).expect("prefix");
-    assert_eq!(prefix, prefix_for(&ID));
-    let mut message2 = vec![0u8; MESSAGE2_LEN];
-    client.read_exact(&mut message2).expect("message2");
-    let (mut send, _recv) = initiator
-        .read_message2(&message2)
-        .expect("message2")
-        .split();
-    let wire = send.seal(b"hello").expect("seal");
-    client.write_all(&wire).expect("record");
-    let handle = listener.runtime_handle().clone();
-    let mut session = handle.block_on(next_session(&mut listener.sessions));
-    let got = handle.block_on(session.recv()).expect("plain");
+    let got = sealed_plaintext(&mut listener, &mut client, &ID, b"hello");
     assert_eq!(got, b"hello");
     assert_eq!(listener.tally.computed(), 1);
     assert_eq!(listener.tally.skipped(), 0);
@@ -292,6 +373,59 @@ fn a_zero_ceiling_refuses_before_any_handshake() {
     }
     assert_eq!(listener.tally.queued(), 0);
     assert_eq!(listener.tally.computed(), 0);
+    listener.shutdown();
+    drop(engine);
+}
+
+/// An inbound connection over the accept rate closes before the
+/// handshake: nothing written to it, no handshake queued or computed
+/// (D10.3). The rate is a test shape, not a ruled value: one accept per
+/// host a minute.
+#[test]
+fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
+    use shekyl_transport_layer::{AcceptGate, AcceptRate};
+    let gate = AcceptGate::new(
+        AcceptRate {
+            token_every_nanos: 1,
+            burst: 1_000,
+        },
+        AcceptRate {
+            token_every_nanos: 60_000_000_000,
+            burst: 1,
+        },
+    );
+    let (engine, listener, seen) = start_on(
+        Sockets::with_clearnet_gate(gate),
+        ID,
+        ClearnetOption::On,
+        Tick::new(5_000_000_000),
+        InboundCeiling::Bounded(4),
+    );
+    let _first = connect(listener.local_addr());
+    let start = Instant::now();
+    while listener.sockets.live() == 0 {
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "the first is admitted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let computed_before = listener.tally.computed();
+    let mut second = connect(listener.local_addr());
+    let mut buf = [0u8; 4];
+    let n = second.read(&mut buf).expect("read");
+    assert_eq!(n, 0, "closed with nothing written");
+    let start = Instant::now();
+    while !seen
+        .lock()
+        .expect("causes")
+        .contains(&CloseKind::AcceptRateExceeded)
+    {
+        assert!(start.elapsed() < Duration::from_secs(2), "refused");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(listener.tally.computed(), computed_before);
+    assert_eq!(listener.sockets.take_accept_refusals().over_host_rate, 1);
     listener.shutdown();
     drop(engine);
 }
@@ -571,6 +705,7 @@ fn a_socks_refusal_carries_the_reply_byte() {
         &engine.handle(),
         Sockets::new(),
         &config(
+            ID,
             ClearnetOption::Off,
             Tick::new(5_000_000_000),
             InboundCeiling::Bounded(4),
@@ -631,3 +766,9 @@ fn a_socks_refusal_carries_the_reply_byte() {
 
 #[path = "gap_tests.rs"]
 mod gap_tests;
+
+#[path = "admission_tests.rs"]
+mod admission_tests;
+
+#[path = "linger_tests.rs"]
+mod linger_tests;

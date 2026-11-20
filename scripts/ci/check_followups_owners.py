@@ -89,8 +89,37 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # claim-source, serde-default and dual-list rows took RPC_WIRE.md as owner
 # (the KV doc's retirement, #1116) and merged with dev's, the list's length;
 # 295 on 2026-10-19 when the PWD-T7 compression-gate row went with
-# compression itself (#1134), the list's length.
-GRANDFATHER_CEILING = 295
+# compression itself (#1134), the list's length; 294 on 2026-11-01 when the
+# store's dead-table rows closed with the tables (layout 34); 288 the same
+# day when the docs sweep's closed rows (the C++ template fill, the
+# C++-anchored gates, `bi_cum_rct`) merged with it, the list's length;
+# 285 on 2026-11-03 when CS-5's two rows (the 2004 continuation closed as
+# built, the bucket-length row given an owner) merged with dev's
+# unbond-journal close (#1237), the list's length; 284 on 2026-11-05 when
+# the truncated credit-wire headline (already re-filed under the
+# attestation-ordering row) went with the C++ file it linked (the p2p
+# remnant cutover), the list's length; 275 on 2026-11-07 when the C++
+# removal closed the rows whose subject it deleted (shekyl-ffi's docs and
+# symbol rename, epee's wipeable_string, the performance tests) with the
+# three it found already resolved (DRS-W16's LMDB cursor, the PoW test
+# seam, the M1 C++ test-support seam), and two rows that had left the list
+# earlier were counted, the list's length; 267 on 2026-11-10 when the
+# switch's C7 deleted the serve-credit input and the attestation extra
+# field with the six rows whose subject they were, the list's length; 266
+# on 2026-11-12 when the switch's C8 closed the LMDB serve-credit scans row
+# (its tables are gone), and 265 the same day when it closed the
+# duplicate-archival-keys row (the template leaves a later conflicting
+# transaction unselected), the list's length; 234 on 2026-11-14 when the
+# FOLLOWUPS sweep after the C++ removal and the 4b switch closed 30 listed rows
+# whose code is gone or whose work landed (the C++ and FFI rows #1299
+# deleted the subject of, rows already marked closed in their own titles,
+# and rows whose PRs merged), restated two under their current subject
+# (CEN-A7's Rust bound; the engine bench pairs the capture script omits),
+# and merged with #1362, which gave the watchdog probe-bytes row an owner,
+# the list's length. 228 on 2026-11-19, when the workspace rustdoc gate
+# closed the two rustdoc rows (the gate that named its crates, and the
+# blocked workspace-wide lane).
+GRANDFATHER_CEILING = 228
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

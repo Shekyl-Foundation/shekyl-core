@@ -3,72 +3,71 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! A relayed tip as a compact announcement (2008).
+//! A relayed tip as a compact announcement (2008), and the fan-out that
+//! relays it and a bundle (2015, [`crate::bundles`]).
 //!
-//! The block and its attestation witness, and no transactions. The owner
-//! sends that announcement to every established session but the supplier.
-//! The model has already decided that the block is relayed.
+//! The block and its bundle references, and no transactions. The owner
+//! sends that announcement to every established session but the supplier,
+//! and to every established session when no session supplied it. The model
+//! has already decided that the block is relayed. A bundle goes by the same
+//! fan-out once the queue has admitted it.
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_levin::{
-    notify, BlockCompleteEntry, NewCompactBlock, PayloadError, PortableMap,
-    NOTIFY_NEW_COMPACT_BLOCK,
-};
-use shekyl_seam::{Hub, SocketId};
+use shekyl_levin::{BlockCompleteEntry, NewCompactBlock};
+use shekyl_p2p_session::{Encoded, Established};
 use shekyl_types::BlockHash;
+
+use crate::session::Session;
 
 /// `block_weight` of zero is omitted on the wire. A relay does not claim
 /// a weight; the receiver forms the block.
 const OMITTED_BLOCK_WEIGHT: u64 = 0;
 
-/// Why a relay could not be built.
-pub(crate) enum Fault {
-    /// The store could not be read.
-    Store(StoreError),
-    /// The announcement did not encode.
-    Encode(PayloadError),
-}
-
-/// The main chain's block `hash` as one 2008 frame, or `None` when `hash`
-/// is not on main.
-pub(crate) fn announcement(store: &ChainStore, hash: &BlockHash) -> Result<Option<Vec<u8>>, Fault> {
-    let snap = store.begin_read().map_err(Fault::Store)?;
-    let Some(height) = snap.height_of(hash).map_err(Fault::Store)? else {
+/// The main chain's block `hash` as one 2008, or `None` when `hash` is
+/// not on main.
+pub(crate) fn announcement(
+    store: &ChainStore,
+    hash: &BlockHash,
+) -> Result<Option<NewCompactBlock>, StoreError> {
+    let snap = store.begin_read()?;
+    let Some(height) = snap.height_of(hash)? else {
         return Ok(None);
     };
-    let AtHeight::Recorded(body) = snap.block(height).map_err(Fault::Store)? else {
+    let AtHeight::Recorded(body) = snap.block(height)? else {
         return Ok(None);
     };
-    let attestation_witness = match snap.attestation_witness_at(height).map_err(Fault::Store)? {
-        AtHeight::Recorded(Some(witness)) => witness,
+    let bundle_references = match snap.bundle_references_at(height)? {
+        AtHeight::Recorded(Some(references)) => references.into_inner(),
         _ => Vec::new(),
     };
     let current_blockchain_height = snap
-        .tip()
-        .map_err(Fault::Store)?
+        .tip()?
         .recorded
         .map_or(0, |tip| tip.height.to_raw().saturating_add(1));
-    let compact = NewCompactBlock {
+    Ok(Some(NewCompactBlock {
         b: BlockCompleteEntry {
             pruned: false,
             block: body.block.serialize(),
             block_weight: OMITTED_BLOCK_WEIGHT,
             txs: Vec::new(),
-            attestation_witness,
+            bundle_references,
         },
         current_blockchain_height,
-    };
-    let payload = compact.store().map_err(Fault::Encode)?;
-    Ok(Some(notify(NOTIFY_NEW_COMPACT_BLOCK, &payload)))
+    }))
 }
 
-/// Send `bytes` to every established session but `from`.
-pub(crate) fn fan_out(hub: &Hub, from: SocketId, bytes: &[u8]) {
-    for row in hub.board().rows() {
-        if row.established() && row.id() != from {
-            // A refused send is the transport's close, not sync's.
-            let _sent = hub.send(row.id(), bytes.to_vec());
+/// Send `encoded` to every established session but `from`. With no `from`
+/// it goes to every established session. A refused send is the session
+/// layer's close, not sync's.
+pub(crate) fn fan_out<'a>(
+    sessions: impl IntoIterator<Item = (&'a Session, &'a Established)>,
+    from: Option<Session>,
+    encoded: &Encoded,
+) {
+    for (session, handle) in sessions {
+        if Some(*session) != from {
+            let _sent = handle.send_encoded(encoded);
         }
     }
 }

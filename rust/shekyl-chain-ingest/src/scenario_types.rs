@@ -10,40 +10,62 @@
 //! is, forms the block and connects it. Callers keep the names on
 //! `crate::scenario`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use shekyl_archival_retention::BundleBody;
 use shekyl_block_template::{Template, TemplateError};
 use shekyl_chain_rules::{
     ArchivalDelta, Candidate, CenRow, InvalidBlock, PaidEmission, Substrate, Target, Weights,
 };
+use shekyl_types::archival::BundleReferences;
 use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 use shekyl_wire::Transaction;
 
-use crate::connector::RunFault;
+use shekyl_hasher::{Class, Ranked, Resident};
 
-/// The seconds between the driver's blocks — the DAA target, so a
-/// scripted chain's timestamps look like a chain's.
+use crate::connector::RunFault;
+use crate::pow::{Fixture, LendJob, Pow, RunJob};
+
+/// The seconds between the driver's blocks by default — the DAA target, so
+/// a scripted chain's timestamps look like a chain's.
 const BLOCK_INTERVAL: u64 = 120;
 
-/// Where the driver's clock starts: after the harness fixtures' epoch so a
-/// scenario and a fixture never share a timestamp by accident.
-pub const CLOCK_START: Timestamp = Timestamp::from_raw(1_800_000_000);
+/// Where the driver's clock starts: one block interval after regtest's
+/// genesis was minted (`NETWORK_IDENTITY.md` NI-R18). A chain over regtest's
+/// table genesis needs its first blocks above the mint time (CEN-C2's
+/// genesis-padded median), so the clock follows the recorded mint and a
+/// regenesis moves it, never a date fixed here. The mint is after the
+/// harness fixtures' epoch, so a scenario and a fixture never share a
+/// timestamp by accident.
+pub const CLOCK_START: Timestamp = Timestamp::from_raw(
+    shekyl_network::Network::Regtest.genesis().timestamp().get() + BLOCK_INTERVAL,
+);
 
 /// A substrate whose clock the driver owns and advances, over a longhash
-/// the caller chooses. Production PoW is `Clocked<ProductionSubstrate>`;
+/// the caller chooses. Production PoW is `Clocked<ProductionPow>`;
 /// the default is the harness's always-satisfying longhash.
 pub struct Clocked<P> {
     clock: AtomicU64,
+    /// Seconds per [`tick`](Self::tick).
+    interval: AtomicU64,
     pow: P,
 }
 
 impl<P> Clocked<P> {
-    /// A clock at [`CLOCK_START`] over `pow`'s longhash.
+    /// A clock at [`CLOCK_START`] over `pow`'s longhash, ticking one DAA
+    /// target per block.
     pub const fn new(pow: P) -> Self {
         Self {
             clock: AtomicU64::new(CLOCK_START.to_raw()),
+            interval: AtomicU64::new(BLOCK_INTERVAL),
             pow,
         }
+    }
+
+    /// Tick `seconds` per block from now on: a chain whose blocks come
+    /// faster or slower than the DAA's target.
+    pub fn set_interval(&self, seconds: core::num::NonZeroU64) {
+        self.interval.store(seconds.get(), Ordering::Relaxed);
     }
 
     /// The clock now.
@@ -53,56 +75,119 @@ impl<P> Clocked<P> {
 
     /// Advance the clock by one block interval and return the new reading.
     pub fn tick(&self) -> Timestamp {
+        let interval = self.interval.load(Ordering::Relaxed);
         let next = self
             .clock
-            .fetch_add(BLOCK_INTERVAL, Ordering::Relaxed)
-            .saturating_add(BLOCK_INTERVAL);
+            .fetch_add(interval, Ordering::Relaxed)
+            .saturating_add(interval);
         Timestamp::from_raw(next)
     }
 }
 
-impl<P: Substrate> Substrate for Clocked<P> {
-    type Fault = P::Fault;
-    type Held = P::Held;
+/// A job's substrate under the driver's clock: the inner job's longhash,
+/// and the instant the driver set.
+struct ClockedJob<'a, J: ?Sized> {
+    now: Timestamp,
+    job: &'a J,
+}
 
-    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
+impl<J: Substrate + ?Sized> Substrate for ClockedJob<'_, J> {
+    type Fault = J::Fault;
+
+    fn local_clock(&self) -> Result<Timestamp, J::Fault> {
+        Ok(self.now)
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, J::Fault> {
+        self.job.longhash(pow_blob, seed)
+    }
+}
+
+/// The inner boundary's jobs, each judged at the driver's clock. Every
+/// other call is the inner boundary's: a clock over a production pow asks
+/// its hasher, or a rank through the clock would rank nothing.
+impl<P: Pow> Pow for Clocked<P> {
+    type Fault = P::Fault;
+
+    fn clock(&self) -> Result<Timestamp, P::Fault> {
         Ok(self.now())
     }
 
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
-        self.pow.longhash(pow_blob, seed)
-    }
-
-    /// The pin is the longhash's: a clock over a production substrate pins
-    /// its cache store, or a pin through the clock would pin nothing.
-    fn pin_seed(&self, seed: &BlockHash) {
-        self.pow.pin_seed(seed);
-    }
-
-    fn cache_absent(&self, fault: &P::Fault) -> bool {
-        self.pow.cache_absent(fault)
-    }
-
-    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
-        self.pow.prepare_seed(seed)
-    }
-
-    fn longhash_held(
+    fn run<R>(
         &self,
-        pow_blob: &[u8],
-        seed: &BlockHash,
-        held: &P::Held,
-    ) -> Result<PowHash, P::Fault> {
-        self.pow.longhash_held(pow_blob, seed, held)
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&RunJob<'job, P::Fault>) -> R,
+    ) -> Option<R> {
+        self.pow.run(class, seed, stop, |inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn lend<R>(
+        &self,
+        class: Class,
+        seed: BlockHash,
+        stop: &AtomicBool,
+        job: impl for<'job> FnOnce(&LendJob<'job, P::Fault>) -> R,
+    ) -> Option<R> {
+        self.pow.lend(class, seed, stop, |inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn wake(&self) {
+        self.pow.wake();
+    }
+
+    fn rank(&self, list: Ranked) {
+        self.pow.rank(list);
+    }
+
+    fn warm(&self, seed: &BlockHash) -> bool {
+        self.pow.warm(seed)
+    }
+
+    fn resident(&self) -> Option<tokio::sync::watch::Receiver<Resident>> {
+        self.pow.resident()
+    }
+
+    fn permits(&self) -> usize {
+        self.pow.permits()
+    }
+
+    fn derives(&self) -> crate::metrics::Derives {
+        self.pow.derives()
+    }
+
+    fn unlent<R>(&self, job: impl for<'job> FnOnce(&LendJob<'job, P::Fault>) -> R) -> R {
+        self.pow.unlent(|inner| {
+            job(&ClockedJob {
+                now: self.now(),
+                job: inner,
+            })
+        })
+    }
+
+    fn stopped(fault: &P::Fault) -> bool {
+        P::stopped(fault)
     }
 }
 
 /// The harness longhash as a substrate: every target satisfied, no cache.
 pub struct FreeHash;
 
+impl Fixture for FreeHash {}
+
 impl Substrate for FreeHash {
     type Fault = std::convert::Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(CLOCK_START)
@@ -166,23 +251,32 @@ pub struct Mined {
     pub seed: BlockHash,
     /// The target the producer claimed (CEN-D4), likewise.
     pub target: Target,
+    /// The bundle references the block carried beside it
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5): the section its header's
+    /// `section_root` commits, `None` when it admitted no bundle.
+    pub bundle_references: Option<BundleReferences>,
+    /// The body each reference names, in section order; empty with no
+    /// references.
+    pub bundle_bodies: Vec<BundleBody>,
 }
 
 impl Mined {
-    /// The block as a candidate: the template's block and listed bodies,
-    /// no witness (the driver mints no attestation records).
+    /// The block as a candidate: the template's block, its listed bodies,
+    /// and the section it carried. A block's header commits its section, so
+    /// without it a block that admitted a bundle is refused at CEN-J29.
     #[must_use]
     pub fn candidate(&self) -> Candidate {
         Candidate::new(
             self.template.block.clone(),
             self.template.transactions.clone(),
         )
+        .with_bundle_references(self.bundle_references.clone())
+        .with_bundle_bodies(self.bundle_bodies.clone())
     }
 }
 
 /// A block this driver formed and did not connect ([`Scenario::assemble_unconnected`](super::Scenario::assemble_unconnected)).
 /// Its header is in the driver's target ledger; the store has never held it.
-#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct Unconnected {
     /// The connecting height the facts named.

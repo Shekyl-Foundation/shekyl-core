@@ -77,8 +77,8 @@ fn complete_cancelled(
 /// # Locking topology
 ///
 /// Per attempt:
-/// 1. **Read lock** — acquired briefly to clone [`DaemonClient`] (for the
-///    network calls below) and to take a fresh [`LedgerSnapshot`]. The
+/// 1. **Read lock** — acquired briefly to clone [`DaemonClient`](crate::engine::daemon::DaemonClient) (for the
+///    network calls below) and to take a fresh [`LedgerSnapshot`](crate::engine::refresh::LedgerSnapshot). The
 ///    lock is released before any I/O.
 /// 2. **No lock** — daemon `get_height`, scanner construction (first
 ///    attempt only), and `RefreshEngine::produce_scan_result` run with no engine
@@ -93,12 +93,12 @@ fn complete_cancelled(
 ///
 /// # `_slot_guard`
 ///
-/// The [`SlotGuard`] returned by [`RefreshSlot::try_claim`] in
+/// The [`SlotGuard`] returned by [`RefreshSlot::try_claim`](crate::engine::refresh_slot::RefreshSlot::try_claim) in
 /// [`Engine::start_refresh`] is moved into this task and held by name
 /// for the task's entire body. Its [`Drop`] impl flips the
 /// `refresh_slot` flag back to `false`, releasing single-flight
 /// exclusion. Releasing on task exit (rather than on
-/// [`RefreshHandle::drop`]) is what guarantees a fresh
+/// [`RefreshHandle::drop`](crate::engine::refresh::RefreshHandle::drop)) is what guarantees a fresh
 /// [`Engine::start_refresh`] cannot observe `AlreadyRunning` after a
 /// cancelled handle is dropped but before the producer task has
 /// actually noticed the cancellation and unwound — which would race
@@ -423,7 +423,7 @@ pub(crate) async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
                 return;
             }
         };
-        if let Err(e) = crate::engine::merge::curve_tree_ingest_scan_result_with_respawn(
+        if let Err(e) = crate::engine::merge::curve_tree_ingest_scan_result_with_recovery(
             &curve_tree,
             &daemon,
             &result,

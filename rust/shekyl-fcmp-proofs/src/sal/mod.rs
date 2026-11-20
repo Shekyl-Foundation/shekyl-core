@@ -15,6 +15,7 @@ use ciphersuite::{
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
 
 use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_types::TxSignableHash;
 
 use crate::{Input, Output};
 
@@ -22,7 +23,7 @@ use crate::{Input, Output};
 #[cfg(all(feature = "std", feature = "multisig"))]
 pub mod multisig;
 
-/// Membership-only spend authority (the `R_O` leg of SAL, no key image).
+// Membership-only spend authority (the `R_O` leg of SAL, no key image).
 pub mod membership_only;
 
 /// Build a fixed-width 64-byte domain-separation tag from a human-readable label.
@@ -115,10 +116,29 @@ impl RerandomizedOutput {
         Self::with_commitment_blind(rng, output, r_c)
     }
 
+    /// Re-randomize so the pseudo-out opens to `pseudo_out_blind`.
+    ///
+    /// `commitment_mask` is `z` in `C = z·G + amount·H`. The commitment blind
+    /// is `r_c = pseudo_out_blind − z`, so
+    /// `C~ = C + r_c·G = pseudo_out_blind·G + amount·H`. The solo prover and
+    /// the multisig SAL proposer both balance through this function, so the
+    /// equation has one definition. The other three blinds are drawn from `rng`.
+    pub fn for_pseudo_out(
+        rng: &mut (impl RngCore + CryptoRng),
+        output: Output,
+        commitment_mask: <Ed25519 as Ciphersuite>::F,
+        pseudo_out_blind: <Ed25519 as Ciphersuite>::F,
+    ) -> RerandomizedOutput {
+        let r_c = Zeroizing::new(pseudo_out_blind - commitment_mask);
+        Self::with_commitment_blind(rng, output, *r_c)
+    }
+
     /// Re-randomize an output using a caller-specified commitment blind `r_c`.
     ///
     /// The resulting pseudo-out is `C_tilde = C + r_c * G`, so the pseudo-out
     /// blinding factor equals the original commitment mask plus `r_c`.
+    /// A spend that must open to a chosen pseudo-out blind calls
+    /// [`Self::for_pseudo_out`] instead of subtracting here.
     /// All other rerandomization scalars (`r_o`, `r_i`, `r_r_i`) remain random.
     pub fn with_commitment_blind(
         rng: &mut (impl RngCore + CryptoRng),
@@ -292,7 +312,7 @@ impl SpendAuthAndLinkability {
 
     #[allow(clippy::too_many_arguments)]
     fn challenge(
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input: &Input,
         L: EdwardsPoint,
         P: EdwardsPoint,
@@ -323,7 +343,7 @@ impl SpendAuthAndLinkability {
     /// Prove a Spend-Authorization and Linkability proof.
     pub fn prove(
         rng: &mut (impl RngCore + CryptoRng),
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         opening: &OpenedInputTuple,
     ) -> (<Ed25519 as Ciphersuite>::G, SpendAuthAndLinkability) {
         let G = <Ed25519 as Ciphersuite>::G::generator();
@@ -400,7 +420,7 @@ impl SpendAuthAndLinkability {
         &self,
         rng: &mut (impl RngCore + CryptoRng),
         verifier: &mut multiexp::BatchVerifier<(), <Ed25519 as Ciphersuite>::G>,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         input: &Input,
         L: <Ed25519 as Ciphersuite>::G,
     ) {

@@ -12,11 +12,13 @@
 //! economy's shortfall is a different value, and this module never reads
 //! or writes it.
 
+use std::num::NonZeroU64;
+
 use shekyl_types::archival::{IssuedDraw, SettlementRow, SettlementRowError, COUNTED_DRAWS};
-use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHash, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::hash::cshake256_32;
-use crate::settlement_select::{select_counted, settle_pair, SETTLEMENT_BEACON_LEN};
+use crate::settlement_select::{select_counted, settle_pair};
 
 /// Draws scheduled for one support tree in one epoch. Ruled 2026-10-22:
 /// `c = 10` at a non-filing rate of one block in ten.
@@ -50,6 +52,24 @@ impl SupportUnissued {
     #[must_use]
     pub const fn get(self) -> u32 {
         self.0
+    }
+
+    /// A count as a support row's `carry_after` stores it. `None` past the
+    /// cap: no transition writes one, so a row above it is not a count.
+    #[must_use]
+    pub const fn stored(count: u32) -> Option<Self> {
+        if count > SUPPORT_DRAWS_PER_EPOCH {
+            None
+        } else {
+            Some(Self(count))
+        }
+    }
+
+    /// One carried draw re-seated: the tree is owed one fewer. Zero stays
+    /// zero.
+    #[must_use]
+    pub const fn reseated(self) -> Self {
+        Self(self.0.saturating_sub(1))
     }
 
     /// One scheduled block the producer did not file. The cap is `c`;
@@ -106,23 +126,39 @@ pub fn support_slot(
     Some(offset.wrapping_add(step) % span)
 }
 
+/// Whether `persona`'s schedule seats it at epoch-relative height
+/// `relative`: some `r_i`, `i` in `0..c`, is `relative`. A tree takes at
+/// most one seat on a block however many of its `r_i` land there (§2: one
+/// draw per tree per chosen block). `false` for every height when the
+/// window is not shorter than the epoch.
+#[must_use]
+pub fn support_seated_at(
+    persona: &PCanonicalId,
+    relative: u64,
+    seb: u64,
+    response_window: u64,
+) -> bool {
+    (0..SUPPORT_DRAWS_PER_EPOCH)
+        .any(|index| support_slot(persona, index, seb, response_window) == Some(relative))
+}
+
 /// The shard a support draw names, uniform in `0..final_count`.
 ///
 /// Rejection sampling on the first eight bytes of
 /// `cSHAKE256(shekyl/archival-support-draw-v1, seed ‖ block_hash ‖ persona ‖ j ‖ final_count)`.
-/// `None` when `final_count` is zero or every attempt fell in the
-/// rejected tail, which a non-zero count below `2^63` does not.
+/// `final_count` is the roster's width, never zero: an archive with no
+/// closed shard has no support stream ([`crate::SupportRoster`]). `None`
+/// only when every one of the eight attempts fell in the rejected tail,
+/// below `(final_count / 2^64)^8`.
 #[must_use]
 pub fn select_support_shard(
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     persona: &PCanonicalId,
     draw: u32,
-    final_count: u64,
+    final_count: NonZeroU64,
 ) -> Option<u64> {
-    if final_count == 0 {
-        return None;
-    }
+    let final_count = final_count.get();
     let limit = u64::MAX - (u64::MAX % final_count);
     for attempt in 0..8u32 {
         let word = support_word(seed, block_hash, persona, draw, final_count, attempt);
@@ -139,13 +175,13 @@ pub fn select_support_shard(
 #[must_use]
 pub fn support_challenge_nonce(
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     draw: u32,
     attempt: u8,
 ) -> [u8; 32] {
     let mut input = [0u8; 32 + 32 + 4 + 1];
     input[..32].copy_from_slice(seed);
-    input[32..64].copy_from_slice(block_hash);
+    input[32..64].copy_from_slice(block_hash.as_bytes());
     input[64..68].copy_from_slice(&draw.to_le_bytes());
     input[68] = attempt;
     cshake256_32(SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, &input)
@@ -155,10 +191,10 @@ pub fn support_challenge_nonce(
 ///
 /// The sentinel shard keeps the beacon off every closed shard. Fewer
 /// than [`COUNTED_DRAWS`] issued returns `None`: that epoch is a
-/// non-observation, the same rule [`crate::settle_pair`] uses.
+/// non-observation, the same rule [`crate::settle_pair`](crate::settlement_select::settle_pair) uses.
 #[must_use]
 pub fn support_counted(
-    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    beacon: &BlockHash,
     persona: &PCanonicalId,
     epoch: SettlementEpoch,
     issued: usize,
@@ -193,7 +229,7 @@ pub struct SupportSettlementKey {
 ///
 /// [`SettlementRowError`] when the counted passes cannot be a row.
 pub fn settle_support(
-    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    beacon: &BlockHash,
     key: SupportSettlementKey,
     draws: &[IssuedDraw],
 ) -> Result<Option<SettlementRow>, SettlementRowError> {
@@ -208,7 +244,7 @@ pub fn settle_support(
 
 fn support_word(
     seed: &[u8; 32],
-    block_hash: &[u8; 32],
+    block_hash: &BlockHash,
     persona: &PCanonicalId,
     draw: u32,
     final_count: u64,
@@ -216,7 +252,7 @@ fn support_word(
 ) -> [u8; 32] {
     let mut input = [0u8; 32 + 32 + 32 + 4 + 8 + 4];
     input[..32].copy_from_slice(seed);
-    input[32..64].copy_from_slice(block_hash);
+    input[32..64].copy_from_slice(block_hash.as_bytes());
     input[64..96].copy_from_slice(persona.as_bytes());
     input[96..100].copy_from_slice(&draw.to_le_bytes());
     input[100..108].copy_from_slice(&final_count.to_le_bytes());
@@ -233,6 +269,10 @@ mod tests {
 
     const SEED: [u8; 32] = [0x11; 32];
     const HASH: [u8; 32] = [0x22; 32];
+
+    fn width(n: u64) -> NonZeroU64 {
+        NonZeroU64::new(n).expect("a non-zero test width")
+    }
 
     fn persona(byte: u8) -> PCanonicalId {
         PCanonicalId::from_bytes([byte; 32])
@@ -292,14 +332,17 @@ mod tests {
         let tree = persona(0x3C);
         let mut differed = false;
         for draw in 0..16u32 {
-            let small = select_support_shard(&SEED, &HASH, &tree, draw, 8).expect("count 8");
-            let large = select_support_shard(&SEED, &HASH, &tree, draw, 64).expect("count 64");
+            let small =
+                select_support_shard(&SEED, &BlockHash::from_bytes(HASH), &tree, draw, width(8))
+                    .expect("count 8");
+            let large =
+                select_support_shard(&SEED, &BlockHash::from_bytes(HASH), &tree, draw, width(64))
+                    .expect("count 64");
             assert!(small < 8, "draw {draw}");
             assert!(large < 64, "draw {draw}");
             differed |= small != large;
         }
         assert!(differed, "the archive size did not change a shard");
-        assert!(select_support_shard(&SEED, &HASH, &tree, 0, 0).is_none());
     }
 
     /// Eleven unfiled blocks carry `c`, not `c` times a multiple.
@@ -317,9 +360,11 @@ mod tests {
     /// Red edit: pass the support debt as `shortfall`.
     #[test]
     fn a_support_miss_does_not_move_the_economy_target() {
-        let before = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS).expect("fits");
+        let before = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS, crate::archival_params())
+            .expect("fits");
         let _debt = SupportUnissued::zero().note_unfiled();
-        let after = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS).expect("fits");
+        let after = draw_target(8, 0, 200, SETTLEMENT_EPOCH_BLOCKS, crate::archival_params())
+            .expect("fits");
         assert_eq!(before, after);
     }
 
@@ -328,14 +373,14 @@ mod tests {
     #[test]
     fn the_support_labels_are_not_the_economys() {
         let tree = persona(0x3C);
-        let support = support_word(&SEED, &HASH, &tree, 0, 8, 0);
+        let support = support_word(&SEED, &BlockHash::from_bytes(HASH), &tree, 0, 8, 0);
         let mut economy_input = [0u8; 32 + 32 + 4 + 4];
         economy_input[..32].copy_from_slice(&SEED);
         economy_input[32..64].copy_from_slice(&HASH);
         let economy = cshake256_32(DRAW_CUSTOMIZATION, &economy_input);
         assert_ne!(support, economy);
-        let support_nonce = support_challenge_nonce(&SEED, &HASH, 0, 0);
-        let economy_nonce = challenge_nonce(&SEED, &HASH, 0, 0);
+        let support_nonce = support_challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 0, 0);
+        let economy_nonce = challenge_nonce(&SEED, &BlockHash::from_bytes(HASH), 0, 0);
         assert_ne!(support_nonce, economy_nonce);
     }
 
@@ -343,7 +388,7 @@ mod tests {
     /// count a set of two.
     #[test]
     fn fewer_than_three_issued_is_not_counted() {
-        let beacon = [0x44; SETTLEMENT_BEACON_LEN];
+        let beacon = BlockHash::from_bytes([0x44; 32]);
         let epoch = SettlementEpoch::from_raw(1);
         assert!(support_counted(&beacon, &persona(0x3C), epoch, 2).is_none());
         assert!(support_counted(&beacon, &persona(0x3C), epoch, 3).is_some());
@@ -362,7 +407,7 @@ mod tests {
     fn a_tree_settles_once_per_epoch() {
         use shekyl_types::archival::SettlementOutcome;
 
-        let beacon = [0x44; SETTLEMENT_BEACON_LEN];
+        let beacon = BlockHash::from_bytes([0x44; 32]);
         let key = SupportSettlementKey {
             persona: persona(0x3C),
             epoch: SettlementEpoch::from_raw(4),

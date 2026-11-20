@@ -1,0 +1,11 @@
+error[E0616]: field `enc_label` of struct `MultisigOutputData` is private
+  --> tests/trybuild/multisig_enc_fields_cannot_be_overwritten.rs:15:8
+   |
+15 |     od.enc_label = forged;
+   |        ^^^^^^^^^ private field
+
+error[E0616]: field `enc_amount` of struct `MultisigOutputData` is private
+  --> tests/trybuild/multisig_enc_fields_cannot_be_overwritten.rs:16:8
+   |
+16 |     od.enc_amount = forged;
+   |        ^^^^^^^^^^ private field

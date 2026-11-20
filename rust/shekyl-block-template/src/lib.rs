@@ -29,8 +29,9 @@
 //!   own validator refuses, so the builder refuses first
 //!   ([`TemplateError::TimestampBeyondFutureLimit`]). `nonce` is zero: the
 //!   template is what the miner searches, not the result.
-//!   `attestation_root` is the caller's — the archival lane owns the credit
-//!   wire; the template carries the root, it does not derive one.
+//!   `section_root` is the caller's — it commits to the bundles the
+//!   caller's section admits; the template carries the root, it does not
+//!   derive one.
 //! - **Coinbase.** One `txin_gen` (CEN-F1) claiming `h` (CEN-F5);
 //!   `unlock_time = h + window` (CEN-F6); `CTTypeNull` with one committed
 //!   base per output (CEN-F3); **one output** above genesis (CEN-F4);
@@ -81,11 +82,9 @@
 //! It holds no **pool**: which bodies are offered, and in what order, is
 //! the mempool's. The selection decision it owns is [`Fill`], the ruled
 //! reward-aware policy: admit a body only when listing it does not lower
-//! the gross coinbase. That rule is policy, not consensus. The daemon's
-//! live scan, `tx_memory_pool::fill_block_template`, is the other policy
-//! (one body may cross the median, then the scan ends). [`Fill`] is the
-//! replacement. The daemon still runs the C++ scan until `tx_pool.cpp`
-//! deletes at the DRS-X flip.
+//! the gross coinbase. That rule is policy, not consensus, and it is the
+//! only fill the node runs: the inherited scan (one body could cross the
+//! median, then the scan ended) left with the C++ pool at the DRS-X flip.
 //!
 //! # How it is tested, by design
 //!
@@ -96,26 +95,24 @@
 //! template's own operands, so the producer and the validator's derived
 //! arm share one composition. Byte-parity with `create_block_template` is
 //! a separate witness (`CHAIN_RULES_SLICE_6.md` §5.3), not this file's.
+#![deny(unsafe_code)]
 
 use core::fmt;
 
-use curve25519_dalek::edwards::EdwardsPoint;
-use curve25519_dalek::scalar::Scalar;
 use shekyl_crypto_pq::output::construct_output;
-use shekyl_crypto_pq::CryptoError;
+use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_difficulty::is_timestamp_below_ftl;
 use shekyl_economics::{
     price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionError,
     EmissionInputs, RewardArithmetic, SupplyInvariantViolation, TxVolume, REPRICING_PASSES,
 };
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, CurveTreeRoot, Timestamp, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, SectionRoot, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{self, CoinbaseBuildError, DrawCommitment, COINBASE_NONCE_BYTES};
-use zeroize::Zeroizing;
 
 mod fill;
 
@@ -167,8 +164,8 @@ pub struct TemplateContext<'a> {
     pub previous: BlockHash,
     /// The curve-tree state **at** `height` — CEN-B5.
     pub curve_tree_root: CurveTreeRoot,
-    /// The archival attestation root the header carries.
-    pub attestation_root: AttestationRoot,
+    /// The section root the header carries (`SCS-P34`).
+    pub section_root: SectionRoot,
     /// The header's `major_version` — the version the rule set in force
     /// admits (CEN-B1). The other version byte is not the producer's to
     /// choose: every template carries
@@ -191,10 +188,10 @@ pub struct TemplateContext<'a> {
     pub params: &'a EconomicParams,
     /// Whom the coinbase pays.
     pub miner: &'a MinerKeys,
-    /// The coinbase transaction secret `r`, wiped when the context drops.
-    /// Randomness is the caller's: a template is deterministic in it, and
-    /// a test can pin it.
-    pub tx_key_secret: Zeroizing<[u8; 32]>,
+    /// The coinbase's transaction key. Randomness is the caller's: a
+    /// template is deterministic in it, a producer builds from one key more
+    /// than once, and a test can pin it.
+    pub tx_key: &'a TxKey,
     /// The `0x02` nonce field's bytes (a pool's extra-nonce slot).
     pub extra_nonce: [u8; COINBASE_NONCE_BYTES],
     /// The `0x0C` field: the producer's commitment to this block's witness
@@ -209,14 +206,14 @@ pub struct TemplateContext<'a> {
 }
 
 impl fmt::Debug for TemplateContext<'_> {
-    /// Every operand but the secret; the secret prints as `[redacted]` so a
-    /// panic message or a log line never carries `r`.
+    /// Every operand; the transaction key prints redacted (its own `Debug`),
+    /// so a panic message or a log line never carries `r`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TemplateContext")
             .field("height", &self.height)
             .field("previous", &self.previous)
             .field("curve_tree_root", &self.curve_tree_root)
-            .field("attestation_root", &self.attestation_root)
+            .field("section_root", &self.section_root)
             .field("major_version", &self.major_version)
             .field("now", &self.now)
             .field("median_timestamp", &self.median_timestamp)
@@ -224,7 +221,7 @@ impl fmt::Debug for TemplateContext<'_> {
             .field("emission", &self.emission)
             .field("params", &self.params)
             .field("miner", &self.miner)
-            .field("tx_key_secret", &"[redacted]")
+            .field("tx_key", &self.tx_key)
             .field("extra_nonce", &self.extra_nonce)
             .field("draw_commitment", &self.draw_commitment)
             .field("listed", &self.listed.len())
@@ -420,7 +417,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
             previous: cx.previous,
             nonce: 0,
             curve_tree_root: cx.curve_tree_root,
-            attestation_root: cx.attestation_root,
+            section_root: cx.section_root,
         },
         miner_transaction: paid.coinbase,
         transaction_hashes: tx_hashes,
@@ -487,15 +484,6 @@ pub fn template_timestamp(now: Timestamp, median: Option<Timestamp>) -> Result<u
             median: median.to_raw(),
         })
     }
-}
-
-/// The tx public key `r·G` for the coinbase secret `r` — the `0x01` field.
-/// The reduced scalar lives in a [`Zeroizing`] for the one multiplication
-/// (`curve25519-dalek`'s `zeroize` feature is what makes that wipe real).
-#[must_use]
-pub fn tx_pubkey(tx_key_secret: &[u8; 32]) -> [u8; 32] {
-    let r = Zeroizing::new(Scalar::from_bytes_mod_order(*tx_key_secret));
-    EdwardsPoint::mul_base(&r).compress().to_bytes()
 }
 
 /// A priced-and-paid coinbase with the figures it was priced from.
@@ -567,7 +555,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
     // — a canonical key and a mask derived from the shared secret, which
     // is not `zeroCommit(amount)`.
     let od = construct_output(
-        &cx.tx_key_secret,
+        cx.tx_key,
         &cx.miner.x25519_pk,
         &cx.miner.ml_kem_ek,
         &cx.miner.spend_public,
@@ -585,7 +573,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
     // CEN-I20: the grammar's one constructor, which refuses what admission
     // would.
     let extra = tx_extra::build_coinbase_extra(
-        tx_pubkey(&cx.tx_key_secret),
+        cx.tx_key.public_bytes(),
         &cx.extra_nonce,
         cx.draw_commitment,
         1,

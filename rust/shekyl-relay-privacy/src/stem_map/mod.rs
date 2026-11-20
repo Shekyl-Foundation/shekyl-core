@@ -483,6 +483,27 @@ impl<Mode> StemMap<Mode> {
         }
     }
 
+    /// The reshape alternate for a transaction from `source` that went to
+    /// `chosen`: the next candidate of the source's frozen [`Pin`] after the
+    /// walk cursor that is not `chosen` (`DAEMON_RELAY_PRIVACY.md` §12.2
+    /// item 3). `None` when the source is unpinned or its frozen set holds no
+    /// other candidate.
+    ///
+    /// **Taken from the pin, never by calling [`Self::stem_for`] again,**
+    /// which returns the cached choice (W1). And taken from the *frozen* set,
+    /// so churn that refills a slot within the epoch cannot hand the reshape a
+    /// fresh draw (W3c): the candidates were fixed at first pin and never grow.
+    /// Liveness is the caller's to check when the alternate is used.
+    #[must_use]
+    pub fn alternate_for(&self, source: SourceId, chosen: ConnectionId) -> Option<ConnectionId> {
+        let pin = self.inbound.get(&source)?;
+        pin.candidates
+            .iter()
+            .skip(pin.cursor)
+            .copied()
+            .find(|candidate| *candidate != chosen)
+    }
+
     /// Walk an existing [`Pin`]: advance past candidates that have left the
     /// map, re-sync usage against the slot the chosen peer currently occupies,
     /// and return that peer (or `None` if the frozen set is exhausted).

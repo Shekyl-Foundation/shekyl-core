@@ -70,13 +70,13 @@ const DERIVED: &[Derived] = &[
     Derived::Listen {
         name: "rpc-admin-listen",
         addr: ADMIN_BIND,
-        port: Network::rpc_port,
+        port: rpc_port,
         when: When::Always,
     },
     Derived::Listen {
         name: "clearnet-listen",
         addr: CLEARNET_BIND,
-        port: Network::p2p_port,
+        port: p2p_port,
         when: When::ClearnetNotOff,
     },
 ];
@@ -110,7 +110,23 @@ pub(super) fn fill(
             }
         }
     }
+    // The one listener row whose addresses may come without a port
+    // (`Kind::Listen`): the view listener takes the network's view port.
+    complete_ports(resolved, "rpc-view-listen", view_port(network));
     faults
+}
+
+/// Gives each address the operator wrote without a port the network's
+/// `port`, so the row holds endpoints from here on, and `option show` prints
+/// the port the listener binds. The value's source is unchanged.
+fn complete_ports(resolved: &mut Resolved, name: &'static str, port: u16) {
+    if let Some((Value::List(items), _)) = resolved.values.get_mut(name) {
+        for item in items.iter_mut() {
+            if let Value::Host(ip) = *item {
+                *item = Value::Endpoint(SocketAddr::new(ip, port));
+            }
+        }
+    }
 }
 
 fn applies(resolved: &Resolved, when: When) -> bool {
@@ -151,4 +167,19 @@ fn fill_listen(resolved: &mut Resolved, name: &'static str, addr: Ipv4Addr, port
         port,
     ))]);
     resolved.values.insert(name, (value, Source::Default));
+}
+
+/// The network's default RPC port: its row's.
+const fn rpc_port(network: Network) -> u16 {
+    network.ports().rpc
+}
+
+/// The network's view port: its row's, the RPC port plus one.
+const fn view_port(network: Network) -> u16 {
+    network.ports().view
+}
+
+/// The network's default P2P port: its row's.
+const fn p2p_port(network: Network) -> u16 {
+    network.ports().p2p
 }

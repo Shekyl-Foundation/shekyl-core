@@ -66,7 +66,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -98,7 +97,7 @@ fn build_ledger(n: usize) -> WalletLedger {
         transfers,
         tip: BlockchainTip {
             synced_height: shekyl_types::BlockHeight::from_raw(tip_height),
-            tip_hash: Some([0xAB; 32]),
+            tip_hash: Some(shekyl_types::BlockHash::from_bytes([0xAB; 32])),
         },
         reorg_blocks: w.ledger.reorg_blocks.clone(),
     };

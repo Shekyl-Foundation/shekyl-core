@@ -817,7 +817,7 @@ only because the chain is 7672 blocks long and the fleet is at the tip.
 **The honest background is *absent*, not `0` — which makes the marker maximally
 effective.** Measured on the six seeds 2026-09-21: `get_blockchain_pruning_seed()`
 is `0` everywhere (§2.8.8), and `KV_SERIALIZE_OPT`
-([`keyvalue_serialization.h:89-95`](../../contrib/epee/include/serialization/keyvalue_serialization.h#L89))
+(`keyvalue_serialization.h` at `ac3836de90` (lines 89–95))
 **skips the field on store when it equals the default**, so an archival node's
 gossiped entries omit `pruning_seed` entirely. `sanitize_peerlist`
 ([`net_node.inl:2319`](../../src/p2p/net_node.inl#L2319)) accepts all eight
@@ -880,7 +880,7 @@ closed — `prune_blockchain` is the only method that surfaces the getter, and t
 fleet runs `restricted-rpc=1`, which refuses it (`-32601 Method not allowed in
 restricted mode`, verified on `skl-seedeu`). So the seed was read where it is
 stored: the LMDB `properties` table, whose key is written **only** by
-`prune_worker` ([`db_lmdb.cpp:2363-2375`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2363)).
+`prune_worker` (`db_lmdb.cpp:2363-2375`).
 
 | | Result |
 | --- | --- |
@@ -890,7 +890,7 @@ stored: the LMDB `properties` table, whose key is written **only** by
 
 The control is the point: the instrument can find keys in these files, and finds
 no `pruning_seed`. **The random-stripe path at
-[`db_lmdb.cpp:2370`](../../src/blockchain_db/lmdb/db_lmdb.cpp#L2370) is not live
+`db_lmdb.cpp:2370` is not live
 in production.** It is reachable only through `prune_blockchain()` /
 `update_blockchain_pruning()`, both gated on `--prune-blockchain`
 ([`cryptonote_core.cpp:668`](../../src/cryptonote_core/cryptonote_core.cpp#L668);

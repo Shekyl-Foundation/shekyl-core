@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Stage 1 [`PersistenceEngine`](super::traits::PersistenceEngine) implementor:
+//! Stage 1 [`PersistenceEngine`] implementor:
 //! [`shekyl_engine_file::WalletFile`].
 
 use shekyl_engine_file::WalletFile;
@@ -22,7 +22,8 @@ impl PersistenceEngine for WalletFile {
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send
+    {
         std::future::ready(
             self.save_state(state_key.as_bytes(), ledger)
                 .map_err(PersistenceError::WalletFile),

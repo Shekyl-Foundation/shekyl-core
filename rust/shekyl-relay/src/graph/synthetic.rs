@@ -94,13 +94,25 @@ fn a_synthetic_column_drives_stem_own_edge_and_embargo() {
     );
 
     let tx = TxId::from_bytes([9u8; 32]);
-    relay.record_stem(&[tx], id(2), None, 0, &mut rng);
+    relay.record_stem(
+        &[(tx, crate::TxBlob::from(&b"tx"[..]))],
+        id(2),
+        None,
+        0,
+        &mut rng,
+    );
     assert_eq!(
         relay.stem_connector(tx),
         None,
         "unassessed transit records nothing"
     );
-    relay.record_stem(&[tx], id(1), None, 0, &mut rng);
+    relay.record_stem(
+        &[(tx, crate::TxBlob::from(&b"tx"[..]))],
+        id(1),
+        None,
+        0,
+        &mut rng,
+    );
     assert_eq!(relay.stem_connector(tx), Some(ConnectorId::Clearnet));
 
     let synthetic_mean = embargo_timer(&measured).map(|timer| timer.mean_secs());

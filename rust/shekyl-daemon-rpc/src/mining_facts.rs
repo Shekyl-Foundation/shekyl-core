@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use shekyl_rpc_types::errors::Diagnostic;
+use shekyl_rpc_types::wire::node::MineSpeed;
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::chain_facts::FactsFault;
@@ -30,8 +31,8 @@ pub struct BacklogEntry {
     pub fee: u64,
 }
 
-/// The node's posted template (N2): what `get_block_template` and
-/// `get_miner_data` read. It is built by the node, never by the RPC.
+/// The node's posted template (N2): what `block_template` and
+/// `block_template` read. It is built by the node, never by the RPC.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PostedTemplate {
     /// The block, serialized.
@@ -66,7 +67,7 @@ pub struct PostedTemplate {
     pub backlog: Vec<BacklogEntry>,
 }
 
-/// The posted job, as `mining_status` reports it.
+/// The posted job, as `mine_status` reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PostedSummary {
     /// The height it connects at.
@@ -82,11 +83,11 @@ pub struct PostedSummary {
 pub struct MinerState {
     /// Worker threads.
     pub threads: u32,
-    /// Hashes per second over the miner's window, whole hashes.
-    pub hashes_per_second: u64,
+    /// Hashes counted over the miner's window of complete seconds.
+    pub speed: MineSpeed,
 }
 
-/// What `mining_status` reports.
+/// What `mine_status` reports.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MiningState {
     /// The miner, while it runs.
@@ -101,7 +102,7 @@ pub struct MiningState {
     pub absent: Option<Diagnostic>,
 }
 
-/// What became of a `pop_blocks` request.
+/// What became of a `dev_chain_pop` request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopOutcome {
     /// The blocks popped; the tip is now `tip`.

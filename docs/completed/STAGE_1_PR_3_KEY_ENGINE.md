@@ -241,7 +241,7 @@ required adversarial review to surface.
   revises the M3a scope to drop the handle-table data structure
   and the concurrency-primitive selection from M3a's
   files-touched estimate. Per
-  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
+  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)'s
   4–6-rounds-before-implementation rule for crypto-critical
   trait migrations, M3a is now cleared to cut its feat branch
   off `dev` at this commit's parent. The substrate Round 3
@@ -750,7 +750,7 @@ revisions in each; PR 4 / PR 5's pre-flight produces
 pattern-shaped findings against the inherited checklist
 methodically rather than discovering them adversarially. The
 4–6-rounds-before-implementation rule from
-[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+[`.cursor/rules/20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)
 remains the discipline; the rounds are likely to be shorter
 because the substrate is more substantial.
 

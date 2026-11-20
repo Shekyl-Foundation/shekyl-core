@@ -1,8 +1,8 @@
 # Shekyl input grammar — the rules and every binary's names
 
-**Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
+**Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B Part K (§32, IG-Q108…IG-Q111), the channel's clients and the tunnel, RULED 2026-11-15 (Rick), as recommended.
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, RULED 2026-10-24 (Rick), with amendments; Part F (§25–§26, IG-Q73…IG-Q93), the wire at the rename, RULED 2026-11-10 (Rick), as recommended; IG-Q94, the selector's wire form, RULED 2026-11-11 (Rick), as posed. Part G (§27–§28, IG-Q95…IG-Q101), the Tor supervisor's states added since Part E, RULED 2026-11-11 (Rick), as recommended with amendments to IG-Q95 and IG-Q96. Part H (§29, IG-Q103…IG-Q105), the owner's socket and the service mode, RULED 2026-11-12 (Rick), as posed. Part I (§30, IG-Q106), the owning connection, RULED 2026-11-12 (Rick) in the GS-C3 brief; the name is derived from the glossary. Part J (§31, IG-Q107), a block's draw count on the wire (RPC 4.5), RULED 2026-11-14 (Rick). Parts C and F are the daemon's wire at `CORE_RPC_VERSION` 4.0 (`RPC_WIRE.md` RW-Q8), its schema generated at `docs/generated/rpc_wire_schema.tsv`.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -101,13 +101,13 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 **IG-10 Unknown and refused names.** An unknown name is one general refusal that names the nearest live name, computed from the table (edit distance), never from a hand list. A REJECTED row (a feature deliberately refused) carries its reason and a pointer to the decision; it is never accepted, never in help, and its refusal states the reason. A REJECTED row is a contract entry in the sense of rule 23, not a code symbol: it is never deleted as dead. A RESERVED row (a name held for a ruled future option; rule 23's reserved slot) is the same kind of entry: never accepted, never in help, and its refusal names what the name is reserved for and where that is ruled.
 
-**IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1.
+**IG-11 Diagnostics.** Every refusal is a typed value: a stable code (`config.value.range`, `config.file.permissions`, …), the option, the source (`cli`, `file:path:line`, `default`, `runtime`) and named parameters. One renderer turns it into the English message, which states what was wrong, where, and what to do (rule 82). Machine output and logs carry the code. A configuration refusal exits with status 2; a runtime failure with 1. **Amended 2026-11-18 (Rick):** every refusal or failure that ends a daemon start goes through one path (`shekyl-daemon`'s `run::StartEnd`): standard error, and the log file as soon as the configuration names one, appended as the logger appends (created at `0600` when its directory exists, the directory never created) and, once the logger runs, through its two sinks. `--config-verify` writes nothing, a refusal included. `config.replace.held-open` is the refusal for a file the start replaces (a rendezvous record, the bundle, the console key) that another program held open past the wait; it names the file and the directory to exclude from scanning, most likely from an antivirus scanner or a search indexer. **Amended 2026-11-19 (Rick):** `config.replace.read-only` is the refusal for such a file whose read-only attribute is set; it names the file and says to clear the attribute. The two are told apart by reading the attribute, never folded into one.
 
-**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, log level and categories, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the `node` grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`) and returns each row whose grant (IG-9) the caller holds; a row the caller may not see is absent, never emptied, and a secret's value is shown under no grant, only whether it is set. Every runtime row's default is writable as a value (`unlimited`, `none`), so `option set` returns a row to its default without a restart; what `option show` prints is valid input to `option set` and builds the same value; and no row is both runtime and a secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining changes while running through `mine start` and `mine stop` instead, which build `mine-address` and `mine-threads` through their constructors, so those rows are not marked runtime. The live value is owned by its subsystem. No binary ever writes its own config file.
+**IG-12 Runtime changes share the constructor.** A value that can also change while running (rates, log level and categories, mining) is marked runtime in its row (IG-9) and is built by the same constructor on both surfaces, with the same refusals. `option set <name> <value>` changes it: it refuses a row not marked runtime with a typed code, requires the `node` grant, and never writes the file. `option show [<name>]` reports each value with its source (`default`, `file`, `cli`, `runtime`) and returns each row whose grant (IG-9) the caller holds; a row the caller may not see is absent, never emptied, and a secret's value is shown under no grant, only whether it is set. Every runtime row's default is writable as a value (`unlimited`, `none`), so `option set` returns a row to its default without a restart; what `option show` prints is valid input to `option set` and builds the same value; and no row is both runtime and a secret, which the gate asserts (RPC_CHANNEL §6.4, RT-O25, RT-O27). Mining changes while running through `mine start` and `mine stop` instead, which build `mine-threads` through its constructor, so that row is not marked runtime. `mine-address` is the config row, not an argument of `mine start`, and is not marked runtime either. The live value is owned by its subsystem. No binary ever writes its own config file.
 
-**IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. On Windows the daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux, FreeBSD and macOS the daemon has one run mode (`service` is refused there): its config file is R2's `/etc/shekyl/`, and its data and log defaults sit under the per-account root. The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
+**IG-13 Inputs come from the table, and nowhere else.** No option value comes from the environment. Default paths come from the operating system's account and known-folder interfaces, never from `HOME`, `XDG_*` or `%APPDATA%`. Each binary's per-account root is the passwd entry's home plus `.shekyl` on Linux, FreeBSD and macOS, and `SHGetKnownFolderPath(FOLDERID_LocalAppData)` plus `Shekyl` on Windows, never Roaming AppData, which copies the wallet and its config to domain servers (rule 36); a run-as-user daemon's data and log defaults, the wallet directory and the wallet binaries' config files sit under it. On Windows the daemon's run mode selects its root, and every default path it derives (`config-file`, `data-dir`, `log-file`) sits under that root: run-as-user uses the per-account root and `service` (IG-Q36) uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. On Linux, FreeBSD and macOS the run mode does not move the configuration file, which is R2's `/etc/shekyl/` in both modes; a run-as-user daemon's data and log defaults sit under the per-account root, and a `service` daemon's unit passes `data-dir` and `log-file` (IG-Q105). The only environment reads permitted are presentation-only (terminal capabilities that change rendering, never a value). Every resolved default path appears in the startup line with its source. A service account whose passwd home is unset or `/nonexistent` has no default paths: the packaging sets the account's home or the unit passes `--data-dir` and `--log-file` (the shipped unit does both, IG-F10).
 
-**IG-14 Required announcements are not log events.** The effective-configuration line, `dev-` lever warnings and posture warnings (clearnet-only, offline, a plaintext RPC listener bound beyond loopback) reach the log and standard error at every start whatever the log level. The effective-configuration line shows every value and its source; a secret is shown as set, never its value (IG-6).
+**IG-14 Required announcements are not log events.** The effective-configuration line, `dev-` lever warnings and posture warnings (clearnet-only, offline, a plaintext RPC listener bound beyond loopback) reach the log and standard error at every start whatever the log level, and so does a stop the operator asked for (`stop requested by` its cause: a signal, a console event or the RPC's `stop_daemon`; Rick, 2026-11-06), with no level tag. A forced stop (chain sync's owner ending on its own) is an error event (`chain sync stopped:` the cause) and fails the exit. The effective-configuration line shows every value and its source; a secret is shown as set, never its value (IG-6).
 
 **IG-15 Home.** The rules become one cursor rule. The glossary tree and the name tables live in one design document. One Rust crate holds the table types, the value kinds and their parsers, the unit types, the diagnostic type and the renderer; every binary builds its table from it.
 
@@ -115,7 +115,7 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 ## 3. Glossary — Part A's terms
 
-A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's. The Kind column carries IG-3's verbs and views as data: one `parent:view` or `parent:verb` pair for each parent under which the term ends a command, with `—` for a bare subject; a blank cell is a term that ends no command. The italic *view* and *verb* in a meaning are its prose, and must agree with the column (the walk gate, §18.1).
+A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's. The Kind column carries IG-3's verbs and views as data: one `parent:view` or `parent:verb` pair for each parent under which the term ends a command, with `—` for a bare subject; a blank cell is a term that ends no command. The italic *view* and *verb* in a meaning are its prose, and must agree with the column (the walk gate, `scripts/ci/check_input_grammar_walk.py`).
 
 | Term | Parents | Meaning | Kind |
 |---|---|---|---|
@@ -124,9 +124,11 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | network | — | which chain: `mainnet`, `testnet`, `stagenet`, `regtest` | |
 | config | — | the TOML file of option values | |
 | data | — | the per-network directory holding the daemon's stores and state | |
+| instance | — | which node of one network on this machine: the default instance, or a second node the operator names (RPC_CHANNEL §7.1, IG-Q103) | |
+| owning | — | the process that started this daemon and holds its life: the daemon stops when that process closes its end or dies (IG-Q106) | |
 | log | — | the daemon's log sink | |
-| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor | a file path (value term) | |
-| dir | data, wallet, create, recipients | a directory path (value term) | |
+| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor, bundle, key | a file path (value term) | |
+| dir | data, wallet, create, recipients, socket | a directory path (value term); under `socket`, the directory that holds the owner's socket (IG-Q104) | |
 | level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` | |
 | category | log | a log category, owned by `shekyl-logging` | |
 | size | log | the disk a log may use | |
@@ -137,7 +139,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | username | socks, rpc | a credential's name (SOCKS5, RFC 1929; the wallet RPC's authentication) | |
 | password | socks, wallet, rpc | a secret credential; always a secret | |
 | onion | tor | this node's v3 onion service | |
-| listen | clearnet, onion, rpc, view, admin | a local endpoint a listener binds | |
+| listen | —, clearnet, onion, rpc, view, admin | a local endpoint a listener binds; a root in `shekyl-rpc-tunnel`, whose one listener it names (IG-Q110) | |
 | advertise | clearnet | the endpoint we tell peers is ours | |
 | local | p2p | endpoints not dialable on the public internet (private, loopback, link-local) | |
 | peer | p2p, closed, — | another Shekyl node | |
@@ -159,7 +161,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | split | reorg | the point where the two chains part (`{split-height}`) | |
 | added | reorg | blocks in the new chain | |
 | removed | reorg | blocks discarded from the old chain | |
-| window | rate | the observation window, in seconds | |
+| window | rate, speed, bootstrap | the observation window, in seconds | |
 | observed | rate | blocks seen in the window | |
 | expected | rate | blocks expected in the window | |
 | mine | — | the daemon's miner and its control | |
@@ -171,7 +173,6 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | cors | rpc | cross-origin resource sharing | |
 | origin | cors | an allowed origin | |
 | connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
-| console | — | the daemon's interactive console (interim; R8) | |
 | dev | — | a development lever (IG-8) | |
 | encrypt | clearnet | the pre-flip clearnet encryption switch | |
 | relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
@@ -199,7 +200,7 @@ Two words are given one meaning each by this table, ending two collisions: **add
 
 The table, kinds, parsers, units, diagnostics and renderer live in one crate (IG-Q13). `shekyl-daemon-config` builds the daemon's table from it and owns precedence, the per-network file, permission checks, the effective-config line and the typed `DaemonConfig` (sections per subsystem; each Rust consumer takes its section at construction; the C++ that remains reads a Rust-owned snapshot until its subsystem is Rust).
 
-Cross-row constraints are types, not checks: the P2P section is built from a clearnet posture `Off | On { listen, socks, advertise }` and a Tor posture `Off | Managed | Operator { socks, onion }`, so a SOCKS endpoint for a connector that is off cannot be constructed, and a `p2p-peer` whose connector is off is refused by the section's constructor.
+Cross-row constraints are types, not checks: the P2P section is built from a clearnet posture `Off | On { listen, socks, advertise }` and a Tor posture `Off | Managed | Operator { socks, onion }`, so a SOCKS endpoint for a connector that is off cannot be constructed, and a peer on a connector that is off is refused by the section's constructor. A value that asks for nothing confirms that parent: an empty list or map, the word `none`, the word `off`, or a switch that is off (`Bearing` on the parsed value).
 
 ---
 
@@ -216,10 +217,13 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `help` | `help` | switch | | CLI |  |  | K |
 | `version` | `version` | switch | | CLI |  |  | K; prints the OS line too |
 | — | `config-verify` | switch | off | CLI |  |  | N (IG-Q58, IG-Q59): the configuration check. `shekyld` runs start's walk (`load`, then every refusal start makes before it creates anything) with nothing created, locked or latched, prints the account checked and the effective configuration, and exits 0, 2 or 1 as start would (IG-Q61, IG-Q62). `rust/shekyl-daemon/src/verify.rs`, `walk`, called from `run` |
+| — | `rpc-console-key-reset` | switch | off | CLI |  |  | N (IG-Q88): replace a service's console key and exit without starting, under the data directory's exclusive lock (`RPC_CHANNEL.md` §5, §7). Refused in a run mode with no console key (`config.value.requires`) and while a daemon holds the lock (`config.data-dir.locked`) |
 | `os-version` | — | | | |  |  | R into `version` |
 | `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI |  |  | R |
-| — | `service` | switch | off | CLI |  |  | N (IG-Q36, IG-Q37); visibility `reserved` (IG-9, IG-10) until RT-W14 builds the SCM dispatcher: not accepted, and its refusal names RT-W14. Live: `shekyld` answers the platform's service manager ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16); accepted only where RT-16 defines it (Windows), refused elsewhere with a typed code; selects the daemon's root (IG-13) |
-| `config-file` | `config-file` | path | `/etc/shekyl/shekyld-<network>.toml` on Linux, FreeBSD and macOS; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses |
+| — | `service` | switch | off | CLI |  |  | N (IG-Q36, IG-Q37, IG-Q105): this is the machine's service instance. Accepted on every platform. On Linux, FreeBSD and macOS it serves no owner socket ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1) and keeps the plaintext loopback listeners (RT-O33). On Windows it also answers the service manager (RT-16), whose dispatcher is RT-W14's: until then a Windows start refuses the switch (`config.service.platform`), naming RT-W14. Selects the daemon's root on Windows (IG-13) |
+| — | `instance` | name | unset, the default instance | both |  |  | N (IG-Q103): this node's name, for a second node of the same network on this machine ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1): 1 to 16 of `[a-z0-9-]`, starting with a letter or a digit; `default` is refused by name. The rule is `shekyl-rpc-rendezvous`'s `InstanceName`, and the name reaches no path: it is hashed into the rendezvous. A named instance needs an explicit `data-dir` |
+| — | `owning-connection` | integer ≥ 3 | unset | CLI |  |  | N (IG-Q106): the descriptor (Unix) or socket handle (Windows) of one end of a connected stream socket pair the starting process created and the daemon inherited. The daemon adopts it first, close-on-exec (Unix) or not inheritable (Windows), so no child it starts holds a copy; writes `shekyld-ready 1` and a newline once its owner's leg is bound, served and published; and stops cleanly when the starting process closes its end, shuts down its writing half, or dies. The daemon's own end stays open until its process exits, so end of stream on the starting process's end means the daemon is gone. Command line only (a file's value is `config.value.surface`); refused with `service` (`config.value.conflict`); 0 to 2 is `config.value.range`; anything but a connected stream socket is `config.owning-connection.unusable`, naming which (the GUI repository's [`GUI_SYNC_LANE.md`](https://github.com/Shekyl-Foundation/shekyl-gui-wallet/blob/dev/docs/design/GUI_SYNC_LANE.md) GS-C3) |
+| `config-file` | `config-file` | path, or `none` | `/etc/shekyl/shekyld-<network>.toml` on Linux, FreeBSD and macOS; on Windows the daemon's root (IG-13) + `shekyld-<network>.toml` | CLI |  |  | K; a missing file at the default per-network path means defaults, and the startup line says so; a missing file at a path the operator named refuses with a typed code (IG-11) that names the path; an unsafe file or directory refuses. `none` reads no file, whatever is at the default path, and the startup line says `config-file=none (cli)`: a program that starts its own daemon (the GUI wallet) runs it on the command line and the defaults alone, so the node means the same on every machine whatever a service install keeps in the shared file (Rick, 2026-11-18) |
 | `data-dir` | `data-dir` | path | the daemon's root (IG-13) + network subdir (row) | both |  |  | K; an explicit path is taken as given, the default layout keeps the network subdirectory, and a Rust network marker refuses a wrong-chain directory (IG-Q17, ruled 2026-10-13); no home refuses; the daemon's root on every platform (IG-13, IG-Q36); exclusive lock (IG-F2) |
 | `log-file` | `log-file` | path | the daemon's root (IG-13) + `logs/shekyld-<network>.log` | both |  |  | K; the per-network name the docs promised (IG-F4) |
 | `log-level` | `log-level` | one-of | `warn` | both | yes | status | R (numeric 0–4 and category strings go); by default the log records what needs the operator's attention, and the startup and posture lines are announcements, not log events (IG-14); runtime `set_log_level` shares the constructor |
@@ -241,13 +245,13 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  |  | – (R5) |
 | `proxy` | `clearnet-socks` | endpoint | unset | both |  |  | R |
 | (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N; carried on the dial as an RFC 1929 pair: given together or refused (`config.value.requires`), each half 1 to 255 bytes (`config.value.range`) |
-| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet |
-| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept) |
+| `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet. Beside `clearnet off`, `none` confirms it and is accepted; an endpoint there is `config.value.conflict` (Rick, 2026-11-18) |
+| `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept). Beside `clearnet off`, `none` confirms it and is accepted; an endpoint there is `config.value.conflict` (Rick, 2026-11-18) |
 | `p2p-ignore-ipv4` | — | | | |  |  | – (the listen lists state the address families) |
 | `no-igd`, `igd` | — | | | |  |  | X `upnp`, `igd` (R4) |
 | `allow-local-ip` | `p2p-local` | switch | off | both |  |  | R |
-| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | peers | R; IP and onion only (IG-Q6); seeds are ordinary peers |
-| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | peers | R; non-empty declares a closed network |
+| `add-peer`, `seed-node` | `p2p-peer` | list of peer-endpoint | `none` | both |  | peers | R; IP and onion only (IG-Q6); seeds are ordinary peers. `none` beside a connector that is off confirms it; an IP peer beside `clearnet off`, or an onion beside `tor off`, is `config.value.conflict` |
+| `add-exclusive-node` | `p2p-closed-peer` | list of peer-endpoint | `none` | both |  | peers | R; non-empty declares a closed network. `none` beside a connector that is off confirms it, as `p2p-peer` does |
 | `p2p-disclose-early` `[PR-3]` | `p2p-disclose-early` | switch | off | both |  |  | K (IG-Q20); for bootstrapping or testing a network smaller than the white-diversity floor (48): this node discloses its known peers and its own address below the floor, on each connector until that connector's white count reaches the floor or the span `P2P_DISCLOSE_EARLY_SPAN_NANOS` ends it, whichever comes first; announced at start (IG-14) |
 | `add-priority-node` | — | | | |  |  | X (bypasses the identity protections; removed by PR-3) |
 | `ban-list` | `p2p-ban-file` | path | unset | both |  | peers | R; read in Rust at parse |
@@ -259,9 +263,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `tos-flag` | — | | | |  |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
 | `offline` | — | | | |  |  | R into `clearnet = off` and `tor = off` (IG-Q3) |
 | `pad-transactions` | — | | | |  |  | L relay |
-| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest (IG-8: never mainnet); deleted at the Noise flip |
+| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); deleted at the Noise flip |
 | `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  |  | R; regtest; the chain-sync lane owns it |
-| `carrier-development` | `dev-relay-cover` | switch | off | both |  |  | R; testnet, stagenet, regtest (IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
+| `carrier-development` | `dev-relay-cover` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
 
 ### Core, pool, notify, mine
 
@@ -271,38 +275,39 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `keep-fakechain` | — | | | |  |  | – (nothing is wiped, R3) |
 | `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  |  | R; regtest |
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | X (chain sync's protocol constants replace `span-limit`, `block-sync-size` and `block-download-max-size`: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device, rule 76; a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40; `prep-blocks-threads` is the shared hasher budget's, derived from the floor device's scratchpads, DRS-X DX-Q2 item 6; [`P2P_3_CHAIN_SYNC_BRIEF.md`](P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q12, ruled 2026-10-18) |
-| `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the constant is DRS-D9's `safe`, Rick 2026-10-26) |
+| `db-sync-mode` | — | | | |  |  | – (the DRS lane decided: no knob; the Rust store's durability is the constant `shekyl_chain_store::store::DURABILITY`, `Immediate`, DRS-D9, Rick 2026-10-26) |
 | `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
-| `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  |  | R; a Monero-derived operand; deleted at the DRS-X flip, the pool's cap deriving from the chain (IG-Q11, amended 2026-10-17) |
+| `max-txpool-weight` | — | | | |  |  | X `txpool-weight-max` (the pool's cap derives from the chain, CEN-M10: `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit; IG-Q11, amended 2026-10-17); the inherited spelling leaves no trace (IG-5) |
 | `block-notify` | `notify-block` | command | unset | file |  |  | R (IG-Q5); placeholders `{height}`, `{hash}` |
 | `reorg-notify` | `notify-reorg` | command | unset | file |  |  | R (IG-Q5); placeholders `{split-height}` (the last block both chains share), `{height}` (the new tip), `{added}` (blocks in the new chain), `{removed}` (blocks discarded) |
 | `block-rate-notify` | `notify-block-rate` | command | unset | file |  |  | R (IG-Q5); placeholders `{window}` (the window in seconds), `{observed}`, `{expected}` |
-| `start-mining` | `mine-address` | address | unset | both |  |  | R; set means mine from start; `mine start` builds it while running (IG-12) |
-| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
+| — | `mine` | `on` / `off` | `off` | both |  |  | R (IG-Q21, amended 2026-11-02); `on` starts the miner once the node has opened, to `mine-address`, with `mine-threads`; `on` with no `mine-address` is refused at parse naming `mine-address` (IG-11, exit 2) |
+| `start-mining` | `mine-address` | address | unset | both |  |  | R (IG-Q21, amended 2026-11-02); the address the miner pays; it is the config row and starts nothing by itself; the effective-configuration line shows it shortened to its first and last eight characters, `option show` the whole value under its grant |
+| `mining-threads` | `mine-threads` | integer ≥ 1, or `auto` | `auto` | both |  |  | R (IG-Q21); the node's thread count for the start-time miner and for a `start_mining` that names none; a count above the host's parallelism is refused by the configuration check (exit 2); `mine start` builds it while running (IG-12); one default for starting the miner on every surface: `shekyl-cli mine start` with no count is `auto` (`grammar.rs:539-540`); the miner's owner defines `auto` once |
 | `bg-mining-*` (5) | — | | | |  |  | X (Monero background mining) |
 
 ### RPC, named for the ratified RPC_CHANNEL model
 
 | Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
 |---|---|---|---|---|---|---|---|
-| — | `rpc-listen` | list of endpoint | | |  |  | visibility `reserved` (IG-9, IG-10): held for the authenticated channel listener (RT-W10); not accepted in this cut |
+| — | `rpc-listen` | list of endpoint | `none` | both |  |  | N (RT-W10 step 4): the authenticated channel's listeners ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7). Any address, a wildcard included (RT-14); no channel port is ruled, so `none`, no channel listener, is the default (Rick, 2026-11-14). Enrolled clients are admitted by fingerprint (§5). A service publishes its machine-wide rendezvous only when it listens. **Reopening criterion:** RT-W12 rules a channel port and gives a service a loopback channel listener by default before it retires `rpc-admin-listen`, the only door a service without `rpc-listen` has |
+| — | `rpc-socket-dir` | path | unset: the account's session directory (IG-Q14) | both |  |  | N (IG-Q104): the directory for the owner's socket on a host with no session directory, a test host such as CI or a regtest harness ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1). Asserted, not adopted: local, owned by the daemon's account, mode 0700, or the start refuses naming the condition. The harness creates it. On Windows it names the rendezvous directory instead, which the daemon creates with its owner, protections and no-read-up label, or checks where it exists. Refused with `service`, which serves no owner socket. Refused on Windows, whose rendezvous directory is fixed (`config.socket-dir.platform`; Rick, 2026-11-14) |
 | `rpc-bind-ip`, `rpc-bind-port`, `rpc-bind-ipv6-address`, `rpc-use-ipv6` | `rpc-admin-listen` | list of endpoint, loopback only | `127.0.0.1:<row rpc port>` | both |  |  | R; the interim plaintext full-access listener; loopback only by RT-14 (a plaintext listener never binds beyond loopback; only the authenticated channel listener may bind wildcard); becomes an X row when RT-W12 moves its clients (IG-Q16; RT-W12, not RT-W10, by RT-O33, ruled 2026-10-25) |
-| `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  |  | R; keeps its method set (`view` plus `submit` and `mining-work`) through RT-W10 and is re-scoped to `view` in RT-W12, with the clients that use it (RT-O33, ruled 2026-10-25); plaintext loopback at view, off by default (ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
+| `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only; an address with no port takes the network's view port, the RPC port plus one (Rick, 2026-11-17) | `none` | both |  |  | R; keeps its method set (`view` plus `submit` and `mining-work`) through RT-W10 and is re-scoped to `view` in RT-W12, with the clients that use it (RT-O33, ruled 2026-10-25); plaintext loopback at view, off by default (ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
 | `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
-| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
-| — | `dev-rpc` | switch | off | both |  |  | N; testnet, stagenet, regtest (IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks`, `pop_blocks`, and on regtest only `inject_archival_serve_credit`; RT-O9.2, `RPC_CHANNEL.md` §6.1) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
+| `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy (IG-Q12). The row stays live; `txpool-weight-max` closed as a rejected name (IG-Q11) and the pool's cap is CEN-M10 |
+| — | `dev-rpc` | switch | off | both |  |  | N; regtest only, admitted by regtest's row (`NETWORK_IDENTITY.md` NI-R6, NI-R8; IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks` and `pop_blocks`; RT-O9.2, `RPC_CHANNEL.md` §6.1) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
-### Session (interim, until `shekyl-cli` serves the console — R8)
-
-| Today | New | Kind | Default | Surface | Runtime | Grant | Notes |
-|---|---|---|---|---|---|---|---|
-| `non-interactive` | `console` | switch | off | CLI |  |  | R (IG-Q8); deleted with the console |
-| `daemon_command` (positional) | unchanged | | | |  |  | moves to `shekyl-cli` (Part B) |
-
 ### Environment levers (regtest only, IG-8)
+
+The `Today` column is the environment read as it stood when the row was
+ruled; the C++ files it cites are deleted (the p2p remnant cutover,
+2026-11-05), the environment reads with them, and the levers are the
+`dev-` rows alone, parsed by `shekyl-daemon`'s `levers.rs` (what each row
+arms is that row's own status in the table).
 
 | Today | New | Kind |
 |---|---|---|
@@ -313,9 +318,9 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 
 The public-network refusal now in C++ (`blockchain.cpp:416-433`) becomes the IG-8 parse refusal; the announcement stays (IG-14).
 
-### REJECTED rows carried from `removed_flags.cpp`
+### REJECTED rows carried from `removed_flags.cpp`, and the pruning lane's
 
-Criterion: a REJECTED row exists for a capability a user could reasonably ask for again. Implementation switches and folds leave no trace.
+Criterion: a REJECTED row exists for a capability a user could reasonably ask for again. Implementation switches and folds leave no trace. The two pruning rows are `DRS_SB_BELOW_HORIZON.md` SB-Q6's: the body horizon is a rule of the epoch calendar, with no option, no `option show` row and no lever.
 
 | Name | Disposition | Reason |
 |---|---|---|
@@ -324,11 +329,13 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 | `bootstrap-daemon-address`, `bootstrap-daemon-login`, `bootstrap-daemon-proxy` | X | no proxying to a third-party daemon |
 | `public-node` | X | no public-node advertisement |
 | `max-connections-per-ip` | X | no per-host inbound cap (the reason in `removed_flags.cpp`) |
+| `prune-blockchain` | X | every daemon discards the same bodies at the same boundary (`ARCHIVAL_PRUNED_DAEMON_MODE.md` `PDM-Q2`, `PDM-Q9`); there is no node-local retention to choose (`PDM-Q7`). Bodies below the horizon are not held by any daemon; the archive serves them (`DRS_SB_BELOW_HORIZON.md` SB-Q6) |
+| `sync-pruned-blocks` | X | trust-the-txid with no anchor; the skeleton band below the checkpoint is `PDM-Q5`'s and needs no flag (SB-Q6) |
 | `no-rust-rpc`, `confirm-external-bind`, `rpc-ignore-ipv4`, `hide-my-port` | – | an implementation switch, a confirmation, a fold into the listen lists, and an advert now derived |
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 50 live names after, the four environment levers among them (`rpc-listen` arrives at RT-W10 and `rpc-admin-listen` becomes an X row at RT-W12, RT-O33; 51 between the two).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 55 live names, the four environment levers among them (`rpc-admin-listen` becomes an X row at RT-W12, RT-O33; `rpc-listen` and `rpc-console-key-reset` arrived with RT-W10 step 4, 2026-11-14; `owning-connection` arrived with IG-Q106, 2026-11-13; `service`, `instance` and `rpc-socket-dir` arrived with IG-Q103…IG-Q105, 2026-11-12; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment; `console` left with the C++ console, 2026-11-03).
 
 ---
 
@@ -373,20 +380,20 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 
 **IG-Q7 — `max-concurrency` — RULED 2026-10-13.** A cap on one C++ thread pool (`util.cpp:861`), a macOS workaround. Removed; concurrency belongs to the thread-budget work.
 
-**IG-Q8 — the interim console — RULED 2026-10-13.** Every service unit and the GUI pass `--non-interactive`. No console unless `--console` is given, until R8 deletes it.
+**IG-Q8 — the interim console — RULED 2026-10-13; deleted 2026-11-03.** The switch `console` and the bare command words are gone with the C++ console. A bare word on `shekyld` is `config.cli.syntax` and names the token. Daemon commands are `shekyl-cli` words.
 
 **IG-Q9 — absolute paths only — RULED 2026-10-13.** On both surfaces.
 
 **IG-Q10 — integers only, IEC units only — RULED 2026-10-13.**
 
-**IG-Q11 — `txpool-weight-max` — RULED 2026-10-13; AMENDED 2026-10-17 (Rick, on #1102).** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name landed with the inherited default and a FOLLOWUPS row for the pool's owner to re-derive it. The re-derivation is done: the Rust pool derives its cap from the chain, `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (`DRS_E5_POOL_ALT_PRUNE.md` CEN-M10), and reads no option. **`txpool-weight-max` is deleted at the DRS-X flip** and joins the retired options, refused with "the pool's cap derives from the chain (CEN-M10)". The C++ pool reads it until then. The reasons:
+**IG-Q11 — `txpool-weight-max` — RULED 2026-10-13; AMENDED 2026-10-17 (Rick, on #1102).** The default is "3 days at 300000 bytes" (`cryptonote_config.h:328`), a Monero operand. The name landed with the inherited default and a FOLLOWUPS row for the pool's owner to re-derive it. The re-derivation is done: the Rust pool derives its cap from the chain, `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (`DRS_E5_POOL_ALT_PRUNE.md` CEN-M10), and reads no option. **`txpool-weight-max` is a rejected option**, refused with "the pool's cap derives from the chain (CEN-M10)" (`shekyl-daemon-config`'s table). The reasons:
 - the cap is derived, not chosen: any lower number only discards transactions that could still be mined;
 - a per-node cap changes what a node holds under pressure, which peers see through pool sync;
 - on a floor device the chain binds before the pool does.
 
-*Reopening criterion:* a floor-device measurement at the flip in which pool RSS, not the chain, binds first at a realistic weight limit. The remedy then is a compact in-memory representation, not an option.
+*Reopening criterion:* a floor-device measurement in which pool RSS, not the chain, binds first at a realistic weight limit; `DAEMON_REDB_STORE.md` §1.3a's PB-R1 reads the node's RSS at design load on the floor device. The remedy then is a compact in-memory representation, not an option.
 
-**IG-Q12 — `rpc-connections-max`'s default — RULED 2026-10-13.** The only number on hand is the C++'s effective 25, which nobody derived. The cap is a resource limit, and RT-O9.4 ruled cost a resource policy separate from grants. The cutover ships the inherited value 25 with a FOLLOWUPS row for the RPC lane to derive the default under that policy, the same shape as `txpool-weight-max`.
+**IG-Q12 — `rpc-connections-max`'s default — RULED 2026-10-13.** The only number on hand is the C++'s effective 25, which nobody derived. The cap is a resource limit, and RT-O9.4 ruled cost a resource policy separate from grants. The cutover ships the inherited value 25 with a FOLLOWUPS row for the RPC lane to derive the default under that policy. `rpc-connections-max` stays that option. `txpool-weight-max` closed under IG-Q11 as a rejected name, and the pool's cap is CEN-M10.
 
 **IG-Q13 — names — RULED 2026-10-13.** Family `IG-`; the shared crate `shekyl-options`; the daemon crate `shekyl-daemon-config`.
 
@@ -454,9 +461,9 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | status | wallet, stake, mine, sync, daemon | *view* — the current state | wallet:view, stake:view, mine:view, sync:view, daemon:view |
 | stop | mine, daemon | *verb* — stop | mine:verb, daemon:verb |
 | set | option, password, note | *verb* — assign a value | option:verb, password:verb, note:verb |
-| show | tx, shard, block, ban, option | *verb* — print one item | tx:verb, shard:verb, block:verb, ban:verb, option:verb |
+| show | tx, shard, block, ban, option, key | *verb* — print one item | tx:verb, shard:verb, block:verb, ban:verb, option:verb, key:verb |
 | endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) | |
-| socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 | |
+| socket | daemon, rpc, listen | the local socket of RPC_CHANNEL RT-15; under `listen`, the tunnel's own (IG-Q110) | |
 | mnemonic | create, restore | the wallet's recovery words (IG-Q24) | |
 | direction | list | `in` or `out` | |
 | unmatched | list | receives matching no request | |
@@ -491,7 +498,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | white | list | the white peer list | |
 | gray | list | the gray peer list | |
 | spent | chain | *view* — whether a key image is spent | chain:view |
-| create | wallet, request, recipients | *verb* — create | wallet:verb, request:verb, recipients:verb |
+| create | wallet, request, recipients, key | *verb* — create | wallet:verb, request:verb, recipients:verb, key:verb |
 | open | wallet | *verb* — open | wallet:verb |
 | close | wallet | *verb* — close | wallet:verb |
 | restore | wallet | *verb* — restore from the recovery words | wallet:verb |
@@ -500,6 +507,8 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | list | tx, request, shard, peer, ban, txpool | *verb* — print the entries | tx:verb, request:verb, shard:verb, peer:verb, ban:verb, txpool:verb |
 | note | tx | *view* — a transaction's local note | tx:view |
 | abandon | tx | *verb* — give up on a dispatched send | tx:verb |
+| alarm | tx | *view* — the held sends that need the user's decision, each with why (A19) | tx:view |
+| resend | tx | *verb* — offer a held send's saved bytes to the daemon again, by the user's decision (A19) | tx:verb |
 | decode | tx | *verb* — decode a transaction blob | tx:verb |
 | make | uri | *verb* — compose | uri:verb |
 | read | uri | *verb* — decode | uri:verb |
@@ -532,8 +541,10 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | — | `config-file` | path | the account root (IG-13) + `shekyl-cli-<network>.toml` | CLI | | N (IG-Q29) |
 | `wallet-dir` (alias `engine-dir`) | `wallet-dir` | path | the account root + `wallets/<network>` | both | | K; the alias goes (IG-5) |
 | `wallet` (alias `engine-file`) | `wallet-file` | path | unset | both | | R (IG-3: a path ends in `file`); the alias goes |
-| `daemon-address` | `daemon-endpoint` | peer-endpoint | `127.0.0.1:<row rpc port>` | both | | R (IG-Q31): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
+| `daemon-address` | `daemon-endpoint` | peer-endpoint | unset: "this computer" (RT-15) | both | | R (IG-Q31, default amended by RT-W10 step 5, Rick 2026-11-17: unset is the node this account runs, on its owner's leg, never a plaintext port; a wallet beside a service is told the service's view listener to set): an IP or an onion, because a local wallet with a remote daemon over Tor is a supported posture; a hostname or URL is refused |
 | (`daemon-address` `uds://`) | `daemon-socket-file` | path | unset | both | | N; RT-15's local leg; unconstructible together with `daemon-endpoint` |
+| — | `daemon-bundle-file` | path | unset | both | | N (IG-Q108): the node's bundle as `rpc bundle show` prints it; set, the enrollment words reach the node at an explicit `daemon-endpoint` over the channel (the row's default is the plaintext listener, and `rpc-listen` has no default port); unconstructible together with `daemon-socket-file` |
+| — | `rpc-key-file` | path | the account root + `rpc-shekyl-cli-<network>.key` | both | | N (IG-Q108, IG-Q109): this client's channel key, readable by this account alone; a file anyone else can read is refused |
 | `rpc-url` | `wallet-rpc-endpoint` | peer-endpoint | unset | both | | R (IG-Q31); set means an external `shekyl-wallet-rpc`, not self-hosting |
 | (`rpc-url` `uds://`) | `wallet-rpc-socket-file` | path | unset | both | | N; unconstructible together with `wallet-rpc-endpoint` |
 | `proxy` | `daemon-socks` | endpoint | unset | both | | R; SOCKS5, names resolved by the proxy |
@@ -578,9 +589,11 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `version`, `help [command]` | same | | | K |
 | `exit` (synonym `quit`) | `exit` | | | R (IG-Q30): `quit` goes |
 | `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
-| `tx show <id>` | same | hash | `--body` | K; `--body` prints the transaction's serialized bytes, kind `bytes` (RW-Q4) |
+| `tx show <id>` | same | hash | `--body` | K (Rick, 2026-11-03): one report of transaction `<id>`. An open wallet that holds the id is the report, and the daemon is not asked. Otherwise the report is the daemon's view. `--body` fetches the serialized bytes from the daemon (kind `bytes`, RW-Q4). If neither source knows the id, the refusal names both |
 | `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
+| — | `tx alarm` | | | N (A19, 2026-11-12): the held sends that need a decision — every held send sent before this session, and every one the watchdog has alarmed on in it — with why and the height each left at |
+| — | `tx resend <txid>` | hash | | N (A19, 2026-11-12): resend a held send's saved bytes; the reply is `send`'s. After a restart this is the only way a held send is offered again |
 | — | `tx decode <body>` | bytes (a transaction's serialized bytes) | | N (IG-Q26, RW-Q4): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
 | `request new <amount> <label> [--expiry e]` | `request create <amount> <label>` | amount, text | `--expiry` quantity (duration) | R (IG-Q34) |
 | `request list [--matched \| --all]` | same | | `--matched`; `--all` | K |
@@ -599,6 +612,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
 | `sign <message...>`, `verify <address> <signature> <message...>` | same | text; address, text | | K |
+| `freeze`, `thaw`, `frozen` | — | | | X (Rick, 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection. The refusal states this and names the decision log entry; the wallet RPC's method registry rejects the same three names |
 | the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30) |
 
 ### 12.4 `shekyl-wallet-rpc` — options
@@ -613,13 +627,13 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | | N; Unix only; refused on Windows |
 | `rpc-login` | `rpc-username`, `rpc-password` | secret | unset | file | | R (IG-Q29); both set or neither |
 | `disable-rpc-login` | — | | | | | – (IG-4): no credentials is the absence of the two rows, accepted on loopback or a socket |
-| `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | `127.0.0.1:<row rpc port>`; unset | both | | R (IG-Q31) |
+| `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | unset: "this computer" (RT-15); unset | both | | R (IG-Q31; default amended by RT-W10 step 5, Rick 2026-11-17, as `shekyl-cli`'s row) |
 | `proxy` | `daemon-socks` | endpoint | unset | both | | R |
 | `log-file` | `log-file`, with `log-level`, `log-category`, `log-size-max` | as §5 | the file `shekyl-wallet-rpc-<network>.log` | both | | K; the daemon's rows apply |
 
 ## 13. The daemon console
 
-The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ console (`src/daemon/command_server.cpp`) is not renamed and is deleted with R8 (DC-N2).
+The catalog `shekyl-cli` serves (IG-Q25). The C++ console is deleted (R8, DC-N2, 2026-11-03). These words are the shell's.
 
 | Today | New | Positionals / flags | Notes |
 |---|---|---|---|
@@ -633,18 +647,20 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
-| `print_tx <hash> [+hex] [+json]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word |
+| `print_tx <hash> [+hex]` | `tx show <id>` | hash; `--body`; `--json` is the session's | One report (Rick, 2026-11-03): the open wallet's record when it holds the id, and the daemon is not asked; otherwise the daemon's view. `--body` fetches the bytes from the daemon. If neither source knows the id, the refusal names both. `+json` went with epee's rendering (IG-Q55) |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
 | `limit [kB/s]`, `limit_up`, `limit_down`, `set_log <level\|categories>` | `option set <name> <value>`, `option show [<name>]` | an option name; a value of that row's kind | IG-12: `option set` takes only the rows §5 marks runtime, needs the `node` grant, and never writes the file; `option show` reports each source and returns each row whose grant the caller holds (§5's Grant column); `limit` (both rates at once) is one option per value and goes |
 | `out_peers <n>`, `in_peers <n>` | — | | – (each option is an X row, §5) |
 | `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--duration <quantity>]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
-| `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start <address> [threads\|auto]`, `mine stop`, `mine status` | address; integer or `auto` | builds `mine-address` and `mine-threads` (IG-12); the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
+| `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start [threads\|auto]`, `mine stop`, `mine status` | integer or `auto` | builds `mine-threads` while running (IG-12); `mine-address` is the config row; the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
 | `status`, `print_status`, `sync_info` | `daemon status`, `sync status` | | `print_status` is a duplicate of `status` (IG-Q33) |
 | `stop_daemon`, `exit` | `daemon stop` | | IG-Q33: no bare word in the shared shell stops the daemon |
 | `save`, `flush_cache [bad-txs] [bad-blocks]` | — | | –: LMDB and C++ cache internals |
 | `version` | `version` | | |
+| — | `rpc client add <fingerprint> --ceiling <grants>`, `rpc client set <fingerprint> --ceiling <grants>`, `rpc client remove <fingerprint>`, `rpc client list`, `rpc bundle show` | a hash; a list of grant and preset keywords | built by RT-W10 step 4 (IG-Q87): enrollment over the channel, under the `enroll` grant |
+| — | `rpc key create`, `rpc key show` | | IG-Q109: this client's channel key, made only when asked and refused if one is there; each prints the fingerprint as `rpc client list` does |
 
 ## 14. The utilities and the tools
 
@@ -652,16 +668,16 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 
 | Binary | Ruling | Reason |
 |---|---|---|
-| `shekyl-blockchain-usage`, `-ancestry`, `-depth` | deleted, each in its own PR (FOLLOWUPS) | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
-| `shekyl-gen-ssl-cert` | deleted (FOLLOWUPS) | RT-11: the RPC channel replaces TLS |
-| `shekyl-utils-object-sizes` | deleted (FOLLOWUPS) | a C++ debug tool with no remaining job |
-| `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | go with LMDB at the redb cutover; not renamed meanwhile (FOLLOWUPS) | LMDB tools; offline bootstrap afterwards, if wanted, is the chain-ingest file source feeding the daemon's store, the DRS lane's to design |
+| `shekyl-blockchain-usage`, `-ancestry`, `-depth` | deleted | ring-signature-era analytics (`rct-only`, `ringsize`) with no referent under FCMP++ (rule 60) |
+| `shekyl-gen-ssl-cert` | deleted | RT-11: the RPC channel replaces TLS |
+| `shekyl-utils-object-sizes` | deleted | a C++ debug tool with no remaining job |
+| `shekyl-blockchain-import`, `-export`, `-stats`, `shekyl-mdb-copy` | deleted | the chain store is the Rust store; these read LMDB |
 | `shekyl-utils-deserialize` | stays until `tx decode` (§12.3) lands, then goes | the decode need is real; the Rust codecs serve it |
-| `shekyl-e2-trace-export` | DRS-E2's | the replay driver's own tool |
+| `shekyl-e2-trace-export` | deleted | the C++ LMDB harvest; the replay reads a frozen `trace.e2` |
 | `geblock` | its table is §14.2 | the genesis ceremony tool |
 | `shekyl-chain-replay`, `shekyl-wss-q1b-bench`, and every other binary target the gate enumerates | in the gate (IG-Q27); their tables come with the gate (FOLLOWUPS) | development tools follow the grammar |
 
-Each deletion fixes its consumers: the weekly workflow's comment, the logging and blob-dump gate comments that name the tools, the Windows installer and the build workflows for `shekyl-mdb-copy`, and `EXECUTABLES.md`.
+Each remaining deletion fixes its consumers in the same change.
 
 ### 14.2 `geblock`
 
@@ -683,7 +699,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 ## 15. Questions for Part B
 
-**IG-Q21 — `mine` — RULED 2026-10-14.** `mine` is the subject everywhere; Part A's `mining-address` and `mining-threads` are `mine-address` and `mine-threads` (§5).
+**IG-Q21 — `mine` — RULED 2026-10-14; amended 2026-11-02.** `mine` is the subject everywhere; Part A's `mining-address` and `mining-threads` are `mine-address` and `mine-threads` (§5). **Amendment (Rick, 2026-11-02):** `mine` is also a row, kind one-of `on`/`off`, default `off`, both surfaces, help "Start the miner at start, to mine-address." Not `mine-start`: the subject alone is the name, and starting is what the row does. `mine-address` has no default and starts nothing by itself; its help is "The address the miner pays." `mine = on` with no `mine-address` is refused at parse (IG-11, exit 2) naming `mine-address`. `mine-threads` is the node's thread count for the start-time miner and for a `start_mining` that names no count; a count above the host's parallelism is refused by the configuration check, exit 2. With `mine = on` the node calls the miner's start once after it opens, with that count; the miner idles until a job is posted; `start_mining` and `stop_mining` act on the running node, and a restart returns to the configuration. The effective-configuration line shows `mine-address` shortened to its first and last eight characters; `option show` gives the full value under its grant.
 
 **IG-Q22 — `out`, `outputs` and `size` — RULED 2026-10-14.** `address --file`, `tx list --direction in|out`, `fee --input-count` / `--output-count`, `shard fetch --png-file` / `--png-pixels`, `shard list held`.
 
@@ -695,7 +711,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q26 — the utilities — RULED 2026-10-14.** As §14.1. The deletions are separate implementation PRs, each fixing its consumers. `tx decode <body>` (§12.3) replaces `shekyl-utils-deserialize`.
 
-**IG-Q27 — the gate's scope — RULED 2026-10-14.** The gate's subject is every binary target we author, enumerated mechanically from the Cargo workspace and CMake, never from a hand-kept list; the gate asserts the set is non-empty (rule 47). Development tools are in it. The exceptions are the tools bound to LMDB or the C++ while they last, and `shekyl-mdb-copy`, which is LMDB's upstream tool.
+**IG-Q27 — the gate's scope — RULED 2026-10-14.** The gate's subject is every binary target we author, enumerated mechanically from the Cargo workspace and CMake, never from a hand-kept list; the gate asserts the set is non-empty (rule 47). Development tools are in it. The exceptions were the tools bound to LMDB or the C++ while they lasted, and `shekyl-mdb-copy`, which was LMDB's upstream tool. Those exceptions are discharged: the tools are deleted.
 
 **IG-Q28 — the CompleteTree flags — RULED 2026-10-14.** `archival-complete-tree` and `archival-acknowledge` are public rows.
 
@@ -713,7 +729,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q35 — `geblock`'s table — RULED 2026-10-14.** §14.2, with its glossary rows. `geblock` has no path defaults: `--dir`, `--recipients-file`, `--recipients-dir` and `--constants-file` are required wherever they apply, so the command line records exactly what the ceremony used. `genesis recipients create` creates its directory fresh (`0700`, refused if it exists or lies inside a git tree) and writes the wallet files `0600`, under the secret-file checks of IG-Q24 and §12.1.
 
-**IG-Q36 — the service run mode — RULED 2026-10-14, amended the same day** (the same ruling is DC-Q17 in the daemon-configuration cutover; [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, ruled 2026-10-13). `service` is a public switch, off by default, given on the command line only (IG-Q37): `shekyld` answers the platform's service manager (RT-16); it is accepted only where RT-16 defines it (Windows) and refused elsewhere with a typed code. The run mode selects one root and every default path (`config-file`, `data-dir`, `log-file`) derives from it: on Windows, run-as-user uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep R2's `/etc/shekyl/` files in every mode. The REJECTED row `run-as-service` keeps its name with the reason in §5. The mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, is the daemon-configuration cutover's. Until RT-W14 builds the SCM dispatcher, the row has visibility `reserved` (IG-9, IG-10), worded like the `rpc-listen` row: it is not accepted, and its refusal names RT-W14. Kind, default, surface (command line only, IG-Q37) and the IG-13 root rule stand as ruled; only the row's visibility changes until RT-W14 lands.
+**IG-Q36 — the service run mode — RULED 2026-10-14, amended the same day** (the same ruling is DC-Q17 in the daemon-configuration cutover; [`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16, ruled 2026-10-13). `service` is a public switch, off by default, given on the command line only (IG-Q37): `shekyld` answers the platform's service manager (RT-16); it is accepted only where RT-16 defines it (Windows) and refused elsewhere with a typed code. The run mode selects one root and every default path (`config-file`, `data-dir`, `log-file`) derives from it: on Windows, run-as-user uses the per-account root (`FOLDERID_LocalAppData`) and `service` uses `%ProgramData%\shekyl\`, which only the installer creates (owner and ACL: Administrators, SYSTEM and the service account); the daemon never creates the machine-wide root, and one that is missing, mis-owned or writable by others refuses with a typed code. Linux and macOS keep R2's `/etc/shekyl/` files in every mode. The REJECTED row `run-as-service` keeps its name with the reason in §5. The mechanism, including the deletion of the elevation branch in `daemon_default_data_dir.cpp`, is the daemon-configuration cutover's. Until RT-W14 builds the SCM dispatcher, the row has visibility `reserved` (IG-9, IG-10), worded like the `rpc-listen` row: it is not accepted, and its refusal names RT-W14. Kind, default, surface (command line only, IG-Q37) and the IG-13 root rule stand as ruled; only the row's visibility changes until RT-W14 lands. *Amended 2026-11-12 (IG-Q105):* `service` is accepted on every platform; on Windows a start refuses it until RT-W14's dispatcher.
 
 **IG-Q37 — where `service` is given — RULED 2026-10-14** (DC-Q18 in the daemon-configuration cutover). Command line only (IG-7): the run mode selects the file, so a key in that file could only restate or contradict it, and on Windows the installer's service registration carries the command line.
 
@@ -729,7 +745,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 ## 16. Part C — the RPC wire's names
 
-**RULED 2026-10-19 (Rick): IG-Q42…IG-Q57 as recommended.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. The names land in one rename PR after the store flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR (RW-Q8); until then the wire keeps today's names.
+**RULED 2026-10-19 (Rick): IG-Q42…IG-Q57 as recommended.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. The wire carries these names from `CORE_RPC_VERSION` 4.0: the one rename PR after the store flip, which changed every in-tree client with it (RW-Q8). Part F (§25–§26) re-takes the census at that PR's ground and names what Part C had not.
 
 The rules Part C applies are ruled. It adds no rule; each question in §20 is a convention needed to write the names, or a consequence of a rule for a row already ruled.
 
@@ -740,17 +756,47 @@ The rules Part C applies are ruled. It adds no rule; each question in §20 is a 
 
 **The version read.** `version` is in every grant set. Every authenticated connection may call it, as may the same-user socket and the plaintext view listener. It is never served before authentication (`RPC_CHANNEL.md` §4.3). In its reply only the `version` field is frozen: the key, a JSON integer, `(major << 16) | minor` (RK-D25, RW-Q6). The method's name and its empty params are frozen from the RW-Q6 ruling on. Every other field of the reply follows this Part like any other.
 
+### 16.1 The wallet RPC's names added for A19
+
+The wallet RPC (`docs/api/wallet_rpc.yaml`) predates Part C's rename and keeps its names until its own rename. The methods and fields A19 adds (the alpha.11 bug hunt; the wallet lane brief, Rick, 2026-11-12) take Part C's rules now, so the rename has nothing to undo:
+
+| Method | Path | Parameters | Reply | Notes |
+|---|---|---|---|---|
+| `tx_alarm` | `tx alarm` (§12.3) | — | a list (IG-Q53) of `{id, alarm, sent_height}` | a view; `id` is the transaction's id (hash), `alarm` one keyword (IG-Q86): `earlier-session`, `overdue`, `untracked`, `published-past-lookback`, `peerless`, `offline`, `reference-stale`, `bytes-missing`; `sent_height` the wallet's height when the send left (ordinal) |
+| `tx_resend` | `tx resend` (§12.3) | `id` (hash) | `submit_pending_tx`'s reply | a state change ending in its verb; refusals are `submit_pending_tx`'s (`-29106`, `-29107`), and `-29121 TX_NOT_HELD`, `-29122 TX_BYTES_MISSING` |
+
+`submit_pending_tx`'s reply, and so `tx_resend`'s, gains `verdict_saved` (switch): `false` when the send went out and stands but saving its verdict failed. `submit_pending_tx` gains the refusal `-29120 SAVE_NOT_WRITABLE`: the send's record could not be saved because the wallet's folder, file or drive is not writable, so nothing was sent (`data`: `target`, one keyword of a closed set: `folder`, `file`, `volume`, each with its own advice). Every other cause of an unsaved send is its own refusal (Rick, 2026-11-18 and 2026-11-19), each sending nothing and keeping the reservation: `-29128 SAVE_DURABILITY_UNCONFIRMED` (`data`: `file_system`, a local Windows volume other than NTFS), `-29129 SAVE_DISK_FULL`, `-29130 SAVE_FILE_HELD`, `-29131 SAVE_IO_FAILED` (`data`: `step`, one keyword of a closed set: `write`, `rename`, `folder-sync`, `flush`, `volume-query`; and `error`, the system's words, never a path), `-29132 SAVE_RENAME_UNCONFIRMED` (a local NTFS volume), `-29133 SAVE_INTERNAL_FAULT` and `-29134 SAVE_ON_NETWORK_DRIVE`. `stake`, `unstake`, `drain` and `collect_unstaked` answer the same refusals by cause when their seal was saved but not confirmed: nothing was sent and the seal was removed.
+
+### 16.2 The wallet RPC's names changed for A16–A18
+
+The wallet lane's PR 2 (Rick, 2026-11-12; the balance legs and the fee tiers, 2026-11-15) changes these names on the wallet RPC, under the same rules as §16.1:
+
+| Method | Field or parameter | Change | Notes |
+|---|---|---|---|
+| `get_balance` | `balance` | new | an amount: `spendable + incoming`; the reply's only sum |
+| `get_balance` | `spendable` | new; replaces `liquid` and `unlocked` (both deleted) | an amount: what a send could use at the synced tip |
+| `get_balance` | `incoming` | new | an amount: received, not yet spendable, plus in-flight sends' change |
+| `get_balance` | `incoming_wait` | new | a count of blocks until the soonest on-chain incoming output is spendable; absent, not 0, when none is on chain |
+| `get_balance` | `outgoing` | new; replaces `pending` (deleted) | an amount beside the balance: recipients plus fee of the in-flight sends |
+| `build_pending_tx` | `priority` | values renamed | one-of `economy`, `standard`, `high` (§11), lowercase; `ECONOMY`, `STANDARD`, `PRIORITY` and the `{custom}` form are deleted |
+| `get_default_fee_priority` | `default_priority` | deleted | no front end read it; a send that names no tier takes `standard`, the tier set's default |
+| `get_default_fee_priority` | `economy`, `standard`, `high` | renamed from `economy_fee`, `standard_fee`, `priority_fee` | amounts: the converged fee at each rung, the names of the daemon's `fee` reply (§18) |
+
+The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`data`: `count`, `limit`), and `-29125 INPUT_NOT_IN_TREE` and `-29126 INPUT_UNSPENDABLE` (`data`: `input`, a position). `-29127` is retired and never reused (the user freeze is removed; Rick, 2026-11-15). `-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set: `no-inputs`, `no-outputs`, `zero-input-amount`, `zero-output-amount`, `input-amount-overflow`, `output-amount-overflow`, `insufficient-funds`, `empty-leaf-chunk`, `pqc-leaf-derivation`, `leaf-chunk-too-large`, `zero-tree-depth`, `tree-too-shallow`, `tree-depth-too-large`, `branch-layer-mismatch`, `invalid-combined-ss-length`, `bulletproof`, `fcmp-prove`, `pqc-sign`, `wire`, `balance-self-check` (the builder's invariants), and `primitive`, `handle-mismatch`, `missing-key-image`, `source-decapsulation`, `rid-not-encodable`, `proof`, `bulletproof-parse`, `wire-encode`, `randomness` (the wallet state signing reads, and its random source). A fee variant the build should have made unreachable is the builder's `insufficient-funds`, not a second keyword.
+
+The balance's terms (§19 rows): `spendable`, `incoming` and `outgoing` are new. The wallet has no user-set hold on outputs (Rick, 2026-11-15), so the balance has no third leg and no name for the part a send cannot use now: that part is `incoming`. `held` keeps its one meaning, the shards a wallet holds (`shard list held`). The method registry rejects `freeze`, `thaw` and `frozen`, and so does the CLI's table (§12.3).
+
 ## 17. The method census
 
-Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
+Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42; RT-W10 step 4 adds IG-Q87's five (§25.3), 47 in all. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
 
 | Served today | Method | Parameters | Grant | Notes |
 |---|---|---|---|---|
 | `get_version` | `version` | — | every grant | frozen (§16) |
 | `/get_height` (`/getheight`), `get_block_count` (`getblockcount`) | `chain_height` | — | chain | IG-Q45, IG-Q46 |
-| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | `{"height": n}`, `{"hash": h}` or `"tip"`; `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56 |
+| `get_block_header_by_height` (`getblockheaderbyheight`), `get_block_header_by_hash` (`getblockheaderbyhash`), `get_last_block_header` (`getlastblockheader`), `on_get_block_hash` (`on_getblockhash`) | `block_header_show` | exactly one of `height`, `hash` or `tip` (`{"tip": null}`; IG-Q94); `pow` (switch) | chain | RW-Q1; IG-Q46, IG-Q56; `pow` is served to a bounded caller: the hash recorded at validation, inside the header cap (IG-F24) |
 | `get_block_headers_range` (`getblockheadersrange`) | `block_header_list` | `from`, `to` (inclusive heights), or `hash` (a list); `pow` (switch) | chain | RW-Q1; IG-Q53, IG-Q56 |
-| `get_block` (`getblock`) | `block_show` | the selector as `block_header_show`'s; `pow` (switch); `prune` (switch) | chain | RW-Q5's first output index is a field; IG-Q55 |
+| `get_block` (`getblock`) | `block_show` | the selector as `block_header_show`'s (IG-Q94); `pow` (switch); `prune` (switch) | chain | RW-Q5's first output index is a field; IG-Q55 |
 | `/get_blocks_by_height.bin` (`/getblocks_by_height.bin`) | `block_list` | `height` (a list); `prune` (switch) | chain | RW-Q5; bounded, `RPC_CHANNEL.md` §6.3; IG-Q55 |
 | `/get_o_indexes.bin` | — | — | — | deleted (RW-Q5) |
 | `/get_transactions` (`/gettransactions`) | `tx_show`, `tx_list` | `id`, one or a list; `prune` (switch) | chain, pool | IG-Q50, IG-Q55; unrelayed entries are host-only (RT-O9.3) |
@@ -758,10 +804,10 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `get_fee_estimate` | `fee` | — | chain | IG-Q52 |
 | `get_coinbase_tx_sum` | `chain_coinbase_sum` | `from`, `to` | chain | IG-Q44 |
 | `get_alternate_chains`, `/get_alt_blocks_hashes` | `chain_alt` | — | status | IG-Q46 |
-| `get_curve_tree_info`, `get_curve_tree_checkpoint` | `curve_show` | `{"height": n}` or `"tip"` | chain | one reply type (IG-Q47) |
+| `get_curve_tree_info`, `get_curve_tree_checkpoint` | `curve_show` | exactly one of `height` or `tip` (IG-Q94) | chain | one reply type (IG-Q47) |
 | `get_archival_emission_claim_source` | `archival_claim_show` | `{"persona": h}` | chain | the wallet's contract |
 | `get_archival_shard_coverage` | `shard_coverage` | — | chain | |
-| `request_archival_shard` | `shard_fetch` | `id` | node | the wallet's word (§12.3) |
+| `request_archival_shard` | `shard_fetch` | `id` | chain | the wallet's word (§12.3); bounded by the shard-fetch permit (IG-Q90, IG-Q91) |
 | `get_info`, `/get_info` (`/getinfo`) | `daemon_status` | — | health; each field by its grant | §13's word |
 | `sync_info` | `sync_status` | — | peers | §13's word |
 | `get_connections` | `peer_connections` | — | peers | §13's word |
@@ -775,14 +821,17 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `flush_txpool` | `txpool_flush` | `id` (a list, optional) | node | |
 | `relay_tx` | `tx_relay` | `id` (a list) | node | |
 | `/submit_transaction` | `tx_submit` | `body` | submit | |
-| `get_block_template` (`getblocktemplate`), `get_miner_data` | `block_template` | `address`, `extra`, `extra_size` | mining-work | a view with inputs (IG-Q43); IG-Q46 |
+| `get_block_template` (`getblocktemplate`), `get_miner_data` | `block_template` | — | mining-work | the one posted job; it pays the node's `mine-address` (IG-F23); IG-Q46 |
 | `submit_block` (`submitblock`) | `block_submit` | `body` | mining-work | named, not positional (RW-Q2) |
 | `calc_pow` | `pow` | `height`, `hashing`, `seed` | mining-work | a view with inputs (IG-Q43); IG-Q48 |
-| `/start_mining`, `/stop_mining`, `/mining_status` | `mine_start`, `mine_stop`, `mine_status` | `address`, `threads` (an integer or `auto`) for `mine_start` | mining-control | §13's words |
+| `/start_mining`, `/stop_mining`, `/mining_status` | `mine_start`, `mine_stop`, `mine_status` | `threads` (an integer or `auto`) for `mine_start` | mining-control | §13's words; the node mines to its `mine-address` (IG-12, IG-F23) |
 | `set_bans` | `ban_add`, `ban_remove` | `host`; `duration` for `ban_add` | bans | one verb per change; IG-Q44 |
 | `get_bans`, `banned` | `ban_list`, `ban_show` | `host` for `ban_show` | bans | IG-Q46 |
 | `/get_stem_tallies` | `relay_stats` | — | host-only (RT-O9.3) | |
-| `generateblocks` | `dev_block_generate` | `count`, `address`, `nonce` | armed lever (RT-O9.2) | IG-Q49 |
+| — | `rpc_client_add`, `rpc_client_set` | `fingerprint`, `ceiling` | enroll | IG-Q87; built by RT-W10 step 4 |
+| — | `rpc_client_remove` | `fingerprint` | enroll | IG-Q87; closes the fingerprint's sessions |
+| — | `rpc_client_list`, `rpc_bundle_show` | — | enroll | IG-Q87 |
+| `generateblocks` | `dev_block_generate` | `count` | armed lever (RT-O9.2) | IG-Q49; IG-F23 |
 | `/pop_blocks` | `dev_chain_pop` | `count` | armed lever (RT-O9.2) | IG-Q49 |
 | `save_bc`, `flush_cache`, `inject_archival_serve_credit`, `/set_log_hash_rate` | — | — | — | deleted (`DRS_X_STORE_FLIP.md` DX-Q3) |
 
@@ -790,7 +839,7 @@ Words of `shekyl-cli` (§11, §13) that render part of another method's reply ha
 
 ## 18. The field census
 
-Each shape's fields today, and their names under this Part. The census from source, with each key's wire type and `file:line`, is the appendix [`INPUT_GRAMMAR_PART_C_CENSUS.md`](INPUT_GRAMMAR_PART_C_CENSUS.md). A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
+Each shape's fields today, and their names under this Part. The names the types carry, each with the holder its walk starts from and the grant that shows it, are [`docs/generated/rpc_wire_schema.tsv`](../generated/rpc_wire_schema.tsv), rendered from `shekyl-rpc-types`' method table (`wire::TABLE`, RW-Q7) and held equal to it by a test there; `scripts/ci/check_input_grammar_walk.py` walks that file over §3, §11, §14.2 and §19 and checks §17 and this section against it. The census from source, with each key's wire type and `file:line`, is the appendix [`INPUT_GRAMMAR_PART_C_CENSUS.md`](INPUT_GRAMMAR_PART_C_CENSUS.md). A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
 
 **Block header** (`block_header_show`, `block_header_list`; `header` in a block):
 
@@ -813,15 +862,15 @@ Each shape's fields today, and their names under this Part. The census from sour
 | `pow_hash` | `pow` | hash; absent unless asked for (IG-Q56) |
 | `miner_tx_hash` | `coinbase` | hash, the coinbase transaction's id |
 | `curve_tree_root` | `curve_root` | hash |
-| `attestation_root` | `attestation_root` | hash |
+| `attestation_root` | `section_root` | hash, the root of the block's section (IG-Q102) |
 
-`get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order and an unknown item is `null` in its slot (IG-Q53).
+`get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order, and a slot that does not hold the item is `{"missing": null}` (IG-Q53, IG-Q73).
 
-**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the pruned form when `prune` is set, IG-Q55); the first output's global index → `output_index` (RW-Q5). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
+**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle); the draws the count rule issued at the block, `count(h)` → `draws`, a count, `null` where this node holds no row (4.5, IG-Q107). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
 
-**Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's.
+**Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's; `writer`, the chain store's writer, `{"live": null}` or `{"halted": {"height": h, "invariant": n}}` (IG-Q92).
 
-**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `pooled` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `mined_height`; `confirmations` → `confirmations`; `block_timestamp` → `mined_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
+**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned segment when `prune` is set, IG-Q55 — never with the `pqc_auths` bytes appended, SB-Q2); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `pqc_auth_hash` → `pqc_auth_hash` (a nullable hash: the `pqc_auths` region's digest, the txid's third operand; `null` where the identity has no third component, the coinbase); `archival_len` → `archival_size` (bytes); the three operands are in the entry only under `prune`, and without it the entry is `{id, body}` with the whole body (`RPC_WIRE.md` RW-Q4 as amended, 4.1); `pruned` goes (the request says); `archived` (`{tx_hash, shard}`, the side list beside `missed_tx`) → `archived`, the slot state: this node discarded the body with its shard at the archival horizon and the archive serves it (`PDM-Q10`, SB-Q2); never under `prune`, since every node holds the skeleton at every horizon, and never a transaction that carries no archival good, whose skeleton is its whole body; `in_pool` → `pooled` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `mined_height`; `confirmations` → `confirmations`; `block_timestamp` → `mined_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx`, `unavailable_tx` and the `archived` side list fold into the slot, which is the entry, `{"missing": null}`, `{"archived": {…}}`, or `null` where the pool could not be asked (IG-Q73).
 
 **Spent** (`chain_spent`): `key_images` → `key_image`; `spent_status` (0, 1, 2) → a list of one-of `unspent`, `chain`, `txpool`, in request order.
 
@@ -833,9 +882,9 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Curve tree** (`curve_show`): `root` (free-length hex today) → `root` (hash); `depth` → `layers`; `leaf_count` → `leaf_count`; `height` (`chain_height - 1` in one method) and `block_height` (the other) → `height`, ordinal.
 
-**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claimed` (a list of epochs); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `failure_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch` (`null`: never served); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
+**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); — → `hash`, the hash of the block at `height`, read in the same snapshot (IG-Q84); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claimed` (a list of epochs); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `failure_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch`, the last epoch the record passed a draw inside the release cooldown's window (`null`: no pass in the window; 4.3); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
 - Its epoch element: `settlement_epoch` → `id`; `close_block_height` → `closing_height`; `sigma_work_milli` → `work` (milli, IG-Q54); `budget_atomic`, `has_budget_row` → `budget` (amount, `null`: no budget row); `bonds` → `bond`; `shards` → `shard`; `credit_pairs` → `credit`; `claimant_bond_idx` (`u64::MAX` for none) → `claimant` (an index into `bond`, `null` for none).
-- Its bond element: `join_settlement_epoch` → `joined_epoch`; `is_support_complete_tree` → `complete_tree` (switch); `bad_intervals_flat` (flattened pairs) → `failure`, a list of `{from, to}`, inclusive: the intervals the bond failed.
+- Its bond element: `join_settlement_epoch` → `joined_epoch`; `bad_intervals_flat` (flattened pairs) → `failure`, a list of `{from, to}`, inclusive: the intervals the bond failed.
 - Its shard element: `shard_id` → `id`; `freeze_height` → `freeze_height`; `has_segment` → `segment` (switch). Its credit element: `bond_idx`, `shard_idx` → `bond`, `shard` (indices).
 
 **Shard coverage** (`shard_coverage`): `as_of_height` → `height`; `leaf_count` → `leaf_count`; `frozen_count` → `frozen_count`; `settled_epoch` → `settled_epoch`; `budget_atomic` → `budget` (amount); `sigma_work_milli` → `work` (milli); `profit_estimate_available` goes (`null` in `profit`); `shards` → `shard`, whose element is `shard_id` → `id`, `bonded_count` → `bonded_count`, `served_count` → `served_count`, `freeze_height` → `freeze_height`, `join_scarcity_micro` → `scarcity` (micro, IG-Q54), `expected_profit_atomic` → `profit` (amount, `null` when not estimated).
@@ -861,17 +910,18 @@ Each shape's fields today, and their names under this Part. The census from sour
 | `database_size` | `data_size` | `version` (a build string) | `revision` |
 | `outgoing_connections_count` | `peer_outbound_count` | `incoming_connections_count` | `peer_inbound_count` |
 | `alt_blocks_count` | `alt_count` | `rpc_connections_count` | `rpc_connections` |
-| `public_incoming_socket_count` | `clearnet_inbound_count` | `public_outgoing_socket_count` | `clearnet_outbound_count` |
-| `tor_incoming_socket_count` | `tor_inbound_count` | `tor_outgoing_socket_count` | `tor_outbound_count` |
-| `p2p` (`running`, `offline`) | goes: it repeats `offline` | `white_peerlist_size` | `peer_white_count` |
-| `grey_peerlist_size` | `peer_gray_count` | `tx_pool_unbroadcast_count` (host-only, RT-O9.3) | `txpool_private_count` (host-only) |
-| `restricted` | `grant` (the grants the caller holds, `RPC_CHANNEL.md` §6.2) | | |
+| `connectors` (a list of rows) | `connector`, a map from connector to its counts (IG-Q82) | `p2p` (`running`, `offline`) | goes: it repeats `offline` |
+| `pool_retired` | `txpool_retired` (status; IG-Q74) | `tx_pool_unbroadcast_count` (host-only, RT-O9.3) | `txpool_private_count` (host-only) |
+| `restricted` | `grant` (the grants the caller holds, `RPC_CHANNEL.md` §6.2) | — | `writer` (health; IG-Q92) |
+| — | `randomx_cache_places` (status; the places the hasher has in use for RandomX caches, a count and an upper bound on that memory: [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.6; wire 4.4) | | |
+
+A connector's counts (`connector`'s values): `incoming_sockets` → `inbound_count`; `outgoing_sockets` → `outbound_count`; `white_peerlist_size` → `peer_white_count`; `gray_peerlist_size` → `peer_gray_count`. `txpool_count` and `txpool_private_count` are `null` when `txpool_retired` is true.
 
 **Version** (`version`; its fields walk under `daemon`, whose build and network the read names): `version` (frozen); `release` → `tagged`; `current_height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `consensus_constants_digest` → `consensus_digest`; `nettype` → `network` (its value `fakechain` is `regtest`, §3's name); `genesis_hash` → `genesis`.
 
-**Connection** (`peer_connections`; `peer` in `sync_status`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` → `state`; `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `connection_id` → `id`; `height` → `height`.
+**Connection** (`peer_connections`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` (the session's mode) → `mode` (IG-Q81; `null` for a connection chain sync does not hold); `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `connection_id` → `id`; `height` (the claim's count) → `height`, the ordinal of the tip the peer claims, `null` before it has claimed (IG-Q81).
 
-**Sync status** (`sync_status`): `height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `peers`, each `{info: …}` → `peer`, a list of connections, unwrapped; `spans` → `span`, whose element is `start_block_height` → `from`, `nblocks` → `blocks`, `connection_id` → `connection`, `rate` → `download_speed` (bytes per second), `speed` (the queue's relative speed, a percentage today) → `pace` (micro), `size` → `size` (bytes), `remote_address` → `endpoint`; `overview`, an ASCII picture, goes: it is the console's rendering.
+**Sync status** (`sync_status`; IG-Q80): `height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal); `state` → `state` (one-of `unpeered`, `behind`, `following`, `synced`); `stalled` → `stalled` (switch); `peers` → `session`, a list, whose element is `connection_id` → `connection`, `address` → `endpoint`, `claimed_height` → `height` (ordinal, `null` before a claim), `mode` → `mode`, `header_request` → `header` (`{age, due}` or `null`), `body_requests` → `span` (a list of `{from, blocks, size, age, due}`, from `start_height`, `count`, `planned_bytes`, `age_ms`, `due_in_ms`), `rate` → `download_speed` (bytes per second, `null` until a response has arrived). `age` and `due` are durations in whole seconds.
 
 **Peer list** (`peer_list`, an element per peer): `host`, `ip`, `port` → `endpoint`; each element names its list in `tier`, one-of `white`, `gray` (IG-Q51); `white_list`, `gray_list` go. `public_only` (default true) → `local` (switch, default off: include local endpoints); `include_blocked` goes: banned hosts are `ban_list`'s (IG-Q51).
 
@@ -883,97 +933,21 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Pool statistics** (`txpool_stats`): `pool_stats` unwraps. `txs_total` → `count`; `bytes_total`, `bytes_min`, `bytes_max`, `bytes_med` → `weight_total`, `weight_min`, `weight_max`, `weight_median`; `fee_total` → `fee_total`; `num_double_spends` goes (IG-Q57); `num_not_relayed` (host-only, RT-O9.3) → `private_count` (host-only); `num_failing`, `oldest`, `num_10m`, `histo_98pc` and `histo` go (IG-Q57).
 
-**Template** (`block_template`): parameters `wallet_address` → `address`, `reserve_size` → `extra_size` (bytes, at most 8), `extra_nonce` → `extra` (bytes); `prev_block`, refused when set, goes. Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
+**Template** (`block_template`): no parameters; the reply is the one posted job, which pays the node's `mine-address` (IG-F23). Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `nonce_offset` → `nonce_offset` (IG-Q78); `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
 
-**Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict` and `cause` keep their names, and its `height` (the block that holds the transaction, on `already_in_chain`) → `mined_height`, as on the transaction entry.
+**Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict` keeps its name, with hyphenated keywords (`already-in-pool`; IG-Q86); `cause` is one object with one key, the cause, whose value is its payload or `null` (IG-Q76; `row` goes into it); `relay` on `already-in-pool` → `publication` (one-of `held`, `overdue`, `public`, `untracked`; IG-Q75); and its `height` (the block that holds the transaction, on `already-in-chain`) → `mined_height`, as on the transaction entry.
 
 **Proof of work** (`pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
 
-**Miner** (`mine_start`, `mine_status`): `miner_address` → `address`; `threads_count` (0 for auto) → `threads` (an integer, or the keyword `auto`). Status: `active` → `active`; `speed` (hashes per second) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
+**Miner** (`mine_start`, `mine_status`; IG-Q77): `mine_start` takes `threads` (an integer, or the keyword `auto`) and no address (IG-F23). Status: `active` → `active`; `speed` → `speed`, `{count, window}` (hashes counted over a window of complete seconds, a duration); `threads_count` → `threads` (an integer); `address` (`""` when unset) → `address` (`null` when unset); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; the posted job's `height`, `block_reward` and difficulty triple → `height`, `reward`, `difficulty`, each `null` when no job is posted; `no_template` → `cause` (a diagnostic, or `null` when a job is posted); `pool_retired` → `txpool_retired` (IG-Q74).
 
 **Bans** (`ban_add`, `ban_remove`, `ban_list`, `ban_show`): `set_bans`' list of `{host, ip, ban, seconds}` → one `host` and `duration` per `ban_add` and one `host` per `ban_remove`; `ip` goes (the host carries it); `banned`'s `address` → `host`. An entry: `host`, `seconds` → `duration` (remaining), `permanent` → `permanent`; `banned`'s `banned` goes (`ban_show` replies `null` for a host not banned).
 
 **Pool and chain flush, relay** (`txpool_flush`, `tx_relay`): `txids` → `id`.
 
-**Relay statistics** (`relay_stats`): `floor` → `floor`, whose element is `connector` → `connector`, `achieved_out_connections` → `outbound_count`, the inner `floor` → `outbound_min`, `below` → `below`; `tallies` → `tally`, whose element is `peer` (a 16-byte id) → `peer` (bytes), `connector` → `connector`, `propagated`, `silent` → `propagated`, `silent`, `distinct_sources` → `sender_count`.
+**Relay statistics** (`relay_stats`): `floor` → `floor`, whose element is `connector` → `connector`, `achieved_out_connections` → `outbound_count`, the inner `floor` → `outbound_min`, `below` → `below`; `tallies` → `tally`, whose element is `peer` (the connection's id) → `connection` (IG-Q83), `connector` → `connector` (`null` where it has not been observed; today's `unnamed`), `propagated`, `silent` → `propagated`, `silent`, `distinct_sources` → `sender_count`.
 
-**Armed levers**: `generateblocks`' `amount_of_blocks` → `count`, `wallet_address` → `address`, `starting_nonce` → `nonce`, `prev_block` goes; reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
-
-### 18.1 The names the walk reads
-
-Every method, parameter and field name above, with the holder its walk starts from (IG-Q42): `method` for a method name, otherwise the path of the object that holds or is selected or modified by the name. `scripts/ci/check_input_grammar_walk.py` walks each name over §3, §11, §14.2 and §19, and refuses a name that §17 or §18 gives and this table omits. The rename PR's schema gate (RW-Q7) replaces this table and that gate.
-
-| Names | Holder | Walked |
-|---|---|---|
-| methods (§17) | method | `version`, `chain_height`, `block_header_show`, `block_header_list`, `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum`, `chain_alt`, `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch`, `daemon_status`, `sync_status`, `peer_connections`, `peer_list`, `p2p_stats`, `option_set`, `option_show`, `daemon_stop`, `txpool_list`, `txpool_stats`, `txpool_flush`, `tx_relay`, `tx_submit`, `block_template`, `block_submit`, `pow`, `mine_start`, `mine_stop`, `mine_status`, `ban_add`, `ban_remove`, `ban_list`, `ban_show`, `relay_stats`, `dev_block_generate`, `dev_chain_pop` |
-| parameters of block_header_show/list, block_show (selector) | `block` | `height`, `hash` |
-| parameters of block_header_list (selector) | `block` | `from`, `to`, `hash` |
-| parameters of header reads, block_show (modifier: the header) | `block header` | `pow` |
-| parameters of block_list (selector) | `block` | `height` |
-| parameters of tx_show/list (selector) | `tx` | `id` |
-| parameters of tx_show/list, block_show/list (modifier: the transaction) | `tx` | `prune` |
-| parameters of chain_spent (input) | `chain spent` | `key_image` |
-| parameters of chain_coinbase_sum (input) | `chain coinbase sum` | `from`, `to` |
-| parameters of curve_show (selector) | `curve` | `height` |
-| parameters of archival_claim_show (selector) | `archival` | `persona` |
-| parameters of shard_fetch (argument) | `shard` | `id` |
-| parameters of peer_list (input) | `peer` | `local` |
-| parameters of option_set (argument) | `option` | `value` |
-| parameters of option_show (selector) | `option` | `name` |
-| parameters of txpool_flush (argument) | `txpool` | `id` |
-| parameters of tx_relay (argument) | `tx` | `id` |
-| parameters of tx_submit (argument) | `tx` | `body` |
-| parameters of block_template (input) | `block template` | `address`, `extra`, `extra_size` |
-| parameters of block_submit (argument) | `block` | `body` |
-| parameters of pow (input) | `pow` | `height`, `hashing`, `seed` |
-| parameters of mine_start (argument) | `mine` | `address`, `threads` |
-| parameters of ban_add/remove/show | `ban` | `host`, `duration` |
-| parameters of dev_block_generate (argument) | `block` | `count`, `address`, `nonce` |
-| parameters of dev_chain_pop (argument) | `chain` | `count` |
-| block header fields | `block header` | `version_major`, `version_minor`, `time`, `parent`, `nonce`, `orphan`, `height`, `depth`, `hash`, `difficulty`, `difficulty_cumulative`, `reward`, `weight`, `weight_longterm`, `tx_count`, `pow`, `coinbase`, `curve_root`, `attestation_root` |
-| block fields | `block` | `header`, `body`, `tx`, `output_index` |
-| block tx element | `tx` | `id`, `body` |
-| chain_height fields | `chain` | `height`, `hash` |
-| tx entry fields | `tx` | `id`, `body`, `prunable_hash`, `archival_size`, `pooled`, `mined_height`, `confirmations`, `mined_time`, `output_index`, `public` |
-| fee fields | `fee` | `economy`, `standard`, `high` |
-| coinbase sum fields | `chain coinbase sum` | `emission`, `fee` |
-| alt chain element | `chain alt` | `hash`, `height`, `difficulty_cumulative`, `block`, `parent` |
-| curve fields | `curve` | `root`, `layers`, `leaf_count`, `height` |
-| claim fields | `archival claim` | `height`, `settled_epoch`, `joined_epoch`, `holding`, `shard`, `claimed`, `bond_total`, `failure_count`, `served_epoch`, `slash_epoch`, `epoch` |
-| claim epoch element | `epoch` | `id`, `closing_height`, `work`, `budget`, `bond`, `shard`, `credit`, `claimant` |
-| claim bond element | `bond` | `joined_epoch`, `complete_tree`, `failure` |
-| bond failure element | `bond failure` | `from`, `to` |
-| claim shard element | `shard` | `id`, `freeze_height`, `segment` |
-| claim credit element | `credit` | `bond`, `shard` |
-| coverage fields | `shard coverage` | `height`, `leaf_count`, `frozen_count`, `settled_epoch`, `budget`, `work`, `shard` |
-| coverage shard element | `shard` | `id`, `bonded_count`, `served_count`, `freeze_height`, `scarcity`, `profit` |
-| shard fetch fields | `shard` | `id`, `hash`, `size`, `block_count`, `tx_count`, `output_count`, `coinbase_output_count`, `duration`, `closing_height` |
-| daemon status fields | `daemon` | `height`, `hash`, `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, `peered`, `protocol_version`, `difficulty`, `difficulty_cumulative`, `block_spacing`, `tx_count`, `block_weight_max`, `block_weight_median`, `time_adjusted`, `emission`, `emission_multiplier`, `burn`, `burn_total`, `stake_share`, `txpool_count`, `started`, `disk_free`, `data_size`, `revision`, `peer_outbound_count`, `peer_inbound_count`, `alt_count`, `rpc_connections`, `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count`, `peer_gray_count`, `txpool_private_count`, `grant` |
-| version (the frozen key, RW-Q6) | `daemon` | `version` |
-| version fields | `daemon` | `tagged`, `height`, `target_height`, `consensus_digest`, `network`, `genesis` |
-| connection element | `peer connection` | `inbound`, `local`, `endpoint`, `connector`, `download`, `upload`, `download_idle`, `upload_idle`, `state`, `age`, `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current`, `id`, `height` |
-| sync status fields | `sync` | `height`, `target_height`, `peer`, `span` |
-| span element | `sync span` | `from`, `blocks`, `connection`, `download_speed`, `pace`, `size`, `endpoint` |
-| peer element | `peer` | `endpoint`, `tier` |
-| p2p stats fields | `p2p` | `started`, `download`, `upload`, `download_packets`, `upload_packets` |
-| option element | `option` | `name`, `value`, `source`, `runtime`, `secret`, `assigned` |
-| refusal data (a diagnostic, IG-11) | `diagnostic` | `code`, `option`, `source`, `message`, `parameter` |
-| pool entry fields | `tx` | `id`, `weight`, `fee` |
-| pool stats fields | `txpool` | `count`, `weight_total`, `weight_min`, `weight_max`, `weight_median`, `fee_total`, `private_count` |
-| template fields | `block template` | `difficulty`, `height`, `extra_offset`, `reward`, `parent`, `seed_height`, `body`, `hashing`, `seed`, `seed_next`, `version_major`, `weight_median`, `emission` |
-| block submit fields | `block` | `hash` |
-| tx submit fields | `tx` | `verdict`, `mined_height`, `cause` |
-| pow reply | `block` | `pow` |
-| mine status fields | `mine` | `active`, `speed`, `threads`, `address`, `block_spacing`, `reward`, `difficulty` |
-| ban element | `ban` | `host`, `duration`, `permanent` |
-| relay stats fields | `relay` | `floor`, `tally` |
-| floor element | `relay floor` | `connector`, `outbound_count`, `outbound_min`, `below` |
-| tally element | `relay tally` | `peer`, `connector`, `propagated`, `silent`, `sender_count` |
-| dev block generate reply | `block` | `height`, `hash` |
-| dev chain pop reply | `chain` | `height` |
-| Part E: `daemon_status`'s Tor fields (IG-Q66…IG-Q71) | `daemon` | `hiding`, `posture`, `origination`, `sync_connector`, `tor` |
-| Part E: the posture | `daemon posture` | `tor`, `clearnet` |
-| Part E: the managed Tor object | `tor` | `state`, `facet`, `cause`, `since`, `respawn_count`, `progress`, `flagged`, `fix` |
+**Armed levers**: `generateblocks` takes `count` and nothing else (IG-F23); reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
 
 ## 19. Glossary — Part C's terms
 
@@ -987,7 +961,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | template | block | *view* — a block to mine on, built for an address | block:view |
 | submit | block, tx | *verb* — hand to the daemon for acceptance | block:verb, tx:verb |
 | curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) | |
-| root | curve, attestation | a tree's root hash | |
+| root | curve, section | a tree's or a section's root hash | |
 | leaf | curve, coverage | a leaf of the curve tree | |
 | layers | curve | the tree's depth, in layers | |
 | claim | archival | an emission claim's source record | |
@@ -996,22 +970,30 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | generate | block | *verb* — mine blocks; only under `dev` | block:verb |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` | chain:verb |
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
-| key | spent | a key; only in `key image` | |
+| spendable | balance | what a send could use at the wallet's synced tip, an amount | |
+| incoming | balance | money received and not yet spendable, plus in-flight sends' change, an amount; with `wait`, the blocks until the soonest on-chain part is spendable | |
+| outgoing | balance | the recipients and fee of this wallet's in-flight sends, beside the balance, an amount | |
+| key | spent, console, rpc | a key: under `spent`, only in `key image`; under `console`, the console key (IG-Q88); under `rpc`, this client's channel key (IG-Q109) | |
 | image | key | a key image (a hash) | |
-| prune | tx | a switch: carry the pruned body | |
+| tip | block, curve | the chain's last block, as a selector; its value is `null` (IG-Q94) | |
+| prune | tx | a switch: carry the skeleton — the pruned segment with the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` (`DRS_SB_BELOW_HORIZON.md` SB-Q2) | |
 | prunable | tx | the prunable part of a transaction | |
+| pqc | tx | the transaction's `pqc_auths` region, the post-quantum authorizations; only in `pqc auth hash` | |
+| auth | pqc | an authorization; only in `pqc auth hash`, the region's digest, the txid's third operand | |
+| archived | tx | a slot state: this node discarded the body with its shard at the archival horizon, and the archive serves it; carries `id` and `shard` (`PDM-Q10`, SB-Q2) | |
 | public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) | |
 | private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) | |
 | confirmations | tx | blocks since the transaction's | |
 | parent | block, alt, header, template | the block this one extends (a hash) | |
-| nonce | block, header | the header's nonce; under `dev block generate`, the first nonce | |
+| nonce | block, header, template | the header's nonce; under `template`, with `offset`, where its bytes sit | |
 | orphan | block, header | not on the main chain | |
 | reward | block, mine, header, template | the block's reward, an amount | |
 | cumulative | difficulty | summed over the chain to this block | |
 | longterm | weight | the long-term weight | |
 | median | weight, size | the median | |
 | total | fee, weight, burn, bond | a sum | |
-| attestation | header | the attestation tree | |
+| section | header, block | a block's bundle section: the references to the serve-credit bundles it admits, in section order (IG-Q102) | |
+| draws | block | the draws the count rule issued at the block, `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3; IG-Q107) | |
 | index | output | a global output index | |
 | time | block, header, daemon, mined | a point in time (IG-Q54) | |
 | adjusted | time | the network-adjusted time | |
@@ -1031,11 +1013,11 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | disk | daemon | the data directory's disk | |
 | free | disk | its free space, in bytes | |
 | outbound | peer, clearnet, tor, floor | connections we open | |
-| grant | daemon | the grants this connection holds | |
+| grant | daemon, rpc | the grants this connection holds; under `rpc`, the grants a tunnel's sessions ask for (IG-Q108) | |
 | consensus | — | the consensus rules; `consensus digest`, the constants' digest | |
 | digest | consensus | a digest | |
-| connector | connection, floor, tally, sync | one-of `clearnet`, `tor`; under `sync`, the connectors the node syncs over (IG-Q71) | |
-| connection | span, peer | the P2P connection downloading the span | |
+| connector | connection, floor, tally, sync, daemon | one-of `clearnet`, `tor`; under `sync`, the connectors the node syncs over (IG-Q71); under `daemon`, a map from each connector the node runs to its counts (IG-Q82) | |
+| connection | peer, session, tally, owning | a P2P connection; under `session` and `tally`, its id, as `peer_connections` gives it; under `owning`, the connected stream socket the process that started the daemon handed it (IG-Q106) | |
 | host | ban | an IP address or subnet | |
 | parameter | diagnostic | a diagnostic's named parameters, a map (IG-11) | |
 | diagnostic | — | a typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3) | |
@@ -1044,7 +1026,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | pooled | tx | in the pool, not yet in a block | |
 | mined | tx | the block that holds the transaction; with `height` and `time` | |
 | verdict | tx | the daemon's verdict on a submitted transaction | |
-| cause | tx, tor | why a rejected transaction was refused; under `tor`, the supervisor's cause variant, one object or null (IG-Q70) | |
+| cause | tx, tor, mine, onion | why a rejected transaction was refused, one object with one key (IG-Q76); under `tor`, the supervisor's cause variant, one object or null (IG-Q70); under `onion`, why it is unreachable, one object or null (IG-Q96); under `mine`, why no job is posted, a diagnostic or null (IG-Q77) | |
 | claimed | claim | the epochs this persona has claimed | |
 | failure | bond, claim | an interval the bond failed, `{from, to}`; with `count`, how many | |
 | offline | daemon | P2P is off (IG-Q3's offline state) | |
@@ -1059,19 +1041,21 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | assigned | option | a secret row has a value | |
 | major | version | the major version | |
 | minor | version | the minor version | |
-| state | connection, tor | the connection's state; under `tor`, the §4.3 projection (IG-Q69) | |
-| age | connection | how long it has lived | |
+| state | sync, tor, onion | under `sync`, chain sync's derived state: one-of `unpeered`, `behind`, `following`, `synced` (IG-Q80); under `tor`, the §4.3 projection (IG-Q69); under `onion`, one-of `publishing`, `reachable`, `unreachable` (IG-Q96) | |
+| age | connection, header, span, tor, onion, quiet | how long it has lived: a connection or a request in flight; under `tor` and `onion`, the state, in awake time (IG-Q93, IG-Q96); under `quiet`, the span with no answer | |
 | idle | download, upload | time since the last bytes | |
-| speed | download, upload, mine | per second: bytes, or under `mine` hashes | |
+| speed | download, upload, mine | per second: bytes under download and upload; under `mine`, hashes counted over `window` | |
 | average | speed | the average | |
 | current | speed | the current value | |
 | packets | download, upload | a packet count | |
-| span | sync | a block span being downloaded | |
-| pace | span | the span queue's relative speed, a ratio (micro) | |
+| span | session | a body span in flight to the session (IG-Q80) | |
 | tier | peer | which peer list holds it, one-of `white`, `gray` | |
 | offset | extra | where the reserved extra bytes start | |
-| extra | template | the coinbase's extra nonce: the bytes, and with `size` how many to reserve | |
+| extra | template | the coinbase's reserved extra-nonce bytes; with `offset`, where they start | |
 | revision | daemon | the build's version string | |
+| randomx | — | the RandomX proof-of-work function as this node runs it: `pow` is a proof, this is the machinery that computes one ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)) | |
+| cache | randomx | a RandomX cache: the 256 MiB a seed's hashes are computed from, held by the node's one hasher | |
+| places | cache | the places the hasher has in use for caches, at most three; a count. The quantity the cap bounds: an upper bound on the cache memory, never a reading of it, since a place reserved for a build or one whose cache is being returned counts | |
 | joined | bond, claim | the epoch the bond joined | |
 | closing | epoch, shard | the epoch's closing height | |
 | hashing | template, pow | the bytes proof of work hashes | |
@@ -1102,12 +1086,31 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | hiding | daemon | an address-hiding session exists now, with no pin state: the class part of the hop-0 verdict (IG-Q67) | |
 | posture | daemon | the connector settings in force: `tor` and `clearnet` (IG-Q68) | |
 | origination | daemon | what happens to the node's own transactions (`OwnTx`), from the relay's two verdict parts (IG-Q68) | |
-| facet | tor | which facet is down: outbound or inbound; null when the impaired state names no facet (IG-Q69) | |
-| since | tor | when the state began, a time (IG-Q54) | |
 | respawn | tor | a restart of the managed Tor; with `count`, how many | |
 | progress | tor | how far bootstrap has come, an integer from 0 to 100 | |
 | flagged | tor | the consensus does not recommend this Tor; independent of the state and of the cause (IG-Q70) | |
 | fix | tor | a fix the operator may apply; the list is empty except for an install cause | |
+| missing | tx | a slot state: the node was asked and holds no such item (IG-Q73) | |
+| retired | txpool | the pool's file faulted and the node holds no pool until it restarts (IG-Q74) | |
+| publication | tx | where the caller's own transaction stands with the relay: one-of `held`, `overdue`, `public`, `untracked` (IG-Q75) | |
+| session | sync | a peer session chain sync holds (IG-Q80) | |
+| mode | session, connection | what chain sync's header run is doing with the session: one-of `idle`, `reachable`, `slot`, `challenging`, `past-cap`, `evidence-candidate`, `evidence` | |
+| due | header, span | until the response is late, a duration; `0` once it is | |
+| stalled | sync | behind, with nothing moving toward the target | |
+| writer | chain, daemon | the chain store's writer: `live`, or `halted` on an invariant (IG-Q92) | |
+| invariant | writer | the `SI-` row of the store-invariant register that caught the halt, an integer | |
+| client | rpc | a client identity enrolled on this daemon: a fingerprint and its ceiling (IG-Q87) | |
+| bundle | rpc, daemon | this daemon's static public keys, given to a client that will be enrolled; under `daemon`, the node's, as a client holds it (IG-Q108) | |
+| fingerprint | client | the client's static-key fingerprint, a hash (`RPC_CHANNEL.md` RT-O14) | |
+| ceiling | client | the grants an enrollment may hold, stored expanded | |
+| console | rpc | the console key: the host administrator's credential in service mode (IG-Q88) | |
+| reset | key | *verb* — replace the console key, offline, under the data home's lock | key:verb |
+| bootstrap | tor | how a bootstrap is going, as the supervisor reads it against its own window (IG-Q98) | |
+| unchanged | bootstrap | how long the bootstrap percent has not moved, a duration | |
+| carriage | tor | what the Tor link still carries: one-of `carries`, `open-only`, `gone` (IG-Q100) | |
+| quiet | tor | the quiet line: no Tor peer known, or none answering through Tor (IG-Q99) | |
+| needed | disk | the space Tor needs there, in bytes (IG-Q97) | |
+| pace | bootstrap | the reading of a bootstrap against the supervisor's own window: one-of `advancing`, `slow`, `stalled`, `held` (IG-Q98) | |
 
 **Terms of §3, §11 and §14.2 that gain a parent:**
 
@@ -1118,33 +1121,38 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | output | block, coinbase, shard, tx | the block's first output; `output index`, its global index | |
 | alt | daemon | §11's `alt` gains `daemon`: the alternative blocks | |
 | relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads | |
-| endpoint | connection, peer, span | §11's `endpoint`: the peer's | |
+| endpoint | connection, peer, session | §11's `endpoint`: the peer's | |
 | version | header, daemon, protocol, template | the version of what its parent names: under `header` and `template`, the block format's; under `protocol`, the P2P protocol's; under `daemon`, the RPC contract's, the field RW-Q6 freezes. Bare, §3's `version` is the binary's, so none of these is a reference to it | |
 | blocks | span | a length in blocks | |
-| body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` | |
+| add | client | *verb* — §11's `add`: enroll a client | client:verb |
+| set | client | *verb* — §11's `set`: assign an enrolled client's ceiling | client:verb |
+| remove | client | *verb* — §11's `remove`: revoke an enrollment | client:verb |
+| offset | nonce | where its bytes start | |
+| body | block, template, tx, section | a block's, transaction's or bundle's serialized bytes, kind `bytes` | |
 | complete | bond | the whole corpus | |
-| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white, respawn | how many | |
+| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, speed, tx, txpool, white, respawn | how many | |
 | depth | header | a depth in blocks | |
 | difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) | |
-| download | connection, span | bytes we receive | |
+| download | connection, session, bootstrap | bytes we receive | |
 | epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names | |
 | from | block, failure, span | the first height | |
 | gray | peer | the gray peer list | |
-| hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names | |
-| height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mined, pow, seed, sync, target, template | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) | |
+| hash | alt, auth, chain, claim, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names; under `auth`, the digest of the `pqc_auths` region | |
+| height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mine, mined, pow, seed, session, sync, target, template, writer | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) | |
 | inbound | clearnet, connection, peer, tor | connections other nodes open to us | |
-| list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) | block:verb, header:verb |
+| list | block, header, client | *verb* — print the entries; on the wire, a bounded list (RW-Q1) | block:verb, header:verb, client:verb |
 | local | connection, peer | endpoints not dialable on the public internet | |
 | seed | template | the RandomX seed | |
-| show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) | claim:verb, curve:verb, header:verb |
+| show | claim, curve, header, bundle | *verb* — print one item, by a typed selector (RW-Q1) | claim:verb, curve:verb, header:verb, bundle:verb |
 | size | archival, data, extra, shard, span | a size in bytes | |
+| header | session | §19's `header`: the read of headers in flight to the session | |
 | stats | relay | *view* — statistics | relay:view |
 | to | block, failure | the last height, inclusive | |
 | upload | connection | bytes we send | |
 | weight | block, header, template, tx | a weight, in bytes | |
 | white | peer | the white peer list | |
 
-Value keywords added: `unspent` (spent), `tip` (a header, block or curve selector), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier).
+Value keywords added: `unspent` (spent), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier); by Part F, `live`, `halted` (writer), `held`, `overdue`, `public`, `untracked` (publication), `unpeered`, `behind`, `following`, `synced` (sync state), the session modes, and the verdict and cause keywords of IG-Q86.
 
 Every term of §3 and §11 used as a field (`height`, `hash`, `count`, `weight`, `fee`, `address`, `size`, `depth`, `seed`, `threads`, `difficulty`, `from`, `to`, `blocks`, `download`, `upload`, `inbound`, `local`, `endpoint`, `white`, `gray`, …) gains the object that holds it as a parent and keeps its one meaning; the schema RW-Q7's table generates lists those edges for the gate. The implementing PR builds the field table from the reply types (RW-Q7) and brings any term this census missed as a row for ruling in its review.
 
@@ -1199,7 +1207,7 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 **IG-Q54 — the wire kinds of time, quantities and fractions — RULED 2026-10-19, as recommended.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. The economics ratios (`burn_pct`, `release_multiplier`, `staker_emission_share_effective`) are fixed-point at `shekyl_fixed_point_scale` = 1,000,000 (`config/economics_params.json`; `SCALE` in `rust/shekyl-economics/src/params.rs`), whatever their names say. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `milli` and `micro`, a ratio in thousandths and in millionths. No field needs a percent: the economics ratios and the sync span's relative speed are `micro`, so no `percent` kind is minted. A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
 
-**IG-Q55 — a transaction's body — RULED 2026-10-19, as recommended.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries `prunable_hash`. The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
+**IG-Q55 — a transaction's body — RULED 2026-10-19, as recommended.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries the txid's operands `prunable_hash`, `pqc_auth_hash` and `archival_size` — the skeleton, one shape at every horizon (`DRS_SB_BELOW_HORIZON.md` SB-Q2, which amended this row 2026-10-31). Without `prune`, a slot whose body this node discarded at the archival horizon is `archived` (`{id, shard}`), not a failure (§18). The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
 
 **IG-Q56 — the proof-of-work hash in a header — RULED 2026-10-19, as recommended.** `fill_pow_hash` has two restricted-listener policies: `get_block` and `get_block_header_by_height` blank the field silently, and the other three header methods refuse with `-19`. *Recommended:* one input, `pow` (a switch, off by default); a caller whose grant or resource bound does not cover it is refused with the RW-Q3 class that applies, never answered with a blank; the field is absent when not asked for.
 
@@ -1225,11 +1233,11 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 - The annotated example already exists, generated from the table: `docs::example_toml` (`rust/shekyl-daemon-config/src/docs.rs`) renders `docs/generated/shekyld.example.toml`, every line commented out; a test parses it uncommented, and `scripts/ci/check_daemon_option_docs.py` holds `docs/USER_GUIDE.md`'s copy to it (IG-9).
 - No package installs a configuration file. The `.deb` is built with `--deb-no-default-config-files` and installs nothing under `/etc` (`.github/workflows/gitian.yml`); the Windows installer copies binaries and shortcuts only (`contrib/packaging/windows/shekyl.nsi`). A missing file at the default path means defaults (§5's `config-file` row); a missing file at a named path refuses.
 
-- **IG-F12 — the shipped unit's account is created by nothing.** `contrib/packaging/linux/shekyld.service` runs as `User=shekyl`; `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start.
-- **IG-F13 — no installer creates the daemon's directories.** `/etc/shekyl/` (R2) and, on Windows, `%ProgramData%\shekyl\` (IG-13, IG-Q36: "only the installer creates" it) are created by no package today.
+- **IG-F12 — the shipped unit's account is created by nothing — CLOSED (shekyl-core #1440).** `contrib/packaging/linux/shekyld.service` runs as `User=shekyl`; the `.deb`'s after-install script only reloaded systemd, and the `.rpm` carried no unit, so on a fresh install the unit could not start. Both packages now declare the account in `contrib/packaging/linux/shekyl.sysusers`, which `post-install.sh` applies. `pre-install.sh` refuses an existing `shekyl` that is a login or another account's group (Rick, 2026-11-18).
+- **IG-F13 — no installer creates the daemon's directories.** `/etc/shekyl/` (R2) and, on Windows, `%ProgramData%\shekyl\` (IG-13, IG-Q36: "only the installer creates" it) are created by no package today. **The Linux half is CLOSED (shekyl-core #1440):** `contrib/packaging/linux/shekyl.tmpfiles` declares `/etc/shekyl/` `root:shekyl` `0750`. The Windows half waits on RT-W14.
 - **IG-F14 — the user guide's Windows root — CLOSED in this part.** At the ground, `docs/USER_GUIDE.md` names `C:\ProgramData\shekyl\` for a first run, where a run-as-user daemon uses the per-account `LocalAppData\Shekyl` (IG-13, `paths.rs`). The guide now names that root; a service install uses `%ProgramData%\shekyl\`.
 - **IG-F15 — the path checks create what they test — CLOSED in this part.** At the ground, `Lock::take` created the data directory and the lock file, `log_location_writable` the log directory and the file, and `marker::check_or_write` wrote the marker when the directory was fresh, so a check that called them changed the machine. Each now asks first and creates after: `Lock::creatable`, `log_location_creatable` and `marker::read` are the questions, asked by the check and by the effect.
-- **IG-F16 — the shipped unit runs mainnet only.** `contrib/packaging/linux/shekyld.service`'s `ExecStart` passes no `--network` (IG-F10 recorded that default). The package runs mainnet and reads `/etc/shekyl/shekyld-mainnet.toml`; testnet, the network every alpha release runs, needs an operator's own unit. The unit does pass `--data-dir /var/lib/shekyl` and `--log-file /var/log/shekyl/shekyld.log`, equal to its `StateDirectory`, `LogsDirectory` and `ReadWritePaths`, with `ProtectHome=true`.
+- **IG-F16 — the shipped unit runs mainnet only — CLOSED (shekyl-core #1440).** The template `contrib/packaging/linux/shekyld@.service` replaces it: `shekyld@<network>` passes `--service --network %i --data-dir /var/lib/shekyl/%i --log-file /var/log/shekyl/%i/shekyld.log`, with its `--config-verify` check as `ExecStartPre`; `RuntimeDirectoryPreserve=yes` keeps the shared `/run/shekyl` (IG-Q105, after this Part) while one instance stops. At the ground, `contrib/packaging/linux/shekyld.service`'s `ExecStart` passed no `--network` (IG-F10 recorded that default). The package runs mainnet and reads `/etc/shekyl/shekyld-mainnet.toml`; testnet, the network every alpha release runs, needs an operator's own unit. The unit does pass `--data-dir /var/lib/shekyl` and `--log-file /var/log/shekyl/shekyld.log`, equal to its `StateDirectory`, `LogsDirectory` and `ReadWritePaths`, with `ProtectHome=true`.
 
 ## 22. Questions for Part D
 
@@ -1238,7 +1246,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 **IG-Q58 — the check's name — RULED 2026-10-22.** *Recommended:* `config-verify`, a command-line-only switch (IG-7, beside `help` and `version`), off by default, public. It walks `config` → `verify`: §11's `verify` already means "check a claim against its source", and here the claim is the configuration and the source is the table. When this is ruled, the same edit adds the parent `config` and extends that one sentence to cover it (Kind `config:verb`). `config-check` would widen §11's `check`, which means "check a proof".
 
 **IG-Q59 — what it does — RULED 2026-10-22.** *Recommended:* one walk, called from `shekyl-daemon`'s `run` (`verify.rs`), in start's order. `config-verify` runs the walk and exits. Start runs the same walk and, on acceptance, performs the effects the walk withheld. `--help` and `--version` still win, before the file is read. Every other flag is read as start reads it.
-- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation stops here, as start does. Otherwise, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
+- **The walk.** `load`, unchanged: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. A client invocation used to stop here; that mode was deleted with the console (2026-11-03), so every start continues. Then, in order, stopping at the first refusal and printing that stage's whole vector, as `refuse` does: whether the account can create the data directory and open the lock file; whether the host has a network id (exit 1, the same `tell` as start); the marker read; whether the account can create the log directory and open the log file; the pure owner checks; the Tor pin read. Each pure function lives beside the effect it was split from, and the effect's function calls the pure half, so the decision is not written twice. `shekyl-daemon-config` does not gain a dependency on the owner latches.
 - **The splits (IG-F15).** `Lock::take` and `log_location_writable` gain a creatability half that does not create, open or lock; start calls it and then creates. `marker::check_or_write` gains a read that does not write: absent when the directory is missing, or when the directory holds no marker and no store; matched; or the refusal start already returns (`config.marker.network`, `config.marker.network-id`, `config.marker.missing`, `config.marker.unreadable`). Verify calls the read. Start takes the lock, calls the read, and writes only when the read is absent. The lock stays the proof of the write, and start rechecks under it. `record_seed_epoch` and `arm_settlement_schedule` gain a pure check of the value. The walk calls that check. The record functions call it and then latch. The walk does not observe `Latched`.
 - **Left on start.** Creating the directory, the lock file, the marker and the log file. `network::record`. Logging. Signals, the runtime, binds, the store, and anything sent. `tor::begin`'s spawn and bootstrap. The pin half is `discover_and_verify` / `discover_and_verify_at`. The walk classifies that error as the supervisor's pin does (`BundleMissing`, `Unavailable`, `PinRefused`) and warns with that cause's posture sentence; a missed discovery names the paths it searched, and the held sentence is the posture's for a link that is not up, with clearnet read from the connector. TB-2 does not turn that warning into a refusal ([`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md); the posture table in [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md)).
 - **Outside the verdict.** A port in use, Tor's bootstrap, disk space, mandatory-access policy (SELinux, AppArmor), and a held data-directory lock. Those are contention or the running service. The check takes no lock, so it can run while the daemon is up. Exit 0 says nothing about them.
@@ -1272,7 +1280,7 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 
 - **The relay's hop-0 verdict**, under every `tor` setting, in two parts. `connected`: an outbound session hides this node's address now. That is Health's boolean (`TSR-Q4` as GS-C1 reads it): an address-hiding session exists now, with no pin state; transient, and it says nothing lasting about the node, so it stays off any reply that would let an outsider tie the endpoint to the onion (§8). `routable`: `connected`, and this epoch's origin pin is not exhausted. `routable` implies `connected`. `origination` is read from both parts, under `status`: `connecting` is `connected` false with Tor on, and `rebuilding` is `connected` true with `routable` false. Health can be true while `origination` is `rebuilding`. The link being usable is neither part.
 - **The managed supervisor**, and only that posture. `tor::begin` returns nothing unless the setting is managed. An operator's Tor has no child and no §4.3 phase (§4.9). The `tor` object is that projection. It is null unless `posture.tor` is `managed`.
-- **Status** also carries (`TSR-Q12`): the posture (the `tor` and `clearnet` settings); `OwnTx`, carrying the two held cases as `connecting` and `rebuilding`; whether the node is syncing, and over what; and, inside the managed object, the §4.3 state, the cause as one variant, since when, the respawn count, the bootstrap percent, the version flag, and the fixes that apply.
+- **Status** also carries (`TSR-Q12`): the posture (the `tor` and `clearnet` settings); `OwnTx`, carrying the two held cases as `connecting` and `rebuilding`; whether the node is syncing, and over what; and, inside the managed object, the §4.3 state, the cause as one variant, how long, the respawn count, the bootstrap percent, the version flag, and the fixes that apply.
 - **Typed values, never sentences, and polling** (`TSR-Q13`). Clients read Status on their normal refresh. One renderer in a shared crate turns the values into words for the daemon's log line, `shekyl-cli` and the GUI. GS-C2 puts these reply fields on `daemon_status`. GS-C1 publishes the two verdict parts. The supervisor's increment 3 owns the managed projection, including growing the version flag out of the cause slot so a flag and a cause can both stand.
 
 **The GUI's grant** (`TSR-Q12`'s third ask) is answered by ruled text, not by a question here, but not by a leg that exists yet. `RPC_CHANNEL.md` RT-15 rules that a caller running as the daemon's own OS user, over the owner-only socket or pipe, is the owner, with every grant, Status included, and names the GUI running `shekyld` as its child as the case it covers. That socket or pipe is RT-W10's, which is not built. Until it is, the GUI's sidecar runs with `--rpc-admin-listen none` and a loopback `--rpc-view-listen` (`shekyl-gui-wallet` `src-tauri/src/daemon_manager.rs`; DC-Q8), and the `view` preset carries no Status, so no leg carries Status to the GUI today. The GUI sync lane's GS-Q1, on launching the sidecar with an owning connection, concerns that gap. After RT-W10, a GUI pointed at a service-mode daemon reaches it over the channel and holds Status through the `wallet` preset (`RPC_CHANNEL.md` §6.1, ruled 2026-10-24).
@@ -1289,36 +1297,40 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 | `sync_connector` (`daemon_status`) | status | a list of one-of `clearnet`, `tor`: the connectors the node syncs over now; `[]` when it syncs over none | `TSR-Q12` |
 | `tor` (`daemon_status`) | status | the managed supervisor's projection, below. Null unless `posture.tor` is `managed` | §4.9 |
 | `tor.state` | status | one-of `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired`. `waiting` is Restarting (held). `impaired` is §4.3's Degraded. The chain field `degraded` keeps that word | §4.3 |
-| `tor.facet` | status | `outbound`, `inbound`, or null. The facet down. Null unless `state` is `impaired` and the cause names a facet. `descriptor-limit` is `impaired` and the value is null (RK-D23) | §4.3, §5 |
 | `tor.cause` | status | null, or one object with one key, the variant below. The value is that variant's payload. A variant with no payload has `null`. No second object carries detail | §5 |
-| `tor.since` | status | time (IG-Q54, unix seconds): when `state` began. The supervisor's internal clock is not this field | `TSR-Q12` |
+| `tor.age` | status | duration (IG-Q54, whole seconds) of awake time: how long `state` has stood. No reading of the node's wall clock is carried: it is wrong exactly when the cause is `clock-skew` (IG-Q93, on #1344; IG-Q96) | `TSR-Q12` |
 | `tor.respawn_count` | status | integer: respawns since the daemon started | `TSR-Q12` |
-| `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent while `state` is `bootstrapping`; 0 before the first sample. Null in every other state, because 0 is a sample (RK-D23) | §4.2 |
+| `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent whenever the bootstrap is spoken: while `state` is `bootstrapping`, and while a bootstrap reading stands, which an `impaired` bootstrap also has; 0 before the first sample. Null otherwise, because 0 is a sample (RK-D23). A renderer speaks the bootstrap exactly when this is non-null, and never prints a null as 0% (amended 2026-11-12, Rick) | §4.2 |
 | `tor.flagged` | status | switch: the consensus does not recommend this Tor. Independent of `state` and of `cause`, so it stands while `state` is `usable` | §5 |
 | `tor.fix` | status | a list of one-of `restore-managed`, `operator`, `clearnet-on`, `clearnet-only`. Empty unless `cause` is an install variant. `clearnet-on` is offered only when the clearnet setting is off | `ManagedTorFix` |
+| `tor.onion` | status | null when no onion is offered, else `{state, age, cause}`: `state` one-of `publishing`, `reachable`, `unreachable`; `age` the awake time the state has stood (for `reachable`, since the last probe arrived); `cause` null unless `unreachable`, then one key: `probe-missed`, `uploads-refused`, `descriptor-missing` (each null), or `clock-behind` (a duration, a lower bound) (IG-Q96) | `Inbound` |
+| `tor.bootstrap` | status | null before the first window, else `{pace, unchanged, download, window}`: `pace` one-of `advancing`, `slow`, `stalled`, `held`; `unchanged` how long the percent has not moved, a duration; `download` the bytes that arrived in the window, or null when they cannot be read; `window` a duration (IG-Q98) | `BootstrapLine` |
+| `tor.carriage` | status | one-of `carries`, `open-only`, `gone`: what the link still carries (IG-Q100) | `Carriage` |
+| `tor_quiet` (`daemon_status`) | status | null when no quiet line stands; `{"unreached": {"age": s}}` when peers are known, the Tor Manager's onion-path reading has been impaired for `s` seconds of awake time, and a Tor dial launched since failed. Under every `tor` setting (IG-Q99, amended 2026-11-15) | `TorQuiet` |
 
 **Cause variants.** One key, so a clock skew cannot carry a path. §5's "Rendered from the cause: none" rows are not variants. The value is the payload.
 
 | Key | Payload | Shown as | Fixes |
 |---|---|---|---|
-| `outbound-blocked` | null | `impaired`, facet `outbound` | none |
-| `directory-unreachable` | null | `impaired`, facet `outbound` | none |
-| `clock-skew` | a signed integer, seconds (IG-6, the row allows the sign) | `impaired`, facet `outbound` | none |
-| `onion-unreachable` | null | `impaired`, facet `inbound` | none |
-| `descriptor-limit` | a non-negative integer, how many Tor reported open. The supervisor reports that count and not a second limit | `impaired`, facet null | none |
+| `outbound-blocked` | null | `impaired` | none |
+| `directory-unreachable` | null | `impaired` | none |
+| `clock-skew` | null when Tor stated no figure (relays' certificates read as out of date); `{"measured": s}` when Tor measured the offset; `{"minimum": s}` when Tor gave a lower bound. `s` is a signed integer, seconds (IG-6, the row allows the sign): negative is behind the network, positive ahead (IG-Q95) | `impaired` | none |
+| `descriptor-limit` | a non-negative integer, how many Tor reported open. The supervisor reports that count and not a second limit | `impaired` | none |
 | `exited` | an integer exit code, or null when the reap reported none (the process ended, or the control connection ended) | `restarting` | none |
 | `unanswered` | null. A control reply missed its bound | `restarting` | none |
 | `launch-failed` | null. A spawn that passed the pin did not come up | `restarting` | none |
-| `install-defect` | a path (IG-6): the file the pin rejected. The binary was not executed. The pin error carries that path and `PinRefused` drops it; this value is the path | `waiting` | the install list |
+| `install-defect` | null: the pin refused the Tor it found, and the binary was not executed. The file and the reason are in the daemon's log, not on the wire, so the status holds no daemon-authored free text (amended 2026-11-12, Rick; IG-F26) | `waiting` | the install list |
 | `missing` | null. Discovery found no bundle. The segment `not` is refused (IG-4), so this is not `not-installed` | `waiting` | the install list |
 | `unavailable` | null. This release has no managed Tor for this platform | `waiting` | the install list |
-| `unusable` | `unwritable`, `exhausted`, or null. `unwritable` is a directory the account cannot write. `exhausted` is no space left. Null is any other failure, which is the whole variant today: `DirectoryUnusable` carries no kind. The path is `data-dir`, already named under the `config` grant. The subject `data` keeps its meaning, and `full` keeps "the whole address" | `waiting` | none |
+| `unusable` | `{"exhausted": {"free": b, "needed": b}}` (both bytes) when the pre-spawn check found too little space; `{"unwritable": null}` when the account cannot write the directory; null for any other failure (IG-Q97). The path is `data-dir`, under the `config` grant, and is not in the payload; a renderer names it only for a caller that holds `config`. The subject `data` keeps its meaning, and `full` keeps "the whole address" | `waiting` | none |
+| `onion-refused` | null. Tor refused to publish the onion again after it was found unreachable, and the remedy escalated to a respawn (IG-Q101) | `restarting` | none |
+| `stranded` | null. Tor reported a clock jump during bootstrap, then neither its percent nor its bytes moved for the bound (IG-Q101) | `restarting` | none |
 
-Directory wait is `state` `bootstrapping`, `cause` null, `progress` the last sample. A clock jump leaves the cause alone. It moves the shown state to `bootstrapping`, and `since` dates that state, only when the shown state changes: a live link that was `usable` and is not impaired. A jump during `bootstrapping`, during a standing impairment, or while the process is down leaves `state`, `cause`, and `since` as they were. Today's `shown` reports an impairment before the resumed link for `outbound-blocked`, `directory-unreachable`, `clock-skew`, and `descriptor-limit`. `onion-unreachable` is the same projection once that cause exists: a jump does not clear it. No `resumed` keyword and no `directory-waiting` keyword. `exited`, `unanswered` and `launch-failed` are §5's one "exited or wedged" row, split by the sentence the renderer speaks (`TSR-Q13`): one keyword cannot carry three sentences. `onion-unreachable` is §5's row; the supervisor's descriptor-failed path does not set a cause yet, and the variant is the contract it grows to.
+Directory wait is `state` `bootstrapping`, `cause` null, `progress` the last sample. A clock jump leaves the cause alone. It moves the shown state to `bootstrapping`, and `age` restarts with that state, only when the shown state changes: a live link that was `usable` and is not impaired. A jump during `bootstrapping`, during a standing impairment, or while the process is down leaves `state` and `cause` as they were, and `age` runs on. Today's `shown` reports an impairment before the resumed link for `outbound-blocked`, `directory-unreachable`, `clock-skew`, and `descriptor-limit`. An unreachable onion is `tor.onion`'s, and a jump does not clear it. No `resumed` keyword and no `directory-waiting` keyword. `exited`, `unanswered` and `launch-failed` are §5's one "exited or wedged" row, split by the sentence the renderer speaks (`TSR-Q13`): one keyword cannot carry three sentences. `onion-unreachable` is §5's row; the supervisor's descriptor-failed path does not set a cause yet, and the variant is the contract it grows to.
 
-The install list is `restore-managed`, `operator`, `clearnet-only`, and `clearnet-on` only when clearnet is off. A crash, a bad data directory, an unanswered control connection and an impaired facet offer nothing. `clearnet-only` stays the operator's own choice of `tor = off` with `clearnet = on` (`TSR-Q10`, `TSR-Q11`), whether it appears as `origination` or as a fix.
+The install list is `restore-managed`, `operator`, `clearnet-only`, and `clearnet-on` only when clearnet is off. A crash, a bad data directory, an unanswered control connection and an impairment offer nothing. `clearnet-only` stays the operator's own choice of `tor = off` with `clearnet = on` (`TSR-Q10`, `TSR-Q11`), whether it appears as `origination` or as a fix.
 
-**Terms these names need** are §19's rows, one home each (IG-15): `hiding`, `posture` and `origination` under `daemon`; `facet`, `since`, `respawn`, `progress`, `flagged` and `fix` under `tor`. Each walks under IG-Q42. `tor` and `clearnet` are subjects, used by reference under `posture` and, for `tor`, as the managed object. No term below ends a command, so no Kind cell is set. Value keywords are closed sets on a row. They are not paths, so a keyword adds no edge: `address-hiding` does not parent `hiding` under `address`.
+**Terms these names need** are §19's rows, one home each (IG-15): `hiding`, `posture` and `origination` under `daemon`; `respawn`, `progress`, `flagged`, `fix`, `bootstrap`, `carriage` and `quiet` under `tor` (Part G). Each walks under IG-Q42. `tor` and `clearnet` are subjects, used by reference under `posture` and, for `tor`, as the managed object. No term below ends a command, so no Kind cell is set. Value keywords are closed sets on a row. They are not paths, so a keyword adds no edge: `address-hiding` does not parent `hiding` under `address`.
 
 Existing terms that gain a parent. The §19 row gains the parent and states the meaning per parent, as `height` does:
 
@@ -1327,11 +1339,11 @@ Existing terms that gain a parent. The §19 row gains the parent and states the 
 - `connector` gains `sync` on its §19 defining row, keeping "one-of `clearnet`, `tor`".
 - `count` gains `respawn` on its §19 gains row. `count` is defined in §11, so a second defining row would be a duplicate. The meaning stays "how many".
 
-§18.1 walks `hiding`, `posture`, `origination`, `sync_connector` and `tor` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `facet`, `cause`, `since`, `respawn_count`, `progress`, `flagged` and `fix`.
+These fields are in the generated schema from `CORE_RPC_VERSION` 4.2, and the walk takes `hiding`, `posture`, `origination`, `sync_connector`, `tor` and `tor_quiet` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `cause`, `age`, `respawn_count`, `progress`, `flagged`, `fix`, `onion`, `bootstrap` and `carriage`. `tor_quiet` walks under `daemon` as a reference: `tor` then `quiet`.
 
 `offline` is already the term "P2P is off" (IG-Q3). The origination keyword uses it with that meaning: Tor off and clearnet off.
 
-Value keywords: `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired` (state); `outbound`, `inbound` (facet; both already terms); the cause keys in the table above; `unwritable`, `exhausted` (`unusable`'s payload); `address-hiding`, `connecting`, `rebuilding`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix). `operator` and `clearnet-only` are the settings those fixes name, with the same meaning as in `posture` and `origination`.
+Value keywords: `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired` (state); the cause keys in the table above; `measured`, `minimum` (`clock-skew`'s payload); `unwritable`, `exhausted` (`unusable`'s payload); `publishing`, `reachable`, `unreachable`, `probe-missed`, `uploads-refused`, `descriptor-missing`, `clock-behind` (the onion); `advancing`, `slow`, `stalled`, `held` (the bootstrap's pace); `carries`, `open-only`, `gone` (carriage); `unreached` (the quiet line); `address-hiding`, `connecting`, `rebuilding`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix). `operator` and `clearnet-only` are the settings those fixes name, with the same meaning as in `posture` and `origination`.
 
 ## 24. Questions for Part E
 
@@ -1343,9 +1355,9 @@ Each is ruled (Rick, 2026-10-24); an amendment is stated in the question's own l
 
 **IG-Q68 — the posture and origination — RULED 2026-10-24, as amended.** *Ruling:* `origination` is one-of `address-hiding`, `connecting`, `rebuilding`, `clearnet-only`, `offline`, from the relay's two verdict parts: `connecting` is Tor on with no address-hiding session (`connected` false); `rebuilding` is a live session with the epoch's origin pin exhausted (`connected` true, `routable` false). There is no `hold` field; IG-Q72 is answered by this row. The renderer leads with `tor.cause` when one stands. *Recommended:* `posture` carries the two settings under their own option names and keywords (§5's `tor` and `clearnet` rows), so a value shown is valid input to the file. `origination` carries `OwnTx` as the ruling above. `address-hiding` is the pin part. Where Tor is `managed` or `operator` and the pin part is false, the value is `connecting` (`connected` false: no session hides the address now) or `rebuilding` (`connected` true: the pin is exhausted while a session is live). The value is read from the relay's verdict alone; the supervisor's state is not a second source for it. `clearnet-only` means one thing, here and as a fix: the operator's own choice of `tor = off` with `clearnet = on` (`TSR-Q10`, `TSR-Q11`). A node whose managed Tor is down reports `connecting` once the relay holds no address-hiding session (until then the verdict, and so `origination`, may still read `address-hiding` or `rebuilding`), and never `clearnet-only`, even while it syncs over clearnet. The send flow reads `origination` before broadcasting (`TSR-Q12`).
 
-**IG-Q69 — the Tor object — RULED 2026-10-24, as recommended, amended:** the supervisor document and the shared renderer use the wire's words, `impaired` (was Degraded) and `waiting` (was Restarting (held)), so each state has one name. *Recommended:* one nested object, `tor`, null unless `posture.tor` is `managed`, with `state`, `facet`, `cause`, `since`, `respawn_count`, `progress`, `flagged` and `fix`. There is no `detail` object. Restarting (held) is the keyword `waiting`. §4.3's Degraded is the keyword `impaired`, because `degraded` is already the chain-following field on this reply (§19). `facet` is `outbound` or `inbound` when an impaired cause names a facet, and null for `descriptor-limit`. `cause` is null when the supervisor has no variant: the opening `restarting`, `usable`, and `bootstrapping` with no cause. A resume does not clear a variant. Where the cause was null and the link was `usable`, the state becomes `bootstrapping` and `since` dates it. A standing impairment stays `impaired` with its cause and its `since` (RK-D23: null is no answer, not a withheld field). `flagged` may be true in any state. `progress` is the bootstrap percent while `state` is `bootstrapping`, and null in every other state.
+**IG-Q69 — the Tor object — RULED 2026-10-24, as recommended, amended:** the supervisor document and the shared renderer use the wire's words, `impaired` (was Degraded) and `waiting` (was Restarting (held)), so each state has one name. *Recommended:* one nested object, `tor`, null unless `posture.tor` is `managed`, with `state`, `facet`, `cause`, `age`, `respawn_count`, `progress`, `flagged` and `fix`. There is no `detail` object. Restarting (held) is the keyword `waiting`. §4.3's Degraded is the keyword `impaired`, because `degraded` is already the chain-following field on this reply (§19). `facet` is `outbound` or `inbound` when an impaired cause names a facet, and null for `descriptor-limit`. `cause` is null when the supervisor has no variant: the opening `restarting`, `usable`, and `bootstrapping` with no cause. A resume does not clear a variant. Where the cause was null and the link was `usable`, the state becomes `bootstrapping` and `age` dates it. A standing impairment stays `impaired` with its cause and its `age` (RK-D23: null is no answer, not a withheld field). `flagged` may be true in any state. `progress` is the bootstrap percent while `state` is `bootstrapping`, and null in every other state. *Amended 2026-11-10 (IG-Q93):* `since`, a time, is `age`, a duration from the monotonic clock; where this row dates a state, it restarts the age. *Amended 2026-11-11 (IG-Q96):* `facet` goes; an unreachable onion is `tor.onion`'s, and the outbound causes need no facet.
 
-**IG-Q70 — the cause is one variant — RULED 2026-10-24, as recommended.** *Recommended:* `tor.cause` is null, or one object with one key, as the table in §23. The key is named by what the operator sees (rule 81). The value is that variant's payload, and a variant with no payload has null, so the illegal combinations a detail bag allowed cannot be written. `flagged` is the §5 announcement and is a switch, not a cause: the supervisor's single cause slot that stores the version flag is the slot increment 3 grows out of, because a usable node can be flagged and skewed at once and one slot cannot hold both. The open-file payload is the count Tor reported. The data-directory payload is `unwritable` or `exhausted`, not a field named `data` and not the keyword `full`. Fixes are the install variants only.
+**IG-Q70 — the cause is one variant — RULED 2026-10-24, as recommended.** *Recommended:* `tor.cause` is null, or one object with one key, as the table in §23. The key is named by what the operator sees (rule 81). The value is that variant's payload, and a variant with no payload has null, so the illegal combinations a detail bag allowed cannot be written. `flagged` is the §5 announcement and is a switch, not a cause: the supervisor's single cause slot that stores the version flag is the slot increment 3 grows out of, because a usable node can be flagged and skewed at once and one slot cannot hold both. The open-file payload is the count Tor reported. The data-directory payload is `unwritable` or `exhausted`, not a field named `data` and not the keyword `full`. Fixes are the install variants only. *Amended 2026-11-11 (IG-Q95, IG-Q97, IG-Q101):* `clock-skew`'s payload is `null`, `{"measured": s}` or `{"minimum": s}`; `unusable`'s is a one-key state; `onion-refused` and `stranded` join the keys, and `onion-unreachable` leaves them.
 
 **IG-Q71 — syncing over what — RULED 2026-10-24, as recommended.** *Recommended:* `sync_connector`, a list of the connectors the node syncs over now. Health's `syncing` already says whether it syncs; the list says over what, and `[]` with `syncing` true is not a state the node can be in. The supervisor's current pair, configured clearnet and "the link is usable", is the stand-in a chain-sync feed replaces. This field is that feed.
 
@@ -1354,3 +1366,354 @@ Each is ruled (Rick, 2026-10-24); an amendment is stated in the question's own l
 - `rebuilding`: the epoch's origin pin is exhausted while a session is live (`connected` true, `routable` false). Health stays true.
 
 *Ruling:* there is no `hold` field. The two cases are `origination`'s `connecting` and `rebuilding` (IG-Q68), and the renderer leads with `tor.cause` when one stands. The keywords name what the operator sees (rule 81); `tor.since` dates the state, and an epoch's end would date the pin.
+
+---
+
+## 25. Part F — the wire at the rename
+
+**RULED 2026-11-10 (Rick): IG-Q73…IG-Q93 as recommended.** Ground: `dev` `cf561f79d`, `CORE_RPC_VERSION` 3.70. Part C's census was last re-taken at 3.64, and the wire has moved six minors since. This Part re-takes the census at the ground, names what the rename PR (`RPC_WIRE.md` RW-Q8) finds unnamed, and rules each name as a question in §26. It adds no rule and registers no family: the questions continue `IG-Q`, the findings `IG-F`. Citations are `file:line` at the ground; `T/` is `rust/shekyl-rpc-types/src/` and `D/` is `rust/shekyl-daemon-rpc/src/`.
+
+**The served surface at the ground.** `T/methods.rs:162-244` lists 51 methods under 64 served names: 32 JSON-RPC methods with 9 aliases, and 19 REST paths with 4 aliases, beside the `/json_rpc` endpoint's own row. Every row is served natively; the C++ table is gone (`D/handlers/json_rpc.rs:95-104`). Under Part C and this Part they become 42 methods on one path, with no alias.
+
+### 25.1 Findings: ruled names the code never adopted
+
+Each is implemented by the rename PR as ruled. None is a question.
+
+- **IG-F17 — `option_set` takes a list.** Its request is `options`, a list of `{name, value}` (`T/options.rs:227-239`). IG-Q42 and §18 rule `value`, a map from option name to value, in which a name cannot appear twice.
+- **IG-F18 — `option_show` takes `names`, and both replies wrap.** The request key is `names` (`T/options.rs:243-247`); §17 rules `name`. Both replies wrap their rows under `options` (`T/options.rs:251-254`), which IG-Q53 unwraps, and a secret row carries `set` (`T/options.rs:156-164`), which IG-Q42 rules `assigned`.
+- **IG-F19 — a connection's byte counts.** `get_connections` carries `recv_count` and `send_count` (`T/p2p.rs:230`, `:233`); §18 rules `download` and `upload`.
+- **IG-F20 — a diagnostic's parameters are positional pairs.** `Diagnostic.params` and `Refusal.params` are lists of pairs (`T/errors.rs:139`, `T/options.rs:220`); §18 rules `parameter`, a map.
+- **IG-F21 — Part E's fields are ruled and not served.** `get_info`'s wire form (`T/info.rs:535-614`) carries none of `hiding`, `posture`, `origination`, `sync_connector` or `tor`. Their names stand as ruled (§23), with `tor.age` for `tor.since` (IG-Q93). The Tor supervisor lane's PR puts them on `get_info` first, in §23's shape and under §23's names; the rename merges it and moves them to `daemon_status` unchanged.
+- **IG-F22 — the writer's halt is minted and no reply carries it.** `ConnectState` and `StoreInvariantRow` (`T/chain.rs:642`, `:656-668`) are `DAEMON_REDB_STORE.md` §3.6.2's halt on the tip: a halted writer's tip is stale, and a wallet that does not know refreshes against a chain that has moved on without it. The design deferred the field until the Rust store served `get_info`, which the flip did. The store mints the halt (`rust/shekyl-chain-store/src/store/mod.rs:521-528`), and no reply carries it. It is a missing function, built in the rename PR; its name is IG-Q92's.
+- **IG-F23 — §17 and §5 rows the flip made stale.** `start_mining` takes `threads` only (`T/mining.rs:126-129`); `generateblocks` takes `count` only (`T/mining.rs:245-247`); `get_block_template` takes no parameters (`T/mining.rs:28`); §5's `dev-rpc` row still listed `inject_archival_serve_credit`, deleted with the C++ chain (`DRS_X_STORE_FLIP.md` DX-Q3). §17, §18.1 and §5 are corrected in the commit that poses this Part. §18's `address`, `extra` and `extra_size` parameter rows for `block_template`, and its `address` and `nonce` rows for `dev_block_generate`, name parameters that no longer exist.
+- **IG-F24 — `pow` on a header read is served to a bounded caller.** IG-Q56 refuses a caller "whose grant or resource bound does not cover it". Since 3.67 the bound covers it: the header's hash is the one recorded at validation (`D/store_facts.rs:325`), it spends nothing from the hash budget (`D/hash_budget.rs:31`), and a bounded read stays inside the header cap (`RPC_CHANNEL.md` §6.3). §17 now says so. No refusal code is needed for it.
+- **IG-F25 — the shard reply's closing height.** The reply key is `close_height` (`T/archival.rs:69`), where §18 reads today's name as `closing_height`. The ruled name, `closing_height`, is unchanged.
+
+### 25.2 The census delta since 3.64
+
+Every key added, changed or removed between Part C's last re-take and the ground. A row whose name is settled by an earlier ruling says so; the others are ruled in §26.
+
+| Minor | Method today | Key at the ground | Source | Under this Part |
+|---|---|---|---|---|
+| 3.61 | `get_transactions` | `unavailable_tx` (a list of ids) | `T/transactions.rs:374-375` | folds into the slot (IG-Q73) |
+| 3.61 | `get_transactions` | `missed_tx` | `T/transactions.rs:358-359` | folds into the slot (IG-Q73) |
+| 3.64 | `get_transactions` | `archived`, a side list of `{tx_hash, shard}` | `T/transactions.rs:363-364`, `:330-334` | folds into the slot (IG-Q73) |
+| 3.64 | `get_blocks_by_height.bin` | a per-slot `Full`, `Skeleton` or `Archived` | `T/bin_commands.rs:251-259` | the slot (IG-Q73) |
+| 3.61 | `get_info` | `pool_retired`, written only when true | `T/info.rs:576-577` | IG-Q74 |
+| 3.61 | `get_info` | `tx_pool_size`, `null` when the pool is retired | `T/info.rs:578` | `txpool_count`, as ruled; IG-Q74 |
+| 3.61 | `get_info` | `tx_pool_unbroadcast_count`, `null` when retired | `T/info.rs:606-611` | `txpool_private_count`, as ruled; IG-Q74 |
+| 3.63 | `mining_status` | `pool_retired` | `T/mining.rs:220` | IG-Q74 |
+| 3.63 | `mining_status` | `height`, the posted job's | `T/mining.rs:217` | IG-Q77 |
+| 3.63 | `mining_status` | `no_template`, a diagnostic or `null` | `T/mining.rs:222` | IG-Q77 |
+| 3.63 | `mining_status` | `threads_count` | `T/mining.rs:204` | IG-Q77 |
+| 3.65 | `mining_status` | `speed`, `{count, window}` | `T/mining.rs:203`, `:150-155` | IG-Q77 |
+| 3.63 | `get_block_template` | `nonce_offset` | `T/mining.rs:47` | IG-Q78 |
+| 3.63 | `/submit_transaction` | the cause `consensus_rule`, and `row` beside it | `T/lib.rs:303`, `:247-248` | IG-Q76 |
+| 3.63 | `/submit_transaction` | the cause `join_market_unsupported` | gone from `T/lib.rs:264-312` | leaves the set; no name |
+| 3.69 | `/submit_transaction` | `relay` on `already_in_pool`: `held`, `held_overdue`, `published`, `untracked` | `T/lib.rs:209-213`, `:170-179` | IG-Q75 |
+| 3.66–3.67 | the four capped reads, `calc_pow` | the diagnostic `rpc.bound.exceeded` with `method`, `bound`, `asked`; `rpc.bound.budget` | `D/methods.rs:166-185`; `D/hash_budget.rs:141-143` | IG-Q79 |
+| 3.68 | `sync_info` | `height`, `target_height` (counts), `state`, `stalled` | `T/p2p.rs:319-334` | IG-Q80 |
+| 3.68 | `sync_info` | `peers[]`: `connection_id`, `address`, `claimed_height`, `mode`, `header_request`, `body_requests`, `rate` | `T/p2p.rs:294-312` | IG-Q80 |
+| 3.68 | `sync_info` | the timing objects: `age_ms`, `due_in_ms`; a body span's `start_height`, `count`, `planned_bytes` | `T/p2p.rs:267-288` | IG-Q80 |
+| 3.68 | `sync_info` | `spans`, `overview` | gone | §18's span rows and the terms `span` and `pace` go with them, but for `span` as IG-Q80 keeps it |
+| 3.68 | `get_connections` | `height` (the claim's count, or `null`), `state` (the session's mode, or `null`) | `T/p2p.rs:250`, `:237` | IG-Q81 |
+| 3.59 | `get_connections`, `sync_info` | `support_flags` | gone | no name |
+| 3.56 | `get_connections`, `sync_info`, `/get_peer_list` | the offline reply, `{"status": "offline"}` alone | `T/p2p.rs:345-350` | IG-Q85 |
+| 3.70 | `get_info` | `connectors[]`: `connector`, `incoming_sockets`, `outgoing_sockets`, `white_peerlist_size`, `gray_peerlist_size` | `T/info.rs:396-407`, `:601-602` | IG-Q82 |
+| 3.70 | `get_info` | the six flat socket and list-size keys | gone | §18's `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count` and `peer_gray_count` rows on `daemon_status` go |
+| `8494ffe88` | `/get_stem_tallies` | the connector value `unnamed`; `peer`, 32 hexadecimal characters | `T/p2p.rs:468-475`, `:494-495` | IG-Q83 |
+| — | `get_archival_emission_claim_source` | no hash of the gather's tip | `T/archival_reads.rs:85-110` | IG-Q84 |
+| 3.60 | `get_archival_emission_claim_source` | `is_support_complete_tree` | gone | goes at 4.3 (the 4b switch): a complete tree is never in an epoch's market, so it was always `false` |
+
+Keywords whose spelling IG-Q86 rules: the sync modes `past_cap` and `evidence_candidate` and the sync state `no_view` (`T/p2p.rs:147-193`); the relay state `held_overdue`; the verdicts and causes of `/submit_transaction` (`T/lib.rs:193-312`); and the dotted diagnostic codes (`D/mining_methods.rs:39-92`, `D/ban_methods.rs:24-26`, `D/authority.rs:45-47`, `T/methods.rs:106`, `T/endpoint.rs:31`).
+
+### 25.3 Names the next slice builds
+
+RT-W10 step 4 builds enrollment over the channel. Its method names are ruled here (IG-Q87, IG-Q88) so that step 4's submission contract and route-to-grant table are written once. The rows join §13 marked "built by RT-W10 step 4". They do not join the method table in the rename PR, whose gate requires every row to be served.
+
+One question is step 4's own and is not ruled here. Only the host is told `held` or `overdue` for a transaction it submitted (IG-Q75). A wallet reaching a service-mode daemon over the channel is a bounded key, so it loses that read for its own transactions. Telling the submitting fingerprint would let a stem successor that shares the fingerprint, as strangers behind a relaying site do, resubmit bytes this node sent it and learn that this node originated them. Any disclosure is therefore a ceiling bit given only to a single-owner device, never implied by `wallet`, and it is posed with step 4's grant work.
+
+## 26. Questions for Part F
+
+Each is ruled (Rick, 2026-11-10), as recommended. Each states the problem, then the question, then the recommendation that was ruled. A question that amends a ruled row names it, and the row carries the amendment.
+
+**IG-Q73 — a list reply's slot — RULED 2026-11-10, as recommended; amends IG-Q53.** IG-Q53 puts `null` in a list reply's slot for "an unknown item". Under RK-D23, `null` means *no answer*. The daemon now tells three cases apart: asked and not found (`missed_tx`); could not ask, because the pool is retired (`unavailable_tx`, 3.61); and a body discarded with its shard at the archival horizon (`archived`, 3.64, SB-Q2). The wallet already treats them differently: `TransactionsUnavailable` is never "not found" (`rust/shekyl-engine-core/src/engine/block_fetch.rs`, `proofs_chain_facts.rs`). One `null` cannot carry three cases. *Question:* what is in a slot that does not hold the item? *Recommended:* a `list` reply's slot is exactly one of:
+- the item itself;
+- `{"missing": null}`: the node was asked and holds no such item (§23's `missing`: looked, and none is there);
+- `{"archived": {"id": h, "shard": n}}`: the body was discarded with its shard, and the archive serves it (§19's `archived`);
+- `null`: that item's source could not be asked (RK-D23).
+
+A state other than the item is a one-key object naming the state, with its payload as the value, or `null` when it has none. That is IG-Q70's rule for `tor.cause`, applied once across the wire. Four consequences:
+- A read whose only source cannot answer refuses whole (RW-Q3). A slot is `null` only in a read that spans sources which fail separately; today that is `tx_list`, over the chain and the pool.
+- An unrelayed pool entry is `{"missing": null}` to every caller without the host's view (RT-O9.3), so a list read never reveals that one exists.
+- `missed_tx`, `unavailable_tx` and the `archived` side list fold into the slot. No side list remains.
+- `tx_show`, which has no slot, refuses a missing id (`RefusedByMethod`, `tx.missing`) and an unaskable one (`NotReady`, `txpool.retired`), and answers an archived one as `{"archived": {…}}`, the reply itself.
+
+`missing` joins §19 beside `archived`, a slot state under `tx`: "the node was asked and holds no such item". It is §23's keyword, with the meaning it has there.
+
+**IG-Q74 — a retired pool — RULED 2026-11-10, as recommended.** A node whose pool file faults retires the pool until it restarts (`rust/shekyl-node/src/facts.rs`). `get_info` says so with `pool_retired`, written only when true (`T/info.rs:576-577`), and `mining_status` with `pool_retired`, always written (`T/mining.rs:220`). `pool` is not a term: the subject is `txpool`. A key written only when true is absent for a reason other than a grant, which RK-D23 refuses. *Question:* what is the field, and where? *Recommended:* `txpool_retired`, a switch, always present, on `daemon_status` in the Status part and on `mine_status`. Everyone who can submit holds `status` (the `wallet` preset is `view`, `submit` and `status`), so Health would add only outside readers, who have no use for it. It walks by reference: the subject `txpool`, then a new term `retired` under it, "the pool's file faulted and the node holds no pool until it restarts". When it is true, `txpool_count` and the host's `txpool_private_count` are `null` (no answer), as today.
+
+**IG-Q75 — the relay state on `already_in_pool` — RULED 2026-11-10, as recommended.** Since 3.69 the verdict `already_in_pool` carries a required `relay`: `held`, `held_overdue`, `published` or `untracked` (`T/lib.rs:170-179`, `:209-213`). `relay` under `tx` is the verb (§3: `tx relay`), so a field of that name states a kind it does not have. The glossary's word for an entry the relay has made public is `public` (§19), and `held` is §11's view of a wallet's shards. *Question:* what are the field and its states? *Recommended:* the field is `publication`, a new term under `tx`: "where the caller's own transaction stands with the relay". Its states are one-of `held` (unpublished, inside the daemon's publication budget), `overdue` (unpublished at or past that budget), `public` (the relay has made it public; §19's `public`) and `untracked` (pool-resident, with no origin row). `overdue` is judged on the daemon's clock when the state is read; the wallet converts it to neither blocks nor a duration. A caller without the owner's view is told `public` only, and only once the transaction is public (RT-O9.3). Keywords are not paths, so `held` here adds no edge to §11's `held`.
+
+**IG-Q76 — the consensus row on a rejection — RULED 2026-11-10, as recommended.** Since 3.63 a rejection may carry the cause `consensus_rule`, with the refusing row's id (`"CEN-J15"`) in a sibling field `row` that is absent for every other cause (`T/lib.rs:240-249`, `:294-303`). A field absent for a reason other than a grant is what RK-D23 refuses, and a `null` there would say "no answer" where the truth is "this cause has no row". `row` is not a term. *Question:* how does a cause carry its payload? *Recommended:* IG-Q70's form. `cause` is one object with one key, the cause; its value is that cause's payload, or `null` when it has none: `{"consensus-rule": "CEN-J15"}`, `{"fee-too-low": null}`. No sibling field exists, so a row cannot ride a cause that has none. The skew rule is unchanged: a key this build does not know reads as `unrecognized` (`DAEMON_SUBMIT_VERDICT.md` §2.3), and a new rejection is still an added key (F38). The alternative keeps `cause` a keyword and adds a field `rule`, `null` for every cause but one.
+
+**IG-Q77 — `mine_status` — RULED 2026-11-10, as recommended; amends §18's Miner row.** Three keys arrived with the Rust miner, and two ruled rows need their kind stated.
+- `speed` is `{count, window}` since 3.65 (`T/mining.rs:150-155`): hashes counted over a window of complete seconds. §19 already walks `mine` → `speed` → `count` and `window`. *Recommended:* `speed` stays an object; `count` is an integer and `window` a `duration` (IG-Q54), zero before the first second completes. No rate is carried: a quotient read `0` for a miner below one hash a second.
+- `threads_count` (`T/mining.rs:204`) names its kind. §18 rules `threads`. *Recommended:* `threads`, an integer: the count the miner runs with, never the keyword `auto`, which is an input.
+- `height` (`T/mining.rs:217`), `block_reward` and the difficulty triple describe the posted job and read `0` when none is posted. *Recommended:* the job's three fields — `height` (the ordinal the block connects at), `reward` and `difficulty` — are `null` when no job is posted (RK-D23). `height` gains the parent `mine`.
+- `no_template` (`T/mining.rs:222`) is a diagnostic saying why no job is posted, or `null`. `no` is refused as a term (IG-4). *Recommended:* `cause`, which gains the parent `mine`: "why no job is posted", a diagnostic (§19) or `null` when one is. `address` is `null` when `mine-address` is unset, as §18 rules.
+
+**IG-Q78 — the template's nonce offset — RULED 2026-11-10, as recommended.** `get_block_template` carries `nonce_offset`: where the header's four nonce bytes sit, in both blobs (`T/mining.rs:47`). §18 has `reserved_offset` → `extra_offset` and no row for this one. *Question:* its name. *Recommended:* `nonce_offset`. `nonce` already has the parents `block` and `header`; it gains `template`, and `offset` gains the parent `nonce`: "where its bytes start".
+
+**IG-Q79 — a refusal over a resource bound — RULED 2026-11-10, as recommended.** Since 3.66 a bounded caller over a bound is refused with class `OverResourceBound` (-32003). Every list cap shares one diagnostic, `rpc.bound.exceeded`, which names the method in a parameter (`D/methods.rs:166-185`); the hash budget's is `rpc.bound.budget` (`D/hash_budget.rs:141-143`). A client that must tell one bound from another reads a method name out of a parameter, and that name changes at the rename. *Question:* what does a client branch on? *Recommended:* the class, then one dotted code per bound, each with the parameters `bound` (the limit) and `asked`:
+
+| Code | The bound | Value | Where |
+|---|---|---|---|
+| `bound.block` | blocks one `block_list` or one `block_header_list` by hash may name | 1,000 | `D/methods.rs:627`, `:963`; `D/read_methods.rs:490` |
+| `bound.header` | headers one `block_header_list` range may span | 1,000 | `D/methods.rs:631`, `:1026` |
+| `bound.tx` | ids one `tx_list` may name | 100 | `D/methods.rs:635`; `D/read_methods.rs:573` |
+| `bound.key-image` | key images one `chain_spent` may name | 5,000 | `D/methods.rs:639`; `D/read_methods.rs:636` |
+| `bound.pow-size` | the size of `pow`'s hashing bytes | `MAX_POW_BLOB_SIZE` | `D/read_methods.rs:191` |
+| `bound.hash` | the shared hash budget, when it cannot pay one hash | one hash | `D/hash_budget.rs:141` |
+| `bound.shard` | a bounded caller's shard fetch that would open a flight while another bounded caller's holds the one permit (IG-Q90) | one flight | after the ground, at `34255a8945`: the view desk's cache miss, `rust/shekyl-archival-fetch-sched/src/view.rs` (`ViewRefusal::Busy`); `D/shard_view.rs` |
+| `bound.sessions` | channel sessions one client key may hold at once (`RPC_CHANNEL.md` RT-O37); the session past it is answered with this code on its first request and closed | `SESSIONS_PER_CLIENT`, 4 | after the ground, RT-W11: `Sessions::register` in `D/channel/sessions.rs`, answered by `refuse_at_cap` in `D/channel/listener.rs` |
+
+The `pow` switch on a header read has no code (IG-F24), and a bounded `chain_coinbase_sum` waits for its one permit and is not refused. The method is never a parameter: the caller knows what it called.
+
+**IG-Q80 — `sync_status` — RULED 2026-11-10, as recommended; replaces §18's Sync status row.** CS-5 replaced the reply (3.68, `T/p2p.rs:267-334`). §18's `peer` (a list of connections) and `span` rows describe a block queue that is deleted. Several of the new keys break a rule: `address` holds a network location, which §3 reserves for `endpoint`; `claimed_height` carries a count (RW-Q4, IG-Q45); `_ms` and `_bytes` are units (RW-Q10); and `header_request` and `body_requests` use `request`, §11's payment request. *Question:* the reply's names. *Recommended:*
+
+| Today | Part F | Kind |
+|---|---|---|
+| `height` (a count) | `height` | integer, the tip's ordinal (IG-Q45) |
+| `target_height` (a count, always present) | `target_height` | integer, the ordinal of the best verified chain's tip |
+| `state` | `state` | one-of `unpeered`, `behind`, `following`, `synced` |
+| `stalled` | `stalled` | switch: behind, with nothing moving toward the target |
+| `peers` | `session` | a list, one element for each session chain sync holds; `[]` when none |
+| — `connection_id` | `connection` | the connection's id, as `peer_connections` gives it |
+| — `address` | `endpoint` | peer-endpoint |
+| — `claimed_height` (a count) | `height` | integer, the ordinal of the tip the peer claims; `null` before it has claimed |
+| — `mode` | `mode` | one-of `idle`, `reachable`, `slot`, `challenging`, `past-cap`, `evidence-candidate`, `evidence` |
+| — `header_request` | `header` | the header read in flight to the session, `{age, due}`, or `null` when none is |
+| — `body_requests` | `span` | a list of the body spans in flight; `[]` when none |
+| — — `start_height`, `count` | `from`, `blocks` | the span's first height, and its length |
+| — — `planned_bytes` | `size` | bytes: the response its deadline is planned for |
+| — `age_ms` | `age` | duration: since it was sent |
+| — `due_in_ms` | `due` | duration: until its response is late; `0` once it is |
+| — `rate` | `download_speed` | bytes per second its last response arrived at; `null` until one has |
+
+- `session` is a new term under `sync`: "a peer session chain sync holds". Its fields walk `sync` → `session`. `mode` and `due` are new terms; `stalled` is a new term under `sync`; `state` gains the parent `sync`; `connection`, `endpoint`, `height`, `header`, `span` and `download` gain the parent `session`; `age` and `due` sit under `header` and `span`. `header` under `session` is the read of headers in flight, which is §19's "with `show` and `list`, the read".
+- `no_view` is `unpeered`: no session has completed a handshake, which is `daemon_status`'s `peered` false. `no` is refused as a segment (IG-4, as Part E refused `not-installed`).
+- The timings are IG-Q54's `duration`, whole seconds: `age` rounds down and `due` rounds up, so `due` is `0` exactly when the response is late. The node's own test holds a deadline to a minute at most (`rust/shekyl-node/src/facts.rs:916`), and an operator reading a stall reads seconds. The alternative mints a second duration kind in milliseconds for these two fields alone.
+
+**IG-Q81 — a connection's claim and mode — RULED 2026-11-10, as recommended; amends §18's Connection row.** Since 3.68 `get_connections` takes two fields from chain sync's view: `height`, the block count the peer claims, and `state`, the session's mode (`T/p2p.rs:237`, `:250`); each is `null` for a connection chain sync does not hold. `sync_info` calls the same two facts `claimed_height` and `mode`. *Question:* one fact, one name. *Recommended:* on `peer_connections` they are `height` (the ordinal of the tip the peer claims, `null` before it has claimed) and `mode` (IG-Q80's keywords, `null` for a connection chain sync does not hold). `state` leaves the connection; its §19 row keeps `tor` and gains `sync` (IG-Q80), and `mode` gains the parent `connection`.
+
+**IG-Q82 — the connector rows on `daemon_status` — RULED 2026-11-10, as recommended; replaces six §18 rows.** Since 3.70 the Peers part reports one row for each connector the daemon runs, `connectors: [{connector, incoming_sockets, outgoing_sockets, white_peerlist_size, gray_peerlist_size}]` (`T/info.rs:396-407`); a connector it does not run has no row. `_sockets` and `_size` state a kind, `incoming` is ruled `inbound`, and an element that names its own connector lets one connector appear twice. *Question:* the field's shape and names. *Recommended:* `connector`, a map (IG-6) from connector — `clearnet`, `tor` — to that connector's counts: `inbound_count`, `outbound_count`, `peer_white_count` and `peer_gray_count`. A connector the daemon does not run has no key, and a name cannot appear twice, which is the reason IG-Q42 gave `option_set` a map. `connector` gains the parent `daemon`. Inside a connector's object the counts walk from its subject (`clearnet` → `inbound` → `count`) or by reference (`peer` → `white` → `count`); every edge exists. §18's six flat rows go. The alternative keeps a list whose element names its connector in `id`.
+
+**IG-Q83 — `relay_stats` — RULED 2026-11-10, as recommended.** §18 rules the reply's names. Two facts are unnamed. A tally's connector may be `unnamed`, "a successor whose connector has not been observed" (`T/p2p.rs:463-475`), a third value where §19's `connector` is one-of `clearnet`, `tor`; and a tally's `peer` is the connection's id, 32 hexadecimal characters (`T/p2p.rs:492-495`), where §18 says `peer` (bytes). *Question:* both. *Recommended:* a tally's `connector` is `null` when it has not been observed (RK-D23: no answer), so `connector` keeps its two values everywhere; `peer` becomes `connection`, the connection's id in the one encoding `peer_connections` gives it, so a reader can join the two replies. `connection` gains the parent `tally`. The method stays host-only (RT-O9.3).
+
+**IG-Q84 — the claim source's gather tip — RULED 2026-11-10, as recommended.** The reply carries the height it was gathered at (`chain_height`, `T/archival_reads.rs:88`) and not that block's hash, so the wallet cannot tell which chain the record was gathered on and brackets the read to close a reorg across it (FOLLOWUPS, "The claim-source reply should carry the hash of its own gather tip"). *Question:* the field. *Recommended:* `hash`, beside `height`: the hash of the block at `height`, read in the same snapshot. `hash` gains the parent `claim`, as `chain_height`'s reply pairs the two. The wallet's bracket goes when it reads the field.
+
+**IG-Q85 — a read about peers on an offline daemon — RULED 2026-11-10, as recommended.** A daemon started offline answers `sync_info`, `get_connections` and `/get_peer_list` with `{"status": "offline"}` alone (`T/p2p.rs:336-350`): it has no peers by configuration, and an empty list would read as a running node with none (Rick, 2026-10-14). `status` leaves every reply (RW-Q3). RW-Q3 keeps a state a reply legitimately describes as data and refuses where a method cannot answer. *Question:* which is this? *Recommended:* a refusal: class `RefusedByMethod`, diagnostic `p2p.offline`. The three methods have nothing to describe, the state itself is already data on `daemon_status` (`offline`), and a client branches on the dotted code. It is not `NotReady`: asking again does not help. The alternative applies IG-Q73's one-key form to a whole reply, `{"offline": null}`, which gives two list methods a reply that is not a list.
+
+**IG-Q86 — keywords and diagnostic codes on the wire — RULED 2026-11-10, as recommended.** IG-1 gives a path three renderings and says nothing of a keyword. Part E's keywords are hyphenated on the wire (`address-hiding`, `clearnet-only`, `restore-managed`), as §3's are (`complete-tree`); the keywords that arrived outside the grammar use `_` (`past_cap`, `held_overdue`, `already_in_pool`, `fee_too_low`). IG-11's diagnostic codes are dotted with hyphens inside a segment (`config.marker.network-id`); the daemon's RPC codes use `_` and negations (`mine.no_address`, `node.not_ready`, `rpc.grant.host_only`). *Question:* one spelling for each. *Recommended:*
+- **A keyword has one spelling on every surface**: lowercase segments joined with `-`, never translated (IG-1). `_` joins only the segments of a method, parameter or field name. A keyword may be an object's key where the object is a one-key state (IG-Q70, IG-Q73). The verdicts become `accepted`, `already-in-pool`, `already-in-chain`, `rejected`; the causes `malformed`, `fee-too-low`, `double-spend-conflict`, `stale-root`, `reference-too-recent`, `reference-unknown`, `consensus-rule`, `unrecognized`; the sync keywords as IG-Q80.
+- **No keyword and no code segment is a term IG-4 refuses**, as Part E refused `not-installed`: `reference_not_found` is `reference-unknown`, `no_view` is `unpeered`.
+- **A diagnostic code is dotted segments**, each lowercase and `-`-joined, none an IG-4 term. The first names what refused: a glossary subject (`mine`, `block`, `tx`, `txpool`, `p2p`, `daemon`), or `grant` or `bound` for RW-Q3's two classes that belong to no method. The rename PR rewrites every RPC code to that form and lists each in the registry `RPC_WIRE.md` RW-Q3 keeps: `mine.no_address` is `mine.address.unset`, and `rpc.grant.host_only` is `grant.host-only`. A code names one source. `node.not_ready` is raised for several today — a handle not yet supplied, a pool that was never supplied, a retired pool, a relay with no driver (`D/handles.rs:124-151`) — and each takes its own code; none is labelled with another's cause. The full list is the PR's error-code mapping, reviewed with it.
+
+**IG-Q87 — enrollment's names — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 names enrollment `shekyld rpc-enroll FINGERPRINT --ceiling GRANTS` and `shekyld rpc-revoke FINGERPRINT`. Both contradict landed rulings. IG-Q8 (2026-11-03): a bare word on `shekyld` is `config.cli.syntax`, and daemon commands are `shekyl-cli` words. IG-3: a command is a path, not a hyphenated verb. And §5 itself says enrollment runs over the channel, so each act is a method with a grant (`enroll`), and its `shekyl-cli` word is that method's path. *Question:* names for five acts: enroll a fingerprint with a ceiling; change an enrolled ceiling; revoke; list the enrolled set; show this daemon's public bundle. *Recommended:* the `ban` pattern, one verb per change (IG-Q44):
+
+| Word | Method | Parameters | Grant |
+|---|---|---|---|
+| `rpc client add <fingerprint> --ceiling <grants>` | `rpc_client_add` | `fingerprint`, `ceiling` | enroll |
+| `rpc client set <fingerprint> --ceiling <grants>` | `rpc_client_set` | `fingerprint`, `ceiling` | enroll |
+| `rpc client remove <fingerprint>` | `rpc_client_remove` | `fingerprint` | enroll |
+| `rpc client list` | `rpc_client_list` | — | enroll |
+| `rpc bundle show` | `rpc_bundle_show` | — | enroll |
+
+- `add` on an enrolled fingerprint is refused and names `set`; `set` on one not enrolled is refused and names `add`. Each call is bounded by §5's rule: the ceiling given, and the ceiling of the key being changed or removed, lie within the caller's effective grant. `list` returns the enrollments whose ceiling lies within it; the others are absent.
+- `remove` closes every live session the fingerprint holds, and so does a `set` that lowers the ceiling (`RPC_CHANNEL.md` §5): the client reconnects to receive the new grant.
+- A ceiling is stored and listed as its expanded grants, never as a preset's name. A request may name presets. A record that kept the name would widen every key enrolled under it when the preset's definition changed.
+- The console key is not an enrollment (§5). It is never in `rpc_client_list`, and `rpc_client_remove` and `rpc_client_set` cannot name it.
+- `fingerprint` is kind `hash`: 32 bytes (RT-O14). `ceiling` is a list of one-of the grant and preset keywords of `RPC_CHANNEL.md` §6.1. `rpc_bundle_show`'s reply is `{"bundle": b}`, kind `bytes`.
+- New terms: `client` under `rpc`, "a client identity enrolled on this daemon: a fingerprint and its ceiling"; `bundle` under `rpc`, "this daemon's static public keys, given to a client that will be enrolled"; `fingerprint` and `ceiling` under `client`. `add`, `set`, `remove` and `list` gain the parent `client`; `show` gains `bundle`.
+- `client` is used nowhere else as a term. `bundle` appears in prose for the Tor bundle and the witness bundle; neither is a name in any table, so the term has one meaning.
+
+**IG-Q88 — the console key's reset — RULED 2026-11-10, as recommended.** `RPC_CHANNEL.md` §5 rules an offline, local reset of the console key that takes the data home's exclusive lock, so by design it cannot run over the channel, and it is therefore no method and no `shekyl-cli` word. Under IG-Q8 `shekyld` has no command words. *Question:* where does it live? *Recommended:* a `shekyld` switch, `--rpc-console-key-reset`, given on the command line only (IG-7), the shape `config-verify` already has (IG-Q58): a switch that selects what the process does and exits. It takes the lock, replaces the console enrollment, writes the new private half and exits without starting the node; it is refused in a run mode that has no console key, and while the lock is held. IG-Q8 refuses bare words, not a one-shot switch. New terms: `console` under `rpc`, "the console key: the host administrator's credential in service mode"; `reset`, a verb under `key`; `key` gains the parent `console` and its meaning widens from "only in `key image`" to "a key: under `spent`, in `key image`; under `console`, the console key".
+
+**IG-Q89 — what a re-offer and a flush answer — RULED 2026-11-10, as recommended.** `relay_tx` and `flush_txpool` name ids and reply `status` alone (`D/pool_methods.rs:184-208`). Both hold the `node` grant, and a `node` key is bounded; entries not yet public are host-only (RT-O9.3). A reply that lets a bounded caller tell "held here, unpublished" from "not here" tells it this node originated the transaction, and so does a re-offer the caller can watch arrive on the network. *Question:* the reply, and what a bounded caller may cause. *Recommended:* each replies a list in selector order (IG-Q53): the id where the act was done, `{"missing": null}` where the pool the caller may see holds no such entry (IG-Q73). For a caller without the host's view an unpublished entry is not in that pool: its slot is `{"missing": null}` and the daemon neither re-offers nor removes it. The host's administrator sees and acts on every entry. A retired pool refuses the whole call (`NotReady`, `txpool.retired`). `txpool_flush` with no `id` removes every entry the caller may see and replies their ids.
+
+**IG-Q90 — what one `shard_fetch` may cost — RULED 2026-11-10, as recommended.** `request_archival_shard` holds the `node` grant. Its view desk caches one view for each closed shard and runs one flight for each shard asked (`rust/shekyl-archival-fetch-sched/src/view.rs:140-158`); a flight reads the whole shard from its holders through the node's Tor. `RPC_CHANNEL.md` §6.3 bounds the four caps, the hash and the coinbase read, and names no bound here, so a bounded caller naming many closed shards opens as many flights. *Question:* the bound. *Recommended:* §6.3 gains it, in the coinbase read's shape: bounded callers share one shard-fetch permit, a cached view takes none, and a bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`. The flight a refused caller did not open is not queued. **The producer's reads come first.** The scheduler is the one the bundle producer reads through, whose challenge reads have deadlines (`CHALLENGE_TIMEOUTS`); a missed read is a missed witness duty. So the permit caps bounded callers at one flight in total, the producer's reads take the client's `READS_AT_ONCE` slots before any view flight, and the host's own flights, which take no permit, yield to the producer too. A node with Tor off has no client to read through: `shard_fetch` refuses there with `RefusedByMethod`, `shard.tor-off`, never with "no skeleton".
+
+**IG-Q91 — `shard_fetch`'s grant — RULED 2026-11-10, as recommended; amends `RPC_CHANNEL.md` §6.1.** `request_archival_shard` holds `node`, the control grant (§6.1). The wallet reads a closed shard's view through it (`rust/shekyl-wallet-contract/src/shard_view.rs:117`), and neither the `wallet` preset nor the view listener holds `node`, so a wallet's `get_shard_view` is refused by its grant before it reaches the desk. What the method reads is public, closed history. The grant stood in for the cost, and IG-Q90 bounds the cost. *Question:* which grant? *Recommended:* `chain`, bounded by IG-Q90. A site relaying strangers through a `view` key can open at most one flight at a time; a cached view is free; the producer keeps its slots. The alternative keeps `node`, and a wallet without `node` cannot read a closed shard's view.
+
+**IG-Q92 — the writer's halt — RULED 2026-11-10, as recommended.** The chain store's writer halts when a connect or a pop hits a store invariant: it refuses until restart, and reads stay open (`DAEMON_REDB_STORE.md` §3.6.2; IG-F22). The tip a halted node serves is stale, and nothing on the wire says so. The wire type exists as `{"state": "live"}` or `{"state": "halted", "at_height": h, "row": n}` (`T/chain.rs:656-668`); `at_height` and `row` are not paths, and `row` is not a term. *Question:* the field, where it lives, and who may read it. *Recommended:* `writer`, on `chain_height`, the tip read, and on `daemon_status`, in IG-Q70's form: `{"live": null}`, or `{"halted": {"height": h, "invariant": n}}`, where `height` is the ordinal the halting connect or pop was working at and `invariant` is the `SI-` row of `STORE_INVARIANT_REGISTER.md` that caught it, an integer. Grant: `health` on `daemon_status`, and `chain` with the tip. Whoever reads the tip can know it is stale, a site that relays a halted node included. New terms: `writer` under `chain` and `daemon`, "the chain store's writer: live, or halted on an invariant"; `invariant` under `writer`. `height` gains the parent `writer`.
+
+**IG-Q93 — when the Tor state began — RULED 2026-11-10, as recommended; amends IG-Q69 and §23's `tor.since` row.** §23 rules `tor.since` a time, unix seconds: when `state` began. A reading of the node's wall clock is wrong exactly when the cause is `clock-skew`, because the node's clock is the thing that is wrong; and a client on another machine subtracts its own clock from it, so what it computes is the skew between two machines added to the age. *Question:* does `tor.since` stand? *Recommended:* it becomes `tor.age`, a `duration` in whole seconds taken from the monotonic clock: how long `state` has stood, as IG-Q80 uses `age`. An age is right under a skewed clock and needs no second clock to read. Its one cost is that it is true as of the reply, which every polled field already is. `age` gains the parent `tor`, and `since` leaves §19. The Tor supervisor lane's PR writes the field as `tor.age`.
+
+**IG-Q94 — a selector on the wire — RULED 2026-11-11, as posed; amends §17, §19 and §18.1.** §17 writes the selector of `block_header_show`, `block_show` and `curve_show` as `{"height": n}`, `{"hash": h}` or `"tip"`, beside the switches `pow` and `prune`. RW-Q2 makes `params` a named object, so a bare `"tip"` cannot stand beside a switch; and §18.1 walks `height` and `hash` as parameters of their own. *Question:* how does a call name its item? *Recommended:* `params` carries **exactly one** of the keys `height`, `hash` and `tip`, beside the method's switches: `{"height": 7, "pow": true}`, `{"hash": h}`, `{"tip": null}`. `tip` takes IG-Q70's form, a key whose value is `null` because it has no payload.
+- **Exactly one, never zero.** A call that names no selector is refused (`BadParams`), and never means the tip: a client that dropped `height` by mistake would otherwise read the tip's header in place of block *n*, and a scan might never notice. Two selectors are refused the same way.
+- **The walk changes.** `tip` was a value keyword (§19, "a header, block or curve selector"). Under this form it is a parameter, so it leaves the value-keyword list and is a term under `block` and `curve`, "the chain's last block, as a selector; its value is `null`"; §18.1's selector rows gain `tip`; §17's three cells read `height`, `hash` or `tip` (exactly one). All three are recorded in place.
+- **The alternatives are worse.** A parameter `block` holding the selector repeats the method's own subject and adds a name. `"tip"` inside `height` gives one field two encodings, which RW-Q4 refuses.
+- **Built by hand.** serde's `flatten` turns `deny_unknown_fields` off, so the request type has its own `Deserialize` and its own schema shape (one of several keys, flattened), and `conforms` refuses a call with no selector and one with two.
+
+**IG-Q102 — a block's bundle section on the wire — RULED 2026-11-12 (Rick), as recommended, and the header uses it too.** The 4b switch (`SO-D12`) replaces the header's attestation root with the root of the block's bundle section (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5), and a block now carries that section: the references to the serve-credit bundles it admits, and the bodies a node holds for them. A client that captures or replays a chain needs both. The 4.0 wire names the root `attestation_root`, under the term `attestation` ("the attestation tree"), which names a structure that no longer exists. *Question:* what are the root, the references and the bodies called? *Recommended:* a new term `section` under `header` and `block`, "a block's bundle section", so the header's field is `section_root`, a block's references are `section` (a list of bytes, in section order) and the bodies are `section_body` (a list of bytes, in no set order). `root` and `body` gain `section` as a parent; `attestation` leaves the glossary.
+- **Not `bundle`.** `bundle` is already a term, under `rpc`: this daemon's static public keys (IG-Q87). A term has one meaning, so a serve-credit bundle cannot take it.
+- **`section`, not `reference`.** The section *is* the list of references, in the order the header's root commits; a second term for each element would add a name for no reader.
+- **The bodies ride beside the references.** A reader matches each body to its reference by hash, as P2P 2014 carries them; a body this node no longer holds is simply absent from the list.
+- **The header field and its type take the term too.** The root commits the section, one reference per admitted bundle, so the block header's field is `section_root` and its type `SectionRoot` across the wire, types, rules, store and RPC. No wire byte changes; the domain label stays `shekyl/archival-bundle-root-v1`.
+
+---
+
+## 27. Part G — the Tor supervisor's states added since Part E
+
+**RULED 2026-11-11 (Rick): IG-Q95…IG-Q101 as recommended, with amendments to IG-Q95 and IG-Q96.** Ground: `dev` `3dbd148ac` (#1343 merged). `INPUT_GRAMMAR.md` §25–§26 and IG-Q73…IG-Q94 are Part F, held on the rename PR (#1344); this Part numbers after them so the two land in either order. Part F's rulings this Part relies on: IG-Q70's one-key cause, IG-Q86's keyword spelling, IG-Q93's `tor.age`. The Tor supervisor lane proposed nine rows for states the supervisor has grown since Part E (2026-10-24), each anchored in `rust/shekyl-tor-control-client/src/supervisor/` (`P/` is `posture.rs`, `CL/` is `clock_line.rs`). The design review read them on 2026-11-11. Every field below is under the `status` grant. The supervisor lane carries this Part in its status PR (Rick, 2026-10-17: the lane that needs a grammar change makes it in its own PR), and its shared status crate writes these names.
+
+The rule each row is held to: **the wire carries exactly what the renderer reads.** A fact the shared renderer speaks from goes on the wire; a fact it does not read stays in the log.
+
+### 27.1 Findings
+
+- **IG-F26 — the install defect's path.** `Cause::PinRefused` (`P/posture.rs:200`) carries no path, and the core's `Input::PinRefused` drops the one the pin error holds. §23's `install-defect` payload is that path. The supervisor lane's PR keeps it; no name changes. *Closed 2026-11-12 (Rick):* the path stays in the daemon's log. `install-defect`'s payload is null, and the daemon logs the file and the reason at the start and at every running re-check that refuses.
+- **IG-F27 — a dangerous version is `flagged`, not a cause.** `Cause::DangerousVersion` (`P/posture.rs:239`) projects to `flagged` true with `cause` null, as IG-Q70 ruled. No row.
+- **IG-F28 — soak telemetry stays off the wire.** `Status::stuck_upload_rounds` (`P/posture.rs:559`) is "telemetry for the soak, never a cause". The renderer does not read it, so it stays in the log.
+- **IG-F29 — the clock's lag has one home.** `Status::clock_behind` (`P/posture.rs:563`) is computed from the onion's cause and nothing else (`core/clock.rs:248-256`: `Some` exactly while `InboundCause::ClockBehind` stands). On the wire it is that cause's payload (IG-Q96), and the clock sentence's reach clause reads it there.
+- **IG-F30 — two clock readings.** `Inbound::Reachable { evidence_at }` and `Inbound::Unreachable { since }` (`P/posture.rs:146-160`) are readings of the node's clock. Under IG-Q93 the wire carries ages; IG-Q96 writes them as `age`.
+
+## 28. Questions for Part G
+
+Each is ruled (Rick, 2026-11-11). Each states the problem, then the question, then the recommendation that was ruled, and an amendment in its own line. A question that amends a ruled row names it, and the row carries the amendment.
+
+**IG-Q95 — the clock's cause — RULED 2026-11-11, as amended; amends §23's `clock-skew` row.** Tor reports a wrong clock three ways. `CLOCK_SKEW` gives a measured offset (`SKEW=`) or a lower bound (`MIN_SKEW=`) (`Cause::ClockSkew { skew: ReportedSkew::{Measured, AtLeast} }`, `P/posture.rs:169-225`); and relays' certificates read as expired or not yet valid from enough relays that the clock is the cause, with no figure at all (`Cause::CertificatesOutOfDate`, `P/posture.rs:230`). §23's `clock-skew` carries a signed integer, which holds neither the bound nor the absence of a figure. All three tell the operator one thing, that the clock is wrong, and offer one fix. *Question:* one key or two, and what payload? *Recommended:* one key. `clock-skew`'s payload is `null` when Tor stated no figure (RK-D23: no answer), else `{"skew": s, "measured": m}`, where `skew` is a signed integer, seconds (IG-6, the row allows the sign), as §23's `clock-skew` payload already is; negative is behind the network, positive ahead. It is the registry's `signed` kind, not `duration`, which IG-Q54 rules unsigned and `measured` is a switch, false when `skew` is a lower bound. Shown `impaired`. The renderer picks its sentence from the payload: a figure is "This computer's clock is [at least ]<span> behind|ahead of the Tor network's", `null` is "Tor reports that this computer's date or time looks wrong" (`CL/clock_line.rs:28-58`). The alternatives: the supervisor lane's two keys, `clock-skew` with `{seconds, bound}` and `clock-wrong` with `null` (`seconds` names a unit, which RW-Q10 refuses); or a keyword `bound` (`measured`, `at-least`), where a switch says the same with no new keywords. No term was added: the ruling (below) puts the figure's nature in the payload's key.
+
+*Ruling (Rick, 2026-11-11):* `clock-skew` is `null`, `{"measured": s}` or `{"minimum": s}`, in IG-Q70's form, with no switch. `s` is a signed integer, seconds. One key, as recommended; the payload's keys say whether the figure was measured or is a lower bound, so no `skew` or `measured` term is added.
+
+**IG-Q96 — the onion's reachability — RULED 2026-11-11, as amended; amends §23 and IG-Q69.** The supervisor keeps the onion's state apart from the outbound cause, because a blocked outbound link and an unreachable onion can stand together and one `cause` cannot hold both (`Status::inbound`, `P/posture.rs:146`, `:555`): not offered, publishing, reachable (the last probe arrived), or unreachable with a cause (`InboundCause`, `P/posture.rs:118`: the probe timed out, uploads were refused, the clock is behind by at least a span, the descriptor was not found). §23 has one key for all of it, `onion-unreachable`, and a field `facet` (`outbound`, `inbound`, or null) to say which side is down. *Question:* how does the onion's state reach the wire, and does `facet` stay? *Recommended:*
+- `tor.onion`, `null` when no onion is offered, else `{state, age, cause}`. `state` is one-of `publishing`, `reachable`, `unreachable`; `age` is how long the state has stood, a duration from the monotonic clock (for `reachable`, since the last probe arrived; IG-F30); `cause` is `null` unless `state` is `unreachable`, and then one key: `probe-missed`, `uploads-refused`, `descriptor-missing` (each `null`), or `clock-behind` (a duration, a lower bound; IG-F29).
+- **An age is awake time, on every platform** (Rick, 2026-11-11). It is taken on the supervisor's monotonic source, the clock its policy windows run on, so an age and the windows agree. That source counts awake time on Linux, macOS and Windows alike.
+- `onion-unreachable` leaves `tor.cause`'s keys. `tor.cause` is the outbound and process cause alone.
+- **`facet` goes.** With the onion read from `tor.onion`, `facet` could only be `outbound` or `null`, and every outbound cause already says it is outbound. A field left with one value repeats another field.
+- `onion` is §3's "this node's v3 onion service", the meaning it has under `tor`; this names its state. The supervisor lane proposed `tor.inbound`, but `inbound` under `tor` already means "connections other nodes open to us" (§19), a count's subject.
+- New edges: `state`, `age` and `cause` gain the parent `onion`. Keywords: `publishing`, `reachable`, `unreachable`, `probe-missed`, `uploads-refused`, `descriptor-missing`, `clock-behind`.
+
+*Ruling (Rick, 2026-11-11):* as recommended, and an age is awake time on every platform. `tor.onion`; `onion-unreachable` leaves `tor.cause`; `facet` goes.
+
+**IG-Q97 — the storage hold's payload — RULED 2026-11-11, as recommended; amends §23's `unusable` row.** `Cause::DirectoryUnusable { path, space }` (`P/posture.rs:211`, `Space`: `:253`) carries the free and the needed space when the pre-spawn check found too little, and nothing when the directory could not be used otherwise. §23 rules the payload a keyword, `unwritable` or `exhausted`, or `null`. The supervisor produces `unwritable` nowhere today. *Question:* does `exhausted` carry its figures, and in what form? *Recommended:* the payload takes IG-Q70's form one level down: `{"exhausted": {"free": b, "needed": b}}` (both bytes), `{"unwritable": null}`, or `null` for any other failure. The path stays off the payload, as §23 rules: it is `data-dir`, under the `config` grant, so a renderer whose caller holds `config` names it and one whose caller does not says "Tor's data directory". `free` is §19's term under `disk`, which the payload's holder is; `needed` is a new term under `disk`, "the space Tor needs there". The alternative is the supervisor lane's `{kind: exhausted, available, needed}`, which puts a keyword field inside a payload that a one-key state already names.
+
+**IG-Q98 — how a bootstrap is going — RULED 2026-11-11, as recommended.** The supervisor classifies a bootstrap (`BootstrapLine`, `BootstrapPace`, `P/posture.rs:302`, `:335`) against `Policy::alive_every`, a daemon-side span the client cannot see (`BootstrapReading::classify`, `P/posture.rs:663-690`). So the reading cannot be derived on the client, and Rick ruled the word a client shows (2026-10-24). It has a fourth reading the current `pace` field omits: the percent held and the bytes cannot be called. *Question:* the field. *Recommended:* `tor.bootstrap`, `null` before the first window, else `{pace, unchanged, download, window}`: `pace` one-of `advancing`, `slow`, `stalled`, `held`; `unchanged`, how long the percent has not moved, a duration; `download`, the bytes that arrived in the window, or `null` when they cannot be read; `window`, the window, a duration. `tor.progress` stays as ruled. The renderer reads all four (`P/posture.rs:704-733`). Names: the supervisor lane's `held` for the duration would give §11's view `held` a second meaning, which IG-2 refuses, so the duration is `unchanged`; its `received` is §3's `download`, "bytes we receive". New terms: `bootstrap` under `tor`; `unchanged` under `bootstrap`; `pace`, `download` and `window` gain the parent `bootstrap` (Part F, IG-Q80, removes the sync span's `pace`, so the term keeps one meaning once both land).
+
+**IG-Q99 — the quiet line — RULED 2026-11-11, as recommended.** The dialer's Tor census can hold no address at all, so nothing can be dialled; or it holds peers and none has answered through Tor for a span in which a Tor dial failed (`TorQuiet`, `P/posture.rs:504`; quiet after 120 s). Its facts, the dialer's census and its last sign of life through Tor, exist under every `tor` setting, an operator's included; today only the managed projection computes the line (`core/mod.rs:1012`). Rick's ruling of 2026-11-10 runs the status actor under every `tor` setting, so the line is computed under every setting; and a fact of the connector belongs beside the connector's other facts, not inside an object that is `null` unless the posture is `managed`. `no-peers` is refused by IG-4, and is not `unpeered` (IG-Q80), which is about handshakes. *Question:* the field and its states. *Recommended:* `tor_quiet` on `daemon_status`, beside `sync_connector`: `null` when no quiet line stands, `{"empty": null}` when the census holds no Tor peer, `{"failing": {"age": s}}` when peers are known and none has answered for `s` seconds. It walks by reference, `tor` then a new term `quiet`, "no peer has answered through Tor". The alternative is the supervisor lane's `unknown-peers` and `{"unanswered": s}`; `unanswered` is already §23's control-reply cause, and a keyword keeps one meaning.
+
+**IG-Q99 amended 2026-11-15 (Rick).** The line stands only when the Tor Manager's onion-path reading is impaired, peers are known, and a Tor dial has failed since ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.5a; [`DIALER_OUTAGE_EVIDENCE.md`](DIALER_OUTAGE_EVIDENCE.md) §6). No line stands while no peer is known, so `empty` is gone; `failing`'s age meant time since a peer last answered, which no longer fits, and it is gone too. The one state is `unreached`, carrying the age of the impaired reading. `impaired` is not taken: it is already `tor.state`'s Degraded, a named cause, and a keyword keeps one meaning. The field decodes strictly: a client that knows only `empty` and `failing` reads `unreached` as an unknown key.
+
+**IG-Q100 — what the link still carries — RULED 2026-11-11, as recommended.** The renderer reads whether the link carries traffic (`Carriage`, `P/posture.rs:794`, from the phase and the outbound facet, `core/mod.rs:1495-1510`): it carries; only connections already open still carry; or nothing does. It cannot be derived from `state`: an outbound cause during bootstrap and the same cause on a running Tor are both `impaired`, and only one still carries. The sentence under `origination` reads it (`P/posture.rs:764-772`, `:854-866`). *Question:* the field. *Recommended:* `tor.carriage`, one-of `carries`, `open-only`, `gone`; a new term `carriage` under `tor`, "what the link still carries". One caution for the ruling: §3 gives `carrier` one meaning, the serve-credit witness carrier, and `carriage` sits close to it. The alternative is `tor.reach`, with the same values.
+
+*Ruling (Rick, 2026-11-11):* `carriage`.
+
+**IG-Q101 — two restart causes — RULED 2026-11-11, as recommended.** Two causes restart Tor and have no key: Tor refused to publish the onion again after it was found unreachable, and the remedy escalated to a respawn (`Cause::OnionRefused`, `P/posture.rs:243`); and Tor reported a clock jump during bootstrap, then neither its percent nor its bytes moved for the bound (`Cause::StrandedAfterClockJump`, `P/posture.rs:248`). *Recommended:* `onion-refused` and `stranded`, each with payload `null`, shown `restarting`, and no fix (`P/posture.rs:954-968`). Both pass IG-4.
+
+## 29. Part H — the owner's socket and the service mode
+
+**RULED 2026-11-12 (Rick): IG-Q103 and IG-Q104 as posed; IG-Q105 as ruled.** RT-W10's third step builds the owner's socket and its rendezvous ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §7.1; the step's row in [`RPC_CHANNEL_RT_W10_PREFLIGHT.md`](RPC_CHANNEL_RT_W10_PREFLIGHT.md) §5). Two of its inputs had no row (F-15: "no socket-directory option or instance option"), and a daemon run as its user now refuses to start without a session directory, which every service manager's daemon lacks. This Part names the two inputs and rules the service mode those daemons take.
+
+**IG-Q103 — the instance name — RULED 2026-11-12, as posed.** `instance`, a `name` (IG-6) whose rule is the owner's: 1 to 16 lower-case letters, digits or hyphens, starting with a letter or a digit, and `default` refused by name (§7.1, `shekyl-rpc-rendezvous`'s `InstanceName::parse`). Unset is the default instance, the one a client means by "this computer". The name is hashed into the rendezvous with the network id and never becomes a path or an IPC name. A named instance is a second node, so it names its own `data-dir` or the start refuses (`config.value.requires`). Command line and file. The term `instance` is a root of the glossary (§3).
+
+**IG-Q104 — the socket directory — RULED 2026-11-12, as posed.** `rpc-socket-dir`, a path: the directory for the owner's socket where the account has no session directory. Session-less test hosts (CI and the regtest harnesses) create it and pass it. It is asserted, not adopted: it must exist, be a directory and not a link, be owned by the daemon's account, have mode 0700, and be on a local filesystem; otherwise the start refuses, naming the condition that failed (`config.socket-dir.unusable`). A socket path over the platform's limit is refused with the path and the limit (`config.socket-dir.path-long`). With neither this nor a session directory, a daemon run as its user refuses and names the three ways forward: `service`, `loginctl enable-linger`, or this option (`config.socket-dir.none`). On Windows, whose owner's leg is a pipe named in a rendezvous file, the option names the rendezvous directory in place of `%LOCALAPPDATA%\Shekyl\rendezvous`, and the harness leaves it to the daemon to create, labelled, since an existing directory without the label is refused. `dir` gains the parent `socket` (§3).
+
+**IG-Q105 — the service mode on every platform — RULED 2026-11-12; amends IG-Q36.** `service` is accepted on every platform. On Linux, FreeBSD and macOS it means only that this is the machine's service instance: it serves no same-user socket (§7.1), and it takes the machine-wide rendezvous in the service's rendezvous directory once RT-W10's channel step builds the channel. On Windows it also answers the service manager, and that dispatcher stays RT-W14's, so a Windows start refuses the switch until then. The service's rendezvous directory is fixed per platform and separate from `data-dir`: `/run/shekyl` on Linux (the unit's `RuntimeDirectory=shekyl`, `RuntimeDirectoryMode=0755`), `/var/run/shekyl` on FreeBSD (Rick, 2026-11-14; the rc.d script's `start_precmd` creates it with `install -d -o shekyl -g shekyl -m 0755`, and the daemon checks it exactly as on Linux), `/Library/Application Support/Shekyl` on macOS (the installer's), `%ProgramData%\shekyl\rendezvous` on Windows (amended 2026-11-14, below). A service daemon checks it rather than adopting it, and refuses naming the condition that failed (`config.service.rendezvous`): it exists, it is not a link, it is owned by the daemon's account, it is not writable by its group or by others, and the daemon is not root. A non-service account that gives `service` is refused there, before the start touches anything. A service daemon keeps the plaintext loopback listeners (RT-O33). A service is given no socket directory: `rpc-socket-dir` with `service` is refused (`config.value.conflict`). The seeds' units and the package's unit pass `service`. A Windows start's refusal is `config.service.platform`, "not available on this platform yet", naming RT-W14. **Amended 2026-11-14 (Rick, RT-W10 step 4), amending IG-Q36 as well:** a service's data home is a fixed root per platform: `/var/lib/shekyl` on Linux (the unit's `StateDirectory=shekyl`, `StateDirectoryMode=0700`; the unit passes no `data-dir`), `/var/db/shekyl` on FreeBSD (the rc.d script's prestart makes it at mode 0700 and passes no `data-dir`) and on macOS (the installer's), `%ProgramData%\shekyl` on Windows, unchanged, its ACL admitting the service account and Administrators only. The daemon checks it and never creates it: it exists, is not a link, is owned by the daemon's account, has mode 0700 (on Windows that ACL), and the daemon is not root; otherwise `config.service.root` names the condition. An explicit `data-dir` with `service` gets the same checks. The key, the channel bundle, the console key and the enrolled set live in the network's data directory, the one the exclusive lock covers (RT-O34). `rpc-socket-dir` is refused on Windows (`config.socket-dir.platform`): it does not name the rendezvous directory. On Windows the service's rendezvous directory is `%ProgramData%\shekyl\rendezvous`, inside the data home: users can read it, only the service account can write to it, it carries the no-read-up label and holds rendezvous files only. The daemon creates it, with its owner, permissions and label set in the creating call; an existing one is checked on all three and refused if any differs, never adopted. A client that cannot open a service's record for lack of access reports an access failure, never "not running". RT-W14 builds this with the Windows service, and RT-P8 measures it then (`RPC_CHANNEL.md` §7.1). **Amended 2026-11-18 (Rick), withdrawing the Windows rendezvous directory above:** On Windows the service's rendezvous record is a registry value under `HKLM\SOFTWARE\Shekyl\Rendezvous`, always in the 64-bit view, named for the network and instance as the file is elsewhere (Rick, 2026-11-18). **The threat that decided it:** a local account can hold a world-readable file open without delete sharing, and then nothing can replace or remove it, so any local account could block the service's publish; a registry value is written whole and removed whatever readers hold the key. The value is written at each publish and removed at a clean stop only while it still holds this daemon's record. The Windows installer creates the key, once, together with the service account (RT-W14), with its final DACL: owner Administrators or SYSTEM, every account may read, only the service account, Administrators and SYSTEM may write; no installer amends an existing key's DACL. The daemon checks the key before it publishes and never creates it: a missing key, or one whose owner, readers or writers differ, refuses the start (`config.service.rendezvous-key`), naming the key and what its DACL must be, as `config.service.root` names the data home. `shekyl-rpc-rendezvous` keeps one reader API over the value and the file. Nothing publishes or reads it until RT-W14 builds the Windows service. Linux, FreeBSD and macOS keep the single file in the service's rendezvous directory, where nothing can block a rename.
+
+---
+
+## 30. Part I — the owning connection
+
+**RULED 2026-11-12 (Rick), in the GS-C3 brief (the GUI repository's [`GUI_SYNC_LANE.md`](https://github.com/Shekyl-Foundation/shekyl-gui-wallet/blob/dev/docs/design/GUI_SYNC_LANE.md)); the option's name is derived from the glossary (rule 83).** A wallet that starts its own daemon (the GUI's "this computer") needs the daemon to stop when the wallet goes, however it goes, and to say when it can be called. A pid or a timer answers neither: a pid outlives a crash's reuse, and a timer guesses. The owning connection answers both with the one thing every operating system closes on a process's death: a socket.
+
+**IG-Q106 — the owning connection — RULED 2026-11-12.** `owning-connection`, an integer ≥ 3: the number of one end of a connected stream socket pair the starting process created and handed the daemon by inheritance (a descriptor on Unix; a socket handle on Windows, inheritable across the spawn and nothing else). The glossary gains `owning` (a root: the process that started this daemon and holds its life) and `connection` gains the parent `owning`. **The name and the root confirmed 2026-11-13 (Rick):** "owner" stays the authority word (the owner's leg, at the owner's authority); "owning" names the process whose life holds the daemon's.
+
+- **Command line only.** The value names a descriptor of this one process start; a file's value would name another's. A file's `owning-connection` is `config.value.surface`.
+- **Not with `service`.** A service is started by the service manager, which holds its life by its own means; the pair is refused (`config.value.conflict`).
+- **Adopted first.** Before the walk, the lock or any child: the end is checked to be a connected stream socket above the standard streams, then made close-on-exec (Unix) or not inheritable (Windows), so the managed Tor and the notify commands never hold a copy that would keep the connection open after the daemon's death. 0 to 2 is `config.value.range` (the table's floor). Anything else that fails is `config.owning-connection.unusable`, naming the condition: not open, not a socket, not a stream socket, not connected. The checks are for a clear error, not a defence: the process that passes the number is the operator.
+- **Readiness.** The daemon writes `shekyld-ready 1` and a newline once, when its owner's leg is bound, served and published, and never writes again. A start that refuses writes no line: the connection closes, and the exit status and standard error say why.
+- **Life.** The starting process sends nothing. Bytes it sends are read and discarded, and the first is logged once. End of stream or a read error is a clean stop through the one stop owner, announced as "the process that started this daemon closed its owning connection". The rendezvous watch (§7.1) stays: either one stops the daemon.
+- **Not a control channel.** Calls go over the owner's leg, found through the rendezvous, at the owner's authority (`RPC_CHANNEL.md` RT-15). The owning connection carries the daemon's life and its readiness, and nothing else.
+
+---
+
+## 31. Part J — a block's draw count
+
+**RULED 2026-11-14 (Rick), for the `SO-D12` 4b evidence (#1373).**
+
+**IG-Q107 — a block's draw count on the wire — RULED 2026-11-14 (Rick).** The emission walk paces its mining at the heights that drew, and reads them as any peer would, over the public RPC (`SO-D12` 4b evidence, #1373). A block's draw count `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3) is consensus state every node writes at connect, and a filed bundle's reference carries the same count (`SCS-P39`); it names no pair, since the draw selection stays secret until the reveal. *Ruled:* `block_show` and `block_list` carry each block's `draws`, a count; `null` where this node holds no row: an alternative block, or a height below the draw rows' floor (SI-34). `draws` joins the glossary under `block`. 4.5.
+
+---
+
+## 32. Part K — the channel's clients and the tunnel
+
+**RULED 2026-11-15 (Rick), as recommended**, in RT-W11's pre-flight
+([`RPC_CHANNEL_RT_W11_PREFLIGHT.md`](RPC_CHANNEL_RT_W11_PREFLIGHT.md) §4).
+The tunnel ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §8) always speaks the
+channel; a CLI on another host speaks it when told to. One table serves
+both, so each name means the same thing in both, and existing names are
+reused where they fit.
+
+**IG-Q108 — the channel client's rows — RULED 2026-11-15, as recommended.**
+`daemon-endpoint` and `daemon-socks` are reused as they are (IG-Q31).
+`daemon-bundle-file`, a path: the node's bundle as `rpc bundle show`
+prints it (the `bytes` kind's base64); set, it selects the channel, and
+it is unconstructible with `daemon-socket-file`. `rpc-key-file`, a path:
+this client's channel key, readable by this account alone, refused if
+another can read it and never repaired; its default is the account root
+and `rpc-<binary>-<network>.key`. `rpc-grant`, the tunnel's only: the
+grants its sessions ask for, grant and preset words, the option repeated
+(IG-6), default `view` (`RPC_CHANNEL.md` §6.2). In RT-W11 the two new
+rows move only the five enrollment words onto the channel; the CLI's
+other words and the wallet session's daemon leg stay until RT-W12. An
+enrollment word asks for every grant, and the node clamps the request to
+the key's ceiling: RT-O9.1 bounds what a key may enroll, list or remove
+by its effective grant. While `daemon-bundle-file` is set, the enrollment
+words require an explicit `daemon-endpoint`: `rpc-listen` has no default
+port, and `daemon-endpoint`'s default is the plaintext listener. The
+values are the peer-endpoint and endpoint kinds (IG-Q31); a URL or a
+hostname is refused.
+
+**IG-Q109 — making a client's key and showing its fingerprint — RULED
+2026-11-15, as recommended.** A key is made only when asked, never as a
+side effect of a dial. `shekyl-cli` gains `rpc key create` (refused if a
+key is there) and `rpc key show`; `shekyl-rpc-tunnel`, which has no
+command words, the one-shot switches `rpc-key-create` and `rpc-key-show`,
+the shape `rpc-console-key-reset` has on `shekyld` (IG-Q88). Each prints
+the fingerprint as `rpc client list` prints one.
+
+**IG-Q110 — the tunnel's listener — RULED 2026-11-15, as recommended.**
+`listen`, an endpoint, loopback only (RT-14; the endpoint rule refuses
+any other address, a wildcard included), required unless
+`listen-socket-file` is set. `listen-socket-file`, a path, Unix only: a
+socket in a directory only the tunnel's account can enter; refused on
+Windows with `config.socket-dir.platform`. The two are unconstructible
+together (`config.value.conflict`). The tunnel's own name gives `listen`
+its parent, as `shekyld`'s `rpc-listen` gives it `rpc`.
+
+**IG-Q111 — the tunnel's table — RULED 2026-11-15, as recommended.**
+
+| Name | Kind | Default | Surface | Notes |
+|---|---|---|---|---|
+| `help`, `version` | switch | | CLI | K |
+| `rpc-key-create`, `rpc-key-show` | switch | | CLI | IG-Q109: each acts on `rpc-key-file` and exits |
+| `network` | one-of | `mainnet` | CLI | the daemon's row; chooses the file |
+| `config-file` | path | the account root + `shekyl-rpc-tunnel-<network>.toml` | CLI | IG-13 |
+| `daemon-endpoint` | peer-endpoint | unset; required | both | IG-Q108 |
+| `daemon-socks` | endpoint | unset | both | IG-Q108; required for an onion |
+| `daemon-bundle-file` | path | unset; required | both | IG-Q108 |
+| `rpc-key-file` | path | the account root + `rpc-shekyl-rpc-tunnel-<network>.key` | both | IG-Q108 |
+| `rpc-grant` | list of grant and preset words | `view` | both | IG-Q108 |
+| `listen` | endpoint, loopback | unset; required without `listen-socket-file` | both | IG-Q110 |
+| `listen-socket-file` | path | unset | both | IG-Q110; Unix only |
+| `log-file` | path | the account root + `logs/shekyl-rpc-tunnel-<network>.log` | both | |
+| `log-level`, `log-category`, `log-size-max` | the daemon's kinds | `warn`, `none`, `1GiB` | both | read by the daemon's mapping (`shekyl_daemon_config::logging`) |
+
+No pool option: the pool's size is `SESSIONS_PER_CLIENT`, a constant the
+daemon enforces (RT-O37). The tunnel reports on start the grant it
+received ("Connected with GRANT; this client is enrolled for at most
+CEILING.", `RPC_CHANNEL.md` §4.5), and ends naming a revocation.
+
+**The tunnel's grant row is `rpc-grant`** (Rick, 2026-11-16): the grants
+the tunnel's sessions ask for. `request` keeps its one meaning; `grant`
+gains the parent `rpc`.

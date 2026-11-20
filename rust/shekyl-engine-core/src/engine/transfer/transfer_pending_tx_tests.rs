@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_address::ShekylAddress;
+use shekyl_crypto_pq::account::account_from_seed;
 use shekyl_crypto_pq::account::AllKeysBlob;
-use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_curve_tree::{
     select_reference_height, AssembleInput, BlockHash, BlockHeight, CurveTreeClient, CurveTreeRoot,
     Gindex, ReferenceBlock, REF_ANCHOR_AGE,
@@ -30,6 +30,7 @@ use crate::engine::diagnostics::{
     AssertionSink, DiagnosticSink, DiscardReason, PanickingSink, PanickingSinkTrigger,
     PendingTxDiagnostic, TracingDiagnosticSink,
 };
+use crate::engine::dispatch_durability::{DurableTxBytes, NoSaveCommit};
 use crate::engine::error::{
     AmbiguousErrorKind, PendingTxError, RetryableRejectCause, SendError, SubmitError,
     TerminalErrorKind,
@@ -53,7 +54,7 @@ use crate::engine::transaction_submitter::{
 use crate::engine::tx_counts::{InputCount, OutputCount};
 use crate::engine::LocalLedger;
 
-/// Deterministic raw32 test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
+/// Deterministic 32-byte test seed. Distinct from `SIGNER_TEST_MASTER_SEED`
 /// (`engine/signer.rs`) so pending-tx tests do not share derivation state
 /// with the C4α `LocalSigner` fixtures.
 const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
@@ -69,9 +70,8 @@ const PENDING_TX_TEST_RAW_SEED: [u8; 32] = {
 const TEST_OUTPUT_TX_KEY: [u8; 32] = [11u8; 32];
 
 fn test_account_blob() -> AllKeysBlob {
-    let (_master, blob) =
-        generate_account_from_raw_seed(&PENDING_TX_TEST_RAW_SEED, DerivationNetwork::Testnet)
-            .expect("testnet raw32 rederivation succeeds");
+    let (_master, blob) = account_from_seed(&PENDING_TX_TEST_RAW_SEED, Network::Testnet)
+        .expect("testnet derivation succeeds");
     blob
 }
 
@@ -113,7 +113,7 @@ fn test_fee_estimates() -> FeeEstimates {
     FeeEstimates {
         economy: tiny,
         standard: tiny,
-        priority: tiny,
+        high: tiny,
     }
 }
 
@@ -146,7 +146,8 @@ impl TestTransactionSubmitter {
 }
 
 impl TransactionSubmitter for TestTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         if let Some(scripted) = self
             .scripted
             .lock()
@@ -204,7 +205,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     tx_hash[8] = seed;
     let output_index = u64::from(seed);
     let constructed = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
@@ -246,7 +247,7 @@ fn advance_ledger_empty_blocks(ledger: &LocalLedger, from: u64, to: u64) {
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -269,7 +270,7 @@ fn populate_ledger(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -278,7 +279,7 @@ fn populate_ledger(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -300,7 +301,7 @@ fn populate_ledger(
         let amount = td.amount().to_raw();
         let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
-            &TEST_OUTPUT_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
@@ -316,7 +317,7 @@ fn populate_ledger(
         td.source_ciphertext = Some(ciphertext.clone());
         td.output_handle = Some(derive_output_handle(
             blob.view_sk.as_canonical_bytes(),
-            td.tx_hash.as_bytes(),
+            &td.tx_hash,
             output_index,
         ));
 
@@ -361,7 +362,7 @@ type TestPendingTx = LocalPendingTx<
     LocalLedger,
 >;
 
-fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+fn test_pending_tx_on(ledger: Arc<LocalLedger>, network: Network) -> TestPendingTx {
     LocalPendingTx::new(
         Arc::new(LocalSigner::new(test_signer_handle())),
         WalletGreedyOutputSelector,
@@ -372,8 +373,12 @@ fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
         None,
         Arc::new(TracingDiagnosticSink),
         ReservationTTLConfig::default(),
-        Network::Mainnet,
+        network,
     )
+}
+
+fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
+    test_pending_tx_on(ledger, Network::Mainnet)
 }
 
 fn test_pending_tx_with_sink(
@@ -408,6 +413,154 @@ fn funded_ledger() -> Arc<LocalLedger> {
     ledger
 }
 
+/// What one payment asks for in the recipient-refusal cases below. The
+/// ledger that answers them holds less than this, so a build that skipped
+/// the address check would report insufficient funds.
+const RECIPIENT_REFUSAL_ASK_ATOMIC: u64 = 1_000;
+
+/// The same ledger's one output. Small enough that `RECIPIENT_REFUSAL_ASK_ATOMIC`
+/// cannot be paid, large enough that selection has a balance to mis-report.
+const RECIPIENT_REFUSAL_HELD_ATOMIC: u64 = 10;
+
+async fn assert_recipient_refused(pending: &TestPendingTx, request: TxRequest, reason: &str) {
+    let err = pending.build(request).await.unwrap_err();
+    assert!(
+        matches!(err, SendError::InvalidRecipient { reason: got } if got == reason),
+        "expected {reason}, got {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0, "a refusal selects nothing");
+}
+
+/// `LocalPendingTx::build` refuses a recipient before it looks at the
+/// balance. The same small synced ledger pays a real address with
+/// `InsufficientFunds` and refuses the others as `InvalidRecipient`.
+///
+/// Deleting both `check_recipients` calls (`build` and `build_select_sync`)
+/// turns the bad-address cases into `InsufficientFunds` and lets the empty
+/// list reach selection. Accepting the display form in
+/// `PaymentAddress::decode` does the same to that case. The selection
+/// helper does not call `check_recipients`; this is the production door.
+#[tokio::test]
+async fn build_refuses_a_bad_recipient_before_the_balance() {
+    let ledger = Arc::new(test_ledger());
+    populate_ledger(
+        ledger.as_ref(),
+        1,
+        vec![make_recovered_output(1, 100, RECIPIENT_REFUSAL_HELD_ATOMIC)],
+        20,
+    );
+    let pending = test_pending_tx(Arc::clone(&ledger));
+
+    let mut garbage = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    garbage.recipients[0].destination = TxDestination::Address("notanaddress".into());
+    assert_recipient_refused(&pending, garbage, "recipient is not a Shekyl address").await;
+
+    let display = ShekylAddress::decode(&test_payment_address())
+        .expect("the test address decodes")
+        .encode_classical_display()
+        .expect("the display form encodes");
+    let mut display_req = standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC);
+    display_req.recipients[0].destination = TxDestination::Address(display);
+    assert_recipient_refused(
+        &pending,
+        display_req,
+        "recipient address cannot receive a payment",
+    )
+    .await;
+
+    let testnet = test_pending_tx_on(Arc::clone(&ledger), Network::Testnet);
+    assert_recipient_refused(
+        &testnet,
+        standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC),
+        "recipient address is for another network",
+    )
+    .await;
+
+    assert_recipient_refused(
+        &pending,
+        TxRequest {
+            recipients: Vec::new(),
+            priority: FeePriority::Standard,
+        },
+        "TxRequest must carry at least one recipient",
+    )
+    .await;
+
+    let err = pending
+        .build(standard_request(RECIPIENT_REFUSAL_ASK_ATOMIC))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, SendError::InsufficientFunds { .. }),
+        "a real address on this ledger is short of funds, not an invalid recipient: {err:?}"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+/// A selector that answers every target with one index no candidate
+/// carries, covering the target in full.
+struct OutOfSetSelector;
+
+impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
+    type Error = crate::engine::error::OutputSelectorError;
+
+    fn select_outputs(
+        &self,
+        _candidates: &[crate::engine::output_selector::OutputCandidate],
+        target: AtomicUnits,
+    ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
+        Ok(crate::engine::output_selector::SelectedOutputs {
+            indices: vec![usize::MAX],
+            total_covered: target,
+        })
+    }
+}
+
+/// A selector that returns an index outside its candidate set is the
+/// wallet's own bug (F4): the build refuses it as a build invariant, with
+/// the selector-contract diagnostic, and never tells the client to fix a
+/// recipient. Bites if the violation is reported as `InvalidRecipient`, or
+/// if the subset check is removed and the out-of-set index reaches assembly.
+#[tokio::test]
+async fn an_out_of_set_selection_is_the_wallets_fault() {
+    use crate::engine::diagnostics::BuildErrorKind;
+
+    let sink = Arc::new(AssertionSink::new());
+    let pending = LocalPendingTx::new(
+        Arc::new(LocalSigner::new(test_signer_handle())),
+        OutOfSetSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        test_submitter(),
+        funded_ledger(),
+        None,
+        Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+
+    let err = pending.build(standard_request(7_000)).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SendError::BuildInvariant {
+                reason: "output selector returned indices outside candidate set"
+            }
+        ),
+        "{err:?}"
+    );
+    assert!(
+        sink.recorded_pending().iter().any(|event| matches!(
+            event,
+            PendingTxDiagnostic::BuildFailed {
+                kind: BuildErrorKind::SelectorContractViolation
+            }
+        )),
+        "the build reports the selector-contract violation"
+    );
+    assert_eq!(pending.outstanding(), 0, "nothing is reserved");
+}
+
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
 
 /// A fresh, empty curve-tree handle over a tempdir store. Its
@@ -439,7 +592,7 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 }
 
 /// CT-5c consistent fixture: a `(ledger, tree)` pair whose tree leaves
-/// **are** the ledger's owned outputs, so the real `assemble_path` resolves
+/// **are** the ledger's owned outputs, so the real `assemble_paths` resolves
 /// each by gindex and the signer builds a real membership proof.
 ///
 /// Each `specs` entry is `(seed, amount)`; the output's `global_output_index`
@@ -484,7 +637,7 @@ async fn funded_ledger_and_tree(
     for &(seed, amt) in specs {
         let output_index = u64::from(seed);
         let c = construct_output(
-            &TEST_OUTPUT_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
@@ -581,7 +734,7 @@ fn test_pending_tx_with_tree_and_sink(
 
 /// CT-5c: the standard funded fixture (`funded_ledger`'s two outputs,
 /// 50_000 + 30_000) backed by a **consistent** curve tree — the tree leaves
-/// are those outputs, so the real `assemble_path` resolves them and the
+/// are those outputs, so the real `assemble_paths` resolves them and the
 /// signer builds a real proof. Returns the pending engine, the ledger, and
 /// the tree-store `TempDir` (which the caller must keep alive). Replaces the
 /// pre-CT-5c `test_pending_tx(funded_ledger())`, which had no tree.
@@ -1005,7 +1158,7 @@ async fn wallet_too_young_to_spend_before_reference_anchor() {
 
 /// CT-5c DoD: a real-root membership proof builds and submits end-to-end.
 /// The consistent fixture's tree leaves **are** the ledger's owned outputs,
-/// so the engine resolves the real `assemble_path` at the reference height
+/// so the engine resolves the real `assemble_paths` at the reference height
 /// (`tip − REF_ANCHOR_AGE` = 14 for synced 20; the eligible-11 output is
 /// drained there), folds it into the signing context, and the signer builds
 /// a real FCMP++ proof against the reconstructed root — the last synthetic
@@ -1028,7 +1181,7 @@ async fn real_root_membership_proof_builds_and_submits() {
     );
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1165,7 +1318,7 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
     }
 
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("horizon re-anchor reproves and broadcasts transparently");
     assert_eq!(
@@ -1194,7 +1347,7 @@ async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
     advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(
@@ -1206,6 +1359,61 @@ async fn submit_reanchor_unavailable_when_tree_too_far_behind() {
         1,
         "reservation preserved on clean fail"
     );
+}
+
+/// **A reservation discarded while its submit re-anchors is never reported
+/// held** (Copilot on #1448). The submit releases the state lock across the
+/// re-anchor; a discard lands meanwhile, and the re-anchor then fails (here
+/// the tree is too far behind, as above). The submit reads where the entry
+/// stands before it reports: gone, so `ReservationNotFound`
+/// (`ReservationAfterSubmit::Gone`), never `ReanchorUnavailable` (`Held`),
+/// which would tell the caller to retry or discard a reservation that no
+/// longer exists. Deterministic: the submit parks inside the re-anchor's
+/// fee fetch until the discard has run. Red edit: in `submit_async`, return
+/// the re-anchor's error without `left_consumer_held`.
+#[tokio::test]
+async fn a_reservation_discarded_during_its_reanchor_is_not_reported_held() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (ledger, _tree_dir, tree) = funded_ledger_and_tree(&[(1, 50_000)], 1, 20).await;
+    let entered = Arc::new(AtomicUsize::new(0));
+    // One permit for the build's own fee fetch; the submit's parks.
+    let gate = Arc::new(tokio::sync::Semaphore::new(1));
+    let pending = test_pending_tx_with_tree_and_fee_source(
+        Arc::clone(&ledger),
+        tree,
+        GatedFeeSnapshotSource {
+            entered: Arc::clone(&entered),
+            gate: Arc::clone(&gate),
+        },
+    );
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+    advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
+
+    let submit = pending.submit(built.id, built.content_gen, &NoSaveCommit);
+    let interleave = async {
+        while entered.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+        pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .expect("the reservation is consumer-held while its submit re-anchors");
+        gate.add_permits(1);
+    };
+    let (submitted, ()) = tokio::join!(submit, interleave);
+
+    let err = submitted.unwrap_err();
+    assert!(
+        matches!(err, SubmitError::ReservationNotFound { reservation_id } if reservation_id == built.id),
+        "a discarded reservation is gone, not held: {err:?}"
+    );
+    assert_eq!(
+        err.reservation_after(),
+        crate::engine::error::ReservationAfterSubmit::Gone
+    );
+    assert_eq!(pending.outstanding(), 0);
 }
 
 /// CT-5c: a spend requires the curve tree to assemble a membership proof.
@@ -1227,7 +1435,7 @@ async fn build_without_curve_tree_is_refused() {
 
 #[tokio::test]
 async fn build_then_submit_places_awaiting_confirmation_lock() {
-    // CT-5c: a consistent ledger+tree so the real `assemble_path` resolves
+    // CT-5c: a consistent ledger+tree so the real `assemble_paths` resolves
     // the spent output and the signer builds a real membership proof.
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
@@ -1277,7 +1485,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
     assert_eq!(pending.outstanding(), 1);
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1297,7 +1505,12 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+            !td.is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &spend_locks
+            ),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1336,7 +1549,7 @@ async fn submit_persists_tx_key_and_pending_hash() {
     }
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -1348,11 +1561,10 @@ async fn submit_persists_tx_key_and_pending_hash() {
         .tx_keys
         .get(&tx_hash.to_bytes())
         .expect("dispatch persists the per-tx secret keyed by canonical txid");
-    assert_ne!(
-        *stored.primary.as_bytes(),
-        [0u8; 32],
-        "the persisted secret is the minted scalar, not a placeholder"
-    );
+    // The persisted record opens as a transaction key: what the OUTBOUND
+    // proof will read back.
+    shekyl_crypto_pq::TxKey::open(stored.primary.stored())
+        .expect("the persisted secret is a minted transaction key");
     assert!(
         guard
             .ledger
@@ -1401,7 +1613,7 @@ async fn discard_never_persists_tx_key() {
 /// path 2 drives.
 #[tokio::test]
 async fn confirmed_absent_release_keeps_retention_record() {
-    use crate::engine::submit_lifecycle::WatchdogHost;
+    use crate::engine::submit_lifecycle::{ReleasePersistence, WatchdogHost};
 
     let (ledger, _tree_dir, tree) =
         funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
@@ -1412,13 +1624,21 @@ async fn confirmed_absent_release_keeps_retention_record() {
         .await
         .expect("build ok");
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
 
-    let released = WatchdogHost::release_awaiting_confirmation(&pending, &HashSet::from([tx_hash]));
-    assert!(released > 0, "the F14 lock is released");
+    let released = WatchdogHost::release_awaiting_confirmation(
+        &pending,
+        &HashSet::from([tx_hash]),
+        &NoSaveCommit,
+    );
+    assert_eq!(
+        released,
+        ReleasePersistence::Confirmed,
+        "the F14 lock is released"
+    );
 
     let guard = pending.ledger.read();
     assert!(
@@ -1461,7 +1681,7 @@ async fn terminal_reject_retires_dispatch_persisted_record() {
         kind: TerminalErrorKind::DoubleSpend,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("terminal reject");
 
@@ -1493,7 +1713,7 @@ async fn retryable_reject_retires_dispatch_persisted_record() {
         cause: RetryableRejectCause::StaleRoot,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("retryable reject");
 
@@ -1527,7 +1747,7 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
         kind: AmbiguousErrorKind::DaemonTimeout,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("ambiguous verdict");
 
@@ -1561,10 +1781,11 @@ async fn ambiguous_verdict_keeps_dispatch_persisted_record() {
 ///
 /// The persisted baseline is the claimed height **clamped to the
 /// wallet's synced height** (§2.5(a) as amended): the claim is
-/// untrusted, and the watchdog horizon is measured as `synced −
-/// baseline`, so a baseline the wallet has not reached is a horizon it
-/// cannot reach. The verdict still carries the raw claim to the
-/// consumer — this pins that the two are read from different places.
+/// untrusted. An unread sight does not read the baseline, so the claim
+/// cannot park the status probe. The clamp still keeps a height this
+/// wallet has not reached out of the journal. The verdict still carries
+/// the raw claim to the consumer — this pins that the two are read from
+/// different places.
 #[tokio::test]
 async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     let sink = Arc::new(AssertionSink::new());
@@ -1581,7 +1802,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -1632,8 +1853,7 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 lock.accepted_at_height,
                 shekyl_types::BlockHeight::from_raw(20),
                 "the lock is baselined at a height the wallet has reached — \
-                 the claimed 25 clamped to the synced 20, so the watchdog \
-                 horizon stays measurable"
+                 the claimed 25 clamped to the synced 20"
             );
             assert_eq!(
                 row.lock_baseline,
@@ -1641,7 +1861,12 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1694,7 +1919,7 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -1783,7 +2008,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("a pool-resident duplicate resolves the submit successfully");
     assert_eq!(
@@ -1818,29 +2043,30 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
+                !td.is_spendable(
+                    shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                        u64::MAX
+                    )),
+                    &spend_locks
+                ),
                 "journal-locked output must be excluded from selection"
             );
         }
     }
 }
 
-/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`) is
-/// "released by the §2.6 confirmed-absent watchdog horizon (bounded
-/// liveness cost)". Asserted on the axis the cap actually lives on —
-/// horizon *reachability*, not the stored number: a daemon claiming
-/// `u64::MAX` must not be able to park `escape_ladder_step` on
-/// `HorizonNotReached` forever, because the F14 lock it places is
-/// persisted and nothing else would ever release it (refresh cannot
-/// observe a spend that never reached the chain).
-///
-/// The negative control is the unclamped value itself: fed as a
-/// baseline, `u64::MAX` fails this same assertion at every height, so
-/// the test cannot pass by accident.
+/// The lie-high damage cap (§7.2 rider row `AlreadyInChain.height`).
+/// A fresh projection is unread, and an unread sight is asked on the
+/// next chain advance whatever baseline was stored. A daemon claiming
+/// `u64::MAX` therefore cannot park the status probe. The stored
+/// baseline is still the wallet's synced height: the journal does not
+/// keep a height this wallet has not reached. An in-chain sight counts
+/// the proof-life ceiling from the baseline a probe records, and a
+/// baseline of `u64::MAX` on that sight would wait forever.
 #[tokio::test]
 async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reachable() {
     use crate::engine::submit_watchdog::{
-        escape_ladder_step, held_submits, HeldSubmit, WaitReason, WatchdogConfig, WatchdogStep,
+        escape_ladder_step, held_submits, HeldSubmit, WatchdogConfig, WatchdogStep,
     };
     use crate::engine::traits::DaemonHealth;
 
@@ -1856,7 +2082,7 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
     }));
 
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("AlreadyInChain resolves the submit successfully");
     assert_eq!(
@@ -1882,31 +2108,26 @@ async fn submit_already_in_chain_absurd_height_leaves_the_watchdog_horizon_reach
         }
     );
 
-    // Horizon reachability, the property the §7.2 cap names.
-    let config = WatchdogConfig::from_block_target(120);
+    // An unread sight is asked at the wallet's height and at the
+    // unclamped claim. The height cannot park the ladder.
+    let config = WatchdogConfig::production();
     let healthy = DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 20,
         synchronized: true,
     };
-    let horizon_reached = 20 + config.escape_horizon_blocks;
-    assert_ne!(
-        escape_ladder_step(held, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "a lock baselined at a reached height must clear the horizon once \
-         the wallet syncs past it — otherwise the escape ladder never runs \
-         and the persisted lock strands the inputs permanently"
+    assert_eq!(
+        escape_ladder_step(held, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes
     );
-    // Negative control: the unclamped claim is exactly what would break it.
     let unclamped = HeldSubmit {
         baseline_height: u64::MAX,
         ..*held
     };
     assert_eq!(
-        escape_ladder_step(&unclamped, horizon_reached, healthy, config),
-        WatchdogStep::Wait(WaitReason::HorizonNotReached),
-        "sanity: the unclamped baseline is unreachable, so this assertion \
-         discriminates rather than passing for any input"
+        escape_ladder_step(&unclamped, 20, healthy, config),
+        WatchdogStep::ProbeResubmitSameBytes,
+        "an unread sight is asked whatever baseline a height claim wrote"
     );
 }
 
@@ -1935,10 +2156,10 @@ async fn production_submit_dispatch_projects_the_daemon_verdict() {
         // Nothing queued via `queue_submit_daemon_outcome`, so `submit_async`
         // takes the production branch and the scripted submitter answers.
         let outcome = pending
-            .submit(built.id, built.content_gen)
+            .submit(built.id, built.content_gen, &NoSaveCommit)
             .await
             .expect("submit resolves successfully");
-        (hash, outcome)
+        (hash, outcome.outcome)
     }
 
     let (hash, outcome) = submit_via_production_dispatch(|hash| {
@@ -2208,7 +2429,7 @@ async fn dispatch_writes_the_send_journal_row() {
         .expect("build ok");
     let expected_fee = wire_fee(&built.tx_bytes);
     let outcome = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok");
     let txid = outcome.hash();
@@ -2269,7 +2490,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
         kind: TerminalErrorKind::FeeTooLow,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("terminal refusal");
     {
@@ -2297,7 +2518,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
         cause: RetryableRejectCause::StaleRoot,
     }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("retryable refusal");
     let guard = pending.ledger.read();
@@ -2319,7 +2540,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// single-leaf-chunk tree. This test re-runs the same composition over a
 /// **real** curve tree: the funding output is a drained leaf of the
 /// consistent `funded_ledger_and_tree` fixture, and its membership path is
-/// assembled by the production `CurveTreeClient::assemble_path` (CT-5c) — the
+/// assembled by the production `CurveTreeClient::assemble_paths` (CT-5c) — the
 /// same path the real-tree transfer KAT
 /// (`build_then_submit_places_awaiting_confirmation_lock`) drives. The bond's `bond_credit`
 /// rides as the single-sourced output-side cleartext term through
@@ -2341,7 +2562,7 @@ async fn terminal_keeps_the_journal_row_retryable_removes_it() {
 /// # What is real here that was synthetic in 2a
 ///
 /// The tree root, the depth, and the `c1`/`c2` branch layers come from the
-/// real `assemble_path` over a depth-2 fixture (two drained leaves), so the
+/// real `assemble_paths` over a depth-2 fixture (two drained leaves), so the
 /// FCMP++ membership proof traverses genuine branch chunks rather than a
 /// single synthetic leaf chunk. Everything else (the prover, BP+, FCMP++
 /// verify, the two retention verify entrypoints, the cofactor recovery for
@@ -2371,10 +2592,7 @@ async fn join_market_bond_post_verifies_over_real_tree() {
     };
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
-
-    use curve25519_dalek::scalar::Scalar;
 
     // Shared real-tree setup: assemble the real depth-2 membership path and
     // sign the bond post (`bond_credit` as the sole cleartext term). The
@@ -2404,9 +2622,7 @@ async fn join_market_bond_post_verifies_over_real_tree() {
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask canonical");
-            let c = Commitment::new(mask, out.amount.to_raw());
+            let c = out.commitment_mask.opening(out.amount.to_raw());
             CompressedPoint::from(c.calculate().compress().to_bytes())
         })
         .collect();
@@ -2503,13 +2719,12 @@ struct RealTreeBondProofs {
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
-    signable_tx_hash: shekyl_types::PrefixHash,
 }
 
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
@@ -2517,18 +2732,13 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     use shekyl_tx_builder::{sign_transaction_with_terms, LeafEntry, SpendInput, TreeContext};
 
     // ── Bond persona `P` + holdings → bond floor ─────────────────────
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for fixture holdings"
@@ -2537,7 +2747,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let fee: u64 = 1_000;
     // Funding covers the change output, the fee, and the bond credit.
     let input_amount: u64 = floor + fee + 1_000_000;
-    let signable_tx_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
+    let prefix_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
 
     // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
     // The bond spends gindex 0 (the first leaf); the second leaf makes the
@@ -2554,7 +2764,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let blob = test_account_blob();
     let output_index = u64::from(spend_seed);
     let constructed = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
@@ -2584,7 +2794,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let reference = ReferenceBlock {
         height: rh,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     };
 
     // ── Assemble the REAL membership path for the funding output ─────
@@ -2598,26 +2808,28 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
             }],
         )
         .await
-        .expect("real assemble_path resolves the funding leaf");
-    let path = paths
-        .first()
+        .expect("real assemble_paths resolves the funding leaf");
+    let tree = paths.tree();
+    let (_, path) = paths
+        .paths()
+        .next()
         .expect("assemble_tx returns one path per AssembleInput");
     assert_eq!(
-        path.tree.tree_depth, ref_depth,
+        tree.tree_depth, ref_depth,
         "assembled path depth agrees with the depth resolved from the same reference block"
     );
     assert_eq!(
-        path.tree.tree_depth, 2,
+        tree.tree_depth, 2,
         "the two-leaf consistent fixture yields a real depth-2 tree"
     );
     assert!(
-        !path.c1_layers.is_empty() || !path.c2_layers.is_empty(),
+        !path.c1_layers().is_empty() || !path.c2_layers().is_empty(),
         "a real depth-2 path carries genuine branch layers, not a synthetic leaf chunk"
     );
 
     // Map curve-tree path → tx-builder signing inputs (mirror types).
     let leaf_chunk: Vec<LeafEntry> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .map(|cl| LeafEntry {
             output_key: cl.output_key.to_bytes(),
@@ -2627,9 +2839,9 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         })
         .collect();
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
-        tree_depth: path.tree.tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
 
     let inputs = vec![SpendInput {
@@ -2642,8 +2854,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         combined_ss: bundle.combined_ss.to_vec(),
         output_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers().to_vec(),
+        c2_layers: path.c2_layers().to_vec(),
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
@@ -2657,7 +2869,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // with the input (a collision zeroes the FCMP++ rerandomization scalar).
     let change_output_index: u64 = output_index + 100;
     let change_out = construct_output(
-        &TEST_OUTPUT_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
@@ -2668,7 +2880,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let outputs = vec![OutputInfo {
         dest_key: change_out.output_key,
         amount: AtomicUnits::from_raw(change),
-        commitment_mask: change_out.z,
+        commitment_mask: change_out.commitment_mask(),
         enc_amount: change_out.enc_amount_wire(),
         enc_label: change_out.enc_label_wire(),
     }];
@@ -2685,7 +2897,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // ── Prove over the REAL tree: bond_credit is the sole cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
-        signable_tx_hash,
+        &shekyl_network::HARNESS_NETWORK_ID,
+        prefix_hash,
         &inputs,
         &outputs,
         AtomicUnits::from_raw(fee),
@@ -2711,7 +2924,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         spend_key_x: *bundle.spend_key_x,
         fee,
         floor,
-        signable_tx_hash,
     }
 }
 
@@ -2739,7 +2951,6 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         output_key,
         pqc_public_key,
         spend_key_x,
-        signable_tx_hash,
         ..
     } = real_tree_bond_post_proofs().await;
 
@@ -2761,9 +2972,10 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_ctx.tree_root.as_bytes(),
+        &tree_ctx.tree_root,
         tree_ctx.tree_depth,
-        signable_tx_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable,
     );
     assert!(
         matches!(fcmp_result, Ok(true)),
@@ -2841,7 +3053,7 @@ async fn submit_double_spend_emits_terminal_discarded() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2885,7 +3097,7 @@ async fn submit_fee_too_low_releases_outputs() {
         kind: TerminalErrorKind::FeeTooLow,
     }));
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -2927,7 +3139,9 @@ async fn submit_malformed_releases_outputs() {
         kind: TerminalErrorKind::Malformed,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonRejectedTerminal {
             kind: TerminalErrorKind::Malformed
         })
@@ -3005,7 +3219,7 @@ async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
         .expect("build ok");
     pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect_err("first rejection");
 
@@ -3016,7 +3230,7 @@ async fn assert_loop_breaker_trips_on(kind: TerminalErrorKind) {
         .expect("one-shot rebuild allowed after first rejection");
     pending.queue_submit_daemon_outcome(Err(SubmitterError::RejectedTerminal { kind }));
     pending
-        .submit(rebuilt.id, rebuilt.content_gen)
+        .submit(rebuilt.id, rebuilt.content_gen, &NoSaveCommit)
         .await
         .expect_err("second rejection");
 
@@ -3083,7 +3297,7 @@ async fn submit_retryable_rejection_restores_reservation() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -3129,7 +3343,7 @@ async fn submit_retryable_rejection_restores_reservation() {
 
     // The restored reservation resubmits — this time accepted.
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("restored reservation resubmits")
         .hash();
@@ -3151,7 +3365,7 @@ async fn submit_timeout_keeps_reservation_in_flight() {
     }));
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -3216,7 +3430,9 @@ async fn submit_daemon_unavailable_same_as_timeout() {
         kind: AmbiguousErrorKind::DaemonUnavailable,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonAmbiguous {
             kind: AmbiguousErrorKind::DaemonUnavailable,
             ..
@@ -3236,7 +3452,9 @@ async fn build_in_flight_via_daemon_timeout(pending: &TestPendingTx) -> PendingT
         kind: AmbiguousErrorKind::DaemonTimeout,
     }));
     assert!(matches!(
-        pending.submit(built.id, built.content_gen).await,
+        pending
+            .submit(built.id, built.content_gen, &NoSaveCommit)
+            .await,
         Err(SubmitError::DaemonAmbiguous {
             kind: AmbiguousErrorKind::DaemonTimeout,
             ..
@@ -3395,7 +3613,7 @@ async fn submit_carries_proof_across_benign_tip_advance() {
     );
 
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("benign tip advance broadcasts the existing proof as-is");
     assert_eq!(pending.outstanding(), 0, "submit consumed the reservation");
@@ -3454,7 +3672,7 @@ async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
     // Submit immediately (no tip advance → not stale, no re-anchor) with a
     // generation the consumer never saw: withhold, do not broadcast.
     let err = pending
-        .submit(built.id, built.content_gen + 1)
+        .submit(built.id, built.content_gen + 1, &NoSaveCommit)
         .await
         .unwrap_err();
     let SubmitError::ContentChanged {
@@ -3477,7 +3695,7 @@ async fn submit_with_mismatched_seen_gen_is_withheld_as_content_changed() {
 
     // Re-confirming with the correct generation broadcasts.
     pending
-        .submit(built.id, 0)
+        .submit(built.id, 0, &NoSaveCommit)
         .await
         .expect("correct seen_gen broadcasts");
     assert_eq!(pending.outstanding(), 0);
@@ -3501,7 +3719,7 @@ fn populate_ledger_scan_only(
     let inserted_range = indexes.process_scanned_outputs(
         ledger_block,
         shekyl_types::BlockHeight::from_raw(block_height),
-        block_hash,
+        BlockHash::from_bytes(block_hash),
         timelocked,
     );
     assert!(!inserted_range.is_empty() || ledger_block.transfer_count() == 0);
@@ -3510,7 +3728,7 @@ fn populate_ledger_scan_only(
         let _ = indexes.process_scanned_outputs(
             ledger_block,
             shekyl_types::BlockHeight::from_raw(h),
-            hash,
+            BlockHash::from_bytes(hash),
             Timelocked::from_vec(Vec::new()),
         );
     }
@@ -3521,7 +3739,7 @@ fn daemon_fee_estimates_distinct() -> FeeEstimates {
     FeeEstimates {
         economy: FeeRate::new(5).expect("economy rate"),
         standard: FeeRate::new(10).expect("standard rate"),
-        priority: FeeRate::new(40).expect("priority rate"),
+        high: FeeRate::new(40).expect("high rate"),
     }
 }
 
@@ -3576,8 +3794,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
     use shekyl_curve_tree::{
-        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex,
-        TreeContext as CtTreeContext,
+        AssembleInput, AssembledPaths, BlockHash, BlockHeight, CurveTreeRoot, Gindex, PathParts,
+        ReferenceBlock,
     };
     use shekyl_rpc_client::FeeRate;
 
@@ -3595,33 +3813,40 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         InputCount::clamped(1),
         OutputCount::clamped(request.recipients.len()),
         1,
-    );
+    )
+    .expect("the fee fits");
     // The `gindex` must equal the output's `global_output_index` (100) so the
     // index-stability guard passes and the missing-`key_image` check inside
     // `input_context_from_transfer` is reached. The path is unused before
-    // that check fires, so a placeholder suffices.
-    let assemble_inputs = vec![AssembleInput {
+    // that check fires, so a placeholder suffices, written through the
+    // test-only constructor (R-25, R-26).
+    let asked = AssembleInput {
         gindex: Gindex::from_raw(100),
         output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0u8; 32]),
         commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0u8; 32]),
-    }];
-    let paths = vec![AssembledPath {
-        leaf_chunk: Vec::new(),
-        c1_layers: Vec::new(),
-        c2_layers: Vec::new(),
-        tree: CtTreeContext {
-            reference_block: BlockHash::NULL,
-            tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-            tree_depth: 1,
+    };
+    let paths = AssembledPaths::from_parts_unchecked(
+        ReferenceBlock {
+            height: BlockHeight::from_raw(1),
+            curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+            block_hash: BlockHash::NULL,
         },
-    }];
+        1,
+        vec![(
+            asked,
+            PathParts {
+                leaf_chunk: Vec::new(),
+                c1_layers: Vec::new(),
+                c2_layers: Vec::new(),
+            },
+        )],
+    );
     let err = ledger.with_ledger_block(|block| {
         assemble_tx_to_sign(
             Network::Mainnet,
             &request,
             &[0],
             block.transfers(),
-            &assemble_inputs,
             &paths,
             fee_directive,
         )
@@ -3639,9 +3864,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
 #[tokio::test]
 async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-    use crate::engine::tx_fee_model::{
-        converge_fee, fee_from_weight, fee_rate_for_priority, predict_weight,
-    };
+    use crate::engine::tx_fee_model::{converge_fee, fee_from_weight, predict_weight};
 
     let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
     let (ledger, _tree_dir, tree) =
@@ -3661,7 +3884,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     let snapshot =
         crate::engine::fee_policy::ValidatedFeeEstimates::try_new(daemon_fee_estimates_distinct())
             .expect("test daemon tiers are well-formed");
-    let rate = fee_rate_for_priority(FeePriority::Standard, &snapshot).expect("standard rate");
+    let rate = snapshot.rate(FeePriority::Standard);
     // Real tree depth for the 2-leaf consistent fixture is 2.
     let seed = fee_from_weight(
         &rate,
@@ -3673,7 +3896,8 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
         OutputCount::clamped(n_out),
         2,
         seed,
-    );
+    )
+    .expect("the built shape's fee fits");
     assert_eq!(
         built.fee_atomic_units.to_raw(),
         expected_fee,
@@ -3707,7 +3931,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
     );
 
     let tx_hash = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("submit ok")
         .hash();
@@ -3746,14 +3970,14 @@ async fn daemon_dedupes_identical_tx_bytes() {
         .await
         .expect("build ok");
     pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .expect("first submit");
     assert_eq!(daemon.submitted_count(), 1);
 
     let submitter = DaemonTransactionSubmitter::new(Arc::clone(&daemon));
     let success = submitter
-        .submit(built.tx_bytes.clone())
+        .submit(DurableTxBytes::for_test(built.tx_bytes.clone()))
         .await
         .expect("daemon dedup accepts identical bytes");
     // A pool-resident duplicate is `AlreadyInPool` → the `Broadcast`
@@ -3769,11 +3993,140 @@ async fn daemon_dedupes_identical_tx_bytes() {
     assert_eq!(daemon.submitted_count(), 1);
 
     let err = pending
-        .submit(built.id, built.content_gen)
+        .submit(built.id, built.content_gen, &NoSaveCommit)
         .await
         .unwrap_err();
     assert!(
         matches!(err, SubmitError::ReservationNotFound { .. }),
         "reservation consumed after first submit: {err:?}"
+    );
+}
+
+/// A submitter that never answers: the bytes are in hand and the process
+/// dies before any verdict. The test seam for A19's crash window between
+/// the dispatch save and the send — the one window a real process cannot
+/// be stopped in reliably, since the daemon round-trip it would have to
+/// interrupt takes microseconds on loopback.
+struct NeverAnswers;
+
+impl TransactionSubmitter for NeverAnswers {
+    async fn submit(&self, _tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        std::future::pending().await
+    }
+}
+
+/// A commit seam that keeps what the save would write — the ledger's
+/// postcard bytes, which `save_state` seals into the wallet file — so a
+/// test can reopen from exactly that state.
+#[derive(Default)]
+struct CapturingCommit {
+    saved: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+impl crate::engine::dispatch_durability::LedgerCommit for CapturingCommit {
+    fn commit(
+        &self,
+        ledger: &shekyl_engine_state::WalletLedger,
+    ) -> Result<shekyl_engine_file::Durability, crate::engine::error::PersistenceError> {
+        let bytes = ledger.to_postcard_bytes().expect("the ledger serializes");
+        *self.saved.lock().expect("capture lock") = Some(bytes);
+        Ok(shekyl_engine_file::Durability::Confirmed)
+    }
+}
+
+/// A19, the crash between the dispatch save and the send. The submitter
+/// never answers and the submit is dropped (the process died with the
+/// bytes in hand); the wallet reopens from what the dispatch save wrote.
+/// The record is there with its signed bytes and its secret, open locks its
+/// inputs, and on the production host the send is held, has bytes to
+/// resend, and is not this session's — the three facts that make the
+/// watchdog alarm `DispatchedBeforeThisSession` instead of resending
+/// (`submit_lifecycle_tests` pins that reaction).
+#[tokio::test]
+async fn a_crash_between_the_dispatch_save_and_the_send_reopens_held() {
+    use crate::engine::submit_lifecycle::WatchdogHost;
+
+    let (ledger, _tree_dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+    let pending = LocalPendingTx::new(
+        Arc::new(LocalSigner::new(test_signer_handle())),
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        test_fee_snapshot_source(),
+        Arc::new(NeverAnswers),
+        Arc::clone(&ledger),
+        Some(tree),
+        Arc::new(TracingDiagnosticSink),
+        ReservationTTLConfig::default(),
+        Network::Mainnet,
+    );
+    let built = pending
+        .build(standard_request(7_000))
+        .await
+        .expect("build ok");
+
+    let commit = CapturingCommit::default();
+    let submit = pending.submit(built.id, built.content_gen, &commit);
+    let outcome = tokio::time::timeout(std::time::Duration::from_millis(500), submit).await;
+    assert!(outcome.is_err(), "the submitter never answers");
+    drop(pending);
+
+    let saved = commit
+        .saved
+        .lock()
+        .expect("capture lock")
+        .take()
+        .expect("the dispatch was saved before the bytes were handed over");
+    let mut reopened =
+        shekyl_engine_state::WalletLedger::from_postcard_bytes(&saved).expect("the save decodes");
+
+    let (txid, row) = reopened
+        .send_journal
+        .rows
+        .iter()
+        .next()
+        .map(|(k, v)| (*k, v.clone()))
+        .expect("the send's record was saved");
+    assert_eq!(
+        canonical_tx_id(row.tx_bytes.as_deref().expect("with its bytes")).to_bytes(),
+        txid,
+        "the saved bytes are the send's own"
+    );
+    assert_eq!(row.lock_baseline, None, "no verdict was recorded");
+    assert!(
+        reopened.tx_meta.tx_keys.contains_key(&txid),
+        "the tx secret was saved with the record"
+    );
+
+    // Open: the send whose verdict never arrived is locked and held.
+    assert_eq!(reopened.send_journal.lock_unverdicted_dispatches(), 1);
+    let locks = reopened.send_journal.spend_locks();
+    for input in &row.inputs {
+        assert!(
+            locks.contains(shekyl_types::GlobalOutputIndex::from_raw(input.gindex)),
+            "input {} is locked after the reopen",
+            input.gindex
+        );
+    }
+
+    let host = test_pending_tx(Arc::new(LocalLedger::new(
+        reopened,
+        shekyl_engine_state::LedgerIndexes::empty(),
+    )));
+    let tx_hash = shekyl_types::TxHash::from_bytes(txid);
+    assert!(
+        WatchdogHost::held_submits(&host)
+            .iter()
+            .any(|held| held.tx_hash == tx_hash),
+        "the send is held"
+    );
+    assert_eq!(
+        WatchdogHost::held_bytes_for(&host, &tx_hash).as_deref(),
+        row.tx_bytes.as_deref(),
+        "its bytes are there to resend"
+    );
+    assert!(
+        !WatchdogHost::dispatched_this_session(&host, &tx_hash),
+        "and it is not this session's, so resending is the user's decision"
     );
 }

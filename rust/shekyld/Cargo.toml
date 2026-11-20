@@ -1,0 +1,40 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyld"
+description = "The daemon binary: Rust's main over shekyl-daemon's sequence (DAEMON_CONFIG_CUTOVER.md DC-Q19); all Rust, no C++ in its link (P2P_3_REMNANT_CUTOVER_BRIEF.md §1)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "shekyld"
+path = "src/main.rs"
+test = false
+doctest = false
+
+[dependencies]
+# The sequence: the parse, the lock, logging, the node and its network,
+# the one signal owner, the RPC and the managed Tor.
+shekyl-daemon = { path = "../shekyl-daemon" }
+# Direct edges with no features of their own, so the measurement build
+# (cmake/BuildRust.cmake, `SHEKYL_MEASUREMENT_SPANS`) can name
+# `shekyl-transport-layer/measurement-spans`,
+# `shekyl-clearnet/measurement-spans` and `shekyl-relay/measurement-spans`
+# on `cargo rustc -p shekyld`'s command line: cargo lets a command line name
+# a dependency's feature only through the selected package's own edges. All
+# three crates are in this binary's graph already (shekyl-node, shekyl-p2p);
+# nothing here is a feature, so scripts/ci/check_measurement_spans.py's
+# no-Cargo-edge limb holds.
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+shekyl-clearnet = { path = "../shekyl-clearnet" }
+shekyl-relay = { path = "../shekyl-relay" }
+
+[lints]
+workspace = true

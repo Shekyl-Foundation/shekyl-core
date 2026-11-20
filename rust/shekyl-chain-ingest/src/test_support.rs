@@ -47,13 +47,19 @@
         reason = "pipeline-only fixtures are unused when the pipeline tests are not built"
     )
 )]
+#![cfg_attr(
+    all(not(test), feature = "forge"),
+    expect(
+        dead_code,
+        reason = "fixture builders serve this crate's tests; the forge feature compiles the module for the store helpers the driver opens with"
+    )
+)]
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{Candidate, RecordedWeights, RuleSet, ViewRead};
-use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::SettlementEpochBlocks;
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::ChainStore;
@@ -61,22 +67,27 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{base_block_reward, EconomicParams};
 use shekyl_harness_spender::{first_spending_height, MinerWallet};
 use shekyl_harness_wallet::coinbase::repay;
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight,
-};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, SectionRoot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 #[cfg(feature = "pipeline")]
 use crate::connector::{Connector, ConnectorArgs};
-use crate::corpus::{CorpusNet, CorpusWriter};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::trace::{Digest, Facts, Trace, TraceWriter};
+use shekyl_corpus::CorpusWriter;
+use shekyl_network::Network;
 
 mod growing;
+#[cfg(feature = "pipeline")]
+mod quiet;
 mod tree;
 
 pub use growing::Growing;
+#[cfg(test)]
+pub use quiet::quiet_seeds;
+#[cfg(feature = "pipeline")]
+pub use quiet::{held_seeds, named_seeds, quiet_resident};
 pub use tree::GrownTree;
 
 /// A settlement epoch for test stores.
@@ -85,29 +96,64 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
     None => unreachable!(),
 };
 
-/// A fresh temp path for a store.
+/// A store path inside a directory the test owns.
 ///
-/// A redb store is **one file**, so a stale one is removed with
-/// `remove_file`; `remove_dir_all` on a file fails with `NotADirectory`,
-/// which is how an earlier version of this helper left every store behind
-/// and would have handed a same-named test a *reopened* stale store rather
-/// than a fresh one (`ChainStore::create` reopens an existing path).
-pub fn tmp(name: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("shekyl-ingest-{}-{name}", std::process::id()));
-    cleanup(&p);
-    assert!(
-        !p.exists(),
-        "stale store at {} could not be removed",
-        p.display()
-    );
-    p
+/// The directory is created under the system temp directory with a random
+/// name, by a `mkdir` that refuses an existing path, so a test never
+/// reopens a store another test or an earlier run left behind
+/// (`ChainStore::create` reopens an existing path). When this drops, the
+/// directory goes with everything in it: the store, and the files a store
+/// keeps beside itself (`.creation-lock`, `.discard`, `.unfinished-*`). A
+/// panicking test drops it too.
+///
+/// The directory outlives the open store.
+///
+/// - A local is declared before the store. Locals drop in reverse
+///   declaration order, so the store drops first.
+/// - A field is declared after the store. Fields drop in declaration
+///   order, so the store drops first.
+///
+/// An owner that holds both stays whole. A struct pattern drops its
+/// bindings in reverse pattern order, so naming the directory last in the
+/// pattern removes it before the store.
+///
+/// The file is [`Self::path`]. A function that takes `impl AsRef<Path>`
+/// accepts this value. A function that takes `&Path` is handed
+/// [`Self::path`]. Bind this value, then borrow it: chaining on the
+/// temporary ends the directory at the end of that statement.
+pub struct TestPath {
+    path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
 }
 
-/// Remove the store at `p` (a file — or a directory, should a helper ever
-/// make one). Absence is not an error.
-pub fn cleanup(p: &std::path::Path) {
-    let _gone = std::fs::remove_file(p).or_else(|_| std::fs::remove_dir_all(p));
+impl TestPath {
+    /// The store file inside the directory this owns.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// A fresh `<name>.redb` path in a directory of its own.
+///
+/// # Panics
+///
+/// The directory cannot be created.
+pub fn tmp(name: &str) -> TestPath {
+    let dir = tempfile::Builder::new()
+        .prefix("shekyl-chain-ingest-")
+        .tempdir()
+        .expect("create a test directory");
+    TestPath {
+        path: dir.path().join(format!("{name}.redb")),
+        _dir: dir,
+    }
+}
+
+impl AsRef<std::path::Path> for TestPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
 }
 
 pub fn h(n: u64) -> BlockHeight {
@@ -194,16 +240,6 @@ pub fn at(height: u64) -> usize {
     usize::try_from(height).expect("a fixture height fits usize")
 }
 
-/// A **fixture** body `tx` anchored for a block at `height` on the chain
-/// whose block hashes so far are `hashes`: the harness's
-/// [`fixture::anchored_at`] — the newest reference CEN-I11 admits. For the
-/// archival bodies (a join, a serve credit, which is left as it is); a
-/// real spend carries its reference inside its proof and is never passed
-/// here — rewriting it would be the forged-reference shape, not an anchor.
-pub fn anchor(hashes: &[BlockHash], height: u64, tx: Transaction) -> Transaction {
-    fixture::anchored_at(hashes, height, tx)
-}
-
 /// A block at `height` on `previous`, listing `listed`, with `nonce`, whose
 /// header carries `root` — the tree state going into `height`
 /// ([`GrownTree::root_going_into`]; CEN-B5) — and whose coinbase pays
@@ -238,11 +274,9 @@ pub fn block_with_nonce(
             previous,
             nonce,
             curve_tree_root: root,
-            // The empty set's root: a block carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            // The empty section's root: a block carrying no references is
+            // judged against it (CEN-J29).
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction,
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
@@ -394,7 +428,7 @@ pub fn reorg_of(main: Vec<(Block, Vec<Transaction>)>, to: u64, fork_len: u64) ->
 
 /// The reorg as a corpus: main's blocks, a rewind record, the fork's.
 pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
-    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), CorpusNet::Fakechain, h(0))
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, h(0))
         .expect("header");
     for (b, txs) in &r.main {
         let (bytes, bodies) = wire(b, txs);
@@ -427,12 +461,8 @@ pub fn corpus_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<u8> {
 
 /// The corpus of `chain`, whose first block is at `first`.
 pub fn corpus_from(first: BlockHeight, chain: &[(Block, Vec<Transaction>)]) -> Vec<u8> {
-    let mut w = CorpusWriter::create(
-        std::io::Cursor::new(Vec::new()),
-        CorpusNet::Fakechain,
-        first,
-    )
-    .expect("header");
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, first)
+        .expect("header");
     for (b, txs) in chain {
         let (bb, bodies) = wire(b, txs);
         w.append(&bb, &bodies).expect("verified");
@@ -516,50 +546,33 @@ pub fn facts_at(
 
 /// The spent-key set of `chain` after its last block: one key image per
 /// listed spend.
-pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
+pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<KeyImage> {
     chain
         .iter()
         .flat_map(|(_, txs)| txs.iter())
         .flat_map(|t| t.prefix.inputs.iter())
         .filter_map(|i| match i {
-            Input::ToKey { key_image, .. } => Some(KeyImage::from_bytes(*key_image).to_bytes()),
+            Input::ToKey { key_image, .. } => Some(KeyImage::from_bytes(*key_image)),
             _ => None,
         })
         .collect()
-}
-
-/// What a test trace's covered-tip checkpoint records. The checkpoint's two
-/// encodings travel together (`trace.rs`), so this names both at once.
-#[derive(Clone, Copy, Debug)]
-pub enum Pinned<'a> {
-    /// The grown tree's own state after the tip: its digest, and the
-    /// archival rows the store writes for a chain that posts no bonds
-    /// ([`GrownTree::archival_snapshot_after`]).
-    OfTree,
-    /// A state read from a reference store — the pair as the LMDB walker
-    /// would have taken it, for chains the tree cannot derive (bond posts,
-    /// an injected credit).
-    Read {
-        /// The reference digest.
-        digest: Digest,
-        /// The reference rows.
-        archival: &'a ArchivalSnapshot,
-    },
 }
 
 /// A trace for `chain`. Each row's `root_after` is [`GrownTree::root_after`]
 /// of this chain and its three weight values are the tree's derivation at
 /// that height ([`GrownTree::weights_of`], [`GrownTree::median_for`]);
 /// `economics` supplies the rest and is called once per height, from
-/// genesis, in order. `pinned` appends the checkpoint — both encodings —
-/// after the tip, when given.
+/// genesis, in order. With `checkpoint`, the covered-tip checkpoint follows
+/// the tip in both encodings: the grown tree's digest, and the archival
+/// rows the store writes for a chain that posts no bonds
+/// ([`GrownTree::archival_snapshot_after`]).
 ///
 /// Heights are the chain's indices. A chain whose first block is not
 /// genesis is not this constructor's input.
-pub fn trace_pinned(
+pub fn trace_with(
     chain: &[(Block, Vec<Transaction>)],
     mut economics: impl FnMut(u64) -> TraceEconomics,
-    pinned: Option<Pinned<'_>>,
+    checkpoint: bool,
 ) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     let tree = GrownTree::over(chain);
@@ -568,35 +581,18 @@ pub fn trace_pinned(
         let facts = economics(height).over(&tree, height);
         w.push_facts(h(height), &facts).expect("facts");
     }
-    if let Some(pinned) = pinned {
-        let (digest, archival) = match pinned {
-            Pinned::OfTree => {
-                let tip = chain
-                    .len()
-                    .checked_sub(1)
-                    .and_then(|t| u64::try_from(t).ok())
-                    .expect("a checkpoint of the tree needs a tip: the chain is empty");
-                (
-                    digest_of(chain, tree.root_after(h(tip)).as_bytes()),
-                    tree.archival_snapshot_after(h(tip)),
-                )
-            }
-            Pinned::Read { digest, archival } => (digest, archival.clone()),
-        };
-        w.push_checkpoint(&digest).expect("checkpoint");
-        w.push_archival_snapshot(&archival)
+    if checkpoint {
+        let tip = chain
+            .len()
+            .checked_sub(1)
+            .and_then(|t| u64::try_from(t).ok())
+            .expect("a checkpoint of the tree needs a tip: the chain is empty");
+        w.push_checkpoint(&digest_of(chain, &tree.root_after(h(tip))))
+            .expect("checkpoint");
+        w.push_archival_snapshot(&tree.archival_snapshot_after(h(tip)))
             .expect("archival snapshot");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
-}
-
-/// [`trace_pinned`] with the tree's own checkpoint, or none.
-pub fn trace_with(
-    chain: &[(Block, Vec<Transaction>)],
-    economics: impl FnMut(u64) -> TraceEconomics,
-    checkpoint: bool,
-) -> Trace {
-    trace_pinned(chain, economics, checkpoint.then_some(Pinned::OfTree))
 }
 
 /// [`trace_with`] with the synthetic economics: distinct per height, zero burn.
@@ -604,36 +600,19 @@ pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace 
     trace_with(chain, synthetic_economics, checkpoint)
 }
 
-/// [`trace_pinned`] with the synthetic economics and a checkpoint read
-/// from a reference store ([`Pinned::Read`]).
-pub fn trace_read(
-    chain: &[(Block, Vec<Transaction>)],
-    digest: Digest,
-    archival: &ArchivalSnapshot,
-) -> Trace {
-    trace_pinned(
-        chain,
-        synthetic_economics,
-        Some(Pinned::Read { digest, archival }),
-    )
-}
-
 /// The redb-shaped digest of `chain` given the root after its tip.
-fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &[u8; 32]) -> Digest {
-    let hashes: Vec<[u8; 32]> = chain
-        .iter()
-        .map(|(block, _)| block.hash().to_bytes())
-        .collect();
+fn digest_of(chain: &[(Block, Vec<Transaction>)], root_after_tip: &CurveTreeRoot) -> Digest {
+    let hashes: Vec<BlockHash> = chain.iter().map(|(block, _)| block.hash()).collect();
     digest_v0(&hashes, &spent_keys_of(chain), root_after_tip)
 }
 
 /// The redb-shaped digest one would expect after `chain`.
 pub fn expected_state(chain: &[(Block, Vec<Transaction>)]) -> Digest {
     let last = u64::try_from(chain.len() - 1).expect("a chain has a tip");
-    digest_of(chain, GrownTree::over(chain).root_after(h(last)).as_bytes())
+    digest_of(chain, &GrownTree::over(chain).root_after(h(last)))
 }
 
-pub fn open_store(path: &std::path::Path) -> ChainStore {
+pub fn open_store(path: impl AsRef<std::path::Path>) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
 }
 
@@ -650,7 +629,7 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
 /// [`ApplyPolicy`]: shekyl_chain_store::apply_policy::ApplyPolicy
 /// [`ApplyPolicy::Full`]: shekyl_chain_store::apply_policy::ApplyPolicy::Full
 pub fn open_store_under(
-    path: &std::path::Path,
+    path: impl AsRef<std::path::Path>,
     in_force: &RuleSet,
     policy: shekyl_chain_store::apply_policy::ApplyPolicy,
 ) -> ChainStore {
@@ -749,7 +728,7 @@ impl Source for Scripted {
 }
 
 /// The keys every scenario block's coinbase pays: the harness wallet's.
-pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
+pub fn harness_keys() -> shekyl_block_template::MinerKeys {
     let recipient = MinerWallet::harness().recipient();
     shekyl_block_template::MinerKeys {
         spend_public: recipient.spend_public,
@@ -762,7 +741,7 @@ pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
 /// reads; with the miner's sender, which a test keeps alive or drops, and
 /// the follower's posting.
 #[cfg(feature = "pipeline")]
-pub(crate) fn job_seat(
+pub fn job_seat(
     board: &std::sync::Arc<shekyl_miner::JobBoard>,
     keys: Option<shekyl_block_template::MinerKeys>,
     sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
@@ -781,9 +760,50 @@ pub(crate) fn job_seat(
             keys,
             miner: crate::follower::MinerFeed { found, sync },
             posting,
-            witness: std::sync::Arc::new(shekyl_bundle_producer::WitnessRing::new()),
+            witness: std::sync::Arc::new(shekyl_bundle_producer::WitnessRing::new(
+                shekyl_network::HARNESS_NETWORK_ID,
+            )),
         },
         sender,
         posted,
     )
+}
+
+/// A production proof-of-work boundary over a hasher of the test's own, as
+/// each daemon has its own. Dropping it stops the hasher: every job has
+/// ended by then, since a job borrows the boundary.
+#[cfg(feature = "pipeline")]
+pub struct OwnHasher {
+    /// The boundary, to plug in. Cheap to clone.
+    pub pow: crate::pow::ProductionPow,
+    /// The hasher, for its `resident()` watch.
+    pub hasher: shekyl_hasher::Hasher,
+    _owner: shekyl_hasher::Owner,
+}
+
+/// [`OwnHasher`] over a budget of this host's parallelism.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher() -> OwnHasher {
+    own_hasher_on(shekyl_hash_budget::Budget::of_host())
+}
+
+/// [`OwnHasher`] over `budget`.
+#[cfg(feature = "pipeline")]
+pub fn own_hasher_on(budget: shekyl_hash_budget::Budget) -> OwnHasher {
+    let (hasher, owner) = shekyl_hasher::Hasher::start(budget).expect("the builder thread starts");
+    let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+    OwnHasher {
+        pow: crate::pow::ProductionPow::new(hasher.clone(), metrics),
+        hasher,
+        _owner: owner,
+    }
+}
+
+/// A running hasher nothing ranks, shared by the process's tests: every
+/// warm loan on it is declined, as on a node whose list names no such
+/// seed. For a test whose subject builds no cache.
+#[cfg(feature = "pipeline")]
+pub fn unranked_hasher() -> shekyl_hasher::Hasher {
+    static IDLE: std::sync::OnceLock<OwnHasher> = std::sync::OnceLock::new();
+    IDLE.get_or_init(own_hasher).hasher.clone()
 }

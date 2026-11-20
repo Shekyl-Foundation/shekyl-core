@@ -8,20 +8,21 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use shekyl_curve_tree::{
-    select_reference_height, BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock,
-};
+use shekyl_curve_tree::{BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock};
 use shekyl_engine_state::LedgerBlock;
 
-use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
+use super::super::diagnostics::{
+    emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic, WatchdogAlarmReason,
+};
+use super::super::dispatch_durability::{commit_release, LedgerCommit};
 use super::super::error::{PendingTxError, SendError, SignerError, SubmitError};
 use super::super::fee_estimator::FeeEstimator;
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::output_selector::OutputSelector;
-use super::super::pending::{PendingTx, ReservationId, SubmitOutcome, TxHash, TxRequest};
+use super::super::pending::{PendingTx, ReservationId, SubmitReceipt, TxHash, TxRequest};
 use super::super::signer::{Signer, TransferSigningContext};
 use super::super::signing_assembly::assemble_tx_to_sign;
-use super::super::submit_lifecycle::WatchdogHost;
+use super::super::submit_lifecycle::{HeldSendFact, ReleasePersistence, WatchdogHost};
 use super::super::submit_watchdog::{self, HeldSubmit};
 use super::super::traits::{LedgerEngine, PendingTxEngine};
 use super::super::transaction_submitter::TransactionSubmitter;
@@ -69,7 +70,7 @@ where
         self.ledger.with_ledger_block(LedgerBlock::height)
     }
 
-    fn block_hash_at(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn block_hash_at(&self, height: BlockHeight) -> Option<BlockHash> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -78,15 +79,50 @@ where
         LocalPendingTx::held_bytes_for(self, tx_hash)
     }
 
-    fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
-        LocalPendingTx::prune_held_bytes(self, live);
+    fn prune_settled_send_bytes(&self) {
+        LocalPendingTx::prune_settled_send_bytes(self);
+    }
+
+    fn dispatched_this_session(&self, tx_hash: &TxHash) -> bool {
+        LocalPendingTx::dispatched_this_session(self, tx_hash)
+    }
+
+    fn latch_alarm(&self, tx_hash: TxHash, reason: WatchdogAlarmReason) -> bool {
+        let mut state = self.state.lock().expect("pending-tx state lock poisoned");
+        match state.raised_alarms.entry(tx_hash) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(reason);
+                true
+            }
+        }
+    }
+
+    fn release_alarms(&self, live: &HashSet<TxHash>) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .raised_alarms
+            .retain(|tx_hash, _| live.contains(tx_hash));
+    }
+
+    fn clear_alarm(&self, tx_hash: &TxHash) {
+        self.state
+            .lock()
+            .expect("pending-tx state lock poisoned")
+            .raised_alarms
+            .remove(tx_hash);
     }
 
     fn drain_rescan_queue(&self) -> Vec<RescanRequest> {
         LocalPendingTx::drain_rescan_queue(self)
     }
 
-    fn release_awaiting_confirmation(&self, tx_hashes: &HashSet<TxHash>) -> usize {
+    fn release_awaiting_confirmation(
+        &self,
+        tx_hashes: &HashSet<TxHash>,
+        commit: &dyn LedgerCommit,
+    ) -> ReleasePersistence {
         // The confirmed-absent verdict releases the F14 locks ONLY. It
         // deliberately does NOT touch the WI-RPC-3 retention record:
         // the release trigger — a terminal reject when the held bytes
@@ -101,9 +137,48 @@ where
         // safe-direction residue — the retention policy's deliberate
         // trade (`docs/api/wallet_rpc.yaml` OUTBOUND PREREQUISITE
         // death rule).
-        self.ledger.with_wallet_ledger_mut(|wallet| {
-            submit_watchdog::release_awaiting_confirmation(wallet, tx_hashes)
+        //
+        // The release frees inputs a new send can select, so it is saved
+        // under the same guard. [`commit_release`] restores the whole row
+        // when the rename does not land.
+        self.ledger
+            .with_wallet_ledger_mut(|wallet| commit_release(wallet, commit, tx_hashes))
+    }
+
+    fn held_send_facts(&self) -> Vec<HeldSendFact> {
+        // State first, then the ledger. A build holds the state lock
+        // across a ledger read, so the reverse order deadlocks behind a
+        // writer waiting on that read.
+        let (session, alarms) = {
+            let state = self.state.lock().expect("pending-tx state lock poisoned");
+            (
+                state.dispatched_this_session.clone(),
+                state.raised_alarms.clone(),
+            )
+        };
+        self.ledger.with_wallet_ledger(|wallet| {
+            wallet
+                .send_journal
+                .rows
+                .iter()
+                .filter(|(_, row)| row.lock_baseline.is_some() && row.state.locks_carried_inputs())
+                .map(|(txid, row)| {
+                    let tx_hash = TxHash::from_bytes(*txid);
+                    HeldSendFact {
+                        tx_hash,
+                        sent_height: row.dispatched_at_height,
+                        has_bytes: row.tx_bytes.is_some(),
+                        dispatched_this_session: session.contains(&tx_hash),
+                        latched: alarms.get(&tx_hash).copied(),
+                    }
+                })
+                .collect()
         })
+    }
+
+    fn adopt_into_session(&self, tx_hash: TxHash) {
+        LocalPendingTx::adopt_into_session(self, tx_hash);
+        self.clear_alarm(&tx_hash);
     }
 
     fn emit(&self, event: PendingTxDiagnostic) {
@@ -121,9 +196,10 @@ where
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     async fn build(&self, request: TxRequest) -> Result<PendingTx, SendError> {
-        // Refusals that need no network and no permit run first: an
-        // empty recipient list or an unechoable rid is a malformed
-        // request (`TxRequest::check_recipients`), and a tripped
+        // Refusals that need the wallet's network but no daemon and no
+        // permit run first. An empty list, an address that cannot be
+        // paid, or an unechoable rid is a malformed request
+        // (`TxRequest::check_recipients`), and a tripped
         // F28/F37 loop breaker exists precisely to refuse *fast*
         // (§2.5 — the alarm was raised at trip time and only operator
         // acknowledgment re-enables building). Queueing either behind a
@@ -131,7 +207,7 @@ where
         // breaker cost a full build's latency per refused attempt, and
         // would make the sync `Engine::build_pending_tx` wrapper report
         // permit contention (`BuildInvariant`) instead of the real error.
-        if let Err(err) = request.check_recipients() {
+        if let Err(err) = request.check_recipients(self.network) {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -214,53 +290,62 @@ where
         // below refuses (a spend requires the curve tree — no synthetic
         // fallback). The depth sizes the FCMP++ proof weight for fee estimation;
         // its `1` default is inert because those unresolved cases never assemble.
+        // One horizon for the build (A17): the reference it binds and the
+        // classifier that picks its candidates both come from this tip.
+        let horizon = shekyl_engine_state::SpendHorizon::at_tip(
+            self.ledger.with_ledger_block(LedgerBlock::height),
+        );
         let (reference, tree_depth) = match &self.curve_tree {
-            Some(handle) => {
-                let synced = self.ledger.with_ledger_block(LedgerBlock::height);
-                match select_reference_height(synced) {
-                    Some(rh)
-                        if matches!(
-                            tree_gate,
-                            TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
-                        ) =>
-                    {
-                        let (curve_tree_root, depth) =
-                            handle.reference_root_and_depth(rh).await.map_err(|err| {
-                                fail_build_after_attempted(
-                                    self.sink.as_ref(),
-                                    map_curve_tree_handle_error_for_send(&err),
-                                )
-                            })?;
-                        let block_hash = self
-                            .ledger
-                            .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
-                            .ok_or_else(|| {
-                                fail_build_after_attempted(
-                                    self.sink.as_ref(),
-                                    SendError::BuildInvariant {
-                                        reason: "reference-height block hash missing from ledger",
-                                    },
-                                )
-                            })?;
-                        (
-                            Some(ReferenceBlock {
-                                height: rh,
-                                curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-                                block_hash: BlockHash::from_bytes(block_hash),
-                            }),
-                            depth,
-                        )
-                    }
-                    _ => (None, 1u8),
+            Some(handle) => match horizon.reference() {
+                Some(rh)
+                    if matches!(
+                        tree_gate,
+                        TreeSpendGate::Enforced { covered_through: Some(c) } if c >= rh
+                    ) =>
+                {
+                    let (curve_tree_root, depth) =
+                        handle.reference_root_and_depth(rh).await.map_err(|err| {
+                            fail_build_after_attempted(
+                                self.sink.as_ref(),
+                                map_curve_tree_handle_error_for_send(&err),
+                            )
+                        })?;
+                    let block_hash = self
+                        .ledger
+                        .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
+                        .ok_or_else(|| {
+                            fail_build_after_attempted(
+                                self.sink.as_ref(),
+                                SendError::BuildInvariant {
+                                    reason: "reference-height block hash missing from ledger",
+                                },
+                            )
+                        })?;
+                    (
+                        Some(ReferenceBlock {
+                            height: rh,
+                            curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+                            block_hash,
+                        }),
+                        depth,
+                    )
                 }
-            }
+                _ => (None, 1u8),
+            },
             None => (None, 1u8),
         };
         let BuildSelected {
             assemble_inputs,
             fee_directive,
             meta,
-        } = self.build_select_sync(&request, fee_snapshot, tree_gate, reference, tree_depth)?;
+        } = self.build_select_sync(
+            &request,
+            fee_snapshot,
+            tree_gate,
+            horizon,
+            reference,
+            tree_depth,
+        )?;
         let mut reservation_cleanup = BuildReservationCleanup::new(self, meta.reservation_id);
 
         // CT-5c: assemble the real FCMP++ membership paths for the whole tx in
@@ -300,10 +385,9 @@ where
         // Both are read at the one reference height, so a divergence means the
         // tree moved under the reference — refuse rather than sign a proof whose
         // weight the fee did not cover. Holds as a tautology under a valid
-        // reference; never fires benignly. Check *every* path (all share the one
-        // reference's tree, so they should agree — verifying all closes the gap
-        // if that invariant ever breaks).
-        if paths.iter().any(|p| p.tree.tree_depth != tree_depth) {
+        // reference; never fires benignly. The batch is to one tree by
+        // construction (R-26), so its depth is every path's.
+        if paths.tree().tree_depth != tree_depth {
             return Err(fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::BuildInvariant {
@@ -314,15 +398,15 @@ where
         // Fold the real paths into the signing context, re-reading the selected
         // transfers by index for their secret-pathway fields (`TransferDetails`
         // is not `Clone`). `assemble_tx_to_sign` guards each re-read with a
-        // `gindex` check against `assemble_inputs`, so an index shift under a
-        // reorg during the assemble round-trip is refused, not mis-signed.
+        // `gindex` check against the input each path was assembled for, so an
+        // index shift under a reorg during the assemble round-trip is refused,
+        // not mis-signed.
         let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
             assemble_tx_to_sign(
                 self.network,
                 &request,
                 &meta.selected.indices,
                 ledger.transfers(),
-                &assemble_inputs,
                 &paths,
                 fee_directive,
             )
@@ -341,13 +425,14 @@ where
         Ok(pending)
     }
 
-    fn submit(
+    fn submit<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> impl Future<Output = Result<SubmitOutcome, SubmitError>> + Send {
+        commit: &C,
+    ) -> impl Future<Output = Result<SubmitReceipt, SubmitError>> + Send {
         let this = self;
-        async move { this.submit_async(id, seen_gen).await }
+        async move { this.submit_async(id, seen_gen, commit).await }
     }
 
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError> {
@@ -382,7 +467,7 @@ where
                 created_at: Instant::now(),
                 snapshot_id: SnapshotId([0u8; 16]),
                 built_at_height: shekyl_types::BlockHeight::ZERO,
-                built_at_tip_hash: [0u8; 32],
+                built_at_tip_hash: BlockHash::from_bytes([0u8; 32]),
                 tx_bytes: Vec::new(),
                 request: TxRequest {
                     recipients: Vec::new(),
@@ -400,9 +485,7 @@ where
                     AtomicUnits::ZERO,
                 )
                 .expect("empty fingerprint is constructible"),
-                tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                    [0u8; 32],
-                )),
+                tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             },
         );
     }

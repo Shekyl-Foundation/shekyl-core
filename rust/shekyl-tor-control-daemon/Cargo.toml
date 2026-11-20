@@ -20,6 +20,9 @@ publish = false
 # depends on shekyl-tor-control-wallet: the wallet's supervisor, vanguards and
 # cross-incarnation state are exactly what the daemon posture must not touch.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# The probe of this node's own onion dials through the managed Tor's SOCKS
+# port with its own isolation pair (`TOR_SUPERVISOR.md` §4.5).
+shekyl-socks = { path = "../shekyl-socks" }
 
 # The start sequence: tokio for the bootstrap-gate timers and teardown bounds;
 # kameo for the control actor handle it drives. Both are the workspace's
@@ -28,11 +31,14 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # actor's: timers, process, and the I/O the control client uses.
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }
 kameo = { workspace = true }
-# OS CSPRNG for the per-boot hs-id seed mint — the same source the wallet's
-# vanguard rotation draws from.
+# OS CSPRNG for the probe's per-boot isolation pair and the data directory's
+# name — the same source the wallet's vanguard rotation draws from. The onion
+# key's seed is drawn inside `shekyl-onion-key` (`OnionKeypair::ephemeral`).
 getrandom = "0.2"
-# Wipe-on-drop for the minted seed (35-secure-memory): the seed exists only
-# between mint and ADD_ONION, and this makes the window structural.
+# The boot's onion (`OnionKeypair::ephemeral`). The client encodes it; this
+# crate mints it, so the keypair crate is a direct edge.
+shekyl-onion-key = { path = "../shekyl-onion-key" }
+# Wipe-on-drop for the probe's isolation username (35-secure-memory).
 zeroize = { version = "1", default-features = false }
 
 [dev-dependencies]

@@ -1,4 +1,6 @@
+#![deny(unsafe_code)]
 mod admission;
+mod baseline;
 mod block_space;
 mod budget;
 mod budget_scenarios;
@@ -6,9 +8,12 @@ mod burden;
 mod calibration;
 mod cartel;
 mod chain_cursor;
+mod committed_fixture;
 mod distribution;
 mod engine;
 mod escalation;
+mod esr10;
+mod eup4;
 mod fee_bar;
 mod fee_floor;
 mod fee_horizon;
@@ -16,19 +21,26 @@ mod fee_ladder;
 mod fee_model;
 mod fee_signal;
 mod growth_gate;
+mod honest_step;
+mod jg_grid;
 mod median_window;
 mod miner_stuffer;
 mod mn_feasibility;
 mod onset;
+mod parallel;
 mod population;
 mod proxy;
 mod redistribution;
 mod rng;
+mod rung_mix;
 mod secret_draw;
 mod secret_draw_production;
+mod seed_spread;
+mod step_response;
 mod stranding;
 mod swing;
 mod volume_window;
+mod window_stuffer;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
 // `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
@@ -65,12 +77,195 @@ use std::io::Write;
 /// flat fee per transaction, the fee the `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`
 /// §12.13–§12.14 tables were measured on. Without it the run charges the
 /// production ladder (`fee_model.rs`). Every such report names its arm.
+///
+/// `--control-steady-traffic` runs any mode on the `steady` control's
+/// traffic: every block offered its scenario's demand. Without it each
+/// block draws standard traffic around that demand
+/// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.35). The baseline printed beside
+/// a `--set` cell runs on the same arm.
+///
+/// `--seed-spread` runs `--stage2`, `--esr10` or `--eup4` (or one
+/// instrument) at every declared seed of standard traffic and prints the
+/// reports merged: each figure that differs as its median and `[its range]`
+/// (`seed_spread.rs`). On demand; the pins carry the canonical seed.
+/// The run's overrides: every `--set set.field=value`, in order
+/// (`baseline.rs`). Parsed and applied before any mode runs.
+fn overrides_from_args() -> Result<Vec<baseline::Override>, baseline::OverrideError> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut overrides = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--set" {
+            let text = args.get(i + 1).map_or("", String::as_str);
+            overrides.push(baseline::Override::parse(text)?);
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(overrides)
+}
+
+/// Refuse a run and exit before any fold.
+fn refuse(reason: &str) -> ! {
+    eprintln!("shekyl-economics-sim: {reason}");
+    std::process::exit(2);
+}
+
 fn main() {
-    let params = if std::env::args().any(|a| a == "--control-flat-fee") {
-        SimParams::section_12_14_control()
-    } else {
-        SimParams::default()
+    let control = std::env::args().any(|a| a == "--control-flat-fee");
+    let steady = std::env::args().any(|a| a == "--control-steady-traffic");
+    let arm = |mut params: SimParams| {
+        if control {
+            params.fee = SimParams::section_12_14_control().fee;
+        }
+        if steady {
+            params = params.on_steady();
+        }
+        params
     };
+    let overrides = overrides_from_args().unwrap_or_else(|e| refuse(&e.to_string()));
+    let params =
+        arm(SimParams::with_overrides(overrides).unwrap_or_else(|e| refuse(&e.to_string())));
+
+    // Every report starts with the baseline's three digests and the run's
+    // overrides (ESR-16 completion, ruling 6).
+    let mut header = String::new();
+    baseline::write_header(&mut header, params.overrides()).expect("String sink is infallible");
+    eprint!("{header}");
+
+    // A sweep cell is a `--stage2` or `--esr10` run: each prints a cell
+    // beside its baseline. Every other mode reads the shipped baseline, so
+    // an override there would change nothing it prints, or change it with
+    // no baseline beside it.
+    let stage2 = std::env::args().any(|a| a == "--stage2");
+    let esr10 = std::env::args().any(|a| a == "--esr10");
+    // EUP-4 prep 2 (§5.32): `--eup4` runs every instrument; each
+    // instrument's own mode runs it alone, and only that mode takes a cell.
+    let eup4 = std::env::args().any(|a| a == "--eup4");
+    let instrument = eup4::Instrument::ALL
+        .into_iter()
+        .find(|i| std::env::args().any(|a| a == i.flag()));
+    let jg = std::env::args().any(|a| a == "--jg-grid");
+    if !params.overrides().is_empty() && !stage2 && !esr10 && instrument.is_none() && !jg {
+        refuse(
+            "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
+             prints a cell beside its baseline",
+        );
+    }
+    if esr10 && control {
+        refuse("--esr10 runs the production ladder: the flat control fee has no rungs to mix");
+    }
+    if (eup4 || instrument.is_some()) && control {
+        refuse("the instruments name their fee arms: --control-flat-fee selects none of them");
+    }
+    // An override on a field the mode's report does not read would print
+    // the baseline, which reads as "no effect": refused before the fold.
+    let (mode, reads) = if let Some(instrument) = instrument {
+        baseline::instrument_reach(instrument)
+    } else if esr10 {
+        baseline::esr10_reach()
+    } else {
+        baseline::stage2_reach(control)
+    };
+    if let Err(e) = baseline::check_reach(params.overrides(), params.baseline(), mode, reads) {
+        refuse(&e.to_string());
+    }
+
+    if std::env::args().any(|a| a == "--seed-spread") {
+        if !params.overrides().is_empty()
+            || steady
+            || jg
+            || !(stage2 || esr10 || eup4 || instrument.is_some())
+        {
+            refuse(
+                "--seed-spread runs --stage2, --esr10, --eup4 or one instrument on standard traffic: \
+                 no --set, no --control-steady-traffic, and not --jg-grid, which prints its own seeds",
+            );
+        }
+        // The spread merges the narrations; no seed's JSON summary is
+        // written, so stdout stays empty in this mode.
+        let render = |at: &SimParams| {
+            let mut narration = String::new();
+            if eup4 || instrument.is_some() {
+                eup4::run(&mut narration, at, instrument).expect("String sink is infallible");
+            } else if esr10 {
+                esr10::run_esr10(&mut narration, at, &esr10::every_scenario(at))
+                    .expect("String sink is infallible");
+            } else {
+                stage2::run_stage2(&mut narration, at).expect("String sink is infallible");
+            }
+            narration
+        };
+        eprint!("{}", seed_spread::across_seeds(&params, render));
+        return;
+    }
+
+    if jg {
+        // J x G (§5.33): the grid sets its own zone, w_ref and rails per
+        // cell, so it takes no override and names its own fee arms.
+        if !params.overrides().is_empty() || control || steady {
+            refuse(
+                "--jg-grid sets its own cells: it takes no --set, no --control-flat-fee and no --control-steady-traffic",
+            );
+        }
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let summary = jg_grid::run(&mut narration, &params, jg_grid::Scope::Full)
+            .expect("String sink is infallible");
+        eprint!("{narration}");
+        let json = serde_json::to_string_pretty(&summary).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "--jg-grid wall time: {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
+        return;
+    }
+
+    if eup4 || instrument.is_some() {
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let summary =
+            eup4::run(&mut narration, &params, instrument).expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            eup4::run(
+                &mut baseline_narration,
+                &arm(SimParams::default()),
+                instrument,
+            )
+            .expect("String sink is infallible");
+            // The reach the mode declares is the fold's; whether the cell
+            // reaches this instrument's figures is read here, from the two
+            // reports, so a cell never prints its baseline as a result.
+            if let Some(reason) = baseline::unmoved_cell_refusal(
+                &narration,
+                &baseline_narration,
+                instrument.map_or("--eup4", eup4::Instrument::flag),
+            ) {
+                refuse(&reason);
+            }
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
+        let json = serde_json::to_string_pretty(&summary).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "{} wall time: {:.0} s",
+            instrument.map_or("--eup4", eup4::Instrument::flag),
+            started.elapsed().as_secs_f64()
+        );
+        return;
+    }
 
     if std::env::args().any(|a| a == "--fb1c-c2") {
         eprintln!("{}", params.fee.label());
@@ -159,7 +354,42 @@ fn main() {
         return;
     }
 
-    if std::env::args().any(|a| a == "--stage2") {
+    // ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.29): the fee multiplier
+    // and the rung mix on both `w_ref` arms. The narration to stderr, as
+    // `--stage2`'s; the summary EUP-5 reads as JSON to stdout.
+    if esr10 {
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let rows = esr10::run_esr10(&mut narration, &params, &esr10::every_scenario(&params))
+            .expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let shipped = arm(SimParams::default());
+            let mut baseline_narration = String::new();
+            esr10::run_esr10(
+                &mut baseline_narration,
+                &shipped,
+                &esr10::every_scenario(&shipped),
+            )
+            .expect("String sink is infallible");
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
+        let json = serde_json::to_string_pretty(&rows).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "--esr10 wall time: {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
+        return;
+    }
+
+    if stage2 {
         // The I/O boundary lives here, in the binary target: the arm modules
         // *render* into a sink (`fmt::Write`) and `main` performs the write.
         // That keeps each report next to the model it renders — the
@@ -167,8 +397,25 @@ fn main() {
         // intent (no ad-hoc printing in non-binary source) is satisfied by
         // construction rather than by exemption.
         let mut narration = String::new();
-        stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
-        eprint!("{narration}");
+        let report =
+            stage2::run_stage2(&mut narration, &params).expect("String sink is infallible");
+        if params.overrides().is_empty() {
+            eprint!("{narration}");
+        } else {
+            let mut baseline_narration = String::new();
+            stage2::run_stage2(&mut baseline_narration, &arm(SimParams::default()))
+                .expect("String sink is infallible");
+            eprint!(
+                "{}",
+                baseline::beside_baseline(&narration, &baseline_narration)
+            );
+        }
+        // One JSON document, the run's own: the baseline beside it is
+        // narration only.
+        let json = serde_json::to_string_pretty(&report).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
         return;
     }
 

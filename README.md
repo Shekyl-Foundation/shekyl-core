@@ -9,7 +9,6 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
   - [Vulnerability response](#vulnerability-response)
   - [Research](#research)
   - [Announcements](#announcements)
-  - [Translations](#translations)
   - [Coverage](#coverage)
   - [Why the name Shekyl](#why-the-name-shekyl)
   - [Introduction](#introduction)
@@ -21,7 +20,6 @@ Portions Copyright (c) 2012-2013 The Cryptonote developers.
   - [Release staging schedule and protocol](#release-staging-schedule-and-protocol)
   - [Compiling Shekyl from source](#compiling-shekyl-from-source)
     - [Dependencies](#dependencies)
-  - [Internationalization](#Internationalization)
   - [Using Tor](#using-tor)
   - [Pruning](#Pruning)
   - [Debugging](#Debugging)
@@ -55,12 +53,6 @@ protocol contracts include:
 ## Announcements
 
 - Major release and security announcements are published via `shekyl.org` and repository release notes.
-
-## Translations
-
-The CLI wallet supports multiple languages. See [README.i18n.md](docs/README.i18n.md)
-for the translation workflow. To contribute translations, open an issue and we
-will coordinate files and review process.
 
 ## Coverage
 
@@ -155,73 +147,46 @@ Releases follow the `dev` -> `main` workflow. Active development happens on
 
 ### Dependencies
 
-The following table summarizes the tools and libraries required to build. A
-few of the libraries are also included in this repository (marked as
-"Vendored"). By default, the build uses the library installed on the system
-and ignores the vendored sources. However, if no library is found installed on
-the system, then the vendored source will be built and used. The vendored
-sources are also used for statically-linked builds because distribution
-packages often include only shared library binaries (`.so`) but not static
-library archives (`.a`).
+Shekyl is a Rust workspace (`rust/`); CMake and the top-level Makefile drive
+one cargo build that stages `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`.
+The tree holds no C++ of its own. A C toolchain is still needed: some crates
+compile C (`ring`, for one), and cross builds link through it.
 
-| Dep          | Min. version  | Vendored | Debian/Ubuntu pkg    | Arch pkg     | Void pkg           | Fedora pkg          | Optional | Purpose         |
-| ------------ | ------------- | -------- | -------------------- | ------------ | ------------------ | ------------------- | -------- | --------------- |
-| GCC          | 5             | NO       | `build-essential`    | `base-devel` | `base-devel`       | `gcc`               | NO       |                 |
-| CMake        | 3.5           | NO       | `cmake`              | `cmake`      | `cmake`            | `cmake`             | NO       |                 |
-| pkg-config   | any           | NO       | `pkg-config`         | `base-devel` | `base-devel`       | `pkgconf`           | NO       |                 |
-| Boost        | 1.66          | NO       | `libboost-all-dev`   | `boost`      | `boost-devel`      | `boost-devel`       | NO       | C++ libraries   |
-| OpenSSL      | basically any | NO       | `libssl-dev`         | `openssl`    | `openssl-devel`    | `openssl-devel`     | NO       | sha256 sum      |
-| libsodium    | ?             | NO       | `libsodium-dev`      | `libsodium`  | `libsodium-devel`  | `libsodium-devel`   | NO       | cryptography    |
-| libunwind    | any           | NO       | `libunwind8-dev`     | `libunwind`  | `libunwind-devel`  | `libunwind-devel`   | YES      | Stack traces    |
-| liblzma      | any           | NO       | `liblzma-dev`        | `xz`         | `liblzma-devel`    | `xz-devel`          | YES      | For libunwind   |
-| libreadline  | 6.3.0         | NO       | `libreadline6-dev`   | `readline`   | `readline-devel`   | `readline-devel`    | YES      | Input editing   |
-| GTest        | 1.5           | YES      | `libgtest-dev`[1]    | `gtest`      | `gtest-devel`      | `gtest-devel`       | YES      | Test suite      |
-| ccache       | any           | NO       | `ccache`             | `ccache`     | `ccache`           | `ccache`            | YES      | Compil. cache   |
-| Doxygen      | any           | NO       | `doxygen`            | `doxygen`    | `doxygen`          | `doxygen`           | YES      | Documentation   |
-| Graphviz     | any           | NO       | `graphviz`           | `graphviz`   | `graphviz`         | `graphviz`          | YES      | Documentation   |
-| lrelease     | ?             | NO       | `qttools5-dev-tools` | `qt5-tools`  | `qt5-tools`        | `qt5-linguist`      | YES      | Translations    |
+| Dep              | Min. version | Debian/Ubuntu pkg | Arch pkg     | Fedora pkg | Optional | Purpose                                   |
+| ---------------- | ------------ | ----------------- | ------------ | ---------- | -------- | ----------------------------------------- |
+| GCC or Clang     | any current  | `build-essential` | `base-devel` | `gcc`      | NO       | the C some crates compile; the linker     |
+| CMake            | 3.22         | `cmake`           | `cmake`      | `cmake`    | NO       | the build entry point                     |
+| Git              | any          | `git`             | `git`        | `git`      | NO       | submodules, the version string            |
+| Rust (`rustup`)  | the pin      | see rustup.rs     | `rustup`     | `rustup`   | NO       | the toolchain `rust/rust-toolchain.toml` pins |
+| Clang + libclang | any          | `clang libclang-dev` | `clang`   | `clang-devel` | YES   | bindgen, for some tests' dev-dependencies |
 
-[1] On Debian/Ubuntu `libgtest-dev` only includes sources and headers. You must
-build the library binary manually. This can be done with the following command `sudo apt-get install libgtest-dev && cd /usr/src/gtest && sudo cmake . && sudo make`
-then:
-
-* on Debian:
-  `sudo mv libg* /usr/lib/`
-* on Ubuntu:
-  `sudo mv lib/libg* /usr/lib/`
-
-Install all dependencies at once on Debian/Ubuntu:
+Install the system packages at once on Debian/Ubuntu (then Rust from
+https://rustup.rs; `cargo` picks the pinned toolchain up from the tree):
 
 ```
-sudo apt update && sudo apt install build-essential cmake pkg-config libssl-dev libsodium-dev libunwind8-dev liblzma-dev libreadline6-dev qttools5-dev-tools libboost-chrono-dev libboost-date-time-dev libboost-filesystem-dev libboost-locale-dev libboost-program-options-dev libboost-regex-dev libboost-serialization-dev libboost-system-dev libboost-thread-dev python3 ccache doxygen graphviz
+sudo apt update && sudo apt install build-essential cmake git clang libclang-dev
 ```
 
-Install all dependencies at once on Arch:
+On Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake boost openssl libsodium libunwind xz readline gtest python3 ccache doxygen graphviz qt5-tools
-```
-
-Install all dependencies at once on Fedora:
-```
-sudo dnf install gcc gcc-c++ cmake pkgconf boost-devel openssl-devel libsodium-devel libunwind-devel xz-devel readline-devel gtest-devel ccache doxygen graphviz qt5-linguist
+sudo pacman -Syu --needed base-devel cmake git clang rustup
 ```
 
-Install all dependencies at once on openSUSE:
-
+On Fedora:
 ```
-sudo zypper ref && sudo zypper in libboost_chrono-devel libboost_date_time-devel libboost_filesystem-devel libboost_locale-devel libboost_program_options-devel libboost_regex-devel libboost_serialization-devel libboost_system-devel libboost_thread-devel libminiupnpc-devel libsodium-devel libunwind-devel cmake doxygen ccache fdupes gcc-c++ libevent-devel libopenssl-devel pkgconf-pkg-config readline-devel xz-devel libqt5-qttools-devel patterns-devel-C-C++-devel_C_C++
+sudo dnf install gcc cmake git clang-devel rustup
 ```
 
-Install all dependencies at once on macOS with the provided Brewfile:
+On macOS with the provided Brewfile:
 
 ```
 brew update && brew bundle --file=contrib/brew/Brewfile
 ```
 
-FreeBSD 12.1 one-liner required to build dependencies:
+On FreeBSD:
 
 ```
-pkg install git gmake cmake pkgconf boost-libs libsodium
+pkg install git gmake cmake rust
 ```
 
 ### Cloning the repository
@@ -291,15 +256,14 @@ invokes cmake commands as needed.
 
 * Run Shekyl with `shekyld` (foreground), or supervise it with systemd/
   launchd/Task Scheduler for background operation. See
-  `contrib/packaging/linux/shekyld.service` for an example systemd unit.
+  `contrib/packaging/linux/shekyld@.service` for the systemd unit, one
+  instance per network.
 
-* **Optional**: build and run the test suite to verify the binaries:
+* **Optional**: run the test suite (from `rust/`):
 
     ```bash
-    make release-test
+    cd rust && cargo test --workspace --exclude shekyl-randomx-differential
     ```
-
-    *NOTE*: `core_tests` test may take a few hours to complete.
 
 * **Optional**: to build binaries suitable for debugging:
 
@@ -313,18 +277,10 @@ invokes cmake commands as needed.
     make release-static
     ```
 
-Dependencies need to be built with -fPIC. Static libraries usually aren't, so you may have to build them yourself with -fPIC. Refer to their documentation for how to build them.
-
-* **Optional**: build documentation in `doc/html` (omit `HAVE_DOT=YES` if `graphviz` is not installed):
+* **Optional**: build the crate documentation (from `rust/`):
 
     ```bash
-    HAVE_DOT=YES doxygen Doxyfile
-    ```
-
-* **Optional**: use ccache not to rebuild translation units that have not changed. Shekyl's CMakeLists.txt file automatically handles it.
-
-    ```bash
-    sudo apt install ccache
+    cd rust && cargo doc --workspace --no-deps
     ```
 
 #### On the Raspberry Pi (ARM)
@@ -379,7 +335,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-boost mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium
+    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-rust git
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -431,42 +387,23 @@ Shekyl package naming may differ by distro and is not yet standardized.
 
 ### On OpenBSD:
 
-You will need to add a few packages to your system. `pkg_add cmake gmake libiconv boost`.
-
-The `doxygen` and `graphviz` packages are optional and require the xbase set.
-Running the test suite also requires `py-requests` package.
-
-Build Shekyl: `env DEVELOPER_LOCAL_TOOLS=1 BOOST_ROOT=/usr/local gmake release-static`
-
-Note: you may encounter the following error when compiling the latest version as a normal user:
-
-```
-LLVM ERROR: out of memory
-c++: error: unable to execute command: Abort trap (core dumped)
-```
-
-Then you need to increase the data ulimit size to 2GB and try again: `ulimit -d 2000000`
+OpenBSD is not a supported target: no CI or gitian job builds it, and a OpenBSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### On NetBSD:
 
-Check that the dependencies are present: `pkg_info -c libexecinfo boost-headers boost-libs readline git-base pkgconf gmake cmake | more`, and install any that are reported missing, using `pkg_add` or from your pkgsrc tree.  Readline is optional but worth having.
+NetBSD is not a supported target: no CI or gitian job builds it, and a NetBSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
-Third-party dependencies are usually under `/usr/pkg/`, but if you have a custom setup, adjust the "/usr/pkg" (below) accordingly.
+### On DragonFly BSD:
 
-Clone the Shekyl repository recursively and checkout the most recent release as described above. Then build: `gmake BOOST_ROOT=/usr/pkg LDFLAGS="-Wl,-R/usr/pkg/lib" release`. The resulting executables can be found in `build/NetBSD/[Release version]/Release/bin/`.
+DragonFly BSD is not a supported target: no CI or gitian job builds it, and a DragonFly BSD build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
+
+### On illumos:
+
+illumos is not a supported target: no CI or gitian job builds it, and a illumos build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### On Solaris:
 
-The default Solaris linker can't be used, you have to install GNU ld, then run cmake manually with the path to your copy of GNU ld:
-
-```bash
-mkdir -p build/release
-cd build/release
-cmake -DCMAKE_LINKER=/path/to/ld -D CMAKE_BUILD_TYPE=Release ../..
-cd ../..
-```
-
-Then you can run make as usual.
+Solaris is not a supported target: no CI or gitian job builds it, and a Solaris build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
 ### Building portable statically linked binaries
 
@@ -479,8 +416,8 @@ By default, in either dynamically or statically linked builds, binaries target t
 32-bit portable targets (`release-static-linux-i686`, `release-static-win32`)
 were permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
-The C++-side configure refuses non-64-bit hosts, and the Rust workspace
-carries three independent `compile_error!` tripwires against
+The CMake configure refuses non-64-bit hosts, and the Rust workspace
+carries two independent `compile_error!` tripwires against
 `target_pointer_width != 64`.
 
 ### Cross Compiling
@@ -515,8 +452,12 @@ The produced binaries still link libc dynamically. If the binary is compiled on 
 
 ## Installing Shekyl from a package
 
-No distribution packages exist yet. Build from source using the instructions
-above. Packaging contributions are welcome.
+Each release on the
+[releases page](https://github.com/Shekyl-Foundation/shekyl-core/releases)
+carries a `.deb` and an `.rpm` for Linux x86_64 and aarch64 and a Windows
+installer, beside the binary archives. Each installs `shekyld`,
+`shekyl-cli`, `shekyl-wallet-rpc` and the pinned Tor; the `.deb` also
+installs the systemd unit and its slice.
 
 ## Running shekyld
 
@@ -539,15 +480,12 @@ in [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 To run in the background, use your platform's service manager (systemd,
 launchd, or Task Scheduler). The shipped systemd unit is
-`contrib/packaging/linux/shekyld.service`, which runs in its own
-`shekyl.slice` beside it (the `.deb` installs both). Adapt paths and the
-service user to your deployment; nothing reads the daemon's stdin unless
-`--console` is given, so a unit needs no flag for that. `shekyld` always
+`contrib/packaging/linux/shekyld@.service`, one instance per network
+(`systemctl enable --now shekyld@testnet`), which runs in its own
+`shekyl.slice` beside it. The `.deb` and the `.rpm` install both and create
+the `shekyl` account it runs as. The daemon has no console and reads
+nothing from stdin; its commands are `shekyl-cli` words. `shekyld` always
 runs in the foreground and is supervised externally.
-
-## Internationalization
-
-See [README.i18n.md](docs/README.i18n.md).
 
 ## Using Tor
 
@@ -565,8 +503,7 @@ shekyld --tor operator --tor-socks 127.0.0.1:9050 \
 `--tor off` is clearnet only; `--clearnet off` is Tor only. The same rows
 go in the configuration file. The wallet reaches a daemon's RPC over an
 onion service you run in front of its loopback RPC, through `--proxy`
-(see [docs/proxies.md](docs/proxies.md)); use `--untrusted-daemon` unless
-it is your own.
+(see [docs/proxies.md](docs/proxies.md)).
 
 ### Using Tor on Tails
 
@@ -592,53 +529,31 @@ launch.
 
 This section contains general instructions for debugging failed installs or runtime issues. First, ensure you are running the latest version built from this repository.
 
-### Obtaining stack traces and core dumps on Unix systems
+### Obtaining stack traces on Unix systems
 
-We generally use the tool `gdb` (GNU debugger) to provide stack trace functionality, and `ulimit` to provide core dumps in builds which crash or segfault.
+`shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` harden their process before they read an argument: the core-file limit is zero on both bounds, so no crash writes a core file. `ulimit -c unlimited` changes nothing, because the process cannot raise the limit again, and `coredumpctl` has nothing to show. On Linux the process is also not dumpable, so only root can attach a debugger to it. On FreeBSD tracing is disabled for every process, root included. On macOS the core limit is the only restriction the binary sets; macOS itself writes a core only for a program signed with the `com.apple.security.get-task-allow` entitlement, which a release build does not carry.
 
-* To use `gdb` in order to obtain a stack trace for a build that has stalled:
+What each binary prints on its way down:
 
-Run the build.
+* A panic: `shekyld` writes one line to standard error and to its log, naming the thread, the source location and the message, then aborts. `shekyl-cli` and `shekyl-wallet-rpc` print Rust's standard panic message; run them with `RUST_BACKTRACE=1` in their environment to add the stack.
+* A stack overflow: the runtime prints "has overflowed its stack" and the process ends by `SIGABRT` (on FreeBSD by `SIGSEGV`, without the message).
+* Any other fault ends the process by its signal.
 
-Once it stalls, enter the following command:
-
-```bash
-gdb /path/to/shekyld `pidof shekyld`
-```
-
-Type `thread apply all bt` within gdb in order to obtain the stack trace
-
-* If however the core dumps or segfaults:
-
-Enter `ulimit -c unlimited` on the command line to enable unlimited filesizes for core dumps
-
-Enter `echo core | sudo tee /proc/sys/kernel/core_pattern` to stop cores from being hijacked by other tools
-
-Run the build.
-
-When it terminates with an output along the lines of "Segmentation fault (core dumped)", there should be a core dump file in the same directory as `shekyld`. It may be named just `core`, or `core.xxxx` with numbers appended.
-
-You can now analyse this core dump with `gdb` as follows:
+To get a stack trace from a process that hangs, attach `gdb` as root (Linux):
 
 ```bash
-gdb /path/to/shekyld /path/to/dumpfile`
+sudo gdb -p "$(pidof shekyld)"
 ```
 
-Print the stack trace with `bt`
+Type `thread apply all bt` within gdb to print every thread's stack.
 
- * If a program crashed and cores are managed by systemd, the following can also get a stack trace for that crash:
+To get a stack trace from a crash on Linux, start the binary under `gdb` from the beginning. The debugger is attached before the hardening runs, and it stays attached:
 
 ```bash
-coredumpctl -1 gdb
+gdb --args /path/to/shekyld <options>
 ```
 
-#### To run Shekyl within gdb:
-
-Type `gdb /path/to/shekyld`
-
-Pass command-line options with `--args` followed by the relevant arguments
-
-Type `run` to run shekyld
+Type `run`. When the process stops on the fault, type `thread apply all bt`.
 
 ### Analysing memory corruption
 
@@ -658,21 +573,9 @@ You can then run the Shekyl tools normally. Performance will typically halve.
 
 Install valgrind and run as `valgrind /path/to/shekyld`. It will be very slow.
 
-### LMDB
+### Store
 
-Instructions for debugging suspected blockchain corruption as per @HYC
-
-There is an `mdb_stat` command in the LMDB source that can print statistics about the database but it's not routinely built. This can be built with the following command:
-
-```bash
-cd ~/Shekyl/external/db_drivers/liblmdb && make
-```
-
-The output of `mdb_stat -ea <path to blockchain dir>` will indicate inconsistencies in the blocks, block_heights and block_info table.
-
-The output of `mdb_dump -s blocks <path to blockchain dir>` and `mdb_dump -s block_info <path to blockchain dir>` is useful for indicating whether blocks and block_info contain the same keys.
-
-These records are dumped as hex data, where the first line is the key and the second line is the data.
+The daemon's chain store is the Rust store `shekyl-node` opens. `mdb_stat` does not read it.
 
 # Known Issues
 
@@ -683,10 +586,4 @@ These records are dumped as hex data, where the first line is the key and the se
 Because of the nature of socket-based protocols that drive decentralized nodes, certain protocol weaknesses are somewhat unavoidable at this time. Please consider the following precautions if you are a Shekyl node operator:
 
 - Run `shekyld` on a secured machine. At minimum, use a dedicated machine and avoid general web/email activity on that host.
-- RPC is operator-to-operator: run `shekyld` on a machine you control. There is no public-remote-node product; `--restricted-rpc` is a view-only listener for *your* wallet, not an invitation for strangers.
-
-### Blockchain-based
-
-Certain blockchain "features" can be considered "bugs" if misused correctly. Consequently, please consider the following:
-
-- When receiving funds, be aware that they may be locked for an arbitrary time if the sender elected to set an unlock condition.
+- RPC is operator-to-operator: run `shekyld` on a machine you control. There is no public-remote-node product; `rpc-view-listen` is a view-only listener for *your* wallet, not an invitation for strangers.

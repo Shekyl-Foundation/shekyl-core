@@ -1,50 +1,109 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // All rights reserved. BSD-3-Clause
 
-//! Cross-platform determinism canary tests.
-//!
-//! These tests pin byte-exact outputs for critical derivation functions.
-//! If any of these fail on a new platform, it means the V3.1 multisig
-//! protocol would produce incompatible results across platforms —
-//! a consensus-breaking bug.
+//! Byte-exact pins for the multisig formats every member must reproduce.
+//! A failure here means two members' wallets would disagree on what they
+//! sign: refuse the change, or bump the format with a recorded reason.
 
-use crate::{
-    encryption::derive_message_key,
-    intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
-    messages::MessageType,
-};
+use crate::intent::{ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent};
+use serde_json::Value;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_units::AtomicUnits;
 
+const INTENT_VECTORS: &str = include_str!("../../../../docs/test_vectors/MULTISIG_INTENT_V3.json");
+
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn hex32(v: &Value) -> [u8; 32] {
+    hex(v.as_str().unwrap()).try_into().unwrap()
+}
+
+fn u64_of(v: &Value) -> u64 {
+    v.as_u64().unwrap()
+}
+
+fn u8_of(v: &Value) -> u8 {
+    u8::try_from(u64_of(v)).unwrap()
+}
+
+/// A recipient's payee as the vector names it: a single-signer address as
+/// its string with its label block, a group's payload as hex.
+fn payee_of(r: &Value) -> IntentPayee {
+    let address = r["address"].as_str().unwrap();
+    match u8_of(&r["kind"]) {
+        IntentPayee::KIND_SINGLE => IntentPayee::Single {
+            address: address.to_owned(),
+            label_plaintext: hex(r["label"].as_str().unwrap()).try_into().unwrap(),
+        },
+        IntentPayee::KIND_GROUP => IntentPayee::Group {
+            address: hex(address),
+        },
+        kind => panic!("the vector names recipient kind {kind}"),
+    }
+}
+
+fn intent_of(v: &Value) -> SpendIntent {
+    SpendIntent {
+        version: u8_of(&v["version"]),
+        intent_id: hex32(&v["intent_id"]),
+        address_fingerprint: hex32(&v["address_fingerprint"]),
+        proposer_index: u8_of(&v["proposer_index"]),
+        signers: v["signers"].as_array().unwrap().iter().map(u8_of).collect(),
+        responder_index: u8_of(&v["responder_index"]),
+        created_at: u64_of(&v["created_at"]),
+        reference_block_height: u64_of(&v["reference_block_height"]),
+        reference_block_hash: hex32(&v["reference_block_hash"]),
+        recipients: v["recipients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| IntentRecipient {
+                payee: payee_of(r),
+                amount: AtomicUnits::from_raw(u64_of(&r["amount"])),
+            })
+            .collect(),
+        fee: AtomicUnits::from_raw(u64_of(&v["fee"])),
+        input_global_indices: v["input_global_indices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(u64_of)
+            .collect(),
+        kem_randomness_seed: IntentSeed::new(&hex32(&v["kem_randomness_seed"])),
+        chain_state_fingerprint: hex32(&v["chain_state_fingerprint"]),
+    }
+}
+
+/// The intent's canonical bytes and hash, against the Python oracle
+/// (`scripts/kat/multisig_intent_oracle.py`, written from the spec). The
+/// vectors define the bytes; do not regenerate them to make this pass.
 #[test]
-fn intent_hash_canary() {
-    let intent = SpendIntent {
-        version: SPEND_INTENT_VERSION,
-        intent_id: [0x42; 32],
-        address_fingerprint: [0xBB; 32],
-        proposer_index: 0,
-        proposer_sig: vec![0xAA; 64],
-        created_at: 1000000,
-        expires_at: 1086400,
-        tx_counter: 1,
-        reference_block_height: 999900,
-        reference_block_hash: [0xCC; 32],
-        recipients: vec![IntentRecipient {
-            address: vec![0x01, 0x02, 0x03, 0x04],
-            amount: AtomicUnits::from_raw(1_000_000_000),
-        }],
-        fee: AtomicUnits::from_raw(1_000_000),
-        input_global_indices: vec![12345],
-        kem_randomness_seed: [0xDD; 32],
-        chain_state_fingerprint: [0xEE; 32],
-    };
-
-    let hash = intent.intent_hash().unwrap();
-
-    assert_eq!(
-        &hash[..4],
-        &[0x7e, 0x3e, 0x50, 0x43],
-        "intent_hash prefix diverged — cross-platform determinism broken"
-    );
+fn intent_v3_vectors() {
+    let file: Value = serde_json::from_str(INTENT_VECTORS).unwrap();
+    let vectors = file["vectors"].as_array().unwrap();
+    assert!(!vectors.is_empty(), "the vector file pins no intent");
+    for v in vectors {
+        let intent = intent_of(v);
+        let name = v["name"].as_str().unwrap();
+        let canonical = hex(v["canonical"].as_str().unwrap());
+        assert_eq!(
+            intent.to_canonical_bytes().unwrap(),
+            canonical,
+            "{name}: canonical bytes"
+        );
+        let parsed = SpendIntent::from_canonical_bytes(&canonical).unwrap();
+        assert_eq!(parsed.recipients, intent.recipients, "{name}: parsed back");
+        assert_eq!(
+            intent.intent_hash().unwrap(),
+            hex32(&v["intent_hash"]),
+            "{name}: intent_hash"
+        );
+    }
 }
 
 #[test]
@@ -69,48 +128,5 @@ fn chain_state_fingerprint_canary() {
         &hash[..4],
         &[0x65, 0x09, 0xdc, 0x17],
         "chain_state_fingerprint prefix diverged — cross-platform determinism broken"
-    );
-}
-
-#[test]
-fn message_key_derivation_canary() {
-    let group_secret = [0x42; 32];
-    let intent_hash = [0xAA; 32];
-
-    let key = derive_message_key(&group_secret, &intent_hash, MessageType::SpendIntent, 0).unwrap();
-
-    assert_eq!(
-        &key[..4],
-        &[0x6d, 0xbd, 0xa3, 0xaf],
-        "message_key derivation diverged — cross-platform determinism broken"
-    );
-}
-
-#[test]
-fn canonical_serialization_length_canary() {
-    let intent = SpendIntent {
-        version: SPEND_INTENT_VERSION,
-        intent_id: [0; 32],
-        address_fingerprint: [0; 32],
-        proposer_index: 0,
-        proposer_sig: vec![0; 64],
-        created_at: 0,
-        expires_at: 0,
-        tx_counter: 0,
-        reference_block_height: 0,
-        reference_block_hash: [0; 32],
-        recipients: vec![],
-        fee: AtomicUnits::ZERO,
-        input_global_indices: vec![],
-        kem_randomness_seed: [0; 32],
-        chain_state_fingerprint: [0; 32],
-    };
-
-    let bytes = intent.to_canonical_bytes().unwrap();
-
-    assert_eq!(
-        bytes.len(),
-        278,
-        "canonical serialization length changed — wire format broken"
     );
 }

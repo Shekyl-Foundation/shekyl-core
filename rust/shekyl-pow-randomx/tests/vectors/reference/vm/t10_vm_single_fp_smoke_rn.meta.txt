@@ -39,6 +39,7 @@ order listed above. Total: 1024 bytes.
 Generator
 ---------
 source      = ./_generator/phase2d/gen.cpp (mode t10)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 command     = ./gen t10 > t10_vm_single_fp_smoke_rn.bin
 output_size = 1024 bytes
 

@@ -8,7 +8,7 @@
   `ARCHIVAL_P_DERIVE_V1` KAT + `archival_p` module **landed** (Bond-PR 0 #152 — verified at source:
   [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) carries all eight §9.3 labels
   incl. the `bond_spend_*` pair and the GF-9 `hs_id` label (SPIKE-F-4, §10.13);
-  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs)).
+  [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs)).
   **C-1 dependency discharged:** the emission vin-layer ML-DSA equality check **landed** (PR #277,
   `dev` `13c368707`; `emission_verify.rs`) — quantum spend-authority no longer classical-only.
 - **Round 2 closed (2026-07-11)** — network + transport (§10). All §10.10 exit dispositions
@@ -555,7 +555,7 @@ artifact where one exists.
       incl. the `shekyl-archival-p-bond-spend-{ed25519,ml-dsa-65}-v1` labels → `bond_spend_pk`
       (GF-1; §9.3 / §9.4). **code (Bond-PR 0 #152, verified 2026-07-11):**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (7 labels present),
-      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [ ] Pin off-chain announce/backing presentation wire (daemon + wallet). **R2 transport half
       pinned** (GF-5 broadcast, §10.5 / §10.13); the *wire* half is the residual (§10.13 carry).
 - [ ] Pin rotation ceremony (over-enumeration; holdings/bond migration). **→ R3** (§11; §2.3 P2B-1
@@ -602,7 +602,7 @@ artifact where one exists.
 
 ```text
 master_seed_64   // wallet file — same as principal ([account.rs](../../rust/shekyl-crypto-pq/src/account.rs))
-network, format  // DerivationNetwork + SeedFormat — same salt_for() as principal
+network          // the network (NI-R7: no seed format) — same salt_for() as principal
 p_slot: u32      // rotation slot; genesis default 0; increment on pure over-enumeration rotation
 ```
 
@@ -616,8 +616,9 @@ new keys**). Consensus sees only the resulting `P_canonical_id`.
 Reuse the principal salt and wide-reduce discipline:
 
 ```text
-salt = salt_for(network, format)
-       // e.g. b"shekyl-master-derive-v1-mainnet-bip39"
+salt = salt_for(network)
+       // = name_id(network) || b"shekyl-master-derive-v3"
+       //   (NETWORK_IDENTITY.md NI-R7, NI-R10; V3_WALLET_DECISION_LOG.md 2026-11-04)
 
 HKDF-SHA-512(salt, ikm = master_seed_64, info = LABEL || 0x00 || p_slot.to_le_bytes(), L = per-row)
 ```
@@ -978,7 +979,7 @@ note).
 - [x] Reviewer sign-off on Round 1 draft (2026-06-13 — GF-1 resolved, GF-2 made architectural, GF-8/11/4 corrected, downstream round criteria named).
 - [x] `ARCHIVAL_P_DERIVE_V1` KAT manifest (fixed `master_seed` + `p_slot` → known `p_canonical_id`
       **and `bond_spend_pk`** — the §9.3 `shekyl-archival-p-bond-spend-*` labels, GF-1). **Landed**
-      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v1.rs).
+      (Bond-PR 0 #152): [`kat_archival_p_derive_v1.rs`](../../rust/shekyl-crypto-pq/tests/kat_archival_p_derive_v2.rs).
 - [x] `shekyl-crypto-pq::archival_p` implementation + unit tests. **Landed:**
       [`archival_p.rs`](../../rust/shekyl-crypto-pq/src/archival_p.rs) (eight §9.3 labels present,
       verified at source 2026-07-11; the GF-9 `hs_id` label added by SPIKE-F-4, 2026-08-05).
@@ -1085,7 +1086,7 @@ exact workspace version, `onion-service-service` (+ `vanguards`, + `restricted-d
 feature plumbing, MSRV vs. workspace, and the **`launch_onion_service_with_hsid` key-injection
 API shape** (load-bearing for §10.7). **Embed-vs-external (Fork #1) is therefore decidable in
 Round 2** — embed Arti, Rust-canonical per
-[`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc) — **conditional on**
+[`20-rust-vs-cpp-policy.mdc`](../completed/RULE_20_RUST_VS_CPP.md) — **conditional on**
 that at-source pin, with the external-daemon-over-SOCKS fallback held as the reversion clause
 ([`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc))
 if the at-source check fails.
@@ -1996,9 +1997,9 @@ finding — that `fcmp_reference_block_max_age = 100` made a claim "verifiable o
 `≥ SEB` hold was impossible. **That was a reviewer construction resting on an unverified premise —
 the constant's semantics were asserted from its name, not traced to its consumer** (the exact failure
 mode this track holds the line against). Traced at source: `REFERENCE_BLOCK_MAX_AGE` is a **daemon
-inclusion-freshness window** (`proof_submittable`, `reference.rs:181`), **not** a verifiability
+inclusion-freshness window** (`proof_submittable` in `shekyl-curve-tree`'s `reference.rs`), **not** a verifiability
 expiry — a mined claim is validated once at inclusion and stands; `PROOF_VALIDITY_HORIZON = 94`,
-`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`reference.rs:102-106`). The
+`REBUILD_AT = 50`, and re-anchor is explicitly local + non-observable (`REBUILD_AT`'s doc in `reference.rs`). The
 "infeasible / 100 ≪ SEB / ~200-rebuilds-observable" claims are **withdrawn**. What survives is the
 narrow, correct pin below.
 
@@ -2055,7 +2056,7 @@ so it is **reclassified as the fifth WI-4 §13.5 standing conditional** (§12.8;
 source that the `1.86` was computed on nominal cover, so the conditional is load-bearing
 against the 7% margin). **The hit's follow-through (same day): the conditional's *shape*
 was then measured, because the sensitivity sweep is mechanism even though the level is
-economics** — `shekyl-staking-sim --gf7-breakeven` sweeps the model's own `r(N)` at the
+economics** — `shekyl-staking-sim --gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`) sweeps the model's own `r(N)` at the
 gate posture (a property of the model, not the world). Result: worst-arm `r` is flat
 ≈1.86 across `N ∈ [2, 16]` — **`r < 2` is structurally blind to cover**, so cover was
 never gated by `r` and no per-event monitoring threshold exists to derive (the candidate
@@ -2829,7 +2830,7 @@ exists on the chain as designed), F-W8 retracted X-3's harm model (cohort member
   on this side. Scope narrowing: thin-cover-as-regime is already L12 with a design-away
   disposition (M1 reward-gate refuses the regime), so what this conditional carries is
   effective-vs-nominal **at steady state**. (2) *Sweep:* `shekyl-staking-sim
-  --gf7-breakeven` (mechanism-class under method note 3: a property of the model, no
+  --gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`) (mechanism-class under method note 3: a property of the model, no
   economics input) sweeps `r(N)` at the gate posture, `N ∈ [2, 16]`. Finding: worst-arm
   `r` clears the bound at every row (≈1.46–1.83) and never trends toward the bar as
   cover thins — **`r < 2` is structurally blind to cover**. The ratio renormalizes by
@@ -3334,14 +3335,14 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   on-chain). F-W family extended F-W1…F-W8 → F-W9 (index row 97).
 
 - **2026-07-16 (GF-7 fifth conditional: kind sharpened, sensitivity sweep run —
-  `--gf7-breakeven`; reading corrected same day, per review):** Follow-through on the
+  `--gf7-breakeven` (deleted 2026-11-08, last at `76677fcfa`); reading corrected same day, per review):** Follow-through on the
   reclassification below. (1) *Kind corrected:* "the isolation-conditioning kind" got
   permanence right and shape wrong — isolation conditions a channel; effective cover
   conditions **the number itself** (`1.86` was computed at nominal cover, an upper bound;
   honest characterization is stacked marginals of opposite sign — pessimistic adversary
   panel × optimistic cover). Scope narrowed: thin-cover-as-regime is already
   L12/design-away; the conditional carries effective-vs-nominal **at steady state**.
-  (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` —
+  (2) *Sweep run* (`shekyl-staking-sim --gf7-breakeven`, `gf7_breakeven.rs` (deleted 2026-11-08, last at `76677fcfa`) —
   mechanism-class under method note 3, a property of the model): worst-arm `r`
   **clears the bound at every row of `N ∈ [2, 16]`, never trending toward the bar as
   cover thins** — **`r < 2` is structurally blind to cover** (hit probability and

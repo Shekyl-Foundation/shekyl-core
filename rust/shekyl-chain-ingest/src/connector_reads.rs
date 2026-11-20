@@ -43,9 +43,7 @@ impl Message<ObserveTarget> for Connector {
                 });
             }
             let observed = match shekyl_chain_rules::target_claim(&view, height, &rule_set) {
-                // CEN-D6 is a verdict on a consistent window, not a fault.
-                Ok(Err(_refused)) => return Ok(()),
-                Ok(Ok(target)) => {
+                Ok(target) => {
                     shekyl_chain_rules::cumulative_difficulty_after(&view, height, target)
                         .map(|_work| ())
                 }

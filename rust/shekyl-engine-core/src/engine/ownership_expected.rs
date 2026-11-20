@@ -37,7 +37,7 @@ fn persona_tx(seed: u64, n: usize) -> shekyl_wire::Transaction {
         .collect();
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(seed)],
             outputs,
             extra: crate::engine::test_support::conforming_pqc_extra(n),
@@ -106,7 +106,9 @@ fn block_one_carrying(tx: &shekyl_wire::Transaction) -> Vec<crate::scan::OwnedTx
         shekyl_types::BlockHash::from_bytes([0x01; 32]),
     );
     scannable.block.transaction_hashes.push(tx.hash());
-    scannable.transactions.push(tx.clone());
+    scannable
+        .transactions
+        .push(shekyl_wire::BoundTx::whole(tx.clone()));
     crate::engine::curve_tree_decode::decode_block_leaves(&scannable).expect("the block decodes")
 }
 

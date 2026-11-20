@@ -5,15 +5,14 @@
 
 //! The network marker (`DAEMON_CONFIG_CUTOVER.md` §2.6; IG-Q17, DC-Q15):
 //! `shekyld.network` at the data directory's root, TOML holding the network
-//! and the network id, written to a temporary file, synced, renamed into
-//! place with the directory synced after, and read only while the lock is
-//! held.
+//! and the network id, written through the one replace (a staged file,
+//! synced, renamed into place with the directory synced after), and read
+//! only while the lock is held.
 
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use shekyl_options::{Code, Diagnostic, Source};
+use shekyl_os_account::private_file::{self, Access};
 
 use crate::lock::Lock;
 use crate::network::Network;
@@ -36,19 +35,22 @@ pub enum MarkerRead {
 }
 
 /// What the marker said, or that it was written.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum MarkerOutcome {
     /// The directory held no store and no marker; the marker is written.
-    Written,
+    /// `Some` names why its save is not confirmed to survive a power loss
+    /// (storage the daemon does not support), which the daemon logs once its
+    /// logger runs (Rick, 2026-11-19).
+    Written(Option<private_file::Unconfirmed>),
     /// The marker names this network and this id.
     Matched,
 }
 
-/// Whether the directory holds a daemon store: the closed set the pre-flight
-/// read at the implementation pin (`DAEMON_CONFIG_CUTOVER_AUDIT.md` §3).
+/// Whether the directory holds a daemon store: the chain file the node
+/// writes, or the inherited p2p state file.
 #[must_use]
 pub fn holds_store(data_dir: &Path) -> bool {
-    data_dir.join("lmdb").join("data.mdb").is_file() || data_dir.join("p2pstate.bin").is_file()
+    data_dir.join("chain.db").is_file() || data_dir.join("p2pstate.bin").is_file()
 }
 
 /// Reads the marker and writes nothing: the configuration check's half,
@@ -111,8 +113,11 @@ pub fn read(
 /// [`read`], so the decision is written once.
 ///
 /// # Errors
-/// [`read`]'s refusals, and `config.data-dir.unusable` when the marker
-/// cannot be written.
+/// [`read`]'s refusals; `config.replace.held-open` when another program
+/// held the marker's staged file or the marker past the replace's wait;
+/// `config.replace.read-only` when a marker's read-only attribute refused
+/// the replace; and `config.data-dir.unusable` when the marker cannot be
+/// written otherwise.
 pub fn check_or_write(
     lock: &Lock,
     network: Network,
@@ -123,16 +128,34 @@ pub fn check_or_write(
         MarkerRead::Matched => Ok(MarkerOutcome::Matched),
         MarkerRead::Absent => {
             let path = data_dir.join(MARKER_FILE);
-            write(data_dir, &path, network, network_id).map_err(|e| {
-                Diagnostic::new(Code::DataDirUnusable, Source::Machine)
-                    .option("data-dir")
-                    .param("path", data_dir.display().to_string())
-                    .param(
-                        "error",
-                        format!("the network marker could not be written: {e}"),
-                    )
+            let written = write(&path, network, network_id).map_err(|e| match e {
+                // A scanner holding the marker's leftover staged file (or
+                // the marker) past the wait: its own refusal, naming the
+                // file and the directory to exclude from scanning.
+                private_file::CommitError::HeldOpen(held) => {
+                    crate::replace::held_open_refusal(&held, data_dir)
+                }
+                private_file::CommitError::ReadOnly(path) => {
+                    crate::replace::read_only_refusal(&path)
+                }
+                other @ (private_file::CommitError::Io { .. }
+                | private_file::CommitError::Unsynced(..)) => {
+                    Diagnostic::new(Code::DataDirUnusable, Source::Machine)
+                        .option("data-dir")
+                        .param("path", data_dir.display().to_string())
+                        .param(
+                            "error",
+                            format!("the network marker could not be written: {other}"),
+                        )
+                }
             })?;
-            Ok(MarkerOutcome::Written)
+            Ok(MarkerOutcome::Written(match written {
+                private_file::Replaced::Written(private_file::Durability::Unconfirmed(why)) => {
+                    Some(why)
+                }
+                private_file::Replaced::Written(private_file::Durability::Durable)
+                | private_file::Replaced::Unchanged => None,
+            }))
         }
     }
 }
@@ -148,7 +171,7 @@ pub fn render(network: Network, network_id: NetworkId) -> String {
 #[must_use]
 pub fn parse(text: &str) -> Option<(Network, NetworkId)> {
     let table: toml::Table = text.parse().ok()?;
-    let network = Network::from_word(table.get("network")?.as_str()?)?;
+    let network = Network::from_name(table.get("network")?.as_str()?)?;
     let hex = table.get("network-id")?.as_str()?;
     if hex.len() != 32 {
         return None;
@@ -160,33 +183,19 @@ pub fn parse(text: &str) -> Option<(Network, NetworkId)> {
     Some((network, id))
 }
 
-/// Temporary file, sync, rename, directory sync.
+/// The one replace (Rick, 2026-11-18): a staged file, synced, renamed over
+/// `path`, and the directory synced. The marker keeps what a plain create
+/// gives it ([`Access::Default`]).
 fn write(
-    data_dir: &Path,
     path: &Path,
     network: Network,
     network_id: NetworkId,
-) -> std::io::Result<()> {
-    let staged: PathBuf = data_dir.join(format!("{MARKER_FILE}.tmp"));
-    {
-        let mut f = File::create(&staged)?;
-        f.write_all(render(network, network_id).as_bytes())?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&staged, path)?;
-    sync_dir(data_dir)
-}
-
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    File::open(dir)?.sync_all()
-}
-
-/// Windows has no directory handle to sync; the rename is durable on its
-/// own once the file was.
-#[cfg(windows)]
-fn sync_dir(_dir: &Path) -> std::io::Result<()> {
-    Ok(())
+) -> Result<private_file::Replaced, private_file::CommitError> {
+    private_file::replace(
+        path,
+        render(network, network_id).as_bytes(),
+        Access::Default,
+    )
 }
 
 #[cfg(test)]
@@ -238,8 +247,8 @@ mod tests {
         let before = std::fs::read(data.join(MARKER_FILE)).unwrap();
         // A store with no marker, read without a lock: the same refusal.
         let bare = d.path().join("bare");
-        std::fs::create_dir_all(bare.join("lmdb")).unwrap();
-        std::fs::write(bare.join("lmdb").join("data.mdb"), "").unwrap();
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("chain.db"), "").unwrap();
         assert_eq!(
             read(&bare, Network::Testnet, ID_A).unwrap_err().code,
             Code::MarkerMissing
@@ -251,18 +260,19 @@ mod tests {
     #[test]
     fn a_fresh_directory_is_marked_and_then_matches() {
         let (_d, lock) = locked();
-        assert_eq!(
-            check_or_write(&lock, Network::Testnet, ID_A).unwrap(),
-            MarkerOutcome::Written
+        let written = check_or_write(&lock, Network::Testnet, ID_A).unwrap();
+        assert!(
+            matches!(written, MarkerOutcome::Written(None)),
+            "a local disk's write is confirmed: {written:?}"
         );
         let text = std::fs::read_to_string(lock.data_dir().join(MARKER_FILE)).unwrap();
         assert_eq!(text, render(Network::Testnet, ID_A));
         assert_eq!(parse(&text), Some((Network::Testnet, ID_A)));
-        assert_eq!(
+        assert!(matches!(
             check_or_write(&lock, Network::Testnet, ID_A).unwrap(),
             MarkerOutcome::Matched
-        );
-        assert!(!lock.data_dir().join(format!("{MARKER_FILE}.tmp")).exists());
+        ));
+        assert!(!private_file::staged_path(&lock.data_dir().join(MARKER_FILE)).exists());
     }
 
     #[test]
@@ -291,8 +301,7 @@ mod tests {
     #[test]
     fn a_store_with_no_marker_is_never_marked_after_the_fact() {
         let (_d, lock) = locked();
-        std::fs::create_dir_all(lock.data_dir().join("lmdb")).unwrap();
-        std::fs::write(lock.data_dir().join("lmdb").join("data.mdb"), "").unwrap();
+        std::fs::write(lock.data_dir().join("chain.db"), "").unwrap();
         let e = check_or_write(&lock, Network::Mainnet, ID_A).unwrap_err();
         assert_eq!(e.code, Code::MarkerMissing);
         assert!(!lock.data_dir().join(MARKER_FILE).exists());
@@ -313,5 +322,37 @@ mod tests {
         let e = check_or_write(&lock, Network::Mainnet, ID_A).unwrap_err();
         assert_eq!(e.code, Code::MarkerUnreadable);
         assert_eq!(parse("network = \"mainnet\"\nnetwork-id = \"zz\"\n"), None);
+    }
+
+    /// On Windows a scanner holding the marker's leftover staged file past
+    /// the replace's wait refuses the start with `config.replace.held-open`,
+    /// naming the staged file and the data directory to exclude from
+    /// scanning, never the generic `config.data-dir.unusable`. Red edit:
+    /// map every write failure to `DataDirUnusable` (Copilot, #1439).
+    #[cfg(windows)]
+    #[test]
+    fn a_held_leftover_marker_is_the_held_open_refusal() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let (_dir, lock) = locked();
+        let staged = private_file::staged_path(&lock.data_dir().join(MARKER_FILE));
+        std::fs::write(&staged, b"a crashed write").unwrap();
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&staged)
+            .unwrap();
+        let refused = check_or_write(&lock, Network::Testnet, ID_A).unwrap_err();
+        drop(reader);
+        assert_eq!(refused.code, Code::ReplaceHeldOpen, "{}", refused.render());
+        let text = refused.render();
+        assert!(text.contains(&staged.display().to_string()), "{text}");
+        assert!(
+            text.contains(&format!(
+                "exclude {} from scanning",
+                lock.data_dir().display()
+            )),
+            "{text}"
+        );
     }
 }

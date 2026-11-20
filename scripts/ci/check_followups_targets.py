@@ -42,7 +42,9 @@ BANNED_TARGET = re.compile(
 )
 REQUIRED_HEADERS = ("## Pre-genesis", "## Post-genesis", "## V4")
 # Historical records may still mention old Target: tokens.
-SKIP_V3X_DIRS = ("docs/completed", "docs/CHANGELOG.md", "docs/V3_WALLET_DECISION_LOG.md")
+# `docs/changelog.d` holds CHANGELOG entries until the release cut moves them in.
+SKIP_V3X_DIRS = ("docs/completed", "docs/changelog.d", "docs/CHANGELOG.md",
+                 "docs/V3_WALLET_DECISION_LOG.md")
 
 
 def _opens_unclosed_bold(line: str) -> bool:
@@ -110,7 +112,7 @@ def main() -> int:
                 continue
             p = os.path.join(dirpath, f)
             rel = os.path.relpath(p, ROOT)
-            if rel in SKIP_V3X_DIRS or rel.startswith("docs/completed"):
+            if rel in SKIP_V3X_DIRS or rel.startswith(("docs/completed", "docs/changelog.d/")):
                 continue
             if rel == "docs/FOLLOWUPS.md":
                 continue

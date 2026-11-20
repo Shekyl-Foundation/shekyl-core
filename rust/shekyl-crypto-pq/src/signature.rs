@@ -23,8 +23,8 @@
 //!
 //! `sign` / `verify` take a required non-empty `domain` — there is no bare-
 //! message path. Each signing surface has a named `SCHEME_DOMAIN_*` constant
-//! below. FFI exports apply the surface's constant in Rust so C++ never
-//! carries a domain string. Full surface table: `docs/design/SIGNATURE_ALIGNMENT.md`.
+//! below; a caller names the surface, never a domain string. Full surface
+//! table: `docs/design/SIGNATURE_ALIGNMENT.md`.
 //!
 //! # Version byte is the security boundary (SA-R-4)
 //!
@@ -47,6 +47,8 @@ use ed25519_dalek::{
 use fips204::ml_dsa_65;
 use fips204::traits::{SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
+use shekyl_network::envelope::Framed64;
+use shekyl_types::SigningPayloadHash;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub const HYBRID_KEY_VERSION: u8 = 1;
@@ -79,9 +81,7 @@ pub const HYBRID_SCHEME_ID_ED25519_FN_DSA_1024: u8 = 3;
 /// applies to build `message`, and it gets its own string rather than reusing
 /// the inner one (a shared string across two layers would create a standing
 /// cross-parse proof obligation for no benefit). `sign`/`verify` take the
-/// domain as a required parameter so a caller cannot sign a bare message; the
-/// FFI exports apply the surface's constant internally so C++ never carries a
-/// domain string it could get wrong.
+/// domain as a required parameter so a caller cannot sign a bare message.
 pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// Multisig participant auth (scheme 2), **distinct** from single-sig
 /// [`SCHEME_DOMAIN_PQC_AUTH_TX`] (SA-R-5). A multisig participant and a
@@ -93,49 +93,28 @@ pub const SCHEME_DOMAIN_PQC_AUTH_TX: &[u8] = b"shekyl/pqc-auth-tx-v1";
 /// signed payload), but that is a caller-side property of the tx builder; the
 /// scheme owns its separation here so a signature made in one context cannot be
 /// reused in the other even for a caller that passes a bare payload to
-/// `verify_multisig`. `verify_multisig` and the (test-support) participant
-/// signer both use this constant; production multisig signing is unbuilt.
+/// `verify_multisig`. `verify_multisig` uses this constant; production
+/// multisig signing is unbuilt (slice 3).
 pub const SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG: &[u8] = b"shekyl/pqc-auth-tx-multisig-v1";
+/// A multisig ceremony file's sender signature (R-6): a member's long-term
+/// envelope key over the file's fields, framed under
+/// `shekyl/multisig-envelope-v1` (`crate::multisig_envelope`). Distinct from
+/// [`SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG`]: an envelope signature is never a
+/// spend signature.
+pub const SCHEME_DOMAIN_MULTISIG_ENVELOPE: &[u8] = b"shekyl/multisig-envelope-scheme-v1";
 /// Emission claim-role auth (surface C).
 pub const SCHEME_DOMAIN_EMISSION_CLAIM: &[u8] = b"shekyl/archival-emission-claim-scheme-v1";
 /// Emission backing-role auth (surface D).
 pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-backing-scheme-v1";
-/// Attestation pass countersignature (surface E), **v3**: the signed message is
-/// the fetching client's decoded request header, the served shard, and the
-/// digest of the bytes delivered under that request's nonce —
-/// `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8] ‖
-/// delivery_digest[32]` (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`; built by
-/// `shekyl_archival_retention::pass_anchor::pass_countersignature_message`).
-///
-/// One label never names two messages. The retired `…-scheme-v1` signed the
-/// 32-byte block-bound nonce alone, and the retired `…-scheme-v2` signed the
-/// first 80 bytes above with no delivery digest. Neither is reused: an
-/// earlier signature can never verify as a v3 one because the domain
-/// differs, independent of the message layout. Pre-genesis, no chain carried
-/// either.
-pub const SCHEME_DOMAIN_ATTESTATION: &[u8] = b"shekyl/archival-attestation-scheme-v3";
-/// Serve-credit response (surface F).
-pub const SCHEME_DOMAIN_SERVE_CREDIT: &[u8] = b"shekyl/archival-serve-credit-scheme-v1";
 /// A serve receipt, under scheme 3: `P`'s signature over the 113-byte
 /// delivery transcript with its **receipt key**
-/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6). Distinct from
-/// [`SCHEME_DOMAIN_ATTESTATION`], which names the same transcript under the
-/// identity key and scheme 1: one label never names two schemes.
+/// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6).
 pub const SCHEME_DOMAIN_RECEIPT: &[u8] = b"shekyl/archival-receipt-scheme-v1";
-/// **SUPERSEDED** by [`SCHEME_DOMAIN_WITNESS_BUNDLE`] (`SCS-P16`): the
-/// witness's signature over a carrier's set commitment, under scheme 3.
-/// No signer and no verifier uses it; it stays registered so the label is
-/// never minted again for another message.
-pub const SCHEME_DOMAIN_WITNESS_CARRIER: &[u8] = b"shekyl/archival-witness-carrier-scheme-v1";
 /// The witness's signature over a bundle's commitment, under scheme 3 with
 /// the key generated fresh for the block and committed in its `0x0C`
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §6.2, §7.3). The message is the 32-byte
 /// `shekyl/archival-serve-credit-bundle-v1` commitment
 /// (`shekyl_archival_retention::bundle_commitment`).
-///
-/// Distinct from the superseded [`SCHEME_DOMAIN_WITNESS_CARRIER`]: the
-/// bundle commitment is a different message from the carrier's set
-/// commitment, and one label never names two messages.
 pub const SCHEME_DOMAIN_WITNESS_BUNDLE: &[u8] = b"shekyl/archival-witness-bundle-scheme-v1";
 // Surface B (bond-post vin) has no scheme domain: the SA-2b reconciliation
 // (SIGNATURE_ALIGNMENT.md §2.2) ruled the bond vin's on-chain auth rides the
@@ -390,12 +369,16 @@ impl HybridEd25519MlDsa {
     }
 }
 
-// Test-support surface (F-7). Behind `test-utils` (or `cfg(test)` in-crate).
-// **Not** a production isolation gate: `shekyl-ffi` enables `test-utils` so the
-// C++ unit tests can link the same archive as production — cargo feature
-// unification keeps these symbols in that artifact. The structural gate
-// (separate test-only archive / cmake feature) is tracked in FOLLOWUPS F-7.
-// Names announce test-only intent; do not call from production paths.
+/// Width of the seed [`HybridEd25519MlDsa::sign_with_ml_dsa_seed`] passes to
+/// ML-DSA's `try_sign_with_seed`. Production [`SignatureScheme::sign`] does
+/// not take this seed; ML-DSA draws its own nonce.
+#[cfg(any(test, feature = "seeded-rng"))]
+pub const ML_DSA_SIGNING_SEED_LEN: usize = 32;
+
+// Test-support surface, behind `test-utils` (or `cfg(test)` in-crate), a
+// TEST_ONLY feature enabled from dev edges only
+// (`scripts/ci/check_test_only_features.py`). Names announce test-only intent;
+// do not call from production paths.
 #[cfg(any(test, feature = "test-utils"))]
 impl HybridEd25519MlDsa {
     pub fn generate_ephemeral_keypair_for_tests(
@@ -417,7 +400,13 @@ impl HybridEd25519MlDsa {
 
         Ok((public_key, secret_key))
     }
+}
 
+// Deterministic signing, behind the TEST_ONLY `seeded-rng` feature
+// (CHAIN_FORGE.md §5.3, seam T3): no build that ships has it, so no
+// production signer can be handed a seed.
+#[cfg(any(test, feature = "seeded-rng"))]
+impl HybridEd25519MlDsa {
     /// Deterministic nested sign for iai benches / KATs. Same nesting as
     /// [`SignatureScheme::sign`]; only the PQ half uses a fixed seed (stable
     /// instruction counts).
@@ -426,7 +415,7 @@ impl HybridEd25519MlDsa {
         secret_key: &HybridSecretKey,
         domain: &[u8],
         message: &[u8],
-        ml_dsa_seed: &[u8; 32],
+        ml_dsa_seed: &[u8; ML_DSA_SIGNING_SEED_LEN],
     ) -> Result<HybridSignature, CryptoError> {
         Self::sign_nested(secret_key, domain, message, |pk, inner| {
             pk.try_sign_with_seed(ml_dsa_seed, inner, &[])
@@ -495,9 +484,10 @@ impl SignatureScheme for HybridEd25519MlDsa {
 }
 
 /// One transaction `pqc_auths` slot's signature, verified — **the** body
-/// behind every consumer: the daemon's `shekyl_pqc_verify` FFI, the
-/// daemon-rpc submit verifier (K13) and the consensus validator (CEN-I18)
-/// all call this, so the three cannot disagree on what a valid slot is.
+/// behind every consumer: the daemon-rpc submit verifier (K13) and the
+/// consensus validator (CEN-I18) both call this, so they cannot disagree on
+/// what a valid slot is. `network` is the chain's id: a multisig slot's key
+/// hashes bind it ([`crate::multisig::MULTISIG_KEY_HASH`]).
 ///
 /// Dispatch on the container `scheme_id`:
 /// [`HYBRID_SCHEME_ID_ED25519_ML_DSA_65`] parses the single hybrid key and
@@ -508,12 +498,14 @@ impl SignatureScheme for HybridEd25519MlDsa {
 /// Anything else is [`PqcVerifyError::SchemeMismatch`]. Structural pins on
 /// the slot's *other* fields (`auth_version`, `flags`) are the wire's
 /// business (CEN-I16), not this function's: it is given the three blobs and
-/// the message and answers whether the signature is valid for them.
+/// the message and answers whether the signature is valid for them. The
+/// message is the input's [`SigningPayloadHash`] by type: that is what binds
+/// the slot to its network (`DOMAIN_BINDING_RATCHET.tsv`).
 ///
 /// `Result<()>`, never `Result<bool>` (SA-R-1): there is no `Ok(false)` to
-/// mishandle. The error is the discriminant the FFI has always exported —
-/// a parse failure is [`PqcVerifyError::DeserializationFailed`], a good
-/// parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`].
+/// mishandle. A parse failure is [`PqcVerifyError::DeserializationFailed`], a
+/// good parse that does not verify is [`PqcVerifyError::CryptoVerifyFailed`],
+/// and a multisig slot's own checks have their own variants.
 ///
 /// # Errors
 ///
@@ -522,7 +514,8 @@ pub fn verify_pqc_auth(
     scheme_id: u8,
     public_key: &[u8],
     signature: &[u8],
-    message: &[u8],
+    message: &SigningPayloadHash,
+    network: &shekyl_network::NetworkId,
 ) -> Result<(), PqcVerifyError> {
     match scheme_id {
         HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
@@ -531,14 +524,91 @@ pub fn verify_pqc_auth(
             let signature = HybridSignature::from_canonical_bytes(signature)
                 .map_err(|_| PqcVerifyError::DeserializationFailed)?;
             HybridEd25519MlDsa
-                .verify(&public_key, SCHEME_DOMAIN_PQC_AUTH_TX, message, &signature)
+                .verify(
+                    &public_key,
+                    SCHEME_DOMAIN_PQC_AUTH_TX,
+                    message.as_bytes(),
+                    &signature,
+                )
                 .map_err(|_| PqcVerifyError::CryptoVerifyFailed)
         }
         crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
-            crate::multisig::verify_multisig(scheme_id, public_key, signature, message)
+            crate::multisig::verify_multisig(scheme_id, public_key, signature, message, network)
         }
         _ => Err(PqcVerifyError::SchemeMismatch),
     }
+}
+
+/// The bytes of a `pqc_auth` key blob that the spent output's leaf commits
+/// to: `k = H_ℓ(these bytes)` (`PL-D3`). Both consensus verifiers derive `k`
+/// through this one function, so they cannot disagree about it.
+///
+/// - Scheme 1 (solo): the whole key blob, which must be exactly one
+///   canonical hybrid key.
+/// - Scheme 2 (multisig): the committed form at the front of the blob,
+///   `0x02 ‖ n ‖ m ‖ h_1 ‖ … ‖ h_n` — never the revealed signer keys, which
+///   a spend chooses and the output could not have committed to.
+///
+/// # Errors
+///
+/// [`PqcVerifyError::SchemeMismatch`] for an unknown scheme;
+/// [`PqcVerifyError::KeyBlobLength`] for a solo blob of the wrong length;
+/// the committed form's own parse errors for scheme 2. The slot is refused
+/// either way; these are the same refusals [`verify_pqc_auth`] makes.
+pub fn pqc_leaf_key_bytes(scheme_id: u8, key_blob: &[u8]) -> Result<&[u8], PqcVerifyError> {
+    match scheme_id {
+        HYBRID_SCHEME_ID_ED25519_ML_DSA_65 => {
+            if key_blob.len() == HybridPublicKey::CANONICAL_LEN {
+                Ok(key_blob)
+            } else {
+                Err(PqcVerifyError::KeyBlobLength)
+            }
+        }
+        crate::multisig::HYBRID_SCHEME_ID_MULTISIG => {
+            let len = crate::multisig::MultisigCommittedForm::prefix_len(key_blob)?;
+            Ok(&key_blob[..len])
+        }
+        _ => Err(PqcVerifyError::SchemeMismatch),
+    }
+}
+
+/// Auth-P: sign an emission's claim-side binding message under
+/// [`SCHEME_DOMAIN_EMISSION_CLAIM`]. The message is the envelope's
+/// [`Framed64`] (`shekyl/archival-emission-auth-claim-v4`), so it is bound to
+/// one network by type.
+///
+/// # Errors
+///
+/// The hybrid signer's refusal: malformed key material, or the combiner
+/// giving up.
+pub fn sign_emission_claim(
+    secret: &HybridSecretKey,
+    message: &Framed64,
+) -> Result<HybridSignature, CryptoError> {
+    HybridEd25519MlDsa.sign(secret, SCHEME_DOMAIN_EMISSION_CLAIM, message.as_bytes())
+}
+
+/// [`sign_emission_claim`] with the ML-DSA nonce drawn from `ml_dsa_seed`
+/// ([`HybridEd25519MlDsa::sign_with_ml_dsa_seed`]), so a forged chain's
+/// emission claims come out the same every forging (`CHAIN_FORGE.md` §5.3,
+/// seam T3). Deterministic signing only (the TEST_ONLY `seeded-rng` feature,
+/// or this crate's own tests).
+///
+/// # Errors
+///
+/// As [`sign_emission_claim`].
+#[cfg(any(test, feature = "seeded-rng"))]
+pub fn sign_emission_claim_with_ml_dsa_seed(
+    secret: &HybridSecretKey,
+    message: &Framed64,
+    ml_dsa_seed: &[u8; ML_DSA_SIGNING_SEED_LEN],
+) -> Result<HybridSignature, CryptoError> {
+    HybridEd25519MlDsa.sign_with_ml_dsa_seed(
+        secret,
+        SCHEME_DOMAIN_EMISSION_CLAIM,
+        message.as_bytes(),
+        ml_dsa_seed,
+    )
 }
 
 #[cfg(test)]
@@ -570,6 +640,54 @@ mod tests {
         out
     }
 
+    /// The classical half is verified strictly. Under the identity key
+    /// (small order) the Ed25519 equation holds for `(R = [s]B, S = s)` over
+    /// any message, so a plain verify accepts this forgery; the strict
+    /// verify refuses it. The post-quantum half is a real signature, so the
+    /// classical check is the only thing that can refuse.
+    #[test]
+    fn hybrid_refuses_a_small_order_classical_key() {
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+        let (pk, sk) = kp();
+        let msg = b"strict classical half";
+        let honest = scheme().sign(&sk, D, msg).unwrap();
+
+        let s = Scalar::from(7u64);
+        let mut forged_ed = (ED25519_BASEPOINT_POINT * s).compress().to_bytes().to_vec();
+        forged_ed.extend_from_slice(s.as_bytes());
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+
+        let weak_pk = HybridPublicKey {
+            ed25519: identity,
+            ml_dsa: pk.ml_dsa.clone(),
+        };
+        let forged = HybridSignature {
+            ed25519: forged_ed,
+            ml_dsa: honest.ml_dsa.clone(),
+        };
+        assert!(scheme().verify(&weak_pk, D, msg, &forged).is_err());
+    }
+
+    /// A classical key spelled non-canonically (y at or above p) is refused
+    /// by its encoding, before any signature check: `y = p + 1` decodes to
+    /// the same point as `y = 1`, and a key's bytes are signed content.
+    #[test]
+    fn hybrid_refuses_a_non_canonical_classical_key() {
+        let (mut pk, sk) = kp();
+        let msg = b"canonical key";
+        let sig = scheme().sign(&sk, D, msg).unwrap();
+        // p + 1 = 2^255 - 18, little-endian.
+        let mut p_plus_one = [0xffu8; 32];
+        p_plus_one[0] = 0xee;
+        p_plus_one[31] = 0x7f;
+        pk.ed25519 = p_plus_one;
+        assert!(matches!(
+            scheme().verify(&pk, D, msg, &sig),
+            Err(CryptoError::InvalidKeyMaterial)
+        ));
+    }
+
     #[test]
     fn keygen_sign_verify_roundtrip() {
         let scheme = scheme();
@@ -580,15 +698,15 @@ mod tests {
     }
 
     /// The one slot verifier every consumer calls: scheme 1 verifies a
-    /// signature made under the tx-auth domain and refuses, by the FFI's
-    /// discriminants, a wrong message, a garbled signature, a garbled key
+    /// signature made under the tx-auth domain and refuses, by
+    /// [`PqcVerifyError`], a wrong message, a garbled signature, a garbled key
     /// and an unknown scheme. Scheme 2's arm is `verify_multisig`'s and is
     /// held by that module's tests.
     #[test]
     fn verify_pqc_auth_dispatches_and_refuses_by_discriminant() {
         let scheme = scheme();
         let (pk, sk) = kp();
-        let msg = [0x5a; 32];
+        let msg = [0x5a; 64];
         let sig = scheme.sign(&sk, SCHEME_DOMAIN_PQC_AUTH_TX, &msg).unwrap();
         let pk_bytes = pk.to_canonical_bytes().unwrap();
         let sig_bytes = sig.to_canonical_bytes().unwrap();
@@ -596,7 +714,8 @@ mod tests {
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
             &pk_bytes,
             &sig_bytes,
-            &msg,
+            &SigningPayloadHash::from_bytes(msg),
+            &[0u8; 16],
         )
         .expect("a slot signed under the tx-auth domain verifies");
         assert_eq!(
@@ -604,7 +723,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes,
-                &[0x5b; 32]
+                &SigningPayloadHash::from_bytes([0x5b; 64]),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a different message"
@@ -612,7 +732,13 @@ mod tests {
         let mut forged = sig_bytes.clone();
         *forged.last_mut().unwrap() ^= 0x01;
         assert_eq!(
-            verify_pqc_auth(HYBRID_SCHEME_ID_ED25519_ML_DSA_65, &pk_bytes, &forged, &msg),
+            verify_pqc_auth(
+                HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                &pk_bytes,
+                &forged,
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
+            ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "a well-formed signature that does not verify"
         );
@@ -621,7 +747,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &sig_bytes[1..],
-                &msg
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a signature that does not parse"
@@ -631,13 +758,20 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes[1..],
                 &sig_bytes,
-                &msg
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::DeserializationFailed),
             "a key that does not parse"
         );
         assert_eq!(
-            verify_pqc_auth(0x7f, &pk_bytes, &sig_bytes, &msg),
+            verify_pqc_auth(
+                0x7f,
+                &pk_bytes,
+                &sig_bytes,
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
+            ),
             Err(PqcVerifyError::SchemeMismatch),
             "an unknown scheme"
         );
@@ -651,7 +785,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk_bytes,
                 &other.to_canonical_bytes().unwrap(),
-                &msg
+                &SigningPayloadHash::from_bytes(msg),
+                &[0u8; 16]
             ),
             Err(PqcVerifyError::CryptoVerifyFailed),
             "another surface's domain"

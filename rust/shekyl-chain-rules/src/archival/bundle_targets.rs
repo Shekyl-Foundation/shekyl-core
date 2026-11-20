@@ -8,7 +8,7 @@
 //! One shape from selection through the read: [`Drawn`]. Economy and
 //! support select differently, and [`DrawOrigin`] is that difference.
 //! The stream is derived from the origin, so it is not stored twice.
-//! [`draw_targets`] calls the verifier's [`select_pairs`](super::select_pairs)
+//! [`draw_targets`] calls the verifier's [`select_pairs`]
 //! and [`support_seats`](super::records::support_seats), so the pair a
 //! producer reads is the pair the verifier derives.
 
@@ -130,7 +130,7 @@ pub fn draw_targets<V: BundleView>(
                 epoch,
             }));
         };
-        let pairs = select_pairs(view, drawable, h, seed, hash.as_bytes(), count)?;
+        let pairs = select_pairs(view, drawable, h, seed, &hash, count)?;
         draws.reserve(pairs.len());
         for (draw, (index, pair)) in (0..count).zip(pairs) {
             let Some(receipt_key) = drawable.receipt_key(index) else {
@@ -145,17 +145,12 @@ pub fn draw_targets<V: BundleView>(
             });
         }
     }
-    for seat in records::support_seats(view, h, seed, hash.as_bytes(), issued)? {
-        let Ok(receipt_key) = FnDsaHybridPublicKey::from_receipt_sign_pk(&seat.receipt_key) else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
-                draw: seat.draw,
-            }));
-        };
+    for seat in records::support_seats(view, h, seed, &hash, issued)? {
         draws.push(Drawn {
             draw: seat.draw,
             persona: seat.persona,
             shard: seat.shard,
-            receipt_key,
+            receipt_key: seat.receipt_key,
             origin: DrawOrigin::Support,
         });
     }

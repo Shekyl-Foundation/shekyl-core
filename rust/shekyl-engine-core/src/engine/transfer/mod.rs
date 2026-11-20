@@ -34,11 +34,13 @@
 //! `docs/design/ENGINE_COMPOSITION_DECOMPOSITION.md`. Policy + ratchet:
 //! same doc, §"Transfer workflow ownership".
 //!
-//! Per [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`] §5.0.1 and
+//! Per `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.0.1 and
 //! `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.4, [`LocalPendingTx`] aggregates
 //! a `Signer`, an `OutputSelector`, a `FeeEstimator`, a `LedgerEngine`
 //! handle, the diagnostic sink, and reservation state under a `Mutex`.
 
+mod candidates;
+mod dispatch;
 mod engine;
 mod submit_finalize;
 mod support;

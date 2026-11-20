@@ -24,6 +24,9 @@ jobs:
   fmt-clippy-on-stable:
     name: fmt + clippy on @stable (advisory)
     runs-on: ubuntu-latest
+    # Dispatch-only and never timed: a stable-toolchain workspace build
+    # plus clippy, bounded well above what that takes in the Rust job.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
         with:

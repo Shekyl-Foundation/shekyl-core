@@ -3,269 +3,47 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Wallet↔daemon RPC **wire-contract types** — the single Rust definition of
-//! the transaction-submit contract, consumed by `shekyl-daemon-rpc` (server)
-//! and `shekyl-rpc-client` (wallet).
+//! The daemon RPC's wire contract (`RPC_WIRE.md`): the single Rust
+//! definition of every method's request and reply, consumed by
+//! `shekyl-daemon-rpc` (the server) and every client (RK-D1).
 //!
-//! The contract is specified in `docs/design/DAEMON_SUBMIT_VERDICT.md` §2 and
-//! is **draft until the §8 parity matrix clears** (the ⚠-rows named by that
-//! document's freeze rule); the types here are the §2.1 text made
-//! compilable, with the skew rules (§2.3) pinned by `tests/skew.rs`.
-//!
-//! ## Contract shape
-//!
-//! - Endpoint: `POST /submit_transaction`, request [`SubmitTransactionRequest`]
-//!   (`{ "tx_blob": "<hex>" }`), response **is** the serde-tagged
-//!   [`SubmitVerdict`] (HTTP 200 for every verdict including `Rejected`;
-//!   transport/availability failures use transport-level status codes and
-//!   surface client-side as the `Err` arm, never as a verdict).
-//! - A verdict is truth at commit-check time — the wallet acts on it
-//!   (lock-lifecycle transitions only; ledger `spent` finality stays
-//!   refresh-authoritative).
-//! - Wire minimalism (§2.2): no `relayed`/`diffused` payloads, no relay-state
-//!   `height`, no `detail` field. Every deleted field was either
-//!   trusted-daemon metadata the wallet must not consume or a snapshot
-//!   observable trustlessly via refresh. One reasoned carve-out (F40):
-//!   [`SubmitVerdict::AlreadyInChain`] carries the confirming-block `height`
-//!   — a release-path discriminant the wallet consumes under the R1/R2
-//!   bounds, not metadata it consumes as truth (§2.2 / §7.2).
-//!
-//! ## Version-skew rules (§2.3, test-pinned)
-//!
-//! Wallet and daemon are released together but not deployed atomically:
-//!
-//! - Unknown `cause` string → deserializes to [`RejectCause::Unrecognized`]
-//!   (`#[serde(other)]`) — fail-safe: released + one-shot rebuild, never
-//!   retryable-in-place, never ambiguous.
-//! - Unknown `verdict` tag → deserialization **error** → the client's `Err`
-//!   arm (transport-equivalent ambiguity, TTL-resubmit). A verdict the
-//!   client cannot name is not a verdict it can act on.
-//! - Unknown *fields* within known variants are tolerated (no
-//!   `deny_unknown_fields`) — deliberately, and unlike the read types in
-//!   [`chain`] and [`transactions`], which now refuse them. The reason is not
-//!   network compatibility (there is no network): a verdict arrives mid-submit,
-//!   where a daemon and a wallet from different in-tree builds must still
-//!   agree on whether the transaction was accepted. Failing that parse turns an
-//!   informational field into an ambiguous submit, which is the outcome §2.3's
-//!   whole skew design exists to avoid. `skew_c` pins it.
-//!
-//! ## Schema-evolution rule (§2.3, F38 — binding on authors)
-//!
-//! New **rejection** semantics MUST land as additive [`RejectCause`]
-//! variants (older wallets degrade to `Unrecognized` → release, the
-//! fail-safe direction). New **top-level [`SubmitVerdict`] tags** are
-//! reserved for genuinely new *non-rejection* dispositions and are a
-//! **breaking change** requiring a coordinated wire-version bump plus
-//! skew-test extension — a rejection-shaped top-level tag would route every
-//! older wallet into `Err` → TTL-resubmit → the same unknown tag, a
-//! designed-in loop on every such release.
+//! - [`wire`] holds every method's types under its `INPUT_GRAMMAR.md`
+//!   Part C name, and [`wire::TABLE`], the one method table (RW-Q7): a
+//!   method's name, request, reply and grant, from one list.
+//! - [`method`] is what a method is ([`method::RpcMethod`]) and who may call
+//!   it ([`method::Policy`]).
+//! - [`schema`] reads the table's names and shapes; the grammar's walk gate
+//!   reads its rendering, `docs/generated/rpc_wire_schema.tsv`.
+//! - [`kinds`] holds the wire's value kinds, one type each (RW-Q4).
+//! - [`errors`] is the error registry: a failure's class and its typed
+//!   diagnostic (RW-Q3).
+//! - [`version`] is `CORE_RPC_VERSION` and its history, and [`identity`]
+//!   the one lenient reader of the version read (RK-D25).
 
 #![deny(unsafe_code)]
 
-use serde::{Deserialize, Serialize};
-
-pub mod archival;
-pub mod archival_reads;
-pub mod bans;
-pub mod bin_commands;
-pub mod chain;
-pub mod chain_reads;
 pub mod consensus_digest;
+pub mod endpoint;
 pub mod errors;
 pub mod hash;
-pub mod headers;
 pub mod hex128;
 pub mod identity;
-pub mod info;
-pub mod methods;
-pub mod mining;
+pub mod kinds;
+pub mod method;
 pub mod nullable;
-pub mod p2p;
-pub mod pool;
-pub mod transactions;
-pub use archival::{
-    RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
-    CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
-    CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
-};
-pub use archival_reads::{
-    ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
-    GetArchivalEmissionClaimSourceRequest, GetArchivalEmissionClaimSourceResponse,
-    GetArchivalShardCoverageResponse, ShardCoverageRow,
-};
-pub use bin_commands::{
-    BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
-    GetOIndexesResponse,
-};
-pub use chain::{
-    core_rpc_version_string, BlockHeader, ConnectState, GetBlockCountResponse, GetBlockHashParams,
-    GetBlockHeaderByHeightRequest, GetBlockHeaderByHeightResponse, GetBlockRequest,
-    GetBlockResponse, GetHeightResponse, GetVersionResponse, RestErrorEnvelope, RpcStatus,
-    StoreInvariantRow, CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE, CORE_RPC_ERROR_CODE_CORE_BUSY,
-    CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
-    CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
-    CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
-};
-pub use chain_reads::{
-    AltChainInfo, CalcPowRequest, GetAltBlocksHashesResponse, GetAlternateChainsResponse,
-    GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, GetCurveTreeCheckpointRequest,
-    GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-};
-pub use consensus_digest::{
-    DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
-};
+pub mod options;
+pub mod schema;
+pub mod version;
+pub mod wire;
+
+pub use consensus_digest::{Network, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH};
 pub use hash::{HashHex, HashHexError};
-pub use headers::{
-    BlockHeaderSlot, FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetBlockHeaderByHashResponse,
-    GetBlockHeadersRangeRequest, GetBlockHeadersRangeResponse, GetFeeEstimateRequest,
-    GetFeeEstimateResponse, GetLastBlockHeaderRequest, GetLastBlockHeaderResponse,
-};
 pub use hex128::{HexU128, HexU128Error};
 pub use identity::{
     daemon_rpc_version, genesis_hash_for, IdentityAxis, IdentityExpectation, IdentityMismatch,
     IdentityRefusal, VersionUnreadable,
 };
-pub use info::{
-    GetInfoResponse, GetInfoShapeError, HealthP2p, Hidden, InfoChain, InfoEconomics, InfoHealth,
-    InfoHost, InfoIdentity, InfoP2p, InfoPeers, InfoPool, InfoStatus, StatusConnections,
-};
 pub use nullable::Nullable;
-pub use p2p::{
-    ConnectionInfo, ConnectionState, GetConnectionsResponse, GetNetStatsResponse,
-    GetPeerListRequest, GetPeerListResponse, P2pReply, P2pRunningReply, Peer, SyncInfoPeer,
-    SyncInfoResponse, SyncSpan,
+pub use version::{
+    core_rpc_version_string, CORE_RPC_VERSION, CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
 };
-pub use transactions::{
-    GetTransactionsRequest, GetTransactionsResponse, IsKeyImageSpentRequest,
-    IsKeyImageSpentResponse, KeyImageStatus, KeyImageStatusError, TxEntry, TxEntryError,
-    TxLocation,
-};
-
-/// Request body for `POST /submit_transaction` (§2.4).
-///
-/// The transaction blob is hex-encoded raw tx bytes. There are no other
-/// fields by design: the legacy `do_not_relay` and `do_sanity_checks` knobs
-/// are deleted (§2.4 — a submitted tx is an offered tx; engine rules are
-/// always on), and unknown fields sent by a newer client are ignored by an
-/// older daemon per the §2.3 skew rules.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SubmitTransactionRequest {
-    /// Hex-encoded transaction blob (the exact bytes the wallet built).
-    pub tx_blob: String,
-}
-
-/// The daemon's atomic verdict on one submitted transaction
-/// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1).
-///
-/// Computed by the Rust admission engine with every mutable premise
-/// re-checked under one lock scope (§3.1 Phase D), so the variants are
-/// mutually consistent facts, not racy snapshots. The client-side type is
-/// `Result<SubmitVerdict, RpcError>`: a verdict is definite; only the `Err`
-/// arm (transport drop after send — Two Generals) is ambiguous.
-///
-/// Authoring constraint (F38): new rejection semantics go under
-/// [`RejectCause`]; new top-level tags here are a breaking change. See the
-/// crate docs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "verdict", rename_all = "snake_case")]
-pub enum SubmitVerdict {
-    /// Admitted to this daemon's pool at commit-check time; relay is
-    /// daemon-owned from here (design doc §5.2). `Accepted ⇒ in pool at
-    /// commit-check time` — a later eviction is observable via refresh, which
-    /// is why the wallet keys liveness on chain confirmation, not verdicts.
-    Accepted,
-    /// Identity match: these exact bytes (same txid) are in the pool.
-    /// Resolves prior transport ambiguity for this txid.
-    AlreadyInPool,
-    /// Identity match: this txid is in the main chain, confirmed at
-    /// `height`. Confirmation observed by verdict; refresh remains the
-    /// settlement authority (reorgs happen).
-    ///
-    /// The height is the lock-lifecycle discriminant (§2.5): it decides
-    /// *which release path* clears the awaiting-confirmation lock — refresh
-    /// catch-up (confirming block above the wallet's synced height) vs
-    /// targeted re-scan (at/below it). Carve-out from §2.2 wire minimalism,
-    /// reasoned in §7.2 (F40): unlike the deleted relay-`height`, this is
-    /// not trusted-daemon metadata the wallet consumes as truth — it is a
-    /// routing hint whose misuse is damage-capped in both directions
-    /// (F40-R1 rescan-never-release, F40-R2 fruitless-rescan breaker).
-    ///
-    /// The field is **required** (no `#[serde(default)]`): pre-genesis,
-    /// wallet and daemon release together, and a field-less
-    /// `already_in_chain` from a stale daemon lands in the `Err` arm
-    /// (§2.3 third-category rule, pinned by skew test D). Post-genesis,
-    /// field additions to existing variants must be optional-with-default;
-    /// this pin is the test that rule flips.
-    AlreadyInChain {
-        /// Main-chain height of the block containing the transaction.
-        height: u64,
-    },
-    /// Not in pool, not in chain, and not admitted — `cause` says why. Under
-    /// single-egress this carries the proof that the bytes were not relayed
-    /// by this daemon (design doc §7.1), so lock release is safe.
-    Rejected {
-        /// Why the transaction was refused.
-        cause: RejectCause,
-    },
-}
-
-/// Why a transaction was rejected (`docs/design/DAEMON_SUBMIT_VERDICT.md`
-/// §2.1), with the per-cause wallet dispositions specified in §2.5.
-///
-/// Additive variants are the *only* schema-evolution vector for rejection
-/// semantics (F38): older wallets deserialize unknown causes to
-/// [`RejectCause::Unrecognized`] and take the fail-safe release path.
-///
-/// `Copy`: fieldless enum; the consumer is the wallet engine's
-/// `TxSubmitOutcome` (itself `Copy`), which embeds the cause in its
-/// `Rejected` variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RejectCause {
-    /// Parse, structural, semantic, or policy-static failure — including
-    /// coinbase-submit, zero-fee, tx-extra cap, nonzero unlock time,
-    /// key-image domain/order violations. Deterministically permanent for
-    /// these bytes.
-    Malformed,
-    /// Fee below the floor: at Phase C against the snapshot params, at the
-    /// Phase-D re-gate against fresh params (the floor is per-block dynamic,
-    /// design doc §3.1 / F34), or admitted-then-evicted under pool pressure
-    /// at the post-prune membership check. All mean the same thing to the
-    /// wallet: not in the pool, fee is why.
-    FeeTooLow,
-    /// A *different* transaction (pool or chain) consumes at least one of
-    /// this tx's inputs — a key image, or an archival claim slot (a bond
-    /// record already posted for this P; a serve-credit already claimed for
-    /// this (P, shard, epoch); design doc §8.7.1). Emitted from Phase D
-    /// re-check (or Phase C over chain-state facts) — never from the Phase B
-    /// snapshot alone — so it genuinely means a competing consumption.
-    DoubleSpendConflict,
-    /// The FCMP++ reference block is no longer canonical (reorged away), or
-    /// the curve-tree root at the reference height no longer matches, or the
-    /// tree depth moved out of range. Rebuild the proof against a fresh
-    /// root; input selection is still sound.
-    StaleRoot,
-    /// Reference block is canonical but younger than the FCMP++ reference
-    /// minimum age. Timed backoff, then resubmit-same-bytes.
-    ReferenceTooRecent,
-    /// Reference block hash unknown to this daemon (typically: daemon not
-    /// yet synced to it). Sync-gated retry (§2.5).
-    ReferenceNotFound,
-    /// The transaction is a JoinMarket bond post and this daemon cannot
-    /// admit one. Phases A–C passed. Phase D's mutable re-checks do not
-    /// run, because the C++ commit step decodes no JoinMarket form that
-    /// carries a receipt key and returns before `shekyl_submit_commit_tx`
-    /// (`FN_DSA_HYBRID.md` `FND-20`). The capability refusal is the
-    /// verdict: a key-image or fee race during Phase C is reported as this
-    /// cause, and retrying the same bytes against this daemon fails the
-    /// same way. The wallet releases the post and its funding reservation
-    /// and does not resubmit (§2.5). Deleted with the C++ commit shim at
-    /// `DEL-008`.
-    JoinMarketUnsupported,
-    /// Forward-compat catch-all: a cause this client build does not know.
-    /// Deserialize-side only — a daemon never authors it. Disposition per
-    /// §2.5: release + one-shot rebuild (the F28 loop-breaker applies).
-    #[serde(other)]
-    Unrecognized,
-}

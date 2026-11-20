@@ -18,7 +18,7 @@ use stub::{connect, formed, with_view, Evil, Stub};
 fn main() {
     with_view(|view| {
         let evil: Evil = Stub(());
-        let valid = validate(formed(), &evil, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let valid = validate(formed(), &evil, &RuleSet::GENESIS, &Trust::UNPINNED)
             .unwrap()
             .unwrap();
         connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>

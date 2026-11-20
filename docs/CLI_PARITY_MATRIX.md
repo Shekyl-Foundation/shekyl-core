@@ -95,8 +95,8 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 44 | `encrypted_seed` | N/A | Out of scope | Encrypted seed export not needed with display.rs safety |
 | 45 | `export_outputs` | N/A | Out of scope | Removed by construction: the cold-coordination flow it served is rejected permanently with cold signing (decision log 2026-09-07), and FCMP++ membership proofs need no per-wallet output export |
 | 46 | `export_transfers` | N/A | Out of scope | CSV export, low priority |
-| 47 | `freeze` | N/A | Out of scope | Removed by construction (rule 60): freezing exists to keep a poisoned decoy out of a ring. FCMP++ has no decoy selection, so the hazard has no referent |
-| 48 | `frozen` | N/A | Out of scope | As row 47 — nothing can be frozen |
+| 47 | `freeze` | N/A | Out of scope | REJECTED (decision log 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, any human choice on a visible parameter becomes a pattern, and the wallet's own reservations keep built and staking-held outputs out of selection. `shekyl-cli` refuses the command with this reason, and the wallet RPC refuses the method |
+| 48 | `frozen` | N/A | Out of scope | As row 47 |
 | 49 | `get_description` | N/A | Out of scope | Wallet description, trivial metadata |
 | 50 | `get_tx_note` | `tx note <txid>` | Covered | Native `get_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. An absent note is also the answer for an unknown txid — the note store carries no existence claim |
 | 51 | `hw_key_images_sync` | N/A | Out of scope | Hardware wallet, not supported |
@@ -119,7 +119,7 @@ capability, never a blocker on deleting C++ that no longer exists.
 | 68 | `set_tx_key` | N/A | Out of scope | Manual tx key injection, niche |
 | 69 | `set_tx_note` | `tx note <txid> <text...>` | Covered | Native `set_tx_note` (PR-SA-4 / SJ-DQ-7); CLI landed WI-RPC-5. The note is the verbatim line remainder; a missing note is a usage error, never a silent clear (the wire's empty-note clear stays RPC-only). 4096-UTF-8-byte ceiling |
 | 70 | `show_qr_code` | N/A | Out of scope | QR display, GUI concern |
-| 71 | `start_mining` | `mine start [threads\|auto]` | Covered | CU-3 ([`design/CLI_USABILITY.md`](design/CLI_USABILITY.md)): the CLI **controls** mining; the daemon still does the hashing — no RandomX runs in the wallet, which is what the original "Out of scope" was protecting. `start_mining` diagnoses and does not run. Loopback is the default/recommended posture (a named remote daemon is allowed, with a reminder); unrestricted RPC; pays to this wallet's address; the daemon owns the threads past CLI exit |
+| 71 | `start_mining` | `mine start [threads\|auto]` | Covered | CU-3 ([`design/CLI_USABILITY.md`](design/CLI_USABILITY.md)): the CLI **controls** mining; the daemon still does the hashing — no RandomX runs in the wallet, which is what the original "Out of scope" was protecting. `start_mining` diagnoses and does not run. Loopback is the silent default; a named remote daemon is allowed, and `mine start` reminds that mining will run on that machine's CPU. Unrestricted RPC; no open wallet (IG-Q21); pays the daemon's `mine-address`; the shell sends only the thread count; the daemon owns the threads past CLI exit |
 | 72 | `start_mining_for_rpc` | N/A | Out of scope | RPC mining, removed. Unchanged by row 71: this was the wallet-RPC *doing* mining, which stays out |
 | 73 | `stop_mining` | `mine stop` | Covered | As row 71; `mine status` reports state, threads, hash rate. `stop_mining` and `mining_status` diagnose and do not run |
 | 74 | `stop_mining_for_rpc` | N/A | Out of scope | As row 72 |

@@ -51,14 +51,14 @@ const BENCH_PASSWORD: &[u8] = b"correct horse battery staple";
 /// are sufficient for measuring the framing + AEAD + Argon2id cost
 /// that `open_cold` actually exercises.
 struct Fixture {
-    master_seed: [u8; 64],
+    master_seed: [u8; 32],
     address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 }
 
 impl Fixture {
     fn new() -> Self {
         Self {
-            master_seed: [0x11; 64],
+            master_seed: [0x11; 32],
             address: {
                 let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                 a[0] = 0x01;
@@ -69,7 +69,7 @@ impl Fixture {
 
     fn capability(&self) -> CapabilityContent<'_> {
         CapabilityContent::Full {
-            master_seed_64: &self.master_seed,
+            seed: &self.master_seed,
         }
     }
 }
@@ -87,7 +87,6 @@ fn prepared_wallet(kdf: KdfParams) -> (TempDir, PathBuf) {
         base_path: &base,
         password: BENCH_PASSWORD,
         network: BENCH_NETWORK,
-        seed_format: 0x00,
         capability: &cap,
         creation_timestamp: 0x6000_0000,
         restore_height_hint: 0,

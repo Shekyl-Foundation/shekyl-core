@@ -35,9 +35,9 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_release_multiplier, corrected_fee_ladder, correction_factors_at, effective_emission,
-    emission_share_at, paid_block_reward, projected_already_generated, relay_fee_floor,
+    paid_block_reward, projected_already_generated, relay_fee_floor, relay_policy,
     tail_subsidy_per_block, CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
-    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 use shekyl_units::AtomicUnits;
 
@@ -55,15 +55,15 @@ pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 /// this instrument measuring a span the chain no longer uses.
 const VOLUME_WINDOW: u64 = TX_VOLUME_WINDOW;
 
-/// [`FeeLadder::as_slots`] order: economy, standard, priority.
+/// [`FeeLadder::as_slots`] order: economy, standard, high.
 const ECONOMY_RUNG: usize = 0;
 const STANDARD_RUNG: usize = 1;
-const PRIORITY_RUNG: usize = 2;
+const HIGH_RUNG: usize = 2;
 
 /// Served-ladder arity, taken from the production owner.
 const SERVED_SLOTS: usize = FeeLadder::SATURATED.as_slots().len();
 const _: () = assert!(
-    ECONOMY_RUNG < SERVED_SLOTS && STANDARD_RUNG < SERVED_SLOTS && PRIORITY_RUNG < SERVED_SLOTS
+    ECONOMY_RUNG < SERVED_SLOTS && STANDARD_RUNG < SERVED_SLOTS && HIGH_RUNG < SERVED_SLOTS
 );
 
 /// Registered chain ages, in years. Supply on the projected trajectory is
@@ -179,6 +179,7 @@ fn served_ladder(
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
+        shekyl_economics::relay_policy(),
     )
     .as_slots()
 }
@@ -223,7 +224,7 @@ pub struct XServedRow {
     /// `x_i = f_i·M/R` per rung, in millionths: the expansion of the
     /// median that rung funds on an average-cost basis.
     pub x_millionths: [u64; SERVED_SLOTS],
-    /// Adjacent-rung ratios ×1000: standard/economy, then priority/standard.
+    /// Adjacent-rung ratios ×1000: standard/economy, then high/standard.
     pub adjacent_ratio_milli: [u64; SERVED_SLOTS - 1],
 }
 
@@ -252,7 +253,7 @@ fn x_served_row(
         x_millionths: x,
         adjacent_ratio_milli: [
             ratio(f[STANDARD_RUNG], f[ECONOMY_RUNG]),
-            ratio(f[PRIORITY_RUNG], f[STANDARD_RUNG]),
+            ratio(f[HIGH_RUNG], f[STANDARD_RUNG]),
         ],
     }
 }
@@ -269,7 +270,7 @@ pub(crate) struct AgeState {
 }
 
 pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
-    state_at_height(age_years * BLOCKS_PER_YEAR, params)
+    state_at_height(age_years.saturating_mul(params.blocks_per_year()), params)
 }
 
 /// The projected trajectory's state at one height. [`age_state`] is this at
@@ -287,24 +288,25 @@ pub(crate) fn state_at_height(height: u64, params: &EconomicParams) -> AgeState 
     }
 }
 
-/// The height at which production's staker share is lowest, where `C` is at
-/// its structural maximum.
+/// The height at which this set's staker share is lowest, where `C` is
+/// at its structural maximum.
 ///
 /// The share turns on at block 1 and takes its year values at
-/// `1 + k·BLOCKS_PER_YEAR`, `k` whole years of decay; between two of those
-/// it interpolates down to the later one, so the lowest share is at one of
-/// them. Each year multiplies the share by `annual_decay / SCALE` and
-/// truncates, which strictly lowers a positive share whenever the decay is
-/// below `SCALE`. The walk therefore stops at the first year that does not
-/// lower the share: the first zero on the shipped schedule (year 97), and
-/// year 0 on a schedule with no decay. It ends within `initial_share + 1`
-/// steps for any decay, with no bound to choose.
-fn lowest_share_height() -> u64 {
-    let year_height = |years: u64| 1 + years * BLOCKS_PER_YEAR;
-    let mut years = 0;
-    let mut share = emission_share_at(year_height(0));
+/// `1 + k · blocks_per_year`. Between two of those it interpolates down
+/// to the later one, so the lowest share is at one of them. Each year
+/// multiplies the share by `annual_decay / SCALE` and truncates, which
+/// strictly lowers a positive share whenever the decay is below `SCALE`.
+/// The walk stops at the first year that does not lower the share: the
+/// first zero on the shipped schedule, and year 0 on a schedule with no
+/// decay. A huge year saturates the height rather than wrapping.
+fn lowest_share_height(params: &EconomicParams) -> u64 {
+    let schedule = params.emission_schedule();
+    let year = params.blocks_per_year();
+    let year_height = |years: u64| 1u64.saturating_add(years.saturating_mul(year));
+    let mut years = 0u64;
+    let mut share = schedule.share_at(year_height(0));
     while share > 0 {
-        let next = emission_share_at(year_height(years + 1));
+        let next = schedule.share_at(year_height(years.saturating_add(1)));
         if next >= share {
             break;
         }
@@ -315,7 +317,7 @@ fn lowest_share_height() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Rung tables at representative states
+// FeePriority tables at representative states
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -329,8 +331,9 @@ pub struct RungTable {
     pub c_scaled: u64,
     /// Served ladder at raw `C`.
     pub served: [u64; SERVED_SLOTS],
-    /// Relay acceptance bound at this state, per byte. FL-R23 sets the
-    /// slack to zero, so the bound is the floor.
+    /// Relay acceptance bound at this state, per byte: the shipped
+    /// policy's [`shekyl_economics::RelayPolicy::admitted_floor`] of the
+    /// floor. The shipped slack is zero, so the bound is the floor.
     pub relay_floor_accept: u64,
     /// The served economy rung sits below the relay accept bound (FL-C6).
     pub served_below_relay: bool,
@@ -352,10 +355,7 @@ fn rung_table(
     let corr = correction_factor(v, st.ag, st.height, params);
     let served = served_ladder(st.base_reward, median, corr.c_scaled, params);
     let floor = relay_floor(st.base_reward, median, corr.c_scaled, params);
-    debug_assert_eq!(
-        RELAY_ADMISSION_SLACK_BP, 0,
-        "accept == floor assumes zero slack"
-    );
+    let accept = relay_policy().admitted_floor(floor);
     RungTable {
         label,
         age_years,
@@ -365,8 +365,8 @@ fn rung_table(
         base_reward_unmodulated: st.base_reward,
         c_scaled: corr.c_scaled,
         served,
-        relay_floor_accept: floor,
-        served_below_relay: served[ECONOMY_RUNG] < floor,
+        relay_floor_accept: accept,
+        served_below_relay: served[ECONOMY_RUNG] < accept,
     }
 }
 
@@ -435,6 +435,7 @@ fn standard_units_per_floor_unit(params: &EconomicParams) -> u64 {
         RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::UNITY,
         params,
+        shekyl_economics::relay_policy(),
     );
     assert_eq!(
         ladder.standard % ladder.economy,
@@ -527,7 +528,7 @@ fn feedback_scenario(
         u64::try_from(u128::from(fee_max) * 10_000 / u128::from(fee_min.max(1)) - 10_000)
             .expect("amplitude fits u64");
     FeedbackResult {
-        age_years: st.height / BLOCKS_PER_YEAR,
+        age_years: st.height / params.blocks_per_year(),
         median,
         elasticity_milli: eps_milli,
         demand_scale,
@@ -704,7 +705,7 @@ pub fn report() -> FeeLadderReport {
     // structural maximum.
     let boundaries = [
         state_at_height(1, &params),
-        state_at_height(lowest_share_height(), &params),
+        state_at_height(lowest_share_height(&params), &params),
     ];
     for st in states.iter().map(|(_, st)| *st).chain(boundaries) {
         for &v in &SURFACE_VOLUMES {
@@ -898,7 +899,7 @@ mod tests {
             params.tx_volume_baseline
         );
         println!("base_reward = {}", genesis.base_reward);
-        println!("median | x(economy) x(standard) x(priority) | std/eco pri/std");
+        println!("median | x(economy) x(standard) x(high) | std/eco high/std");
         for &factor in &MEDIAN_ZONE_FACTORS {
             let row = x_served_row(genesis.base_reward, factor * zone, c, &params);
             let x = row.x_millionths;
@@ -908,7 +909,7 @@ mod tests {
                 row.median,
                 x[ECONOMY_RUNG] as f64 / 10_000.0,
                 x[STANDARD_RUNG] as f64 / 10_000.0,
-                x[PRIORITY_RUNG] as f64 / 10_000.0,
+                x[HIGH_RUNG] as f64 / 10_000.0,
                 r[0] as f64 / 1000.0,
                 r[1] as f64 / 1000.0,
             );
@@ -931,6 +932,7 @@ mod tests {
                 RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                 FeeCorrection::from_scaled(16 * SCALE),
                 &params,
+                shekyl_economics::relay_policy(),
             )
             .as_slots()
         );
@@ -994,9 +996,14 @@ mod tests {
     /// zero there, positive one year of decay earlier.
     #[test]
     fn the_lowest_share_height_is_the_first_whole_year_of_zero_share() {
-        let h = lowest_share_height();
-        assert_eq!(emission_share_at(h), 0);
-        assert!(h > BLOCKS_PER_YEAR, "the shipped share decays for years");
-        assert!(emission_share_at(h - BLOCKS_PER_YEAR) > 0);
+        let params = EconomicParams::default();
+        let h = lowest_share_height(&params);
+        let schedule = params.emission_schedule();
+        assert_eq!(schedule.share_at(h), 0);
+        assert!(
+            h > params.blocks_per_year(),
+            "the shipped share decays for years"
+        );
+        assert!(schedule.share_at(h - params.blocks_per_year()) > 0);
     }
 }

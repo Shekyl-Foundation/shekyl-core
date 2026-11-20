@@ -5,10 +5,8 @@
 
 //! Chain-sync commands 2011–2014 (CS-Q3, `P2P_3_CHAIN_SYNC_BRIEF.md`).
 //!
-//! These are new commands with new ids. They are not [`crate::DefinedCommand`]
-//! arms: ingress admits a command for dispatch, and no handler exists until
-//! the cutover. The ids they replace (2003, 2004, 2006, 2007) stay until
-//! that cutover retires them.
+//! These are new commands with new ids, arms of [`crate::Command`] like the
+//! rest. The ids they replaced (2003, 2004, 2006, 2007) are retired.
 //!
 //! A body is a [`shekyl_wire::BlockBody`]. This module moves it; it does
 //! not judge it. The partition of a body response is judged here, because
@@ -21,7 +19,7 @@ use shekyl_portable_storage::{load_from_binary, Limits, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
 use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody, MIN_POW_BLOB_SIZE, MIN_PRUNED_SEGMENT};
 
-use super::block::ATTESTATION_WITNESS_MAX_BYTES;
+use super::block::{check_references, opt_references, MAX_BUNDLE_REFERENCES};
 use super::error::Error;
 use super::get::{self, HASH_SIZE};
 use super::notifies::{
@@ -76,7 +74,7 @@ const RESPONSE_HEADERS_OVERHEAD: u64 = (HEADERS_RESPONSE_BYTES / TWO_BYTE_LENGTH
     + RESPONSE_HEADERS_SECTION;
 
 /// Encoded cap of [`RequestHeaders`]. Derived from the locator count
-/// [`RequestChain`](super::RequestChain) already uses.
+/// the retired chain request (2006) used.
 pub const CAP_REQUEST_HEADERS: u64 = hash_list_cap(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT);
 
 /// Encoded cap of [`ResponseHeaders`]: the preimage budget plus the section.
@@ -181,10 +179,11 @@ pub const RESPONSE_BODIES_MAX_OBJECTS: usize =
     cap_usize(MAX_OBJECT_REQUEST_COUNT) + RESPONSE_BODIES_MAX_TXS;
 
 /// Strings in the minimum (full) section: the blob. A body adds `block`
-/// and, at most, `attestation_witness`. The root adds `deferred` and
-/// `missed_ids`.
+/// and, at most, one per bundle reference and one per bundle body the
+/// server holds (no more bodies than references). The root adds
+/// `deferred` and `missed_ids`.
 const FULL_TX_STRINGS: usize = 1;
-const BODY_STRINGS: usize = 2;
+const BODY_STRINGS: usize = 1 + 2 * MAX_BUNDLE_REFERENCES;
 const ROOT_STRINGS: usize = 2;
 
 /// Strings a body response may declare, from the same two counts.
@@ -192,10 +191,11 @@ pub const RESPONSE_BODIES_MAX_STRINGS: usize = ROOT_STRINGS
     + cap_usize(MAX_OBJECT_REQUEST_COUNT) * BODY_STRINGS
     + RESPONSE_BODIES_MAX_TXS * FULL_TX_STRINGS;
 
-/// Fields: the root's three, two on a body (`block`, `txs`), two on the
-/// minimum transaction section (`form`, `blob`).
+/// Fields: the root's three, at most four on a body (`block`, `txs`,
+/// `bundle_references`, `bundle_bodies`), two on the minimum transaction
+/// section (`form`, `blob`).
 const ROOT_FIELDS: usize = 3;
-const BODY_FIELDS: usize = 2;
+const BODY_FIELDS: usize = 4;
 const FULL_TX_FIELDS: usize = 2;
 
 /// Fields a body response may declare, from the same two counts.
@@ -233,69 +233,6 @@ const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
 const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
 
-/// The chain-sync commands, as chain sync's router admits them
-/// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-3 §4.2).
-///
-/// Not [`crate::DefinedCommand`]: that set is what the C++ ingress admits
-/// for its handler, and 2011–2014 are not added to it. The router reads a
-/// bucket's command, admits these here with their caps, and hands the bytes
-/// to the sync owner; every other command goes on to the C++ handler.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyncCommand {
-    /// `NOTIFY_REQUEST_HEADERS` (2011).
-    RequestHeaders,
-    /// `NOTIFY_RESPONSE_HEADERS` (2012).
-    ResponseHeaders,
-    /// `NOTIFY_REQUEST_BODIES` (2013).
-    RequestBodies,
-    /// `NOTIFY_RESPONSE_BODIES` (2014).
-    ResponseBodies,
-}
-
-impl SyncCommand {
-    /// Every arm.
-    pub const ALL: [Self; 4] = [
-        Self::RequestHeaders,
-        Self::ResponseHeaders,
-        Self::RequestBodies,
-        Self::ResponseBodies,
-    ];
-
-    /// The wire id this arm speaks.
-    #[must_use]
-    pub const fn wire_id(self) -> u32 {
-        match self {
-            Self::RequestHeaders => NOTIFY_REQUEST_HEADERS,
-            Self::ResponseHeaders => NOTIFY_RESPONSE_HEADERS,
-            Self::RequestBodies => NOTIFY_REQUEST_BODIES,
-            Self::ResponseBodies => NOTIFY_RESPONSE_BODIES,
-        }
-    }
-
-    /// A wire command id as a chain-sync command, or `None`.
-    #[must_use]
-    pub const fn from_wire(command: u32) -> Option<Self> {
-        match command {
-            NOTIFY_REQUEST_HEADERS => Some(Self::RequestHeaders),
-            NOTIFY_RESPONSE_HEADERS => Some(Self::ResponseHeaders),
-            NOTIFY_REQUEST_BODIES => Some(Self::RequestBodies),
-            NOTIFY_RESPONSE_BODIES => Some(Self::ResponseBodies),
-            _ => None,
-        }
-    }
-
-    /// The payload cap the router applies before it buffers a message.
-    #[must_use]
-    pub const fn payload_cap(self) -> u64 {
-        match self {
-            Self::RequestHeaders => CAP_REQUEST_HEADERS,
-            Self::ResponseHeaders => CAP_RESPONSE_HEADERS,
-            Self::RequestBodies => CAP_REQUEST_BODIES,
-            Self::ResponseBodies => CAP_RESPONSE_BODIES,
-        }
-    }
-}
-
 fn capped<T: PortableMap>(bytes: &[u8], cap: u64, limits: Limits) -> Result<T, Error> {
     let max = usize::try_from(cap).expect("an encoded cap fits usize");
     if bytes.len() > max {
@@ -319,7 +256,7 @@ fn within_count(field: &'static str, got: usize, max: u64) -> Result<(), Error> 
     Ok(())
 }
 
-/// `NOTIFY_REQUEST_HEADERS` (2011). The locator, as `RequestChain`'s
+/// `NOTIFY_REQUEST_HEADERS` (2011). The locator, as the retired chain request's (2006)
 /// `block_ids`. No prune flag: a header request has nothing to prune.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestHeaders {
@@ -849,13 +786,19 @@ impl BodyPlanner {
 }
 
 /// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
-/// block, each carried transaction, and the witness. [`plan_bodies`] and
+/// block, each carried transaction, each bundle reference and each bundle
+/// body. [`plan_bodies`] and
 /// the body codec ([`ResponseBodies::decode`], [`PortableMap::to_section`])
 /// both charge this and nothing else.
 #[must_use]
 pub fn body_budget_bytes(body: &BlockBody) -> usize {
     let mut n = body.block.len();
-    n = n.saturating_add(body.attestation_witness.len());
+    for reference in &body.bundle_references {
+        n = n.saturating_add(reference.len());
+    }
+    for bundle in &body.bundle_bodies {
+        n = n.saturating_add(bundle.len());
+    }
     for tx in &body.txs {
         n = n.saturating_add(match tx {
             TxBody::Full(bytes) => bytes.len(),
@@ -889,13 +832,21 @@ fn charge(sent_bytes: usize, size: usize, sent_one: bool) -> Option<usize> {
     }
 }
 
-fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
-    if body.attestation_witness.len() > ATTESTATION_WITNESS_MAX_BYTES {
-        return Err(Error::WitnessTooLarge {
-            got: body.attestation_witness.len(),
-            max: ATTESTATION_WITNESS_MAX_BYTES,
-        });
+/// No more bundle bodies than a section has references.
+fn check_bundle_bodies(bodies: &[Vec<u8>]) -> Result<(), Error> {
+    if bodies.len() > MAX_BUNDLE_REFERENCES {
+        Err(Error::TooManyBundleBodies {
+            got: bodies.len(),
+            max: MAX_BUNDLE_REFERENCES,
+        })
+    } else {
+        Ok(())
     }
+}
+
+fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
+    check_references(&body.bundle_references)?;
+    check_bundle_bodies(&body.bundle_bodies)?;
     let mut section = Section::new();
     section.insert("block", Value::Bytes(body.block.clone()));
     let mut txs = Vec::with_capacity(body.txs.len());
@@ -903,22 +854,15 @@ fn block_body_section(body: &BlockBody) -> Result<Section, Error> {
         txs.push(tx_section(tx));
     }
     get::insert_object_array(&mut section, "txs", txs);
-    get::insert_opt_bytes(
-        &mut section,
-        "attestation_witness",
-        &body.attestation_witness,
-    );
+    get::insert_bytes_array(&mut section, "bundle_references", &body.bundle_references);
+    get::insert_bytes_array(&mut section, "bundle_bodies", &body.bundle_bodies);
     Ok(section)
 }
 
 fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
-    let attestation_witness = get::opt_bytes(section, "attestation_witness")?;
-    if attestation_witness.len() > ATTESTATION_WITNESS_MAX_BYTES {
-        return Err(Error::WitnessTooLarge {
-            got: attestation_witness.len(),
-            max: ATTESTATION_WITNESS_MAX_BYTES,
-        });
-    }
+    let bundle_references = opt_references(section)?;
+    let bundle_bodies = get::bytes_array(section, "bundle_bodies")?;
+    check_bundle_bodies(&bundle_bodies)?;
     let txs = get::object_array(section, "txs")?
         .into_iter()
         .map(tx_from)
@@ -926,7 +870,8 @@ fn block_body_from(section: &Section) -> Result<BlockBody, Error> {
     Ok(BlockBody {
         block: get::bytes(section, "block")?.to_vec(),
         txs,
-        attestation_witness,
+        bundle_references,
+        bundle_bodies,
     })
 }
 

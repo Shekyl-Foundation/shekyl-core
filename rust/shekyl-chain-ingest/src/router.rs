@@ -35,11 +35,12 @@
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, Trust, ViewRead,
+    PerHeightRecord, ReferenceClaims, RuleSet, Target, ViewRead,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
 };
+use shekyl_network::NetworkId;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
@@ -122,19 +123,14 @@ pub struct Claims {
     pub target: Target,
     /// The third claim: each reference's height and root.
     pub references: ReferenceClaims,
+    /// The id of the network the run is on: every input's signature hash
+    /// binds it (CEN-I17, `NETWORK_IDENTITY.md` NI-Q4).
+    pub network: NetworkId,
 }
 
 /// Why a run's claims stopped at one of its blocks.
 #[derive(Debug)]
 pub enum ClaimStop {
-    /// CEN-D6 refused the block's target on its own headers: that block's
-    /// verdict, so it is not formed.
-    Refused {
-        /// Its index in the run.
-        index: usize,
-        /// The verdict.
-        refused: InvalidBlock,
-    },
     /// The headers the window reads are corrupt: the writer's to judge.
     Corrupt {
         /// The connecting height whose window it was.
@@ -183,16 +179,7 @@ pub fn claim_run(
     let mut ledger = TargetLedger::new();
     for (index, candidate) in run.iter().enumerate() {
         let height = BlockHeight::from_raw(first.to_raw() + index as u64);
-        match claim_one(
-            &snap,
-            rules,
-            &mut ledger,
-            first,
-            run,
-            index,
-            height,
-            candidate,
-        ) {
+        match claim_one(&snap, rules, &mut ledger, first, run, height, candidate) {
             Ok(claim) => claims.push(claim),
             Err(stop) => return (claims, Some(stop)),
         }
@@ -200,17 +187,12 @@ pub fn claim_run(
     (claims, None)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one block's claim reads the snapshot, the run and the ledger the run builds"
-)]
 fn claim_one(
     snap: &ReadSnapshot<'_>,
     rules: ChainRules,
     ledger: &mut TargetLedger,
     first: BlockHeight,
     run: &[Candidate],
-    index: usize,
     height: BlockHeight,
     candidate: &Candidate,
 ) -> Result<Claims, ClaimStop> {
@@ -226,8 +208,7 @@ fn claim_one(
         ledger.record(at, header_record(snap, at)?);
     }
     let target = match ledger.claim(height, &rule_set) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => return Err(ClaimStop::Refused { index, refused }),
+        Ok(target) => target,
         Err(corrupt) => return Err(ClaimStop::Corrupt { height, corrupt }),
     };
     // Read before this block's own header joins the ledger: a block cannot
@@ -245,6 +226,7 @@ fn claim_one(
         seed,
         target,
         references,
+        network: rules.trust().network_id(),
     })
 }
 
@@ -252,13 +234,12 @@ fn claim_one(
 /// and before any cache is built.
 #[derive(Clone, Debug)]
 pub(crate) enum ClaimedAlt {
-    /// Inside the band. The target was read. `prepare` is the branch's own
-    /// seed block: prepare it into the transient slot before the hash (B2).
+    /// Inside the band. The target was read. The arrival is formed as a
+    /// job on the claims' seed: a main-chain seed in the window, or the
+    /// branch's own seed block (B2).
     Ready {
         /// The claims.
         claims: Claims,
-        /// The seed is the branch's own block, above the fork.
-        prepare: bool,
     },
     /// The early gate's answer. The target was not read.
     Spend(AltSpend),
@@ -273,7 +254,7 @@ pub(crate) enum ClaimedAlt {
 /// the window is read on the same snapshot. A fork outside the band, or a
 /// below-fork seed the pair does not hold, comes back as
 /// [`ClaimedAlt::Spend`] and the target is not derived. A seed on the
-/// branch itself is [`ClaimedAlt::Ready`] with `prepare` (B2).
+/// branch itself is [`ClaimedAlt::Ready`] like any other (B2).
 ///
 /// # Errors
 ///
@@ -284,7 +265,6 @@ pub(crate) fn claim_alt(
     store: &ChainStore,
     rules: ChainRules,
     candidate: &Candidate,
-    trust: &Trust,
 ) -> Result<ClaimedAlt, ClaimStop> {
     let snap = store.begin_read()?;
     let window = match cache_window::seeds_on(&snap, rules) {
@@ -320,15 +300,13 @@ pub(crate) fn claim_alt(
             }
         },
     };
-    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, trust, &window);
-    let prepare = match outcome {
-        AltSpend::Hash => false,
-        AltSpend::Prepare => true,
-        refused => return Ok(ClaimedAlt::Spend(refused)),
-    };
+    let floor = snap.undo_floor().map_err(ClaimStop::Store)?;
+    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, &window, floor);
+    if !matches!(outcome, AltSpend::Hash) {
+        return Ok(ClaimedAlt::Spend(outcome));
+    }
     let target = match target_claim(&view, height, &rule_set) {
-        Ok(Ok(target)) => target,
-        Ok(Err(refused)) => return Err(ClaimStop::Refused { index: 0, refused }),
+        Ok(target) => target,
         Err(Fault::Corrupt(corrupt)) => return Err(ClaimStop::Corrupt { height, corrupt }),
         Err(Fault::View(e)) => return Err(ClaimStop::Store(e)),
         Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
@@ -340,8 +318,8 @@ pub(crate) fn claim_alt(
             seed,
             target,
             references: ReferenceClaims::EMPTY,
+            network: rules.trust().network_id(),
         },
-        prepare,
     })
 }
 
@@ -365,8 +343,7 @@ pub(crate) fn claim_next(
         Some(at) => recorded_hash(snap, at)?,
     };
     match target_claim(&view, connecting, &rule_set) {
-        Ok(Ok(target)) => Ok((connecting, seed, target)),
-        Ok(Err(refused)) => Err(ClaimStop::Refused { index: 0, refused }),
+        Ok(target) => Ok((connecting, seed, target)),
         Err(Fault::Corrupt(corrupt)) => Err(ClaimStop::Corrupt {
             height: connecting,
             corrupt,

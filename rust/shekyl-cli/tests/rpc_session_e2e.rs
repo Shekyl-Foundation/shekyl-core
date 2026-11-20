@@ -24,8 +24,7 @@ fn host(dir: &std::path::Path) -> RpcSession {
     RpcSession::host_in_process(
         dir.to_path_buf(),
         Network::Stagenet,
-        NO_DAEMON.into(),
-        None,
+        shekyl_wallet_rpc::tenant::DaemonTarget::address(NO_DAEMON),
         false,
     )
     .expect("host in-process wallet RPC")
@@ -154,7 +153,7 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
             "build_pending_tx",
             json!({
                 "recipients": [{ "address": "skl1abc", "amount": "1" }],
-                "priority": "STANDARD",
+                "priority": "standard",
             }),
         )
         .expect_err("no wallet open");
@@ -170,7 +169,7 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
             "build_pending_tx",
             json!({
                 "recipients": [{ "address": "not-an-address", "amount": "1" }],
-                "priority": "STANDARD",
+                "priority": "standard",
             }),
         )
         .expect_err("invalid recipient must refuse");

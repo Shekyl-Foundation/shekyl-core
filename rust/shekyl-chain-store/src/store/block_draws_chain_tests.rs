@@ -12,6 +12,10 @@
 //! at the open changes `D`. Releasing a complete tree does not. A warm
 //! memo, a miss, a switch, an aborted switch and a removed digest (SI-29)
 //! run on that chain.
+//!
+//! Every epoch numbered in this file's prose is counted from the personas'
+//! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
+//! loads the captured shard-fill prefix first and the personas join after it.
 
 use std::collections::BTreeMap;
 
@@ -27,12 +31,12 @@ use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use crate::codec::{BondRecord, Canonical};
 
 use super::super::super::{Popped, StoreError, StoreInvariant, WriteBatch};
-use super::super::{Listed, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
-use super::{h_open, no_draws, plant_compact_bond, BONDED, COMPACT, FIRST};
+use super::super::{shifted, Listed, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
+use super::{h_open, join_compact_bond, no_draws, BONDED, COMPACT, FIRST};
 
 /// The count against a store chain with one compact pair in `D`.
 ///
-/// The chain is the harness's through `h_open(2) − 1`. Epoch 1's set is
+/// The chain is the harness's through `h_open(shifted(2)) − 1`. Epoch 1's set is
 /// empty, so the block before the open is a zero row. One compact bond is
 /// then planted, and eleven blocks run into the epoch. `|D|` is 1. Nothing
 /// is admitted, and the rows are that set's composition (`draw_horizon`,
@@ -47,15 +51,15 @@ use super::{h_open, no_draws, plant_compact_bond, BONDED, COMPACT, FIRST};
 /// [`an_aborted_switch_does_not_change_the_next_row`].
 #[test]
 fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
-    let open = h_open(2);
+    let open = h_open(shifted(2));
     let last = open + 11;
-    let mut chain = SlashedChain::build_with("count-set", WITNESS_PERSONAS, open - 1, no_draws);
+    let mut chain = SlashedChain::build_with("count-set", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     assert_eq!(
         draws_of(&chain, BlockHeight::from_raw(open - 1)),
         BlockDraws::ZERO,
-        "epoch 1's set is empty, so the block before the open is a zero row"
+        "the join's epoch has no compact pair, so the block before the open is a zero row"
     );
-    plant_compact_bond(&mut chain);
 
     let reference = {
         let mut cold = None;
@@ -173,27 +177,42 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "releasing the compact bond removes its pair from D"
     );
 
-    // The release sits above the open. Its pre-image is a complete tree,
-    // which is not in `D`, so rewriting that pre-image does not move the
-    // digest. A missing digest is still the digest's own row (SI-29).
+    // The release sits above the open. Its pre-image is a complete tree:
+    // not in `D`, but a support member of the epoch under the same digest
+    // (`SO-D12` S1, ruled 2026-11-01). Rewriting that pre-image drops the
+    // member from the rebuild, so the count's memo miss refuses it as
+    // drift. A missing digest is still the digest's own row (SI-29).
     pop_back(&mut chain, 2);
     connect_listed(&mut chain, &[], None);
     connect_listed(&mut chain, &release, None);
-    let epoch = SettlementEpoch::from_raw(2);
-    let kept: Result<(), TestErr> = chain.store.write(|batch| {
+    let epoch = SettlementEpoch::from_raw(shifted(2));
+    let drifted: Result<(), TestErr> = chain.store.write(|batch| {
         let mut record = journaled(batch)?;
         record.holdings =
             shekyl_types::archival::Holdings::shard_set(Vec::new()).expect("the empty set");
         rewrite_journal(batch, &record)?;
         let view = batch.chain_view();
-        let Ok(_) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-            panic!("the pass refused a complete tree's pre-image");
+        let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
+            panic!("the pass kept a rebuild without the complete tree's membership");
         };
-        Ok(())
+        assert_eq!(
+            corrupt,
+            shekyl_chain_rules::Corrupt::SettlementIntegrity {
+                epoch,
+                check: shekyl_chain_rules::SettlementCheck::DrawableDrift,
+            }
+        );
+        Err(batch.refuse_corrupt(corrupt).into())
     });
-    kept.expect("a complete tree's pre-image is not an operand of D");
+    let TestErr::Store(refused) = drifted.expect_err("a drifted member refuses") else {
+        panic!("aborted, not refused");
+    };
+    assert!(
+        refused.contains("does not digest to archival_drawable_digest"),
+        "{refused}"
+    );
 
-    let far = h_open(3) + 2;
+    let far = h_open(shifted(3)) + 2;
     assert_eq!(
         rows_from_open("count-memo", far, true),
         rows_from_open("count-none", far, false),
@@ -207,10 +226,10 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
                 crate::schema::ARCHIVAL_DRAWABLE_DIGEST,
                 StoreInvariant::TipMismatch,
             )?
-            .remove(2)?;
+            .remove(shifted(2))?;
         let view = batch.chain_view();
         let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-            panic!("the count ran without epoch 2's digest");
+            panic!("the count ran without its open's digest");
         };
         assert_eq!(
             corrupt,
@@ -225,12 +244,11 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         panic!("aborted, not refused");
     };
     assert!(refused.contains("holds no digest"), "{refused}");
-    chain.finish();
 }
 
 /// An aborted switch inserts the other fork's set and does not adopt it.
 ///
-/// Chain A is connected through `h_open(2) + 1` with a memo, over the
+/// Chain A is connected through `h_open(shifted(2)) + 1` with a memo, over the
 /// planted compact bond, so the memo holds that one pair. One batch then
 /// pops below A's open and connects fork B's open with a release of that
 /// bond, so B's set is empty. The batch is aborted. The store stays on A.
@@ -246,10 +264,10 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
 /// the epoch's latest set from `get`.
 #[test]
 fn an_aborted_switch_does_not_change_the_next_row() {
-    let open = h_open(2);
+    let open = h_open(shifted(2));
     let mut chain =
-        SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+        SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let reference = compose(1, open, open + 2);
     let mut memo = DrawableMemo::new();
     let committed = connect_span(&mut chain, open, open + 1, &mut Some(&mut memo));
@@ -298,20 +316,17 @@ fn an_aborted_switch_does_not_change_the_next_row() {
         next, reference[2],
         "A's next block counts A's set, not the set the aborted fork inserted"
     );
-    chain.finish();
 }
 
 /// Epoch 2's open through `through`, on a chain of its own. `with_memo`
 /// carries one memo from the open; otherwise every block rebuilds.
 fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws> {
-    let open = h_open(2);
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+    let open = h_open(shifted(2));
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut slot = if with_memo { Some(&mut memo) } else { None };
-    let rows = connect_span(&mut chain, open, through, &mut slot);
-    chain.finish();
-    rows
+    connect_span(&mut chain, open, through, &mut slot)
 }
 
 fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {
@@ -357,7 +372,7 @@ fn connect_span(
     rows
 }
 
-fn pop_back(chain: &mut SlashedChain, n: u64) {
+pub(super) fn pop_back(chain: &mut SlashedChain, n: u64) {
     for _ in 0..n {
         let popped: Result<Popped, TestErr> = chain.store.write(|batch| Ok(batch.pop()?));
         popped.expect("pop");
@@ -369,7 +384,7 @@ fn pop_back(chain: &mut SlashedChain, n: u64) {
 /// `set_size` pairs and admits nothing. The unsettled shortfall is
 /// `max(0, visible − in flight)`, the same saturation [`draw_count`] is
 /// specified to take.
-fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
+pub(super) fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
     let schedule = RULES.settlement_schedule();
     let seb = schedule.blocks().get();
     let window = schedule
@@ -393,9 +408,15 @@ fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
         let (count, next) = draw_count(
             set_size,
             visible.saturating_sub(in_flight),
-            draw_horizon(h - h_open, seb, window),
+            draw_horizon(
+                h - h_open,
+                seb,
+                window,
+                shekyl_archival_retention::archival_params(),
+            ),
             seb,
             carry,
+            shekyl_archival_retention::archival_params(),
         )
         .expect("the horizon fits");
         carry = next;
@@ -417,13 +438,12 @@ fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
 /// shortfall at 1536 when `|D|` is 512.
 #[test]
 fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
-    let open = h_open(2);
-    let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 1, no_draws);
-    plant_compact_bond(&mut chain);
+    let open = h_open(shifted(2));
+    let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 2, no_draws);
+    join_compact_bond(&mut chain);
     let admitted = late_bundle(open - 1);
-    let memo = DrawableMemo::new();
-    connect_admitting(&mut chain, &admitted, &memo);
-    let prior = SettlementEpoch::from_raw(1);
+    connect_admitting(&mut chain, &admitted);
+    let prior = SettlementEpoch::from_raw(shifted(1));
     let floor =
         EpochFloor::<Settling>::under(BlockHeight::from_raw(open), RULES.settlement_schedule());
     let rows = chain
@@ -486,7 +506,7 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     );
     assert!(!draws_of(&chain, BlockHeight::from_raw(open - 1)).revealed);
 
-    connect_admitting(&mut chain, &admitted, &memo);
+    connect_admitting(&mut chain, &admitted);
     let next = connect_listed(&mut chain, &[], None);
     assert_eq!(opened.issued_short, 0);
     let one_pair = u64::try_from(COUNTED_DRAWS).expect("the counted draws fit");
@@ -498,7 +518,6 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
         next.shortfall, opened.shortfall,
         "E + 1's shortfall is untouched"
     );
-    chain.finish();
 }
 
 fn late_bundle(h: u64) -> Vec<Admitted> {
@@ -533,14 +552,17 @@ fn late_bundle(h: u64) -> Vec<Admitted> {
     }]
 }
 
-fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted], memo: &DrawableMemo) {
+/// Connect the next block with `admitted` as its verdict's admissions: the
+/// writer is handed a derivation no fixture bundle produces, through the
+/// harness instrument (`ChainValid::with_admitted`).
+fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted]) {
     let txs = chain.grown.realise(&[]);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
         let judged = chain
             .grown
             .judge_listing_with_memo(&view, &RULES, &txs, None)?;
-        batch.connect_admitting(judged, RULES, Some((memo, admitted)))?;
+        batch.connect(judged.with_admitted(admitted.to_vec()), RULES)?;
         Ok(())
     });
     out.expect("the block connects");
@@ -550,7 +572,10 @@ fn journaled(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
     let persona = Persona::at(FIRST).id();
     Ok(batch
         .chain_view()
-        .release_journal_after(BlockHeight::from_raw(h_open(2)), ReleaseJournalFloor::NONE)?
+        .release_journal_after(
+            BlockHeight::from_raw(h_open(shifted(2))),
+            ReleaseJournalFloor::NONE,
+        )?
         .into_iter()
         .find(|row| row.persona == persona)
         .expect("the release was journaled")
@@ -559,7 +584,7 @@ fn journaled(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
 
 fn rewrite_journal(batch: &WriteBatch<'_, '_>, record: &BondRecord) -> Result<(), StoreError> {
     let key = crate::ids::ReleaseJournalKey::new(
-        BlockHeight::from_raw(h_open(2) + 1),
+        BlockHeight::from_raw(h_open(shifted(2)) + 1),
         Persona::at(FIRST).id(),
     );
     batch

@@ -22,6 +22,7 @@
 //! vocabulary for the RPC and the option table.
 
 #![no_std]
+#![deny(unsafe_code)]
 
 /// One grant (`RPC_CHANNEL.md` §6.1's table, in its order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -50,7 +51,7 @@ pub enum Grant {
     /// The node's configuration.
     Config,
     /// Enrolling and revoking keys (RT-O9.1).
-    Enrol,
+    Enroll,
 }
 
 impl Grant {
@@ -67,7 +68,7 @@ impl Grant {
         Self::Bans,
         Self::Node,
         Self::Config,
-        Self::Enrol,
+        Self::Enroll,
     ];
 
     /// This grant's bit in a [`GrantSet`] on the wire. Fixed: a change is a
@@ -86,7 +87,7 @@ impl Grant {
             Self::Bans => 1 << 8,
             Self::Node => 1 << 9,
             Self::Config => 1 << 10,
-            Self::Enrol => 1 << 11,
+            Self::Enroll => 1 << 11,
         }
     }
 
@@ -105,7 +106,7 @@ impl Grant {
             Self::Bans => "bans",
             Self::Node => "node",
             Self::Config => "config",
-            Self::Enrol => "enrol",
+            Self::Enroll => "enroll",
         }
     }
 
@@ -244,6 +245,46 @@ impl GrantSet {
         }
     }
 
+    /// The channel's message-3 or message-4 payload carrying this set
+    /// (RT-O31): byte 0 the version, [`PAYLOAD_VERSION`]; bytes 1 and 2 the
+    /// bits, little-endian; bytes 3 to 15 zero.
+    #[must_use]
+    pub const fn to_payload(self) -> [u8; PAYLOAD_LEN] {
+        let bits = self.0.to_le_bytes();
+        let mut payload = [0u8; PAYLOAD_LEN];
+        payload[0] = PAYLOAD_VERSION;
+        payload[1] = bits[0];
+        payload[2] = bits[1];
+        payload
+    }
+
+    /// The set a message-3 or message-4 payload carries. Anything but
+    /// [`PAYLOAD_LEN`] bytes of [`PAYLOAD_VERSION`] with zero reserved bytes
+    /// and known bits is refused, never ignored (RT-O31).
+    ///
+    /// # Errors
+    ///
+    /// [`PayloadRefused`], naming what was wrong.
+    pub const fn from_payload(payload: &[u8]) -> Result<Self, PayloadRefused> {
+        if payload.len() != PAYLOAD_LEN {
+            return Err(PayloadRefused::Length);
+        }
+        if payload[0] != PAYLOAD_VERSION {
+            return Err(PayloadRefused::Version(payload[0]));
+        }
+        let mut at = 3;
+        while at < PAYLOAD_LEN {
+            if payload[at] != 0 {
+                return Err(PayloadRefused::Reserved);
+            }
+            at += 1;
+        }
+        match Self::from_bits(u16::from_le_bytes([payload[1], payload[2]])) {
+            Ok(set) => Ok(set),
+            Err(UnknownGrantBits(bits)) => Err(PayloadRefused::UnknownGrants(bits)),
+        }
+    }
+
     /// The grants this set names, in the table's order.
     pub fn iter(self) -> impl Iterator<Item = Grant> {
         Grant::ALL
@@ -252,7 +293,28 @@ impl GrantSet {
     }
 }
 
-/// What an operator names at enrolment (`RPC_CHANNEL.md` §6.1).
+/// The length of the channel's message-3 and message-4 payloads: one
+/// length for every grant set, so each message is one size on the wire
+/// (RT-O31).
+pub const PAYLOAD_LEN: usize = 16;
+
+/// The payload's version, its first byte.
+pub const PAYLOAD_VERSION: u8 = 1;
+
+/// Why a message-3 or message-4 payload was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayloadRefused {
+    /// Not [`PAYLOAD_LEN`] bytes.
+    Length,
+    /// A version this build does not read.
+    Version(u8),
+    /// A reserved byte is not zero.
+    Reserved,
+    /// Bits no grant has.
+    UnknownGrants(u16),
+}
+
+/// What an operator names at enrollment (`RPC_CHANNEL.md` §6.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Preset {
     /// `chain` + `pool` + `health`.
@@ -261,11 +323,31 @@ pub enum Preset {
     Wallet,
     /// `view` + `mining-work`.
     Miner,
-    /// Every grant, `enrol` included.
+    /// Every grant, `enroll` included.
     Admin,
 }
 
 impl Preset {
+    /// Every preset, in the order an operator meets them.
+    pub const ALL: [Self; 4] = [Self::View, Self::Wallet, Self::Miner, Self::Admin];
+
+    /// The preset's name, as an operator writes it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Wallet => "wallet",
+            Self::Miner => "miner",
+            Self::Admin => "admin",
+        }
+    }
+
+    /// The preset an operator's name names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.name() == name)
+    }
+
     /// The preset's grants.
     #[must_use]
     pub const fn grants(self) -> GrantSet {
@@ -299,7 +381,7 @@ mod tests {
             (Grant::Bans, 0x0100),
             (Grant::Node, 0x0200),
             (Grant::Config, 0x0400),
-            (Grant::Enrol, 0x0800),
+            (Grant::Enroll, 0x0800),
         ];
         for (grant, bit) in pinned {
             assert_eq!(grant.bit(), bit, "{grant:?}");
@@ -335,6 +417,47 @@ mod tests {
     }
 
     #[test]
+    fn the_payload_is_pinned_and_round_trips() {
+        // RT-O31: version 1, the view preset's bits little-endian, zeros.
+        let view = Preset::View.grants().to_payload();
+        assert_eq!(view, [1, 0x07, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let admin = GrantSet::ALL.to_payload();
+        assert_eq!(&admin[..3], &[1, 0xFF, 0x0F]);
+        for set in [GrantSet::EMPTY, Preset::Wallet.grants(), GrantSet::ALL] {
+            assert_eq!(GrantSet::from_payload(&set.to_payload()), Ok(set));
+        }
+    }
+
+    /// Each way a payload can be wrong is refused. Red edit: skip the
+    /// reserved-byte loop, and the payload with byte 15 set is read.
+    #[test]
+    fn a_payload_that_is_not_the_format_is_refused() {
+        let good = GrantSet::ALL.to_payload();
+        assert_eq!(
+            GrantSet::from_payload(&good[..15]),
+            Err(PayloadRefused::Length)
+        );
+        let mut version = good;
+        version[0] = 2;
+        assert_eq!(
+            GrantSet::from_payload(&version),
+            Err(PayloadRefused::Version(2))
+        );
+        let mut reserved = good;
+        reserved[15] = 1;
+        assert_eq!(
+            GrantSet::from_payload(&reserved),
+            Err(PayloadRefused::Reserved)
+        );
+        let mut unknown = good;
+        unknown[2] = 0x1F;
+        assert_eq!(
+            GrantSet::from_payload(&unknown),
+            Err(PayloadRefused::UnknownGrants(0x1000))
+        );
+    }
+
+    #[test]
     fn unknown_wire_bits_are_refused() {
         assert_eq!(GrantSet::from_bits(0x0FFF), Ok(GrantSet::ALL));
         assert_eq!(GrantSet::from_bits(0), Ok(GrantSet::EMPTY));
@@ -359,7 +482,7 @@ mod tests {
         for preset in [Preset::View, Preset::Wallet, Preset::Miner] {
             assert!(!preset.grants().names(Peers), "{preset:?}");
             assert!(!preset.grants().names(Config), "{preset:?}");
-            assert!(!preset.grants().names(Enrol), "{preset:?}");
+            assert!(!preset.grants().names(Enroll), "{preset:?}");
         }
     }
 

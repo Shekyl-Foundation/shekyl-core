@@ -50,8 +50,10 @@ pub(crate) mod ledger_ops {
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
         BalanceSummary::compute(
             ledger.transfers(),
-            shekyl_types::BlockHeight::from_raw(current_height),
-            &no_locks(),
+            shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                current_height,
+            )),
+            &SendJournalBlock::empty(),
         )
     }
 
@@ -150,7 +152,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA0; 32],
+            shekyl_types::BlockHash::from_bytes([0xA0; 32]),
             make_timelocked(outputs),
         );
 
@@ -164,7 +166,7 @@ pub(crate) mod ledger_ops {
 
         let balance_before = balance_of(&ledger, 1000);
         assert_eq!(
-            balance_before.total,
+            balance_before.balance(),
             AtomicUnits::ZERO,
             "both spent → zero total"
         );
@@ -177,8 +179,14 @@ pub(crate) mod ledger_ops {
         assert!(ledger.transfers()[1].spent_height.is_none());
 
         let balance_after = balance_of(&ledger, 1000);
-        assert_eq!(balance_after.total, AtomicUnits::from_raw(3_000_000_000));
-        assert_eq!(balance_after.unlocked, AtomicUnits::from_raw(3_000_000_000));
+        assert_eq!(
+            balance_after.balance(),
+            AtomicUnits::from_raw(3_000_000_000)
+        );
+        assert_eq!(
+            balance_after.spendable,
+            AtomicUnits::from_raw(3_000_000_000)
+        );
     }
 
     #[test]
@@ -191,7 +199,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA1; 32],
+            shekyl_types::BlockHash::from_bytes([0xA1; 32]),
             make_timelocked(outputs),
         );
 
@@ -211,7 +219,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA2; 32],
+            shekyl_types::BlockHash::from_bytes([0xA2; 32]),
             make_timelocked(outputs),
         );
 
@@ -240,7 +248,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA3; 32],
+            shekyl_types::BlockHash::from_bytes([0xA3; 32]),
             make_timelocked(outputs),
         );
 
@@ -259,8 +267,8 @@ pub(crate) mod ledger_ops {
         assert!(ledger.transfers()[2].spent);
 
         let balance = balance_of(&ledger, 1000);
-        assert_eq!(balance.total, AtomicUnits::from_raw(2_000_000_000));
-        assert_eq!(balance.unlocked, AtomicUnits::from_raw(2_000_000_000));
+        assert_eq!(balance.balance(), AtomicUnits::from_raw(2_000_000_000));
+        assert_eq!(balance.spendable, AtomicUnits::from_raw(2_000_000_000));
     }
 
     #[test]
@@ -279,7 +287,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA4; 32],
+            shekyl_types::BlockHash::from_bytes([0xA4; 32]),
             make_timelocked(outputs),
         );
 
@@ -298,7 +306,7 @@ pub(crate) mod ledger_ops {
             .expect("invariants after unmark_spent");
 
         assert_eq!(
-            balance_of(&ledger, 1000).total,
+            balance_of(&ledger, 1000).balance(),
             AtomicUnits::from_raw(1_500_000_000)
         );
     }
@@ -315,21 +323,31 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xA5; 32],
+            shekyl_types::BlockHash::from_bytes([0xA5; 32]),
             make_timelocked(outputs),
         );
 
-        let spendable = ledger.spendable_outputs(block(105), None, &no_locks());
+        // Eligible at 110; spendable from the first tip whose reference
+        // block's tree holds it: reference 111, drained through 110, at a
+        // tip of 117 (the baseline `REF_ANCHOR_AGE` of 6). At 116 the
+        // reference is 110, which drained only through 109.
+        let at = |tip| shekyl_engine_state::SpendHorizon::at_tip(block(tip));
         assert!(
-            spendable.is_empty(),
-            "output mined at 100 should NOT be spendable at 105"
+            ledger
+                .spendable_outputs(at(110), None, &no_locks())
+                .is_empty(),
+            "not spendable at its eligible height"
         );
-
-        let spendable = ledger.spendable_outputs(block(110), None, &no_locks());
+        assert!(
+            ledger
+                .spendable_outputs(at(116), None, &no_locks())
+                .is_empty(),
+            "not spendable one tip before its reference holds it"
+        );
         assert_eq!(
-            spendable.len(),
+            ledger.spendable_outputs(at(117), None, &no_locks()).len(),
             1,
-            "output mined at 100 should be spendable at 110"
+            "spendable once its reference holds it"
         );
     }
 
@@ -353,7 +371,7 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xB0; 32],
+            shekyl_types::BlockHash::from_bytes([0xB0; 32]),
             make_timelocked(outputs),
         );
         indexes.check_invariants(&ledger).expect("after process");
@@ -366,12 +384,6 @@ pub(crate) mod ledger_ops {
         indexes
             .check_invariants(&ledger)
             .expect("after unmark_spent");
-
-        ledger.freeze(0);
-        indexes.check_invariants(&ledger).expect("after freeze");
-
-        ledger.thaw(0);
-        indexes.check_invariants(&ledger).expect("after thaw");
 
         indexes.handle_reorg(&mut ledger, block(200));
         indexes
@@ -392,19 +404,19 @@ pub(crate) mod ledger_ops {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(100),
-            [0xC0; 32],
+            shekyl_types::BlockHash::from_bytes([0xC0; 32]),
             make_timelocked(vec![(make_wallet_output(txh(70), 0, 900, 1_000), 1_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(200),
-            [0xC1; 32],
+            shekyl_types::BlockHash::from_bytes([0xC1; 32]),
             make_timelocked(vec![(make_wallet_output(txh(71), 0, 901, 2_000), 2_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(300),
-            [0xC2; 32],
+            shekyl_types::BlockHash::from_bytes([0xC2; 32]),
             make_timelocked(vec![(make_wallet_output(txh(72), 0, 902, 3_000), 3_000)]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
@@ -514,8 +526,6 @@ mod ledger_proptest {
         AddOutputs { count: usize, base_amount: u64 },
         MarkSpent { frac: f64 },
         UnmarkSpent { frac: f64 },
-        Freeze { frac: f64 },
-        Thaw { frac: f64 },
         Reorg { frac: f64 },
     }
 
@@ -524,8 +534,6 @@ mod ledger_proptest {
             10 => (1..4usize, 1..100_000u64).prop_map(|(c, a)| Op::AddOutputs { count: c, base_amount: a }),
             3 => (0.0..1.0f64).prop_map(|f| Op::MarkSpent { frac: f }),
             2 => (0.0..1.0f64).prop_map(|f| Op::UnmarkSpent { frac: f }),
-            1 => (0.0..1.0f64).prop_map(|f| Op::Freeze { frac: f }),
-            1 => (0.0..1.0f64).prop_map(|f| Op::Thaw { frac: f }),
             1 => (0.0..1.0f64).prop_map(|f| Op::Reorg { frac: f }),
         ]
     }
@@ -554,7 +562,7 @@ mod ledger_proptest {
                             {
                                 let mut h = [0u8; 32];
                                 h[..8].copy_from_slice(&next_height.to_le_bytes());
-                                h
+                                shekyl_types::BlockHash::from_bytes(h)
                             },
                             Timelocked(outputs),
                         );
@@ -576,20 +584,6 @@ mod ledger_proptest {
                             if let Some(ki) = ledger.transfers()[idx].key_image {
                                 indexes.unmark_spent(&mut ledger, &[ki]);
                             }
-                        }
-                    }
-                    Op::Freeze { frac } => {
-                        let count = ledger.transfers().len();
-                        if count > 0 {
-                            let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ledger.freeze(idx);
-                        }
-                    }
-                    Op::Thaw { frac } => {
-                        let count = ledger.transfers().len();
-                        if count > 0 {
-                            let idx = ((*frac * count as f64) as usize).min(count - 1);
-                            ledger.thaw(idx);
                         }
                     }
                     Op::Reorg { frac } => {
@@ -642,19 +636,10 @@ mod sync_bookkeeping {
         output::*,
         scan::{RecoveredWalletOutput, Timelocked},
     };
-    use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
+    use shekyl_engine_state::{LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
 
     use super::{block, txh};
-
-    /// These tests drive a bare [`LedgerBlock`] with no send journal, so
-    /// nothing is in flight and the derived lock set is empty. Spelled
-    /// through the derivation because that is `InFlightSpendLocks`'s only
-    /// constructor — the point of the newtype is that "no locks" cannot
-    /// be typed by accident.
-    fn no_locks() -> InFlightSpendLocks {
-        SendJournalBlock::empty().spend_locks()
-    }
 
     /// Balance over a bare ledger block: the whole-wallet
     /// `WalletLedgerExt::balance` needs a `WalletLedger`, which these
@@ -662,8 +647,10 @@ mod sync_bookkeeping {
     fn balance_of(ledger: &LedgerBlock, current_height: u64) -> BalanceSummary {
         BalanceSummary::compute(
             ledger.transfers(),
-            shekyl_types::BlockHeight::from_raw(current_height),
-            &no_locks(),
+            shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                current_height,
+            )),
+            &SendJournalBlock::empty(),
         )
     }
 
@@ -777,7 +764,7 @@ mod sync_bookkeeping {
             indexes.process_scanned_outputs(
                 &mut ledger,
                 block(*height),
-                block_hash(*height),
+                shekyl_types::BlockHash::from_bytes(block_hash(*height)),
                 Timelocked(recovered),
             );
             heights.push(ledger.height().to_raw());
@@ -806,17 +793,23 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![o1, o2]),
         );
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
+        assert_eq!(
+            balance_of(&ledger, 100).balance(),
+            AtomicUnits::from_raw(8000)
+        );
 
         indexes.detect_spends(&mut ledger, block(20), &[(ki_100, txh(0xEE))]);
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(3000));
+        assert_eq!(
+            balance_of(&ledger, 100).balance(),
+            AtomicUnits::from_raw(3000)
+        );
         indexes
             .check_invariants(&ledger)
             .expect("after spend detection");
@@ -830,41 +823,50 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![mock_output(200, 1000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(20),
-            block_hash(20),
+            shekyl_types::BlockHash::from_bytes(block_hash(20)),
             Timelocked(vec![mock_output(201, 2000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             block(30),
-            block_hash(30),
+            shekyl_types::BlockHash::from_bytes(block_hash(30)),
             Timelocked(vec![mock_output(202, 3000)]),
         );
 
         assert_eq!(ledger.transfers().len(), 3);
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(6000));
+        assert_eq!(
+            balance_of(&ledger, 100).balance(),
+            AtomicUnits::from_raw(6000)
+        );
 
         indexes.handle_reorg(&mut ledger, block(20));
 
         assert_eq!(ledger.transfers().len(), 1);
         assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(10));
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(1000));
+        assert_eq!(
+            balance_of(&ledger, 100).balance(),
+            AtomicUnits::from_raw(1000)
+        );
         indexes.check_invariants(&ledger).expect("after reorg");
 
         indexes.process_scanned_outputs(
             &mut ledger,
             block(20),
-            block_hash(20),
+            shekyl_types::BlockHash::from_bytes(block_hash(20)),
             Timelocked(vec![mock_output(301, 7000)]),
         );
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
+        assert_eq!(
+            balance_of(&ledger, 100).balance(),
+            AtomicUnits::from_raw(8000)
+        );
         indexes
             .check_invariants(&ledger)
             .expect("after re-scan post-reorg");
@@ -879,7 +881,7 @@ mod sync_bookkeeping {
             indexes.process_scanned_outputs(
                 &mut ledger,
                 block(h),
-                block_hash(h),
+                shekyl_types::BlockHash::from_bytes(block_hash(h)),
                 Timelocked(vec![]),
             );
         }
@@ -901,18 +903,18 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(
             &mut ledger,
             block(10),
-            block_hash(10),
+            shekyl_types::BlockHash::from_bytes(block_hash(10)),
             Timelocked(vec![o]),
         );
 
         let spent = indexes.detect_spends(&mut ledger, block(20), &[(ki, txh(0xEE))]);
         assert_eq!(spent, 1);
-        assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::ZERO);
+        assert_eq!(balance_of(&ledger, 100).balance(), AtomicUnits::ZERO);
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 1);
         assert_eq!(
-            balance_of(&ledger, 100).total,
+            balance_of(&ledger, 100).balance(),
             AtomicUnits::from_raw(10_000)
         );
 

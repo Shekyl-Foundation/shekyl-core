@@ -53,11 +53,10 @@
 //!   `shekyl_economics::paid_block_reward` — the release-modulated,
 //!   tail-floored emission (F15) with the quadratic penalty applied to the
 //!   paid quantity (FL-R12′'s ordering; C2-R2 Q4's curve). **One owner**:
-//!   the same function the C++ marshals through `shekyl_block_reward`, so
 //!   the refusal and the price come from one call and cannot disagree.
-//!   Its `Overflow` arm is a refusal on this row, as the C++'s non-`OK`
-//!   status is (`cryptonote_basic_impl.cpp:158`): fail-closed, never a
-//!   panic a block can reach.
+//!   Its `Overflow` arm is a refusal on this row, as `shekyl_block_reward`'s
+//!   non-`OK` status is in `cryptonote_basic_impl.cpp` at `ac3836de90`
+//!   (lines 146–150): fail-closed, never a panic a block can reach.
 //! - **CEN-F16** — a definition: the split of the paid reward into the
 //!   miner and staker legs (`shekyl_economics::compute_emission_split`,
 //!   the one owner, from CEN-F21's epoch). The coinbase may pay only the
@@ -230,7 +229,7 @@ fn arithmetic_refusal(err: RewardArithmetic) -> InvalidBlock {
 /// F18's owed overflow at `Locus::Tx { slot: Miner }`, or G11's accrual
 /// overflow at [`Locus::Block`]. Nothing here reads the view, so there is
 /// no fault position. Rows are recorded on the passing path; a refusal
-/// carries the row and [`validate`] drops the coverage.
+/// carries the row and [`validate`](fn@crate::validate) drops the coverage.
 pub(crate) fn price(
     connecting: BlockHeight,
     emission: &Emission,

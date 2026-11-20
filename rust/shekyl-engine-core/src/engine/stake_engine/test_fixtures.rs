@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_curve_generators::biased_hash_to_point;
@@ -23,17 +23,12 @@ pub(crate) const TEST_SEED: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES
 /// One tx-key for every fixture output (outputs differ by index).
 pub(crate) const FIXTURE_TX_KEY: [u8; 32] = [0x5Au8; 32];
 
-/// Derive a persona bundle for `p_slot` on mainnet/bip39 (a permitted pair).
+/// Derive a persona bundle for `p_slot` on mainnet.
 /// Re-derivable on demand because `ArchivalPKeys` is `!Clone` and derivation
 /// is deterministic — each spawn gets its own freshly-derived bundle.
 pub(crate) fn derive_bundle(p_slot: u32) -> ArchivalPKeys {
-    derive_archival_p_keys(
-        &TEST_SEED,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        p_slot,
-    )
-    .expect("oracle derivation succeeds for mainnet/bip39")
+    derive_archival_p_keys(&TEST_SEED, Network::Mainnet, p_slot)
+        .expect("oracle derivation succeeds on mainnet")
 }
 
 /// An in-memory body store for a spawned stake actor. The actor owns the
@@ -56,7 +51,39 @@ pub(crate) fn spawn_over(held: &[u32], bonded: &[u32], active: Option<u32>) -> S
         bonded,
         active.map(PSlot::from_raw),
         ephemeral_body_store(),
+        shekyl_network::HARNESS_NETWORK_ID,
     )
+}
+
+/// The S6 self-cert mode [`spawn_with_self_cert`] takes, named here for
+/// suites outside `stake_engine`, whose `types` module is private.
+#[cfg(feature = "conformance")]
+pub(crate) use super::types::TestSelfCert;
+
+/// Spawn a handle over `held` with an explicit S6 self-cert mode.
+/// [`spawn_over`] always skips the check; the S6 tests here and the
+/// wallet-open refusal test need `RealOsRng` or `Degenerate`.
+#[cfg(feature = "conformance")]
+pub(crate) fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
+    use kameo::actor::Spawn;
+
+    let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
+        .iter()
+        .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
+        .collect();
+    let args = super::types::StakeEngineArgs {
+        bundles,
+        bonded: BTreeSet::new(),
+        active: None,
+        network: shekyl_network::HARNESS_NETWORK_ID,
+        self_cert: mode,
+        #[cfg(feature = "gf7-hooks")]
+        observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
+    };
+    StakeEngineHandle {
+        actor: super::StakeEngine::spawn(args),
+        bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
+    }
 }
 
 /// A REAL P-paid output for `keys`: a funding record carrying the
@@ -93,7 +120,7 @@ pub(crate) fn constructed_record_with_entry(
     lineage: MintLineageOutput,
 ) -> (PFundingOutputRecord, LeafEntry, [u8; 64]) {
     let constructed = construct_output(
-        &FIXTURE_TX_KEY,
+        &shekyl_crypto_pq::TxKey::seeded(FIXTURE_TX_KEY),
         &keys.x25519_pk,
         &keys.ml_kem_ek,
         keys.spend_pk.as_canonical_bytes(),

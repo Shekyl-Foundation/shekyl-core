@@ -77,6 +77,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -129,7 +130,7 @@ pub(crate) async fn paying_the_floor_at(
     connecting: BlockHeight,
 ) -> Transaction {
     let floor = scenario.connecting_relay_floor().await;
-    let spender = Spender::over(mined);
+    let spender = Spender::on(scenario.network_id(), mined);
     let wallet = scenario.wallet();
     let mut fee = Family::Main.fee();
     for _ in 0..RELAY_FEE_REPRICE_STEPS {
@@ -159,7 +160,7 @@ pub(crate) async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>) {
 async fn the_door_and_a_block_of_one_agree_on_every_spend() {
     let (mut scenario, mut mined) = matured("pool-door-agree").await;
     let (good, flipped) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), Family::Main.fee()),
@@ -185,7 +186,7 @@ async fn the_door_and_a_block_of_one_agree_on_every_spend() {
             .await
             .unwrap_or_else(|outcome| panic!("the spend connects: {outcome}")),
     );
-    let respend = Spender::over(&mined).spend_coinbase(
+    let respend = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT + 1),
@@ -263,7 +264,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let (mut scenario, mined) = matured("pool-door-rows").await;
     let good = paying_the_floor(&mut scenario, &mined, 0).await;
     let (twin, cheap) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         let fee = match &good.ct {
             shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
@@ -285,6 +286,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -355,6 +357,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -368,7 +371,6 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -391,6 +393,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("open");
@@ -424,6 +427,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 shekyl_types::UnixSeconds::from_raw(1),
                 view,
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &policy,
             )
             .expect("reopen");
@@ -441,6 +445,5 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
         "fluffed: in the listing, peer sync and the template"
     );
     assert_eq!(reopened, after, "the public bit survives a restart");
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }

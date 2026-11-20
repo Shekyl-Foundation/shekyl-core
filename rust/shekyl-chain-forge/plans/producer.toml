@@ -1,0 +1,51 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The producer plan (CHAIN_FORGE.md §4, the producer audit; CF-1c): a small
+# chain whose bundles the bundle producer's own task makes, reading a
+# persona that serves its shard on the production serve loop over
+# loopback. It is not Chain B (CF-1c does not forge B); it is where B's
+# acceptance criteria (CF-R18) are exercised:
+#
+#   (1) every drawn input from this plan's seed, through the production
+#       seams, at this plan's start spread: two forgings, two processes, the
+#       same bytes;
+#   (2), (3) a live run (every producer input from the OS, its reads on
+#       another spread) held to this one on settlement state, by exclusion.
+#
+# The epoch is 1,200 blocks: W2 = SEB / 20 = 60 must clear the producer's
+# filing margin (30), which the settled schedule's 300 does not (CF-F8).
+# The served epoch settles at its slash pass, where the produce step ends.
+#
+# The seed is SHA-256("shekyl/chain-forge/producer-plan-v1").
+
+chain = "producer"
+seed = "26d515d8e4f9d81955cd8e575321a8fe1c84e9a9a17f3823e004993ad35c8f1a"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+schedule = { settlement_epoch_blocks = 1200, reorg_cap_blocks = 10 }
+
+[[step]]
+do = "mine"
+blocks = 80
+
+[[step]]
+do = "fill-shards"
+count = 1
+
+[[step]]
+event = "first-compact-join"
+do = "join"
+persona = 0
+shards = [0]
+
+[[step]]
+event = "producer-bundle"
+do = "produce"
+persona = 0
+# The spread each read's start delay is drawn below: an input to the bytes
+# (the producer draws its start delays from its read plans' stream).
+start_spread_ms = 50

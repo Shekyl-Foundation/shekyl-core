@@ -26,10 +26,10 @@ wrong for Shekyl however well it was tested in its original context.
 
 Migrate the data model. Do not rationalize the inheritance.
 
-`36-secret-locality.mdc` says Rust owns secrets at the C++/Rust boundary.
-This rule asks which Rust component owns them. Orchestrator-persisted
-derived per-output secrets satisfy rule 36 and still contradict engine
-isolation. Both rules apply.
+`36-secret-locality.mdc` says which crates may open a secret's bytes: the
+crypto-owning crates. This rule asks which component owns the secret.
+Orchestrator-persisted derived per-output secrets can satisfy rule 36 and
+still contradict engine isolation. Both rules apply.
 
 ## A claim about the code is not the code
 
@@ -110,7 +110,7 @@ When a design "gracefully accepts," "preserves compatibility,"
 "soft-deprecates," or "tolerates skew," ask whether any pre-genesis user
 is protected by that default. If none, the inversion is the disposition.
 The same default re-enters every review under a new name (a new RPC
-field, an FFI parameter, an error code). Ask each time.
+field, a function parameter, an error code). Ask each time.
 
 ## A comment that outlived its architecture
 

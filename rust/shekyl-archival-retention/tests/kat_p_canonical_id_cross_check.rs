@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `p_canonical_id` cross-check against the `ARCHIVAL_P_DERIVE_V1` KAT.
+//! `p_canonical_id` cross-check against the `ARCHIVAL_P_DERIVE_V2` KAT.
 //!
 //! `shekyl-crypto-pq`'s KAT pins `p_canonical_id` via an inline cSHAKE256. This
 //! test derives the same persona through `crypto_pq::archival_p` and recomputes
@@ -13,56 +13,58 @@
 //! wallet derivation and the retention verify surface
 //! (`ARCHIVAL_FIREWALL_GATE6.md` §9.5).
 //!
-//! The pinned hexes mirror `docs/test_vectors/ARCHIVAL_P_DERIVE_V1/vectors.json`.
+//! The pinned hexes mirror `docs/test_vectors/ARCHIVAL_P_DERIVE_V2/vectors.json`.
 //! A deliberate derivation-version bump that regenerates that corpus must update
 //! these constants in lockstep; that lockstep is exactly the tripwire.
 
 use shekyl_archival_retention::id::{
     p_canonical_id_from_hybrid_pubkey, P_CANONICAL_ID_CUSTOMIZATION,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_hs_id_seed, ARCHIVAL_P_HS_ID_INFO,
 };
 
-/// `(master_byte, network, seed_format, p_slot, expected_p_canonical_id_hex)`,
+/// `(master_byte, network, p_slot, expected_p_canonical_id_hex)`,
 /// copied from the crypto-pq KAT Tier-2 corpus.
-const CASES: &[(u8, DerivationNetwork, SeedFormat, u32, &str)] = &[
+const CASES: &[(u8, Network, u32, &str)] = &[
     (
         0x33,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
+        Network::Mainnet,
         0,
-        "0e6217a54d726f602ff5500fb8d0a3a8f8392d7a9afc4918b3c9a6a3bc098df5",
+        "8a8a612989821f7a4afaeef53c9ab220280930f964bda000826d8c4433bcde40",
     ),
     (
         0x33,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
+        Network::Mainnet,
         7,
-        "e121a43aff5b08a89a12d99c8889cccb7028f5992565d7e63c142f2feae76b9a",
+        "5cd7e1e6f835d498096a757ae7961dad7b5c83790cbbd417afddab023ef79a70",
     ),
     (
         0x44,
-        DerivationNetwork::Testnet,
-        SeedFormat::Raw32,
+        Network::Testnet,
         0,
-        "87f678800c747ad7f7b2cdc301dddf3ceed2340b8490ab9f2d47bd98cee8227c",
+        "95db321af969be98e5f098850b95e3e0675280ccb18877ff35b03ba2bba74598",
     ),
     (
         0x33,
-        DerivationNetwork::Stagenet,
-        SeedFormat::Bip39,
+        Network::Stagenet,
         3,
-        "8036a0a34c57d5be66b9bd35ca545208d431da9b1d2edf0d435b1e7b5cf80f81",
+        "7528b823c28a4b6e2f50675463ad0a0c12ce655f7bb49ef9fd2ab9a3e981ff9f",
+    ),
+    (
+        0x44,
+        Network::Regtest,
+        2,
+        "869f220a4272bb35a8ff08f9fb98f87a3064d3ca1a5191289f26ecbae92c962a",
     ),
 ];
 
 #[test]
 fn id_rs_reproduces_the_kat_pinned_p_canonical_id() {
-    for &(master_byte, net, fmt, p_slot, expected_hex) in CASES {
+    for &(master_byte, net, p_slot, expected_hex) in CASES {
         let master = [master_byte; MASTER_SEED_BYTES];
-        let keys = derive_archival_p_keys(&master, net, fmt, p_slot)
+        let keys = derive_archival_p_keys(&master, net, p_slot)
             .expect("derive_archival_p_keys for cross-check");
 
         let bond_bytes = keys
@@ -74,7 +76,7 @@ fn id_rs_reproduces_the_kat_pinned_p_canonical_id() {
         assert_eq!(
             hex::encode(id),
             expected_hex,
-            "p_canonical_id mismatch for {net:?}/{fmt:?}/slot{p_slot}: \
+            "p_canonical_id mismatch for {net:?}/slot{p_slot}: \
              id.rs cSHAKE diverged from the crypto-pq KAT pin"
         );
     }
@@ -112,8 +114,8 @@ fn hs_id_seed_is_domain_separated_from_p_canonical_id() {
     // canonical id are distinct 32-byte values. A shared separator (the failure
     // this guards) would have collapsed the two maps.
     let master = [0x33u8; MASTER_SEED_BYTES];
-    let hs_id = derive_p_hs_id_seed(&master, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
-    let keys = derive_archival_p_keys(&master, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
+    let hs_id = derive_p_hs_id_seed(&master, Network::Mainnet, 0);
+    let keys = derive_archival_p_keys(&master, Network::Mainnet, 0)
         .expect("derive_archival_p_keys for domain-separation check");
     let bond_bytes = keys
         .hybrid_bond_id()

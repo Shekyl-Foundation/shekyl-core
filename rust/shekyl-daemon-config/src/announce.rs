@@ -8,27 +8,31 @@
 //! and standard error at every start whatever the level; they are not log
 //! events.
 
-use std::path::Path;
-
 use shekyl_options::{Source, Table, Visibility};
 
+use crate::load::ConfigFileFate;
 use crate::resolve::Resolved;
 use crate::sections::{Clearnet, DaemonConfig, Tor};
 
 /// Every value and its source, in table order, as one line. A secret shows
-/// as `set`, never its text. The configuration file read, or the default
-/// path at which none was found, leads.
+/// as `set`, never its text; `mine-address` shows shortened to its first
+/// and last eight characters, and `option show` gives the full value under
+/// its grant (Rick, 2026-11-02). The configuration file leads: the file
+/// that was read, `none` when none was asked for, or the default path at
+/// which no file was found.
 #[must_use]
 pub fn effective_configuration(
     table: &Table,
     resolved: &Resolved,
-    config_file: Option<&Path>,
-    default_path: &Path,
+    config_file: &ConfigFileFate,
 ) -> String {
     let mut parts = Vec::with_capacity(resolved.values.len() + 1);
     parts.push(match config_file {
-        Some(p) => format!("config-file={} (cli)", p.display()),
-        None => format!("config-file=none-at:{} (default)", default_path.display()),
+        ConfigFileFate::Read(path) => format!("config-file={} (cli)", path.display()),
+        ConfigFileFate::None => "config-file=none (cli)".to_owned(),
+        ConfigFileFate::DefaultAbsent(path) => {
+            format!("config-file=none-at:{} (default)", path.display())
+        }
     });
     // The config-file row is the first part above, with the path's fate.
     for row in table
@@ -44,10 +48,26 @@ pub fn effective_configuration(
                 Source::Runtime => "runtime".to_owned(),
                 Source::Machine => "machine".to_owned(),
             };
-            parts.push(format!("{}={} ({shown})", row.name, value.render()));
+            let value = match row.name {
+                "mine-address" => shortened(&value.render()),
+                _ => value.render(),
+            };
+            parts.push(format!("{}={value} ({shown})", row.name));
         }
     }
     format!("effective configuration: {}", parts.join(" "))
+}
+
+/// The first and last eight characters of an address, joined by `…`; an
+/// address of sixteen or fewer is whole.
+fn shortened(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= 16 {
+        return text.to_owned();
+    }
+    let head: String = chars[..8].iter().collect();
+    let tail: String = chars[chars.len() - 8..].iter().collect();
+    format!("{head}…{tail}")
 }
 
 /// One line per development lever set (IG-8).
@@ -131,8 +151,7 @@ impl Announcements {
 pub fn announcements(
     table: &Table,
     resolved: &Resolved,
-    config_file: Option<&Path>,
-    default_path: &Path,
+    config_file: &ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> Announcements {
@@ -140,7 +159,7 @@ pub fn announcements(
     rest.push(posture(config));
     rest.extend(warnings.iter().cloned());
     Announcements {
-        effective: effective_configuration(table, resolved, config_file, default_path),
+        effective: effective_configuration(table, resolved, config_file),
         rest,
     }
 }
@@ -154,7 +173,7 @@ mod tests {
     use crate::sections::build;
     use crate::table::TABLE;
     use std::ffi::OsString;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn resolved_only(cli: &[&str], file: &str) -> Resolved {
         let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
@@ -174,7 +193,9 @@ mod tests {
         let mut resolved = resolve(&TABLE, network, cli, given).unwrap();
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
+            session_dir: None,
+            service_rendezvous: None,
         };
         let config = build(&mut resolved, network, mode, &platform, None).unwrap();
         (resolved, config)
@@ -200,7 +221,9 @@ mod tests {
         );
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
-            program_data: None,
+            service_parent: None,
+            session_dir: None,
+            service_rendezvous: None,
         };
         let built = build(
             &mut resolved,
@@ -213,8 +236,7 @@ mod tests {
         let line = effective_configuration(
             &TABLE,
             &resolved,
-            None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileFate::DefaultAbsent("/etc/shekyl/shekyld-regtest.toml".into()),
         );
         assert!(line.starts_with("effective configuration: config-file=none-at:/etc/shekyl/shekyld-regtest.toml (default)"), "{line}");
         assert!(line.contains("dev-difficulty=7 (cli)"), "{line}");
@@ -238,20 +260,85 @@ mod tests {
             "{line}"
         );
         assert!(
-            line.contains("clearnet-listen=0.0.0.0:11021 (default)"),
+            line.contains("clearnet-listen=0.0.0.0:14021 (default)"),
             "{line}"
         );
         assert!(
-            line.contains("rpc-admin-listen=127.0.0.1:11029 (default)"),
+            line.contains("rpc-admin-listen=127.0.0.1:14029 (default)"),
             "{line}"
         );
         assert!(!line.contains("tor-file="), "{line}");
         assert!(resolved.get("tor-file").is_none());
+        assert!(line.contains("mine=off (default)"), "{line}");
+        assert!(
+            !line.contains("mine-address="),
+            "unset rows do not print: {line}"
+        );
         let levers = dev_levers(&TABLE, &resolved);
         assert_eq!(
             levers,
             vec!["development lever set: dev-difficulty=7".to_owned()]
         );
+    }
+
+    /// The startup line names the file that was read, the default path at
+    /// which none was found, or that none was asked for. Red edit: report
+    /// [`ConfigFileFate::DefaultAbsent`] for [`ConfigFileFate::None`].
+    #[test]
+    fn the_line_says_when_no_file_was_asked_for() {
+        let (resolved, _) = setup(&["--tor", "off"], "");
+        let none = effective_configuration(&TABLE, &resolved, &ConfigFileFate::None);
+        assert!(
+            none.starts_with("effective configuration: config-file=none (cli)"),
+            "{none}"
+        );
+        let absent = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::DefaultAbsent("/etc/x.toml".into()),
+        );
+        assert!(
+            absent.contains("config-file=none-at:/etc/x.toml (default)"),
+            "{absent}"
+        );
+        let read = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::Read("/srv/shekyld.toml".into()),
+        );
+        assert!(
+            read.contains("config-file=/srv/shekyld.toml (cli)"),
+            "{read}"
+        );
+    }
+
+    /// `mine-address` prints shortened: the first and last eight characters
+    /// and nothing of the middle. Red edit: print the full address.
+    #[test]
+    fn the_mine_address_prints_shortened() {
+        let text = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let (resolved, _) = setup(&["--mine-address", &text, "--tor", "off"], "");
+        let line = effective_configuration(
+            &TABLE,
+            &resolved,
+            &ConfigFileFate::DefaultAbsent("/etc/x.toml".into()),
+        );
+        let want = format!(
+            "mine-address={}…{} (cli)",
+            &text[..8],
+            &text[text.len() - 8..]
+        );
+        assert!(line.contains(&want), "{line}");
+        assert!(!line.contains(&text[8..text.len() - 8]), "{line}");
+        assert_eq!(shortened("sixteen-chars-ok"), "sixteen-chars-ok");
     }
 
     /// The armed-lever switch announces itself in exactly this text.
@@ -288,8 +375,7 @@ mod tests {
         let announced = announcements(
             &TABLE,
             &resolved,
-            None,
-            Path::new("/etc/shekyl/shekyld-regtest.toml"),
+            &ConfigFileFate::DefaultAbsent("/etc/shekyl/shekyld-regtest.toml".into()),
             &config,
             &warnings,
         );

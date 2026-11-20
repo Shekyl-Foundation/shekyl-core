@@ -12,20 +12,63 @@ use std::time::Instant;
 use shekyl_chain_rules::{seed_height, RuleSet};
 use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
 use shekyl_draw_rng::RelayRng;
-use shekyl_levin::RequestHeaders;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::fork_depth;
-use crate::model::{draw_one, header_deadline, Command, HashClass, Sync};
-use crate::peer::{HeaderRequest, Run};
+use crate::model::{draw_one, AlarmWrite, Command, Evidence, HashClass, Sync};
+use crate::peer::Run;
+use crate::ALARM_RETRY;
 
 impl<K, R> Sync<K, R>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
+    /// A refused latch write. The evidence is already held, so this does
+    /// not read the chain: a store fault must not leave the retry unarmed.
+    /// `Idle` is the only state that accepts new evidence, and a retry
+    /// that never arms never leaves `Refused`.
+    pub fn alarm_refused(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::InFlight(evidence) = self.alarm_write {
+            self.alarm_write = AlarmWrite::Refused(evidence);
+            out.push(Command::ArmAlarmRetry {
+                deadline: now + ALARM_RETRY,
+            });
+        }
+    }
+
+    /// The retry of a refused latch write. Raises the same evidence.
+    /// No chain read, for the same reason as [`Self::alarm_refused`].
+    pub fn alarm_retry(&mut self, out: &mut Vec<Command<K>>) {
+        if let AlarmWrite::Refused(evidence) = self.alarm_write {
+            self.raise_alarm(evidence, out);
+        }
+    }
+
+    /// The latch watch's report. The watch is the store's answer, so this
+    /// does not read the chain: a store fault must not leave a write that
+    /// landed in flight, where nothing retries it and the model still
+    /// reads the latch clear.
+    pub fn latch_reported(&mut self, set: bool) {
+        self.alarm = set;
+        if set {
+            self.alarm_write = AlarmWrite::Written;
+        }
+    }
+
+    /// Ask for the latch write with `evidence`. It is in flight until the
+    /// latch watch reports it set or the owner reports it refused.
+    pub(crate) fn raise_alarm(&mut self, evidence: Evidence, out: &mut Vec<Command<K>>) {
+        out.push(Command::RaiseAlarm {
+            fork_at: evidence.fork_at,
+            tip: evidence.tip,
+            work: evidence.work,
+        });
+        self.alarm_write = AlarmWrite::InFlight(evidence);
+    }
+
     pub(crate) fn alarm_from_tree(&mut self, out: &mut Vec<Command<K>>) {
-        if self.alarm_sent {
+        if self.alarm_write != AlarmWrite::Idle {
             return;
         }
         let Some(local) = self.local else {
@@ -49,8 +92,7 @@ where
         let Some((tip, work, fork_at)) = past_cap else {
             return;
         };
-        out.push(Command::RaiseAlarm { fork_at, tip, work });
-        self.alarm_sent = true;
+        self.raise_alarm(Evidence { fork_at, tip, work }, out);
         self.tree.mark_invalid(tip);
     }
 
@@ -73,13 +115,13 @@ where
             .local
             .map(|l| l.work)
             .unwrap_or(CumulativeDifficulty::ZERO);
-        if work > local && !self.alarm_sent {
-            out.push(Command::RaiseAlarm {
+        if work > local && self.alarm_write == AlarmWrite::Idle {
+            let evidence = Evidence {
                 fork_at: run.chain.parent_height,
                 tip: run.chain.checked[run.chain.proven - 1].hash,
                 work,
-            });
-            self.alarm_sent = true;
+            };
+            self.raise_alarm(evidence, out);
             self.drop_run(session);
         }
     }
@@ -88,7 +130,7 @@ where
         let Some(state) = self.peers.get_mut(&session) else {
             return;
         };
-        if self.alarm || state.gates.evidence_spent {
+        if self.alarm || !state.evidence.available() {
             return;
         }
         let local = self
@@ -107,6 +149,36 @@ where
         }
     }
 
+    /// Whether a draw could run now: the latch is unset, no check runs,
+    /// and a candidate waits.
+    fn draw_waits(&self) -> bool {
+        !self.alarm
+            && self.evidence_holder().is_none()
+            && self.peers.values().any(|state| {
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
+            })
+    }
+
+    /// After a header response: a wake for the draw it did not run, when
+    /// one would run and none is armed ([`Command::ArmDraw`]). At the
+    /// session's declared transit from now.
+    pub(crate) fn arm_draw(&mut self, session: K, now: Instant, out: &mut Vec<Command<K>>) {
+        if self.draw_wake.is_some() || !self.draw_waits() {
+            return;
+        }
+        let Some(transit) = self.peers.get(&session).map(|peer| peer.transit) else {
+            return;
+        };
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        self.draw_wake = Some(id);
+        out.push(Command::ArmDraw {
+            session,
+            id,
+            deadline: now.checked_add(transit).unwrap_or(now),
+        });
+    }
+
     /// One evidence check, drawn uniformly from the waiting candidates.
     /// Nothing is drawn while the latch is set, or while a check runs.
     pub(crate) fn start_evidence(
@@ -122,7 +194,7 @@ where
             .peers
             .iter()
             .filter(|(_, state)| {
-                !state.gates.evidence_spent && state.run.as_ref().is_some_and(Run::is_candidate)
+                state.evidence.available() && state.run.as_ref().is_some_and(Run::is_candidate)
             })
             .map(|(session, _)| *session)
             .collect();
@@ -130,7 +202,7 @@ where
             return;
         };
         if let Some(state) = self.peers.get_mut(&session) {
-            state.gates.evidence_spent = true;
+            state.evidence = crate::peer::EvidenceDraw::Spent;
             if let Some(run) = state.run.as_mut() {
                 run.begin_evidence();
             }
@@ -181,28 +253,7 @@ where
             run.chain.checked.clear();
             run.chain.proven = 0;
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        if let Some(state) = self.peers.get_mut(&session) {
-            state.follow_up = Some(HeaderRequest {
-                session,
-                id,
-                points: vec![(parent_height, parent)],
-            });
-        }
-        let transit = self
-            .peers
-            .get(&session)
-            .map(|peer| peer.transit)
-            .unwrap_or_default();
-        out.push(Command::RequestHeaders {
-            session,
-            id,
-            deadline: header_deadline(now, transit),
-            request: RequestHeaders {
-                block_ids: vec![*parent.as_bytes()],
-            },
-        });
+        self.follow_up(session, (parent_height, parent), now, out);
     }
 
     pub(super) fn past_bound(&self, session: K, cap: BlockCount) -> bool {
@@ -296,7 +347,7 @@ where
         let take = holder_work.is_none_or(|held| work > held);
         if !take {
             if let Some(state) = self.peers.get_mut(&session) {
-                state.gates.header_quiet = true;
+                state.draw.quiet();
                 state.run = None;
             }
             return;

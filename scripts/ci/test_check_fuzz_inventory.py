@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# check_fuzz_inventory.py's selftest: throwaway trees, each planting one
+# failure class, and the verdict each must get.
+
+from __future__ import annotations
+
+import io
+import json
+import subprocess
+import sys
+import tempfile
+from contextlib import redirect_stdout
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_fuzz_inventory as gate  # noqa: E402
+
+WORKSPACE_LOCK = """version = 4
+
+[[package]]
+name = "rand"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "shekyl-a"
+version = "0.1.0"
+"""
+
+FUZZ_LOCK = """version = 4
+
+[[package]]
+name = "libfuzzer-sys"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "rand"
+version = "{rand}"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "shekyl-a"
+version = "0.1.0"
+"""
+
+WORKFLOW = (
+    "jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+    "      - run: python3 scripts/ci/check_fuzz_inventory.py --floors\n"
+)
+COMMIT = "0123456789abcdef0123456789abcdef01234567"
+OTHER_COMMIT = "fedcba9876543210fedcba9876543210fedcba98"
+# The planted trees' floors: one row for the one target.
+FLOORS = (
+    "# target\tcov\trun\tcommit\tsecond_cov\tsecond_run\ttolerance\n"
+    f"shekyl-a/fuzz_one\t182\t43772973669\t{COMMIT}\t180\t43772976347\t90\n"
+)
+FUZZ_WORKFLOW_TEXT = (
+    "on:\n  schedule:\n"
+    '    - cron: "17 15 * * *"\n'
+    '    - cron: "17 19 * * 0"\n'
+    "jobs:\n  fuzz-targets:\n    steps:\n"
+    "      - run: python3 scripts/ci/check_fuzz_inventory.py --plan\n"
+)
+# The planted trees' weekly run: the one target they have.
+WEEKLY = ("shekyl-a/fuzz_one",)
+
+
+def write(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def fuzz_manifest(bins: list[str]) -> str:
+    text = (
+        '[package]\nname = "shekyl-a-fuzz"\nversion = "0.0.0"\nedition = "2021"\n\n'
+        '[dependencies]\nlibfuzzer-sys = "0.4"\nshekyl-a = { path = ".." }\n\n'
+    )
+    for name in bins:
+        text += f'[[bin]]\nname = "{name}"\npath = "fuzz_targets/{name}.rs"\n\n'
+    return text + "[workspace]\n"
+
+
+def tree(
+    root: Path,
+    *,
+    bins=("fuzz_one",),
+    files=("fuzz_one",),
+    rand="0.8.5",
+    lock=True,
+    workflow=WORKFLOW,
+    fuzz_workflow=FUZZ_WORKFLOW_TEXT,
+    seeds=(),
+    fuzz=True,
+    floors=FLOORS,
+) -> None:
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    write(root, "rust/Cargo.lock", WORKSPACE_LOCK)
+    write(root, "rust/shekyl-a/Cargo.toml", '[package]\nname = "shekyl-a"\nversion = "0.1.0"\n')
+    if fuzz:
+        write(root, "rust/shekyl-a/fuzz/Cargo.toml", fuzz_manifest(list(bins)))
+        for name in files:
+            write(root, f"rust/shekyl-a/fuzz/fuzz_targets/{name}.rs", "fn main() {}\n")
+        if lock:
+            write(root, "rust/shekyl-a/fuzz/Cargo.lock", FUZZ_LOCK.format(rand=rand))
+        for name in seeds:
+            write(root, f"rust/shekyl-a/fuzz/seeds/{name}/seed1", "seed\n")
+    if workflow is not None:
+        write(root, gate.WORKFLOW, workflow)
+    if fuzz_workflow is not None:
+        write(root, gate.FUZZ_WORKFLOW, fuzz_workflow)
+    if floors is not None:
+        write(root, gate.FLOORS, floors)
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+
+
+class Results:
+    def __init__(self) -> None:
+        self.passed = 0
+        self.failures: list[str] = []
+
+    def expect(self, why: str, want: int, says: str = "", weekly=WEEKLY, **planted) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tree(root, **planted)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = gate.run(root, weekly)
+            out = buf.getvalue()
+            if code != want or (says and says not in out):
+                wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
+                self.failures.append(f"{why}: wanted {wanted}, got {code}\n{out}")
+            else:
+                self.passed += 1
+
+    def expect_matrix(self, why: str, rust_tests: str, changed: list[str], want: list[str]) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tree(root)
+            got = gate.matrix(root, rust_tests, changed)
+            if got != want:
+                self.failures.append(f"{why}: wanted {json.dumps(want)}, got {json.dumps(got)}")
+            else:
+                self.passed += 1
+
+    def expect_floors(self, why: str, want: int, says: str = "", parent=None, **planted) -> None:
+        """`--floors` on a planted tree; `parent` is the floors file one commit back."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            if parent is not None:
+                tree(root, floors=parent)
+                git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+                subprocess.run([*git, "commit", "-q", "-m", "parent"], check=True)
+            tree(root, **planted)
+            if parent is not None:
+                subprocess.run([*git, "commit", "-q", "-m", "child"], check=True)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = gate.run_floors(root)
+            out = buf.getvalue()
+            if code != want or (says and says not in out):
+                wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
+                self.failures.append(f"{why}: wanted {wanted}, got {code}\n{out}")
+            else:
+                self.passed += 1
+
+    def expect_listed(self, why: str, which: str, only, want) -> None:
+        """`--targets`: the list, or the refusal (`want` None)."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            tree(root, bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"))
+            try:
+                got = gate.listed(root, which, only, WEEKLY)
+            except gate.GateError as exc:
+                got = None
+                refusal = str(exc)
+            if got != want:
+                said = refusal if got is None else json.dumps(got)
+                self.failures.append(f"{why}: wanted {json.dumps(want)}, got {said}")
+            else:
+                self.passed += 1
+
+
+def selftest() -> int:
+    r = Results()
+    r.expect("a crate whose bins, files and lockfile agree", 0, "1 fuzz crates, 1 targets")
+    r.expect("no fuzz crate at all", 2, "missing subject", fuzz=False)
+    r.expect(
+        "a [[bin]] that names no file", 1, "names rust/shekyl-a/fuzz/fuzz_targets/fuzz_two.rs",
+        bins=("fuzz_one", "fuzz_two"),
+    )
+    r.expect(
+        "a target file no [[bin]] names", 1, "fuzz_two.rs is a fuzz target no [[bin]] names",
+        files=("fuzz_one", "fuzz_two"),
+    )
+    r.expect("an untracked lockfile", 1, "Cargo.lock is not tracked", lock=False)
+    r.expect(
+        "a shared package at a version the workspace does not lock", 1,
+        "rand 0.8.6, where rust/Cargo.lock locks 0.8.5", rand="0.8.6",
+    )
+    r.expect("no compile workflow", 1, "is missing: nothing compiles", workflow=None)
+    r.expect(
+        "a workflow that lists its own matrix", 1, "does not build its matrix",
+        workflow="jobs:\n  compile:\n    strategy:\n      matrix:\n        crate: [shekyl-a]\n",
+    )
+    r.expect("a seed directory named for its target", 0, seeds=("fuzz_one",))
+    r.expect(
+        "a seed directory named for no target", 1,
+        "seeds/fuzz_gone/ is named for no target of this crate", seeds=("fuzz_gone",),
+    )
+    r.expect(
+        "a weekly target that does not exist", 1,
+        "the weekly long run names shekyl-a/fuzz_gone, which is not a fuzz target",
+        weekly=("shekyl-a/fuzz_one", "shekyl-a/fuzz_gone"),
+    )
+    r.expect("no fuzz workflow", 1, "fuzz-nightly.yml is missing: nothing runs", fuzz_workflow=None)
+    r.expect(
+        "a fuzz workflow that does not read its plan", 1, "does not read its run",
+        fuzz_workflow="jobs:\n  fuzz:\n    steps:\n      - run: echo hi\n",
+    )
+    r.expect(
+        "a cron the planner does not run", 1, "declares the cron '0 3 * * *'",
+        fuzz_workflow=FUZZ_WORKFLOW_TEXT.replace(
+            '    - cron: "17 19 * * 0"\n',
+            '    - cron: "17 19 * * 0"\n    - cron: "0 3 * * *"\n',
+        ),
+    )
+    r.expect(
+        "the nightly cron missing", 1, "does not declare the cron '17 15 * * *'",
+        fuzz_workflow=FUZZ_WORKFLOW_TEXT.replace('    - cron: "17 15 * * *"\n', ""),
+    )
+    r.expect(
+        "a compile workflow that does not check the floors", 1, "does not check the coverage floors",
+        workflow="jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n",
+    )
+    row = "shekyl-a/fuzz_one\t{cov}\t{run}\t{commit}\t{second}\t{second_run}\t{tolerance}\n"
+
+    def floor(cov=182, run=43772973669, commit=COMMIT, second=180, second_run=43772976347, tolerance=90) -> str:
+        return row.format(
+            cov=cov, run=run, commit=commit, second=second, second_run=second_run, tolerance=tolerance
+        )
+
+    r.expect_floors("one floor per target", 0, "one per target, 1 rows")
+    r.expect_floors("no floors file", 2, "missing subject", floors=None)
+    r.expect_floors(
+        "a target with no floor", 1, "shekyl-a/fuzz_two has no coverage floor",
+        bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"),
+    )
+    r.expect_floors(
+        "a floor for no target", 1, "shekyl-a/fuzz_gone is not a fuzz target",
+        floors=FLOORS + f"shekyl-a/fuzz_gone\t10\t1\t{COMMIT}\t10\t2\t90\n",
+    )
+    r.expect_floors(
+        "a short commit id", 1, "is not a full 40-character commit id",
+        floors=floor(commit=COMMIT[:12]),
+    )
+    r.expect_floors("a floor of zero", 1, "is not a positive count", floors=floor(cov=0))
+    r.expect_floors("a second row", 1, "has a second row", floors=FLOORS + floor(cov=200, run=2, second=198))
+    r.expect_floors(
+        "a floor that moved with its run", 0,
+        parent=FLOORS, floors=floor(cov=240, run=43800000000, commit=OTHER_COMMIT, second=238, second_run=43800000001),
+    )
+    r.expect_floors(
+        "a floor that moved without the run that measured it", 1,
+        "floor moved 182 -> 120 with the run unchanged",
+        parent=FLOORS, floors=floor(cov=120, second=119),
+    )
+    r.expect_floors(
+        "a floor that moved when the commit changed and the run did not", 1,
+        "floor moved 182 -> 120 with the run unchanged",
+        parent=FLOORS, floors=floor(cov=120, commit=OTHER_COMMIT, second=119),
+    )
+    r.expect_floors(
+        "a commit corrected without moving the floor", 0,
+        parent=FLOORS, floors=floor(commit=OTHER_COMMIT),
+    )
+    r.expect_floors("the old four-field row", 1, "not the seven", floors=f"shekyl-a/fuzz_one\t182\t1\t{COMMIT}\n")
+    r.expect_floors("no second run", 1, "is not a second workflow run id", floors=floor(second_run=43772973669))
+    r.expect_floors("a second coverage of zero", 1, "second coverage '0'", floors=floor(second=0))
+    # The tolerance is the runs' spread's: 5% or less is 90, more is
+    # 100 - 2 x the spread rounded up, so 182 against 172 (5.49%) is 88.
+    r.expect_floors("a spread of exactly five percent", 0, floors=floor(cov=200, second=190))
+    r.expect_floors("a spread over five percent at 90", 1, "give 88", floors=floor(second=172))
+    r.expect_floors("a spread over five percent at its own", 0, floors=floor(second=172, tolerance=88))
+    r.expect_floors("a tolerance tighter than the spread gives", 1, "give 90", floors=floor(tolerance=95))
+    r.expect_floors("runs too far apart to floor", 1, "too far apart", floors=floor(cov=200, second=99))
+    r.expect_floors(
+        "a second coverage that moved without its run", 1,
+        "second coverage moved 180 -> 172 with its run unchanged",
+        parent=FLOORS, floors=floor(second=172, tolerance=88),
+    )
+    r.expect_listed("the nightly list is every target", "nightly", None, ["shekyl-a/fuzz_one", "shekyl-a/fuzz_two"])
+    r.expect_listed("the weekly list is the weekly targets", "weekly", None, ["shekyl-a/fuzz_one"])
+    r.expect_listed("one target narrows the list", "nightly", "shekyl-a/fuzz_two", ["shekyl-a/fuzz_two"])
+    r.expect_listed("a target outside the list is refused", "weekly", "shekyl-a/fuzz_two", None)
+    r.expect_listed("an unknown list is refused", "hourly", None, None)
+
+    def expect_resolved(why: str, schedule: str, requested: str, want: str) -> None:
+        try:
+            got = gate.resolve_plan(schedule, requested)
+        except gate.GateError as exc:
+            got = f"error: {exc}"
+        if got != want:
+            r.failures.append(f"{why}: wanted {want!r}, got {got!r}")
+        else:
+            r.passed += 1
+
+    expect_resolved("the nightly cron is the nightly run", gate.NIGHTLY_CRON, "weekly", "nightly")
+    expect_resolved("the weekly cron is the weekly run", gate.WEEKLY_CRON, "", "weekly")
+    expect_resolved("a dispatch names the nightly run", "", "nightly", "nightly")
+    expect_resolved("a dispatch names the weekly run", "", "weekly", "weekly")
+    expect_resolved("a foreign cron is refused", "0 3 * * *", "", "error: the schedule '0 3 * * *' is not a fuzz run")
+    expect_resolved("a dispatch with no plan is refused", "", "", "error: a dispatch names its plan, nightly or weekly")
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        tree(root, bins=("fuzz_one", "fuzz_two"), files=("fuzz_one", "fuzz_two"))
+        nightly = gate.build_plan(root, "nightly", None, WEEKLY)
+        weekly = gate.build_plan(root, "weekly", "shekyl-a/fuzz_one", WEEKLY)
+        one = gate.build_plan(root, "nightly", "shekyl-a/fuzz_two", WEEKLY)
+        if nightly["crates"] != ["shekyl-a"] or nightly["weekly"] or "shekyl-a/fuzz_one" not in nightly["nightly"]:
+            r.failures.append(f"the nightly plan: {nightly}")
+        elif weekly["weekly"] != ["shekyl-a/fuzz_one"] or weekly["nightly"] or weekly["crates"] != ["shekyl-a"]:
+            r.failures.append(f"the weekly plan: {weekly}")
+        elif one["nightly"] != ["shekyl-a/fuzz_two"] or one["crates"] != ["shekyl-a"]:
+            r.failures.append(f"a narrowed plan: {one}")
+        elif nightly["nightly_seconds"] != gate.NIGHTLY_SECONDS or weekly["weekly_seconds"] != gate.WEEKLY_SECONDS:
+            r.failures.append("the plan's seconds are not the module's")
+        else:
+            r.passed += 1
+        try:
+            gate.build_plan(root, "weekly", "shekyl-a/fuzz_two", WEEKLY)
+            r.failures.append("a weekly target outside the list was accepted")
+        except gate.GateError:
+            r.passed += 1
+        emitted = Path(raw) / "out"
+        gate.emit_plan(nightly, "ci/fuzz-nightly-runs", COMMIT, emitted)
+        text = emitted.read_text()
+        if (
+            f"commit={COMMIT}\n" not in text
+            or 'branches=["ci/fuzz-nightly-runs"]\n' not in text
+            or "shekyl-a/fuzz_one" not in text
+            or f"nightly_seconds={gate.NIGHTLY_SECONDS}\n" not in text
+        ):
+            r.failures.append(f"the emitted plan: {text}")
+        else:
+            r.passed += 1
+        try:
+            gate.emit_plan(nightly, "", COMMIT, emitted)
+            r.failures.append("an emit with no branch was accepted")
+        except gate.GateError:
+            r.passed += 1
+    r.expect_matrix("a change the closure reaches", "shekyl-a", ["rust/shekyl-a/src/lib.rs"], ["shekyl-a"])
+    r.expect_matrix("a change it does not reach", "shekyl-b", ["rust/shekyl-b/src/lib.rs"], [])
+    r.expect_matrix("the fuzz crate's own file", "none", ["rust/shekyl-a/fuzz/fuzz_targets/fuzz_one.rs"], ["shekyl-a"])
+    r.expect_matrix("the workspace lockfile reaches every harness", "none", ["rust/Cargo.lock"], ["shekyl-a"])
+    r.expect_matrix("the workflow reaches every harness", "none", [gate.WORKFLOW], ["shekyl-a"])
+    r.expect_matrix("a classifier that says all", "all", [], ["shekyl-a"])
+    if r.failures:
+        print("SELFTEST FAIL:")
+        for failure in r.failures:
+            print("  " + failure)
+        return 1
+    print(f"fuzz inventory selftest: {r.passed} cases pass")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(selftest())

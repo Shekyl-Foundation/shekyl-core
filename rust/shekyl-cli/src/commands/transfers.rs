@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{SubmitPendingTxResult, SubmitVerdictView};
 
 use super::{format_amount, format_amount_str, require_open};
-use crate::outcome::{failed, CommandResult};
-use crate::rpc_client::RpcSession;
+use crate::outcome::CommandResult;
+use crate::rpc_client::{RpcError, RpcSession};
 
 /// The handle fields of a `build_pending_tx`-shaped success (`transfer` and
 /// `stake_in` share this contract shape) that the confirm/submit flow needs.
@@ -139,7 +139,7 @@ pub(crate) fn submit_pending(rpc: &RpcSession, built: &BuiltPendingTx) -> Comman
         // build instead of silently rendering as a plain submit.
         Ok(val) => Ok(val),
         Err(e) => {
-            let reported = rpc.report("Failed to submit transaction", &e);
+            let reported = report_refusal(rpc, "Failed to submit transaction", &e);
             // The failed submit left the reservation live; release it so the
             // user's spendable balance is not silently tied up.
             discard_reservation(rpc, &built.id);
@@ -162,7 +162,7 @@ pub fn cmd_transfer(
         "build_pending_tx",
         json!({
             "recipients": [{ "address": dest, "amount": amount.to_string() }],
-            "priority": priority.wire(),
+            "priority": priority.name(),
         }),
     ) {
         Ok(v) => v,
@@ -232,7 +232,7 @@ pub(crate) fn show_transfers(val: &Value) {
     };
     println!(
         "{:<10} {:<12} {:>16} {:>12} {:>8}  Id",
-        "Direction", "State", "Amount", "Fee", "Height"
+        "Direction", "State", "Amount", "Fee", "Block"
     );
     for t in transfers {
         print_transfer_row(t);
@@ -251,11 +251,18 @@ pub(crate) fn show_submit(val: &Value) {
                 ),
                 SubmitVerdictView::AlreadyInChain => match result.confirmed_height {
                     Some(h) => println!(
-                        "Transaction already confirmed on chain (reported height {h}): \
+                        "Transaction already confirmed on chain (at block {h}): \
                          {tx_hash}"
                     ),
                     None => println!("Transaction already confirmed on chain: {tx_hash}"),
                 },
+            }
+            if !result.verdict_saved {
+                eprintln!(
+                    "Warning: the send went out and stands, but the wallet could not save \
+                     the daemon's answer (see the wallet log). The next save writes it; if \
+                     the wallet stops first, `tx alarm` lists this send when it reopens."
+                );
             }
         }
         Err(_) => {
@@ -263,6 +270,14 @@ pub(crate) fn show_submit(val: &Value) {
             println!("Transaction submitted (verdict not recognized): {tx_hash}");
         }
     }
+}
+
+/// The transaction id a row is listed under.
+///
+/// `tx show`, `tx note` and `tx abandon` take this id. It is the transaction
+/// hash, not the wallet's per-output transfer id.
+pub(crate) fn listed_tx_id(t: &Value) -> &str {
+    t.get("tx_hash").and_then(Value::as_str).unwrap_or("?")
 }
 
 /// One history row.
@@ -281,7 +296,7 @@ fn print_transfer_row(t: &Value) {
     let amount = format_amount_str(s("amount"));
     let fee = format_amount_str(s("fee"));
     let height = format_height(t);
-    let id = s("id");
+    let id = listed_tx_id(t);
     println!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
     // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
     // so the user sees the failure where the money is listed (rule 82).
@@ -297,7 +312,7 @@ fn print_transfer_row(t: &Value) {
 /// Plain-language rendering of `unspendable_reason` (`PL-D3` §6.2). The
 /// user is told what it means for them — the sender's transaction cannot
 /// be spent from this wallet — not the protocol mechanism (rule 81).
-fn unspendable_reason_text(reason: &str) -> String {
+pub(crate) fn unspendable_reason_text(reason: &str) -> String {
     match reason {
         "PQC_LEAF_MISMATCH" => "the sender's transaction published a leaf entry this wallet \
                                 cannot open; this output can never be spent from here — \
@@ -306,6 +321,34 @@ fn unspendable_reason_text(reason: &str) -> String {
         "PQC_LEAF_ENTRY_ABSENT" => "the sender's transaction carries no leaf entry for this \
                                     output; this output can never be spent from here — \
                                     contact the sender"
+            .to_owned(),
+        "MULTISIG_ENTRY_ABSENT" => "the sender's transaction paid this group without the \
+                                    group's record; this output can never be spent from \
+                                    here — contact the sender"
+            .to_owned(),
+        "MULTISIG_GROUP_SIZE" => "the sender's transaction names a different group than \
+                                  this wallet; this output can never be spent from here — \
+                                  contact the sender"
+            .to_owned(),
+        "MULTISIG_HASHES_UNDECRYPTABLE" => "the sender's transaction published a group record \
+                                            this wallet cannot open; this output can never be \
+                                            spent from here — contact the sender"
+            .to_owned(),
+        "MULTISIG_MEMBER_DECAP" => "this wallet cannot open its part of the sender's \
+                                    transaction; this output can never be spent from here — \
+                                    contact the sender"
+            .to_owned(),
+        "MULTISIG_MEMBER_KEY_HASH" => "the sender's transaction records a different key for \
+                                       this wallet; this output can never be spent from here — \
+                                       contact the sender"
+            .to_owned(),
+        "MULTISIG_DUPLICATE_KEY_HASH" => "the sender's transaction repeats a member of this \
+                                          group; this output can never be spent from here — \
+                                          contact the sender"
+            .to_owned(),
+        "MULTISIG_LEAF_MISMATCH" => "the sender's transaction published a record that does not \
+                                     match this group; this output can never be spent from \
+                                     here — contact the sender"
             .to_owned(),
         other => format!("unspendable ({other})"),
     }
@@ -316,46 +359,10 @@ fn unspendable_reason_text(reason: &str) -> String {
 /// `block_height` is absent for a send that was never mined (PENDING /
 /// FAILED / DROPPED). Printing `0` there would render a plausible block
 /// number beside a send that does not exist on chain.
-fn format_height(t: &Value) -> String {
+pub(crate) fn format_height(t: &Value) -> String {
     t.get("block_height")
         .and_then(serde_json::Value::as_i64)
         .map_or_else(|| "—".to_owned(), |h| h.to_string())
-}
-
-pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) -> CommandResult {
-    require_open(rpc)?;
-    match rpc.call("get_transfer_by_id", json!({ "id": id })) {
-        Ok(val) => {
-            if val.get("transfer").is_none() {
-                return failed("Malformed get_transfer_by_id response.");
-            }
-            Ok(val)
-        }
-        Err(e) => Err(rpc.report("Failed to get transfer", &e)),
-    }
-}
-
-pub(crate) fn show_transfer(val: &Value) {
-    let Some(t) = val.get("transfer") else {
-        return;
-    };
-    let s = |name: &str| t.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Transfer:");
-    println!("  Id (tx show):              {}", s("id"));
-    println!("  Transaction (note/abandon): {}", s("tx_hash"));
-    println!("  Amount:    {} SKL", format_amount_str(s("amount")));
-    println!("  Fee:       {} SKL", format_amount_str(s("fee")));
-    println!("  Height:    {}", format_height(t));
-    if let Some(spent) = t.get("spent_height").and_then(Value::as_i64) {
-        println!("  Spent at:  {spent}");
-    }
-    if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
-        println!("  Unspendable: {}", unspendable_reason_text(reason));
-    }
-    if let Some(attr) = t.get("attribution") {
-        let kind = attr.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
-        println!("  Attribution: {kind}");
-    }
 }
 
 /// `get_tx_note <txid>` — read the local note stored for a transaction
@@ -415,6 +422,100 @@ pub fn cmd_abandon(rpc: &RpcSession, txid: &str) -> CommandResult {
     }
 }
 
+/// A submit or resend refusal, with the daemon's cause in plain words
+/// when it gave one (`-29106`'s `error.data.cause`). Without this the user
+/// read "submit rejected" and nothing more; the cause rode only in the
+/// error data, which human mode prints under `--debug` alone (alpha.11
+/// bug hunt §A19, sends 7–9).
+fn report_refusal(rpc: &RpcSession, context: &str, e: &RpcError) -> crate::outcome::CommandFailed {
+    let mut reported = rpc.report(context, e);
+    if let Some(why) = reported.data.as_ref().and_then(refusal_words) {
+        reported.message = format!("{context}: {why}");
+    }
+    reported
+}
+
+/// The daemon's refusal cause (`-29106`'s `cause`, `row` beside a
+/// consensus refusal) in words a user can act on.
+fn refusal_words(data: &Value) -> Option<String> {
+    let cause = data.get("cause")?.as_str()?;
+    Some(match cause {
+        "double_spend_conflict" => "the network already has a transaction spending one of \
+             its inputs — an earlier send of yours, or one from another copy of this wallet. \
+             Refresh and check your history before sending again"
+            .to_owned(),
+        "fee_too_low" => "the fee is below what the network accepts now; build it again".to_owned(),
+        "malformed" => {
+            "the daemon could not accept the transaction as built; build it again".to_owned()
+        }
+        "stale_root" | "reference_too_recent" | "reference_not_found" => {
+            "the block the transaction was built against cannot be used now; build it again"
+                .to_owned()
+        }
+        "consensus_rule" => match data.get("row").and_then(Value::as_str) {
+            Some(row) => format!("the chain refuses it under consensus rule {row}"),
+            None => "the chain refuses it under a consensus rule".to_owned(),
+        },
+        "unrecognized" => "the daemon refused it for a reason this wallet does not know".to_owned(),
+        _ => return None,
+    })
+}
+
+/// `tx alarm`: the held sends that need your decision (A19).
+pub fn cmd_tx_alarm(rpc: &RpcSession) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("tx_alarm", json!({})) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to read the held sends", &e)),
+    }
+}
+
+/// `tx resend <txid>`: resend a held send's saved bytes, by your decision.
+pub fn cmd_tx_resend(rpc: &RpcSession, txid: &str) -> CommandResult {
+    require_open(rpc)?;
+    match rpc.call("tx_resend", json!({ "id": txid })) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(report_refusal(rpc, "Failed to resend the send", &e)),
+    }
+}
+
+pub(crate) fn show_tx_alarm(val: &Value) {
+    let Some(sends) = val.as_array() else {
+        println!("(the wallet's answer was not a list)");
+        return;
+    };
+    if sends.is_empty() {
+        println!("No sends need your decision.");
+        return;
+    }
+    println!("Sends that need your decision:");
+    for send in sends {
+        let id = send.get("id").and_then(Value::as_str).unwrap_or("?");
+        let height = send
+            .get("sent_height")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
+        let why = match send.get("alarm").and_then(Value::as_str).unwrap_or("") {
+            "earlier-session" => {
+                "sent before the wallet last stopped; its result was not seen since"
+            }
+            "overdue" => "the daemon has held it longer than it should",
+            "untracked" => "the daemon has it but no record of publishing it",
+            "published-past-lookback" => "published, and still not mined",
+            "peerless" => "the daemon has no peers, so it cannot relay",
+            "offline" => "the daemon is offline, so it relays nothing",
+            "reference-stale" => "it can no longer be offered as built",
+            "bytes-missing" => "the wallet has no saved copy to resend",
+            _ => "(a reason this version does not know)",
+        };
+        println!("  {id}  sent at height {height}: {why}");
+    }
+    println!(
+        "Resend one with `tx resend <id>` (the same transaction, offered again), or give it \
+         up with `tx abandon <id>`."
+    );
+}
+
 pub(crate) fn show_abandoned(_val: &Value) {
     println!("Send abandoned: the wallet has given up on it.");
     println!(
@@ -426,17 +527,38 @@ pub(crate) fn show_abandoned(_val: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_built_pending_tx, MalformedBuild};
+    use super::{parse_built_pending_tx, refusal_words, MalformedBuild};
+
+    /// A19: a refusal's cause reaches the user in words. A double spend
+    /// says what it means (the A19 self-conflict among them), a consensus
+    /// refusal names its row, and data with no cause leaves the message as
+    /// the server wrote it.
+    #[test]
+    fn a_refusal_names_its_cause_in_words() {
+        let ds = refusal_words(&json!({"verdict": "rejected", "cause": "double_spend_conflict"}))
+            .expect("worded");
+        assert!(
+            ds.contains("already has a transaction spending one of its inputs"),
+            "{ds}"
+        );
+        let row = refusal_words(&json!({
+            "verdict": "rejected", "cause": "consensus_rule", "row": "CEN-J15"
+        }))
+        .expect("worded");
+        assert!(row.contains("CEN-J15"), "{row}");
+        assert_eq!(refusal_words(&json!({"detail": "x"})), None);
+    }
     use crate::resolve::FeePriority;
     use serde_json::json;
 
-    /// The named tiers are the OpenAPI `FeePriority` enum values. An absent
-    /// `--priority` is Standard, the server's documented default.
+    /// The wire carries the tier's one name, lowercase (IG-Q52); an absent
+    /// `--priority` is the tier set's default, `standard`.
     #[test]
-    fn priority_flag_maps_onto_named_tiers() {
-        assert_eq!(FeePriority::Standard.wire(), "STANDARD");
-        assert_eq!(FeePriority::Economy.wire(), "ECONOMY");
-        assert_eq!(FeePriority::High.wire(), "PRIORITY");
+    fn priority_flag_sends_the_tiers_name() {
+        assert_eq!(FeePriority::Standard.name(), "standard");
+        assert_eq!(FeePriority::Economy.name(), "economy");
+        assert_eq!(FeePriority::High.name(), "high");
+        assert_eq!(FeePriority::default(), FeePriority::Standard);
     }
 
     /// The never-default contract, whose violation is a fund-lock: a
@@ -490,5 +612,39 @@ mod tests {
         assert_eq!(parsed.id, "42");
         assert_eq!(parsed.seen_gen, 7);
         assert_eq!(parsed.fee_skl, "0.700000000");
+    }
+
+    /// Each persisted reason is told in the user's terms: the output cannot
+    /// be spent from this wallet, and the sender is who to contact. The
+    /// spelling is the RPC name; an unknown spelling stays visible rather
+    /// than being folded into a known reason.
+    #[test]
+    fn unspendable_reasons_say_the_output_cannot_be_spent() {
+        use super::unspendable_reason_text;
+        for reason in [
+            "PQC_LEAF_MISMATCH",
+            "PQC_LEAF_ENTRY_ABSENT",
+            "MULTISIG_ENTRY_ABSENT",
+            "MULTISIG_GROUP_SIZE",
+            "MULTISIG_HASHES_UNDECRYPTABLE",
+            "MULTISIG_MEMBER_DECAP",
+            "MULTISIG_MEMBER_KEY_HASH",
+            "MULTISIG_DUPLICATE_KEY_HASH",
+            "MULTISIG_LEAF_MISMATCH",
+        ] {
+            let text = unspendable_reason_text(reason);
+            assert!(
+                text.contains("can never be spent"),
+                "{reason} should say the output cannot be spent: {text}"
+            );
+            assert!(
+                text.contains("contact the sender"),
+                "{reason} should name who to contact: {text}"
+            );
+        }
+        assert_eq!(
+            unspendable_reason_text("NOT_A_REASON"),
+            "unspendable (NOT_A_REASON)"
+        );
     }
 }

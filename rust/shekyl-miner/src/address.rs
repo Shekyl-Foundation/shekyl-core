@@ -6,7 +6,7 @@
 //! [`MiningAddress`]: the address a node mines to, decoded once and held
 //! to the daemon's network.
 
-use shekyl_address::{AddressError, Network, ShekylAddress};
+use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_block_template::MinerKeys;
 use shekyl_crypto_pq::account::{coinbase_recipient, RecipientRefused};
 
@@ -79,8 +79,12 @@ impl MiningAddress {
     /// (`shekyl_crypto_pq::account::coinbase_recipient`, the C++ decode's
     /// checks).
     pub fn decode(text: &str, network: Network) -> Result<Self, MiningAddressRefused> {
-        let address = match ShekylAddress::decode_for_network(text, network) {
-            Ok(address) => address,
+        // The same payable door a wallet uses. A display-only address
+        // has no encapsulation key, so no coinbase output can be built
+        // to it; the curve checks below are the mining-specific residue.
+        let address = match PaymentAddress::decode(text, network) {
+            Ok(payment) => payment.into_inner(),
+            Err(AddressError::DisplayOnly) => return Err(MiningAddressRefused::NoKemKey),
             Err(AddressError::NetworkMismatch {
                 addr_net,
                 expected_net,
@@ -92,9 +96,6 @@ impl MiningAddress {
             }
             Err(other) => return Err(MiningAddressRefused::Undecodable(other.to_string())),
         };
-        if !address.has_pqc_segment() || address.ml_kem_encap_key.is_empty() {
-            return Err(MiningAddressRefused::NoKemKey);
-        }
         let x25519_pk = coinbase_recipient(
             &address.spend_key,
             &address.view_key,
@@ -131,7 +132,7 @@ impl MiningAddress {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_address::{MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN};
+    use shekyl_address::{ShekylAddress, MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN};
 
     /// The Ed25519 basepoint's encoding: a view key on the curve.
     const BASEPOINT: [u8; 32] = [

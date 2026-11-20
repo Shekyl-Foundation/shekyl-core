@@ -999,7 +999,7 @@ the verifier crate).
 **Criteria.**
 
 - Minimize `unsafe` surface (per
-  [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  [`20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md),
   [`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc),
   and the
   [`shekyl-ffi` localization principle](./RANDOMX_V2_PHASE2F_PLAN.md)
@@ -2267,7 +2267,7 @@ gate continues to enforce the freeze.
   contract: a Round-N design-round entry adds the cfg-gated
   entry point + the harness-side `TraceSink` trait per Phase
   2F §10.4 substrate; the implementation lands in a separate
-  PR per [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  PR per [`20-rust-vs-cpp-policy.mdc`](RULE_20_RUST_VS_CPP.md)
   migration discipline (the trace surface is secret-adjacent
   — intermediate VM register values are inputs to the final
   hash output — and gets its own design rounds rather than

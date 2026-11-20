@@ -13,7 +13,8 @@
 # specified shape lands here first (or in the same PR as) the implementation
 # change.
 #
-# Transport: JSON-RPC 2.0 over HTTP POST / or a Unix domain socket. UDS with
+# Transport: JSON-RPC 2.0 over HTTP POST /json_rpc (the daemon's path, the
+# only one: no alias at /) or a Unix domain socket. UDS with
 # filesystem-permission auth is the recommended deployment mode
 # (docs/WALLET_RPC_README.md); HTTP basic auth remains available for tooling.
 #
@@ -54,6 +55,12 @@
 #     build_pending_tx, submit_pending_tx, discard_pending_tx,
 #     abandon_tx                                   (PR-SJ-3 — the P3-4
 #                                                   user-authored abandon)
+#     tx_alarm, tx_resend                          (A19 — the held sends
+#                                                   that need the user's
+#                                                   decision, and the
+#                                                   user's resend; Part C
+#                                                   names, INPUT_GRAMMAR
+#                                                   §16.1)
 #     set_tx_note, get_tx_note                     (PR-SA-4 — SJ-DQ-7
 #                                                   per-txid annotation;
 #                                                   the reader is the only
@@ -195,9 +202,9 @@
 #                                                   which fetches the body
 #                                                   from a holder. Read-only;
 #                                                   the viewer renders
-#                                                   locally. Open shard, miss
-#                                                   and not-offered are
-#                                                   -29534..-29536, never an
+#                                                   locally. Open shard, miss,
+#                                                   not-offered and busy are
+#                                                   -29534..-29537, never an
 #                                                   empty result)
 #   SPECIFIED (WR-Q2 — staking outcomes a user can see):
 #     acknowledge_staking_outcome                  (clear the staking
@@ -298,6 +305,17 @@
 #     claim_rewards                                (alias-shape of `claim`;
 #       rejected with it 2026-09-07 so the same surface cannot return
 #       under a synonym. Same rationale and reopening clause as `claim`.)
+#     freeze, thaw, frozen                         (the user freeze, Rick
+#       2026-11-15, decision log. A user-set hold on outputs has no
+#       privacy job under FCMP++, which already hides which outputs a
+#       spend uses; any human choice on a visible parameter (input count,
+#       consolidation timing) becomes a pattern, while deterministic
+#       selection gives every wallet the same shapes. The wallet's own
+#       reservations already keep built and staking-held outputs out of
+#       selection. These are the names a Monero client would try. The
+#       server refuses each -32601 with this reason. Reopen when: a named
+#       user job that those reservations do not cover; the re-evaluation
+#       shape is a fresh contract sub-PR citing this note.)
 #   SPECIFIED (PR-SM-2 — message-signing projection; formerly the
 #   "sign, verify" RESERVED entry, which sat ambiguously below the
 #   REJECTED block — it was reserved, never rejected):
@@ -329,7 +347,7 @@
 #                            `unstake` and -29523..-29527 and -29529 on
 #                            `collect_unstaked` (PR-C; -29513 is shared by
 #                            the exit pair); -29530..-29533 are a staker's
-#                            open-time refusals; -29534..-29536 live on
+#                            open-time refusals; -29534..-29537 live on
 #                            `get_shard_view` (SV-D); rest reserved — never
 #                            reuse an allocated code)
 #   -29600..-29699           payment requests (RESERVED range)
@@ -463,7 +481,90 @@ info:
   # `support_complete_tree` on the bond request, the -29506 refusal, and
   # the serving-posture response. The obligation is unchanged: the
   # whole-corpus archival backstop. api_version stays 1.
-  version: 0.15.0
+  # 0.16.0: an in_flight entry says what it holds
+  # (WALLET_RPC_STAKING_OUTCOMES.md WR-Q6, ruled 2026-11-07). reserved is
+  # required: the amounts of the record's reserved inputs still unspent,
+  # "0" when nothing is held (a held stake, an empty reservation), and
+  # null when the staking scan has not run yet, so what is held cannot be
+  # read. OpenAPI 3.1 does not treat `nullable` as null, so the schema is
+  # a oneOf of AtomicUnits and type null, the same shape as
+  # JsonRpcResponse.id. A refused entry's reason no longer says its funds
+  # stay set aside; reserved says what is held. api_version stays 1.
+  # 0.17.0: any daemon operation gains -29212 DAEMON_GRANT_REFUSED: the
+  # daemon (CORE_RPC_VERSION 4.0) refused the call as outside this wallet's
+  # grant. Before 4.0 a daemon had no grants and no such refusal. A
+  # get_shard_view refused this way stays -29536 with cause "restricted".
+  # get_shard_view gains -29537 SHARD_VIEW_BUSY: the daemon fetches one
+  # shard at a time for bounded callers and was already fetching one
+  # (bound.shard); transient. -29536 gains data.cause "tor_off": the daemon
+  # runs with Tor off and has no client to fetch a shard through. The
+  # cause "skeleton_absent" is gone: no daemon refuses that way.
+  # api_version stays 1.
+  # 0.18.0: A19 (alpha.11 bug hunt) — a send is saved before its bytes
+  # leave. submit_pending_tx gains -29120 SEND_NOT_SAVED (the record could
+  # not be saved, so nothing was sent; the reservation is kept) and its
+  # result gains the required verdict_saved (false: the send stands, but
+  # saving its verdict failed). tx_alarm lists the held sends that need
+  # the user's decision; tx_resend resends one's saved bytes (-29121
+  # TX_NOT_HELD, -29122 TX_BYTES_MISSING; refusals as submit's).
+  # api_version stays 1.
+  # 0.19.0: the wallet lane's PR 2 (Rick, 2026-11-12 and 2026-11-15). This
+  # tranche REMOVES fields, so a client of 0.18.0 must move with it; the
+  # wire-compat integer stays 1 pre-genesis (rule 16). get_balance carries
+  # balance = spendable + incoming and each leg once (incoming_wait
+  # absent when no incoming output is on chain), with outgoing and
+  # unspendable beside it; liquid, unlocked and pending are deleted (A17).
+  # The wallet has no user-set hold on outputs: no parked leg, and the
+  # names freeze, thaw and frozen are REJECTED (Rick, 2026-11-15). The fee
+  # tier is economy / standard / high, lowercase; the {custom} form and the
+  # Feerate schema are deleted, get_default_fee_priority's fields are
+  # economy, standard, high, and its default_priority is deleted (no front
+  # end read it) (A18). The signer's faults keep their
+  # identity: -29123 TOO_MANY_INPUTS, -29124 TOO_MANY_OUTPUTS (refused at
+  # the request), -29125 INPUT_NOT_IN_TREE, -29126 INPUT_UNSPENDABLE, and
+  # -29119 SIGNER_FAILED names its fault in data.fault (A16).
+  # 0.20.0: RT-W10 step 5 (Rick, 2026-11-17). With no daemon-address the
+  # wallet's daemon is "this computer": the owner's socket or pipe of the
+  # node this account runs, never a plaintext listener. Any daemon
+  # operation gains -29213 DAEMON_PEER_CHECK_FAILED (something other than
+  # this account's node answers at its rendezvous: a security failure,
+  # never retried) and -29214 DAEMON_IS_A_SERVICE (this computer's node is
+  # a service, which a wallet reaches over the channel only from RT-W12;
+  # data.view is its view listener, the daemon-address to set, or null
+  # when it has none). api_version stays 1.
+  # 0.21.0: open gains -29017 RANDOM_SOURCE_CHECK_FAILED (Rick,
+  # 2026-11-17). A wallet built with the engine's conformance feature
+  # checks this computer's random-number source before it stakes, and
+  # refuses to open when the source fails; the refusal had no code of its
+  # own. The default build never runs the check, so never answers it.
+  # Every cause of an unsaved send has its own code (Rick, 2026-11-18 and
+  # 2026-11-19). SEND_NOT_SAVED (-29120) is renamed SAVE_NOT_WRITABLE: the
+  # wallet's folder, file or drive is not writable (data.target:
+  # folder, file or volume, each with its own advice). submit_pending_tx
+  # gains -29128 SAVE_DURABILITY_UNCONFIRMED (a local Windows volume other
+  # than NTFS, which cannot confirm a save survives a power cut;
+  # data.file_system names it; move the wallet to an NTFS volume), -29129
+  # SAVE_DISK_FULL, -29130 SAVE_FILE_HELD (another program, most likely a
+  # scanner, held the wallet's file), -29131 SAVE_IO_FAILED (the disk's
+  # error at a step: data.step, one of write, rename, folder-sync, flush,
+  # volume-query, and data.error), -29132 SAVE_RENAME_UNCONFIRMED (a local
+  # NTFS drive that refused the rename Windows confirms), -29133
+  # SAVE_INTERNAL_FAULT (a fault in the wallet before the disk was touched)
+  # and -29134 SAVE_ON_NETWORK_DRIVE (a network drive, never confirmed,
+  # whatever file system it reports; move the wallet to a local drive).
+  # Each sent nothing and keeps the reservation. stake, unstake, drain and
+  # collect_unstaked answer the same codes by cause when their seal was not
+  # saved, or saved but not confirmed: nothing was sent and the seal was
+  # removed, so the call is retried; unstake never answers -29522 for it,
+  # nor drain and collect_unstaked -29107. A staking record read back from
+  # disk is sent only after a save of the pending records confirmed in
+  # this process; the wallet saves them once at open for that.
+  # Supported storage (Rick, 2026-11-19): a local NTFS volume on Windows,
+  # a local disk on Unix. On anything else the wallet still saves, but
+  # refuses to send or stake, answering the code for the cause, whose
+  # message says why. Network shares are not a supported configuration.
+  # api_version stays 1.
+  version: 0.21.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -494,6 +595,10 @@ servers:
 # arm. JsonRpcRequest.method.enum must equal the SPECIFIED set exactly.
 # Rationale for each non-SPECIFIED status lives in the header comment block
 # at the top of this file; this table is the status, the header is the why.
+# A REJECTED row also carries `reason`: the sentence the server states when
+# the name is called (-32601), held equal to the server's table by
+# shekyl-wallet-contract's rejected.rs test. The header keeps the full
+# rationale and the reopening clause.
 x-shekyl-method-registry:
   create_wallet: { status: SPECIFIED }
   restore_wallet: { status: SPECIFIED }
@@ -506,6 +611,8 @@ x-shekyl-method-registry:
   submit_pending_tx: { status: SPECIFIED }
   discard_pending_tx: { status: SPECIFIED }
   abandon_tx: { status: SPECIFIED }
+  tx_alarm: { status: SPECIFIED }
+  tx_resend: { status: SPECIFIED }
   set_tx_note: { status: SPECIFIED }
   get_tx_note: { status: SPECIFIED }
   get_transfers: { status: SPECIFIED }
@@ -538,16 +645,19 @@ x-shekyl-method-registry:
   sign_message: { status: SPECIFIED }
   verify_message: { status: SPECIFIED }
   get_shard_view: { status: SPECIFIED }
-  match_transfer_to_request: { status: REJECTED }
-  claim: { status: REJECTED }
-  claim_rewards: { status: REJECTED }
-  get_stakes: { status: REJECTED }
-  get_tx_key: { status: REJECTED }
-  check_tx_key: { status: REJECTED }
-  get_spend_proof: { status: REJECTED }
-  check_spend_proof: { status: REJECTED }
-  export_unsigned: { status: REJECTED }
-  submit_signed: { status: REJECTED }
+  match_transfer_to_request: { status: REJECTED, reason: "attribution is automatic: get_transfers carries it (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  claim: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  claim_rewards: { status: REJECTED, reason: "emission claims run inside the wallet's staking; there is no manual claim (wallet_rpc.yaml, REJECTED 2026-09-07)" }
+  get_stakes: { status: REJECTED, reason: "a per-stake listing would link stakes to their personas; get_staked_balance, get_staked_outputs and staking_info are the aggregate reads (wallet_rpc.yaml, REJECTED 2026-08-26)" }
+  get_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  check_tx_key: { status: REJECTED, reason: "the transaction key is a bearer credential; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-23)" }
+  get_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use get_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  check_spend_proof: { status: REJECTED, reason: "a spend proof only links key images to an identity, which FCMP++ hides; use check_tx_proof (wallet_rpc.yaml, REJECTED 2026-07-24)" }
+  export_unsigned: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  submit_signed: { status: REJECTED, reason: "cold signing is not offered: an FCMP++ spend needs the live curve tree; cold storage is your seed (V3_WALLET_DECISION_LOG.md, 2026-09-07)" }
+  freeze: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  thaw: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
+  frozen: { status: REJECTED, reason: "the wallet has no user-set hold on outputs: FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection (V3_WALLET_DECISION_LOG.md, 2026-11-15)" }
 
 # ── Error-code ranges (STATUS OF RECORD — rule 23) ────────────────────────
 # SPECIFIED ranges carry allocated codes (enumerated in WalletRpcErrorCode);
@@ -568,10 +678,18 @@ x-shekyl-error-ranges:
   - { start: -29900, end: -29999, subject: server / transport / tenancy, status: SPECIFIED }
 
 paths:
-  /:
+  /json_rpc:
     post:
       operationId: jsonRpcCall
       summary: JSON-RPC 2.0 envelope; the `method` member selects the operation.
+      description: >-
+        The one path JSON-RPC is served at, spelled as the daemon spells it
+        (rule 83: no alias). A request to any other path, once past the
+        Content-Type, `Host` and authentication checks below, gets HTTP 404
+        with a JSON-RPC error object: `id` null, `code` -32601, and `data`
+        the diagnostic `rpc.path.unrouted` with the parameters `path` (the
+        path asked for) and `json_rpc` (`/json_rpc`). The daemon answers an
+        unrouted path the same way.
       requestBody:
         required: true
         description: >-
@@ -629,6 +747,8 @@ components:
             - submit_pending_tx
             - discard_pending_tx
             - abandon_tx
+            - tx_alarm
+            - tx_resend
             - set_tx_note
             - get_tx_note
             - get_transfers
@@ -738,6 +858,7 @@ components:
         - -29014   # WALLET_CLOSE_BLOCKED
         - -29015   # CURVE_TREE_UNAVAILABLE
         - -29016   # CURVE_TREE_STORE_UNUSABLE
+        - -29017   # RANDOM_SOURCE_CHECK_FAILED
         - -29100   # INVALID_RECIPIENT
         - -29101   # INSUFFICIENT_FUNDS
         - -29102   # FEE_ESTIMATION_FAILED
@@ -758,6 +879,24 @@ components:
         - -29117   # RESELECTION_REQUIRED
         - -29118   # DAEMON_FEE_RESPONSE_INVALID
         - -29119   # SIGNER_FAILED
+        - -29120   # SAVE_NOT_WRITABLE
+        - -29121   # TX_NOT_HELD
+        - -29122   # TX_BYTES_MISSING
+        - -29123   # TOO_MANY_INPUTS
+        - -29124   # TOO_MANY_OUTPUTS
+        - -29125   # INPUT_NOT_IN_TREE
+        - -29126   # INPUT_UNSPENDABLE
+        # -29127 OUTPUTS_PARKED is RETIRED (never reuse): the wallet has
+        # no user-set hold on outputs (decision log 2026-11-15). The
+        # number stays out of the enum and stays recorded here so it is
+        # never reallocated with a new meaning.
+        - -29128   # SAVE_DURABILITY_UNCONFIRMED
+        - -29129   # SAVE_DISK_FULL
+        - -29130   # SAVE_FILE_HELD
+        - -29131   # SAVE_IO_FAILED
+        - -29132   # SAVE_RENAME_UNCONFIRMED
+        - -29133   # SAVE_INTERNAL_FAULT
+        - -29134   # SAVE_ON_NETWORK_DRIVE
         - -29200   # REFRESH_IN_PROGRESS
         - -29201   # DAEMON_UNREACHABLE
         - -29202   # RESCAN_BLOCKED
@@ -770,6 +909,9 @@ components:
         - -29209   # DAEMON_PROTOCOL_VIOLATION
         - -29210   # CHAIN_UNSTABLE
         - -29211   # RESYNC_REQUIRED
+        - -29212   # DAEMON_GRANT_REFUSED
+        - -29213   # DAEMON_PEER_CHECK_FAILED
+        - -29214   # DAEMON_IS_A_SERVICE
         - -29300   # PROOF_MALFORMED
         - -29301   # PROOF_TX_SECRET_UNAVAILABLE
         - -29302   # PROOF_NO_PROVABLE_OUTPUTS
@@ -814,6 +956,7 @@ components:
         - -29534   # SHARD_STILL_OPEN
         - -29535   # SHARD_UNAVAILABLE
         - -29536   # SHARD_VIEW_NOT_OFFERED
+        - -29537   # SHARD_VIEW_BUSY
         - -29800   # MSG_SIG_VERIFY_FAILED
         - -29801   # MSG_SIG_CORRUPTED
         - -29802   # MSG_SIG_UNSUPPORTED_SCHEME
@@ -862,7 +1005,13 @@ components:
                                           password and a damaged file are
                                           different remedies
           -29012 WALLET_FILE_VERSION_UNSUPPORTED wallet files: written by a version,
-                                          or in a shape, this build cannot read
+                                          or in a shape, this build cannot read.
+                                          The message names the remedy: open
+                                          them with the build that wrote them,
+                                          or restore the wallet from its seed,
+                                          which does not bring back the send
+                                          history, proofs for earlier sends,
+                                          notes or payment requests
           -29013 WALLET_FILE_IO_FAILED    wallet files: a read or write failed
                                           underneath (disk full, filesystem
                                           error, a failed atomic rename, a
@@ -874,8 +1023,9 @@ components:
           -29015 CURVE_TREE_UNAVAILABLE   build/refresh: the wallet's curve-tree
                                           membership data is unavailable for
                                           this session (its actor stopped, or
-                                          its store would not resume; a
-                                          respawn did not recover it). Close
+                                          its store would not resume; an
+                                          in-place rebuild did not recover
+                                          it). Close
                                           and reopen the wallet; a store that
                                           cannot be used is then -29016
           -29016 CURVE_TREE_STORE_UNUSABLE open: the wallet's curve-tree store
@@ -890,9 +1040,22 @@ components:
                                           finishes. Never a reason to restore
                                           from the seed (that is -29011, for
                                           the wallet's own files)
+          -29017 RANDOM_SOURCE_CHECK_FAILED open: this computer's random-number
+                                          source failed the check the wallet
+                                          runs before it stakes, so the wallet
+                                          did not open (staking on numbers
+                                          that fail it could link the
+                                          wallet's stakes). Only a build with
+                                          the engine's conformance feature
+                                          runs the check. The check's false
+                                          alarms are about one in a million:
+                                          try once more; a second failure
+                                          means this computer — open the
+                                          wallet on another. The grade stays
+                                          in the server log
 
-          -29100 INVALID_RECIPIENT        build/proofs: address parse or
-                                          network check failed
+          -29100 INVALID_RECIPIENT        build/proofs: the address is not
+                                          one this wallet can pay
           -29101 INSUFFICIENT_FUNDS       build: spendable balance too low
           -29102 FEE_ESTIMATION_FAILED    build: daemon fee query failed
           -29103 RESERVATION_NOT_FOUND    submit: unknown/expired handle
@@ -936,8 +1099,7 @@ components:
                                           trusting this daemon. The
                                           intra-snapshot 10×-economy lock is
                                           withdrawn (honest 2021-scaling
-                                          Fh/Fl exceeds 10×), as is the
-                                          custom-only 100×-economy ceiling.
+                                          Fh/Fl exceeds 10×).
                                           The historical median-multiple
                                           ceiling lands with the V3.x
                                           wallet-side estimator.
@@ -982,10 +1144,164 @@ components:
                                           wallet could not read. Distinct from
                                           -29102 (no answer) and -29109 (an
                                           answer refused as unreasonable)
-          -29119 SIGNER_FAILED            build: the signer tried and a
-                                          downstream failure stopped it
-                                          (a device error, a remote actor
-                                          disconnecting)
+          -29119 SIGNER_FAILED            build: the wallet's own signer hit
+                                          an internal fault — a bug, never
+                                          the request's doing (data:
+                                          {"fault"}, one keyword: a builder
+                                          invariant — no-inputs, no-outputs,
+                                          zero-input-amount,
+                                          zero-output-amount,
+                                          input-amount-overflow,
+                                          output-amount-overflow,
+                                          insufficient-funds,
+                                          empty-leaf-chunk,
+                                          pqc-leaf-derivation,
+                                          leaf-chunk-too-large,
+                                          zero-tree-depth, tree-too-shallow,
+                                          tree-depth-too-large,
+                                          branch-layer-mismatch,
+                                          invalid-combined-ss-length,
+                                          bulletproof, fcmp-prove, pqc-sign,
+                                          wire, balance-self-check — or the
+                                          wallet's random source and the
+                                          state signing reads —
+                                          primitive, handle-mismatch,
+                                          missing-key-image,
+                                          source-decapsulation,
+                                          rid-not-encodable, proof,
+                                          bulletproof-parse, wire-encode,
+                                          randomness).
+                                          Report it; the wallet log has the
+                                          detail (A16)
+          -29120 SAVE_NOT_WRITABLE        submit: the send's record (its
+                                          signed bytes, tx secret and input
+                                          locks) could not be saved because
+                                          the wallet's folder, file or
+                                          drive is not writable for this
+                                          account, so the wallet sent
+                                          NOTHING (data: {"target"}:
+                                          "folder", make it writable for
+                                          this account; "file", its
+                                          read-only attribute is set, clear
+                                          it; "volume", the drive is
+                                          read-only or write-protected, make
+                                          it writable or move the wallet).
+                                          The reservation is kept: fix it
+                                          and submit again, or discard
+                                          (A19). A failed save undoes the
+                                          record; a save whose durability
+                                          was not confirmed leaves the
+                                          applied record. Every other cause
+                                          of an unsaved send is its own
+                                          code, -29128..-29134, each of
+                                          which also sent nothing and keeps
+                                          the reservation. stake, unstake,
+                                          drain and collect_unstaked answer
+                                          these codes by cause when their
+                                          seal was saved but not confirmed:
+                                          nothing was sent and the seal was
+                                          removed, so the call is retried
+                                          (Rick, 2026-11-18 and 2026-11-19)
+          -29121 TX_NOT_HELD              tx_resend: no held send has this
+                                          id — it confirmed, was released,
+                                          or was never this wallet's
+          -29122 TX_BYTES_MISSING         tx_resend: the held send's record
+                                          holds no bytes to resend; abandon
+                                          it, or wait for refresh to settle
+                                          it
+          -29123 TOO_MANY_INPUTS          build: the amount needs more
+                                          inputs than one transaction spends
+                                          (data: {"count", "limit"}; limit
+                                          is 8) — send less, or first send
+                                          part of the balance to yourself
+                                          to merge small amounts
+          -29124 TOO_MANY_OUTPUTS         build: the request has more
+                                          outputs, its change included,
+                                          than one transaction carries
+                                          (data: {"count", "limit"}; limit
+                                          is 16, so at most 15 recipients)
+                                          — split the recipients across
+                                          sends. Refused at the request,
+                                          before selection
+          -29125 INPUT_NOT_IN_TREE        build: the wallet's membership data
+                                          does not hold an output the send
+                                          spends (data: {"input"}, its
+                                          position) — refresh and build
+                                          again
+          -29126 INPUT_UNSPENDABLE        build: an output the send would
+                                          spend was received but its leaf
+                                          does not open to this wallet's
+                                          keys, so it can never be spent
+                                          (data: {"input"}). The scan
+                                          should have counted it as
+                                          unspendable already — report it
+          -29127 (RETIRED — never reuse)  was OUTPUTS_PARKED. The wallet
+                                          has no user-set hold on outputs
+                                          (decision log 2026-11-15); the
+                                          number is retired, not freed
+          -29128 SAVE_DURABILITY_UNCONFIRMED
+                                          submit: the send was saved on a
+                                          local Windows volume whose file
+                                          system
+                                          Windows cannot confirm keeps a
+                                          save through a power cut (any but
+                                          NTFS: FAT32, exFAT, ReFS), so the
+                                          wallet sent nothing (data:
+                                          {"file_system"}, as Windows names
+                                          it) — move the wallet to an NTFS
+                                          volume and submit again, or
+                                          discard
+          -29129 SAVE_DISK_FULL           submit: the disk holding the
+                                          wallet is full (or this account's
+                                          quota on it), so the send was not
+                                          saved and not sent — free disk
+                                          space and submit again, or
+                                          discard
+          -29130 SAVE_FILE_HELD           submit: another program held the
+                                          wallet's file open past the save's
+                                          wait, most likely an antivirus
+                                          scanner or a search indexer, so
+                                          the send was not saved and not
+                                          sent — exclude the wallet's
+                                          folder from scanning and submit
+                                          again, or discard. A read-only
+                                          file is -29120 with target
+                                          "file": the save reads the
+                                          attribute to tell the two apart
+          -29131 SAVE_IO_FAILED           submit: the disk reported an error
+                                          at a step of saving the send or
+                                          confirming the save, so the
+                                          wallet sent nothing (data:
+                                          {"step", "error"}: step is one of
+                                          "write", "rename", "folder-sync",
+                                          "flush", "volume-query", and the
+                                          message names it; error is the
+                                          system's words, never a path) —
+                                          check the disk and submit again,
+                                          or discard
+          -29132 SAVE_RENAME_UNCONFIRMED  submit: the wallet's local NTFS
+                                          drive refused the rename Windows
+                                          confirms survives a power cut, so
+                                          the wallet sent nothing — move the
+                                          wallet to another local NTFS drive
+                                          and submit again, or discard.
+                                          Windows builds observed to give
+                                          it: none observed
+          -29133 SAVE_INTERNAL_FAULT      submit: the wallet could not
+                                          prepare the send's record to save
+                                          (its state failed a check, or
+                                          could not be encoded or sealed): a
+                                          fault in the wallet, not the disk,
+                                          so nothing was sent — report it;
+                                          the wallet's log has the detail
+          -29134 SAVE_ON_NETWORK_DRIVE    submit: the wallet is on a network
+                                          drive, where no save is confirmed
+                                          to survive a power cut whatever
+                                          file system the drive reports (a
+                                          Samba share reports NTFS), so the
+                                          wallet sent nothing — move the
+                                          wallet to a local drive and
+                                          submit again, or discard
           -29200 REFRESH_IN_PROGRESS      refresh: single-flight violation
           -29201 DAEMON_UNREACHABLE       refresh/rescan/proofs/build: the
                                           daemon did not answer — check it
@@ -1107,6 +1423,26 @@ components:
                                           wallet history; another rescan
                                           while the file is still there
                                           leaves the same tree in place
+          -29212 DAEMON_GRANT_REFUSED     any daemon operation: the daemon
+                                          refused the call as outside this
+                                          wallet's grant (CORE_RPC_VERSION
+                                          4.0); the same call on the same
+                                          connection repeats the refusal.
+                                          Connect with a key that holds the
+                                          grant, or to your own node
+          -29213 DAEMON_PEER_CHECK_FAILED any daemon operation: something
+                                          other than this account's node
+                                          answers at "this computer"'s
+                                          rendezvous. A security failure:
+                                          the wallet did not connect and
+                                          does not retry
+          -29214 DAEMON_IS_A_SERVICE      any daemon operation: this
+                                          computer's node runs as a
+                                          service. data: {"view": address
+                                          or null}; view is the service's
+                                          view listener, the daemon-address
+                                          to set; null when it has none.
+                                          Nothing was dialled
           -29300 PROOF_MALFORMED          check_*: proof string failed
                                           Bech32m decode, carried the wrong
                                           HRP, its wire framing did not
@@ -1477,21 +1813,28 @@ components:
                                           (the -29528 posture, for serving)
           -29534 SHARD_STILL_OPEN         get_shard_view: the shard has not
                                           closed, so it has no view yet (the
-                                          daemon's -24). A viewer shows
-                                          "still open", not a picture
+                                          daemon's shard.open). A viewer
+                                          shows "still open", not a picture
           -29535 SHARD_UNAVAILABLE        get_shard_view: the shard is closed
                                           and no holder served its body on
-                                          this attempt (the daemon's -22).
-                                          Transient — retry later. A viewer
-                                          shows "could not be retrieved"
+                                          this attempt (the daemon's
+                                          shard.unavailable). Transient —
+                                          retry later. A viewer shows "could
+                                          not be retrieved"
           -29536 SHARD_VIEW_NOT_OFFERED   get_shard_view: this daemon does not
                                           serve shard views. data.cause is
-                                          "restricted" (the method is
-                                          admin-only and the wallet reached a
-                                          public listener — point it at its
-                                          own node) or "skeleton_absent" (the
-                                          daemon's store holds no archival
-                                          skeleton, SV-D9). Not transient
+                                          "restricted" (the call is outside
+                                          the wallet's grant there — point it
+                                          at its own node) or "tor_off" (the
+                                          daemon runs with Tor
+                                          off and has no client to fetch a
+                                          shard through). Not transient
+          -29537 SHARD_VIEW_BUSY          get_shard_view: the daemon fetches
+                                          one shard at a time for bounded
+                                          callers and was already fetching
+                                          one (bound.shard); a view it
+                                          already held would have answered.
+                                          Transient — retry shortly
           -29800 MSG_SIG_VERIFY_FAILED    verify_message: well-formed,
                                           checksum-intact, and NOT a valid
                                           signature by that address over
@@ -1528,18 +1871,6 @@ components:
         u64 amount in atomic units, decimal string. Mirrors
         `shekyl_units::AtomicUnits`.
 
-    Feerate:
-      type: string
-      pattern: "^[1-9][0-9]*$"
-      description: >
-        Nonzero feerate in atomic units per **weight** unit, decimal string.
-        Per weight, NOT per byte: the two diverge by the Bulletproofs+
-        clawback once a transaction has more than two outputs, so sizing a
-        rate against the serialized length pins the wrong number. Mirrors the
-        `NonZeroU64` inside `shekyl_engine_core::FeePriority::Custom` — a rate,
-        NOT an amount, so it is distinct from `AtomicUnits` and forbids "0"
-        (the pattern excludes zero and leading zeros).
-
     Hex32:
       type: string
       pattern: "^[0-9a-f]{64}$"
@@ -1560,28 +1891,20 @@ components:
         formality.
 
     FeePriority:
+      type: string
+      enum: [economy, standard, high]
       description: >
-        Mirrors `shekyl_engine_core::FeePriority`. Named tiers resolve to a
-        feerate via the daemon fee estimate at build time — never hardcoded
-        multipliers — and the snapshot must be well-formed (monotonic
-        tiers, no named tier above the era-maximum absolute cap;
-        -29109 otherwise).
-        `custom` pins atomic units per weight unit (see `Feerate` — per
-        weight, not per byte), bypassing the named tiers
-        but not the policy they obey: it must sit at or above the
-        snapshot's economy floor and at or below the same absolute cap
-        (-32602 otherwise — a `custom` rate is the caller's parameter,
-        not a daemon defect). There is no `custom`-only relative
-        ceiling, so `custom` can always express the snapshot's own
-        `PRIORITY` rate, or a little more.
-      oneOf:
-        - type: string
-          enum: [ECONOMY, STANDARD, PRIORITY]
-        - type: object
-          required: [custom]
-          properties:
-            custom:
-              $ref: "#/components/schemas/Feerate"
+        The fee tier: one of the ladder's three rungs, lowercase (IG-Q52;
+        `shekyl_economics::FeePriority`, the one definition). Each resolves
+        to a feerate from the daemon's fee snapshot at build time — never a
+        hardcoded multiplier — and the snapshot must be well-formed
+        (monotonic tiers, no tier above the era-maximum absolute cap;
+        -29109 otherwise). Anything else is refused -32602, naming the
+        set: an uppercase name, and a rate of the caller's own. There is no
+        per-wallet rate: the fee is cleartext on chain, and a wallet paying
+        a rate of its own choosing marks itself, where one paying a tier
+        hides in that tier's cohort (`FEE_LADDER_DERIVATION.md` W3; Rick,
+        2026-11-15).
 
     HybridSignature:
       type: object
@@ -1618,7 +1941,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         restore_height_hint:
           type: integer
           format: int64
@@ -1641,39 +1964,28 @@ components:
       required: [wallet]
       description: >
         On success the wallet is open. Backup material is returned exactly
-        once: BIP-39 `mnemonic` on mainnet/stagenet, or `raw_seed_hex` on
-        testnet (32-byte entropy, lowercase hex). Clients must persist the
-        backup before discarding the response; the server does not re-emit it.
+        once: the wallet's 24-word BIP-39 `mnemonic`, on every network
+        (NETWORK_IDENTITY.md NI-R7). Clients must persist the backup before
+        discarding the response; the server does not re-emit it.
       properties:
         wallet:
           $ref: "#/components/schemas/WalletHandle"
         mnemonic:
           type: string
           description: >
-            24-word BIP-39 English mnemonic (mainnet/stagenet). Absent on
-            testnet. Equally secret with the master seed — never log.
-        raw_seed_hex:
-          type: string
-          pattern: "^[0-9a-f]{64}$"
-          description: >
-            32-byte raw seed as lowercase hex (testnet only). Absent on
-            mainnet/stagenet.
+            24-word BIP-39 English mnemonic: the spelling of the wallet's
+            32-byte seed. Equally secret with the seed — never log.
 
     RestoreWalletParams:
       type: object
       required: [name, password, mnemonic]
       description: >
         Recreate a wallet from its seed backup (WI-RPC-2a). The name must
-        not collide with an existing wallet file (-29002). Seed format is
-        NETWORK-GOVERNED, mirroring create's output: mainnet/stagenet
-        take the 24-word BIP-39 mnemonic; testnet takes the 32-byte raw
-        seed as 64-char hex (exactly CreateWalletResult.raw_seed_hex) —
-        ratified through the WI-RPC-2a high-review pass 2026-07-23;
-        contract reconciled to the shipped lifecycle.rs behavior
-        2026-07-24 (the earlier "testnet refuses with -32602" text
-        contradicted dev). Format failures refuse with -32602; the
-        invalid-seed error messages are stable and never reflect the
-        supplied material.
+        not collide with an existing wallet file (-29002). Every network
+        takes the wallet's 24-word BIP-39 mnemonic, exactly
+        CreateWalletResult.mnemonic (NETWORK_IDENTITY.md NI-R7). Anything
+        else refuses with -32602; the error message is stable and never
+        reflects the supplied material.
       properties:
         name:
           type: string
@@ -1683,10 +1995,8 @@ components:
         mnemonic:
           type: string
           description: >
-            Network-governed seed material: 24-word BIP-39 English
-            mnemonic (mainnet/stagenet) or 64-hex raw seed (testnet),
-            from CreateWalletResult. Equally secret with the master
-            seed — never log.
+            The wallet's 24-word BIP-39 English mnemonic, from
+            CreateWalletResult. Equally secret with the seed — never log.
         restore_height:
           type: integer
           format: int64
@@ -1699,8 +2009,7 @@ components:
           type: string
           default: en
           description: >
-            BIP-39 wordlist language of the supplied mnemonic
-            (mainnet/stagenet path only; ignored for testnet raw seeds).
+            BIP-39 wordlist language of the supplied mnemonic.
 
     RestoreWalletResult:
       type: object
@@ -1853,22 +2162,61 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, unlocked, pending, unspendable]
+      required: [balance, spendable, incoming, outgoing, unspendable]
       description: >
-        Staking is first-class (locked JSON shape). As of WI-RPC-5 the
-        staking fields carry live values projected from the same
-        authoritative staking view `get_staked_balance` reads — never the
-        StakingBlock hint. For a non-staker wallet all staking fields are
-        genuinely "0" (there is nothing staked), which is a true zero, not
-        a placeholder. `staked` and `claimable_rewards` are ABSENT
-        (never "0") when the wallet's sealed staking state cannot be
-        read: the liquid fields stay authoritative while the staking
-        projection degrades, and absence is structurally distinct from a
-        zero — a client must render "staking unavailable", not
-        "nothing staked".
+        The balance and each of its legs once (A17; Rick, 2026-11-15).
+        balance = spendable + incoming; no other field is a sum
+        of others. outgoing and unspendable are beside the balance, never
+        in it, and so are the staking fields. An in-flight send's inputs
+        are in no leg: their value is that send's outgoing plus its
+        change. The tree rebuild is the wallet's state, not the money's:
+        money spendable by the rule stays in spendable while the wallet's
+        membership data catches up, and a send in that window is refused
+        -29111. Staking is first-class: `staked` and `claimable_rewards`
+        carry live values projected from the same staking view
+        `get_staked_balance` reads, genuinely "0" for a non-staker, and
+        ABSENT (never "0") when the wallet's sealed staking state cannot
+        be read — the ledger's legs stay authoritative while the staking
+        projection degrades, and a client must render "staking
+        unavailable", not "nothing staked".
       properties:
-        liquid:
+        balance:
           $ref: "#/components/schemas/AtomicUnits"
+          description: spendable + incoming.
+        spendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            What a send could use at the wallet's synced tip: outputs not
+            spent, not unspendable, not under an in-flight
+            send, and in the tree of the reference block the wallet
+            anchors to. The balance says spendable exactly when a build
+            can select the money.
+        incoming:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Received outputs not yet spendable by that rule, plus the
+            change of each in-flight send of this wallet, from dispatch
+            until the change output is scanned (from then it is a received
+            output, counted by the rule).
+        incoming_wait:
+          type: integer
+          minimum: 0
+          description: >
+            Blocks until the soonest on-chain incoming output becomes
+            spendable. ABSENT, not 0, when no incoming output is on chain
+            (only change in flight, or nothing incoming).
+        outgoing:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Σ (recipients + fee) of this wallet's in-flight sends. Beside
+            the balance.
+        unspendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Money in received-but-unspendable outputs (`get_transfers`
+            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
+            on chain and retained, never spendable by this wallet. Beside
+            the balance. Always present; `"0"` is a true zero.
         staked:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1877,9 +2225,8 @@ components:
             `get_staked_balance`'s two bonded legs. The legs stay separate
             on that method; this scalar exists for the one-glance balance
             surface. Absent when the staking seal is unreadable (see the
-            schema description).
-        unlocked:
-          $ref: "#/components/schemas/AtomicUnits"
+            schema description). Beside the balance: staked money is spent
+            from this wallet.
         claimable_rewards:
           $ref: "#/components/schemas/AtomicUnits"
           description: >
@@ -1890,15 +2237,6 @@ components:
             quantity exists in the archival design (claims are engine-side
             automation). Absent exactly when `staked` is (unreadable
             staking seal — degrade, never a fabricated zero).
-        pending:
-          $ref: "#/components/schemas/AtomicUnits"
-        unspendable:
-          $ref: "#/components/schemas/AtomicUnits"
-          description: >
-            Money in received-but-unspendable outputs (`get_transfers`
-            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
-            on chain and retained, never spendable by this wallet. Counted
-            in no other field. Always present; `"0"` is a true zero.
 
     GetPrimaryAddressParams:
       type: object
@@ -1992,10 +2330,26 @@ components:
 
     SubmitPendingTxResult:
       type: object
-      required: [tx_hash, verdict]
+      required: [tx_hash, verdict, verdict_saved]
+      description: >
+        Also tx_resend's result. The send was saved before its bytes left
+        (A19): its record — the signed bytes, the retained tx secret, the
+        inputs its lock holds — is on disk before the daemon sees it, and a
+        save that fails, or whose durability is not confirmed, sends nothing
+        (-29120, -29128..-29134, one code per cause). What the daemon's verdict
+        changed is saved before this reply; verdict_saved says whether that
+        second save succeeded.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
+        verdict_saved:
+          type: boolean
+          description: >
+            false when the send went out and stands but saving what its
+            verdict changed failed (the cause is in the wallet's log). The
+            send is not undone; the next successful save writes it, and if
+            the wallet stops first the send is listed by tx_alarm when it
+            reopens (cause earlier-session).
         verdict:
           type: string
           enum: [ACCEPTED, ALREADY_IN_POOL, ALREADY_IN_CHAIN]
@@ -2050,6 +2404,77 @@ components:
           type: string
           enum: [ABANDONED]
           description: The row's resulting state (always ABANDONED).
+
+    TxAlarmParams:
+      type: object
+      description: >
+        `tx_alarm` (A19; DAEMON_SUBMIT_VERDICT.md §5.3 rung 2, "a human
+        decides") takes no parameters.
+
+    TxAlarmResult:
+      type: array
+      description: >
+        The held sends that need the user's decision, oldest first: every
+        held send dispatched before this session (a restart crossed its
+        verdict, so resending it — perhaps to a different daemon — is the
+        user's decision, never the wallet's), and every one the wallet's
+        watchdog has alarmed on in this session. Derived from the saved
+        send records each time; nothing about the alarm is stored. The
+        choices are tx_resend and abandon_tx; a send that confirms leaves
+        the list on the next refresh.
+      items:
+        $ref: "#/components/schemas/TxAlarmEntry"
+
+    TxAlarmEntry:
+      type: object
+      required: [id, alarm, sent_height]
+      properties:
+        id:
+          $ref: "#/components/schemas/Hex32"
+        alarm:
+          type: string
+          enum:
+            - earlier-session
+            - overdue
+            - untracked
+            - published-past-lookback
+            - peerless
+            - offline
+            - reference-stale
+            - bytes-missing
+          description: >
+            Why it needs a decision. earlier-session: sent before this
+            session. overdue: the daemon holds it past its own publication
+            budget. untracked: pool-resident with no record of publishing
+            it. published-past-lookback: published and unmined past the fee
+            ladder's lookback. peerless: the daemon has no peers. offline:
+            the daemon was started offline. reference-stale: the daemon
+            refused the bytes for a stale reference; they cannot be offered
+            again as built, and rebuilding is the user's decision.
+            bytes-missing: the record holds no bytes to resend.
+        sent_height:
+          type: integer
+          format: int64
+          description: The wallet's synced height when the send left.
+
+    TxResendParams:
+      type: object
+      required: [id]
+      description: >
+        `tx_resend` (A19): resend a held send's saved bytes to the wallet's
+        daemon, by the user's decision, and answer the daemon's verdict.
+        The bytes are exactly those that left at dispatch (same id; the
+        daemon dedups), so the resend is privacy-neutral and doubles as the
+        status query. From here the session owns the send: the wallet's
+        own same-bytes resubmission applies to it again. The result is
+        SubmitPendingTxResult; a refusal is -29106 with the same data as
+        submit's — a terminal refusal also releases the send's input locks,
+        since a definite refusal proves the bytes are in neither pool nor
+        chain — and no verdict is -29107. -29121 TX_NOT_HELD, -29122
+        TX_BYTES_MISSING.
+      properties:
+        id:
+          $ref: "#/components/schemas/Hex32"
 
     SetTxNoteParams:
       type: object
@@ -2220,7 +2645,7 @@ components:
             (`FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`), so no spend of it
             can ever be proven; the money is on chain, the row is retained,
             and `get_balance.unspendable` totals it. `unspendable_reason`
-            names which half failed. Never flips: a rescan re-derives the
+            names which check failed. Never flips: a rescan re-derives the
             same verdict from the same chain bytes.
 
 
@@ -2234,14 +2659,28 @@ components:
           format: int64
         unspendable_reason:
           type: string
-          enum: [PQC_LEAF_MISMATCH, PQC_LEAF_ENTRY_ABSENT]
+          enum:
+            - PQC_LEAF_MISMATCH
+            - PQC_LEAF_ENTRY_ABSENT
+            - MULTISIG_ENTRY_ABSENT
+            - MULTISIG_GROUP_SIZE
+            - MULTISIG_HASHES_UNDECRYPTABLE
+            - MULTISIG_MEMBER_DECAP
+            - MULTISIG_MEMBER_KEY_HASH
+            - MULTISIG_DUPLICATE_KEY_HASH
+            - MULTISIG_LEAF_MISMATCH
           description: >
             Present exactly when `state` is UNSPENDABLE. PQC_LEAF_MISMATCH:
             the published `0x07` entry (`CM ‖ record`) is not this wallet's
             derivation for the output. PQC_LEAF_ENTRY_ABSENT: the
             transaction carries no `0x07` entry for the output (a shape
             consensus refuses; reachable only from a non-consensus block
-            source).
+            source). The MULTISIG_* values are the same fact for a group
+            wallet, one value per check: the `0x0D` entry is missing, it
+            names a different group size, its key hashes do not decrypt,
+            this member's ciphertext does not open, this member's key hash
+            does not match, two key hashes are the same hash, or the leaf
+            does not commit to the decrypted hashes.
         attribution:
           allOf:
             - $ref: "#/components/schemas/ReceiveAttribution"
@@ -2368,7 +2807,7 @@ components:
           $ref: "#/components/schemas/CapabilityMode"
         network:
           type: string
-          enum: [MAINNET, TESTNET, STAGENET]
+          enum: [MAINNET, TESTNET, STAGENET, REGTEST]
         address:
           type: string
         wallet_height:
@@ -2406,6 +2845,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
         reorg_fork_height:
           type: integer
           format: int64
@@ -2449,6 +2889,7 @@ components:
         synced_height:
           type: integer
           format: int64
+          description: The wallet's height after the scan, as get_height's wallet_height.
 
     # ── Node info ────────────────────────────────────────────────────
     GetHeightParams:
@@ -2462,13 +2903,21 @@ components:
         wallet_height:
           type: integer
           format: int64
-          description: Wallet synced height; always present (local state).
+          description: >-
+            Blocks the wallet has scanned through, counted like
+            daemon_height: 0 before the first scan, the newest scanned
+            block's height plus one after it, so a synced wallet equals
+            daemon_height. Always present (local state). refresh's and
+            rescan_blockchain's synced_height, and get_wallet_info's
+            wallet_height, are this number.
         daemon_height:
           type: integer
           format: int64
           nullable: true
           description: >-
-            Daemon chain height, or null when the daemon is unreachable. The
+            The daemon's block count: its `chain_height` reply (the tip's
+            own number) plus one, as shekyl-rpc-client's `get_height`
+            computes it. null when the daemon is unreachable. The
             wallet_height is still returned in that case so an offline or
             still-syncing node does not hide the wallet's own status.
 
@@ -2482,7 +2931,11 @@ components:
       properties:
         version:
           type: string
-          description: shekyl-wallet-rpc semver.
+          description: >-
+            The release this shekyl-wallet-rpc was built as, in the daemon's
+            spelling (3.1.0-alpha.11-release from a tagged build, the commit
+            in place of "release" otherwise). A bare cargo build is told no
+            release and reports 3.1.0-unknown.
         api_version:
           type: integer
           description: >
@@ -2716,8 +3169,7 @@ components:
 
     GetDefaultFeePriorityResult:
       type: object
-      required:
-        [default_priority, economy_fee, standard_fee, priority_fee, tree_depth]
+      required: [economy, standard, high, tree_depth]
       description: >
         One daemon fee snapshot + the same converge fixpoint the build path
         runs, per named tier. The quote is gated by the same snapshot
@@ -2726,15 +3178,15 @@ components:
         -29102, and a snapshot that answered but was *refused* is
         -29109 (both the same codes the build path uses).
       properties:
-        default_priority:
-          type: string
-          enum: [STANDARD]
-        economy_fee:
+        economy:
           $ref: "#/components/schemas/AtomicUnits"
-        standard_fee:
+          description: The converged fee at the economy rung for this shape.
+        standard:
           $ref: "#/components/schemas/AtomicUnits"
-        priority_fee:
+          description: The converged fee at the standard rung.
+        high:
           $ref: "#/components/schemas/AtomicUnits"
+          description: The converged fee at the high rung.
         tree_depth:
           type: integer
 
@@ -2858,8 +3310,8 @@ components:
             sealed frontier, exclusive): every block below it is scanned.
             `null` when the wallet has never scanned as a staker, which is
             an answer, not something withheld. Compare with an in_flight
-            entry's funds_return_at: those funds return once this is
-            greater than it.
+            entry's funds_return_at: what that entry holds (`reserved`)
+            returns once this is greater than it.
         recovery_pending_reopen:
           type: boolean
           description: >
@@ -2951,6 +3403,7 @@ components:
         - dispatched_at_height
         - attempts
         - funds_return_at
+        - reserved
         - reason
       description: >
         One staking record in flight. `kind` and `state` are open strings
@@ -2971,19 +3424,22 @@ components:
             Values at this contract version. `pending`: saved, not yet
             sent. `dispatched`: sent and still able to land. `refused`: a
             node refused it and its end date has not passed. Not final:
-            nothing more is sent, its funds stay set aside until
-            funds_return_at, and a stake that lands before then takes the
-            confirmed path, because only the chain can say whether it
-            landed; the refusal becomes an outcome only at the end date.
-            `expired`: the end date has passed, so the transaction can
-            never be mined; its funds return at funds_return_at, and a
-            record a node refused keeps its reason. `held`: a stake past its end date whose every
-            reserved input has been spent with no confirmation seen; it is
-            kept rather than withdrawn, so a stake that did land keeps its
-            place, nothing is returned because nothing reserved is left,
-            and the wallet raises an integrity alarm. A record that lands
-            leaves the list without an outcome; its effect shows in the
-            balance.
+            nothing more is sent, and the record stays until
+            funds_return_at, because only the chain can say whether it
+            landed. What it still holds is `reserved`, which is "0" when
+            the record reserved nothing, as a zero-fee claim does. A stake
+            that lands before the end date takes the confirmed path; the
+            refusal becomes an outcome only at the end date. `expired`:
+            the end date has passed, so the transaction can never be
+            mined; what the record holds (`reserved`) returns once
+            pscan_synced_height passes funds_return_at, and a record a
+            node refused keeps its reason. `held`: a stake past its end
+            date whose every reserved input has been spent with no
+            confirmation seen; it is kept rather than withdrawn, so a
+            stake that did land keeps its place, nothing is returned
+            because nothing reserved is left, and the wallet raises an
+            integrity alarm. A record that lands leaves the list without
+            an outcome; its effect shows in the balance.
         dispatched_at_height:
           type: integer
           format: int64
@@ -3001,9 +3457,21 @@ components:
           nullable: true
           description: >
             For `refused` and `expired`: the end date, the last height at
-            which the transaction could be mined. Its funds return once
-            pscan_synced_height is greater than it. `null` in the other
+            which the transaction could be mined. What the record holds
+            (`reserved`) returns once pscan_synced_height is greater than
+            it. `null` in the other
             states, where no return is expected.
+        reserved:
+          oneOf:
+            - $ref: "#/components/schemas/AtomicUnits"
+            - type: "null"
+          description: >
+            What the record still holds (WR-Q6): the amounts of its
+            reserved inputs that are still unspent. A partly spent
+            reservation holds what is left. "0" when nothing is held: a
+            `held` stake, whose every reserved input is spent, and an
+            empty reservation. `null` when the staking scan has not run
+            yet, so what is held cannot be read; it is not "0".
         reason:
           type: string
           nullable: true
@@ -3263,7 +3731,9 @@ components:
         irreversible: -29521 means the seal was RELEASED (retry at will);
         -29522 means it is HELD funds-safe until it lands or its end date
         passes (do not re-fire; staking_info names the height) — see the
-        code table.
+        code table. A seal saved but not confirmed on disk sent nothing:
+        it was removed, and the save's own code answers by cause (-29120,
+        -29128..-29134), after which a retry exits the same bond.
       properties:
         tx_hash:
           $ref: "#/components/schemas/Hex32"
@@ -3865,7 +4335,7 @@ components:
         bytes a daemon can read, so every view — including a shard this
         wallet itself serves — is answered by the wallet's configured
         daemon, which fetches the body from a holder
-        (`request_archival_shard`, SHARD_VIEW_FETCH.md SV-D3) and folds the
+        (`shard_fetch`, SHARD_VIEW_FETCH.md SV-D3) and folds the
         view hash (SV-D1). Rendering is the viewer's: the result carries
         exactly the renderer's aggregate fields. No size or format
         parameter — a picture is never on this wire.

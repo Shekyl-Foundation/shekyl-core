@@ -36,6 +36,9 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use curve25519_dalek::Scalar;
+// Valgrind client requests exist only where the Callgrind benches
+// measure (the crate's `cfg(target_os = "linux")` dev-dependency).
+#[cfg(target_os = "linux")]
 use gungraun::client_requests::callgrind as callgrind_cr;
 use gungraun::{
     library_benchmark, library_benchmark_group, main, Callgrind, EntryPoint, LibraryBenchmarkConfig,
@@ -71,7 +74,6 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         source_ciphertext: None,
         output_handle: None,
         eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
-        frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
@@ -98,7 +100,7 @@ fn build_ledger(n: usize) -> WalletLedger {
         transfers,
         tip: BlockchainTip {
             synced_height: shekyl_types::BlockHeight::from_raw(tip_height),
-            tip_hash: Some([0xAB; 32]),
+            tip_hash: Some(shekyl_types::BlockHash::from_bytes([0xAB; 32])),
         },
         reorg_blocks: w.ledger.reorg_blocks.clone(),
     };
@@ -113,8 +115,10 @@ fn build_bytes(n: usize) -> Vec<u8> {
 /// count is the closure body, not setup. Works if inlined: the
 /// client-request sequences are position-based.
 fn measure<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "linux")]
     callgrind_cr::start_instrumentation();
     let out = f();
+    #[cfg(target_os = "linux")]
     callgrind_cr::stop_instrumentation();
     out
 }

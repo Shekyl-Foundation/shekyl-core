@@ -3,10 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The typed read and the one renderer (`TSR-Q12`, `TSR-Q13`).
-//!
-//! The wire carries the variants. [`render`] is the only place those
-//! variants become words.
+//! The typed read (`TSR-Q12`). Its words are `shekyl_tor_status`'s: the
+//! supervisor's snapshot puts this read in the wire's shape, and that
+//! crate's renderer is the one place it becomes words (`TSR-Q13`).
 
 /// The connector settings the posture is read from. Not a config key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +111,87 @@ pub enum Shown {
     Degraded,
 }
 
+/// Why this node's onion is not reachable (`TOR_SUPERVISOR.md` §4.4,
+/// Service class).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboundCause {
+    /// The probe of this node's own onion did not arrive within its bound.
+    ProbeTimedOut,
+    /// More than half of the latest round's directories refused its upload
+    /// (`HS_DESC FAILED REASON=UPLOAD_REJECTED`): they hold a copy whose
+    /// revision counter is not below this one's. A republish cannot help
+    /// (§4.5, "Refused rounds").
+    UploadsRefused,
+    /// This computer's clock is behind the consensus's `valid-after` by more
+    /// than the tolerance (§4.2; Rick, 2026-11-01). Tor numbers each
+    /// descriptor from its own clock, so the directories refuse what this
+    /// node uploads. `behind` is that lag, a lower bound, and
+    /// [`Status::clock_behind`] is this field.
+    ClockBehind {
+        /// How far behind `valid-after` the wall clock was, at the latest
+        /// sample that still named it.
+        behind: std::time::Duration,
+    },
+    /// The probe arrived through this node's own copy of the descriptor,
+    /// but the directories its uploads reached no longer had it (§4.5, the
+    /// directory check).
+    DescriptorNotFound,
+}
+
+/// Can peers reach this node's onion (`TOR_SUPERVISOR.md` §4.1), in the
+/// caller's clock. Beside the outbound projection, never folded into
+/// [`Cause`]: a blocked link and an unreachable onion can stand together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inbound {
+    /// No onion is offered in this posture, or none has been published yet.
+    NotOffered,
+    /// The onion is published, and no probe has arrived on this Tor yet;
+    /// since `since`, in the core's clock.
+    Publishing {
+        /// When the onion became published, or the facet unknown again.
+        since: u64,
+    },
+    /// The last probe arrived, at `evidence_at`.
+    Reachable {
+        /// When the probe's nonce came back.
+        evidence_at: u64,
+    },
+    /// Not reachable since `since`, for `cause`. The onion is being
+    /// published again.
+    Unreachable {
+        /// Why.
+        cause: InboundCause,
+        /// When the facet went down.
+        since: u64,
+    },
+}
+
+/// Tor's `CLOCK_SKEW` figure, in seconds. Negative is behind the network,
+/// positive is ahead. Zero is said ahead: Tor did not report a direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportedSkew {
+    /// `SKEW=`: Tor measured the difference.
+    Measured(i64),
+    /// `MIN_SKEW=`: Tor gave a lower bound, not a measure.
+    AtLeast(i64),
+}
+
+impl ReportedSkew {
+    /// The reported difference, in seconds.
+    #[must_use]
+    pub const fn seconds(self) -> i64 {
+        match self {
+            Self::Measured(seconds) | Self::AtLeast(seconds) => seconds,
+        }
+    }
+
+    /// Behind the network. Zero and ahead are not.
+    #[must_use]
+    pub const fn is_behind(self) -> bool {
+        self.seconds() < 0
+    }
+}
+
 /// Why the phase is what it is. The detail is the variant (`TSR-Q12`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cause {
@@ -132,8 +212,6 @@ pub enum Cause {
     },
     /// The data directory could not be used (§5, "Data directory unusable").
     DirectoryUnusable {
-        /// The directory, the daemon's data directory Tor's lives under.
-        path: std::path::PathBuf,
         /// The shortfall, when the pre-spawn check found too little space.
         /// `None` when the directory itself could not be created or used.
         space: Option<Space>,
@@ -142,11 +220,15 @@ pub enum Cause {
     ExternalBlocked,
     /// No directory Tor knows answered.
     DirectoryUnreachable,
-    /// A source reported the clock this far off, in seconds.
+    /// Tor reported this computer's clock off by [`ReportedSkew`].
     ClockSkew {
-        /// The reported difference, in seconds.
-        seconds: i64,
+        /// Tor's figure.
+        skew: ReportedSkew,
     },
+    /// Tor logged relays' certificates as expired or not yet valid, from
+    /// enough distinct relays within the window that the clock, not a relay,
+    /// is the cause (§4.2). Tor stated no offset.
+    CertificatesOutOfDate,
     /// Tor hit the open-file limit.
     TooManyFiles {
         /// How many sockets Tor reported open.
@@ -156,6 +238,15 @@ pub enum Cause {
     ReplyLate,
     /// The consensus does not recommend this Tor.
     DangerousVersion,
+    /// Tor refused to publish this node's onion again after the onion was
+    /// found unreachable (§4.4: a Service remedy whose control command
+    /// failed escalates to a respawn).
+    OnionRefused,
+    /// Tor reported a clock jump during its bootstrap, and then neither its
+    /// percent nor the bytes it read moved for the policy's bound: its
+    /// retries were scheduled on the clock that was wrong. It is started
+    /// again (§4.4).
+    StrandedAfterClockJump,
 }
 
 /// Free space under Tor's data directory against what a spawn needs.
@@ -167,16 +258,37 @@ pub struct Space {
     pub needed: u64,
 }
 
-/// Whether the node is syncing, and over what (`TSR-Q12`).
-///
-/// `clearnet` is the configured clearnet connector and `tor` is health.
-/// A chain-sync feed replaces those two reads in place.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether the node is syncing, and over what (`TSR-Q12`): each connector
+/// that holds a session now. Every session runs the timed sync, so one
+/// held is the node in sync with a peer over that connector. Read live
+/// from the session layer, never from the configuration: a clearnet that
+/// is on and that no peer accepts carries nothing (alpha.11 finding 9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Syncing {
-    /// Syncing over clearnet.
+    /// A clearnet session is held.
     pub clearnet: bool,
-    /// Syncing over Tor.
+    /// A Tor session is held.
     pub tor: bool,
+}
+
+/// The sessions each connector holds, as the session layer reports them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sessions {
+    /// Clearnet sessions whose handshake has finished.
+    pub clearnet: u32,
+    /// Tor sessions whose handshake has finished.
+    pub tor: u32,
+}
+
+impl Sessions {
+    /// What the node syncs over: each connector that holds one.
+    #[must_use]
+    pub const fn syncing(self) -> Syncing {
+        Syncing {
+            clearnet: self.clearnet > 0,
+            tor: self.tor > 0,
+        }
+    }
 }
 
 /// How a bootstrap is going, as of the last progress line (`TOR_SUPERVISOR.md`
@@ -212,14 +324,21 @@ impl BootstrapLine {
     /// count was reported, or the quiet stretch is shorter than the window.
     #[must_use]
     pub fn pace(self) -> Option<BootstrapPace> {
-        BootstrapReading::classify(Some(self)).pace()
+        if self.held_for < self.span {
+            return Some(BootstrapPace::Advancing);
+        }
+        match self.received {
+            Some(0) if self.window >= self.span => Some(BootstrapPace::Stalled),
+            Some(arrived) if arrived > 0 => Some(BootstrapPace::SlowButNormal),
+            _ => None,
+        }
     }
 }
 
 /// How a bootstrap is going, in one word a client can show (Rick,
 /// 2026-10-24). A description, never a cause: it stands beside
 /// [`Status::cause`], so "stalled" while Tor reports outbound blocked shows
-/// both the stall and the fix. [`render`] composes them.
+/// both the stall and the fix. `shekyl_tor_status::render` composes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootstrapPace {
     /// The percent moved within the window.
@@ -275,6 +394,12 @@ impl ProgressWindow {
         }
     }
 
+    /// When the percent last changed, in the caller's clock.
+    #[must_use]
+    pub const fn moved_at(&self) -> u64 {
+        self.progress_at
+    }
+
     /// The last percent a sample or a bootstrap notice reported.
     #[must_use]
     pub const fn percent(&self) -> u8 {
@@ -308,6 +433,15 @@ impl ProgressWindow {
             }
             self.marks.push_back(ReadMark { at: now, bytes });
         }
+        self.refresh(now);
+    }
+
+    /// The machine slept (§5, "Resumed from suspend"): the percent's hold
+    /// and the byte window start again from the wake, so the sleep reads as
+    /// neither a held percent nor a window with nothing arriving.
+    pub fn resumed(&mut self, now: u64) {
+        self.progress_at = now;
+        self.marks.clear();
         self.refresh(now);
     }
 
@@ -372,6 +506,18 @@ impl ProgressWindow {
     }
 }
 
+/// What the quiet line says (`TOR_SUPERVISOR.md` §4.2; Rick, 2026-11-15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TorQuiet {
+    /// Peers are known, the manager's onion-path reading has been impaired
+    /// since `since`, in nanoseconds on the core's clock, and a Tor dial
+    /// launched since failed. A reading, so the span is taken at the ask.
+    Unreached {
+        /// When the impaired reading was learned.
+        since: u64,
+    },
+}
+
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
@@ -381,6 +527,10 @@ pub struct Status {
     pub health: bool,
     /// The §4.3 projection.
     pub shown: Shown,
+    /// What the Tor behind the link carries now: the outbound facet, not
+    /// the projection. An onion peers cannot reach, or a cause that is not
+    /// an outbound one, leaves it carrying.
+    pub carriage: Carriage,
     /// The typed cause.
     pub cause: Cause,
     /// When `shown` last changed, in the caller's clock units.
@@ -401,10 +551,21 @@ pub struct Status {
     /// How the bootstrap is going, beside [`Self::cause`], never instead of
     /// it. Only while bootstrapping, once the first window has passed.
     pub pace: Option<BootstrapPace>,
-    /// How long no Tor connection has been open and none has opened, while
-    /// Tor runs, names no cause, and this node's Tor dials keep failing
-    /// (§4.2). A neutral fact for the posture line, never a cause.
-    pub tor_quiet: Option<std::time::Duration>,
+    /// The quiet line, while Tor runs and names no cause (§4.2): the
+    /// manager's onion-path reading is impaired, peers are known, and a Tor
+    /// dial launched since failed. A neutral fact, never a cause.
+    pub tor_quiet: Option<TorQuiet>,
+    /// Whether peers can reach this node's onion (§4.1). Its cause stands
+    /// beside [`Self::cause`], never instead of it.
+    pub inbound: Inbound,
+    /// Descriptor rounds this boot that were still open after five minutes:
+    /// uploads with neither `UPLOADED` nor `FAILED`, none of the events lost
+    /// on our side. Telemetry for the soak, never a cause (§10).
+    pub stuck_upload_rounds: u32,
+    /// How far this computer's clock is behind the consensus's
+    /// `valid-after` while [`InboundCause::ClockBehind`] stands: a lower
+    /// bound. `None` otherwise.
+    pub clock_behind: Option<std::time::Duration>,
 }
 
 /// `OwnTx` from the relay's hop-0 verdict and the connector settings.
@@ -447,296 +608,26 @@ fn install_cause(cause: &Cause) -> bool {
     )
 }
 
-/// The words for an install cause: a missing bundle, a refused pin, or no
-/// managed Tor on this platform.
-///
-/// [`render`] and the daemon's pin warning both speak these. `None` for
-/// every other cause, whose sentence reads the rest of a [`Status`]. The
-/// paths a missed discovery searched are not a cause field; the pin error
-/// carries them, and the warning prints that error beside this sentence.
-#[must_use]
-pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
-    match cause {
-        Cause::BundleMissing => Some("No Tor was found beside the daemon."),
-        Cause::PinRefused => {
-            Some("The Tor that was found failed its check, so it was not started.")
-        }
-        Cause::Unavailable => Some("This release has no Tor for this platform yet."),
-        Cause::None
-        | Cause::FailedStart
-        | Cause::Died { .. }
-        | Cause::DirectoryUnusable { .. }
-        | Cause::ExternalBlocked
-        | Cause::DirectoryUnreachable
-        | Cause::ClockSkew { .. }
-        | Cause::TooManyFiles { .. }
-        | Cause::ReplyLate
-        | Cause::DangerousVersion => None,
-    }
-}
-
-/// The line, classified once. [`BootstrapLine::pace`] and the bootstrap
-/// sentence both read this, so the word and the prose cannot disagree.
-enum BootstrapReading {
-    /// No line yet: the percent, and nothing about bytes.
-    Fetching,
-    /// The percent moved inside the span. Bytes are said only when some arrived.
-    Advancing {
-        arrived: Option<u64>,
-        window: std::time::Duration,
-    },
-    /// The percent held, and this many bytes arrived.
-    SlowButNormal {
-        arrived: u64,
-        held_for: std::time::Duration,
-        window: std::time::Duration,
-    },
-    /// A full span in which nothing arrived.
-    Stalled {
-        held_for: std::time::Duration,
-        window: std::time::Duration,
-    },
-    /// The percent held, and the bytes cannot be called.
-    Held { held_for: std::time::Duration },
-}
-
-impl BootstrapReading {
-    fn classify(line: Option<BootstrapLine>) -> Self {
-        let Some(line) = line else {
-            return Self::Fetching;
-        };
-        if line.held_for < line.span {
-            return Self::Advancing {
-                arrived: line.received.filter(|bytes| *bytes > 0),
-                window: line.window,
-            };
-        }
-        match line.received {
-            Some(0) if line.window >= line.span => Self::Stalled {
-                held_for: line.held_for,
-                window: line.window,
-            },
-            Some(arrived) if arrived > 0 => Self::SlowButNormal {
-                arrived,
-                held_for: line.held_for,
-                window: line.window,
-            },
-            _ => Self::Held {
-                held_for: line.held_for,
-            },
-        }
-    }
-
-    fn pace(self) -> Option<BootstrapPace> {
-        match self {
-            Self::Fetching | Self::Held { .. } => None,
-            Self::Advancing { .. } => Some(BootstrapPace::Advancing),
-            Self::SlowButNormal { .. } => Some(BootstrapPace::SlowButNormal),
-            Self::Stalled { .. } => Some(BootstrapPace::Stalled),
-        }
-    }
-
-    fn sentence(self, progress: u8) -> String {
-        let fetching = format!("Tor is fetching the network directory ({progress}%)");
-        match self {
-            Self::Fetching | Self::Advancing { arrived: None, .. } => format!("{fetching}."),
-            Self::Advancing {
-                arrived: Some(bytes),
-                window,
-            } => format!(
-                "{fetching}. {} arrived in the last {}.",
-                spoken_bytes(bytes),
-                spoken_duration(window)
-            ),
-            Self::SlowButNormal {
-                arrived,
-                held_for,
-                window,
-            } => format!(
-                "{fetching}, unchanged for {}. {} arrived in the last {}; a slow directory mirror can hold this for minutes.",
-                spoken_duration(held_for),
-                spoken_bytes(arrived),
-                spoken_duration(window)
-            ),
-            Self::Stalled { held_for, window } => format!(
-                "{fetching}, unchanged for {}. Nothing arrived in the last {}.",
-                spoken_duration(held_for),
-                spoken_duration(window)
-            ),
-            Self::Held { held_for } => {
-                format!("{fetching}, unchanged for {}.", spoken_duration(held_for))
-            }
-        }
-    }
-}
-
-/// The one renderer (`TSR-Q13`). Behaviour, then a named cause, then the
-/// bootstrap line, then the fixes, in the posture table's order.
-///
-/// The bootstrap line is its own clause. A named cause shows the phase as
-/// degraded, and the line is what still marks the bootstrap, so the stall
-/// follows the cause and its fix.
-#[must_use]
-pub fn render(status: &Status) -> String {
-    let mut text = behaviour(status);
-    if let Some(cause) = named_cause(status) {
-        append(&mut text, &cause);
-    } else if let Some(quiet) = quiet_sentence(status) {
-        append(&mut text, &quiet);
-    }
-    if speaks_bootstrap(status) {
-        append(
-            &mut text,
-            &BootstrapReading::classify(status.bootstrap).sentence(status.progress),
-        );
-    }
-    if !status.fixes.is_empty() {
-        append(&mut text, &fixes_sentence(&status.fixes));
-    }
-    text
-}
-
-/// The bootstrap sentence is said while the phase shows bootstrapping, and
-/// while a progress line is present.
-fn speaks_bootstrap(status: &Status) -> bool {
-    status.bootstrap.is_some() || status.shown == Shown::Bootstrapping
-}
-
-fn behaviour(status: &Status) -> String {
-    match status.own_tx {
-        OwnTx::AddressHiding => "Tor is carrying this node's traffic.".to_owned(),
-        OwnTx::Held => held_sentence(status.sync),
-        OwnTx::ClearnetOnly => "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.".to_owned(),
-        OwnTx::Offline => "This node is offline.".to_owned(),
-    }
-}
-
-fn append(text: &mut String, sentence: &str) {
-    text.push(' ');
-    text.push_str(sentence);
-}
-
-fn spoken_duration(duration: std::time::Duration) -> String {
-    let seconds = duration.as_secs();
-    if seconds < 60 {
-        format!("{seconds} s")
-    } else {
-        format!("{} min {} s", seconds / 60, seconds % 60)
-    }
-}
-
-fn spoken_bytes(bytes: u64) -> String {
-    // CLIPPY: a display figure; a byte count below 2^52 is exact in f64.
-    #[allow(clippy::cast_precision_loss)]
-    let value = bytes as f64;
-    if bytes < 1_000 {
-        format!("{bytes} bytes")
-    } else if bytes < 1_000_000 {
-        format!("{:.1} kB", value / 1e3)
-    } else {
-        format!("{:.1} MB", value / 1e6)
-    }
-}
-
-/// The `Held` sentence. The node is "waiting for Tor" only while the link
-/// is not usable; a held origin beside a usable link (no address-hiding peer
-/// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
-/// syncs over is read from `sync`, never assumed from the hold; the typed
-/// reason for the hold is `GS-C2`'s (IG-Q72).
-///
-/// [`render`] speaks this for a held status. The daemon's pin warning
-/// speaks it too, with `tor` false: the link is not up, and `clearnet` is
-/// the connector.
-#[must_use]
-pub fn held_sentence(sync: Syncing) -> String {
-    let syncing = match (sync.tor, sync.clearnet) {
-        (true, true) => "It is syncing over Tor and clearnet.",
-        (true, false) => "It is syncing over Tor.",
-        (false, true) => "It is syncing over clearnet.",
-        (false, false) => "It is not syncing.",
-    };
-    if sync.tor {
-        format!("This node is holding its own transactions. {syncing}")
-    } else {
-        format!("This node is waiting for Tor and holding its own transactions. {syncing}")
-    }
-}
-
-/// The quiet fact, said only when the bootstrap line is not. A running Tor
-/// that still shows as bootstrapping keeps the fetching sentence.
-fn quiet_sentence(status: &Status) -> Option<String> {
-    if speaks_bootstrap(status) {
-        return None;
-    }
-    status.tor_quiet.map(|quiet| {
-        format!(
-            "No connection through Tor is open, and none has opened in {}.",
-            spoken_duration(quiet)
-        )
-    })
-}
-
-/// The named cause. [`Cause::None`] is the absence of one: the bootstrap
-/// line and the quiet fact are [`render`]'s other clauses.
-fn named_cause(status: &Status) -> Option<String> {
-    match &status.cause {
-        Cause::None => None,
-        Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
-            install_sentence(&status.cause).map(str::to_owned)
-        }
-        Cause::FailedStart => Some("Tor did not start.".to_owned()),
-        Cause::Died { exit_code } => Some(died_sentence(status.respawn_count, *exit_code)),
-        Cause::DirectoryUnusable { path, space } => Some(match space {
-            Some(space) => format!(
-                "Tor's data directory {} has {} free and Tor needs {}. Free space there.",
-                path.display(),
-                spoken_bytes(space.available),
-                spoken_bytes(space.needed)
-            ),
-            None => format!("Tor's data directory {} could not be used.", path.display()),
-        }),
-        Cause::ExternalBlocked | Cause::DirectoryUnreachable => Some(
-            "This machine cannot reach the Tor network. Check the firewall or the network."
-                .to_owned(),
-        ),
-        Cause::ClockSkew { seconds } => Some(format!(
-            "The clock is off by {seconds} seconds. Check time sync."
-        )),
-        Cause::TooManyFiles { open } => Some(format!(
-            "Tor reached the open-file limit ({open} open). Raise the limit."
-        )),
-        Cause::ReplyLate => Some("Tor stopped answering and is being started again.".to_owned()),
-        Cause::DangerousVersion => {
-            Some("Upgrade Shekyl when a release updates the bundled Tor.".to_owned())
-        }
-    }
-}
-
-fn died_sentence(count: u32, exit_code: Option<i32>) -> String {
-    if count <= 1 {
-        return "Tor stopped and is being started again.".to_owned();
-    }
-    match exit_code {
-        Some(code) => format!(
-            "Tor has stopped {count} times. The last exit code was {code}. It is being started again."
-        ),
-        None => format!("Tor has stopped {count} times and is being started again."),
-    }
-}
-
-fn fixes_sentence(fixes: &[ManagedTorFix]) -> String {
-    let mut parts = Vec::new();
-    for fix in fixes {
-        parts.push(match fix {
-            ManagedTorFix::RestoreManaged => {
-                "Restore the bundled Tor, or name one that passes its check."
-            }
-            ManagedTorFix::Operator => "Or use a Tor you run yourself.",
-            ManagedTorFix::ClearnetOn => "Or turn clearnet on and keep Tor managed.",
-            ManagedTorFix::ClearnetOnly => {
-                "Or turn Tor off and send over the open network. Until the encrypted link is in place, that network is unencrypted."
-            }
-        });
-    }
-    parts.join(" ")
+/// What the Tor behind the link carries (`TSR-Q12`). The core reads it
+/// from the phase and the outbound facet, never from [`Shown`]: the
+/// projection shows an unreachable onion, or a cause that is no outbound
+/// one, as degraded while the link still carries everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carriage {
+    /// The outbound facet is usable: Tor runs, the route is installed, and
+    /// no outbound cause stands. The link carries traffic, and the node is
+    /// not waiting for Tor whatever its onion's reachability or a cause
+    /// such as a version warning says.
+    Carries,
+    /// Tor runs with its route installed, and an outbound cause stands: the
+    /// Tor that holds the open connections is still running, and a sentence
+    /// that it carries the traffic would contradict the cause that follows
+    /// (the VM suspend, 2026-10-30).
+    OpenOnly,
+    /// Tor is not running with its route installed: restarting,
+    /// bootstrapping a new process, or rebuilding after a clock jump. The
+    /// connections the earlier link held carry nothing, and the node is
+    /// held until Tor is back, as the verdict will say once the relay sees
+    /// the sessions close.
+    Gone,
 }

@@ -173,8 +173,9 @@ cross-stack delta is attempted.
 `shekyl-scanner` as a dev-dep.
 **Binaries.** `benches/balance.rs`, `benches/balance_iai.rs`.
 
-**What it measures.** `BalanceSummary::compute(&transfers,
-current_height)` over `N ∈ {100, 1000, 10000}`. The canonical
+**What it measures.** `BalanceSummary::compute(&transfers, horizon,
+&journal)` over `N ∈ {100, 1000, 10000}`, with an empty journal (nothing
+in flight). The canonical
 balance implementation lives in `shekyl-scanner`; the bench is hosted
 in `shekyl-engine-state` because the `TransferDetails` fixture
 builder is already there and duplicating it would split the
@@ -183,15 +184,20 @@ source-of-truth for the synthetic transfer shape.
 **Operation list — every step exercised in the hot loop.**
 
 - Iterate `&[TransferDetails]`.
-- For each transfer, classify into exactly one of:
-  `unlocked` | `locked_by_timelock` | `spent` | `frozen` |
-  `staked_total` | `staked_matured` | `staked_locked`.
-- Predicate evaluation per transfer:
-  - `td.spent` short-circuit.
-  - `td.frozen` short-circuit.
-  - `td.eligible_height <= current_height` (timelock).
-  - `td.staked` branch + `td.stake_lock_until` comparison.
-- Accumulate per-class running totals into `BalanceSummary` fields.
+- For each transfer, classify into exactly one state with the one
+  classifier (`TransferDetails::state`, A17): `spent` | `unspendable` |
+  `in flight` | `incoming` | `spendable`.
+- Predicate evaluation per transfer, in that precedence:
+  - `td.spent`, `td.unspendable` and the in-flight lock lookup
+    short-circuit.
+  - the reference rule: `in_tree_at_reference(td.eligible_height,
+    reference)` at the horizon's one reference block.
+- Accumulate per-class running totals in locals, and keep the least
+  eligible height among the incoming outputs.
+- After the walk: the wait at that least eligible height, once (the wait
+  never falls as the eligible height rises), and the in-flight sends'
+  outgoing and change. With a send in flight, one more pass first finds
+  the in-flight inputs a scan has spent; the empty journal skips it.
 - Return the summary.
 
 **Fixture shape.** Same `synthetic_transfer(seed, height)` builder as
@@ -199,10 +205,6 @@ source-of-truth for the synthetic transfer shape.
 
 - `spent = (seed & 0x7) == 0` — forces ~12.5% of entries through the
   spent short-circuit.
-- `frozen = (seed & 0xf) == 0` — forces ~6.25% through the frozen
-  short-circuit, and has overlap with `spent` (by design) so the
-  predicate ordering inside `compute` is exercised.
-- `staked = (seed & 0b11) == 0` — 25% staked.
 - `current_height = 1_000 + N/2` so roughly half of `eligible_height`
   comparisons fall on either side of the cutoff. This mirrors the
   "balanced classification spread" that `BM_balance_compute` in the
@@ -210,10 +212,10 @@ source-of-truth for the synthetic transfer shape.
   §`BM_balance_compute`).
 
 **Measurement boundary.** The inner closure is
-`BalanceSummary::compute(black_box(transfers), current_height)` with
-the return value swallowed by `black_box(...)`. For iai-callgrind,
+`BalanceSummary::compute(black_box(transfers), horizon, black_box(&journal))`
+with the return value swallowed by `black_box(...)`. For iai-callgrind,
 `build_transfers(N)` is the annotated `setup` and the measured region
-is `compute(&transfers, current_height)` only; the setup's
+is `compute(&transfers, horizon, &journal)` only; the setup's
 allocations and key-scalar multiplications do not count toward the
 reported instruction counts.
 
@@ -225,7 +227,7 @@ iai-callgrind six-metric block.
 over the same logical transfer shape. **Documented asymmetries:**
 
 - The Rust path evaluates a richer classification (six-way;
-  `unlocked`/`locked`/`spent`/`frozen`/`staked_*`). The C++ path
+  `spendable`/`incoming`/`in flight`/`unspendable`/`spent`). The C++ path
   evaluates a narrower spent/frozen/unlocked split. The Rust
   per-transfer cost is therefore expected to be modestly higher at
   equal `N`.
@@ -501,7 +503,7 @@ The criterion sibling keeps the production path (`scheme.sign(..)`,
 `keypair_generate()`, `OsRng` for BP+) because wall-clock averaging
 absorbs the rejection-sampling variance at the per-iteration level;
 only the instruction-count metric needs determinism. Both halves of
-the split are documented in §14 (Known gaps) because neither fully
+the split are documented in §18 (Known gaps) because neither fully
 exercises the production hedged-randomized sign path in a stable
 way — the criterion half measures it but with variance, the iai
 half measures a fips204-compliant deterministic variant.
@@ -531,7 +533,7 @@ curve-tree fixture is its own scope of work (the tree root is
 chain-dependent; synthesizing a valid fixture from scratch requires
 either a snapshot from the live daemon or a deterministic regtest
 chain of useful depth, neither of which is cheap). It is tracked as
-**§14 (Known gaps) below**. In the interim, a delta in this bench is
+**§18 (Known gaps) below**. In the interim, a delta in this bench is
 interpretable as a regression in **Bulletproofs+ or ML-DSA-65 only**;
 membership-proof cost is tracked separately once the fixture lands.
 
@@ -732,29 +734,48 @@ template above.
 
 ## 11. `crypto_bench_relay_admission_verify`
 
-**Crate.** `shekyl-ffi`.
+**Crate.** `shekyl-verify-cost`.
 **Binaries.** `benches/relay_admission_verify.rs` (criterion — NOT
 registered in the rolling baseline, see below),
-`benches/relay_admission_verify_iai.rs` (iai-callgrind, registered
+`benches/relay_admission_verify_iai.rs` (gungraun, registered
 as an iai-only row in `capture_rust_baseline.sh`).
 **Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
 
-**What it measures.** The relay pool-admission verification term —
-the same two `shekyl_*` FFI entry points `blockchain.cpp` calls at
-admission, **in that order**: `shekyl_check_commitment_masks` over
-the output commitments, then `shekyl_fcmp_verify` over the FCMP++
-proof. Pinned to the admission path rather than to a primitive so
-the gate cannot drift from what admission actually costs when the
-calling code changes (`DAEMON_RELAY_PRIVACY.md` §72.6, §70.3).
+**What it measures (BA-T1).** The pool door's verification sequence
+(`judge_slot_stateless` at `TxSlot::Lone`), **in its order**:
+CEN-H17's `shekyl_ct_balance::check_commitment_masks` over the
+output commitments, CEN-I18's `verify_pqc_auth` over the one input's
+hybrid Ed25519+ML-DSA-65 signature, CEN-I15's
+`shekyl_fcmp::proof::verify` over the FCMP++ proof, and CEN-H19's
+`verify_batch` over the range proof as a batch of one. Those are the
+three terms of each `SPEC_VERIFY_COST` cell (BA-Q9,
+`DAEMON_RELAY_PRIVACY.md` §72.2). Pinned to the admission path
+rather than to a primitive so the gate cannot drift from what
+admission actually costs when the calling code changes
+(`DAEMON_RELAY_PRIVACY.md` §72.6, §70.3). Not in the count:
+CEN-I17's keccak derivation of the signing hash, since the fixture
+has no finished transaction to hash, and `tx_form`'s other rows,
+which verify nothing. A multisig input pays M signatures; the gate's
+input is single-signer, the modal form.
 
 **Fixture shape.** One fixed cell: `1-in / 2-out`, tree depth 2,
 `ChunkLayout::Shared` — the modal transaction shape and the
 cheapest cell, so the gate is sensitive to the per-transaction
-floor rather than to a tail cell. The fixture is built by the
-shared `relay_admission_fixture.rs` module (same workload as the
-wall-clock sweep) and **asserted to VERIFY before it is timed**;
-without that self-witness a broken fixture would time the
-early-return reject path and present as a large speed-up.
+floor rather than to a tail cell. The fixture is
+`shekyl_verify_cost::door::DoorFixture`, built by
+`build_door_fixture_with` so the draw order has one owner: the
+masks and the proof from `relay::build_fixture` (the wall-clock
+sweep's fixture) first, from the pinned seed, then the signature,
+then the range proof, on that same stream. The signature is
+`sign_pqc_auth_for_output_with_ml_dsa_seed`: the wallet signer's
+key assembly, with the ML-DSA nonce seeded, because a hedged
+signature differs every run. That function is `shekyl-crypto-pq`'s
+`test-utils` surface. The fixture is **asserted to VERIFY before
+it is timed**, all four checks; without that self-witness a broken
+fixture would time the early-return reject path and present as a
+large speed-up. `tests/door_pins.rs` pins the status from both
+sides, and that the builder asks for one signature per input in
+order.
 
 **Measurement boundary.** `prove` (fixture construction) is
 `setup`, excluded from the measured region. The fixture is returned
@@ -772,13 +793,12 @@ would classify as an unambiguous improvement.
 hardware-dependent on purpose, run on the reference machine and on
 the Pi, multi-hour at full sweep — so it is deliberately absent
 from the per-PR rolling baseline. The iai row is the CI drift gate:
-a change to FCMP++ verification moves this count, which is the
-signal that `hop` (and the embargo derived from it) is owed a
+a change to any of the door's verifications moves this count, which
+is the signal that `hop` (and the embargo derived from it) is owed a
 re-derivation.
 
-**Apples-to-oranges against C++.** No C++ counterpart; the C++
-admission path is the *caller* of these FFI entry points, not an
-independent implementation.
+**Apples-to-oranges against C++.** No C++ counterpart; admission is
+Rust end to end.
 
 ## 12. `crypto_bench_serve_*` — the archival serve path (`BA-T3`)
 
@@ -797,7 +817,7 @@ split the signature's cost into its own cell):
 | Function | Cells | What is inside the count |
 | --- | --- | --- |
 | `crypto_bench_serve_response` | one leaf, an eighth of a segment, a full segment | One whole response to `GET /shard/{id}`: parse, anchor gate, open, the key's pre-flight, the head, every chunk read and folded into the delivery digest, the call for the countersignature (answered by a pinned envelope — see *Fixture shape*), the bytes written |
-| `crypto_bench_serve_sign` | one pinned transcript | The countersignature alone: the seeded persona key's hybrid sign (Ed25519 + ML-DSA-65) over a fixed transcript, so the cost of signing is gated on a rejection-sampling trajectory nothing on the wire can move |
+| `crypto_bench_serve_sign` | one pinned transcript | The receipt alone: the seeded receipt key's hybrid sign (Ed25519 + FN-DSA-1024, from the SO-D12 4b switch's C7; Ed25519 + ML-DSA-65 before it) over a fixed transcript, with FN-DSA's signing stream seeded, so the cost of signing is gated on a trajectory nothing on the wire can move |
 | `crypto_bench_serve_prehead` | one leaf, a full segment | The same request up to the 200 head being ready to write. No body byte is read |
 | `crypto_bench_serve_read_and_fold` | all three | Open the shard, then read it at the serve loop's chunk size and fold each chunk into the delivery digest |
 | `crypto_bench_serve_digest_alone` | all three | `pass_delivery_digest` in one call over the same body bytes |
@@ -883,7 +903,10 @@ byte is `0x0a`, which keeps the 113-byte transcript on that round count.
 until that constant and the tail are chosen again. The one-time drop in the serve
 cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
 leaving them, absorbed by the rolling baseline on the next `dev`
-rotation.
+rotation. At the SO-D12 4b switch's C7 the bench key became a receipt
+key (Ed25519 + FN-DSA-1024, FN-DSA's signing stream seeded), the serve's
+only scheme from then on: `crypto_bench_serve_sign` moves with the
+scheme, and the serve cells' envelope is 1,356 bytes where it was 3,385.
 
 **Measurement boundary.** Building the shard and the key, and a
 self-witness serve (asserting a `200` closed by a signature, so the gate
@@ -977,7 +1000,231 @@ gives the receipt key's share of a slot (`FN_DSA_HYBRID.md` `FND-12`).
 
 ---
 
-## 14. Known gaps
+## 14. `crypto_bench_block_form` — a block's stateless verification (`BA-T2`)
+
+**Crate.** `shekyl-chain-ingest`.
+**Binary.** `benches/block_path_iai.rs` (gungraun), built with
+`--features bench-internals,harness`. Count-only: `PB-D1`'s seconds are
+read at a release cut on the two devices, and `shekyl-verify-cost`'s
+`block_connect_verify` stays the wall-clock instrument a device runs.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** `shekyl_chain_rules::form` on one block: the header
+and coinbase rows, then for every listed transaction its form (`tx_form`),
+its signatures (CEN-I17, CEN-I18) and its membership proof (CEN-I15), then
+the block's range proofs folded into one batch (CEN-H19). It is the
+stateless stage every connected block pays, whether or not its
+transactions came through the pool, and the verifier's term of `PB-D1`
+(`DAEMON_REDB_STORE.md` §1.3a).
+
+| Cell | The block | Instructions (2026-11-12) |
+| --- | --- | --- |
+| `spend_1in_2out` | four 1-in/2-out spends, block weight 54,165 | 1,825,906,454 |
+| `spend_8in_2out` | four spends at the input cap (`MAX_FCMP_INPUTS`), block weight 236,501 | 4,934,399,305 |
+| `spend_1in_16out` | four spends at the output cap (`MAX_OUTPUTS`), block weight 139,725 | 2,188,084,731 |
+| `bond_post` | four coinbase spends each carrying a complete-tree join by its own persona, block weight 99,373 | 1,848,299,171 |
+
+The counts are a development workstation's, recorded to show the rows'
+scale. The gate compares a pull request with the baseline the runner
+captured, never with these.
+
+**The fixture.** `benches/fixtures/block_path_<shape>_unit.corpus`: a
+chain the scenario driver mined under regtest at fixed difficulty one,
+coinbase-only up to the first height at which the spent coinbases have
+matured, then the subject block. Every spend is the harness spender's,
+signed by the production signer and admitted by the validator when the
+fixture was written. `bench_support::BlockPath::replayed` connects the
+history into a fresh store in `setup`, outside the count, in one write;
+the subject's claims (the seed, the target, the reference claims) are
+read there too.
+
+**What it does not measure.** The block's proof-of-work: the fixture chain
+runs under the harness longhash, and one header's RandomX verification is
+§16. The view-bound stage, which is §15. A block at the weight limit:
+`benches/block_path_full_iai.rs` counts the same call on
+`block_path_<shape>_full.corpus` (45, 10, 17 and 24 transactions), and is the
+nightly capture's (`nightly.yml`, `bench-full`, compared with the night
+before by `bench-full-drift`), because forming the 45 spends of the smallest shape is
+17,141,243,472 instructions and about twenty minutes of callgrind a row.
+`form` judges each listed transaction on its own, so the four carry every
+term the 45 do; what the full block adds is the count.
+
+**Shapes not here.** The set is `DAEMON_REDB_STORE.md` §1.3a.7's. An
+emission claim's own verification (its backing proof and its two
+signatures) is `validate`'s, not `form`'s, so its row needs a store
+holding a settled epoch: a chain through a closed shard and about three
+epochs. No fixture here carries one. That row is the chain forge's (its
+F4 pilot consumer, over the first-settled-epoch snapshot), as is any
+bench that needs a closed shard, a settled epoch, a claim, a slash or a
+discard. The
+multisig container needs a builder of a scheme-2 spend, which the harness
+does not have (`docs/FOLLOWUPS.md`).
+
+**Staleness.** `every_block_path_fixture_replays`
+(`src/bench_fixture_tests.rs`, default lane) replays each fixture and runs
+`form`, `connect` and `pop` on its subject, so a consensus change that
+refuses a fixture fails there by fixture name. The driver panics on a
+refusal, so a stale fixture fails the bench in setup and cannot count a
+refusal path. `regenerate_block_path_fixtures` rewrites them.
+
+## 15. `crypto_bench_block_connect`, `_pop`, `crypto_bench_store_read_*` — the store's share (`BA-T41`)
+
+**Crate, binary, class.** As §14.
+
+**What it measures.** On the blocks of §14:
+
+| Function | What is inside the count |
+| --- | --- |
+| `crypto_bench_block_connect` | `validate_with_memo` over the write batch's view (the view-bound rows: key images, references, the weight medians, the emission), `WriteBatch::connect`, and the commit at production durability: the connector's `Apply` for one block. The store's term, `PB-D1s` |
+| `crypto_bench_block_pop` | one pop of that block and its commit: the connector's rewind for one block |
+| `crypto_bench_store_read_block` | a read snapshot, and the tip block by height: the blob read, parsed, and hashed against its recorded identity |
+| `crypto_bench_store_read_header_range` | a read snapshot, and the 64 header records below the tip |
+| `crypto_bench_store_read_tree_leaves` | a read snapshot, and the first 8 curve-tree leaves |
+
+| Function | `spend_1in_2out` | `spend_8in_2out` | `spend_1in_16out` | `bond_post` |
+| --- | --- | --- | --- | --- |
+| `crypto_bench_block_connect` | 24,703,181 | 44,035,378 | 34,943,887 | 30,505,662 |
+| `crypto_bench_block_pop` | 28,679,225 | 76,536,312 | 35,947,387 | 31,979,949 |
+
+The three reads, on the output-cap fixture: the block 149,147, the header
+run 504,140, the leaf run 22,044. The block read is of the connected
+subject; the two range reads are over the fixture's history, so their
+setup does not form the subject.
+
+**Repeatability.** Captures of one build on one machine agreed to 0.002 %
+on the form rows and to within 1 % on the store rows (the block read:
+149,007, 148,838, 149,492, 149,147; the header run 499,796 and 504,140).
+The store rows are not bit-exact from run to run; the difference is well
+inside the class's ±5 % warning.
+
+**Cost of the capture.** Twelve functions of this binary (before the
+bond-post cells, which add three) took 31 minutes of callgrind on a
+16-core development workstation (2026-11-12), about two and a half
+minutes a function. Most of each is setup: the
+fixture's history, seventy to a hundred coinbase-only blocks, validated
+and connected under callgrind before the measured call. The history is
+connected in one write, since a commit per block was slower still.
+
+**What it does not measure.** The time a commit takes. An instruction
+count does not see the `fsync`, which is most of a commit's wall time on a
+real disk; `PB-D1s`' milliseconds are the release cut's. The reads are
+against a chain of about seventy blocks: they count the read's code, not
+a tree of production depth.
+
+## 16. `crypto_bench_randomx_verify_header` — one header's proof-of-work (`BA-T42`)
+
+**Crate.** `shekyl-pow-randomx`.
+**Binary.** `benches/verify_header_iai.rs` (gungraun). Count-only.
+**Class.** `crypto_bench_*` (bidirectional ±5% / ±15%).
+
+**What it measures.** `compute_hash` over a prepared cache on a 136-byte
+blob, the shortest proof-of-work preimage and a header's: scratchpad
+allocation and fill, the eight program chains in light mode, and the
+final hash. It is the call `ProductionSubstrate::longhash` makes for
+every block a node connects. 1,695,916,524 instructions (2026-11-12, a
+development workstation).
+
+**What it does not measure.** The cache's derivation, which is done in
+`setup`: a cache lasts an epoch of 2,048 blocks, and `benches/cache_derive.rs`
+is its instrument. The floor device's figure, which is `BA-T40`'s. The
+Rust-to-C ratio, which is `BA-T27`'s. The count is the x86 runner's, where
+the verifier uses the instruction set it finds.
+
+## 17. The network and sync path (`BA-T24`, `BA-T43` to `BA-T47`)
+
+Six subjects, in five gungraun targets and one function added to
+`block_path_iai`. All are count-only and `crypto_bench_*` class
+(bidirectional ±5% / ±15%). Counts are a 16-core development
+workstation's (2026-11-12); two passes of each row agreed to the figure
+shown or within the spread named.
+
+**One ingest step (`BA-T43`).** `crypto_bench_ingest_route`, in
+`shekyl-chain-ingest` `benches/block_path_iai.rs`: `router::place` and
+`router::claim_run` for one arriving block, each on its own snapshot as
+the service takes them. The placement reads the tip; the claim reads the
+difficulty window's headers and the references off the store.
+10,161,246 instructions (the second pass 10,161,567). It does not
+measure `form`, `validate` or `connect`, which are §14 and §15, or the
+sync model's handling of a body response before the arrival is offered.
+
+**A peer's block request (`BA-T44`).** `crypto_bench_sync_serve_bodies`,
+in `shekyl-chain-ingest` `benches/serve_bodies_iai.rs`:
+`shekyl_chain_sync_runtime::serve::serve_bodies`, the call the sync owner
+makes for command 2013, over a request for the last eight blocks of the
+smallest-spend fixture chain (seven coinbase-only blocks and the subject
+with its four spends). 1,566,007 instructions (the first pass
+1,568,684, 0.17 % apart). Every body is held and inside the response's
+byte budget, so the deferred and missed paths are not counted. The serve
+is what any peer can ask of a node, so a rise here is a rise in what a
+stranger's request costs.
+
+**One inbound frame (`BA-T45`).** In `shekyl-chain-ingest`
+`benches/levin_bodies_iai.rs`, over that response as the notification a
+serving node sends (command 2014): `crypto_bench_levin_frame_read`
+(`BucketReader::feed` and `next_message` on a reader past the handshake,
+130,871 instructions) and `crypto_bench_levin_bodies_decode`
+(`ResponseBodies::decode` and `check_form`, 1,022,813). The frame's
+record decryption is not in either; it is the record rows below.
+
+**A block template (`BA-T46`).** `crypto_bench_block_template_build`, in
+`shekyl-chain-ingest` `benches/block_template_iai.rs`:
+`shekyl_block_template::build` over the design load's transaction
+(`DAEMON_REDB_STORE.md` §1.3a: 2-in/2-out), 28 of them. 52,608,231
+instructions (the second pass 52,603,891; the miner's KEM keys are drawn
+in setup). The design load names 30 a block. A 2-in/2-out spend weighs
+21,184, the listing's budget at the genesis median is 598,614, and 28
+fit; `build` refuses a listing past the limit, so the fixture
+(`block_path_spend_2in_2out_design.corpus`) lists the 28 and its replay
+test holds it to "30, or full". The row does not measure the pool's
+selection of the listing or the tip follower's reads that compose the
+context.
+
+**A wallet's block read (`BA-T47`).** `crypto_bench_rpc_block_list`, in
+`shekyl-chain-ingest` `benches/wallet_block_read_iai.rs`:
+`shekyl_daemon_rpc::reads::block_list` over the production `StoreFacts`
+for the same eight heights, unpruned, from a bounded caller, and the
+reply serialized (`serde_json::to_value`, as the handler's `framed`, then
+to bytes). 5,368,418 instructions (the second pass 5,350,796, 0.33 %
+apart). It does not measure the request's parse, the channel's records
+or the HTTP layer.
+
+**The transport's handshake and records (`BA-T24`).** In
+`shekyl-p2p-transport` `benches/c5_iai.rs`, the cells `benches/c5.rs`
+times, each call on its own:
+
+| Function | Cell | Instructions |
+| --- | --- | ---: |
+| `crypto_bench_noise_handshake_message1` | the initiator's message 1 | 1,084,709 |
+| `crypto_bench_noise_handshake_message2` | the responder's read and message 2 | 2,060,382 |
+| `crypto_bench_noise_handshake_finish` | the initiator's read of message 2 | 2,002,172 |
+| `crypto_bench_noise_record_seal` | 1,024-byte body | 22,356 |
+| | 65,535-byte body | 641,871 |
+| `crypto_bench_noise_record_open` | 1,024-byte body | 21,713 |
+| | 65,535-byte body | 575,750 |
+| `crypto_bench_noise_window_seal` | 256 / 512 / 1,024 / 1,400 / 2,048 | 9,133 / 11,106 / 15,014 / 18,549 / 22,846 |
+| | 4,096 / 8,192 / 16,384 / 65,535 | 38,505 / 69,833 / 147,315 / 568,886 |
+| `crypto_bench_noise_window_open` | 256 / 512 / 1,024 / 1,400 / 2,048 | 9,298 / 11,248 / 15,156 / 18,751 / 23,066 |
+| | 4,096 / 8,192 / 16,384 / 65,535 | 38,730 / 77,487 / 147,576 / 569,276 |
+| `crypto_bench_noise_rekey` | one HKDF | 21,822 |
+
+A record is the interim framer's: an encrypted length and an encrypted
+body, two AEAD operations a call. A window is one AEAD operation on the
+raw direction, as a fixed-window record is. The window size is not ruled
+(`P2P_TRANSPORT_LAYER.md` D14 item 4), so the sizes are step 7's nine
+candidates. The handshake rows draw keys inside the measured call: the
+two passes differed by at most 0.023 %. The record and window rows
+repeated exactly within a build; a session's keys moved a record row by
+four instructions between two builds. `c5.rs` stays the instrument a
+floor run times with.
+
+**Setup cost.** The serve, frame and wallet-read rows start from a store
+with the subject block connected, and connecting it verifies its four
+spends in setup, under callgrind: five to eight minutes of wall time a
+target on a loaded workstation, for a measured call of a few million
+instructions. The capture's scope keeps that off a pull request that
+cannot reach the rows.
+
+## 18. Known gaps
 
 The v0 baseline is explicit about what it does not measure:
 
@@ -1062,7 +1309,7 @@ lives asymmetrically between the two stacks — this is the
 apples-to-oranges manifest discipline the hardening document
 prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
 
-## 15. Cross-references
+## 19. Cross-references
 
 - `docs/MID_REWIRE_HARDENING.md` §3.1 — C++ scope, Five-path list,
   daemon-coupling rationale.
@@ -1093,13 +1340,13 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   runner. Emits `shekyl_rust_v0.json` and
   `shekyl_rust_v0.iai.snapshot` into this directory.
 
-## 16. Change log for this manifest
+## 20. Change log for this manifest
 
 - `v0` (commit 2 of the mid-rewire hardening pass, a.k.a.
   `bench(wallet-state)`): initial Rust baseline. Live measurements:
   all five hot paths (`ledger_postcard_roundtrip`, `balance_compute`,
   `wallet_open_cold`, `scan_block`, `transfer_e2e_1in_2out`). Known
-  gaps documented in §14, Known gaps (§12 when this entry was written;
+  gaps documented in §18, Known gaps (§12 when this entry was written;
   renumbered since, as the entries below record) (FCMP++ membership proof, hot-spend ledger
   shape, Argon2id production profile under Valgrind).
 - Stage 0 PR-2 of the V3 engine trait spec measurement gate (see
@@ -1190,3 +1437,54 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   `fn_dsa_hybrid_persona_slot_derivation`, criterion only. No gated
   function is added or changed, and no count moves. Schema version
   unchanged (`shekyl_rust_v0`).
+- `BA-T1` (2026-11-09, BA-Q9): §11's gate times the pool door's whole
+  sequence, not the masks-and-proof pair alone. The fixture keeps the
+  pair's operands (drawn first from the same seed) and adds the one
+  input's hybrid signature, under a seeded ML-DSA nonce, and the lone
+  range proof. On an x86 development host
+  `crypto_bench_relay_admission_verify` moves 359,022,427 →
+  384,147,874 (+7.00 %, inside the warn band). Measured term by term on
+  the same fixture: the pair 359,001,180, the signature 3,453,086, the
+  range proof 21,676,240. One-time gated rise, absorbed by the rolling
+  baseline on the next `dev` rotation. Function name, class and schema
+  version (`shekyl_rust_v0`) unchanged.
+- Brief D, PR D1 (2026-11-12): added §14 (`crypto_bench_block_form`,
+  `BA-T2`), §15 (the store's connect, pop and reads, `BA-T41`) and §16
+  (`crypto_bench_randomx_verify_header`, `BA-T42`), the first gated rows
+  on the daemon's block path. Sections previously numbered §§14–16 (Known
+  gaps, Cross-references, Change log) renumbered to §§17–19.
+- Brief D, PR D2 (2026-11-12): added §17, the network and sync path: one
+  ingest step (`BA-T43`), a peer's block request served (`BA-T44`), one
+  inbound Levin frame read and decoded (`BA-T45`), a block template built
+  (`BA-T46`), a wallet's block read (`BA-T47`) and the transport's C5
+  cells as counts (`BA-T24`). A new fixture,
+  `block_path_spend_2in_2out_design.corpus`, is the design-load listing
+  for the block-template row: the 28 2-in/2-out spends one block admits.
+  No existing fixture moved. Sections previously numbered §§17–19 (Known
+  gaps, Cross-references, Change log) renumbered to §§18–20.
+- 2026-11-13 SO-D12 4b (the switch, regenesis): the block-path fixtures
+  of §§14–15 are mined again. The switch moves the replay corpus to
+  format 4 and the block to a bundle section committed by the header's
+  `section_root`, with no coinbase attestation, so the corpora D1 wrote
+  no longer read (`every_block_path_fixture_replays` refused every
+  one). The shapes, sizes and history rule are unchanged. Function
+  names, classes and schema version (`shekyl_rust_v0`) unchanged; the
+  counts §§14–15 record stay the 2026-11-12 capture's. The per-PR
+  capture on the new fixtures (#1327 at `d55c49327`, against the
+  rolling baseline at `ddba96485`), in instructions: `form` 1,827,705,951 /
+  4,934,858,936 / 2,187,558,889 / 1,849,492,351 for `spend_1in_2out`
+  / `spend_8in_2out` / `spend_1in_16out` / `bond_post` (each within
+  0.11 %); `connect` 24,326,535 / 43,587,835 / 34,489,119 / 30,249,301
+  and `pop` 28,491,573 / 76,344,773 / 35,702,337 / 31,776,977 (each
+  within 0.9 %); the block read 146,461 (−0.73 %). The two range reads
+  run over the re-mined history and move past the ±5 % warning, inside
+  the fail band: the header run 478,081 → 450,907 (−5.68 %) and the
+  leaf run 21,399 → 20,312 (−5.08 %). The capture compares the switch's
+  code on the new history with `dev`'s on the old, so it does not say
+  which of the two moved the reads. One-time, absorbed by the rolling
+  baseline on the next `dev` rotation.
+- 2026-11-13: the design-load fixture is mined again onto corpus format 4.
+  D2 wrote `block_path_spend_2in_2out_design.corpus` as format 3, which
+  the switch's reader refuses. The listing is still the 28 2-in/2-out
+  spends one block admits. §17's template count stays the format-3
+  capture; the row's next capture counts this corpus.

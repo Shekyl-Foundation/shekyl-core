@@ -311,21 +311,12 @@ module-level mutable state.
 
 ## 5. FFI Surface
 
-> **Phase 3 amendment (2026-06; `RANDOMX_V2_PHASE3_PLAN.md` §4.1/§4.5).**
-> The committed surface grew from one function to **two**. The ratified
-> sticky-eviction DoS mitigation (`RANDOMX_V2_PLAN.md` Decision #6;
-> `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7) needs the `shekyl-ffi` shim to
-> learn the *canonical* seedhash so `CacheStore` can protect it from LRU
-> eviction under an adversary interleaving 3+ seedhashes — and only C++
-> block-handling code knows that seedhash. The signal export
-> (`…_set_canonical`) was never added to the original §5; Phase 3 adds
-> it. The hash code block below is also corrected to the Round-5
-> pointer-to-array form (`RANDOMX_V2_PHASE3_PLAN.md` §2.7 #1) the shipped
-> ABI uses — the original decayed `const uint8_t*` form silently
-> re-admits the wrong-sized-buffer bug class the typed-array pointer was
-> added to prevent.
+> **Superseded (2026-11-14).** The export this section specifies, and the process-global `CacheStore` behind it, are no longer in the tree: the workspace has no C ABI (rule 25), and `CacheStore` is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the contract as it stood while a C++ caller linked the export.
 
-The committed FFI surface is two functions:
+The hashing export is one function. The daemon does not call it: since
+the DRS-X flip the Rust ingest owns the chain and hashes through the
+node's one hasher (§6). Callers are the C++ parity gates
+(`tests/unit_tests/mining_parity.cpp`, `tests/randomx_v2_parity`).
 
 ```c
 int32_t shekyl_pow_randomx_v2_hash(
@@ -333,93 +324,114 @@ int32_t shekyl_pow_randomx_v2_hash(
     const uint8_t* data,
     size_t data_len,
     uint8_t (*out_hash)[32]);
-
-int32_t shekyl_pow_randomx_v2_set_canonical(
-    const uint8_t (*seedhash)[32]);
 ```
+
+The pointer-to-array form is the ABI (`RANDOMX_V2_PHASE3_PLAN.md` §2.7
+#1). A decayed `const uint8_t*` re-admits the wrong-sized-buffer bug
+the typed pointer was added to prevent.
 
 Semantics:
 
 - `seedhash` points to exactly 32 bytes (`const uint8_t[32]`);
   `out_hash` receives exactly 32 bytes on success.
-- `…_hash` `data`/`data_len` pairing (§17): `data == NULL` is valid iff
-  `data_len == 0`; `data == NULL && data_len > 0` returns `ERR_NULL_PTR`;
-  `data_len` above the 2 MiB hashing-blob bound returns
-  `ERR_DATA_TOO_LARGE`. On any non-zero return `*out_hash` is untouched.
-- `…_set_canonical` eagerly derives (or hits) the seedhash's 256 MiB
-  `PreparedCache` **synchronously** and sticky-pins it against LRU
-  eviction. The daemon calls it at tip advance (~once per 2048-block
-  epoch ≈ 2.84 days), off the validation hot path. See §6 for why this
-  synchronous canonical-pin is *not* the rejected prewarm.
+- `data` / `data_len` (§17): `data == NULL` is valid iff `data_len == 0`;
+  `data == NULL && data_len > 0` returns `ERR_NULL_PTR`; `data_len`
+  above the 2 MiB hashing-blob bound returns `ERR_DATA_TOO_LARGE`. On
+  any non-zero return `*out_hash` is untouched.
+- The export memoizes in its own process-global `CacheStore` and derives
+  on the first use of a seed. That store is not the node's.
+  *Records-was (Phase 3 until the DRS-X flip):* `shekyl_pow_randomx_v2_set_canonical`
+  eagerly derived the seedhash's 256 MiB cache and sticky-pinned it,
+  called by the C++ chain at tip advance, on the premise that only C++
+  block-handling code knew the canonical seedhash. The ingest's pin does
+  both now (§6), and the export is deleted.
 - Return codes follow `40-ffi-discipline.mdc`: `SHEKYL_POW_RANDOMX_V2_OK`
   (`0`) on success; negatives for distinct failure modes
   (`ERR_NULL_PTR -1`, `ERR_DATA_TOO_LARGE -2`,
   `ERR_CACHE_DERIVE_FAILED -3`, `ERR_INTERNAL -4`; the last two are
   reserved and never returned under `panic = "abort"`, kept for §17
   taxonomy parity).
-- `shekyl-ffi` may memoize derived caches internally across calls.
-  `shekyl-pow-randomx` itself does not hold module-level state.
+- `shekyl-pow-randomx` holds no module-level state. The memo lives in
+  `shekyl-ffi`.
 
-`shekyl_pow_randomx_v2_seedheight(height: u64, out_seedheight: *mut u64) -> i32`
-is discretionary. Phase 3 may add it only if the C++ caller survey
-proves the call cannot be eliminated or moved to a Rust caller
-cleanly. The export shape matches `shekyl_pow_randomx_v2_hash`: an
-`i32` error code is returned, the computed seed height is written
-through the `out_seedheight` out-parameter on success. This
-preserves `40-ffi-discipline.mdc`'s uniform return-shape rule so the
-discretionary export does not introduce a second ABI shape.
+The seed-epoch schedule is four pure exports. Each returns the value.
+The daemon reads the epoch length from
+`shekyl_pow_randomx_v2_seed_epoch_blocks`. *Records-was:* the original
+§5 left `shekyl_pow_randomx_v2_seedheight(height, out_seedheight) -> i32`
+discretionary and unshipped; PR #235 landed the schedule as `u64` and
+`bool` returns (`RANDOMX_V2_PHASE3_PLAN.md`).
+
+```c
+uint64_t shekyl_pow_randomx_v2_seedheight(uint64_t height);
+uint64_t shekyl_pow_randomx_v2_next_seedheight(uint64_t height);
+uint64_t shekyl_pow_randomx_v2_seed_epoch_blocks(void);
+bool shekyl_pow_randomx_v2_seed_epoch_overridden(void);
+```
 
 Explicitly not exported:
 
 - `prewarm`
-- `set_main_seedhash` (the inherited *asynchronous* dataset-init state
-  machine — background threads, reorg scheduling, lifecycle calls. Its
-  *purpose* — pinning the canonical cache — is served instead by the
-  synchronous `…_set_canonical` above; the async machinery is deleted,
-  not ported. See §4 of `RANDOMX_V2_PHASE3_PLAN.md`.)
+- `set_canonical` — **deleted at the DRS-X flip**. The Rust ingest pins
+  the canonical seed itself (§6), so no C++ signal exists to carry.
+- `set_main_seedhash` — the inherited asynchronous dataset-init state
+  machine (background threads, reorg scheduling, lifecycle calls).
+  Deleted, not ported. Its purpose, pinning the canonical cache, is the
+  ingest's synchronous pin (§6). *Records-was:* from Phase 3 until the
+  DRS-X flip that pin was `…_set_canonical`. See §4 of
+  `RANDOMX_V2_PHASE3_PLAN.md`.
 - `set_miner_thread`
 - `get_miner_thread`
 - `allocate_state`
 - `free_state`
 
-Those functions manage inherited state that does not exist in the
-derived-first verifier design.
+Those names manage inherited state the derived-first verifier does not
+have.
 
 ## 6. No Prewarm
 
-Prewarm is deliberately omitted. Cache derivation is paid lazily on the
-first hash for a new seedhash.
+Prewarm is not an export, and a hash does not fill a cache on its own.
 
-Current budget assumptions:
+One crate owns every cache in the daemon: `shekyl-hasher`, above this
+one ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). This crate
+derives a cache and hashes under one; it keeps none.
+
+- A hash is a job on its seed (`Hasher::run`, `Hasher::lend`). The
+  hasher builds that seed's cache for the job when it is not warm, on
+  its one builder thread and under a permit, inside a cap of three.
+- The ingest ranks the seeds the node needs: the window's one or two,
+  and the seed of the most-work chain the window does not cover. A
+  window seed is named once its block is on the chain, 64 blocks before
+  its first use, and the hasher builds it then. That is the Decision #6
+  mitigation (`RANDOMX_V2_PLAN.md`; `RANDOMX_V2_PHASE2C_PLAN.md`
+  §5.11.7).
+- The miner and the RPC's `pow` borrow only a cache that is already
+  warm (`Hasher::lend_warm`) and build none.
+
+A job's substrate hashes under the job's seed and no other: a longhash
+asked for another seed is `SubstrateFault::SeedNotLent` and builds
+nothing. Gated in `shekyl-chain-ingest` by
+`a_longhash_for_another_seed_faults_and_builds_nothing`,
+`a_ranked_seed_is_built_once`, and
+`the_follower_waits_for_the_new_epochs_seed_and_the_miner_mines_its_first_block`.
+
+One derivation per epoch, paid when the window first names the seed:
 
 - `SEEDHASH_EPOCH_BLOCKS = 2048`
 - `DIFFICULTY_TARGET_V2 = 120` seconds
-- One cache miss per epoch is about once every 2.84 days.
-- A cache miss budget of 150-200 ms is acceptable for a one-off event.
+- One derivation per epoch is about once every 2.84 days.
+- 150-200 ms is an acceptable cost for that one-off.
 - During a 600k-block initial sync, about 293 epoch transitions add
   roughly 44 seconds of cache-derivation overhead.
 
 That overhead is noise relative to per-hash verification time. The
-inherited async cache-rebuild state machine would add scheduling logic,
-reorg edge cases, background threads, and lifecycle calls for a cost
-that is below the user-visible threshold.
+inherited async cache-rebuild state machine would add scheduling, reorg
+edge cases, background threads, and lifecycle calls for a cost below
+the user-visible threshold. It is not ported.
 
-There is no supported fake-prewarm pattern. With a capacity-2 LRU, a
-dummy hash can be evicted before the real use. If a future design needs
-prewarm, it must propose a new design doc that revisits this decision.
-
-> **Phase 3 amendment (`RANDOMX_V2_PHASE3_PLAN.md` §4.5).** The prewarm
-> prohibition is scoped to (a) the inherited **async** cache-rebuild
-> state machine and (b) the **fake-prewarm** pattern above. It does *not*
-> forbid `shekyl-ffi` from eagerly deriving the canonical cache
-> **synchronously** when C++ signals a new canonical seedhash: that is
-> `…_set_canonical` (§5), the delivery mechanism for the ratified
-> sticky-eviction DoS mitigation, invoked off the hot path at tip
-> advance. The eager derive is *internal* Rust behavior (the
-> `20-rust-vs-cpp-policy.mdc` forward cut that moves canonical-cache
-> management out of C++); prewarm remains forbidden as an *FFI surface*.
-> This is the sanctioned revisit this clause anticipated — scoped to the
-> synchronous pin, explicitly not re-admitting the rejected async design.
+There is no supported fake-prewarm. The store holds two caches, so a
+fill that is neither the pin nor the branch preparation can be evicted
+before use, and on the ingest path a hash fills nothing. A design that
+needs prewarm proposes a new design doc that revisits this decision.
 
 ## 7. Isolation Invariants
 
@@ -480,12 +492,14 @@ differential cron). Six checks, exact names, never a `randomx_*` glob:
 6. `cryptonote::set_pow_hash_override_for_tests` is absent (gc-sections
    dropped the CEN-D2 setter), and the deleted schema-level names
    (`IPowSchema`, `set_pow_schema_override_for_tests`,
-   `get_pow_for_height`) stay deleted. Anchored on
-   `cryptonote::hash_pow_randomx` and the slot
-   `s_pow_hash_override_for_tests` so a moved dispatch cannot pass
-   vacuously. Source counterpart: `check_pow_test_seam.sh`. A new
-   setter is a new name, added here and in the source gate together —
-   this check does not glob.
+   `get_pow_for_height`) stay deleted. The former presence anchors
+   (`cryptonote::hash_pow_randomx`, `s_pow_hash_override_for_tests`)
+   left with the C++ PoW at the DRS-X flip; checks 3 and 4 (the Rust
+   verifier's symbols) are the anchors that keep this absence from
+   passing vacuously. Source counterpart: `check_pow_test_seam.sh`,
+   anchored on `shekyl_pow_randomx::compute_hash` and the ingest's call
+   to it. A new setter is a new name, added here and in the source gate
+   together — this check does not glob.
 
 ## 8. Performance Targets
 
@@ -662,11 +676,13 @@ behind `BUILD_RANDOMX_V2_MINER_LIB=ON` and is never linked into
 
 The irreducible state is narrow and owned by its semantic owner:
 
-- `shekyl-ffi` owns its internal `CacheStore` memo because C callers
-  need cross-call memoization and C ABI state belongs at the boundary.
-- Chain state owns the seedhash selection for a given height.
-- `SEEDHASH_EPOCH_BLOCKS` and `SEEDHASH_EPOCH_LAG` are protocol
-  constants in `shekyl-pow-randomx`.
+- `shekyl-hasher` owns every RandomX cache the daemon holds (§6): at
+  most three, each lent to jobs and freed when nothing needs it.
+- The chain owns which seedhash a height verifies under. The ingest
+  ranks the seeds its window names, and the hasher keeps those warm.
+- `SEEDHASH_EPOCH_BLOCKS` and `SEEDHASH_EPOCH_LAG` are protocol constants
+  in `shekyl-difficulty::seed_epoch`. The FFI schedule exports read the
+  latched pair.
 
 Everything else is transform-shaped and derived on demand.
 
@@ -679,9 +695,11 @@ Everything else is transform-shaped and derived on demand.
 - No runtime env-var overrides of consensus constants.
 - No Rust JIT.
 - No `prewarm` FFI, and no inherited *async* cache-rebuild / dataset-init
-  state machine. (The synchronous, off-hot-path `…_set_canonical` pin
-  added in Phase 3 is the ratified DoS mitigation, not a prewarm in this
-  rejected sense — §5, §6, and `RANDOMX_V2_PHASE3_PLAN.md` §4.)
+  state machine. The synchronous canonical pin is the ingest's `pin_seed`
+  (§6), and it is the ratified DoS mitigation, not a prewarm in this
+  rejected sense (`RANDOMX_V2_PHASE3_PLAN.md` §4). *Records-was:* from
+  Phase 3 until the DRS-X flip that pin was
+  `shekyl_pow_randomx_v2_set_canonical`.
 - No C ABI exports from `shekyl-pow-randomx`.
 - No module-level runtime-mutable state in `shekyl-pow-randomx`.
 
@@ -827,8 +845,8 @@ This means:
 - The FFI contract is unchanged. `shekyl_pow_randomx_v2_hash` accepts
   any 32 bytes as seedhash. Early-block correctness is the caller's
   responsibility.
-- The optional `seedheight(height) -> u64` helper, if exported in
-  Phase 3 (see §5), must reproduce the early-block branch exactly:
+- `shekyl_pow_randomx_v2_seedheight` (§5) reproduces the early-block
+  branch exactly:
 
   ```rust
   pub fn seedheight(height: u64) -> u64 {
@@ -957,6 +975,8 @@ The constants are emitted alongside the function prototype in
 that requires a doc update here.
 
 ## 18. Thread-Safety Contract
+
+> **Superseded (2026-11-14).** The export and the `CacheStore` in `shekyl-ffi` this section binds are no longer in the tree (§5's note). What a concurrent hash may rely on now is the hasher's contract: a job borrows its seed's cache, and one builder thread derives, so two jobs on one seed never derive twice ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5). The text below is the contract as it stood.
 
 `shekyl_pow_randomx_v2_hash` is callable concurrently from multiple
 threads. The contract is:

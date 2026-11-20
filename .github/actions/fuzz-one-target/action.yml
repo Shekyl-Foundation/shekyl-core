@@ -1,0 +1,86 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# One fuzz leg: restore its corpus, run the binary the crate's build
+# handed over, save the corpus, and publish the crash input and the
+# figures. `fuzz` and `fuzz-weekly` are this action with different
+# seconds. The names come from `fuzz_run.py --names` (`leg_names`);
+# the red-issue reporter rebuilds the crash name the same way.
+
+name: Fuzz one target
+description: >-
+  Run one built fuzz binary for a fixed time and publish its corpus,
+  crash input and figures.
+
+inputs:
+  target:
+    description: "<crate>/<target>"
+    required: true
+  branch:
+    description: Branch label for the corpus cache and the artifact names.
+    required: true
+  seconds:
+    description: libFuzzer -max_total_time, in seconds.
+    required: true
+  lane:
+    description: >-
+      The job id. The crash artifact is fuzz-crash-<lane>-<branch>-<target>,
+      with each / read as _.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - id: names
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        BRANCH: ${{ inputs.branch }}
+        TARGET: ${{ inputs.target }}
+      run: python3 scripts/ci/fuzz_run.py --names "$LANE" "$BRANCH" "$TARGET" >> "$GITHUB_OUTPUT"
+
+    - name: The crate's binaries
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ steps.names.outputs.binaries }}
+        path: ${{ runner.temp }}/bin
+
+    - name: Restore the corpus
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ runner.temp }}/corpus
+        key: ${{ steps.names.outputs.cache }}-${{ github.run_id }}
+        restore-keys: ${{ steps.names.outputs.cache }}-
+
+    - id: run
+      name: Fuzz
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        BIN: ${{ steps.names.outputs.bin }}
+        SECONDS: ${{ inputs.seconds }}
+      run: python3 scripts/ci/fuzz_run.py "$TARGET" "$SECONDS" "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/stats.json" "$RUNNER_TEMP/bin/$BIN"
+
+    - name: Save the corpus
+      if: ${{ always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ runner.temp }}/corpus
+        key: ${{ steps.names.outputs.cache }}-${{ github.run_id }}
+
+    - name: Upload the crashing input
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.names.outputs.crash }}
+        path: rust/${{ steps.names.outputs.crate }}/fuzz/artifacts/${{ steps.names.outputs.bin }}/
+        if-no-files-found: ignore
+
+    - name: Upload the run's figures
+      if: ${{ always() && (steps.run.outcome == 'success' || steps.run.outcome == 'failure') }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.names.outputs.stats }}
+        path: ${{ runner.temp }}/stats.json

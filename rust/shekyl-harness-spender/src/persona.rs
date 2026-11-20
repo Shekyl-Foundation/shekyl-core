@@ -11,7 +11,7 @@
 //! `shekyl-engine-core`'s `AssembleBond` / `AssembleRelease` call, so the
 //! vin carries the identity key, the derived `P_canonical_id`, the
 //! floor-priced total and the genesis-frozen term side); and the
-//! transaction around it ([`Spender::spend_coinbase_posting`]: funding
+//! transaction around it ([`Spender::spend_coinbase_posting`](crate::Spender::spend_coinbase_posting): funding
 //! spend, two confidential outputs, `sign_transaction_with_terms` with the
 //! post's term on its side, the bond slot last in `pqc_auths` and signed
 //! by the named key — the identity key for a credit, `bond_spend_sk` for a
@@ -25,9 +25,7 @@
 //! CEN-J27 (`CHAIN_RULES_SLICE_6.md` §5 row 6): once the funding half of a
 //! bond post is judged, a fixture join — a filler spend with a post on it
 //! — connects nowhere, and the store's tests need a real one as much as
-//! the ingest's. The serve credit a persona responds with stays in the
-//! ingest: it is a wire body with no spend, and its pruned record is the
-//! rules harness's.
+//! the ingest's.
 //!
 //! The vin-to-wire mapping is
 //! [`shekyl_archival_bond_builder::bond_post_input`]: every
@@ -37,12 +35,12 @@
 
 use shekyl_archival_bond_builder::{bond_post_input, build_join_market_vin, build_release_vin};
 use shekyl_archival_retention::{
-    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, ArchivalServeCreditResponse,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, HoldingsDescriptor, HoldingsKind,
+    ShardSet,
 };
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{derive_archival_p_keys, ArchivalPKeys};
-use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme, SCHEME_DOMAIN_PQC_AUTH_TX};
+use shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX;
 use shekyl_tx_builder::{InputTerm, OutputTerm};
 use shekyl_types::archival::{BondRecord, Holdings, ReceiptSignPk};
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
@@ -50,6 +48,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::BondPost;
 use shekyl_wire::Input;
 
+use crate::draw::MlDsaDraw;
 use crate::PostedBond;
 
 /// The harness's persona master seed. Any 64 bytes; fixed so the personas
@@ -60,20 +59,57 @@ const MASTER: [u8; MASTER_SEED_BYTES] = [0x51; MASTER_SEED_BYTES];
 /// An archival persona: the keys a wallet derives for slot `p_slot`.
 pub struct Persona {
     keys: ArchivalPKeys,
+    /// Where this persona's signatures draw ML-DSA's randomness: the OS, or
+    /// a signing seed (`Self::with_signing_seed`, `seeded-rng`).
+    draw: MlDsaDraw,
 }
 
 impl Persona {
-    /// Derive the persona at `p_slot` from the harness's master seed.
+    /// Derive the persona at `p_slot` from the harness's master seed, under
+    /// mainnet's name: the personas of the chains that mine their own
+    /// genesis, whose fixtures pin these ids. A chain that carries a
+    /// network's identity derives its personas under that network's name
+    /// ([`Self::on`]).
     #[must_use]
     pub fn at(p_slot: u32) -> Self {
-        let keys = derive_archival_p_keys(
-            &MASTER,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            p_slot,
-        )
-        .expect("the harness's seed derives a persona");
-        Self { keys }
+        Self::on(Network::Mainnet, p_slot)
+    }
+
+    /// Derive the persona at `p_slot` from the harness's master seed under
+    /// `network`'s name, as a wallet of that network derives it (`NI-R10`;
+    /// `CHAIN_FORGE.md` §6).
+    #[must_use]
+    pub fn on(network: Network, p_slot: u32) -> Self {
+        Self::from_master(&MASTER, network, p_slot)
+    }
+
+    /// Derive the persona at `p_slot` from `master` under `network`'s name:
+    /// a chain's own personas, keyed by its plan rather than by the master
+    /// every fixture shares (`CHAIN_FORGE.md` §6: the forge's personas
+    /// derive from `seed_for(plan_seed, role, index)`).
+    ///
+    /// # Panics
+    ///
+    /// If the derivation fails, which a 64-byte master never makes it do.
+    #[must_use]
+    pub fn from_master(master: &[u8; MASTER_SEED_BYTES], network: Network, p_slot: u32) -> Self {
+        let keys = derive_archival_p_keys(master, network, p_slot)
+            .expect("a master seed derives a persona");
+        Self {
+            keys,
+            draw: MlDsaDraw::default(),
+        }
+    }
+
+    /// This persona with every signature it makes (its identity signature,
+    /// the bond slots its posts sign) drawing ML-DSA's randomness from
+    /// `seed`, so a chain built twice from one seed carries the same
+    /// signatures (`CHAIN_FORGE.md` §5.3, seam T4). `seeded-rng` only.
+    #[cfg(feature = "seeded-rng")]
+    #[must_use]
+    pub fn with_signing_seed(mut self, seed: &[u8; 32]) -> Self {
+        self.draw = MlDsaDraw::seeded(seed);
+        self
     }
 
     /// The whole bundle, owned: for a test that hands the persona's keys to
@@ -135,37 +171,11 @@ impl Persona {
     /// `signed_claiming`).
     #[must_use]
     pub fn identity_signature(&self, payload: &SigningPayloadHash) -> Vec<u8> {
-        HybridEd25519MlDsa
-            .sign(
-                &self.keys.hybrid_sign_sk,
-                SCHEME_DOMAIN_PQC_AUTH_TX,
-                payload.as_bytes(),
-            )
-            .expect("the persona's identity key signs")
-            .to_canonical_bytes()
-            .expect("a hybrid signature encodes")
-    }
-
-    /// The serve-credit vin crediting this persona for `shard` in
-    /// `settlement_epoch`: the kept half of a pass record on the production
-    /// wire type ([`ArchivalServeCreditResponse`]), naming [`Self::id`] so
-    /// CEN-J4 finds the record a [`Self::join`] wrote. The
-    /// countersignature is a **marker**, not a signature: no Rust
-    /// countersigner exists (the challenger side is not built) and no
-    /// landed rule verifies it (CEN-J1/J4/J10 pending in the census). The
-    /// body around it — CEN-H20's shape with its `RF-D1` pruned record — is
-    /// the rules harness's to build (`fixture::serve_credit_only_with`).
-    #[must_use]
-    pub fn serve_credit_vin(&self, shard: u64, settlement_epoch: u64) -> Input {
-        let kept = ArchivalServeCreditResponse {
-            p_canonical_id: *self.id().as_bytes(),
-            shard_id: shard,
-            settlement_epoch,
-            ed25519_countersignature: [0x5c; 64],
-        };
-        Input::ServeCredit {
-            canonical_bytes: kept.serialize().expect("a kept half serializes"),
-        }
+        self.draw.sign(
+            &self.keys.hybrid_sign_sk,
+            SCHEME_DOMAIN_PQC_AUTH_TX,
+            payload.as_bytes(),
+        )
     }
 
     /// A JoinMarket over `holdings` at `endpoint`, through the production
@@ -183,6 +193,7 @@ impl Persona {
             built.vin().hybrid_public_key.clone(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A Release of `record_bonded_total`, through the production
@@ -199,6 +210,7 @@ impl Persona {
             self.bond_spend(),
             &self.keys.bond_spend_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// The Reinstate vin for `record` — the shape
@@ -243,6 +255,7 @@ impl Persona {
             self.identity(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A Release `BondPost` with the production constructor's fields, for
@@ -281,6 +294,7 @@ impl Persona {
             self.identity(),
             &self.keys.hybrid_sign_sk,
         )
+        .drawing(&self.draw)
     }
 
     /// A JoinMarket `BondPost` with the production constructor's fields,
@@ -312,5 +326,66 @@ pub fn complete_tree() -> HoldingsDescriptor {
     HoldingsDescriptor {
         kind: HoldingsKind::CompleteTree,
         shard_ids: ShardSet::new(Vec::new()).expect("empty"),
+    }
+}
+
+/// Seam T4 for the persona (`CHAIN_FORGE.md` §5.3). The signing seed is the
+/// persona's own role: a post's slot and the identity signature come out of
+/// it, and a spend's seeds do not. One seed, one signature; the signature
+/// verifies under the key the production signer derives.
+#[cfg(all(test, feature = "seeded-rng"))]
+mod tests {
+    use shekyl_crypto_pq::account::Network;
+    use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+    use shekyl_types::SigningPayloadHash;
+
+    use super::{complete_tree, Persona};
+
+    #[test]
+    fn a_signing_seed_fixes_the_identity_signature_and_the_bond_slot() {
+        let payload = SigningPayloadHash::from_bytes([0x3c; 64]);
+        let network = shekyl_network::Network::Regtest.network_id();
+        let sign = |seed: [u8; 32]| {
+            let persona = Persona::on(Network::Regtest, 1).with_signing_seed(&seed);
+            let identity = persona.identity_signature(&payload);
+            let identity_pk = persona.identity();
+            let post = persona.join(complete_tree(), [0x44; 32]);
+            let slot = post.sign_slot(&payload);
+            (identity, identity_pk, slot, post.slot_pk)
+        };
+        let (identity, identity_pk, slot, slot_pk) = sign([7; 32]);
+        let (identity_again, _, slot_again, _) = sign([7; 32]);
+        let (identity_other, _, slot_other, _) = sign([8; 32]);
+        assert_eq!(
+            identity, identity_again,
+            "one signing seed, one identity signature"
+        );
+        assert_eq!(slot, slot_again, "one signing seed, one bond slot");
+        assert_ne!(
+            identity, identity_other,
+            "another signing seed, another identity signature"
+        );
+        assert_ne!(slot, slot_other, "another signing seed, another bond slot");
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &identity_pk,
+            &identity,
+            &payload,
+            &network,
+        )
+        .expect("the identity signature verifies");
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &slot_pk,
+            &slot,
+            &payload,
+            &network,
+        )
+        .expect("the bond slot verifies");
+        let open = Persona::on(Network::Regtest, 1).identity_signature(&payload);
+        assert_ne!(
+            identity, open,
+            "a persona without a signing seed draws from the OS"
+        );
     }
 }

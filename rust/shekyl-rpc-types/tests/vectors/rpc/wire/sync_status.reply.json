@@ -1,0 +1,28 @@
+{
+  "height": 1199,
+  "target_height": 1203,
+  "state": "behind",
+  "stalled": false,
+  "session": [
+    {
+      "connection": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "endpoint": "203.0.113.5:12021",
+      "height": 1203,
+      "mode": "past-cap",
+      "header": {
+        "age": 2,
+        "due": 28
+      },
+      "span": [
+        {
+          "from": 1200,
+          "blocks": 4,
+          "size": 8192,
+          "age": 1,
+          "due": 14
+        }
+      ],
+      "download_speed": 65536
+    }
+  ]
+}

@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput, BlockHash,
-    BlockHeight, CurveTreeRoot, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
+    should_reanchor, two_sided_reference_height, AssembleInput, BlockHash, BlockHeight,
+    CurveTreeRoot, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
 };
-use shekyl_engine_state::LedgerBlock;
+use shekyl_engine_state::{LedgerBlock, SpendHorizon};
 use shekyl_units::AtomicUnits;
 
 use super::super::curve_tree_actor::CurveTreeHandle;
@@ -21,15 +21,16 @@ use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
     PendingTxDiagnostic,
 };
+use super::super::dispatch_durability::{commit_verdict, LedgerCommit};
 use super::super::error::{
     OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
 };
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
-use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
+use super::super::output_selector::{OutputSelector, SelectedOutputs};
 use super::super::pending::{
-    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
+    InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
@@ -39,12 +40,15 @@ use super::super::traits::LedgerEngine;
 use super::super::transaction_submitter::{canonical_tx_id, wire_fee};
 use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
 use super::super::tx_counts::{InputCount, OutputCount};
-use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
+use super::super::tx_fee_model::build_fee_directive;
 
+use super::super::fee_variant::selection_target;
+use super::candidates::CandidatePartition;
+use super::dispatch::DispatchFacts;
 use super::support::{
     assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
-    map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
-    release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
+    map_handle_err_to_reanchor, map_signer_error, release_output_locks_for,
+    selector_subset_violation, with_pending_tx_state_mut, TreeSpendGate,
 };
 use super::types::{
     ConsumerHeldEntry, ContentFingerprint, OutputId, PendingTxState, ReanchorError,
@@ -170,7 +174,7 @@ where
     /// "build concurrency permit stays 1"): exactly one `build` runs at
     /// a time, **engine-owned** so every embedder — wallet-rpc under a
     /// read lock, the in-process GUI — inherits the serialization now
-    /// that `Engine::build_pending_tx{,_async}` take `&self`. This
+    /// that `Engine::build_pending_tx` takes `&self`. This
     /// preserves the pre-relaxation network observable: one
     /// `AssembleTx` membership round-trip against the segment layer at
     /// a time. Raising the count is a rule-21 reopen gated on
@@ -188,7 +192,7 @@ pub(super) struct BuiltPendingMeta {
     pub(super) fee: AtomicUnits,
     pub(super) selected: SelectedOutputs,
     pub(super) synced: shekyl_types::BlockHeight,
-    pub(super) tip_hash: [u8; 32],
+    pub(super) tip_hash: BlockHash,
     /// Output locks are held from assembly until `consumer_held` commit.
     pub(super) reservation_id: ReservationId,
 }
@@ -286,12 +290,12 @@ where
     /// many intervening reorgs for free, since it compares against the *current*
     /// canonical hash, not a retained fork history.
     pub(super) fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
-        self.ledger_block_hash(reference.height) != Some(reference.block_hash.to_bytes())
+        self.ledger_block_hash(reference.height) != Some(reference.block_hash)
     }
 
     /// Hash at an inclusive ordinal, if the reorg window still holds it.
     /// One sync ledger read (F-J).
-    fn ledger_block_hash(&self, height: BlockHeight) -> Option<[u8; 32]> {
+    fn ledger_block_hash(&self, height: BlockHeight) -> Option<BlockHash> {
         self.ledger
             .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
@@ -326,42 +330,16 @@ where
         )
     }
 
-    /// Look up the retained network-exposed bytes for `tx_hash` (§5.3
-    /// decision 2), cloned for the watchdog's resubmit-same-bytes probe.
-    /// `None` means the bytes are gone — a restart crossed the await, or
-    /// the tx already left the held projection and was pruned — and the
-    /// probe rung degrades to the operator alarm.
-    pub(crate) fn held_bytes_for(&self, tx_hash: &TxHash) -> Option<Vec<u8>> {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .get(tx_hash)
-            .cloned()
-    }
-
-    /// Prune retained probe bytes down to the live held-projection set
-    /// `live` (decision 2: "prune when the hash leaves the held
-    /// projection"). The driver calls this after projecting
-    /// `held_submits` so confirmed / released txs do not retain their
-    /// bytes indefinitely.
-    pub(crate) fn prune_held_bytes(&self, live: &HashSet<TxHash>) {
-        self.state
-            .lock()
-            .expect("pending-tx state lock poisoned")
-            .held_bytes
-            .retain(|tx_hash, _| live.contains(tx_hash));
-    }
-
     pub(super) fn build_select_sync(
         &self,
         request: &TxRequest,
         fee_snapshot: super::super::fee_policy::ValidatedFeeEstimates,
         tree_gate: TreeSpendGate,
+        horizon: SpendHorizon,
         reference: Option<ReferenceBlock>,
         tree_depth: u8,
     ) -> Result<BuildSelected, SendError> {
-        if let Err(err) = request.check_recipients() {
+        if let Err(err) = request.check_recipients(self.network) {
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
                 PendingTxDiagnostic::BuildFailed {
@@ -399,118 +377,28 @@ where
         })?;
         self.refresh_current_snapshot(&mut state);
 
-        // C2 (2A §3.7.5): when a curve tree is enforced, the reference block
-        // anchors `REF_ANCHOR_AGE` behind the tip; an output is in the tree as
-        // of that reference block only if it matured by the block before it
-        // (`in_tree_at_reference`: `eligible_height < reference_height`).
-        // Without a tree there is no FCMP reference, so C2 does not apply.
+        // C2 (2A §3.7.5): when a curve tree is enforced the build anchors to
+        // the horizon's reference block, the one it was bound from, and every
+        // output is classified at that horizon (A17): the balance and the
+        // build decide spendability by one predicate at one tip. Without a
+        // tree there is no FCMP reference, so C2 does not apply.
         let c2_active = matches!(tree_gate, TreeSpendGate::Enforced { .. });
-        let (
-            synced,
-            reference_height,
-            tip_hash,
-            candidates,
-            spendable_now_total,
-            pending_rebuild_total,
-            not_yet_spendable_total,
-            not_yet_spendable,
-        ) = self.ledger.with_wallet_ledger(|wallet| {
-            let tip = wallet.ledger.height();
-            let synced = tip;
-            // Gate against the height the *bound* reference anchors to (computed
-            // in `build` before the cursor-read `.await`), so the C2 spendability
-            // decision and the tx's anchored reference are the same height even
-            // if the ledger advanced during that await — otherwise the gate
-            // could admit an output not in the tree at the anchored reference,
-            // and the proof would not include it. Recompute only when no
-            // reference was resolved (no tree / too young / tree behind the
-            // reference — none of which build a tx, so there is no anchor to
-            // stay consistent with).
-            let reference_height = if c2_active {
-                reference
-                    .as_ref()
-                    .map(|r| r.height)
-                    .or_else(|| select_reference_height(synced))
-            } else {
-                None
-            };
-            let tip_hash = wallet.ledger.block_hash_at(tip).copied();
-            let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
-            // Partition the matured, non-reserved set across three buckets so an
-            // insufficiency surfaces as the precise, self-resolving error rather
-            // than a misleading `InsufficientFunds`:
-            //   - too fresh for the reference block (C2)   → not_yet_spendable
-            //   - in the tree at the reference block       → candidate (now)
-            //   - blocked only by the in-progress backfill → pending_rebuild
-            let mut candidates: Vec<OutputCandidate> = Vec::new();
-            let mut spendable_now_total: u64 = 0;
-            let mut pending_rebuild_total: u64 = 0;
-            let mut not_yet_spendable_total: u64 = 0;
-            // `(eligible_height, amount)` per too-fresh output, so the
-            // wait-blocks signal can account for the *subset needed to cover the
-            // shortfall* rather than just the soonest output (which alone may
-            // not suffice — that would underestimate the wait).
-            let mut not_yet_spendable: Vec<(shekyl_types::BlockHeight, u64)> = Vec::new();
-            for (idx, td) in wallet.spendable_outputs(tip, None) {
-                if locked.contains(&idx) {
-                    continue;
-                }
-                let amount = td.amount();
-                match reference_height {
-                    // C2 active: spendability is decided against the *reference*
-                    // height, not the per-output eligible height.
-                    Some(rh) => {
-                        if !shekyl_curve_tree::in_tree_at_reference(td.eligible_height, rh) {
-                            // Too fresh for the reference block — not in the tree
-                            // there even if its leaf is already ingested.
-                            let raw = amount.to_raw();
-                            not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
-                            not_yet_spendable.push((td.eligible_height, raw));
-                        } else if tree_gate.covers(rh) {
-                            // The tree has reached the reference height, so its
-                            // root is reconstructable and every leaf matured before
-                            // `rh` is present at the reference block — spendable.
-                            spendable_now_total =
-                                spendable_now_total.saturating_add(amount.to_raw());
-                            candidates.push(OutputCandidate { index: idx, amount });
-                        } else {
-                            // The tree has not yet reached the reference height
-                            // (adopting / rebuilding): the reference root cannot
-                            // be reconstructed, so *no* output is provable yet —
-                            // even one whose own leaf is already ingested
-                            // (per-output coverage is necessary but not
-                            // sufficient). Self-healing as the backfill advances
-                            // to the reference height.
-                            pending_rebuild_total =
-                                pending_rebuild_total.saturating_add(amount.to_raw());
-                        }
-                    }
-                    // No C2 reference (no curve tree): the tree gate alone
-                    // decides (`Unenforced` ⇒ covers all), preserving the
-                    // no-tree path.
-                    None => {
-                        if tree_gate.covers(td.eligible_height) {
-                            spendable_now_total =
-                                spendable_now_total.saturating_add(amount.to_raw());
-                            candidates.push(OutputCandidate { index: idx, amount });
-                        } else {
-                            pending_rebuild_total =
-                                pending_rebuild_total.saturating_add(amount.to_raw());
-                        }
-                    }
-                }
-            }
+        let reference_height = if c2_active { horizon.reference() } else { None };
+        debug_assert!(
+            reference
+                .as_ref()
+                .is_none_or(|r| Some(r.height) == horizon.reference()),
+            "the bound reference comes from the build's horizon"
+        );
+        let synced = horizon.tip();
+        let (tip_hash, partition) = self.ledger.with_wallet_ledger(|wallet| {
+            let reserved: HashSet<OutputId> = state.output_locks.keys().copied().collect();
             (
-                synced,
-                reference_height,
-                tip_hash,
-                candidates,
-                spendable_now_total,
-                pending_rebuild_total,
-                not_yet_spendable_total,
-                not_yet_spendable,
+                wallet.ledger.block_hash_at(synced).copied(),
+                CandidatePartition::of(wallet, horizon, tree_gate, &reserved),
             )
         });
+        let candidates = &partition.candidates;
 
         let Some(tip_hash) = tip_hash else {
             let err = SendError::NotSynced;
@@ -542,82 +430,27 @@ where
             return Err(err);
         }
 
-        // CT-5 §3.2.1 D3 + C2 (2A §3.7.5): classify an insufficiency by what is
-        // blocking the shortfall, preferring the soonest-healing explanation.
-        // Tree backfill advances continuously, so `SpendUnavailableRebuilding`
-        // is preferred when the tree-pending outputs alone close the gap; the C2
-        // reference depth advances only with the tip, so `OutputNotYetSpendable`
-        // is next when the too-fresh outputs are also required; otherwise the
-        // wallet is genuinely short and `InsufficientFunds` is honest — its
-        // `available` reports the full matured balance (including not-yet- and
-        // pending-rebuild buckets) so the gate never makes the wallet look
-        // poorer than it is.
-        let resolve_insufficiency = |needed_raw: u64| -> SendError {
-            let with_rebuild = spendable_now_total.saturating_add(pending_rebuild_total);
-            let total_matured = with_rebuild.saturating_add(not_yet_spendable_total);
-            if pending_rebuild_total > 0
-                && spendable_now_total < needed_raw
-                && with_rebuild >= needed_raw
-            {
-                SendError::SpendUnavailableRebuilding {
-                    needed: needed_raw,
-                    spendable_now: spendable_now_total,
-                    pending_rebuild: pending_rebuild_total,
-                }
-            } else if not_yet_spendable_total > 0
-                && with_rebuild < needed_raw
-                && total_matured >= needed_raw
-            {
-                // The too-fresh outputs are required to cover the spend. Report
-                // the height by which *enough* of them mature relative to the
-                // reference — accumulate (cheapest-to-mature first) until the
-                // shortfall is covered, not just the soonest output (which alone
-                // may not suffice, underestimating the wait). The
-                // `total_matured >= needed_raw` guard guarantees the loop
-                // reaches the shortfall.
-                let reference_block_height = reference_height
-                    .expect("not_yet_spendable_total > 0 ⇒ C2 active ⇒ reference height set");
-                let shortfall = needed_raw.saturating_sub(with_rebuild);
-                let mut by_eligible = not_yet_spendable.clone();
-                by_eligible.sort_unstable_by_key(|&(eligible, _)| eligible);
-                let mut covered: u64 = 0;
-                let mut eligible_height = reference_block_height;
-                for (eligible, amount) in by_eligible {
-                    eligible_height = eligible;
-                    covered = covered.saturating_add(amount);
-                    if covered >= shortfall {
-                        break;
-                    }
-                }
-                SendError::OutputNotYetSpendable {
-                    eligible_height,
-                    reference_block_height,
-                    wait_blocks: shekyl_curve_tree::blocks_until_in_tree(
-                        eligible_height,
-                        reference_block_height,
+        // CT-5 §3.2.1 D3 + C2: an insufficiency names what is in the way
+        // (`CandidatePartition::refusal`), never a bare `InsufficientFunds`
+        // when waiting would cover it. A returned index outside the
+        // candidate set is a selector-contract violation.
+        let resolve_insufficiency =
+            |needed_raw: u64| -> SendError { partition.refusal(needed_raw, horizon) };
+        let map_select_err =
+            |err: OutputSelectorError, needed_raw: u64| -> (SendError, BuildErrorKind) {
+                match err {
+                    OutputSelectorError::ReturnedIndicesNotSubset { .. } => (
+                        selector_subset_violation(),
+                        BuildErrorKind::SelectorContractViolation,
                     ),
-                }
-            } else {
-                SendError::InsufficientFunds {
-                    needed: needed_raw,
-                    available: total_matured,
-                }
-            }
-        };
-        // Selector-error projection: an insufficiency (empty/short candidate
-        // set) routes through `resolve_insufficiency`; a returned-subset
-        // violation stays an `InvalidRecipient` contract failure.
-        let map_select_err = |err: OutputSelectorError, needed_raw: u64| -> SendError {
-            match err {
-                OutputSelectorError::ReturnedIndicesNotSubset { .. } => {
-                    SendError::InvalidRecipient {
-                        reason: "output selector returned indices outside candidate set",
+                    OutputSelectorError::InsufficientFunds { .. }
+                    | OutputSelectorError::NoEligibleOutputs => {
+                        let mapped = resolve_insufficiency(needed_raw);
+                        let kind = build_error_kind(&mapped);
+                        (mapped, kind)
                     }
                 }
-                OutputSelectorError::InsufficientFunds { .. }
-                | OutputSelectorError::NoEligibleOutputs => resolve_insufficiency(needed_raw),
-            }
-        };
+            };
 
         let mut total_amount = AtomicUnits::ZERO;
         for recipient in &request.recipients {
@@ -635,9 +468,7 @@ where
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
         let payment_count = request.recipients.len();
-        let rate = fee_rate_for_priority(request.priority, &fee_snapshot).map_err(|err| {
-            fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
-        })?;
+        let rate = fee_snapshot.rate(request.priority);
 
         let estimate = |input_count: usize, output_count: usize| {
             self.fee_estimator
@@ -658,25 +489,17 @@ where
         let fee_pass_a = estimate(1, payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
-            fail_build_after_attempted(
-                self.sink.as_ref(),
-                SendError::InvalidRecipient {
-                    reason: "amount + fee overflowed u64",
-                },
-            )
-        })?;
+        let needed = selection_target(total_amount, fee_pass_a)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         let mut selected: SelectedOutputs = self
             .output_selector
-            .select_outputs(&candidates, needed)
+            .select_outputs(candidates, needed)
             .map_err(|err| {
-                let mapped = map_select_err(err.into(), needed.to_raw());
+                let (mapped, kind) = map_select_err(err.into(), needed.to_raw());
                 emit_pending_tx_diagnostic(
                     self.sink.as_ref(),
-                    PendingTxDiagnostic::BuildFailed {
-                        kind: build_error_kind(&mapped),
-                    },
+                    PendingTxDiagnostic::BuildFailed { kind },
                 );
                 mapped
             })?;
@@ -684,24 +507,16 @@ where
         let fee_pass_b = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if fee_pass_b > fee_pass_a {
-            let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
-                fail_build_after_attempted(
-                    self.sink.as_ref(),
-                    SendError::InvalidRecipient {
-                        reason: "amount + refined fee overflowed u64",
-                    },
-                )
-            })?;
+            let needed_b = selection_target(total_amount, fee_pass_b)
+                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
             selected = self
                 .output_selector
-                .select_outputs(&candidates, needed_b)
+                .select_outputs(candidates, needed_b)
                 .map_err(|err| {
-                    let mapped = map_select_err(err.into(), needed_b.to_raw());
+                    let (mapped, kind) = map_select_err(err.into(), needed_b.to_raw());
                     emit_pending_tx_diagnostic(
                         self.sink.as_ref(),
-                        PendingTxDiagnostic::BuildFailed {
-                            kind: build_error_kind(&mapped),
-                        },
+                        PendingTxDiagnostic::BuildFailed { kind },
                     );
                     mapped
                 })?;
@@ -709,14 +524,8 @@ where
         let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
-        let required = total_amount.checked_add(fee).ok_or_else(|| {
-            fail_build_after_attempted(
-                self.sink.as_ref(),
-                SendError::InvalidRecipient {
-                    reason: "amount + final fee overflowed u64",
-                },
-            )
-        })?;
+        let required = selection_target(total_amount, fee)
+            .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
         if selected.total_covered < required {
             let err = resolve_insufficiency(required.to_raw());
             emit_pending_tx_diagnostic(
@@ -733,15 +542,15 @@ where
             InputCount::clamped(selected.indices.len()),
             OutputCount::clamped(payment_count),
             tree_depth,
-        );
+        )
+        .ok_or(SendError::BuildInvariant {
+            reason: "the fee does not fit in u64",
+        })?;
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
             if !candidate_indices.contains(index) {
-                let err =
-                    map_output_selector_error(&OutputSelectorError::ReturnedIndicesNotSubset {
-                        offending_index: *index,
-                    });
+                let err = selector_subset_violation();
                 emit_pending_tx_diagnostic(
                     self.sink.as_ref(),
                     PendingTxDiagnostic::BuildFailed {
@@ -890,10 +699,7 @@ where
         // per-tx secret rides into `consumer_held` alongside the bytes
         // (persisted at submit-ACCEPTED, wiped with the entry on
         // discard). Destructure once; the secret moves, never copies.
-        let SignedTransfer {
-            tx_bytes,
-            tx_key_secret,
-        } = signed;
+        let SignedTransfer { tx_bytes, tx_key } = signed;
         let mut state = self.state.lock().map_err(|_| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
@@ -967,7 +773,7 @@ where
                         // A fresh build is generation 0; re-anchor bumps it (§4).
                         content_gen: 0,
                         fingerprint,
-                        tx_key_secret,
+                        tx_key,
                     },
                 );
                 Ok(())
@@ -999,7 +805,7 @@ where
         Ok(pending)
     }
 
-    /// CT-5d re-anchor — **reprove** path ([`docs/design/CT5D_REANCHOR.md`] §3/§3a):
+    /// CT-5d re-anchor — **reprove** path (`docs/design/CT5D_REANCHOR.md` §3/§3a):
     /// refresh a `consumer_held` proof against a fresh reference without changing
     /// its inputs.
     ///
@@ -1120,7 +926,7 @@ where
                 Some(block_hash) => ReferenceBlock {
                     height: reference_ordinal,
                     curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-                    block_hash: BlockHash::from_bytes(block_hash),
+                    block_hash,
                 },
                 None => {
                     return Err(ReanchorError::ReferenceResyncing {
@@ -1134,8 +940,7 @@ where
             // a fee the current inputs cannot cover escalates to reselection.
             let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
             let payment_count = request.recipients.len();
-            let rate = fee_rate_for_priority(request.priority, &fee_snapshot)
-                .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err)))?;
+            let rate = fee_snapshot.rate(request.priority);
             let fee = self
                 .fee_estimator
                 .estimate_fee(
@@ -1159,11 +964,7 @@ where
                         reason: "recipient amount sum overflowed u64",
                     }))?;
             }
-            let required = total_amount.checked_add(fee).ok_or(ReanchorError::Failed(
-                SendError::InvalidRecipient {
-                    reason: "amount + fee overflowed u64",
-                },
-            ))?;
+            let required = selection_target(total_amount, fee).map_err(ReanchorError::Failed)?;
 
             // Re-read the selected inputs for `total_covered` and the assemble
             // inputs (public material only; the fold re-reads the secret pathway
@@ -1200,19 +1001,21 @@ where
                 InputCount::clamped(selected_indices.len()),
                 OutputCount::clamped(payment_count),
                 depth,
-            );
+            )
+            .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
+                reason: "the fee does not fit in u64",
+            }))?;
 
             // --- phase 2 (prover, lock-free): assemble + fold + sign ---
             let paths = handle
                 .assemble_tx(reference, assemble_inputs.clone())
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
-            // Check *every* path's depth, not just the first: all paths share the
-            // one reference's tree so they should agree, but verifying all closes
-            // the gap if that invariant ever breaks (the per-input branch-layer
-            // count is authoritatively re-checked downstream in tx-builder's
-            // `validate_inputs`; this is the fee-sizing pre-check).
-            if paths.iter().any(|p| p.tree.tree_depth != depth) {
+            // The batch is to one tree by construction (R-26), so its depth is
+            // every path's (the per-input branch-layer count is authoritatively
+            // re-checked downstream in tx-builder's `validate_inputs`; this is
+            // the fee-sizing pre-check).
+            if paths.tree().tree_depth != depth {
                 // The tree moved under the reference between the depth read and
                 // the assemble — re-stale; retry the whole loop.
                 last_resync = Some(ReanchorError::ReferenceResyncing {
@@ -1228,7 +1031,6 @@ where
                         &request,
                         &selected_indices,
                         ledger.transfers(),
-                        &assemble_inputs,
                         &paths,
                         fee_directive,
                     )
@@ -1247,10 +1049,7 @@ where
             // so the swap below replaces the entry's held secret too;
             // the superseded secret zeroizes on drop. A `continue`
             // retry drops this pair the same way — no residue.
-            let SignedTransfer {
-                tx_bytes,
-                tx_key_secret,
-            } = signed;
+            let SignedTransfer { tx_bytes, tx_key } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
             let new_fingerprint =
@@ -1276,7 +1075,7 @@ where
             let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
             let reference_ordinal = reference_height;
             let still_canonical =
-                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash.to_bytes());
+                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash);
             if !still_canonical || should_reanchor(current_tip, reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",
@@ -1320,7 +1119,7 @@ where
             };
 
             entry.tx_bytes = tx_bytes;
-            entry.tx_key_secret = tx_key_secret;
+            entry.tx_key = tx_key;
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;
@@ -1342,11 +1141,12 @@ where
         }))
     }
 
-    pub(super) async fn submit_async(
+    pub(super) async fn submit_async<C: LedgerCommit>(
         &self,
         id: ReservationId,
         seen_gen: u64,
-    ) -> Result<SubmitOutcome, SubmitError> {
+        commit: &C,
+    ) -> Result<SubmitReceipt, SubmitError> {
         // --- pre-flight: membership under the state lock, staleness outside it
         // (CT-5d §5). The reference is the staleness authority — it *replaces* the
         // SnapshotId / built_at_tip_hash checks, so a benign tip advance no longer
@@ -1394,22 +1194,36 @@ where
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {
-            match self.reanchor_consumer_held(id).await {
-                // Reproved or ContentChanged: the entry now carries a fresh proof
-                // and a possibly-advanced content_gen. The broadcast gate below
-                // enforces consent uniformly via seen_gen, so both fall through.
-                Ok(_) => {}
-                Err(ReanchorError::ReselectionRequired { .. }) => {
-                    return Err(SubmitError::ReselectionRequired { reservation_id: id });
+            // Reproved or ContentChanged: the entry now carries a fresh proof and
+            // a possibly-advanced content_gen. The broadcast gate below enforces
+            // consent uniformly via seen_gen, so both fall through.
+            if let Err(reanchor) = self.reanchor_consumer_held(id).await {
+                // The state lock was released across the re-anchor, so a
+                // concurrent submit or discard may have moved the entry, and
+                // the re-anchor's own failure may be that it found it gone. Its
+                // errors say the reservation is still held (`Held`), so they
+                // stand only while it is: otherwise the error says where it
+                // went, in flight or gone.
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+                if let Some(moved) = left_consumer_held(&state, id) {
+                    return Err(moved);
                 }
-                Err(ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_)) => {
-                    return Err(SubmitError::ReanchorUnavailable { reservation_id: id });
-                }
+                return Err(match reanchor {
+                    ReanchorError::ReselectionRequired { .. } => {
+                        SubmitError::ReselectionRequired { reservation_id: id }
+                    }
+                    ReanchorError::ReferenceResyncing { .. } | ReanchorError::Failed(_) => {
+                        SubmitError::ReanchorUnavailable { reservation_id: id }
+                    }
+                });
             }
         }
 
-        // --- broadcast gate (sync): content_gen consent + atomic flip, then send ---
-        let tx_bytes = {
+        // --- broadcast gate (sync): content_gen consent + atomic flip ---
+        let dispatch = {
             let mut state = self
                 .state
                 .lock()
@@ -1424,16 +1238,14 @@ where
             // `SubmitAlreadyPending`, a vanished one is discarded / never-existed.
             // Peek `content_gen` only (a `Copy`, no entry clone); the entry is
             // moved out below iff the consent gate passes.
-            let content_gen = match state.consumer_held.get(&id) {
-                Some(held) => held.content_gen,
-                None => {
-                    return Err(if state.in_flight.contains_key(&id) {
-                        SubmitError::SubmitAlreadyPending { reservation_id: id }
-                    } else {
-                        SubmitError::ReservationNotFound { reservation_id: id }
-                    });
-                }
-            };
+            if let Some(moved) = left_consumer_held(&state, id) {
+                return Err(moved);
+            }
+            let content_gen = state
+                .consumer_held
+                .get(&id)
+                .expect("consumer_held membership established above")
+                .content_gen;
 
             // CT-5d (§4): broadcast only what the consumer authorized. `seen_gen`
             // must match the materialized `content_gen`; a mismatch means a
@@ -1449,74 +1261,33 @@ where
             }
 
             // Consent satisfied. Move the entry out of `consumer_held` and flip it
-            // to `in_flight` atomically under the lock, then send lock-free —
-            // "committed as of" the flip (F-H). The lock is held continuously
-            // since the peek above (no await), so the entry is still present.
+            // to `in_flight` atomically under the lock (F-H): from here a
+            // concurrent submit is `SubmitAlreadyPending` and a discard is
+            // refused, so the save below can run without the state lock.
             // `in_flight` preserves the *whole* entry (re-anchor substrate
-            // included) so a §2.5 retryable rejection can restore it to
-            // `consumer_held` losslessly; one `tx_bytes` clone moves on to the
-            // send.
+            // included) so a failed save or a §2.5 retryable rejection can
+            // restore it to `consumer_held` losslessly.
             let held = state
                 .consumer_held
                 .remove(&id)
                 .expect("consumer_held membership established above, lock held throughout");
-            let tx_bytes = held.tx_bytes.clone();
-
-            // WI-RPC-3 retention (OUTBOUND PREREQUISITE pin 1, dispatch
-            // form): persist the per-tx secret BEFORE the bytes can
-            // leave for the daemon. The accept verdict is an
-            // *observation* about network exposure, not its start — a
-            // crash or dropped connection between this send and the
-            // verdict leaves a tx the network may still mine, and a
-            // secret that lived only in the runtime `in_flight` map
-            // died with the process, permanently disabling the OUTBOUND
-            // proof for a payment that settles normally. Definite
-            // refusals (terminal / retryable — provably unrelayed under
-            // single-egress, §2.5) retire the record in their
-            // finalizers, so a never-accepted build still leaves no
-            // residue; accept / already-in-chain / ambiguous / crash
-            // keep it.
-            //
-            // Second copy, accounted: from here the persisted record is
-            // the durable holder; the runtime copy stays on the entry
-            // only so a §2.5 retryable restoration can re-dispatch, and
-            // is wiped when the entry drops (`TxSecretKey` is
-            // zeroize-on-drop).
-            let dispatch_txid = canonical_tx_id(&held.tx_bytes);
-            // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
-            // read from the wire bytes — the same cleartext value the
-            // chain sees — never an estimator output. Wallet-built bytes
-            // are canonical wire by construction (the `canonical_tx_id`
-            // contract).
-            let realized_fee = wire_fee(&held.tx_bytes);
             let selected: Vec<OutputId> = state
                 .output_locks
                 .iter()
                 .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
                 .collect();
-            let retained = shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                *held.tx_key_secret.as_bytes(),
-            ));
-            self.ledger.with_wallet_ledger_mut(|wallet| {
-                wallet.record_retained_tx_key(dispatch_txid.to_bytes(), retained);
-                // PR-SJ-1: the journal row is born in the same guard as
-                // the retention record — dispatch facts persist
-                // atomically, before the bytes can reach the daemon
-                // (pin-1 dispatch form). C2: the journal owns these
-                // facts; the F14 field is the derived cache.
-                let inputs: Vec<shekyl_engine_state::SendInputRef> = selected
-                    .iter()
-                    .map(|&idx| {
-                        let td = wallet.ledger.transfers().get(idx).unwrap_or_else(|| {
-                            panic!("dispatch: output_locks references missing transfer index {idx}")
-                        });
-                        shekyl_engine_state::SendInputRef {
-                            gindex: td.global_output_index.to_raw(),
-                            amount: td.amount().to_raw(),
-                        }
-                    })
-                    .collect();
-                let recipients = held
+            let dispatch = DispatchFacts {
+                txid: canonical_tx_id(&held.tx_bytes),
+                // PR-SJ-1 (`WALLET_SEND_RECORD.md` R-4): the realized fee is
+                // read from the wire bytes — the same cleartext value the
+                // chain sees — never an estimator output. Wallet-built bytes
+                // are canonical wire by construction (the `canonical_tx_id`
+                // contract).
+                fee: wire_fee(&held.tx_bytes),
+                tx_bytes: held.tx_bytes.clone(),
+                selected,
+                retained: shekyl_engine_state::TxSecretKey::new(held.tx_key.store()),
+                recipients: held
                     .request
                     .recipients
                     .iter()
@@ -1525,61 +1296,97 @@ where
                         amount: r.amount_atomic_units.to_raw(),
                         rid: r.rid,
                     })
-                    .collect();
-                wallet.record_dispatched_send(
-                    dispatch_txid.to_bytes(),
-                    realized_fee,
-                    recipients,
-                    inputs,
-                );
-            });
-
-            let submitted_at = Instant::now();
+                    .collect(),
+            };
             state.in_flight.insert(
                 id,
                 InFlightSubmit {
                     entry: held,
-                    submitted_at,
+                    submitted_at: Instant::now(),
                 },
             );
+            dispatch
+        };
 
+        // --- save before send: only a saved dispatch can be handed over ---
+        let durable = self.save_dispatch(id, dispatch, commit)?;
+
+        // The daemon round-trip does not hold the pending-tx lock. A
+        // test-injected reply takes the same path as the transport, and
+        // its bytes are dropped unsent.
+        let daemon_result = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            if let Some(outcome) = self.take_queued_submit_outcome() {
+                drop(durable);
+                outcome
+            } else {
+                drop(state);
+                let submitter = Arc::clone(&self.submitter);
+                submitter.submit(durable).await
+            }
+        };
+
+        // State edits under the pending-tx lock. The journal edit is
+        // named here and committed below, after this lock drops: a build
+        // holds the state lock across a ledger read, and the save must
+        // not nest the other way either.
+        let (result, edit) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            match daemon_result {
+                Ok(success) => {
+                    let (outcome, edit) = self.finalize_submit_success(&mut state, id, success);
+                    (Ok(outcome), Some(edit))
+                }
+                Err(err) => {
+                    let (error, edit) = self.finalize_submit_error(&mut state, id, &err);
+                    (Err(error), edit)
+                }
+            }
+        };
+
+        let applied = if let Some(edit) = edit {
+            self.ledger
+                .with_wallet_ledger_mut(|wallet| commit_verdict(wallet, commit, edit))
+        } else {
+            super::super::dispatch_durability::AppliedVerdict {
+                saved: true,
+                rescan: None,
+            }
+        };
+
+        if let Some((txid, claimed_height)) = applied.rescan {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
+            let tx_hash = TxHash::from_bytes(txid);
+            state.rescan_queue.push(RescanRequest {
+                tx_hash,
+                claimed_height,
+            });
             emit_pending_tx_diagnostic(
                 self.sink.as_ref(),
-                PendingTxDiagnostic::SubmitAttempted { reservation_id: id },
+                PendingTxDiagnostic::TargetedRescanRequested {
+                    reservation_id: id,
+                    tx_hash,
+                    claimed_height,
+                },
             );
+        }
 
-            if let Some(outcome) = self.take_queued_submit_outcome() {
-                // Test-injected daemon reply: same finalization as the
-                // production dispatch below, through the same two methods,
-                // so the injected path cannot certify a projection the real
-                // one does not perform.
-                return match outcome {
-                    Ok(success) => Ok(self.finalize_submit_success(&mut state, id, success)),
-                    Err(err) => Err(self.finalize_submit_error(&mut state, id, &err)),
-                };
-            }
-
-            tx_bytes
-        };
-
-        let submitter = Arc::clone(&self.submitter);
-        let success = match submitter.submit(tx_bytes).await {
-            Ok(success) => success,
-            Err(submit_err) => {
-                let mut state = self
-                    .state
-                    .lock()
-                    .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-                return Err(self.finalize_submit_error(&mut state, id, &submit_err));
-            }
-        };
-
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| SubmitError::ReservationNotFound { reservation_id: id })?;
-
-        Ok(self.finalize_submit_success(&mut state, id, success))
+        match result {
+            Ok(outcome) => Ok(SubmitReceipt {
+                outcome,
+                verdict_saved: applied.saved,
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn discard_sync(
@@ -1704,7 +1511,8 @@ where
             in_flight: HashMap::new(),
             next_id: 0,
             loop_breaker: SubmitLoopBreaker::default(),
-            held_bytes: HashMap::new(),
+            dispatched_this_session: HashSet::new(),
+            raised_alarms: HashMap::new(),
             rescan_queue: Vec::new(),
         });
         Self {
@@ -1739,4 +1547,20 @@ where
             .lock()
             .expect("submit_daemon_outcome lock poisoned") = Some(outcome);
     }
+}
+
+/// Where `id` went once it left `consumer_held`: in flight (a concurrent
+/// submit flipped it) or gone (discarded, or never issued). `None` while it
+/// is still `consumer_held`. A submit that released the state lock (across
+/// a re-anchor) reads this before it reports anything about the entry, so
+/// it never says a reservation is held that is not.
+fn left_consumer_held(state: &PendingTxState, id: ReservationId) -> Option<SubmitError> {
+    if state.consumer_held.contains_key(&id) {
+        return None;
+    }
+    Some(if state.in_flight.contains_key(&id) {
+        SubmitError::SubmitAlreadyPending { reservation_id: id }
+    } else {
+        SubmitError::ReservationNotFound { reservation_id: id }
+    })
 }

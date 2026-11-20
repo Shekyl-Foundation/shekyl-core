@@ -1,0 +1,4 @@
+min_block_weight	300000
+coinbase_reserve	1386
+pruned_len	2619
+penalty_multiple	2

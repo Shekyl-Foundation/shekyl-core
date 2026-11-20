@@ -18,11 +18,10 @@
 // ---------------------------------------------------------------------------
 // 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire A — primary).
 //
-// Matching gates (defense-in-depth; all four must be defeated to ship a
+// Matching gates (defense-in-depth; all three must be defeated to ship a
 // 32-bit build):
-//   - rust/shekyl-ffi/src/lib.rs           (Tripwire B, structural-not-observable)
 //   - rust/shekyl-tx-builder/src/lib.rs    (Tripwire C, direct fips204 consumer)
-//   - CMakeLists.txt (top)                 (Tripwire D, C++-side configure gate)
+//   - CMakeLists.txt (top)                 (Tripwire D, configure gate)
 //
 // This is the primary ML-KEM-768 / ML-DSA-65 consumer. The `fips203` /
 // `fips204` constant-time guarantees are stated against native 64-bit
@@ -47,7 +46,7 @@ compile_error!(
      exploited by KyberSlash (Bernstein et al., 2024) against fielded \
      CT implementations. The hybrid X25519+ML-KEM construction does not \
      rescue the ML-KEM secret once it leaks via timing. Matching gates \
-     live in shekyl-ffi, shekyl-tx-builder, and the top-level CMakeLists.txt. \
+     live in shekyl-tx-builder and the top-level CMakeLists.txt. \
      See docs/CHANGELOG.md entry 'Retired 32-bit build targets' before \
      attempting to revert this gate."
 );
@@ -63,7 +62,7 @@ mod encrypted_output_field;
 pub mod error;
 pub mod fn_dsa_hybrid;
 pub mod handle;
-pub(crate) mod heap_secret;
+pub mod held_key_image;
 mod hybrid_combiner;
 pub mod kem;
 pub mod key_image;
@@ -73,13 +72,19 @@ pub mod leaf_commitment;
 pub mod message_signing;
 pub mod montgomery;
 pub mod multisig;
-pub mod multisig_receiving;
+pub mod multisig_blob;
+pub mod multisig_envelope;
+pub mod multisig_intent;
+pub mod multisig_output;
 pub mod output;
 pub mod output_claim;
+pub mod output_mask;
+pub mod output_order;
 pub mod rng;
 pub mod schnorr;
-mod seeded_rng;
+pub mod seeded_rng;
 pub mod signature;
+pub mod tx_key;
 pub mod wallet_envelope;
 
 #[doc(hidden)]
@@ -87,3 +92,4 @@ pub mod test_support;
 
 pub use error::CryptoError;
 pub use shekyl_address as address;
+pub use tx_key::TxKey;

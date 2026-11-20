@@ -41,7 +41,7 @@ unprompted, against an earlier framing in which the diff discharged §7.1.1.)
 ## 2. The denominator is 34, not 17
 
 17 tables, derived from the `X(LMDB_ARCHIVAL_...)` X-macro at
-`src/blockchain_db/lmdb/db_lmdb.cpp:350-366` rather than hand-listed, each
+`src/blockchain_db/lmdb/db_lmdb.cpp` rather than hand-listed, each
 with **two** cells: an apply half and a revert half. Every cell resolves to
 `FORCED-BY:<event>` or `EXCLUDED:<reason>`.
 
@@ -280,8 +280,8 @@ countersignature binds the **coinbase output key** (`[0x09; 32]`) and the
 has neither, so the vector cannot be lifted into a real chain.
 
 **And generating a fresh one is not available: there is no emitter.** The
-attestation FFI exposes exactly two entry points — `shekyl_archival_verify_attestation`
-and `shekyl_archival_attestation_pass_p_ids`. Both verify. Nothing in the tree
+attestation FFI exposes exactly two entry points — `shekyl_archival_verify_attestation` (deleted, `DEL-008`)
+and `shekyl_archival_attestation_pass_p_ids` (deleted, `DEL-008`). Both verify. Nothing in the tree
 **constructs** a witness: every `attestation_witness =` in `src/` is a copy from
 the database, a wire entry, or a bootstrap record. The tree says so plainly at
 `blockchain.cpp:6048` — *"Empty on local mine and until the **Phase 2/3

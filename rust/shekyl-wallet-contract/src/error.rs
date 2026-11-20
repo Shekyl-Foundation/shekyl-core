@@ -10,22 +10,48 @@ use serde_json::{json, Value};
 use shekyl_engine_core::engine::error::{
     FeeEstimatorError, FinalityBreach, FinalityStop, RetryableRejectCause, TerminalErrorKind,
 };
-use shekyl_engine_core::engine::SubmitError;
+use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
     ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
     PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, StakeInError, StoreOpenFault,
+    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
-use shekyl_rpc_client::{
-    DaemonFault, DaemonNetwork, HashHex, IdentityMismatch, RejectCause, SubmitVerdict,
-};
+use shekyl_rpc_client::{DaemonFault, HashHex, IdentityMismatch, Network};
 use thiserror::Error;
 
 pub use crate::shard_view::ShardViewNotOfferedCause;
+
+/// A definite daemon rejection as the wallet RPC contract names it: the
+/// `-29106` data's `cause` and `-29114`'s (`docs/api/wallet_rpc.yaml`).
+///
+/// The wallet contract's own vocabulary. The daemon's wire spells its
+/// causes as one-key states since `CORE_RPC_VERSION` 4.0 (IG-Q76); this
+/// contract keeps the words its callers read until it is renamed in its
+/// own right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectCause {
+    /// The bytes do not parse, or break a structural or static rule.
+    Malformed,
+    /// Below the fee floor.
+    FeeTooLow,
+    /// Another transaction consumes one of this one's inputs.
+    DoubleSpendConflict,
+    /// The FCMP++ reference block's root is no longer the chain's.
+    StaleRoot,
+    /// The reference block is younger than the minimum age.
+    ReferenceTooRecent,
+    /// The daemon does not know the reference block.
+    ReferenceNotFound,
+    /// A consensus row refused the transaction; the row rides beside it.
+    ConsensusRule,
+    /// A cause this build does not know: the fail-safe disposition.
+    Unrecognized,
+}
 
 /// The Foundation CompleteTree terms, stated to the operator on the path
 /// that would take them on (`COMPLETETREE_ACTIVATION.md` §5, approved
@@ -149,6 +175,10 @@ wallet_rpc_error_codes! {
     /// a version this build cannot read. It is rebuilt from the chain once
     /// deleted; `data.cause` says which.
     CurveTreeStoreUnusable = -29016 => "CURVE_TREE_STORE_UNUSABLE",
+    /// Open: this computer's random-number source failed the wallet's
+    /// check, so the wallet did not open. Only a `conformance` build runs
+    /// the check.
+    RandomSourceCheckFailed = -29017 => "RANDOM_SOURCE_CHECK_FAILED",
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100 => "INVALID_RECIPIENT",
     /// Build: spendable balance too low.
@@ -198,8 +228,57 @@ wallet_rpc_error_codes! {
     ReselectionRequired = -29117 => "RESELECTION_REQUIRED",
     /// Build: the daemon's fee answer could not be read.
     DaemonFeeResponseInvalid = -29118 => "DAEMON_FEE_RESPONSE_INVALID",
-    /// Build: the signer tried and a downstream failure stopped it.
+    /// Build: the wallet's own signer hit an internal fault; `data.fault`
+    /// names which.
     SignerFailed = -29119 => "SIGNER_FAILED",
+    /// Submit: the send's record could not be saved because the wallet's
+    /// folder, file or drive is not writable (`data`: `target`), so nothing
+    /// was sent; the reservation is kept (A19). The save's other causes
+    /// have their own codes, `-29128` to `-29134` (Rick, 2026-11-18 and
+    /// 2026-11-19).
+    SaveNotWritable = -29120 => "SAVE_NOT_WRITABLE",
+    /// `tx_resend`: no held send has this id.
+    TxNotHeld = -29121 => "TX_NOT_HELD",
+    /// `tx_resend`: the held send has no saved bytes to resend.
+    TxBytesMissing = -29122 => "TX_BYTES_MISSING",
+    /// Build: the spend needs more inputs than one transaction may carry.
+    TooManyInputs = -29123 => "TOO_MANY_INPUTS",
+    /// Build: the request has more recipients than one transaction may
+    /// carry with its change.
+    TooManyOutputs = -29124 => "TOO_MANY_OUTPUTS",
+    /// Build: an input's tree path does not hold the output it spends.
+    InputNotInTree = -29125 => "INPUT_NOT_IN_TREE",
+    /// Build: an input was received but can never be spent.
+    InputUnspendable = -29126 => "INPUT_UNSPENDABLE",
+    // -29127 OUTPUTS_PARKED is RETIRED (never reuse): the wallet has no
+    // user-set hold on outputs (V3_WALLET_DECISION_LOG.md, 2026-11-15).
+    // The number stays recorded in wallet_rpc.yaml so it is never
+    // reallocated with a new meaning.
+    /// Submit: the send was saved on a volume whose file system Windows
+    /// cannot confirm survives a power cut, so nothing was sent; the
+    /// reservation is kept (`data`: `file_system`).
+    SaveDurabilityUnconfirmed = -29128 => "SAVE_DURABILITY_UNCONFIRMED",
+    /// Submit: the disk holding the wallet is full, so the send was not
+    /// saved and nothing was sent; the reservation is kept.
+    SaveDiskFull = -29129 => "SAVE_DISK_FULL",
+    /// Submit: another program held the wallet's file open past the save's
+    /// wait (a scanner), so nothing was sent; the reservation is kept.
+    SaveFileHeld = -29130 => "SAVE_FILE_HELD",
+    /// Submit: the disk reported an error at a step of saving the send, so
+    /// nothing was sent; the reservation is kept (`data`: `step`, `error`).
+    SaveIoFailed = -29131 => "SAVE_IO_FAILED",
+    /// Submit: the wallet's local NTFS drive refused the rename Windows
+    /// confirms, so nothing was sent; the reservation is kept. Windows
+    /// builds observed to give it: none observed.
+    SaveRenameUnconfirmed = -29132 => "SAVE_RENAME_UNCONFIRMED",
+    /// Submit: the wallet could not prepare the send's record to save (a
+    /// fault in the wallet, not the disk), so nothing was sent; the
+    /// reservation is kept.
+    SaveInternalFault = -29133 => "SAVE_INTERNAL_FAULT",
+    /// Submit: the wallet is on a network drive, where no save is confirmed
+    /// to survive a power cut, so nothing was sent; the reservation is kept
+    /// (Rick, 2026-11-19).
+    SaveOnNetworkDrive = -29134 => "SAVE_ON_NETWORK_DRIVE",
     /// Refresh: single-flight violation.
     RefreshInProgress = -29200 => "REFRESH_IN_PROGRESS",
     /// Refresh / rescan / proofs / build: the daemon did not answer.
@@ -240,6 +319,17 @@ wallet_rpc_error_codes! {
     /// the tree untouched, and this code says so even when the rescan
     /// already cleared history.
     ResyncRequired = -29211 => "RESYNC_REQUIRED",
+    /// The daemon refused a call as outside this wallet's grant: the
+    /// connection holds no grant the operation needs.
+    DaemonGrantRefused = -29212 => "DAEMON_GRANT_REFUSED",
+    /// Something other than this account's node answers at "this
+    /// computer"'s rendezvous (`RPC_CHANNEL.md` RT-15): a security failure.
+    /// The wallet did not connect, and does not retry or try another leg.
+    DaemonPeerCheckFailed = -29213 => "DAEMON_PEER_CHECK_FAILED",
+    /// "This computer"'s node runs as a service, which a wallet reaches
+    /// only over the channel (RT-W12); until then it names the service's
+    /// view listener as `daemon-address`. Nothing was dialled.
+    DaemonIsAService = -29214 => "DAEMON_IS_A_SERVICE",
     /// `check_*`: proof string failed decode / framing / size caps.
     ProofMalformed = -29300 => "PROOF_MALFORMED",
     /// `get_tx_proof` OUTBOUND: no retained per-tx secret for the txid.
@@ -381,10 +471,14 @@ wallet_rpc_error_codes! {
     /// no holder that served it (the daemon's `-22`). Transient; retry.
     ShardUnavailable = -29535 => "SHARD_UNAVAILABLE",
     /// `get_shard_view`: the daemon this wallet uses does not serve shard
-    /// views — the method is admin-only and this is its public listener
-    /// (`-19`), or the daemon holds no archival skeleton (`-25`).
+    /// views — the call is outside the wallet's grant there
+    /// (`OutsideTheGrant`), or it runs with Tor off (`shard.tor-off`).
     /// `data.cause` says which; the remedy is another daemon, not a retry.
     ShardViewNotOffered = -29536 => "SHARD_VIEW_NOT_OFFERED",
+    /// `get_shard_view`: the daemon is already fetching a shard for a
+    /// bounded caller and opens one such fetch at a time (`bound.shard`).
+    /// Transient; retry shortly.
+    ShardViewBusy = -29537 => "SHARD_VIEW_BUSY",
     /// `verify_message`: well-formed, intact, and **not** a valid signature
     /// by the claimed address over this message on this network. An answer,
     /// not a fault (SM-R-6).
@@ -422,6 +516,16 @@ pub enum WalletRpcError {
     /// Method name is unknown, RESERVED, or not yet implemented.
     #[error("method not found: {0}")]
     MethodNotFound(String),
+    /// Method name is REJECTED in the contract
+    /// ([`crate::rejected::REJECTED_METHODS`]): answered `-32601` like any
+    /// name the server does not serve, with the reason it is refused.
+    #[error("{method} is not offered: {reason}")]
+    MethodRejected {
+        /// The name the caller sent.
+        method: String,
+        /// Why the contract refuses it.
+        reason: &'static str,
+    },
     /// Params failed schema / type checks.
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -479,7 +583,11 @@ pub enum WalletRpcError {
     WalletFileCorrupt,
     /// `-29012`: a wallet file was written by a version, or in a shape, this
     /// build cannot read.
-    #[error("the wallet's files were written by a version this build cannot read")]
+    #[error(
+        "the wallet's files were written by a version this build cannot read — open them \
+         with the build that wrote them, or restore the wallet from your seed; your send \
+         history, proofs for earlier sends, notes and payment requests are not restored"
+    )]
     WalletFileVersionUnsupported,
     /// `-29013`: a read or write of the wallet's files failed underneath —
     /// disk full, filesystem error. The cause stays in the server log.
@@ -492,7 +600,7 @@ pub enum WalletRpcError {
         count: usize,
     },
     /// `-29015`: the curve-tree membership data is unavailable for this
-    /// session — its actor stopped and a respawn did not recover it.
+    /// session — its actor stopped, or its store would not rebuild.
     #[error("the wallet's membership data is unavailable — close and reopen the wallet")]
     CurveTreeUnavailable,
     /// `-29016`: the curve-tree store cannot be used. It holds no keys and
@@ -503,6 +611,18 @@ pub enum WalletRpcError {
         /// Why the store cannot be used.
         cause: CurveTreeStoreCause,
     },
+    /// `-29017`: this computer's random-number source failed the check the
+    /// wallet runs before it stakes (the `conformance` build's self-cert,
+    /// S6). The wallet did not open: staking on numbers that fail it could
+    /// link the wallet's stakes. The grade stays in the server log. The
+    /// check's false-alarm rate is about one in a million, so one retry is
+    /// the first remedy; a second failure means this computer.
+    #[error(
+        "this computer's random-number source failed the wallet's safety check, so the \
+         wallet did not open — try once more; if it fails again, open the wallet on \
+         another computer"
+    )]
+    RandomSourceCheckFailed,
     /// `-29201`: the daemon did not answer.
     #[error(
         "the daemon did not answer — check that it is running and its address is right, then retry"
@@ -563,9 +683,9 @@ pub enum WalletRpcError {
     )]
     DaemonNetworkMismatch {
         /// The network this wallet is for.
-        wallet: DaemonNetwork,
+        wallet: Network,
         /// The network the daemon runs.
-        daemon: DaemonNetwork,
+        daemon: Network,
     },
     /// `-29208`: the daemon's chain starts at another genesis block.
     #[error(
@@ -574,7 +694,7 @@ pub enum WalletRpcError {
     )]
     DaemonChainMismatch {
         /// The network whose genesis was compared.
-        network: DaemonNetwork,
+        network: Network,
         /// The genesis block this wallet expects.
         wallet_genesis: HashHex,
         /// The daemon's genesis block.
@@ -587,6 +707,27 @@ pub enum WalletRpcError {
          incompatible build; try another daemon"
     )]
     DaemonProtocolViolation,
+    /// `-29212`: the daemon refused the call as outside this connection's
+    /// grant. The same call on the same connection repeats the refusal.
+    #[error(
+        "the daemon refused the call as outside this wallet's grant — connect with a key \
+         that holds it, or to your own node"
+    )]
+    DaemonGrantRefused,
+    /// `-29213`: something other than this account's node answers at "this
+    /// computer"'s rendezvous. A security failure: never retried.
+    #[error(
+        "something other than your Shekyl node is answering at its local address on this \
+         computer — the wallet did not connect. Check what is running as your node"
+    )]
+    DaemonPeerCheckFailed,
+    /// `-29214`: "this computer"'s node runs as a service. `view` is its
+    /// view listener when it has one: the `daemon-address` to set.
+    #[error("{}", shekyl_rpc_client::service_refusal(*view))]
+    DaemonIsAService {
+        /// The service's view listener, as its rendezvous record names it.
+        view: Option<std::net::SocketAddr>,
+    },
     /// `-29210`: the chain kept reorganizing during refresh.
     #[error(
         "the chain kept reorganizing during refresh and nothing was merged — retry once it settles"
@@ -678,12 +819,190 @@ pub enum WalletRpcError {
     /// answer refused as unreasonable).
     #[error("the daemon's fee answer could not be read")]
     DaemonFeeResponseInvalid,
-    /// `-29119`: the signer tried and a downstream failure stopped it.
-    #[error("the signer failed: {reason}")]
+    /// `-29119`: the wallet's own signer hit an internal fault, named by
+    /// one keyword: a builder invariant ([`InternalSignFault`](shekyl_engine_core::InternalSignFault)) or the
+    /// wallet state signing reads. A bug, never the request's doing.
+    #[error("the wallet's signer hit an internal fault ({fault}) — report it; the wallet log has the detail")]
     SignerFailed {
-        /// Compile-time-fixed description of the failure.
-        reason: &'static str,
+        /// The fault, one keyword from a closed set.
+        fault: &'static str,
     },
+    /// `-29123`: the amount needs more inputs than one transaction spends.
+    #[error(
+        "this send needs {count} inputs and one transaction spends at most {limit} — send less, \
+         or first send part of your balance to yourself to merge small amounts"
+    )]
+    TooManyInputs {
+        /// The inputs the build needed.
+        count: usize,
+        /// [`MAX_INPUTS`].
+        limit: usize,
+    },
+    /// `-29124`: more recipients than one transaction carries.
+    #[error(
+        "this send has {count} outputs with its change and one transaction carries at most \
+         {limit} — split the recipients across two sends"
+    )]
+    TooManyOutputs {
+        /// The outputs the request needs, change included.
+        count: usize,
+        /// [`MAX_OUTPUTS`].
+        limit: usize,
+    },
+    /// `-29125`: an input's assembled tree path does not hold it — the
+    /// wallet's copy of the membership data disagrees with the output.
+    #[error(
+        "the wallet's membership data does not hold an output this send spends — refresh the \
+         wallet and build again"
+    )]
+    InputNotInTree {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// `-29126`: an input was received but its leaf does not open to this
+    /// wallet's keys, so it can never be spent.
+    #[error(
+        "an output this send would spend was received but can never be spent by this wallet \
+         (its sender published a leaf this wallet cannot open) — report it"
+    )]
+    InputUnspendable {
+        /// The input's position in the transaction.
+        input: usize,
+    },
+    /// `-29120`: the record of a send or a staking transaction (its signed
+    /// bytes, and a send's tx secret) could not be saved because `target`
+    /// is not writable for this account, so the wallet sent nothing (A19).
+    /// A send's reservation is kept: fix the cause and submit it again, or
+    /// discard it; a staking seal was removed, so the call is retried. Each
+    /// other cause of an unsaved record is its own code, `-29128` to
+    /// `-29134` (Rick, 2026-11-18 and 2026-11-19).
+    #[error(
+        "{} was not saved, so it was not sent — {} and {}",
+        of.subject(),
+        target.advice(),
+        of.retry()
+    )]
+    SaveNotWritable {
+        /// What could not be written: the folder, the file or the drive.
+        target: SaveTarget,
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29128`: the record was saved on a volume whose file system Windows
+    /// cannot confirm keeps a save through a power cut (anything but NTFS:
+    /// FAT32, exFAT, ReFS), so the wallet sent nothing (Rick, 2026-11-18).
+    #[error(
+        "{} was not sent — the wallet is on a {file_system} volume, where Windows cannot \
+         confirm that a save survives a power cut; move the wallet to an NTFS volume and {}",
+        of.subject(),
+        of.retry()
+    )]
+    SaveDurabilityUnconfirmed {
+        /// The volume's file system, as Windows names it.
+        file_system: String,
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29129`: the disk holding the wallet is full (or this account's
+    /// quota on it is), so the record was not saved and the wallet sent
+    /// nothing.
+    #[error(
+        "{} was not saved, so it was not sent — the disk holding the wallet is full; free \
+         disk space and {}",
+        of.subject(),
+        of.retry()
+    )]
+    SaveDiskFull {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29130`: another program held the wallet's file (or the save's
+    /// staged copy of it) open past the save's wait, so the record was not
+    /// saved and the wallet sent nothing. A read-only file is `-29120` with
+    /// `target: file`: the save reads the attribute to tell the two apart
+    /// (Rick, 2026-11-19). The wording follows the daemon's
+    /// `config.replace.held-open`.
+    #[error(
+        "{} was not saved, so it was not sent — another program, most likely an antivirus \
+         scanner or a search indexer, held the wallet's file open; exclude the wallet's \
+         folder from scanning and {}",
+        of.subject(),
+        of.retry()
+    )]
+    SaveFileHeld {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29131`: the disk reported an error at `step` of saving or
+    /// confirming the record, so the wallet sent nothing. `error` is the
+    /// system's words for it, never a path.
+    #[error(
+        "{} was not sent — the disk holding the wallet reported an error while {} \
+         ({error}); check the disk and {}",
+        of.subject(),
+        step.words(),
+        of.retry()
+    )]
+    SaveIoFailed {
+        /// The step the disk failed.
+        step: SaveStep,
+        /// The system's description of the error, without a path.
+        error: String,
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29132`: the wallet is on a local NTFS drive that refused the
+    /// rename Windows confirms survives a power cut, and the classic rename
+    /// saved it, so the wallet sent nothing. Windows builds observed to give
+    /// it: none observed (Rick, 2026-11-19).
+    #[error(
+        "{} was not sent — the wallet's NTFS drive refused the kind of save Windows can \
+         confirm survives a power cut; move the wallet to another local NTFS drive and {}",
+        of.subject(),
+        of.retry()
+    )]
+    SaveRenameUnconfirmed {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29133`: the wallet could not prepare the record to save (its state
+    /// failed a check, or could not be encoded or sealed): a fault in the
+    /// wallet, not the disk, so the wallet sent nothing. The wallet's log
+    /// has the detail.
+    #[error(
+        "{} was not sent — the wallet could not prepare its record to save (a fault in the \
+         wallet, not the disk); {}",
+        of.subject(),
+        of.fault_remedy()
+    )]
+    SaveInternalFault {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29134`: the wallet is on a network drive, where no save is
+    /// confirmed to survive a power cut whatever file system the drive
+    /// reports (a Samba share reports NTFS), so the wallet sent nothing
+    /// (Rick, 2026-11-19).
+    #[error(
+        "{} was not sent — the wallet is on a network drive, where no save is confirmed to \
+         survive a power cut; move the wallet to a local drive and {}",
+        of.subject(),
+        of.retry()
+    )]
+    SaveOnNetworkDrive {
+        /// What the save was of.
+        of: SaveOf,
+    },
+    /// `-29121`: `tx_resend` named a transaction that is not a held send:
+    /// it confirmed, was released, or was never this wallet's.
+    #[error("no held send with this id — tx_alarm lists the held sends")]
+    TxNotHeld,
+    /// `-29122`: the held send's record holds no bytes to resend.
+    #[error(
+        "this held send has no saved bytes to resend — abandon it, or wait for refresh to \
+         settle it"
+    )]
+    TxBytesMissing,
     /// Submit: unknown / expired reservation handle.
     #[error("reservation not found")]
     ReservationNotFound,
@@ -699,7 +1018,8 @@ pub enum WalletRpcError {
     /// Submit: definite daemon rejection.
     #[error("submit rejected")]
     SubmitRejected {
-        /// OpenAPI `error.data`: serde-tagged [`SubmitVerdict`] projection.
+        /// OpenAPI `error.data`: the `rejected` verdict with its [`RejectCause`]
+        /// (and `row` when a chain row refused it).
         data: Value,
     },
     /// Submit: transport-level ambiguity.
@@ -1020,7 +1340,7 @@ pub enum WalletRpcError {
     /// open" — and `data` carries the file name and both versions so a client
     /// can tell the two apart without parsing prose (the `-29511` precedent).
     /// `file` is the name only. The directory stays on
-    /// [`PScanStartError::StateFileVersionUnsupported`](shekyl_engine_core::PScanStartError::StateFileVersionUnsupported),
+    /// [`PScanStartError::StateFileVersionUnsupported`],
     /// which is what the server log prints. The remedy is the only one that
     /// exists today — nothing rewrites the file, `rescan_blockchain` needs an
     /// open wallet, and the wallet opens once the file is out of the way,
@@ -1070,13 +1390,22 @@ pub enum WalletRpcError {
         detail: String,
     },
     /// `get_shard_view` (`-29536`): the daemon this wallet is pointed at
-    /// does not serve shard views. Two causes, one remedy (another daemon):
-    /// the method is admin-only and this is a public listener, or the
-    /// daemon holds no archival skeleton (`SHARD_VIEW_FETCH.md` `SV-D9`).
+    /// does not serve shard views. Two causes, one remedy (another
+    /// daemon): the call is outside the wallet's grant there, or it runs
+    /// with Tor off and has no client to fetch through (IG-Q90).
     #[error("this daemon does not serve shard views — point the wallet at a node that does")]
     ShardViewNotOffered {
-        /// Why: the daemon's `restricted` refusal or its `skeleton_absent`.
+        /// Why: `restricted` or `tor_off`.
         cause: ShardViewNotOfferedCause,
+        /// The daemon's message.
+        detail: String,
+    },
+    /// `get_shard_view` (`-29537`): the daemon is already fetching a shard
+    /// for a bounded caller and opens one such fetch at a time
+    /// (`RPC_CHANNEL.md` §6.3, IG-Q90). A view it already holds would have
+    /// answered. Transient: retry shortly.
+    #[error("the daemon is fetching another shard view — try again shortly")]
+    ShardViewBusy {
         /// The daemon's message.
         detail: String,
     },
@@ -1109,7 +1438,9 @@ impl WalletRpcError {
         match self {
             Self::ParseError => WalletRpcErrorCode::ParseError,
             Self::InvalidRequest(_) | Self::Unauthorized => WalletRpcErrorCode::InvalidRequest,
-            Self::MethodNotFound(_) => WalletRpcErrorCode::MethodNotFound,
+            Self::MethodNotFound(_) | Self::MethodRejected { .. } => {
+                WalletRpcErrorCode::MethodNotFound
+            }
             Self::InvalidParams(_) => WalletRpcErrorCode::InvalidParams,
             Self::InternalError(_) => WalletRpcErrorCode::InternalError,
             Self::WalletAlreadyOpen => WalletRpcErrorCode::WalletAlreadyOpen,
@@ -1128,6 +1459,7 @@ impl WalletRpcError {
             Self::WalletCloseBlocked { .. } => WalletRpcErrorCode::WalletCloseBlocked,
             Self::CurveTreeUnavailable => WalletRpcErrorCode::CurveTreeUnavailable,
             Self::CurveTreeStoreUnusable { .. } => WalletRpcErrorCode::CurveTreeStoreUnusable,
+            Self::RandomSourceCheckFailed => WalletRpcErrorCode::RandomSourceCheckFailed,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
@@ -1138,6 +1470,9 @@ impl WalletRpcError {
             Self::DaemonNetworkMismatch { .. } => WalletRpcErrorCode::DaemonNetworkMismatch,
             Self::DaemonChainMismatch { .. } => WalletRpcErrorCode::DaemonChainMismatch,
             Self::DaemonProtocolViolation => WalletRpcErrorCode::DaemonProtocolViolation,
+            Self::DaemonGrantRefused => WalletRpcErrorCode::DaemonGrantRefused,
+            Self::DaemonPeerCheckFailed => WalletRpcErrorCode::DaemonPeerCheckFailed,
+            Self::DaemonIsAService { .. } => WalletRpcErrorCode::DaemonIsAService,
             Self::ChainUnstable => WalletRpcErrorCode::ChainUnstable,
             Self::ResyncRequired { .. } => WalletRpcErrorCode::ResyncRequired,
             Self::InvalidRecipient => WalletRpcErrorCode::InvalidRecipient,
@@ -1154,6 +1489,20 @@ impl WalletRpcError {
             Self::ReselectionRequired => WalletRpcErrorCode::ReselectionRequired,
             Self::DaemonFeeResponseInvalid => WalletRpcErrorCode::DaemonFeeResponseInvalid,
             Self::SignerFailed { .. } => WalletRpcErrorCode::SignerFailed,
+            Self::TooManyInputs { .. } => WalletRpcErrorCode::TooManyInputs,
+            Self::TooManyOutputs { .. } => WalletRpcErrorCode::TooManyOutputs,
+            Self::InputNotInTree { .. } => WalletRpcErrorCode::InputNotInTree,
+            Self::InputUnspendable { .. } => WalletRpcErrorCode::InputUnspendable,
+            Self::SaveNotWritable { .. } => WalletRpcErrorCode::SaveNotWritable,
+            Self::SaveDurabilityUnconfirmed { .. } => WalletRpcErrorCode::SaveDurabilityUnconfirmed,
+            Self::SaveDiskFull { .. } => WalletRpcErrorCode::SaveDiskFull,
+            Self::SaveFileHeld { .. } => WalletRpcErrorCode::SaveFileHeld,
+            Self::SaveIoFailed { .. } => WalletRpcErrorCode::SaveIoFailed,
+            Self::SaveRenameUnconfirmed { .. } => WalletRpcErrorCode::SaveRenameUnconfirmed,
+            Self::SaveInternalFault { .. } => WalletRpcErrorCode::SaveInternalFault,
+            Self::SaveOnNetworkDrive { .. } => WalletRpcErrorCode::SaveOnNetworkDrive,
+            Self::TxNotHeld => WalletRpcErrorCode::TxNotHeld,
+            Self::TxBytesMissing => WalletRpcErrorCode::TxBytesMissing,
             Self::ReservationNotFound => WalletRpcErrorCode::ReservationNotFound,
             Self::SnapshotInvalidated => WalletRpcErrorCode::SnapshotInvalidated,
             Self::ContentGenMismatch { .. } => WalletRpcErrorCode::ContentGenMismatch,
@@ -1210,6 +1559,7 @@ impl WalletRpcError {
             Self::ShardStillOpen { .. } => WalletRpcErrorCode::ShardStillOpen,
             Self::ShardUnavailable { .. } => WalletRpcErrorCode::ShardUnavailable,
             Self::ShardViewNotOffered { .. } => WalletRpcErrorCode::ShardViewNotOffered,
+            Self::ShardViewBusy { .. } => WalletRpcErrorCode::ShardViewBusy,
             Self::MessageSigVerifyFailed => WalletRpcErrorCode::MessageSigVerifyFailed,
             Self::MessageSigCorrupted => WalletRpcErrorCode::MessageSigCorrupted,
             Self::MessageSigUnsupportedScheme { .. } => {
@@ -1241,7 +1591,8 @@ impl WalletRpcError {
             | Self::CollectDaemonUnreachable { detail }
             | Self::UnstakeLocalNodeRequired { detail }
             | Self::ShardStillOpen { detail }
-            | Self::ShardUnavailable { detail } => Some(json!({ "detail": detail })),
+            | Self::ShardUnavailable { detail }
+            | Self::ShardViewBusy { detail } => Some(json!({ "detail": detail })),
             Self::ShardViewNotOffered { cause, detail } => {
                 Some(json!({ "cause": cause.as_str(), "detail": detail }))
             }
@@ -1298,6 +1649,20 @@ impl WalletRpcError {
             Self::OutputNotYetSpendable { wait_blocks } => {
                 Some(json!({ "wait_blocks": wait_blocks }))
             }
+            Self::SignerFailed { fault } => Some(json!({ "fault": fault })),
+            Self::SaveDurabilityUnconfirmed { file_system, .. } => {
+                Some(json!({ "file_system": file_system }))
+            }
+            Self::SaveNotWritable { target, .. } => Some(json!({ "target": target.as_str() })),
+            Self::SaveIoFailed { step, error, .. } => {
+                Some(json!({ "step": step.as_str(), "error": error }))
+            }
+            Self::TooManyInputs { count, limit } | Self::TooManyOutputs { count, limit } => {
+                Some(json!({ "count": count, "limit": limit }))
+            }
+            Self::InputNotInTree { input } | Self::InputUnspendable { input } => {
+                Some(json!({ "input": input }))
+            }
             Self::ChainTooShortToSpend {
                 synced_height,
                 ref_anchor_age,
@@ -1306,6 +1671,9 @@ impl WalletRpcError {
                 "ref_anchor_age": ref_anchor_age,
             })),
             Self::SubmitLoopBreakerTripped { cause } => Some(json!({ "cause": cause })),
+            Self::DaemonIsAService { view } => {
+                Some(json!({ "view": view.map(|view| view.to_string()) }))
+            }
             Self::DaemonFeeUnreasonable {
                 reason,
                 rate,
@@ -1326,10 +1694,11 @@ impl WalletRpcError {
         }
     }
 
-    fn submit_rejected(cause: RejectCause) -> Self {
-        let verdict = SubmitVerdict::Rejected { cause };
-        let data = serde_json::to_value(verdict)
-            .unwrap_or_else(|_| json!({ "verdict": "rejected", "cause": "unrecognized" }));
+    fn submit_rejected(cause: RejectCause, row: Option<String>) -> Self {
+        let mut data = json!({ "verdict": "rejected", "cause": cause });
+        if let Some(row) = row {
+            data["row"] = json!(row);
+        }
         Self::SubmitRejected { data }
     }
 
@@ -1403,6 +1772,9 @@ impl From<OpenError> for WalletRpcError {
             OpenError::Io(io) => from_io_error(io),
             OpenError::Key(e) => from_key_error(&e),
             OpenError::Persistence(e) => e.into(),
+            // The grade was logged where the check ran. The wire carries the
+            // remedy only.
+            OpenError::StakeRngSelfCertFailed => Self::RandomSourceCheckFailed,
         }
     }
 }
@@ -1555,11 +1927,6 @@ impl From<FeeEstimatorError> for WalletRpcError {
                 rate: v.rate(),
                 bound: v.bound(),
             },
-            // The caller's Custom rate is out of band: a request error,
-            // -32602 — never blamed on the daemon (rule 82).
-            FeeEstimatorError::CustomFeeOutOfRange(band) => {
-                Self::InvalidParams(format!("custom fee rate out of range: {band}"))
-            }
             // `FeeEstimatorError` is `#[non_exhaustive]` (Phase 0a, semver for
             // consumers outside the workspace), so this arm is forced. Inside
             // one workspace build it is unreachable: every variant is named
@@ -1579,12 +1946,14 @@ impl From<SendError> for WalletRpcError {
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(io) => from_io_error(io),
-            SendError::Tx(e) => internal_detail("transaction construction", e),
+            SendError::Sign(fault) => from_sign_fault(fault),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
             SendError::SignerUnavailable => Self::WalletSessionEnded,
-            SendError::SignerFailed { reason } => Self::SignerFailed { reason },
+            SendError::SignerFailed { fault } => Self::SignerFailed {
+                fault: fault.keyword(),
+            },
             SendError::BuildInvariant { reason } => internal_detail("build invariant", reason),
             SendError::SpendUnavailableRebuilding { .. } => Self::SpendUnavailableRebuilding,
             SendError::CurveTreeUnavailable { detail } => {
@@ -1605,6 +1974,27 @@ impl From<SendError> for WalletRpcError {
                 cause: terminal_to_reject_cause(kind),
             },
         }
+    }
+}
+
+/// The signing pass's fault to its code: the four the user acts on each
+/// get their own, with the limit or the input named; every internal
+/// invariant is `-29119`, named by its keyword (A16).
+fn from_sign_fault(fault: SignFault) -> WalletRpcError {
+    match fault {
+        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
+            count,
+            limit: MAX_INPUTS,
+        },
+        SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
+            count,
+            limit: MAX_OUTPUTS,
+        },
+        SignFault::SpentOutputNotInLeafChunk { input } => WalletRpcError::InputNotInTree { input },
+        SignFault::PqcLeafMismatch { input } => WalletRpcError::InputUnspendable { input },
+        SignFault::Internal(internal) => WalletRpcError::SignerFailed {
+            fault: internal.keyword(),
+        },
     }
 }
 
@@ -1636,10 +2026,25 @@ pub(crate) fn from_daemon_fault(fault: DaemonFault, detail: &str) -> WalletRpcEr
             WalletRpcError::DaemonFeeResponseInvalid
         }
         DaemonFault::Internal => internal_detail("daemon request", detail),
+        DaemonFault::NotPermitted => {
+            tracing::warn!(detail, "daemon refused the call as outside the grant");
+            WalletRpcError::DaemonGrantRefused
+        }
+        DaemonFault::PeerCheck => {
+            tracing::error!(
+                detail,
+                "the peer at this computer's rendezvous failed the check"
+            );
+            WalletRpcError::DaemonPeerCheckFailed
+        }
+        DaemonFault::Service(view) => {
+            tracing::warn!(detail, "this computer's node is a service; nothing dialled");
+            WalletRpcError::DaemonIsAService { view }
+        }
     }
 }
 
-/// A curve-tree ingest failure that survived the engine's one respawn, by
+/// A curve-tree ingest failure that survived the engine's one rebuild, by
 /// its remedy. Reopening helps only where the session's tree is what
 /// failed; a fault a reopen reproduces never answers "close and reopen".
 fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
@@ -1649,7 +2054,7 @@ fn from_curve_tree_ingest_fault(fault: CurveTreeIngestFault) -> WalletRpcError {
         // session. A reopen reopens the store, which names its own fault.
         CurveTreeIngestFault::ActorUnavailable
         | CurveTreeIngestFault::ClientPoisoned
-        | CurveTreeIngestFault::RespawnFailed => WalletRpcError::CurveTreeUnavailable,
+        | CurveTreeIngestFault::RebuildFailed => WalletRpcError::CurveTreeUnavailable,
         // The daemon's data broke the contract: leaves its own header does not
         // commit to, or a block that does not decode.
         CurveTreeIngestFault::RootMismatch | CurveTreeIngestFault::BackfillBlockUndecodable => {
@@ -1847,9 +2252,11 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
         }
         F::DirectoryMissing { .. } => WalletRpcError::WalletDirMissing,
         F::AlreadyLocked { .. } => WalletRpcError::WalletLockedElsewhere,
-        F::AtomicWriteRename { .. } | F::AtomicWriteFinalizeStaged { .. } => {
-            WalletRpcError::WalletFileIoFailed
-        }
+        // The step's error by its kind, as an untyped one is; a read-only
+        // file is this account's access refused.
+        F::SaveStep { source, .. } => from_io_kind(source.kind()),
+        F::ReadOnly { .. } => WalletRpcError::WalletFileAccessDenied,
+        F::HeldOpen(_) => WalletRpcError::WalletFileIoFailed,
         F::NetworkMismatch { expected, found } => WalletRpcError::WalletNetworkMismatch {
             wallet: found.to_string(),
             expected: expected.to_string(),
@@ -1875,6 +2282,7 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
         | E::CapContentLenMismatch { .. }
         | E::StateSeedBlockMismatch => WalletRpcError::WalletFileCorrupt,
         E::FormatVersionTooNew { .. }
+        | E::FormatVersionRetired { .. }
         | E::UnsupportedKdfAlgo(_)
         | E::UnsupportedWrapCount(_)
         | E::UnknownCapabilityMode(_) => WalletRpcError::WalletFileVersionUnsupported,
@@ -1919,7 +2327,247 @@ impl From<PersistenceError> for WalletRpcError {
         match err {
             PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
             PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
+            // A dispatch whose rename landed but whose durability was not
+            // confirmed. Nothing was sent. The submit path reports this as
+            // `DispatchNotSaved`; this arm is the same answer, by cause, if
+            // the error reaches the boundary on its own.
+            err @ PersistenceError::DurabilityUnconfirmed(_) => {
+                from_unsaved_send(&err, SaveOf::Send)
+            }
         }
+    }
+}
+
+/// What a send's save could not write: `-29120`'s `data.target`, a closed
+/// set, each with its own advice (Rick, 2026-11-19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveTarget {
+    /// The wallet's folder: this account may not create or replace a file
+    /// in it.
+    Folder,
+    /// The wallet's file: its read-only attribute is set (Windows).
+    File,
+    /// The drive holding the wallet: read-only, or write-protected.
+    Volume,
+}
+
+impl SaveTarget {
+    /// The keyword `data.target` carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::File => "file",
+            Self::Volume => "volume",
+        }
+    }
+
+    /// The cause and the remedy, for the message; the retry follows.
+    const fn advice(self) -> &'static str {
+        match self {
+            Self::Folder => {
+                "the wallet's folder is not writable; make it writable for this account"
+            }
+            Self::File => "the wallet's file is read-only; clear its read-only attribute",
+            Self::Volume => {
+                "the drive holding the wallet is read-only; make it writable, or move the wallet \
+                 to a writable drive,"
+            }
+        }
+    }
+}
+
+/// The step of a send's save the disk failed: `-29131`'s `data.step`, a
+/// closed set (Rick, 2026-11-19).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveStep {
+    /// Writing the record's staged file: removing a leftover, creating,
+    /// writing and syncing it.
+    Write,
+    /// Renaming the staged file over the wallet's file.
+    Rename,
+    /// Syncing the wallet's folder, before the rename or after it (Unix).
+    FolderSync,
+    /// Flushing the wallet's file after the rename (Windows).
+    Flush,
+    /// Asking the wallet's drive what it is: its device and its file system
+    /// (Windows).
+    VolumeQuery,
+}
+
+impl SaveStep {
+    /// The keyword `data.step` carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Rename => "rename",
+            Self::FolderSync => "folder-sync",
+            Self::Flush => "flush",
+            Self::VolumeQuery => "volume-query",
+        }
+    }
+
+    /// The step, as the message names it.
+    const fn words(self) -> &'static str {
+        match self {
+            Self::Write => "writing the record",
+            Self::Rename => "putting the record in place of the wallet's file",
+            Self::FolderSync => "syncing the wallet's folder",
+            Self::Flush => "flushing the wallet's file to the disk",
+            Self::VolumeQuery => "asking the wallet's drive what it is",
+        }
+    }
+}
+
+/// What an unsaved record was of: the subject and the remedy's last words
+/// differ, the code and its `data` do not (Rick, 2026-11-19: a staking
+/// seal answers through the send's mapping, by cause).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveOf {
+    /// A send (`submit_pending_tx`, `tx_resend`): its reservation is kept,
+    /// so it is submitted again or discarded.
+    Send,
+    /// A staking transaction (`stake`, `unstake`, `drain`,
+    /// `collect_unstaked`): its seal was removed and its lane reopened, so
+    /// the call is retried.
+    Staking,
+}
+
+impl SaveOf {
+    /// What was not sent, as the message names it.
+    const fn subject(self) -> &'static str {
+        match self {
+            Self::Send => "the send",
+            Self::Staking => "the staking transaction",
+        }
+    }
+
+    /// The remedy's last words, once the cause is fixed.
+    const fn retry(self) -> &'static str {
+        match self {
+            Self::Send => "submit again, or discard the send",
+            Self::Staking => "try again",
+        }
+    }
+
+    /// The remedy for a fault in the wallet.
+    const fn fault_remedy(self) -> &'static str {
+        match self {
+            Self::Send => "report it, and discard the send",
+            Self::Staking => "report it",
+        }
+    }
+}
+
+impl From<shekyl_engine_file::Step> for SaveStep {
+    fn from(step: shekyl_engine_file::Step) -> Self {
+        use shekyl_engine_file::Step as S;
+        match step {
+            S::Write => Self::Write,
+            S::FolderSync => Self::FolderSync,
+            S::Rename => Self::Rename,
+        }
+    }
+}
+
+/// A record that was not saved, or not confirmed on disk, so nothing was
+/// sent (A19): a send's, whose reservation is kept, or a staking seal's,
+/// which was removed so its lane reopens ([`SaveOf`]). Every cause is its own
+/// code and advice (Rick, 2026-11-18 and 2026-11-19): a folder, file or
+/// drive this account cannot write (`-29120`, `data.target`), a full disk
+/// (`-29129`), another program holding the file (`-29130`), the disk's
+/// error at a step (`-29131`, `data.step`), a network drive (`-29134`), a
+/// volume Windows does not confirm (`-29128`), a local NTFS drive that
+/// refused the confirmed rename (`-29132`), and a fault in the wallet
+/// before the disk was touched (`-29133`). The whole error, paths and all,
+/// goes to the wallet's log only.
+pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
+    use shekyl_engine_file::Unconfirmed as U;
+    use WalletFileError as F;
+    tracing::error!(error = %err, ?of, "the record could not be saved; nothing was sent");
+    match err {
+        PersistenceError::WalletFile(file) => match file {
+            F::SaveStep { step, source, .. } => from_save_io((*step).into(), source, of),
+            F::ReadOnly { .. } => WalletRpcError::SaveNotWritable {
+                target: SaveTarget::File,
+                of,
+            },
+            F::HeldOpen(_) => WalletRpcError::SaveFileHeld { of },
+            // Before any file is touched the ledger's own check, its
+            // encoding, the frame or the seal failed; a target with no
+            // parent directory is the caller's; and a state save never
+            // names the rest, so each would be a fault too.
+            F::Io(_)
+            | F::Ledger(_)
+            | F::Payload(_)
+            | F::Envelope(_)
+            | F::UnexpectedPayloadKind { .. }
+            | F::KeysFileAlreadyExists { .. }
+            | F::KeysFileWriteOnceViolation { .. }
+            | F::DirectoryMissing { .. }
+            | F::AlreadyLocked { .. }
+            | F::UnknownNetwork(_)
+            | F::NetworkMismatch { .. }
+            | F::UnknownCapability(_)
+            | F::SaveAsCrossFilesystem { .. }
+            | F::SaveAsTargetExists { .. }
+            | F::Prefs(_) => WalletRpcError::SaveInternalFault { of },
+        },
+        PersistenceError::DurabilityUnconfirmed(why) => match why {
+            U::Remote(_) => WalletRpcError::SaveOnNetworkDrive { of },
+            U::FileSystem(name) => WalletRpcError::SaveDurabilityUnconfirmed {
+                file_system: name.clone(),
+                of,
+            },
+            U::ClassicRename => WalletRpcError::SaveRenameUnconfirmed { of },
+            U::DirectoryNotSynced(error) => from_save_io(SaveStep::FolderSync, error, of),
+            U::Flush(error) => from_save_io(SaveStep::Flush, error, of),
+            U::VolumeUnread(error) => from_save_io(SaveStep::VolumeQuery, error, of),
+            // A wallet save stages a fresh file through its creating handle
+            // every time and never resumes one a previous process left, so
+            // it never reports this; if it did, that would be a fault.
+            U::Reopened => WalletRpcError::SaveInternalFault { of },
+        },
+        // A send's or a seal's save never writes the preferences.
+        PersistenceError::Prefs(_) => WalletRpcError::SaveInternalFault { of },
+    }
+}
+
+/// The disk's error at `step` of a save of `of`, by what the user does
+/// about it: a denial is the folder (the staged file is created and renamed
+/// in it; a read-only file is its own variant upstream), a read-only or
+/// write-protected drive the volume, a full disk or quota the space, and
+/// anything else the step, named.
+fn from_save_io(step: SaveStep, error: &std::io::Error, of: SaveOf) -> WalletRpcError {
+    use std::io::ErrorKind as K;
+    match error.kind() {
+        K::PermissionDenied => WalletRpcError::SaveNotWritable {
+            target: SaveTarget::Folder,
+            of,
+        },
+        K::ReadOnlyFilesystem => WalletRpcError::SaveNotWritable {
+            target: SaveTarget::Volume,
+            of,
+        },
+        K::StorageFull | K::QuotaExceeded => WalletRpcError::SaveDiskFull { of },
+        // `io::ErrorKind` is foreign and `#[non_exhaustive]`: every other
+        // kind is the disk failing the step, named in `step` and `error`.
+        _ => WalletRpcError::SaveIoFailed {
+            step,
+            error: system_words(error),
+            of,
+        },
+    }
+}
+
+/// The system's words for `error`, never a path: an OS error's own text
+/// (`Input/output error (os error 5)`), and for an error this process made
+/// up, which may name a path, only its kind.
+fn system_words(error: &std::io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => std::io::Error::from_raw_os_error(code).to_string(),
+        None => error.kind().to_string(),
     }
 }
 
@@ -1931,7 +2579,6 @@ fn from_key_error(err: &KeyError) -> WalletRpcError {
             tracing::warn!("keys file public material does not match its seed");
             WalletRpcError::WalletFileCorrupt
         }
-        KeyError::UnsupportedDerivationPair => WalletRpcError::WalletFileVersionUnsupported,
         KeyError::Primitive { detail } => internal_detail("key derivation primitive", detail),
     }
 }
@@ -2063,6 +2710,11 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
                 Self::SubmitAmbiguous
             }
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed. The save's cause answers (Rick, 2026-11-19).
+            DrainToPrincipalError::SealNotSaved(error) => {
+                from_unsaved_send(&error, SaveOf::Staking)
+            }
         }
     }
 }
@@ -2098,6 +2750,10 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 cause: "daemon",
                 detail,
             },
+            // Not that retry. A failed peer check and a service at this
+            // computer are the daemon-target codes, the same ones every
+            // other wallet verb uses.
+            E::DaemonTarget(fault) => from_daemon_fault(fault, "unstake"),
             E::FeeEstimate(e) => e.into(),
             E::FeeUnreasonable {
                 reason,
@@ -2109,6 +2765,10 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
                 bound,
             },
             E::ExitRefusedAndReleased { detail } => Self::UnstakeRefusedReleased { detail },
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed, so the lane is open. The save's cause
+            // answers, never -29522 (Rick, 2026-11-19).
+            E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
             E::ExitFateUnknown { detail } => {
                 tracing::warn!(detail = %detail, "unstake dispatch fate unknown; seal held");
                 Self::UnstakeFateUnknown { detail }
@@ -2159,6 +2819,9 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
                 tracing::warn!(detail = %detail, "collect_unstaked dispatch failed at the choke point");
                 Self::SubmitAmbiguous
             }
+            // The seal's save was not confirmed: nothing was sent and the
+            // seal was removed. The save's cause answers (Rick, 2026-11-19).
+            E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -2172,16 +2835,23 @@ impl From<SubmitError> for WalletRpcError {
             SubmitError::ContentChanged { content_gen, .. } => {
                 Self::ContentGenMismatch { content_gen }
             }
-            SubmitError::DaemonRejectedTerminal { kind } => {
-                Self::submit_rejected(terminal_to_reject_cause(kind))
-            }
+            SubmitError::DaemonRejectedTerminal { kind } => Self::submit_rejected(
+                terminal_to_reject_cause(kind),
+                match kind {
+                    TerminalErrorKind::ConsensusRule { row } => Some(row.as_str().to_owned()),
+                    _ => None,
+                },
+            ),
             SubmitError::DaemonRejectedRetryable { cause, .. } => {
-                Self::submit_rejected(retryable_to_reject_cause(cause))
+                Self::submit_rejected(retryable_to_reject_cause(cause), None)
             }
             SubmitError::DaemonAmbiguous { .. } => Self::SubmitAmbiguous,
             SubmitError::SubmitAlreadyPending { .. } => Self::SubmitAlreadyPending,
             SubmitError::ReanchorUnavailable { .. } => Self::ReanchorUnavailable,
             SubmitError::ReselectionRequired { .. } => Self::ReselectionRequired,
+            SubmitError::DispatchNotSaved { source, .. } => {
+                from_unsaved_send(&source, SaveOf::Send)
+            }
             // `SubmitError` is `#[non_exhaustive]` (Phase 0a); every variant is
             // named above, so inside one workspace build this is unreachable.
             other => internal_detail("submit variant unmapped at the RPC boundary", other),
@@ -2189,13 +2859,36 @@ impl From<SubmitError> for WalletRpcError {
     }
 }
 
-/// Map Engine terminal reject kinds onto the wire [`RejectCause`] vocabulary.
+impl From<ResendError> for WalletRpcError {
+    /// A resend's refusals speak the submit's vocabulary: a daemon refusal
+    /// is `-29106` with the same `data` (`verdict`, `cause`, and `row` for
+    /// a consensus refusal), and no verdict is `-29107`.
+    fn from(err: ResendError) -> Self {
+        match err {
+            ResendError::NotHeld => Self::TxNotHeld,
+            ResendError::BytesMissing => Self::TxBytesMissing,
+            ResendError::RejectedTerminal { kind, .. } => Self::submit_rejected(
+                terminal_to_reject_cause(kind),
+                match kind {
+                    TerminalErrorKind::ConsensusRule { row } => Some(row.as_str().to_owned()),
+                    _ => None,
+                },
+            ),
+            ResendError::RejectedRetryable { cause } => {
+                Self::submit_rejected(retryable_to_reject_cause(cause), None)
+            }
+            ResendError::Ambiguous { .. } => Self::SubmitAmbiguous,
+        }
+    }
+}
+
+/// Map Engine terminal reject kinds onto the contract's [`RejectCause`].
 fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
     match kind {
         TerminalErrorKind::DoubleSpend => RejectCause::DoubleSpendConflict,
         TerminalErrorKind::FeeTooLow => RejectCause::FeeTooLow,
         TerminalErrorKind::Malformed => RejectCause::Malformed,
-        TerminalErrorKind::JoinMarketUnsupported => RejectCause::JoinMarketUnsupported,
+        TerminalErrorKind::ConsensusRule { .. } => RejectCause::ConsensusRule,
         // `TerminalErrorKind` is `#[non_exhaustive]`; `Unrecognized` and any
         // unknown future kinds take the fail-safe Unrecognized disposition
         // (DAEMON_SUBMIT_VERDICT §2.5).
@@ -2203,7 +2896,7 @@ fn terminal_to_reject_cause(kind: TerminalErrorKind) -> RejectCause {
     }
 }
 
-/// Map Engine retryable reject causes onto the wire [`RejectCause`] vocabulary.
+/// Map Engine retryable reject causes onto the contract's [`RejectCause`].
 fn retryable_to_reject_cause(cause: RetryableRejectCause) -> RejectCause {
     match cause {
         RetryableRejectCause::StaleRoot => RejectCause::StaleRoot,
@@ -2725,7 +3418,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_rejected_data_is_wire_submit_verdict() {
+    fn submit_rejected_data_is_the_contracts_verdict() {
         use shekyl_engine_core::engine::error::TerminalErrorKind;
         use shekyl_engine_core::engine::SubmitError;
 
@@ -2737,6 +3430,22 @@ mod tests {
         let data = err.data().expect("data");
         assert_eq!(data["verdict"], "rejected");
         assert_eq!(data["cause"], "fee_too_low");
+        assert!(
+            data.get("row").is_none(),
+            "no row for a cause that has none"
+        );
+
+        let row = shekyl_engine_core::engine::error::CenRowName::parse("CEN-J15").expect("fits");
+        let err: WalletRpcError = SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::ConsensusRule { row },
+        }
+        .into();
+        let data = err.data().expect("data");
+        assert_eq!(data["cause"], "consensus_rule");
+        assert_eq!(
+            data["row"], "CEN-J15",
+            "the row rides to the wallet's caller"
+        );
     }
 
     /// The WI-RPC-5 F-2 pin, mechanically: the five drain refusals carry
@@ -3144,10 +3853,34 @@ mod tests {
                 WalletRpcErrorCode::WalletFileIoFailed,
             ),
             (
-                WalletFileError::AtomicWriteRename {
+                WalletFileError::SaveStep {
+                    step: shekyl_engine_file::Step::Rename,
                     target: path(),
                     source: IoErr::other("EXDEV"),
                 },
+                WalletRpcErrorCode::WalletFileIoFailed,
+            ),
+            (
+                // A step's denial is the access code, as an untyped one is.
+                WalletFileError::SaveStep {
+                    step: shekyl_engine_file::Step::Write,
+                    target: path(),
+                    source: IoErr::from(ErrorKind::PermissionDenied),
+                },
+                WalletRpcErrorCode::WalletFileAccessDenied,
+            ),
+            (
+                WalletFileError::ReadOnly { target: path() },
+                WalletRpcErrorCode::WalletFileAccessDenied,
+            ),
+            (
+                // Outside a send, a file another program held past the
+                // replace's wait stays the file-I/O code; its `Display`
+                // names both paths, which must stay in the log.
+                WalletFileError::HeldOpen(shekyl_engine_file::HeldOpen {
+                    held: path(),
+                    live: path(),
+                }),
                 WalletRpcErrorCode::WalletFileIoFailed,
             ),
             (
@@ -3162,6 +3895,13 @@ mod tests {
                 WalletFileError::Envelope(WalletEnvelopeError::FormatVersionTooNew {
                     got: 9,
                     max: 1,
+                }),
+                WalletRpcErrorCode::WalletFileVersionUnsupported,
+            ),
+            (
+                WalletFileError::Envelope(WalletEnvelopeError::FormatVersionRetired {
+                    got: 1,
+                    current: 2,
                 }),
                 WalletRpcErrorCode::WalletFileVersionUnsupported,
             ),
@@ -3212,6 +3952,34 @@ mod tests {
         }
     }
 
+    /// A wallet file whose ledger block an earlier build wrote (version 14,
+    /// before the user freeze was removed) is refused `-29012`, and the
+    /// message names the remedy, restoring the wallet from its seed, and
+    /// what that restore does not bring back (rule 82).
+    #[test]
+    fn an_earlier_ledger_version_is_refused_with_the_remedy() {
+        let err = file_err(WalletFileError::Ledger(
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "ledger",
+                file: 14,
+                binary: 15,
+            },
+        ));
+        assert_eq!(err.code(), WalletRpcErrorCode::WalletFileVersionUnsupported);
+        let message = err.message();
+        assert!(
+            message.contains("restore the wallet from your seed"),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "your send history, proofs for earlier sends, notes and payment requests are \
+                 not restored"
+            ),
+            "{message}"
+        );
+    }
+
     /// The network mismatch names both networks (public), in `data` too.
     #[test]
     fn a_network_mismatch_names_both_networks() {
@@ -3223,6 +3991,22 @@ mod tests {
         assert_eq!(err.code().as_i32(), -29007);
         let data = err.data().expect("data");
         assert_ne!(data["wallet"], data["expected"]);
+    }
+
+    /// The stake random-number check's refusal is `-29017`, with the remedy
+    /// and no grade on the wire. The variant is a unit, so this build can
+    /// construct it and the conversion is the real `From` arm.
+    #[test]
+    fn a_failed_random_source_check_names_its_remedy() {
+        let err: WalletRpcError = OpenError::StakeRngSelfCertFailed.into();
+        assert_eq!(err.code(), WalletRpcErrorCode::RandomSourceCheckFailed);
+        assert_eq!(err.code().as_i32(), -29017);
+        assert_eq!(err.data(), None);
+        let message = err.message();
+        assert!(!message.contains("chi-square"), "{message}");
+        for remedy in ["did not open", "try once more", "another computer"] {
+            assert!(message.contains(remedy), "{remedy}: {message}");
+        }
     }
 
     #[test]
@@ -3292,8 +4076,30 @@ mod tests {
             ),
             (
                 SendError::SignerFailed {
-                    reason: "device unplugged",
+                    fault: shekyl_engine_core::SignerFault::HandleMismatch,
                 },
+                WalletRpcErrorCode::SignerFailed,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyInputs { count: 9 }),
+                WalletRpcErrorCode::TooManyInputs,
+            ),
+            (
+                SendError::Sign(SignFault::TooManyOutputs { count: 17 }),
+                WalletRpcErrorCode::TooManyOutputs,
+            ),
+            (
+                SendError::Sign(SignFault::SpentOutputNotInLeafChunk { input: 1 }),
+                WalletRpcErrorCode::InputNotInTree,
+            ),
+            (
+                SendError::Sign(SignFault::PqcLeafMismatch { input: 0 }),
+                WalletRpcErrorCode::InputUnspendable,
+            ),
+            (
+                SendError::Sign(SignFault::Internal(
+                    shekyl_engine_core::InternalSignFault::BalanceSelfCheck,
+                )),
                 WalletRpcErrorCode::SignerFailed,
             ),
             (
@@ -3419,6 +4225,306 @@ mod tests {
         }
     }
 
+    /// A submit refused because the send's save was not confirmed.
+    fn unsaved(source: PersistenceError) -> WalletRpcError {
+        SubmitError::DispatchNotSaved {
+            reservation_id: shekyl_engine_core::ReservationId::from_raw(7),
+            source,
+        }
+        .into()
+    }
+
+    /// A send saved on a FAT32 or exFAT volume is refused `-29128`, naming
+    /// the file system in `data` and the message, and the fix, an NTFS
+    /// volume (Rick, 2026-11-18). The same refusal reaching the boundary on
+    /// its own answers the same. Red edit: map the unconfirmed save to
+    /// `-29120` again, and the code, the data and the advice all differ.
+    #[test]
+    fn a_save_on_a_volume_windows_cannot_confirm_names_it_and_ntfs() {
+        use shekyl_engine_file::Unconfirmed;
+        for file_system in ["FAT32", "exFAT"] {
+            let refusal = || {
+                PersistenceError::DurabilityUnconfirmed(Unconfirmed::FileSystem(
+                    file_system.to_owned(),
+                ))
+            };
+            for err in [unsaved(refusal()), WalletRpcError::from(refusal())] {
+                assert_eq!(
+                    err.code(),
+                    WalletRpcErrorCode::SaveDurabilityUnconfirmed,
+                    "{err:?}"
+                );
+                assert_eq!(err.code().as_i32(), -29128);
+                assert_eq!(err.data(), Some(json!({ "file_system": file_system })));
+                let message = err.message();
+                assert!(
+                    message.contains(&format!("{file_system} volume"))
+                        && message.contains("move the wallet to an NTFS volume")
+                        && message.contains("not sent"),
+                    "{message}"
+                );
+            }
+        }
+    }
+
+    /// A staking seal whose save was not confirmed answers with the save's
+    /// own code, by cause, from every staking call that seals (Rick,
+    /// 2026-11-19): never `-29522` or `-29107`, whose "sent, held" and
+    /// "may have propagated" are false when nothing was sent. The words are
+    /// a staking transaction's: the seal was removed, so the remedy ends in
+    /// a retry, never "discard the send". Red edit: map `SealNotSaved` to
+    /// the old arms, or pass `SaveOf::Send`, and the code or the words
+    /// differ.
+    #[test]
+    fn an_unconfirmed_staking_seal_answers_its_save_code() {
+        use shekyl_engine_core::{CollectUnstakedError, DrainToPrincipalError, UnstakeError};
+        use shekyl_engine_file::Unconfirmed;
+        let unconfirmed =
+            || PersistenceError::DurabilityUnconfirmed(Unconfirmed::FileSystem("FAT32".to_owned()));
+        let answers = [
+            WalletRpcError::from(UnstakeError::SealNotSaved(unconfirmed())),
+            WalletRpcError::from(DrainToPrincipalError::SealNotSaved(unconfirmed())),
+            WalletRpcError::from(CollectUnstakedError::SealNotSaved(unconfirmed())),
+        ];
+        for err in answers {
+            assert_eq!(err.code().as_i32(), -29128, "{err:?}");
+            assert_eq!(err.data(), Some(json!({ "file_system": "FAT32" })));
+            let message = err.message();
+            assert!(
+                message.starts_with("the staking transaction was not sent")
+                    && message.ends_with("move the wallet to an NTFS volume and try again")
+                    && !message.contains("discard"),
+                "{message}"
+            );
+        }
+        let network = WalletRpcError::from(UnstakeError::SealNotSaved(
+            PersistenceError::DurabilityUnconfirmed(Unconfirmed::Remote("NTFS".to_owned())),
+        ));
+        assert_eq!(network.code().as_i32(), -29134, "{network:?}");
+        // A seal whose save failed outright answers by cause too, never as
+        // an internal fault: here a read-only wallet file.
+        let read_only = WalletRpcError::from(UnstakeError::SealNotSaved(
+            PersistenceError::WalletFile(shekyl_engine_file::WalletFileError::ReadOnly {
+                target: std::path::PathBuf::from("wallet.pending"),
+            }),
+        ));
+        assert_eq!(read_only.code().as_i32(), -29120, "{read_only:?}");
+        assert_eq!(read_only.data(), Some(json!({ "target": "file" })));
+        assert!(
+            read_only
+                .message()
+                .starts_with("the staking transaction was not saved")
+                && !read_only.message().contains("wallet.pending"),
+            "{}",
+            read_only.message()
+        );
+    }
+
+    /// Every cause of an unsaved send has its own code, `data` and advice,
+    /// and none of them leaks a path (Rick, 2026-11-18: the audit of
+    /// `-29120`; 2026-11-19: its target, the step, the network drive). A
+    /// cause is what the user does differently: make the folder writable,
+    /// clear the file's read-only attribute, make the drive writable, free
+    /// disk space, exclude the folder from scanning, check the disk, move
+    /// the wallet, or report a fault.
+    #[test]
+    fn every_cause_of_an_unsaved_send_has_its_own_code_and_advice() {
+        use shekyl_engine_file::{HeldOpen, Step, Unconfirmed};
+        use std::io::{Error as IoErr, ErrorKind};
+        use std::path::PathBuf;
+        use WalletRpcErrorCode as C;
+        let path = || PathBuf::from(LOCAL_PATH);
+        let file = PersistenceError::WalletFile;
+        let unconfirmed = PersistenceError::DurabilityUnconfirmed;
+        let at = |step, source| {
+            file(WalletFileError::SaveStep {
+                step,
+                target: path(),
+                source,
+            })
+        };
+        // A generic disk error and a "not a directory's place" error, each
+        // in the OS's own text, which names no path. The raw numbers are the
+        // platform's: Linux's `EIO` (5) is Windows' `ERROR_ACCESS_DENIED`,
+        // which the mapping rightly reads as not writable, so Windows uses
+        // `ERROR_IO_DEVICE` (1117), its generic I/O device error (measured
+        // on the Windows host at 42f306f11f).
+        #[cfg(windows)]
+        const GENERIC_IO_ERROR: i32 = 1117;
+        #[cfg(not(windows))]
+        const GENERIC_IO_ERROR: i32 = 5;
+        // `EISDIR` on Unix, `ERROR_NOT_READY` on Windows: either is a disk
+        // error the mapping sends to SAVE_IO_FAILED.
+        const OTHER_IO_ERROR: i32 = 21;
+        let eio = || IoErr::from_raw_os_error(GENERIC_IO_ERROR);
+        let eio_words = IoErr::from_raw_os_error(GENERIC_IO_ERROR).to_string();
+        let eisdir_words = IoErr::from_raw_os_error(OTHER_IO_ERROR).to_string();
+        let failed = |step: &str, words: &str| Some(json!({ "step": step, "error": words }));
+        let cases: Vec<(PersistenceError, C, Option<Value>, &str)> = vec![
+            (
+                at(Step::Write, IoErr::from(ErrorKind::PermissionDenied)),
+                C::SaveNotWritable,
+                Some(json!({ "target": "folder" })),
+                "the wallet's folder is not writable; make it writable",
+            ),
+            (
+                file(WalletFileError::ReadOnly { target: path() }),
+                C::SaveNotWritable,
+                Some(json!({ "target": "file" })),
+                "the wallet's file is read-only; clear its read-only attribute",
+            ),
+            (
+                at(Step::Rename, IoErr::from(ErrorKind::ReadOnlyFilesystem)),
+                C::SaveNotWritable,
+                Some(json!({ "target": "volume" })),
+                "the drive holding the wallet is read-only; make it writable",
+            ),
+            (
+                at(Step::Write, IoErr::from(ErrorKind::StorageFull)),
+                C::SaveDiskFull,
+                None,
+                "free disk space",
+            ),
+            (
+                at(Step::Write, IoErr::from(ErrorKind::QuotaExceeded)),
+                C::SaveDiskFull,
+                None,
+                "free disk space",
+            ),
+            (
+                file(WalletFileError::HeldOpen(HeldOpen {
+                    held: path(),
+                    live: path(),
+                })),
+                C::SaveFileHeld,
+                None,
+                "exclude the wallet's folder from scanning",
+            ),
+            (
+                at(Step::Write, eio()),
+                C::SaveIoFailed,
+                failed("write", &eio_words),
+                "while writing the record",
+            ),
+            (
+                at(Step::FolderSync, eio()),
+                C::SaveIoFailed,
+                failed("folder-sync", &eio_words),
+                "while syncing the wallet's folder",
+            ),
+            (
+                // The rename refused, the regtest gate's blocked state path.
+                at(Step::Rename, IoErr::from_raw_os_error(OTHER_IO_ERROR)),
+                C::SaveIoFailed,
+                failed("rename", &eisdir_words),
+                "while putting the record in place of the wallet's file",
+            ),
+            (
+                // An error this process made up may carry a path; only its
+                // kind is shown.
+                at(
+                    Step::Write,
+                    IoErr::new(ErrorKind::InvalidData, format!("{LOCAL_PATH} is odd")),
+                ),
+                C::SaveIoFailed,
+                failed("write", &ErrorKind::InvalidData.to_string()),
+                "check the disk",
+            ),
+            (
+                unconfirmed(Unconfirmed::DirectoryNotSynced(eio())),
+                C::SaveIoFailed,
+                failed("folder-sync", &eio_words),
+                "while syncing the wallet's folder",
+            ),
+            (
+                unconfirmed(Unconfirmed::Flush(eio())),
+                C::SaveIoFailed,
+                failed("flush", &eio_words),
+                "while flushing the wallet's file to the disk",
+            ),
+            (
+                unconfirmed(Unconfirmed::VolumeUnread(eio())),
+                C::SaveIoFailed,
+                failed("volume-query", &eio_words),
+                "while asking the wallet's drive what it is",
+            ),
+            (
+                // A Samba share reports NTFS: the network drive decides.
+                unconfirmed(Unconfirmed::Remote("NTFS".to_owned())),
+                C::SaveOnNetworkDrive,
+                None,
+                "move the wallet to a local drive",
+            ),
+            (
+                unconfirmed(Unconfirmed::FileSystem("ReFS".to_owned())),
+                C::SaveDurabilityUnconfirmed,
+                Some(json!({ "file_system": "ReFS" })),
+                "move the wallet to an NTFS volume",
+            ),
+            (
+                unconfirmed(Unconfirmed::ClassicRename),
+                C::SaveRenameUnconfirmed,
+                None,
+                "move the wallet to another local NTFS drive",
+            ),
+            (
+                unconfirmed(Unconfirmed::Reopened),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+            (
+                // A target with no parent directory is the caller's fault,
+                // not the disk's.
+                file(WalletFileError::Io(IoErr::new(
+                    ErrorKind::InvalidInput,
+                    format!("target {LOCAL_PATH} has no parent directory"),
+                ))),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+            (
+                file(WalletFileError::Ledger(
+                    WalletLedgerError::InvariantFailed {
+                        invariant: "I-1",
+                        detail: "tip below a transfer".into(),
+                    },
+                )),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+            (
+                file(WalletFileError::KeysFileWriteOnceViolation { path: path() }),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+            (
+                PersistenceError::Prefs(PrefsError::TomlParse("bad".into())),
+                C::SaveInternalFault,
+                None,
+                "report it",
+            ),
+        ];
+        for (cause, code, data, advice) in cases {
+            let shown = format!("{cause}");
+            let err = unsaved(cause);
+            assert_eq!(err.code(), code, "{shown}");
+            assert_eq!(err.data(), data, "{shown}");
+            let message = err.message();
+            assert!(
+                message.contains("not sent") && message.contains(advice),
+                "{shown}: {message}"
+            );
+            assert!(
+                !message.contains("/home"),
+                "{shown} leaked a path: {message}"
+            );
+        }
+    }
+
     /// The code table here and the contract's `WalletRpcErrorCode` enum are
     /// one set, both directions: a code the server can emit that the contract
     /// does not list is a conformance failure, and a contract code with no
@@ -3471,8 +4577,8 @@ mod tests {
             ),
             (
                 DaemonFault::Identity(IdentityMismatch::Network {
-                    ours: DaemonNetwork::Mainnet,
-                    theirs: DaemonNetwork::Testnet,
+                    ours: Network::Mainnet,
+                    theirs: Network::Testnet,
                 }),
                 C::DaemonNetworkMismatch,
                 Some(json!({ "wallet": "mainnet", "daemon": "testnet" })),
@@ -3481,7 +4587,7 @@ mod tests {
                 DaemonFault::Identity(IdentityMismatch::Genesis {
                     ours: digest(3),
                     theirs: digest(4),
-                    network: DaemonNetwork::Testnet,
+                    network: Network::Testnet,
                 }),
                 C::DaemonChainMismatch,
                 Some(json!({
@@ -3493,7 +4599,56 @@ mod tests {
             (DaemonFault::Protocol, C::DaemonProtocolViolation, None),
             (DaemonFault::FeeResponse, C::DaemonFeeResponseInvalid, None),
             (DaemonFault::Internal, C::InternalError, None),
+            (DaemonFault::NotPermitted, C::DaemonGrantRefused, None),
+            (DaemonFault::PeerCheck, C::DaemonPeerCheckFailed, None),
+            (
+                DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+                C::DaemonIsAService,
+                Some(json!({ "view": "127.0.0.1:11030" })),
+            ),
+            (
+                DaemonFault::Service(None),
+                C::DaemonIsAService,
+                Some(json!({ "view": null })),
+            ),
         ]
+    }
+
+    /// A service at "this computer" says what to set (Rick, 2026-11-17):
+    /// the view listener as the `daemon-address`, or, with none, that the
+    /// node serves no wallet leg and `rpc-view-listen`. A failed peer check
+    /// is reported as the security failure it is.
+    #[test]
+    fn a_service_here_names_the_setting_and_a_peer_check_is_a_security_failure() {
+        let view = from_daemon_fault(
+            DaemonFault::Service(Some("127.0.0.1:11030".parse().unwrap())),
+            DAEMON_TEXT,
+        );
+        assert_eq!(
+            view.message(),
+            "The node on this computer runs as a service. Until wallets reach a service over \
+             the channel, set daemon-address = 127.0.0.1:11030"
+        );
+        let none = from_daemon_fault(DaemonFault::Service(None), DAEMON_TEXT).message();
+        assert!(none.contains("serves no wallet leg"), "{none}");
+        assert!(none.contains("rpc-view-listen"), "{none}");
+        let peer = from_daemon_fault(DaemonFault::PeerCheck, DAEMON_TEXT).message();
+        assert!(peer.contains("did not connect"), "{peer}");
+
+        // The exit reports the same codes, not a retry. Red edit: map
+        // `UnstakeError::DaemonTarget` to `UnstakeRetryTransient`.
+        use shekyl_engine_core::UnstakeError;
+        let exit_peer: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::PeerCheck).into();
+        assert_eq!(exit_peer.code(), WalletRpcErrorCode::DaemonPeerCheckFailed);
+        let exit_service: WalletRpcError = UnstakeError::DaemonTarget(DaemonFault::Service(Some(
+            "127.0.0.1:11030".parse().unwrap(),
+        )))
+        .into();
+        assert_eq!(exit_service.code(), WalletRpcErrorCode::DaemonIsAService);
+        assert_ne!(
+            exit_service.code(),
+            WalletRpcErrorCode::UnstakeRetryTransient
+        );
     }
 
     /// A daemon fault answers the same code whichever operation met it, and
@@ -3532,8 +4687,8 @@ mod tests {
         assert!(newer.message().contains("update this wallet"), "{newer}");
         let network = from_daemon_fault(
             DaemonFault::Identity(IdentityMismatch::Network {
-                ours: DaemonNetwork::Stagenet,
-                theirs: DaemonNetwork::Mainnet,
+                ours: Network::Stagenet,
+                theirs: Network::Mainnet,
             }),
             DAEMON_TEXT,
         );
@@ -3554,8 +4709,8 @@ mod tests {
             CollectUnstakedError, DrainToPrincipalError, FirstStakeError, UnstakeError,
         };
         let wrong_network = DaemonFault::Identity(IdentityMismatch::Network {
-            ours: DaemonNetwork::Mainnet,
-            theirs: DaemonNetwork::Testnet,
+            ours: Network::Mainnet,
+            theirs: Network::Testnet,
         });
         for (fault, code) in [
             (
@@ -3600,7 +4755,7 @@ mod tests {
         for (fault, code) in [
             (F::ActorUnavailable, C::CurveTreeUnavailable),
             (F::ClientPoisoned, C::CurveTreeUnavailable),
-            (F::RespawnFailed, C::CurveTreeUnavailable),
+            (F::RebuildFailed, C::CurveTreeUnavailable),
             (F::RootMismatch, C::DaemonProtocolViolation),
             (F::BackfillBlockUndecodable, C::DaemonProtocolViolation),
             (F::ClientRejected, C::InternalError),
@@ -3659,5 +4814,61 @@ mod tests {
             unlisted.is_empty() && unbacked.is_empty(),
             "emitted but not in the contract: {unlisted:?}; in the contract with no variant: {unbacked:?}"
         );
+    }
+
+    /// `-29119`'s `data.fault` is one keyword of a closed set: the builder's
+    /// invariants and the wallet-side faults. The contract and the input
+    /// grammar list that set; both lists are the two enums' keywords. Bites
+    /// when a fault is added, renamed or removed in the code without the
+    /// docs, or the docs name a keyword nothing emits.
+    #[test]
+    fn the_signer_fault_keywords_are_the_documented_set() {
+        use std::collections::BTreeSet;
+        let emitted: BTreeSet<&str> = shekyl_engine_core::InternalSignFault::ALL
+            .iter()
+            .map(|f| f.keyword())
+            .chain(
+                shekyl_engine_core::SignerFault::ALL
+                    .iter()
+                    .map(|f| f.keyword()),
+            )
+            .collect();
+        assert_eq!(
+            emitted.len(),
+            shekyl_engine_core::InternalSignFault::ALL.len()
+                + shekyl_engine_core::SignerFault::ALL.len(),
+            "no keyword names two faults"
+        );
+
+        fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+            let from = text.find(start).expect(start) + start.len();
+            let len = text[from..].find(end).expect(end);
+            &text[from..from + len]
+        }
+
+        let contract = include_str!("../../../docs/api/wallet_rpc.yaml");
+        // The entry wraps across the YAML's description column: one space
+        // between words, so a phrase reads whole.
+        let entry = between(contract, "-29119 SIGNER_FAILED", "-29120 SAVE_NOT_WRITABLE")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let builder = between(&entry, "a builder invariant — ", " — or the wallet");
+        let wallet = between(&entry, "signing reads — ", ").");
+        let listed: BTreeSet<&str> = builder
+            .split(',')
+            .chain(wallet.split(','))
+            .map(str::trim)
+            .collect();
+        assert_eq!(listed, emitted, "wallet_rpc.yaml's -29119 keywords");
+
+        let grammar = include_str!("../../../docs/design/INPUT_GRAMMAR.md");
+        let sentence = between(
+            grammar,
+            "`-29119 SIGNER_FAILED` gains `data.fault`, one keyword of a closed set:",
+            "(the wallet state signing reads",
+        );
+        let listed: BTreeSet<&str> = sentence.split('`').skip(1).step_by(2).collect();
+        assert_eq!(listed, emitted, "INPUT_GRAMMAR.md's -29119 keywords");
     }
 }

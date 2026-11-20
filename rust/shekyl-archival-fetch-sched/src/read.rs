@@ -33,12 +33,10 @@ use std::sync::Arc;
 use shekyl_archival_retention::{
     challenge_nonce, support_challenge_nonce, PassStream, CHALLENGE_READS, PASS_ANCHOR_DEPTH_BLOCKS,
 };
-use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_p_fetch::{
-    ExpectedShard, FetchError, NextMove, PFetchClient, PassVerifyingKey, RequestHeader, TxSink,
-    VerifiedShard,
+    ExpectedShard, FetchError, NextMove, PFetchClient, RequestHeader, TxSink, VerifiedShard,
 };
-use shekyl_types::{ArchivalLength, BlockHeight, PCanonicalId, ShardId};
+use shekyl_types::{ArchivalLength, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
 use crate::draw::{DrawFault, Urn};
 use crate::facts::{
@@ -149,13 +147,11 @@ impl HolderRetries {
 /// A completed read: the body went through the caller's sink one
 /// transaction at a time, and this is what the requester keeps.
 ///
-/// `K` is the scheme of the holder that was dialled. A drawn read is the
-/// live scheme's. A nonce read is whatever scheme its caller named the
-/// holder under, so a read over a receipt-key target carries the receipt.
+/// The shard's receipt is under the dialled holder's receipt key.
 #[derive(Clone, Debug)]
-pub struct Read<K: PassVerifyingKey = HybridPublicKey> {
+pub struct Read {
     /// The verified shard: view hash, delivery digest, `P`'s signature.
-    pub shard: VerifiedShard<K>,
+    pub shard: VerifiedShard,
     /// Who served it.
     pub holder: PCanonicalId,
     /// The header `P` signed over — the pass record's anchor and nonce.
@@ -205,16 +201,34 @@ pub enum ReadFailure {
     /// it. Nothing was dialled.
     #[error("no holder is bonded to shard {shard_id:?}")]
     NoHolders { shard_id: ShardId },
-    /// Every holder the budget allowed was tried.
-    #[error("every drawn holder failed ({} attempts)", attempts.len())]
+    /// Every holder the budget allowed was tried. The message names the
+    /// last attempt's answer: on a nonce read the scheduler dials only the
+    /// named persona, so that answer is how the read ended, and a log line
+    /// built from this message says whether `P` was unreachable or
+    /// answered and refused (a 404, a 503, a bad countersignature).
+    #[error("every drawn holder failed ({} attempts){}", attempts.len(), LastAnswer(attempts))]
     Exhausted { attempts: Vec<Attempt> },
+}
+
+/// The tail of [`ReadFailure::Exhausted`]'s message: the last attempt's
+/// error, or nothing when no holder was dialled.
+struct LastAnswer<'a>(&'a [Attempt]);
+
+impl std::fmt::Display for LastAnswer<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.last() {
+            Some(last) => write!(f, "; the last: {}", last.error),
+            None => Ok(()),
+        }
+    }
 }
 
 /// The daemon's one fetch scheduler.
 ///
-/// Owns the one [`PFetchClient`] — and so the in-flight cap
-/// ([`shekyl_p_fetch::MAX_INFLIGHT`]) every caller shares — and the two
-/// facts seams. Cheap to share behind an `Arc`.
+/// Owns the one [`PFetchClient`] — and so the in-flight cap its callers'
+/// lanes divide (the bundle producer's reads, the view desk's
+/// [`crate::VIEW_SLOTS`]) — and the two facts seams. Cheap to share
+/// behind an `Arc`.
 pub struct FetchScheduler<F, H> {
     facts: Arc<F>,
     holders: Arc<H>,
@@ -236,7 +250,8 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         &self.facts
     }
 
-    /// Fetch slots not currently in use (`MAX_INFLIGHT` minus in-flight).
+    /// Fetch slots not currently in use (the client's slots minus those
+    /// in flight).
     pub fn available_slots(&self) -> usize {
         self.client.available_slots()
     }
@@ -298,21 +313,21 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     ///
     /// As [`Self::read_from`], except [`ReadFailure::NoHolders`]: the
     /// holder source is not read, so there is no urn to find empty.
-    pub async fn read_from_nonce<K: PassVerifyingKey>(
+    pub async fn read_from_nonce(
         &self,
-        assigned: &Holder<K>,
+        assigned: &Holder,
         shard_id: ShardId,
         nonce: SuppliedNonce,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
-    ) -> Result<Read<K>, ReadFailure> {
+    ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
         match self
             .attempt(assigned, &closed.expected, sink, budget, Some(nonce))
             .await?
         {
             HolderOutcome::Served(shard, header) => Ok(Read {
-                shard,
+                shard: *shard,
                 holder: assigned.id,
                 header,
                 close: closed.close,
@@ -376,7 +391,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             {
                 HolderOutcome::Served(shard, header) => {
                     return Ok(Read {
-                        shard,
+                        shard: *shard,
                         holder: holder.id,
                         header,
                         close: closed.close,
@@ -417,15 +432,10 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
             .block_hash_at(anchor)?
             .ok_or(FactsFault::Inconsistent)?;
         match nonce {
-            Some(SuppliedNonce { stream, nonce }) => Ok(RequestHeader::on_stream(
-                stream,
-                nonce,
-                anchor,
-                hash.to_bytes(),
-            )),
-            None => {
-                RequestHeader::fresh(anchor, hash.to_bytes()).map_err(|_| DrawFault::Entropy.into())
+            Some(SuppliedNonce { stream, nonce }) => {
+                Ok(RequestHeader::on_stream(stream, nonce, anchor, hash))
             }
+            None => RequestHeader::fresh(anchor, hash).map_err(|_| DrawFault::Entropy.into()),
         }
     }
 
@@ -435,14 +445,14 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
     /// order. `Err` is a fault of the requester's own (facts, entropy)
     /// that ends the need — a different type from a spent holder, so `?`
     /// cannot turn one into the other.
-    async fn attempt<K: PassVerifyingKey>(
+    async fn attempt(
         &self,
-        holder: &Holder<K>,
+        holder: &Holder,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
         budget: NeedBudget,
         nonce: Option<SuppliedNonce>,
-    ) -> Result<HolderOutcome<K>, ReadFailure> {
+    ) -> Result<HolderOutcome, ReadFailure> {
         let mut header = self.fresh_header(nonce)?;
         let mut retries = HolderRetries::new(budget);
         let mut errors = Vec::new();
@@ -452,7 +462,7 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
                 .fetch(&holder.target, &header, expected, Arc::clone(&sink))
                 .await
             {
-                Ok(shard) => return Ok(HolderOutcome::Served(shard, header)),
+                Ok(shard) => return Ok(HolderOutcome::Served(Box::new(shard), header)),
                 Err(error) => error,
             };
             let next = retries.after(&error);
@@ -501,7 +511,7 @@ pub struct ChallengeDraw {
     /// The block's unrevealed draw seed.
     pub seed: [u8; 32],
     /// `block_hash(h)` of the issuing block.
-    pub block_hash: [u8; 32],
+    pub block_hash: BlockHash,
     /// Draw index `j` at `h`.
     pub draw: u32,
     /// This read of the draw, from 0. Admission refuses `≥ K`.
@@ -555,14 +565,14 @@ pub enum ChallengeReadError {
 ///
 /// [`ChallengeReadError::AttemptBound`] when `attempt ≥ K`; otherwise a
 /// [`ReadFailure`].
-pub async fn challenge_read<F: ShardFacts, H: HolderSource, K: PassVerifyingKey>(
+pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
     scheduler: &FetchScheduler<F, H>,
-    assigned: &Holder<K>,
+    assigned: &Holder,
     shard_id: ShardId,
     draw: ChallengeDraw,
     sink: Arc<dyn TxSink>,
     budget: NeedBudget,
-) -> Result<Read<K>, ChallengeReadError> {
+) -> Result<Read, ChallengeReadError> {
     if draw.attempt >= CHALLENGE_READS {
         return Err(ChallengeReadError::AttemptBound {
             attempt: draw.attempt,
@@ -585,21 +595,51 @@ fn support_turn(had_drawn: bool, tried: usize) -> bool {
 
 /// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder
 /// moves the need on, and a requester fault ends it.
-enum HolderOutcome<K: PassVerifyingKey> {
-    /// The body verified. The header is the one `P` signed over.
-    Served(VerifiedShard<K>, RequestHeader),
+enum HolderOutcome {
+    /// The body verified. The header is the one `P` signed over. Boxed:
+    /// the shard carries its receipt inline.
+    Served(Box<VerifiedShard>, RequestHeader),
     /// This holder is done with. The attempts are in dial order.
     Spent(Vec<Attempt>),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::support_turn;
+    use super::{support_turn, Attempt, ReadFailure};
+    use shekyl_p_fetch::{FetchError, Stall};
+    use shekyl_types::PCanonicalId;
 
     #[test]
     fn a_support_holder_waits_until_a_drawn_holder_has_been_tried() {
         assert!(!support_turn(true, 0));
         assert!(support_turn(true, 1));
         assert!(support_turn(false, 0));
+    }
+
+    fn attempt(error: FetchError) -> Attempt {
+        Attempt {
+            holder: PCanonicalId::from_bytes([7; 32]),
+            error,
+        }
+    }
+
+    /// The emission walk of 2026-11-17 filed six bundles with no pass and
+    /// its logs could not say why: this message was all a log line carried.
+    #[test]
+    fn an_exhausted_read_names_its_last_answer() {
+        let refused = ReadFailure::Exhausted {
+            attempts: vec![
+                attempt(FetchError::Stall(Stall::DialTimeout)),
+                attempt(FetchError::Miss),
+            ],
+        };
+        assert_eq!(
+            refused.to_string(),
+            "every drawn holder failed (2 attempts); the last: miss: P answered 404"
+        );
+        let none = ReadFailure::Exhausted {
+            attempts: Vec::new(),
+        };
+        assert_eq!(none.to_string(), "every drawn holder failed (0 attempts)");
     }
 }

@@ -15,26 +15,26 @@ import os
 import sys, json
 
 # A COUNT IS EMITTED ONLY FROM A PATH THAT AFFIRMATIVELY PARSED A LIST OF
-# CONNECTION OBJECTS. Every other shape — an error, a missing field, a field of
-# the wrong type, an element that is not an object, an exception nobody
-# predicted — produces ERR. The class being closed is not "restricted mode": it
-# is ANY unrecognized response collapsing to zero, because zero is this run its
+# CONNECTION OBJECTS. Every other shape — an error, a result that is not a
+# list, an element that is not an object, an exception nobody predicted —
+# produces ERR. The class being closed is not "restricted mode": it is ANY
+# unrecognized response collapsing to zero, because zero is this run its
 # headline claim and the instrument must not be able to manufacture it.
-def absent_connections_is_empty(r):
-    """An absent `connections` is never a zero.
+#
+# Both replies are JSON-RPC 2.0 from the daemon's `/json_rpc`:
+# `peer_connections` answers a list of connections, and `peer_list` a list
+# of `{endpoint, tier}`. A refusal is an `error` whose code is the class and
+# whose data is the diagnostic, never a `status` member.
 
-    The count is emitted only from a path that affirmatively parsed a list
-    of connection objects (file header). `untrusted` used to ride every RPC
-    response and was used here as a discriminator; it was deleted with the
-    bootstrap-daemon forward, and `status` is on every response too, so
-    neither field uniquely identifies get_connections. The discriminator is
-    the `connections` key itself: a genuine isolated node serializes
-    `"connections":[]`. A missing key is a different method or a malformed
-    reply — ERR, not a manufactured zero.
-    """
-    if r.get("status") != "OK":
-        return "ERR no-connections-field:status=%r" % (r.get("status"),)
-    return "ERR no-connections-field:not-a-get_connections-reply"
+def _rpc_error(d):
+    """The ERR text for a reply's `error`, or None when it has none."""
+    e = d.get("error")
+    if e is None:
+        return None
+    if isinstance(e, dict):
+        code = (e.get("data") or {}).get("code") if isinstance(e.get("data"), dict) else None
+        return "ERR rpc-error:%s:%s:%s" % (e.get("code"), code, e.get("message"))
+    return "ERR rpc-error:%s" % (e,)
 
 def _excluded_onions():
     """Onions that must NOT appear in any fleet node's peer list.
@@ -69,7 +69,10 @@ def stored_anon(peers_raw):
         p = json.loads(peers_raw)
     except Exception:
         return None
-    if not isinstance(p, dict) or p.get("status") != "OK":
+    if not isinstance(p, dict) or "error" in p:
+        return None
+    entries = p.get("result")
+    if not isinstance(entries, list):
         return None
 
     # SEED EXCLUSION IS AN INVARIANT, NOT AN ARRANGEMENT.
@@ -95,39 +98,37 @@ def stored_anon(peers_raw):
     # below already refuses entry-level damage rather than dropping it -- this
     # is that same rule, applied on the side where it was missing.
     #
-    # A non-onion host is NOT malformed: white and gray legitimately carry
-    # public-zone peers. Only unreadable STRUCTURE refuses.
-    hosts = {"white_list": [], "gray_list": []}
-    for key in ("white_list", "gray_list"):
-        v = p.get(key, [])
-        if v is None:
-            v = []
-        if not isinstance(v, list):
+    # A non-onion endpoint is NOT malformed: white and gray legitimately carry
+    # public-zone peers. Only unreadable STRUCTURE refuses, and a tier that is
+    # neither list is unreadable structure.
+    hosts = {"white": [], "gray": []}
+    for e in entries:
+        if not isinstance(e, dict):
             return None
-        for e in v:
-            if not isinstance(e, dict):
-                return None
-            h = e.get("host")
-            if not isinstance(h, str) or not h:
-                return None
-            hosts[key].append(h)
+        h = e.get("endpoint")
+        if not isinstance(h, str) or not h:
+            return None
+        tier = e.get("tier")
+        if tier not in hosts:
+            return None
+        hosts[tier].append(h)
 
     excl = _excluded_onions()
     if excl:
-        for key in ("white_list", "gray_list"):
+        for key in ("white", "gray"):
             for h in hosts[key]:
                 for bad in excl:
                     if bad and bad in h:
                         return "CONTAMINATED:%s" % bad[:16]
 
-    # `host` carries the PORT too -- "xxxx.onion:13021" -- so an
+    # `endpoint` carries the PORT too -- "xxxx.onion:13021" -- so an
     # endswith(".onion") match counts nothing. It did: every node read
     # white=0 gray=0 while aus demonstrably held 5 and 1. The None-vs-zero
     # guard does not catch that, because the read was fine and the MATCHER was
     # wrong; a guard against unparseable input says nothing about a predicate
     # that parses cleanly and matches the wrong thing.
     return [sum(1 for h in hosts[k] if ".onion" in h)
-            for k in ("white_list", "gray_list")]
+            for k in ("white", "gray")]
 
 def verdict():
     raw = sys.stdin.read()
@@ -138,16 +139,19 @@ def verdict():
         return "ERR unparseable:%s" % type(e).__name__
     if not isinstance(d, dict):
         return "ERR non-object-response:%s" % type(d).__name__
-    if d.get("error"):
-        e = d["error"]
-        if isinstance(e, dict):
-            return "ERR rpc-error:%s:%s" % (e.get("code"), e.get("message"))
-        return "ERR rpc-error:%s" % (e,)
+    refused = _rpc_error(d)
+    if refused:
+        return refused
     if "result" not in d:
         return "ERR no-result-field"
-    r = d["result"]
-    if not isinstance(r, dict):
-        return "ERR result-not-an-object:%s" % type(r).__name__
+    # `peer_connections` answers the list itself. A genuinely isolated node
+    # answers `[]`; anything that is not a list is a different method or a
+    # malformed reply, never a zero.
+    c = d["result"]
+    if c is None:
+        return "ERR connections-null"
+    if not isinstance(c, list):
+        return "ERR connections-not-a-list:%s" % type(c).__name__
     stored = stored_anon(peers_raw)
     if stored is None:
         return "ERR peer-list-unusable"
@@ -158,31 +162,24 @@ def verdict():
         return "ERR seed-%s" % stored
     white, gray = stored
 
-    if "connections" not in r:
-        base = absent_connections_is_empty(r)
-        return base if base.startswith("ERR") else "OK 0 0 0 %d %d" % (white, gray)
-    c = r["connections"]
-    if c is None:
-        return "ERR connections-null"
-    if not isinstance(c, list):
-        return "ERR connections-not-a-list:%s" % type(c).__name__
     for x in c:
         if not isinstance(x, dict):
             return "ERR connection-entry-not-an-object:%s" % type(x).__name__
-        if "address_type" not in x:
-            return "ERR connection-entry-missing-address_type"
-        # `incoming` was read with `not x.get("incoming")`, so an entry MISSING
-        # the field counted as OUTBOUND -- inflating the one quantity the floor
-        # is measured on, in the direction that reports a node as better
-        # connected than it is. The loop already refused a missing
-        # `address_type`; the direction field is exactly as load-bearing and
-        # was not checked. A default is not available here: there is no safe
-        # guess about which way a connection points.
-        if not isinstance(x.get("incoming"), bool):
-            return "ERR connection-entry-bad-incoming"
-    tor_out = sum(1 for x in c if x.get("address_type") == 4 and not x.get("incoming"))
-    tor_in  = sum(1 for x in c if x.get("address_type") == 4 and x.get("incoming"))
-    pub     = sum(1 for x in c if x.get("address_type") != 4)
+        # The connector is `clearnet` or `tor`; any other value is a reply
+        # this parser does not understand, not a public connection.
+        if x.get("connector") not in ("clearnet", "tor"):
+            return "ERR connection-entry-bad-connector"
+        # `incoming` was once read with `not x.get("incoming")`, so an entry
+        # MISSING the field counted as OUTBOUND -- inflating the one quantity
+        # the floor is measured on, in the direction that reports a node as
+        # better connected than it is. The direction field is exactly as
+        # load-bearing as the connector. A default is not available here:
+        # there is no safe guess about which way a connection points.
+        if not isinstance(x.get("inbound"), bool):
+            return "ERR connection-entry-bad-inbound"
+    tor_out = sum(1 for x in c if x["connector"] == "tor" and not x["inbound"])
+    tor_in  = sum(1 for x in c if x["connector"] == "tor" and x["inbound"])
+    pub     = sum(1 for x in c if x["connector"] == "clearnet")
     return "OK %d %d %d %d %d" % (tor_out, tor_in, pub, white, gray)
 
 try:

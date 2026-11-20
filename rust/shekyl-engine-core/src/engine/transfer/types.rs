@@ -5,7 +5,7 @@
 
 //! Transfer / pending-tx state types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -34,7 +34,7 @@ pub(crate) type OutputId = usize;
 /// Semantic, canonically-ordered fingerprint of a built tx's *authorized
 /// content* — the `(fee, who-gets-how-much, change)` the consumer reviewed.
 ///
-/// CT-5d ([`docs/design/CT5D_REANCHOR.md`] §4, F-G/F-G′): a re-anchor advances
+/// CT-5d (`docs/design/CT5D_REANCHOR.md` §4, F-G/F-G′): a re-anchor advances
 /// [`ConsumerHeldEntry::content_gen`] **iff this fingerprint changes**, so it
 /// must capture exactly what consent is over and nothing else:
 ///
@@ -42,10 +42,12 @@ pub(crate) type OutputId = usize;
 ///   *change address* every time; the fingerprint carries the change *amount*
 ///   only, never the address, or transparent reprove would spuriously bump
 ///   `content_gen` (F-G).
-/// - **Canonically ordered** — CryptoNote-lineage txs shuffle outputs so the
-///   change output is not positionally identifiable, and a reprove re-runs the
-///   build internals → re-shuffles; the destinations are sorted here so the
-///   fingerprint is invariant under that privacy permutation (F-G′).
+/// - **Canonically ordered** — every wallet-built transaction places its
+///   outputs in the order its transaction key derives (R-24,
+///   `TxKey::output_order`), so the change output is not positionally
+///   identifiable, and a reprove draws a fresh key and so a fresh order; the
+///   destinations are sorted here so the fingerprint is invariant under that
+///   permutation (F-G′).
 ///
 /// Consent is over *who gets how much* and the fee — not the wallet's own change
 /// address or the output order — so two builds that pay the same recipients the
@@ -126,10 +128,10 @@ impl ContentFingerprint {
 /// CT-5d adds the substrate a submit-time re-anchor needs: a `consumer_held`
 /// entry must carry enough to *rebuild* (the `request`), the anchor it was built
 /// against (`reference`), and the consent state (`content_gen` + `fingerprint`).
-/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, [`docs/design/CT5D_REANCHOR.md`]
+/// `PendingTxState` is a runtime `Mutex` (not persisted — F-F, `docs/design/CT5D_REANCHOR.md`
 /// §7), so these are runtime-only fields with no schema-migration cost.
 ///
-/// **Not `Clone`** (WI-RPC-3 retention): `tx_key_secret` is
+/// **Not `Clone`** (WI-RPC-3 retention): `tx_key` is
 /// deliberately non-`Clone`, keeping the per-tx secret single-copy
 /// while the entry moves `consumer_held → in_flight → finalize`.
 /// Nothing needed the whole-entry clone anyway — the flip moves the
@@ -148,7 +150,7 @@ pub(crate) struct ConsumerHeldEntry {
     /// Engine `synced_height` at build (defense-in-depth checks).
     pub built_at_height: shekyl_types::BlockHeight,
     /// `block_hash_at(built_at_height)` at build.
-    pub built_at_tip_hash: [u8; 32],
+    pub built_at_tip_hash: shekyl_types::BlockHash,
     /// Serialized signed transaction for daemon broadcast.
     pub tx_bytes: Vec<u8>,
     /// CT-5d: the original build request (recipients + priority). Re-anchor
@@ -176,8 +178,9 @@ pub(crate) struct ConsumerHeldEntry {
     /// exists only so a §2.5 retryable restoration can re-dispatch.
     /// Zeroize-on-drop — a discard wipes it structurally with the
     /// entry, matching pin 1's "not at build" lifecycle (a never-
-    /// submitted build leaves no orphan in the store).
-    pub tx_key_secret: shekyl_engine_state::TxSecretKey,
+    /// submitted build leaves no orphan in the store). The dispatch
+    /// record holds its stored form ([`shekyl_crypto_pq::TxKey::store`]).
+    pub tx_key: shekyl_crypto_pq::TxKey,
 }
 
 #[cfg(test)]
@@ -192,7 +195,7 @@ impl ConsumerHeldEntry {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
             built_at_height: shekyl_types::BlockHeight::ZERO,
-            built_at_tip_hash: [0u8; 32],
+            built_at_tip_hash: BlockHash::from_bytes([0u8; 32]),
             tx_bytes,
             request: TxRequest {
                 recipients: Vec::new(),
@@ -205,9 +208,7 @@ impl ConsumerHeldEntry {
             },
             content_gen: 0,
             fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),
-            tx_key_secret: shekyl_engine_state::TxSecretKey::new(zeroize::Zeroizing::new(
-                [0u8; 32],
-            )),
+            tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
         }
     }
 }
@@ -282,7 +283,7 @@ where
 /// [`LocalPendingTx::state`](super::engine::LocalPendingTx::state).
 ///
 /// Segment-2h (γ) lean shape per
-/// [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`] §5.6.8 (γ):
+/// `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.8 (γ):
 /// three collections, no `ReservationState` enum, collection
 /// membership as ground truth.
 ///
@@ -325,25 +326,27 @@ pub(crate) struct PendingTxState {
     pub next_id: u64,
     /// F28/F37 rebuild-loop circuit breaker. See [`SubmitLoopBreaker`].
     pub loop_breaker: SubmitLoopBreaker,
-    /// In-memory serialized bytes of network-exposed txs, keyed by
-    /// canonical txid, retained for the §5.3 watchdog's rung-1
-    /// resubmit-same-bytes probe (`DAEMON_SUBMIT_VERDICT.md` §5.3
-    /// decision 2). Populated at finalize-accept / finalize-already-in-
-    /// chain from the in-flight entry about to be dropped; pruned by the
-    /// driver when the txid leaves the held projection.
+    /// Canonical txids this session dispatched, or adopted by the user's
+    /// resend of a held send (A19, `DAEMON_SUBMIT_VERDICT.md` §5.3). The
+    /// watchdog's rung-1 resubmit-same-bytes probe is automatic only for
+    /// these. A held send outside the set was dispatched before a restart
+    /// — perhaps to a different daemon — so resending it is a human
+    /// decision: the probe rung becomes the operator alarm
+    /// ([`WatchdogAlarmReason::DispatchedBeforeThisSession`](crate::engine::diagnostics::WatchdogAlarmReason::DispatchedBeforeThisSession)).
     ///
-    /// **Ephemeral by design (decision 2).** Not persisted: a wallet
-    /// restart drops these, degrading the probe rung to the operator-
-    /// alarm rung — still satisfying §2.6's "every exit is verdict,
-    /// confirmation, or operator alarm." Persistence's only real product
-    /// would be a silent cross-restart re-broadcast of a signed key-image
-    /// spend, which the ephemeral design correctly converts into a human
-    /// decision.
-    pub held_bytes: HashMap<TxHash, Vec<u8>>,
+    /// Session-scoped by design, so never persisted: every open starts
+    /// empty and the alarm is re-derived from the saved journal rows.
+    pub dispatched_this_session: HashSet<TxHash>,
+    /// The operator alarm raised for each held send this session, by the
+    /// watchdog's alarm rung (the edge-trigger latch: one alarm per held
+    /// send until it leaves the held projection or the user resends it).
+    /// Read by [`HeldSends::list`](crate::engine::held_sends::HeldSends::list)
+    /// beside the alarm derived from the saved journal; never persisted.
+    pub raised_alarms: HashMap<TxHash, crate::engine::diagnostics::WatchdogAlarmReason>,
     /// F40 targeted re-scan requests awaiting the driver's next tick.
-    /// `finalize_submit_already_in_chain` pushes here (alongside the
-    /// observability diagnostic) whenever the daemon claims a confirming
-    /// height at-or-below the wallet's synced height (§2.5(b)); the driver
+    /// `submit_async` pushes here, after the verdict commit, whenever the
+    /// daemon claims a confirming height at-or-below the wallet's synced
+    /// height (§2.5(b)); the driver
     /// drains it and runs the cheap-check-then-escalate executor under the
     /// F40-R2 breaker.
     ///
@@ -419,9 +422,9 @@ impl SubmitLoopBreaker {
     /// the escalation point; there is never a third build.
     const TRIP_THRESHOLD: u8 = 2;
 
-    /// Which terminal kinds the breaker scopes over. `DoubleSpend` and
-    /// `JoinMarketUnsupported` are excluded: their disposition is terminal
-    /// release with no rebuild prescription, so there is no loop to break.
+    /// Which terminal kinds the breaker scopes over. `DoubleSpend` is
+    /// excluded: its disposition is terminal release with no rebuild
+    /// prescription, so there is no loop to break.
     pub(super) fn in_scope(kind: TerminalErrorKind) -> bool {
         matches!(
             kind,
@@ -472,7 +475,7 @@ impl SubmitLoopBreaker {
     }
 }
 
-/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d [`docs/design/CT5D_REANCHOR.md`]
+/// Bounded retries for the re-anchor lock₂ TOCTOU (CT-5d `docs/design/CT5D_REANCHOR.md`
 /// §3a): the tip/tree can move during the lock-free prover run, re-staling the
 /// freshly-anchored reference. Retry the whole pre-phase→prover→commit loop a
 /// few times; a tip moving faster than this is better surfaced as a clean

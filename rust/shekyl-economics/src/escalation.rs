@@ -39,9 +39,9 @@ use crate::params::SCALE;
 /// D2 burden operand: `n = closed_shard_count` at **parent-block** state —
 /// the archival shards (`shekyl_types::SHARD_LENGTH` bytes each, `SHT-Q2`)
 /// the parent chain's archival fold has closed, `shekyl_types::shard_of`
-/// its recorded `cumulative_archival_len`. The C++ validator wraps its
-/// frozen J-segment count here instead (LMDB keeps no archival fold; the
-/// divergence is CEN-L10's, ruled, flat-neutral, closed at cutover).
+/// its recorded `cumulative_archival_len`. The C++ validator wrapped its
+/// frozen J-segment count here instead (CEN-L10, ruled, flat-neutral).
+/// That reader was deleted with the C++ chain.
 ///
 /// State-shaped (chain progression owns the value). Callers read it once per
 /// template/connect and pass the typed count through the burn split — never
@@ -53,10 +53,9 @@ use crate::params::SCALE;
 /// wrapping site is the single audit point. It does **not** certify that a
 /// value was read at parent state: [`Self::new`] is a public const wrapper,
 /// so anything can be wrapped. The read-point discipline lives in the readers
-/// — `shekyl_chain_rules`'s `closed_shards_before(connecting)` on the Rust
-/// side, the C++ `Blockchain::parent_frozen_segment_count` and its throwing
-/// assert until cutover — do not read this type as satisfying it by
-/// construction.
+/// — `shekyl_chain_rules`'s `closed_shards_before(connecting)`. The C++
+/// reader of the same operand was deleted with the chain. Do not read
+/// this type as satisfying the read-point by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
 pub struct ClosedShardCount(u64);

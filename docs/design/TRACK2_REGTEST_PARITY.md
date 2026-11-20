@@ -21,7 +21,7 @@ sent over the real RPC transport, is accepted by `shekyld`'s consensus
   `build_layers` root == daemon header root at every height.
 - **Submit/verify parity is the new surface.** The verify code is the same Rust
   `shekyl_fcmp::proof::verify` the daemon calls via FFI
-  (`shekyl_ffi.h:368` → `shekyl-ffi/src/lib.rs:1485`), and the wallet and daemon
+  (`shekyl_ffi.h` at `ac3836de90` (line 368) → `shekyl-ffi/src/lib.rs:1485`), and the wallet and daemon
   also share the tree-construction FFI (`grow_curve_tree` → `shekyl_curve_tree_*`).
   So parity is **structural** — the in-process #162 result should carry to the
   daemon by transitivity.

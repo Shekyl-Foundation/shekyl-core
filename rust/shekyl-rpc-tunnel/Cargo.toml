@@ -1,0 +1,58 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-rpc-tunnel"
+description = "The RPC channel's tunnel (RPC_CHANNEL.md §8): a consumer on another host reaches a daemon over the channel through a loopback listener or a socket only its account can enter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "shekyl-rpc-tunnel"
+path = "src/main.rs"
+
+[dependencies]
+# The option table, its readers and the typed diagnostic (IG-9, IG-11),
+# and the daemon's resolution and logging section, so a row shared with the
+# daemon means the same thing here.
+shekyl-options = { path = "../shekyl-options" }
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-process = { path = "../shekyl-process" }
+shekyl-logging = { path = "../shekyl-logging" }
+shekyl-version = { path = "../shekyl-version" }
+# The channel's client and its pool (RT-W11), the grants a session asks for,
+# and the keywords a grant is named by.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
+shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
+shekyl-os-account = { path = "../shekyl-os-account" }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "signal", "macros", "time", "sync", "io-util"] }
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = { version = "0.1", default-features = false }
+tracing = "0.1"
+
+[dev-dependencies]
+# The end-to-end test's node lives in a directory of its own (`LocalTarget::test_override`).
+# TEST_ONLY: a dev edge alone may enable it.
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }
+tempfile = "3"
+# The end-to-end test (tests/end_to_end.rs): a real daemon in a child of
+# the test binary, as shekyl-daemon's own tests run one; the owner's calls
+# that enroll the administrator; the CLI's enrollment words, as a library;
+# the spawn lock every launcher takes.
+shekyl-daemon = { path = "../shekyl-daemon" }
+shekyl-cli = { path = "../shekyl-cli" }
+shekyl-spawn = { path = "../shekyl-spawn" }
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+
+[lints]
+workspace = true

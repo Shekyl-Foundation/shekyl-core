@@ -293,7 +293,8 @@ efficacy (with patience) · residual · disposition.** Findings are `TM-#`.
 - **Intended defense:** `f` reads a **count** (not a per-rung histogram) at the
   **last-closed epoch** (slow, finality-deep aggregate). Count-uniform was chosen
   *specifically* because the per-rung histogram was measured to be rung-locally
-  targetable (`--cover-targeting`: histogram halves a chosen victim in 5 bonds,
+  targetable (`--cover-targeting`, deleted 2026-11-08 with the retired
+  `span(C)` model, last at `68f84376d`: histogram halves a chosen victim in 5 bonds,
   count needs >8 and only moves global width).
 - **Actual efficacy:** the slow last-closed-epoch count is **expensive to move** —
   an attacker must suppress bonds across a full ~10k-block epoch, forgoing real

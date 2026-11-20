@@ -2,15 +2,24 @@
 
 SOURCES_PATH ?= $(BASEDIR)/sources
 BASE_CACHE ?= $(BASEDIR)/built
-FALLBACK_DOWNLOAD_PATH ?= https://downloads.getmonero.org/depends-sources
+# The Foundation's mirror of the sources, fetched before each package's own
+# download path and its alternates (funcs.mk `fetch_file`). Every file is
+# checked against the package's pinned SHA-256 whichever host served it.
+# The macOS SDK is not mirrored; it is fetched from its own path.
+MIRROR_DOWNLOAD_PATH ?= https://github.com/Shekyl-Foundation/depends-sources/releases/download/v1
 
 BUILD = $(shell ./config.guess)
 HOST ?= $(BUILD)
 PATCHES_PATH = $(BASEDIR)/patches
 BASEDIR = $(CURDIR)
 HASH_LENGTH:=11
-DOWNLOAD_CONNECT_TIMEOUT:=30
-DOWNLOAD_RETRIES:=5
+# A host that does not answer is given up on quickly, so the next host in
+# funcs.mk `fetch_file`'s order (the mirror, the package's path, its
+# alternates) is reached in well under a minute: three attempts of at most
+# 10 s each, with curl's 1 s and 2 s back-off. Six 30 s attempts against a
+# dead host came first before.
+DOWNLOAD_CONNECT_TIMEOUT:=10
+DOWNLOAD_RETRIES:=2
 HOST_ID_SALT ?= salt
 BUILD_ID_SALT ?= salt
 

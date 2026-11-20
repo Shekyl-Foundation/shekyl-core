@@ -13,7 +13,7 @@
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
 use shekyl_chain_rules::{AtHeight, RuleSet};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
@@ -22,7 +22,7 @@ use super::connect_fixtures::{
     FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::Canonical;
 use crate::schema::{BLOCK_INFO, CURVE_TREE_ROOTS};
@@ -56,7 +56,6 @@ fn tip_on_a_fresh_file_is_none_and_live_not_an_engine_error() {
             connect: ConnectState::Live,
         }
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -86,7 +85,6 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
         "and the writer is halted at genesis: {:?}",
         tip.connect
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -104,7 +102,6 @@ fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
         }
     );
     assert_eq!(tip.connect, ConnectState::Live);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ R2
@@ -124,7 +121,6 @@ fn height_of_is_some_for_a_recorded_hash_and_none_otherwise() {
         None,
         "by hash, absence has one meaning"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ R3
@@ -160,7 +156,6 @@ fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
         snap.block_info(h(u64::MAX)).expect("read"),
         AtHeight::AboveTip
     ));
-    cleanup(&path);
 }
 
 #[test]
@@ -231,7 +226,6 @@ fn a_hole_below_the_tip_is_si7_and_does_not_halt_the_writer() {
         AtHeight::AboveTip
     ));
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ R4
@@ -275,8 +269,6 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
             .expect("range"),
         AtHeight::AboveTip
     ));
-    cleanup(&empty);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ R5–R7
@@ -302,7 +294,6 @@ fn block_returns_the_body_verified_against_the_recorded_identity() {
         snap.block(h(spend_block + 1)).expect("read"),
         AtHeight::AboveTip
     ));
-    cleanup(&path);
 }
 
 #[test]
@@ -353,7 +344,6 @@ fn a_rewritten_blob_is_si7_on_block_and_blocks_but_block_blob_still_hands_out_th
     assert_eq!(raw.into_wire_bytes(), impostor);
     // And none of it halted the writer.
     assert_eq!(store.connect_state(), ConnectState::Live);
-    cleanup(&path);
 }
 
 #[test]
@@ -392,7 +382,6 @@ fn blocks_range_clamps_at_the_tip_and_yields_the_last_height_of_a_half_open_rang
         snap.blocks(h(4)..h(5)).expect("range"),
         AtHeight::AboveTip
     ));
-    cleanup(&path);
 }
 
 #[test]
@@ -424,7 +413,6 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
         ConnectState::Live,
         "a read never arms the halt"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ R8–R9 and the fold reads
@@ -475,7 +463,6 @@ fn block_burn_reads_zero_for_a_block_with_no_row_and_the_amount_otherwise() {
         snap.block_burn(h(fee_block + 1)).expect("read"),
         AtHeight::AboveTip
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -495,7 +482,6 @@ fn block_burn_on_a_chain_that_has_never_burned_is_zero_not_an_engine_error() {
         AtomicUnits::ZERO,
         "absent cell is 0"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -512,7 +498,6 @@ fn total_burned_is_the_sum_connect_folded() {
         snap.total_burned().expect("read"),
         AtomicUnits::from_raw(expected)
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -559,7 +544,6 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
         snap.long_term_effective_median(h(first + 2)).expect("read"),
         AtHeight::AboveTip
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------ DRS-E2 RD-F5: the digest
@@ -571,9 +555,8 @@ fn an_empty_file_digests_as_no_hashes_no_spends_and_the_empty_root() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.logical_state_digest_v0().expect("digest"),
-        crate::digest_v0::digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes())
+        crate::digest_v0::digest_v0(&[], &[], &CurveTreeRoot::EMPTY)
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -595,21 +578,18 @@ fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
     let snap = store.begin_read().expect("read");
     // The spent images are read off the two spends as the chain connected
     // them (one per spend block), not literals that would follow the code.
-    let spent: Vec<[u8; 32]> = connected.iter().flatten().flat_map(key_images).collect();
+    let spent: Vec<KeyImage> = connected
+        .iter()
+        .flatten()
+        .flat_map(key_images)
+        .map(KeyImage::from_bytes)
+        .collect();
     assert_eq!(spent.len(), 2, "one spend per spend block");
-    let by_hand = {
-        let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
-        crate::digest_v0::digest_v0(&blocks, &spent, live_root.as_bytes())
-    };
+    let by_hand = crate::digest_v0::digest_v0(&hashes, &spent, &live_root);
     assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
     // Order-insensitive in the spent family, as the hasher promises.
-    let swapped = crate::digest_v0::digest_v0(
-        &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
-        &[spent[1], spent[0]],
-        live_root.as_bytes(),
-    );
+    let swapped = crate::digest_v0::digest_v0(&hashes, &[spent[1], spent[0]], &live_root);
     assert_eq!(by_hand, swapped);
-    cleanup(&path);
 }
 
 #[test]
@@ -640,7 +620,6 @@ fn the_digest_moves_when_any_family_moves() {
         .logical_state_digest_v0()
         .expect("digest");
     assert_ne!(before, after);
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------
@@ -693,7 +672,6 @@ fn burned_through_is_the_fold_less_the_rows_above_it() {
         read[usize::try_from(tip + 1).expect("small")],
         AtHeight::AboveTip
     );
-    cleanup(&path);
 }
 
 /// A `total_burned` register below the `block_burn` rows it is the sum of
@@ -722,7 +700,6 @@ fn a_fold_below_its_rows_is_si7_on_the_register() {
         }),
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(row).to_string())));
-    cleanup(&path);
 }
 
 /// `block_burn` rows whose sum leaves `u64` are rows no checked fold could
@@ -751,5 +728,4 @@ fn rows_whose_sum_overflows_are_si8() {
         cell: "total_burned",
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(row).to_string())));
-    cleanup(&path);
 }

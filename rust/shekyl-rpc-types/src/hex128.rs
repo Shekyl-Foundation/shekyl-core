@@ -6,7 +6,7 @@
 //! [`HexU128`]: a 128-bit quantity on the wire, as `0x`-prefixed hex.
 //!
 //! A difficulty does not fit a JSON number, so the wire carries it as a
-//! string: `0x`, then the value's hex digits. `get_info` carries its two
+//! string: `0x`, then the value's hex digits. `daemon_status` carries its two
 //! difficulties this way and no other (RK-Q1). The block headers still
 //! carry a triple — the low 64 bits, this string, and the high 64 bits —
 //! and adopt this type when that triple retires (RK-W).

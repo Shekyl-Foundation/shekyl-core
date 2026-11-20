@@ -1,0 +1,125 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The daemon RPC's version (`RPC_WIRE.md` RW-Q6, RK-D25): the constants a
+//! daemon reports in `version` and a client compares before it decodes
+//! anything else, and what the current version is.
+
+/// `CORE_RPC_VERSION_MAJOR`: 4 since the rename (RW-Q8). A major bump is a
+/// wire no reader of the previous major decodes past the version read.
+pub const CORE_RPC_VERSION_MAJOR: u32 = 4;
+/// `CORE_RPC_VERSION_MINOR`. Each wire change takes the next minor and
+/// writes its entry here; earlier entries are in git.
+///
+/// **Read the next number from this tree when the bump is written, never
+/// carry it forward from a plan.** Two branches that each take the same
+/// next minor merge character for character, because `= 0` → `= 1` is
+/// textually identical whoever writes it; the second to merge takes the
+/// number after the first.
+///
+/// 4.0: the rename (`RPC_WIRE.md` RW-Q8). Every method takes its
+/// `INPUT_GRAMMAR.md` Part C path, as Part F and IG-Q94 amend it, and is
+/// served as JSON-RPC on `/json_rpc` alone: no alias, no REST path, and
+/// neither `.bin` method (RW-Q1, RW-Q2, RW-Q5). The envelope is strict
+/// JSON-RPC 2.0 with named `params`. `status` leaves every reply, and every
+/// failure is the error object with a class and a dotted diagnostic
+/// (RW-Q3). Each value takes its kind's one encoding: amounts are decimal
+/// atomic units, bodies base64, heights ordinals (RW-Q4, IG-Q45). The
+/// version read is `version`, under no grant; its `version` key and value
+/// are unchanged (RK-D25, RW-Q6). A 3.x reader of any 4.0 reply refuses it
+/// after the version read reports the daemon newer. The method table and
+/// its schema are `wire::TABLE` and `docs/generated/rpc_wire_schema.tsv`.
+///
+/// 4.1: `daemon_status` follows `RPC_CHANNEL.md` §6.1 (Rick, 2026-11-12).
+/// Its base fields are `health`'s, liveness only; the chain's facts are a
+/// part shown to `chain`, and `txpool_count` a part shown to `pool`. A
+/// caller without the grant finds the part absent, never zero (RK-D23).
+/// And a reply field a request switch selects is present exactly when the
+/// request turned the switch on (RW-Q4 as amended): `pow` selects a
+/// header's proof-of-work hash, never `null`; `prune` selects a
+/// transaction's skeleton entry, the pruned body with the txid's operands,
+/// where without it the entry is `{id, body}` (IG-Q55, IG-Q56).
+///
+/// 4.2: `daemon_status` carries the Tor status (`INPUT_GRAMMAR.md` §23 as
+/// Part G and Rick's rulings of 2026-11-12 amend it). `hiding` joins the
+/// base fields; `posture`, `origination`, `sync_connector`, `tor_quiet` and
+/// `tor` are a part shown to `status`, in `shekyl-tor-status`'s types. Every
+/// closed set there decodes a keyword this build does not know, and the
+/// send flow reads such a value as not address-hiding.
+///
+/// 4.3: the 4b switch (`SO-D12`; `INPUT_GRAMMAR.md` IG-Q102). A block
+/// header's `attestation_root` is `section_root`, the root of the block's
+/// bundle section; `block_show` and `block_list` carry each block's
+/// `section` (its bundle references) and the `section_body` list this node
+/// holds for it; an `archival_claim_show` bond loses `complete_tree` (a
+/// complete tree is never in an epoch's market, so it was always `false`),
+/// and `served_epoch` names the last pass only inside the release
+/// cooldown's window. A 4.2 reader refuses a 4.3 header and bond after the
+/// version read reports the daemon newer.
+///
+/// 4.4: `daemon_status` reports the hasher's RandomX cache places
+/// (`RANDOMX_CACHE_ACTOR.md` §5.6). `randomx_cache_places` joins the part
+/// shown to `status`, beside `data_size`: the places the node's one hasher
+/// has in use when the call is made, at most three. It is the quantity
+/// HA-R2 caps, an upper bound on the RandomX cache memory, never a reading
+/// of it: a place reserved for a build counts, and so does a derive still
+/// filling its pages, and a cache whose 256 MiB is still being returned. A
+/// caller without
+/// the grant finds the part absent (RK-D23). A 4.3 reader of a 4.4 Status
+/// part refuses the field it does not know after the version read reports
+/// the daemon newer.
+/// 4.5: a block carries `draws`, the draws the count rule issued at it,
+/// `count(h)` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3; Rick, 2026-11-14):
+/// public consensus state every node writes at connect, which a filed
+/// bundle's reference carries too (`SCS-P39`). Which pairs were drawn stays
+/// secret until the reveal. `null` where the node holds no row: an
+/// alternative block, or a height below the draw rows' floor. A 4.4 reader
+/// refuses a 4.5 block after the version read reports the daemon newer.
+///
+/// 4.6: enrollment over the channel (RT-W10 step 4; `INPUT_GRAMMAR.md`
+/// IG-Q87). Five methods under `enrol`: `rpc_client_add`, `rpc_client_set`,
+/// `rpc_client_remove`, `rpc_client_list` and `rpc_bundle_show`. A ceiling
+/// is named by grant and preset keywords and listed as its expanded grants.
+///
+/// 4.7: a channel session past its key's cap (`SESSIONS_PER_CLIENT`,
+/// `RPC_CHANNEL.md` RT-O37) is answered with `OverResourceBound`,
+/// diagnostic `bound.sessions`, and closed. A 4.6 client meets a code it
+/// does not know only after the version read reports the daemon newer.
+/// And `daemon_status`'s `tor_quiet` (PR #1404; `INPUT_GRAMMAR.md` IG-Q99,
+/// amended) loses `{"empty": null}` and `{"failing": {"age": s}}`: it is
+/// `null`, or `{"unreached": {"age": s}}` when peers are known, the Tor
+/// Manager's onion-path reading has been impaired for `s` seconds of awake
+/// time, and a Tor dial launched since failed. A 4.6 reader decodes
+/// `unreached` as a key it does not know. And the grant keyword `enrol`,
+/// named since alpha.11, is `enroll`: in a ceiling, in `daemon_status`'s
+/// `grant`, and under the five methods 4.6 added. Grant keywords are a
+/// closed set, so a 4.7 daemon refuses a ceiling or a configuration that
+/// names `enrol`, and a 4.6 reader refuses a reply that lists `enroll`.
+pub const CORE_RPC_VERSION_MINOR: u32 = 7;
+/// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
+pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
+
+/// `major.minor` from the packed constant, for operator-facing copy.
+#[must_use]
+pub fn core_rpc_version_string(packed: u32) -> String {
+    format!("{}.{}", packed >> 16, packed & 0xffff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `MAKE_CORE_RPC_VERSION(4, 7)` is `(4 << 16) | 7` = 262151. Each bump
+    /// moves this pin; the packing does not change (RK-D25).
+    #[test]
+    fn core_rpc_version_packs_major_over_minor() {
+        assert_eq!(CORE_RPC_VERSION, 262_151);
+        assert_eq!(CORE_RPC_VERSION, (4 << 16) | 7);
+        assert_eq!(CORE_RPC_VERSION_MAJOR, 4);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 7);
+        assert_eq!(core_rpc_version_string(CORE_RPC_VERSION), "4.7");
+        assert_eq!(core_rpc_version_string((3 << 16) | 70), "3.70");
+    }
+}

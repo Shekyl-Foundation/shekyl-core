@@ -128,9 +128,11 @@ impl<
                 // Fail closed under the same exclusive guard: restore the
                 // pre-abandon shape. Abandon never touched baseline/locks,
                 // so state + pending is a full undo.
-                self.save_or_rollback(&mut guard, |state| {
+                let durability = self.save_or_rollback(&mut guard, |state| {
                     state.ledger.unabandon_send(&key, previous, was_pending);
                 })?;
+                // Abandon does not broadcast. An applied write stands.
+                super::super::dispatch_durability::accept_applied(&durability);
                 Ok(AbandonTxOutcome::Abandoned)
             }
         }
@@ -144,7 +146,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_engine_state::{
         SendInputRef, SendRecord, SendState, TransferDetails, TxSecretKey, TxSecretKeys,
         WalletLedger,
@@ -152,7 +154,6 @@ mod tests {
     use shekyl_rpc_transport::HttpRpc;
     use tempfile::TempDir;
     use tokio::sync::RwLock;
-    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::traits::LedgerEngine;
@@ -182,7 +183,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(10),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::Unattributed,
@@ -195,7 +195,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_path = tmp.path().join("wallet");
         let creds = Credentials::password_only(b"abandon_tx tests");
-        let mut seed = [0u8; MASTER_SEED_BYTES];
+        let mut seed = [0u8; SEED_BYTES];
         for (i, b) in seed.iter_mut().enumerate() {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(11);
         }
@@ -215,7 +215,7 @@ mod tests {
         wallet.tx_meta.tx_keys.insert(
             txid,
             TxSecretKeys {
-                primary: TxSecretKey::new(Zeroizing::new([0x5A; 32])),
+                primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0x5A; 32]).store()),
             },
         );
         wallet.sync_state.pending_tx_hashes.push(txid);
@@ -232,6 +232,7 @@ mod tests {
                 }],
                 lock_baseline: None,
                 state,
+                tx_bytes: None,
             },
         );
     }
@@ -303,6 +304,7 @@ mod tests {
                     state: SendState::Confirmed {
                         height: shekyl_types::BlockHeight::from_raw(25),
                     },
+                    tx_bytes: None,
                 },
             );
         }
@@ -434,8 +436,12 @@ mod tests {
             shekyl_types::BlockHeight::from_raw(25)
         );
         assert!(
-            !wallet.ledger.transfers[0]
-                .is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
+            !wallet.ledger.transfers[0].is_spendable(
+                shekyl_engine_state::SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(
+                    u64::MAX
+                )),
+                &locks
+            ),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

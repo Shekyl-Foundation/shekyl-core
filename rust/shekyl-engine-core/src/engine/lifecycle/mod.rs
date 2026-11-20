@@ -8,14 +8,14 @@
 //! Split by workflow so the former `lifecycle.rs` god-file is gone:
 //!
 //! - [`types`] — credentials, create params, open outcome
-//! - [`open`] — [`Engine::create`] / [`Engine::open_full`]
+//! - [`open`] — [`Engine::create`](crate::engine::Engine::create) / [`Engine::open_full`](crate::engine::Engine::open_full)
 //! - [`assemble`] — the single field-assembly + SP-R0 reconcile
-//! - [`session`] — [`Engine::change_password`] / [`Engine::close`]
+//! - [`session`] — [`Engine::change_password`](crate::engine::Engine::change_password) / [`Engine::close`](crate::engine::Engine::close)
 //! - [`support`] — network mapping, error translation, persistence drive
 //!
 //! This module implements the four methods that produce, mutate, and
-//! consume a `Engine<S>` handle: [`Engine::create`], [`Engine::open_full`],
-//! [`Engine::change_password`], and [`Engine::close`].
+//! consume a `Engine<S>` handle: [`Engine::create`](crate::engine::Engine::create), [`Engine::open_full`](crate::engine::Engine::open_full),
+//! [`Engine::change_password`](crate::engine::Engine::change_password), and [`Engine::close`](crate::engine::Engine::close).
 //!
 //! # Capability scope
 //!
@@ -48,7 +48,7 @@
 //!
 //! # Lost-state surfacing
 //!
-//! [`Engine::open_full`] returns an [`OpenedEngine`] sum rather than a
+//! [`Engine::open_full`](crate::engine::Engine::open_full) returns an [`OpenedEngine`] sum rather than a
 //! plain `Engine<S>` so the rebuilt-state recovery path
 //! ([`OpenOutcome::StateLost`](shekyl_engine_file::OpenOutcome::StateLost))
 //! is a typed branch the call site cannot accidentally ignore.
@@ -59,7 +59,7 @@ mod session;
 mod support;
 mod types;
 
-pub(crate) use support::{drive_persistence, network_to_derivation};
+pub(crate) use support::drive_persistence;
 pub(crate) use types::FirstStakeIntent;
 pub use types::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 
@@ -69,8 +69,10 @@ pub use types::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 use crate::engine::error::{IoError, OpenError};
 #[cfg(test)]
 use crate::engine::{Capability, Engine, SoloSigner};
+#[cfg(all(test, feature = "conformance"))]
+use assemble::observe_stake_self_cert;
 #[cfg(test)]
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 #[cfg(test)]
 use shekyl_engine_file::{SafetyOverrides, WalletFile};
 

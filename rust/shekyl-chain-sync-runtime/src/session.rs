@@ -14,7 +14,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use shekyl_seam::SocketId;
+use shekyl_transport_layer::SocketId;
 
 /// One open connection. Ordered by its admission id, for map stability only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -27,7 +27,7 @@ impl Session {
         Self(socket)
     }
 
-    /// The socket the seam sends on and closes.
+    /// The admission id the session layer names the session by.
     #[must_use]
     pub const fn socket(self) -> SocketId {
         self.0

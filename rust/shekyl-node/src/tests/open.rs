@@ -14,7 +14,7 @@ use super::*;
 fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     let identity = node.handles().chain.identity().expect("identity");
     assert_eq!(identity.genesis_hash, want);
     let at = node
@@ -77,50 +77,48 @@ fn the_blocking_pool_exceeds_the_permits_and_the_window() {
 }
 /// Stop closes the store, withdraws the board, and a second stop is a
 /// no-op. A handle held past stop is not ready. Red edit: leave the
-/// facts slot filled, or skip the second stop.
+/// facts slot filled, or skip the second stop, or drop the follower's
+/// stop guard (the board is then never withdrawn as `Stopped`).
 #[test]
 fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
     let dir = tempfile::tempdir().expect("temp");
-    let node = open_at(dir.path(), Arc::new(|| {}));
-    let (block, _) = pinned_genesis(Network::Regtest).expect("genesis");
-    // The follower's first word, so it does not withdraw the job below:
-    // no mine-address, no template.
+    // The follower owns the board. On regtest, with a mine-address, it
+    // posts the template and leaves that job up until stop.
+    let node = open_posted(dir.path(), &[]);
     let mut posting = node.posting();
-    wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
-    node.mining.board.publish(Job {
-        offsets: block
-            .blob_offsets()
-            .expect("genesis reserves the extra nonce"),
-        next_seed: None,
-        reward: shekyl_units::AtomicUnits::ZERO,
-        median_weight: 0,
-        already_generated: shekyl_units::AtomicUnits::ZERO,
-        listed: Vec::new(),
-        block,
-        height: BlockHeight::from_raw(1),
-        seed: BlockHash::from_bytes([1; 32]),
-        difficulty: Difficulty::from_raw(1),
-    });
-    assert!(node.mining.board.posted().is_some(), "the job was posted");
+    assert!(
+        matches!(*posting.borrow_and_update(), Posting::Posted(_)),
+        "the follower left its job posted"
+    );
+    assert!(
+        node.mining.board.posted().is_some(),
+        "the job is on the board"
+    );
     node.stop();
     assert!(
         node.mining.board.posted().is_none(),
         "stop withdraws the board"
     );
+    // Only the follower's stop guard posts `Stopped`, and it withdraws
+    // the board as it does.
+    assert_eq!(
+        *posting.borrow(),
+        Posting::Withdrawn(NoJob::Stopped),
+        "stop withdraws the board through the follower's guard"
+    );
     node.stop();
-    let rules =
-        ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");
+    let rules = ChainRules::new(Network::Regtest, None, CappedEpoch::PRODUCTION).expect("rules");
     let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO)).expect("horizons");
-    let store = ChainStore::with_release(
+    let (store, _cut) = ChainStore::with_genesis(
         dir.path().join("chain.db"),
         ApplyPolicy::Full,
         horizons,
-        &ReleaseAnchors::EMPTY,
+        &GenesisPin::NONE,
     )
     .expect("the store closed, so it opens again");
     let snap = store.begin_read().expect("read");
     let tip = snap.tip().expect("tip").recorded.expect("genesis");
-    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+    let want = BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest));
     assert_eq!(tip.hash, want);
     assert_eq!(
         node.handles().chain.identity(),
@@ -128,6 +126,22 @@ fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         "the handle does not answer after the store closes"
     );
 }
+/// A stop the node was asked for is not an end: [`Node::ended`] stays
+/// `None`, so the daemon exits 0 on it. The sync owner's `Stopped` and the
+/// service's fault-free stop are what the forwarders see. This is
+/// [`Node::open`]'s watch, not a watch the test assembled.
+///
+/// Red edit: forward the sync owner's `Stopped` as an end.
+#[test]
+fn a_requested_stop_publishes_no_end() {
+    let dir = tempfile::tempdir().expect("temp");
+    let node = open_at(dir.path(), Arc::new(|| {}));
+    let ended = node.ended();
+    assert!(ended.borrow().is_none(), "a running node has not ended");
+    node.stop();
+    assert!(ended.borrow().is_none(), "a requested stop is not an end");
+}
+
 /// A `pow_hash` waiting on a hasher permit does not hold the facts
 /// lock: a chain read returns while that wait is in progress.
 ///
@@ -146,37 +160,56 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     use std::time::{Duration, Instant};
 
     use shekyl_daemon_rpc::chain_facts::ChainFacts;
-    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
+    use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowAnswer, PowSeed};
     use shekyl_hash_budget::Class;
 
-    /// The hash thread has not reached `acquire`.
+    /// The hash thread has not reached its permit wait.
     const ENTER_BOUND: Duration = Duration::from_secs(5);
+    /// The tip's seed was never built. One derive is about two seconds on
+    /// the floor device.
+    const WARM_BOUND: Duration = Duration::from_secs(120);
     /// The chain read shared the permit wait. The permits are still held.
     const READ_BOUND: Duration = Duration::from_secs(2);
 
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     let budget = node.budget();
-    // Every free permit. `pow_hash` then waits in `acquire` instead of
-    // hashing, which is the wait a chain read must not share.
+    // The seed block 1 hashes under: block 0's id, which the list names
+    // once genesis has connected. `pow` hashes only on a warm loan, so
+    // wait for the hasher to have built it.
+    let seed = PowSeed::AtHeight(shekyl_types::BlockHeight::from_raw(1));
+    let warming = Instant::now();
+    loop {
+        match ChainReadFacts::pow(&*node.handles().chain, seed, &[], &mut || true) {
+            Ok(PowAnswer::Hashed(_)) => break,
+            Ok(PowAnswer::Declined(_)) => {}
+            other => panic!("pow at open: {other:?}"),
+        }
+        assert!(
+            warming.elapsed() < WARM_BOUND,
+            "the tip's seed was never warm"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Every free permit. `pow` then waits for one inside its loan instead
+    // of hashing, which is the wait a chain read must not share. The loan
+    // itself takes no permit.
     let held: Vec<_> = (0..budget.permits())
         .map_while(|_| budget.try_acquire(Class::Chain))
         .collect();
     assert!(
         budget.try_acquire(Class::CalcPow).is_none(),
-        "a calc_pow permit was still free"
+        "a pow permit was still free"
     );
     let hashing = {
         let chain = Arc::clone(&node.handles().chain);
-        std::thread::spawn(move || {
-            ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
-        })
+        std::thread::spawn(move || ChainReadFacts::pow(&*chain, seed, &[], &mut || true))
     };
     let entered = Instant::now();
     while budget.waiting(Class::CalcPow) == 0 {
         if hashing.is_finished() {
             let finished = hashing.join().expect("pow thread");
-            panic!("pow_hash finished without waiting for a permit: {finished:?}");
+            panic!("pow finished without waiting for a permit: {finished:?}");
         }
         assert!(
             entered.elapsed() < ENTER_BOUND,
@@ -199,7 +232,7 @@ fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
     drop(held);
     let hashed = hashing.join().expect("pow thread");
     assert!(
-        hashed.is_ok(),
+        matches!(hashed, Ok(PowAnswer::Hashed(_))),
         "the hash finishes once a permit is free: {hashed:?}"
     );
     reading.join().expect("the chain read");
@@ -216,7 +249,7 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
         dir.path(),
         Arc::new(move || flag.store(true, Ordering::SeqCst)),
     );
-    shekyl_daemon_rpc::node_methods::stop_daemon(&*node.handles().stop).expect("asks");
+    shekyl_daemon_rpc::node_methods::daemon_stop(&*node.handles().stop).expect("asks");
     assert!(asked.load(Ordering::SeqCst), "the handler asked the latch");
     assert_eq!(
         Handles::absent().stop.request_stop(),
@@ -224,18 +257,54 @@ fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
     );
     node.stop();
 }
-/// A chain file at another layout is removed and a fresh store holds
-/// genesis. A file that is not a store is refused and left in place.
-/// Red edit: refuse the version mismatch, or wipe a corrupt header.
+/// A chain file at a newer layout is refused and left byte for byte: an
+/// older binary over a newer node's data must not destroy it (S3). A
+/// chain file at an older layout is removed and a fresh store holds
+/// genesis: the pre-genesis alpha wipe, temporary (FOLLOWUPS, trigger:
+/// before mainnet genesis). A file that is not a store is refused and
+/// left in place. Red edits: wipe the newer layout, refuse the older one,
+/// or wipe a corrupt header.
 #[test]
-fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
-    use shekyl_chain_store::codec::SCHEMA_VERSION;
+fn a_newer_chain_file_is_refused_an_older_one_replaced_and_a_corrupt_one_kept() {
+    use shekyl_chain_store::codec::{SchemaVersion, SCHEMA_VERSION};
     let dir = tempfile::tempdir().expect("temp");
     let node = open_at(dir.path(), Arc::new(|| {}));
     node.stop();
     let chain = dir.path().join("chain.db");
-    put_chain_version(&chain, SCHEMA_VERSION.get() + 1);
-    let node = open_at(dir.path(), Arc::new(|| {}));
+    let config = config_at(dir.path());
+    let open = || {
+        Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            supervisor: None,
+            request_stop: Arc::new(|| {}),
+            plan: test_plan(&config),
+        })
+    };
+
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    put_chain_version(&chain, newer.get());
+    let before = std::fs::read(&chain).expect("the newer file");
+    match open() {
+        Err(OpenError::NewerChainLayout { found, expected }) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        Err(other) => panic!("a newer layout is its own refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a newer layout opened");
+        }
+    }
+    assert_eq!(
+        std::fs::read(&chain).expect("still there"),
+        before,
+        "a newer layout is left as it was"
+    );
+
+    put_chain_version(&chain, SCHEMA_VERSION.get() - 1);
+    let node = open().expect("an older layout is replaced");
     assert_eq!(
         node.handles()
             .chain
@@ -245,22 +314,64 @@ fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
         Some(genesis_hash())
     );
     node.stop();
-    put_chain_version(&chain, SCHEMA_VERSION.get());
+
     let garbage = b"not a chain store";
     std::fs::write(&chain, garbage).expect("overwrite");
-    let config = config_at(dir.path());
-    let opened = Node::open(OpenArgs {
-        config: &config,
-        version: "test".to_owned(),
-        protocol_version: 1,
-        release_build: false,
-        request_stop: Arc::new(|| {}),
-    });
     assert!(
-        opened.is_err(),
+        open().is_err(),
         "a corrupt chain file is not a layout mismatch"
     );
     assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
+}
+/// A regtest node refuses a store whose block 0 is another network's, and
+/// leaves it as it was: the genesis pin covers regtest, judged on the
+/// read-only open (S1, design review 2026-11-03). The network marker sits
+/// above this check in the daemon and can be copied with a store; the pin
+/// is what the store itself says. Red edit: leave regtest unpinned at open.
+#[test]
+fn a_regtest_node_refuses_a_testnet_store_and_leaves_it_unwritten() {
+    use shekyl_chain_store::store::{StoreCannot, StoreError};
+    let dir = tempfile::tempdir().expect("temp");
+    let testnet = config_on(dir.path(), "testnet", &[]);
+    let open_on = |config: &DaemonConfig| {
+        Node::open(OpenArgs {
+            config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            supervisor: None,
+            request_stop: Arc::new(|| {}),
+            plan: test_plan(config),
+        })
+    };
+    open_on(&testnet).expect("a testnet node opens").stop();
+    let chain = dir.path().join("chain.db");
+    let before = std::fs::read(&chain).expect("the testnet store");
+    let modified = std::fs::metadata(&chain)
+        .and_then(|meta| meta.modified())
+        .expect("mtime");
+    match open_on(&config_at(dir.path())) {
+        Err(OpenError::Store(StoreError::Cannot(StoreCannot::ForeignGenesis(conflict)))) => {
+            assert_eq!(conflict.expected, genesis_hash());
+            assert_eq!(
+                conflict.recorded,
+                BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Testnet))
+            );
+        }
+        Err(other) => panic!("another network's store is a genesis refusal, got {other}"),
+        Ok(node) => {
+            node.stop();
+            panic!("a regtest node opened a testnet store");
+        }
+    }
+    assert_eq!(std::fs::read(&chain).expect("still there"), before);
+    assert_eq!(
+        std::fs::metadata(&chain)
+            .and_then(|meta| meta.modified())
+            .expect("mtime"),
+        modified,
+        "a refused store keeps its modification time"
+    );
 }
 /// A pool file at another version is recreated and the node starts. A
 /// pool file that is not a pool file is refused and kept. Red edit:
@@ -284,7 +395,9 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
     });
     assert!(opened.is_err(), "a corrupt pool file is refused");
     assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
@@ -302,7 +415,9 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
     })
     .expect("one lever, the other side production");
     node.stop();
@@ -320,10 +435,48 @@ fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
+        plan: test_plan(&refused),
     });
     assert!(
         opened.is_err(),
         "a reorg cap that is not inside the epoch is refused"
     );
+}
+
+/// **The state at open reads the declaration, never the network** (rule
+/// 71; CS-Q2 step 8, Rick 2026-11-01). Both connectors off is `Offline`
+/// and synced from open; clearnet on with no closed list is `Open` and
+/// has no view. The same declaration gives the same state on every
+/// network. Red edit: select the opening state by network, as
+/// `sync_at_open` did (regtest synced, every other network `NoView`).
+#[test]
+fn the_state_at_open_reads_the_declaration_not_the_network() {
+    for network in ["regtest", "testnet", "stagenet", "mainnet"] {
+        for (declared, config, want) in [
+            (
+                "offline",
+                config_on as fn(&Path, &str, &[&str]) -> DaemonConfig,
+                SyncState::Synced,
+            ),
+            ("open", config_open, SyncState::NoView),
+        ] {
+            let dir = tempfile::tempdir().expect("temp");
+            let config = config(dir.path(), network, &[]);
+            let node = Node::open(OpenArgs {
+                config: &config,
+                version: "test".to_owned(),
+                protocol_version: 1,
+                release_build: false,
+                supervisor: None,
+                request_stop: Arc::new(|| {}),
+                plan: test_plan(&config),
+            })
+            .expect("node");
+            let state = *node.sync().borrow();
+            node.stop();
+            assert_eq!(state, want, "{declared} on {network}");
+        }
+    }
 }

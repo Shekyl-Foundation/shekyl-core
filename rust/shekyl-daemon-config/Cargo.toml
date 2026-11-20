@@ -23,8 +23,17 @@ shekyl-logging = { path = "../shekyl-logging" }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 # A mining address is checked against the network at construction.
 shekyl-address = { path = "../shekyl-address" }
+# The network row (`network.rs`).
+shekyl-network = { path = "../shekyl-network" }
 # ... and its keys as a coinbase pays them (`coinbase_recipient`).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The instance-name rule and the instance the RPC section carries
+# (`RPC_CHANNEL.md` §7.1): the rule lives where the name is hashed into the
+# rendezvous, so the option and the rendezvous cannot disagree.
+shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
+# A directory's entries made durable after a rename (`marker`): one rule
+# with the daemon's key files and the tunnel's (`private_file::sync_dir`).
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's
@@ -32,7 +41,7 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 rustix = { version = "1", features = ["fs", "process"] }
 # The group and account reads the secret-read rule makes (`group.rs`:
 # `getgrgid_r`, `getpwuid_r`, the `getpwent` walk), which rustix does not
-# wrap. The pin shekyl-ffi and shekyl-logging already carry.
+# wrap. The pin shekyl-logging already carries.
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
@@ -47,3 +56,8 @@ shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# The marker's held-file test holds a staged file as a scanner does
+# (`FILE_SHARE_READ`).
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

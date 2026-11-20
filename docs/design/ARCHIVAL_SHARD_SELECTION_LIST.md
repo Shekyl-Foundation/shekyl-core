@@ -353,17 +353,18 @@ challenge/organic (`SF-D7`).
 
 ## 14. Implementation (opened 2026-09-14)
 
-1. **`get_archival_shard_coverage`** — local fold over bond records; empty
+1. **`shard_coverage`** — local fold over bond records; empty
    request; profit hint is `join_scarcity_micro`. No bodies, no aggregates,
    never persisted (`SL-D3`).
-2. **`request_archival_shard { shard_id }`** — fourth scheduler of
+2. **`shard_fetch { id }`** — fourth scheduler of
    `shekyl-p-fetch` (`SF-D1`). Shard bodies sit below the prune window
    (staker hold, or a temporary view-cache after this fetch). Freeze-row
    `R_k` is not a body. GUI names `shard_id` only. **UPDATE 2026-10-08:**
    the response's `shard_hash` is `SV-D1`'s fold over the fetched archival
    bytes, never `R_k` (which the C++ shim copied until then); the method is
-   served natively in `shekyl-daemon-rpc` (`SV-D3`), stays restricted
-   (`SV-D6`), refuses the open tip shard and carries `close_height`
+   served natively in `shekyl-daemon-rpc` (`SV-D3`), is in `chain` under
+   the shard-fetch bound (IG-Q90, IG-Q91; `SV-D6` superseded), refuses the
+   open tip shard and carries `close_height`
    (`SV-D5`). Round and landing order:
    [`SHARD_VIEW_FETCH.md`](SHARD_VIEW_FETCH.md) §4. **UPDATE 2026-10-09:**
    the GUI no longer calls this method itself; its Shards page draws from

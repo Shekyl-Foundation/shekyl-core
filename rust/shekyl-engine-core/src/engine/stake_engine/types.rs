@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_bond_builder::BondBuildError;
 use shekyl_archival_retention::epoch_is_claim_expired;
-use shekyl_archival_retention::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridSecretKey, FnDsaHybridSignature, FnDsaHybridSigner,
@@ -166,7 +165,7 @@ impl HeldPersona {
     ///   next request signs from it.
     pub(crate) fn sign_receipt_transcript(
         &mut self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        transcript: &shekyl_archival_retention::PassTranscript,
     ) -> Result<FnDsaHybridSignature, StakeEngineError> {
         let (keys, receipt) = match self {
             HeldPersona::Bonded(b) => (&b.0, &mut b.1),
@@ -175,7 +174,7 @@ impl HeldPersona {
         let signer = receipt
             .signer_over(&keys.receipt_sign_sk)
             .map_err(|ReceiptKeyUndecodable| StakeEngineError::ReceiptKeyUndecodable)?;
-        shekyl_p_host::sign_receipt_transcript(signer, message)
+        shekyl_p_host::sign_receipt_transcript(signer, transcript)
             .map_err(StakeEngineError::ReceiptSign)
     }
 
@@ -211,17 +210,14 @@ pub(crate) struct EphemeralPersona(pub(crate) ArchivalPKeys, pub(crate) HeldRece
 /// asked of the persona, either built or undecodable, for the rest of the
 /// persona's life.
 ///
-/// **STAGED.** Nothing on the live serve path signs with this key: the
-/// serving task is handed the identity key's capability
-/// (`serving::pass_key`), and the receipt capability
-/// (`serving::receipt_key`) is built and tested but not selected. See that
-/// module for who switches and what would falsify the staging.
+/// The serving task signs with this key through its receipt capability
+/// (`serving::receipt_key`).
 ///
-/// **Why it is lazy.** A staged capability must cost the live path nothing.
-/// Decoding is the expensive step — up to 360 KiB of stack in an optimized
-/// build and 118,640 bytes of heap for the key — and until the cutover no
-/// persona is ever asked for a receipt. So the actor's start decodes nothing
-/// and the slot of a persona that never signs a receipt stays
+/// **Why it is lazy.** Decoding is the expensive step — up to 360 KiB of
+/// stack in an optimized build and 118,640 bytes of heap for the key — and
+/// a persona that does not serve is never asked for a receipt. So the
+/// actor's start decodes nothing and the slot of a persona that never signs
+/// a receipt stays
 /// [`Self::NotBuilt`] for its whole life. The first signature pays the
 /// decode; every later one signs from the held key (`FnDsaHybridSigner`).
 ///
@@ -329,7 +325,7 @@ pub(crate) fn wipe_ephemeral(persona: EphemeralPersona) {
 ///
 /// Takes a [`BondedPersona`] by value. It is the *only* path that wipes a bonded
 /// persona, and it is reached only through the witness-gated retire handler
-/// ([`RetireBondedPersona`]) — so a bonded persona is wiped **only** on
+/// ([`RetireBondedPersona`](crate::engine::stake_engine::retire::RetireBondedPersona)) — so a bonded persona is wiped **only** on
 /// positively-confirmed terminal evidence (`Release` + `W`-lapse + finality-deep),
 /// never on absence. The bundle's per-field `ZeroizeOnDrop` runs at the drop.
 pub(crate) fn wipe_bonded(persona: BondedPersona) {
@@ -377,12 +373,16 @@ impl RetirementWitness {
         e_last: SettlementEpoch,
         settled_epoch: SettlementEpoch,
     ) -> Option<Self> {
-        epoch_is_claim_expired(e_last.to_raw(), settled_epoch.to_raw())
-            .then_some(Self { p_canonical_id })
+        epoch_is_claim_expired(
+            e_last.to_raw(),
+            settled_epoch.to_raw(),
+            shekyl_archival_retention::archival_params(),
+        )
+        .then_some(Self { p_canonical_id })
     }
 }
 
-/// What the witness-gated retire ([`RetireBondedPersona`]) did. All outcomes are
+/// What the witness-gated retire ([`RetireBondedPersona`](crate::engine::stake_engine::retire::RetireBondedPersona)) did. All outcomes are
 /// valid (no error): the retire is **idempotent** — re-handing the same witness
 /// after the persona is gone is a no-op ([`Self::NotHeld`]).
 #[derive(Debug, PartialEq, Eq)]
@@ -442,11 +442,11 @@ impl std::fmt::Debug for FundedSlots {
 /// An operation-scoped capability to **activate** a held persona (typed
 /// contract #2).
 ///
-/// Minted only by [`MintPersonaHandle`] for a slot actually in the held set, so
+/// Minted only by [`MintPersonaHandle`](crate::engine::stake_engine::persona::MintPersonaHandle) for a slot actually in the held set, so
 /// "activate an unheld persona" has no expressible form — the membership check
 /// lives at the single slot→handle boundary, not at every use site. The handle
-/// carries the actor's activation [`generation`](StakeEngine::generation) at mint
-/// time, and [`ActivatePersona`] consumes it **by value**: a handle authorizes
+/// carries the actor's activation [`generation`](crate::engine::stake_engine::actor::StakeEngine::generation) at mint
+/// time, and [`ActivatePersona`](crate::engine::stake_engine::persona::ActivatePersona) consumes it **by value**: a handle authorizes
 /// exactly one activation.
 ///
 /// **Operation-scoped, two ways.** An activation (an activation that changes the
@@ -688,7 +688,7 @@ pub(crate) enum StakeEngineError {
     )]
     RngDegeneracy,
 
-    /// The [`PersonaHandle`] and [`PersistedBondTicket`] passed to [`PlanBondPost`]
+    /// The [`PersonaHandle`] and [`PersistedBondTicket`](crate::engine::stake_persist::PersistedBondTicket) passed to [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost)
     /// name different persona slots. A ticket witnesses the durable persist for a
     /// *specific* slot; it cannot authorize a bond operation for any other slot.
     /// Non-terminal: ensure both are obtained for the same `p_slot`.
@@ -730,13 +730,13 @@ pub(crate) enum StakeEngineError {
 
     /// Bond construction failed after the actor validated the handle and ticket
     /// (`PlanBondPost`, S2). The persona bundle was available but
-    /// [`build_join_market_vin`] returned an error — see the wrapped
+    /// [`build_join_market_vin`](shekyl_archival_bond_builder::build_join_market_vin) returned an error — see the wrapped
     /// [`BondBuildError`] for the specific cause (`BondFloorZero`,
     /// `IdentityEncode`, or `BondSpendEncode`).
     #[error("bond construction failed: {0}")]
     BondBuild(#[from] BondBuildError),
 
-    /// A WI-2 [`AssembleBond`] pipeline step failed — funding arithmetic,
+    /// A WI-2 [`AssembleBond`](crate::engine::stake_engine::bond::AssembleBond) pipeline step failed — funding arithmetic,
     /// spend-bundle derivation, output construction, proving, PQC auth
     /// signing, or wire encoding. The wrapped [`BondAssemblyError`] names the
     /// §3.6 failure mode; in every arm nothing was persisted and no funding
@@ -749,6 +749,8 @@ pub(crate) enum StakeEngineError {
     /// closed and loud rather than scan with a silently-weakened key (DQ7). The
     /// concrete cause (scanner build vs canonical-id encode) is preserved in the
     /// wrapped [`ScanSetupError`], including its `source()` chain.
+    ///
+    /// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
     #[error("persona scan setup failed: {0}")]
     ScanSetup(#[from] ScanSetupError),
 
@@ -766,7 +768,7 @@ pub(crate) enum StakeEngineError {
     #[error("scan-step task failed to join: {0}")]
     ScanJoin(#[from] tokio::task::JoinError),
 
-    /// An [`AssembleEmissionClaim`] claim-side step refused or failed —
+    /// An [`AssembleEmissionClaim`](crate::engine::stake_engine::claim::AssembleEmissionClaim) claim-side step refused or failed —
     /// derivation boundaries, size bounding, or the step-7 self-check. The
     /// wrapped [`EmissionClaimError`] keeps the CB-5 taxonomy (including the
     /// cause-blind `SelfCheckFailed` arm). Nothing was persisted and no
@@ -774,7 +776,7 @@ pub(crate) enum StakeEngineError {
     #[error("emission claim: {0}")]
     EmissionClaim(#[from] EmissionClaimError),
 
-    /// An [`AssembleDrain`] (F-D2 DS-PR-1) pipeline step refused or failed —
+    /// An [`AssembleDrain`](crate::engine::drain_assembly::AssembleDrain) (F-D2 DS-PR-1) pipeline step refused or failed —
     /// payment-parameter validation, funding arithmetic, output construction,
     /// proving, PQC auth signing, or wire encoding. The wrapped
     /// [`DrainAssemblyError`] names the failure; the drain path owns its own
@@ -783,23 +785,15 @@ pub(crate) enum StakeEngineError {
     #[error("drain assembly: {0}")]
     DrainAssembly(#[from] DrainAssemblyError),
 
-    /// Countersigning a pass transcript with the held persona's bond identity
-    /// key failed inside the scheme — **malformed resident key material**
-    /// (corrupted in-memory state), the same class as [`Self::ScanSetup`].
-    /// Not a refusal the serving host chose: the host reports it in its
-    /// `late_sign_failures` counter and the client sees a refusal trailer.
-    #[error("pass countersignature failed: {0}")]
-    PassCountersign(#[source] shekyl_crypto_pq::CryptoError),
-
     /// Signing a pass transcript with the held persona's **receipt key**
     /// (hybrid scheme 3) failed inside the scheme, **with a key that
     /// decoded**: the scheme's signer gave up, or the domain was refused.
-    /// The same class as [`Self::PassCountersign`], kept apart from it so an
-    /// operator can tell which of the persona's two signing keys failed.
-    /// Says nothing about the next signature: the key stays held. A key
-    /// that does not decode is [`Self::ReceiptKeyUndecodable`], never this.
-    /// STAGED with the receipt capability (`serving::receipt_key`): no live
-    /// path constructs it.
+    /// **Malformed resident key material** (corrupted in-memory state), the
+    /// same class as [`Self::ScanSetup`]: not a refusal the serving host
+    /// chose; the host counts it in `late_sign_failures` and the client
+    /// sees a refusal trailer. Says nothing about the next signature: the
+    /// key stays held. A key that does not decode is
+    /// [`Self::ReceiptKeyUndecodable`], never this.
     #[error("receipt signature failed: {0}")]
     ReceiptSign(#[source] shekyl_crypto_pq::CryptoError),
 
@@ -808,7 +802,7 @@ pub(crate) enum StakeEngineError {
     /// first receipt and from the slot's remembered state on every later
     /// one (`HeldReceiptKey::Undecodable`); no later request can succeed
     /// while this persona is held. The receipt capability latches its
-    /// pre-flight on this variant and on no other. STAGED with it.
+    /// pre-flight on this variant and on no other.
     #[error(
         "receipt key does not decode: this persona cannot sign receipts; \
          its identity key and its other keys are unaffected"
@@ -823,12 +817,16 @@ pub(crate) enum StakeEngineError {
 /// persona for GF-4b lineage classification,
 /// `ARCHIVAL_GF4B_BACKING_LINEAGE.md` §3.3). Built per [`ScanStep`] and
 /// dropped with it (DQ5).
+///
+/// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
 pub(crate) type BondedScanInputs = (Vec<(u32, GuaranteedScanner)>, BTreeMap<PCanonicalId, u32>);
 
 /// Why building a [`ScanStep`]'s bonded-union scan inputs failed. Both arms are a
 /// **malformed resident persona key** (corrupted in-memory state) — fail closed,
 /// concrete cause preserved (vs a stringified loss). Wrapped by
 /// [`StakeEngineError::ScanSetup`].
+///
+/// [`ScanStep`]: crate::engine::pscan::scan_step::ScanStep
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ScanSetupError {
     /// Building a persona's guaranteed scanner failed (SP-1 fail-closed rejection
@@ -865,11 +863,9 @@ pub(crate) struct StakeEngineArgs {
     /// Must be present in `bundles` when `Some` (the orchestrator guarantees the
     /// current slot is in the derive-forward set).
     pub active: Option<PSlot>,
-    /// The persona body store (`WSS-Q1`(a)). Opened by the orchestrator
-    /// before spawn, so the blocking redb open stays off `on_start`.
-    /// Non-stakers never construct one. Fill and erase stay on this writer;
-    /// the serve path asks for a reader.
-    pub bodies: shekyl_p_store::BodyStore,
+    /// The id of the network the personas are on; the spends the engine
+    /// assembles sign under it (`NETWORK_IDENTITY.md` NI-Q4).
+    pub network: shekyl_network::NetworkId,
     /// **Test + conformance only.** Selects the `on_start` session self-cert (S6)
     /// behavior. Defaults to [`TestSelfCert::Skip`] so the bulk of the stake
     /// tests — which are **not** about the self-cert — do not run a real ~15 ms

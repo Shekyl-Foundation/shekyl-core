@@ -18,5 +18,5 @@
   "shekyl_escalation_asymptote_share": 250000,
   "shekyl_staker_emission_share": 150000,
   "shekyl_staker_emission_decay": 900000,
-  "shekyl_blocks_per_year": 262800
+  "_comment_blocks_per_year": "Not a key. Blocks per year is 365 * 86400 / daa_target_seconds (consensus_constants.json). A second key here would be a second chain identity for one derivation (ESR-16, E16-4)."
 }

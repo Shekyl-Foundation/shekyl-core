@@ -54,11 +54,13 @@
 //! hindsight. The runner is deliberately kept out of the repo: it is
 //! machine-specific glue (absolute tor-binary and worktree paths), and a
 //! committed script with a hardcoded `$HOME` is the debt rule 15/16 forbids.
+#![deny(unsafe_code)]
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use kameo::actor::{ActorRef, Spawn as _};
+use shekyl_onion_key::OnionKeypair;
 use shekyl_tor_control_client::control::onion::{AddOnion, OnionFlags, OnionPort, OnionPow};
 use shekyl_tor_control_client::control::{
     BootstrapReadiness, BootstrapState, Command, DiskWrites, EventSink, TorControlClient,
@@ -114,26 +116,10 @@ const MAX_ADMISSIBLE_BYTES: usize = 16_651;
 ///
 /// Pinning bought tidiness and nothing else. Freshness costs nothing, since
 /// nothing in the measurement depends on which address it is.
-fn fresh_rig_seed() -> Result<[u8; 32], String> {
-    // `read_exact` of 32 bytes, NOT `fs::read`.
-    //
-    // `fs::read` reads to EOF, and `/dev/urandom` never reaches one: it is an
-    // infinite stream. The first version of this function called it and grew to
-    // **107 GB RSS** before the OOM killer took the process — which is the
-    // `EXIT=137` (SIGKILL) the cron session recorded, and the reason four
-    // consecutive sessions produced zero samples. Every one of those failures
-    // was misread at the time as teardown, volatile storage, or a slow
-    // bootstrap; instrumenting the bring-up is what finally located it, by
-    // showing both daemons Ready in ~14 s and the hang landing *after* them.
-    //
-    // A device file that never ends turns "read the file" into "consume all
-    // memory", and it is silent until the machine notices.
-    use std::io::Read as _;
-    let mut f = std::fs::File::open("/dev/urandom").map_err(|e| format!("urandom open: {e}"))?;
-    let mut seed = [0u8; 32];
-    f.read_exact(&mut seed)
-        .map_err(|e| format!("urandom read: {e}"))?;
-    Ok(seed)
+fn fresh_rig_identity() -> Result<OnionIdentity, String> {
+    OnionKeypair::ephemeral()
+        .map(OnionIdentity::from_keypair)
+        .map_err(|e| format!("onion keypair: {e}"))
 }
 
 const VIRTUAL_PORT: u16 = 80;
@@ -213,6 +199,7 @@ async fn bring_up(
             disable_network: false,
             disk_writes: DiskWrites::Deferred,
             exit_observer: None,
+            handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
         }),
         // No `SETEVENTS` is ever issued here, so the sink receives nothing;
         // `unsubscribed()` is the crate's named form of that fact, and it
@@ -336,18 +323,95 @@ async fn socks_connect(socks: SocketAddr, host: &str, port: u16) -> std::io::Res
     Ok(s)
 }
 
-/// Cleanup policy, and it is NOT a drop guard on purpose.
+/// The tor data directory for one measurement session.
 ///
-/// A guard that removes the directory on every path would delete the two tor
-/// data dirs — including their `notice.log` — exactly when a run failed and
-/// those logs are the only evidence of why. Four runs failed during this
-/// round's bring-up and their logs were what identified a poisoned onion
-/// descriptor; a tidier cleanup would have thrown that away each time.
+/// Removed only when [`Self::finish`] sees success. An error keeps the
+/// directory and prints its path. The workspace builds this binary with
+/// `panic = "abort"` (`rust/Cargo.toml`, the `dev` and `release` profiles),
+/// so a panic never reaches `finish`, and a signal does not either. Both
+/// leave the directory in place.
 ///
-/// So: **removed on success, KEPT and announced on failure.** Splitting the
-/// body into `run` is what makes that uniform across every early return,
-/// rather than remembering to clean up at each one — which is the bug this
-/// replaces, where only the happy path and one failure arm removed it.
+/// That keep-on-failure is the point. A guard that removed the directory on
+/// every path would delete the two tor data dirs — including their
+/// `notice.log` — exactly when a run failed and those logs are the only
+/// evidence of why. Four runs failed during this round's bring-up and their
+/// logs were what identified a poisoned onion descriptor.
+struct SessionDir {
+    root: std::path::PathBuf,
+}
+
+impl SessionDir {
+    /// Directory-name prefix under the system temp directory.
+    const PREFIX: &'static str = "shekyl-transit-";
+    /// The client's tor data directory, inside the session directory.
+    const CLIENT: &'static str = "client";
+    /// The service's tor data directory, inside the session directory.
+    const SERVICE: &'static str = "service";
+
+    /// A fresh directory, with the client and service children created.
+    ///
+    /// The directory is persisted immediately. A failure while creating a
+    /// child is reported through [`Self::report`], so the path is printed
+    /// and the directory stays.
+    fn create() -> Result<Self, String> {
+        let built = tempfile::Builder::new()
+            .prefix(Self::PREFIX)
+            .tempdir()
+            .map_err(|e| e.to_string())?;
+        let session = Self { root: built.keep() };
+        if let Err(error) = session.prepare() {
+            session.report(&error);
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    fn prepare(&self) -> Result<(), String> {
+        for name in [Self::CLIENT, Self::SERVICE] {
+            std::fs::create_dir_all(self.root.join(name)).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// The client's tor data directory.
+    fn client(&self) -> std::path::PathBuf {
+        self.root.join(Self::CLIENT)
+    }
+
+    /// The service's tor data directory.
+    fn service(&self) -> std::path::PathBuf {
+        self.root.join(Self::SERVICE)
+    }
+
+    /// Prints the path. The directory stays: this value holds a plain path,
+    /// persisted when the session was created.
+    fn report(&self, error: &str) {
+        eprintln!(
+            "session failed ({error})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
+            self.root.display()
+        );
+    }
+
+    /// Removes the directory when `result` is [`Ok`]. An error keeps it and
+    /// prints the path.
+    fn finish(self, result: Result<(), String>) -> Result<(), String> {
+        match &result {
+            Ok(()) => {
+                if let Err(error) = std::fs::remove_dir_all(&self.root) {
+                    eprintln!(
+                        "session succeeded; the tor data dirs could not be removed at {}: {error}",
+                        self.root.display()
+                    );
+                }
+            }
+            Err(error) => self.report(error),
+        }
+        result
+    }
+}
+
+/// One measurement session. The tor data directory is removed only when the
+/// session returns success; [`SessionDir`] holds that policy.
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let binary = std::env::var_os("SHEKYL_TEST_TOR_BINARY")
@@ -360,23 +424,9 @@ async fn main() -> Result<(), String> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(200);
 
-    let root = std::env::temp_dir().join(format!("shekyl-transit-{}", utc_ms()));
-    let client_dir = root.join("client");
-    let service_dir = root.join("service");
-    std::fs::create_dir_all(&client_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&service_dir).map_err(|e| e.to_string())?;
-
-    let result = run(&binary, per_arm, client_dir, service_dir).await;
-    match &result {
-        Ok(()) => {
-            let _ = std::fs::remove_dir_all(&root);
-        }
-        Err(e) => eprintln!(
-            "session failed ({e})\n  tor data dirs KEPT for diagnosis at {}\n  (cached-microdesc-consensus present = that daemon reached the directory;\n   absent = it never got that far. ManagedTor reports progress over the\n   control port, not a log file, so stderr above is the event record.)",
-            root.display()
-        ),
-    }
-    result
+    let dirs = SessionDir::create()?;
+    let result = run(&binary, per_arm, dirs.client(), dirs.service()).await;
+    dirs.finish(result)
 }
 
 async fn run(
@@ -392,8 +442,8 @@ async fn run(
     the other's progress rather than hiding behind it. */
     eprintln!("bringing up two tor daemons concurrently (separate guards) …");
     let (client, service) = tokio::try_join!(
-        bring_up("client", binary, client_dir),
-        bring_up("service", binary, service_dir)
+        bring_up(SessionDir::CLIENT, binary, client_dir),
+        bring_up(SessionDir::SERVICE, binary, service_dir)
     )?;
     let (client_tor, client_socks) = client;
     let (service_tor, _) = service;
@@ -403,7 +453,7 @@ async fn run(
         .map_err(|e| e.to_string())?;
     let local = listener.local_addr().map_err(|e| e.to_string())?;
 
-    let identity = OnionIdentity::from_hs_id_seed(&fresh_rig_seed()?);
+    let identity = fresh_rig_identity()?;
     let port = OnionPort::loopback(VIRTUAL_PORT, local).ok_or("listener must be loopback")?;
     let request = AddOnion::new(identity.mint_onion_key(), port, 8)
         .with_flags(OnionFlags { discard_pk: true })

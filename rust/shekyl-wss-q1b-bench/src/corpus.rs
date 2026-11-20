@@ -87,7 +87,7 @@ pub const CANONICAL_OUTPUTS: usize = 2;
 /// 1. The long-term effective median is floored at
 ///    [`EconomicParams::full_reward_zone`].
 /// 2. The short-term governor may run it up to `S ×` that floor
-///    ([`BLOCK_WEIGHT_SURGE_FACTOR`], ratified `S = 4`);
+///    ([`BLOCK_WEIGHT_SURGE_FACTOR`], ratified `S = 3`);
 ///    `shekyl_economics::block_weight` records in its own words that for the
 ///    first ~100 000 blocks this clamp is *the only* protection against
 ///    early-chain weight growth.
@@ -192,7 +192,7 @@ pub const GRADED_TREE_DEPTH: u8 = 6;
 /// **Why this value and not another:** it is the density at which the
 /// measurement can still surprise you. The adversarial ceiling
 /// ([`sustained_block_weight_ceiling`]) is a foregone *fail* — 790 blocks at
-/// 2.4 MB is ~1.9 GB decoded, which no hardware refetches in 5 s, so grading
+/// 1.8 MB is ~1.4 GB decoded, which no hardware refetches in 5 s, so grading
 /// there writes the miss response before measuring it. An empty chain is a
 /// foregone *pass*. The zone is neither: 790 × 300 kB ≈ 237 MB in 5 s is
 /// ~47 MB/s decoded (about twice that on the wire, which is hex), and whether

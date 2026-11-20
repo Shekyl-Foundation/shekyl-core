@@ -1,3 +1,30 @@
+# `seeds/<target>/` is committed and read by every run of that target
+# (`fuzz-nightly.yml`; locally,
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
+# Each seed is one whole body the decoder accepts, built from
+# `docs/test_vectors/PQC_HYBRID_V2_KAT.json` (`key`: its
+# `hybrid_public_key_hex`; `sig`: its first `hybrid_signature_hex`) and
+# `MULTISIG_INTENT_V2.json` (its first vector). Lengths are 4-byte
+# little-endian; counts are one byte.
+#   fuzz_body_hybrid_sig_decode/kat_one_signature        0x01 || sig
+#   fuzz_body_commitment_decode/kat_one_round            0x01 || preprocess || key
+#   fuzz_body_responder_share_decode/kat_one_responder_round
+#                                     0x01 || preprocess || share || key
+#   fuzz_body_signature_share_decode/kat_one_share       0x01 || share
+#   fuzz_body_final_tx_decode/kat_one_input_two_signers
+#     len 0 (no proposal file) || 0x01 inputs || 0x02 signers || key || key
+#     || len 0 (fcmp proof) || len 0 (range proof)
+#   fuzz_envelope_v2_decode/kat_signature_share_envelope
+#     the intent's address_fingerprint || intent_hash || responder_index
+#     || 0x03 (SignatureShare) || len || kat_one_share || len || sig
+# The 64-byte preprocess and the 32-byte share are zeros and come from no
+# vector: the bodies travel them as raw bytes and do not parse them.
+# Unseeded, cold five-minute runs of the envelope, the final transaction
+# and the signature share reached coverage 31, 77 and 87; the hybrid
+# signature and the commitment never got past the input count and the
+# first field's length. A crash's input joins its target's directory
+# with the fix.
+
 [package]
 name = "shekyl-multisig-fuzz"
 version = "0.0.0"
@@ -9,26 +36,12 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+shekyl-address = { path = "../../shekyl-address" }
 shekyl-multisig = { path = ".." }
-shekyl-units = { path = "../../shekyl-units" }
 
 [[bin]]
-name = "fuzz_envelope_parse"
-path = "fuzz_targets/fuzz_envelope_parse.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_decrypted_payload_parse"
-path = "fuzz_targets/fuzz_decrypted_payload_parse.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "fuzz_encrypt_decrypt_roundtrip"
-path = "fuzz_targets/fuzz_encrypt_decrypt_roundtrip.rs"
+name = "fuzz_envelope_v2_decode"
+path = "fuzz_targets/fuzz_envelope_v2_decode.rs"
 test = false
 doc = false
 bench = false
@@ -36,6 +49,55 @@ bench = false
 [[bin]]
 name = "fuzz_intent_validation"
 path = "fuzz_targets/fuzz_intent_validation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_proposal_decode"
+path = "fuzz_targets/fuzz_body_proposal_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_commitment_decode"
+path = "fuzz_targets/fuzz_body_commitment_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_signing_set_decode"
+path = "fuzz_targets/fuzz_body_signing_set_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_responder_share_decode"
+path = "fuzz_targets/fuzz_body_responder_share_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_signature_share_decode"
+path = "fuzz_targets/fuzz_body_signature_share_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_final_tx_decode"
+path = "fuzz_targets/fuzz_body_final_tx_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_body_hybrid_sig_decode"
+path = "fuzz_targets/fuzz_body_hybrid_sig_decode.rs"
 test = false
 doc = false
 bench = false

@@ -57,6 +57,9 @@ shekyl-types = { path = "../shekyl-types", default-features = false }
 # crate, like `shekyl-rpc-types` above and for the same reason.
 shekyl-economics = { path = "../shekyl-economics" }
 
+[dev-dependencies]
+# The fee read's tiers are amounts (`tests/call.rs`).
+shekyl-units = { path = "../shekyl-units" }
 
 [features]
 # NOTE: `std` here is aspirational while `shekyl-rpc-types` is a dependency

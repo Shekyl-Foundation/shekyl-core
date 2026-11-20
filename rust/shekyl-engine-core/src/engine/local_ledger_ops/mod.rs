@@ -35,6 +35,9 @@ pub mod set_tx_note;
 pub use abandon_tx::{AbandonTxError, AbandonTxOutcome};
 pub use set_tx_note::SetTxNoteError;
 
+use shekyl_engine_file::Durability;
+
+use crate::engine::dispatch_durability::restore_unless_saved;
 use crate::engine::error::PersistenceError;
 use crate::engine::lifecycle::drive_persistence;
 use crate::engine::local_ledger::LedgerState;
@@ -72,23 +75,23 @@ impl<
     ///
     /// # Errors
     ///
-    /// [`PersistenceError`] when the durable save failed. The undo has
-    /// already run, so the wallet is back at its pre-mutation state and a
-    /// retry starts from there. Callers wrap this in their own
-    /// `…::Persistence` arm so each op keeps its own refusal vocabulary.
+    /// [`PersistenceError`] when the durable save failed before the rename.
+    /// The undo has already run, so the wallet is back at its pre-mutation
+    /// state and a retry starts from there. [`Durability::Unconfirmed`] is
+    /// success for a non-broadcast op: the write is applied. A caller that
+    /// would broadcast on this save requires [`Durability::Confirmed`].
+    /// Callers wrap a hard failure in their own `…::Persistence` arm so
+    /// each op keeps its own refusal vocabulary.
     pub(crate) fn save_or_rollback(
         &self,
         guard: &mut std::sync::RwLockWriteGuard<'_, LedgerState>,
         undo: impl FnOnce(&mut LedgerState),
-    ) -> Result<(), PersistenceError> {
+    ) -> Result<Durability, PersistenceError> {
         let save_result = drive_persistence(
             self.persistence
                 .save_state(self.state_wrap_key(), &guard.ledger),
-        );
-        if let Err(e) = save_result {
-            undo(guard);
-            return Err(e.into());
-        }
-        Ok(())
+        )
+        .map_err(Into::into);
+        restore_unless_saved(save_result, || undo(guard))
     }
 }

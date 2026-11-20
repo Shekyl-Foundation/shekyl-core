@@ -28,7 +28,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
-use shekyl_wallet_rpc::tenant::{DaemonEndpoint, TenantState};
+use shekyl_wallet_rpc::tenant::{DaemonTarget, TenantState};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 
@@ -46,14 +46,15 @@ fn state(dir: &TempDir) -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             dir.path().to_path_buf(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".into(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 
@@ -62,7 +63,7 @@ async fn rpc(state: Arc<AppState>, method: &str, params: Value) -> Value {
     let app = build_router(state);
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -374,8 +375,8 @@ async fn corrupt_staking_seal_degrades_to_liquid_with_absent_staking_fields() {
         "a staking-seal fault must not black out the balance surface: {bal}"
     );
     let result = &bal["result"];
-    assert!(result.get("liquid").is_some(), "{bal}");
-    assert!(result.get("unlocked").is_some(), "{bal}");
+    assert!(result.get("balance").is_some(), "{bal}");
+    assert!(result.get("spendable").is_some(), "{bal}");
     assert!(
         result.get("staked").is_none(),
         "an unreadable seal must project ABSENT, never a fabricated value: {bal}"

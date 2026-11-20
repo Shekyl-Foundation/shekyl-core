@@ -33,7 +33,7 @@ use std::ops::Range;
 use shekyl_engine_state::{
     transfer::eligible_height, LedgerBlock, LedgerIndexes, ReceiveAttribution, TransferDetails,
 };
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::{balance::BalanceSummary, output::WalletOutput, scan::Timelocked};
 
@@ -105,7 +105,6 @@ impl TransferDetailsExt for TransferDetails {
             // pscan funding path as `spendable_height` (GF4b-6,
             // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
             eligible_height: eligible_height(block_height, output.additional_timelock()),
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
@@ -139,7 +138,7 @@ pub trait LedgerIndexesExt {
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: BlockHeight,
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         outputs: Timelocked,
     ) -> Range<usize>;
 }
@@ -149,7 +148,7 @@ impl LedgerIndexesExt for LedgerIndexes {
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: BlockHeight,
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         outputs: Timelocked,
     ) -> Range<usize> {
         let outputs = outputs.into_inner();
@@ -189,23 +188,24 @@ impl LedgerIndexesExt for LedgerIndexes {
 /// see the dispatch-authored lock facts (C7), so every caller had to
 /// hand-thread a lock map it had no way to obtain honestly. Anything
 /// that genuinely needs a transfer-slice balance calls
-/// [`BalanceSummary::compute`] and passes a derived
-/// [`InFlightSpendLocks`](shekyl_engine_state::InFlightSpendLocks) explicitly.
+/// [`BalanceSummary::compute`] and passes the send journal explicitly.
 pub trait WalletLedgerExt {
-    /// Balance at the wallet's current synced height.
+    /// The balance at the wallet's synced tip.
     fn balance(&self) -> BalanceSummary;
 
-    /// Balance at an explicit chain height (tests / historical views).
-    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary;
+    /// The balance at an explicit horizon (tests / historical views).
+    fn balance_at(&self, horizon: shekyl_engine_state::SpendHorizon) -> BalanceSummary;
 }
 
 impl WalletLedgerExt for shekyl_engine_state::WalletLedger {
     fn balance(&self) -> BalanceSummary {
-        self.balance_at(self.ledger.height())
+        self.balance_at(shekyl_engine_state::SpendHorizon::at_tip(
+            self.ledger.height(),
+        ))
     }
 
-    fn balance_at(&self, current_height: shekyl_types::BlockHeight) -> BalanceSummary {
-        BalanceSummary::compute(self.ledger.transfers(), current_height, &self.spend_locks())
+    fn balance_at(&self, horizon: shekyl_engine_state::SpendHorizon) -> BalanceSummary {
+        BalanceSummary::compute(self.ledger.transfers(), horizon, &self.send_journal)
     }
 }
 

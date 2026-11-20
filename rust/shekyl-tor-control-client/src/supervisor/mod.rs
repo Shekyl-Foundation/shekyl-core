@@ -20,11 +20,22 @@
 mod core;
 mod events;
 mod posture;
+mod view;
 
 pub use crate::control::{NetworkView, Reported};
-pub use core::{Action, Core, DialTally, Input, ManagedRunning, Policy, Step};
-pub use events::input_of;
-pub use posture::{
-    fixes, held_sentence, install_sentence, own_tx, render, BootstrapLine, BootstrapPace, Cause,
-    Connectors, ManagedTorFix, OriginVerdict, OwnTx, Shown, Space, Status, Syncing, TorSetting,
+pub use core::{
+    Action, Core, Counted, DialTally, DirectoryAnswer, DirectoryFetch, DirectoryPlan,
+    DirectoryReport, Exclusion, Input, Launch, LaunchDirectory, ManagedRunning, OnionPath,
+    OpenUploads, PathReading, Policy, RoundTally, Step, TorCensus, CHECK_LONGEST, CHECK_SPACING,
+    DESCRIPTOR_LIFETIME, READING_WAIT, REPLY_BOUND,
 };
+pub use events::{
+    clock_evidence_of, directory_content_input_of, directory_input_of, input_of, round_inputs,
+    CERTIFICATE_OUT_OF_DATE,
+};
+pub use posture::{
+    fixes, own_tx, BootstrapLine, BootstrapPace, Carriage, Cause, Connectors, Inbound,
+    InboundCause, ManagedTorFix, OriginVerdict, OwnTx, ReportedSkew, Sessions, Shown, Space,
+    Status, Syncing, TorQuiet, TorSetting,
+};
+pub use view::{snapshot, wire_cause};

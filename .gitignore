@@ -6,7 +6,6 @@
 # root-anchored (spares contrib/depends/builders/, utils/health/
 # build-scripts/). Nested trees stay covered by **/build/ below.
 /build*/
-/Doxyfile
 /tags
 log/
 
@@ -63,9 +62,6 @@ contrib/gitian/sigs/
 *.exe
 *.out
 *.app
-
-# Tests
-tests/data/
 
 
 ### CMake ###

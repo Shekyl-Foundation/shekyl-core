@@ -8,7 +8,7 @@
 use shekyl_p_host::{DaemonTipCache, PersonaServing};
 
 use super::daemon_tip;
-use super::pass_key::ResidentPassKey;
+use super::receipt_key::ResidentReceiptKey;
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
@@ -140,7 +140,7 @@ where
     /// host is up either way.
     pub async fn start_serving_if_staker(
         self_arc: std::sync::Arc<tokio::sync::RwLock<Self>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
         // Brief read borrow: clone the spawn inputs. Filesystem work stays
         // outside this lock — `tor_service_config` creates and chmods a
@@ -174,15 +174,13 @@ where
             return Ok(None);
         };
 
-        // Outside the engine lock: both handles are actor asks, and the
-        // store lives on the stake actor, not on `Engine`. An empty store
-        // answers 404 until fill (`WSS-Q4`) lands. The reader still
-        // decrypts (`WSS-Q13` is not met). Pin-release erase asks this
-        // actor (`WSS-Q8`); the host does not receive the writer.
-        let bodies = stake
-            .serving_bodies()
-            .await
-            .map_err(|e| ServingStartError::Identity(Box::new(e)))?;
+        // The serving host reads bodies by message to the body store's
+        // owning actor, chunk by chunk, through a weak reference: it holds
+        // neither the store nor its key (`WSS-Q13`; `CURVE_TREE_CLIENT.md`
+        // §11.1). An empty store answers 404 until fill (`WSS-Q4`) lands.
+        // Pin-release erase asks the same owner (`WSS-Q8`).
+        let bodies: std::sync::Arc<dyn shekyl_p_host::HeldShardSource> =
+            std::sync::Arc::new(stake.bodies.reads());
 
         // Claim only once we know we will start a host. An idle staker must
         // not occupy the slot; a second start after activation must.
@@ -207,10 +205,9 @@ where
 
         // ① local posture. `LocalNodeRpc` refuses a non-loopback URL by
         // construction, so the refusal below is the type's, not a check here.
-        let claim_rpc =
-            crate::engine::prpc::LocalNodeRpc::new(daemon_address.to_owned(), CLAIM_SOURCE_TIMEOUT)
-                .await
-                .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
+        let claim_rpc = crate::engine::prpc::LocalNodeRpc::new(daemon, CLAIM_SOURCE_TIMEOUT)
+            .await
+            .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
 
         // The `SF-D5` gate's height (`WSS-24`), on the same loopback transport,
         // cloned rather than re-derived: one construction, one loopback proof,
@@ -220,7 +217,7 @@ where
         //
         // Both timings come off the block target, which is already
         // single-sourced here for the staleness bound below.
-        let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
+        let block_target = shekyl_economics::economic_params().daa_target_seconds;
         let tip = std::sync::Arc::new(DaemonTipCache::new(daemon_tip::tip_max_age(block_target)));
         // The refresher's own first tick fires immediately, but nothing orders
         // it against this function returning. This read does: the cache is
@@ -238,7 +235,7 @@ where
             curve_tree,
             claim_rpc,
             p_id.to_bytes(),
-            crate::engine::stake_engine::serve_set_source::ReleasedRows::Actor(stake.actor.clone()),
+            stake.bodies.clone(),
         );
 
         Ok(Some(spawn_serving_task(
@@ -247,14 +244,17 @@ where
                 identity,
                 virtual_port: SERVING_VIRTUAL_PORT,
                 max_streams: SERVING_MAX_STREAMS,
-                // The `SF-D13` countersignature key is the persona's
-                // `hybrid_sign_sk`, which lives inside the stake actor under
-                // Model D. What crosses into the serving role is not the key
-                // but a per-shard signing round-trip to the actor, over a
-                // weak handle bound to the slot active at this start
-                // (`pass_key`). The actor going away is the pre-flight 503
-                // (`sign_failures`); no unsigned shard is ever served.
-                key: ResidentPassKey::new(&stake, active.p_slot),
+                // The `SF-D13` countersignature key is the persona's receipt
+                // key (hybrid scheme 3), which lives inside the stake actor
+                // under Model D; the bundle verifier checks the receipt
+                // under the bond record's `receipt_sign_pk`. What crosses
+                // into the serving role is not the key but a per-shard
+                // signing round-trip to the actor, over a weak handle bound
+                // to the slot active at this start (`receipt_key`). The
+                // actor going away, or a receipt key that did not decode,
+                // is the pre-flight 503 (`sign_failures`); no unsigned
+                // shard is ever served.
+                key: ResidentReceiptKey::new(&stake, active.p_slot),
                 // The anchor gate reads the daemon's tip, not the principal's
                 // scan (`WSS-24`). The refresher spawned above keeps it
                 // stamped and exits with the last reader.
@@ -297,8 +297,8 @@ mod tests {
         crate::engine::test_support::non_staker_engine(7)
     }
 
-    fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
-        crate::engine::test_support::staker_engine(slot, 7)
+    async fn staker_engine(slot: u32) -> (TempDir, Engine<SoloSigner>) {
+        crate::engine::test_support::staker_engine(slot, 7).await
     }
 
     async fn activate(engine: &Engine<SoloSigner>, slot: u32) {
@@ -309,10 +309,12 @@ mod tests {
     async fn start_serving_if_staker_is_none_for_a_non_staker() {
         let (_tmp, engine) = non_staker_engine();
         let arc = Arc::new(RwLock::new(engine));
-        let started =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("non-staker auto-start must not error");
+        let started = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("non-staker auto-start must not error");
         assert!(started.is_none(), "a non-staker gets no serving host");
         assert!(
             !arc.read().await.open_slots.serving.is_claimed(),
@@ -322,12 +324,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_idle_staker_gets_no_host_and_does_not_claim_the_slot() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let started =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("idle staker is Ok(None), not an error");
+        let started = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("idle staker is Ok(None), not an error");
         assert!(
             started.is_none(),
             "nothing to serve until a persona is active"
@@ -340,12 +344,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_remote_daemon_is_refused_rather_than_served_over_the_principal() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let Err(err) =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://example.com:18081")
-                .await
+        let Err(err) = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://example.com:18081"),
+        )
+        .await
         else {
             panic!("non-loopback must fail closed");
         };
@@ -368,17 +374,23 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_second_start_is_already_running_while_the_first_host_is_held() {
-        let (_tmp, engine) = staker_engine(3);
+        let (_tmp, engine) = staker_engine(3).await;
         activate(&engine, 3).await;
         let arc = Arc::new(RwLock::new(engine));
-        let first =
-            Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1")
-                .await
-                .expect("first start")
-                .expect("active persona starts a host");
+        let first = Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
+        .expect("first start")
+        .expect("active persona starts a host");
         assert!(arc.read().await.open_slots.serving.is_claimed());
 
-        match Engine::<SoloSigner>::start_serving_if_staker(arc.clone(), "http://127.0.0.1:1").await
+        match Engine::<SoloSigner>::start_serving_if_staker(
+            arc.clone(),
+            &shekyl_rpc_transport::DaemonTarget::address("http://127.0.0.1:1"),
+        )
+        .await
         {
             Err(ServingStartError::AlreadyRunning) => {}
             Ok(_) => panic!("expected AlreadyRunning, got a second handle"),

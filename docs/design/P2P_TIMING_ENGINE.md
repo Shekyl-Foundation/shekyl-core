@@ -20,7 +20,7 @@ falsifier ([`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D6).
 
 **Pre-flight discharged 2026-09-25** by `ca825e8df`, the commit before
 the crate. It re-read the substrate at `dev` `78eef562d` (the #860
-merge). Substrate re-read: `levin_notify.cpp:495` and `:895`,
+merge). Substrate re-read: `levin_notify.cpp` lines 495 and 895,
 `net_node.h:720-725`, and `Driver::next_wake`. The relay function is
 now `driver/mod.rs:158`; the design had cited `:149`. It is still
 derived on every call and not cached. No other cited site moved. The
@@ -58,7 +58,7 @@ engine runs today's behaviour so a differential harness can match it.
 
 | Job | Today | Owner |
 | --- | --- | --- |
-| Relay wake | `steady_timer wake` in `src/cryptonote_protocol/levin_notify.cpp:495`, armed at `:895` from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`) | relay `Driver`. This engine only sleeps until that wake |
+| Relay wake | *(the "Today" column is the C++ of 2026-09-25, at `e8838b0095` and before; the host left in PR #1272)* `steady_timer wake` at line 495 of `src/cryptonote_protocol/levin_notify.cpp`, armed at 895 from `Driver::next_wake` (`shekyl-relay` `driver/mod.rs:158`) | relay `Driver`. This engine only sleeps until that wake |
 | Chain-state backstop | `peer_sync_idle_maker` sends command 1002 every 60 s (`P2P_DEFAULT_HANDSHAKE_INTERVAL`, `cryptonote_config.h:185`). Both sides exchange height and top block (`process_payload_sync_data`) | sync lane. The period is how long a node can be stale after a missed announcement, against the block time. New blocks are already pushed when found |
 | Peerlist gossip | the same 1002 response carries up to 250 addresses (`p2p_protocol_defs.h:215-239`) into the gray list | peerlist, slices 1 and 3. Also a privacy surface: each exchange shows a peer part of this node's view of the network |
 | Connection liveness | the same 1002 is a request that must be answered, and it keeps the session off the inherited idle timer | the transport layer, per connector (D9). Not a Levin command |
@@ -243,11 +243,26 @@ so a feature-gated test clock would ship. Virtual time lets relay
 conformance and the transport timeouts run deterministically.
 
 A `Tick` is nanoseconds since the clock's origin. `ManualClock` is the
-test clock. `MonotonicClock` is the production clock: `std::time::Instant`,
-origin at construction. On Linux that instant is `CLOCK_MONOTONIC`, which
-does not advance while the system is suspended, so a deadline is not late
-by the time the machine spent suspended. The transport layer and the C++
-bridge use this clock. They do not keep their own.
+test clock. `MonotonicClock` is the production clock, one origin for the
+whole process (the first reading any `MonotonicClock` took). It counts
+awake time, so a deadline is not late by the time the machine spent
+suspended. On Linux the reading is `Instant` (`CLOCK_MONOTONIC`). On
+macOS the reading is `Instant` (`CLOCK_UPTIME_RAW`). On Windows `Instant`
+counts through every sleep, so the reading is
+`QueryUnbiasedInterruptTimePrecise`, which leaves out S3 sleep and
+hibernation, as Windows documents, and most of the time a Modern Standby
+(S0) spends in DRIPS, its deep idle. It counts the standby's active time, so
+how much of a standby it leaves out depends on how long the platform holds
+DRIPS (measured, `TOR_SUPERVISOR.md` §10, `TSR-M8`).
+The transport layer and the dialer use this clock. They do not keep their own.
+
+The engine thread sleeps on `Clock::wait_for`. It does not link tokio. A
+tokio task's timer is a different clock, and on Windows that timer counts
+through a sleep. Both Tor supervisors wait through
+`shekyl-tor-control-client`'s `awake`, which re-arms that timer until this
+clock says the deadline has passed. A production caller outside that
+client that has to wait the same way is when `awake` moves next to the
+clock. A guard expiry is a `SystemTime` and stays on tokio's timer.
 
 ### 9. Lateness is an output
 
@@ -418,15 +433,19 @@ is not D5's budget.
 command on that mailbox, not a side channel. The home stamps
 `polled_at` itself, at the moment it observes the wake.
 
-**Every home uses the engine's clock, cloned from the same origin.**
-`MonotonicClock::new` stores `Instant::now()` as its origin, and `now`
-is nanoseconds since that instant. The clock is `Clone`, and a clone
-keeps the origin. The service constructs one clock and clones it to
-each home. A home that called `MonotonicClock::new` itself would report
-lateness from a different zero. In the daemon the engine's clock is
-itself a clone of the process clock in `shekyl-ffi` (Rick, 2026-10-14).
-The seam hub, every ban deadline, the zone host's engine and the link
-gate read one origin, so an engine `now` compares with a ban directly.
+**Every production clock reads one origin.** The process holds one
+origin, a `static OnceLock` of the platform reading set by the first
+`MonotonicClock::new`, and `now` on any `MonotonicClock` is nanoseconds
+since it. Two clocks built at different times, or a clone and its
+source, give ticks on one timeline, so a home that built its own clock
+reports lateness from the same zero as the engine. The seam hub, every
+ban deadline, the zone host's engine and the link gate read that origin,
+so an engine `now` compares with a ban directly, and a `Stamp` the
+dialer takes compares with one the Tor supervisor takes
+(`DIALER_OUTAGE_EVIDENCE.md` §6.1). A `ManualClock` keeps its own time,
+for tests. Test:
+`a_stamp_from_a_later_clock_is_never_earlier_than_one_taken_before_it`
+(`rust/shekyl-timing-engine/src/engine_tests.rs`).
 
 **After close.** Each handle holds a closed flag. `register`, `arm`,
 `clear`, and `deregister` check it and return `EngineError::Closed`

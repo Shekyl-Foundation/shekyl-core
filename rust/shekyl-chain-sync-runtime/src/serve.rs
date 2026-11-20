@@ -16,23 +16,32 @@
 //! difficulty.
 //!
 //! A body request names hashes. Each one on the main chain is answered with
-//! its block, its listed transactions and its attestation witness, and
+//! its block, its listed transactions and its bundle references, and
 //! [`BodyPlanner`] decides what is sent, deferred and missed; a body the
-//! budget defers is never read. Until DRS-SB's
-//! discard lands every transaction is held whole and is served
-//! [`TxBody::Full`]. One whose prunable region, or `pqc_auths` region, this
-//! node no longer holds is served as a [`SkeletonTx`].
+//! budget defers is never read. A transaction whose archival good this
+//! node holds is served [`TxBody::Full`]; one whose good the retention
+//! prune has discarded is served as its skeleton
+//! ([`shekyl_chain_store::store::TxRecord::skeleton_of`], the store's one
+//! constructor), which the requester rebinds by `SkeletonTx::txid`.
+//!
+//! A request for an announced block's missing transactions (2009, CS-5 §6)
+//! names the block and indices into its transaction list. It is answered
+//! with one 2008 carrying the block, its references and those transactions
+//! whole. The peer's own faults close its session, each with its cause
+//! ([`MissingTxsRefused`]). A block this node holds only as an alternative
+//! left the main chain after it was announced; that is not the peer's
+//! fault, and it is not answered.
 
 use shekyl_chain_rules::AtHeight;
-use shekyl_chain_store::store::{
-    AtIndex, ChainStore, Prunable, ReadSnapshot, StoreError, TxRecord,
-};
+use shekyl_chain_store::store::{ArchivalGood, AtIndex, ChainStore, ReadSnapshot, StoreError};
 use shekyl_levin::{
-    body_budget_bytes, BodyPlanner, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
+    body_budget_bytes, BlockCompleteEntry, BodyPlanner, NewCompactBlock, RequestBodies,
+    RequestCompactMissingTx, RequestHeaders, ResponseBodies, ResponseHeaders, TxBlobEntry,
     HASH_SIZE, HEADERS_RESPONSE_BYTES,
 };
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{BlockBody, SkeletonTx, TxBody};
+use shekyl_types::archival::BundleReferences;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, TxHash};
+use shekyl_wire::{BlockBody, TxBody};
 
 /// Answer a header request from `store`.
 ///
@@ -183,42 +192,177 @@ fn body_of(snap: &ReadSnapshot<'_>, hash: BlockHash) -> Result<Option<BlockBody>
     };
     let mut txs = Vec::with_capacity(body.block.transaction_hashes.len());
     for txid in &body.block.transaction_hashes {
-        let Some(record) = snap.tx_record(txid)? else {
+        let Some(tx) = tx_body(snap, txid)? else {
             return Ok(None);
-        };
-        let tx = match snap.tx_prunable(record.location.id)? {
-            AtIndex::Recorded(Prunable::Retained(prunable)) => {
-                let skeleton = skeleton_of(&record);
-                match record.wire_bytes(prunable) {
-                    Some(bytes) => TxBody::Full(bytes),
-                    None => TxBody::Skeleton(skeleton),
-                }
-            }
-            AtIndex::Recorded(Prunable::Discarded) => TxBody::Skeleton(skeleton_of(&record)),
-            AtIndex::BeyondCount => return Ok(None),
         };
         txs.push(tx);
     }
-    let attestation_witness = match snap.attestation_witness_at(height)? {
-        AtHeight::Recorded(Some(witness)) => witness,
-        AtHeight::Recorded(None) | AtHeight::AboveTip => Vec::new(),
-    };
+    // The bodies of its section this store holds, passed over where it
+    // holds none: a recent block's are here, an older block's may not be,
+    // and the asker fetches what is missing by 2016 or does without (§8).
+    let section = section_at(snap, height)?;
+    let bundle_bodies = snap
+        .held_section_bodies(section.as_ref())?
+        .iter()
+        .map(|body| body.as_bytes().to_vec())
+        .collect();
+    let bundle_references = section
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default();
     Ok(Some(BlockBody {
         block: body.block.serialize(),
         txs,
-        attestation_witness,
+        bundle_references,
+        bundle_bodies,
     }))
 }
 
-/// The skeleton of a recorded transaction: its pruned segment and the three
-/// operands its txid binds (`PDM-Q-F28`).
-fn skeleton_of(record: &TxRecord) -> SkeletonTx {
-    SkeletonTx {
-        unprunable: record.pruned.clone().into_wire_bytes(),
-        prunable_hash: record.prunable_hash,
-        pqc_auth_hash: record.pqc_auth_hash,
-        archival_len: record.archival_len,
+/// The transaction `txid` as this store holds it: whole, or as its
+/// skeleton when a region it binds is no longer held. `None` when it is
+/// not recorded.
+fn tx_body(snap: &ReadSnapshot<'_>, txid: &TxHash) -> Result<Option<TxBody>, StoreError> {
+    let Some(record) = snap.tx_record(txid)? else {
+        return Ok(None);
+    };
+    Ok(match snap.tx_archival_good(record.location.id)? {
+        AtIndex::Recorded(ArchivalGood::Retained {
+            prunable,
+            pqc_auths,
+        }) => Some(TxBody::Full(
+            record.wire_bytes(&prunable, pqc_auths.as_ref()),
+        )),
+        AtIndex::Recorded(ArchivalGood::Discarded) => Some(TxBody::Skeleton(record.skeleton_of())),
+        AtIndex::BeyondCount => None,
+    })
+}
+
+/// The bundle section of the main-chain block at `height`, if it has one.
+fn section_at(
+    snap: &ReadSnapshot<'_>,
+    height: BlockHeight,
+) -> Result<Option<BundleReferences>, StoreError> {
+    Ok(match snap.bundle_references_at(height)? {
+        AtHeight::Recorded(section) => section,
+        AtHeight::AboveTip => None,
+    })
+}
+
+/// The bundle references of the main-chain block at `height`; empty when
+/// it has none.
+fn references_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<Vec<Vec<u8>>, StoreError> {
+    Ok(section_at(snap, height)?
+        .map(BundleReferences::into_inner)
+        .unwrap_or_default())
+}
+
+/// Why a request for an announced block's missing transactions closes its
+/// session (module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingTxsRefused {
+    /// No block this store holds, on main or as an alternative, has the
+    /// hash.
+    UnknownBlock,
+    /// An index past the block's transaction list.
+    IndexOutOfRange {
+        /// The index.
+        index: u64,
+        /// How many transactions the block lists.
+        count: usize,
+    },
+    /// An index named twice.
+    DuplicateIndex {
+        /// The index.
+        index: u64,
+    },
+    /// A listed transaction this store does not hold whole.
+    TxNotHeld {
+        /// Its index in the block.
+        index: u64,
+    },
+}
+
+/// What a request for an announced block's missing transactions gets.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MissingTxsServed {
+    /// The block, its references and the transactions asked for, in the
+    /// order asked, as one 2008.
+    Answer(NewCompactBlock),
+    /// The block is held only as an alternative: it left the main chain
+    /// after it was announced. Not answered, and not the peer's fault.
+    LeftMain,
+    /// The session closes.
+    Refused(MissingTxsRefused),
+}
+
+/// Answer a request for an announced block's missing transactions from
+/// `store` (module docs). The indices are judged before any transaction
+/// is read.
+///
+/// # Errors
+///
+/// The store's own fault.
+pub fn serve_missing_txs(
+    store: &ChainStore,
+    request: &RequestCompactMissingTx,
+) -> Result<MissingTxsServed, StoreError> {
+    let snap = store.begin_read()?;
+    let hash = BlockHash::from_bytes(request.block_hash);
+    let Some(height) = snap.height_of(&hash)? else {
+        return Ok(if snap.has_alt_block(&hash)? {
+            MissingTxsServed::LeftMain
+        } else {
+            MissingTxsServed::Refused(MissingTxsRefused::UnknownBlock)
+        });
+    };
+    let AtHeight::Recorded(body) = snap.block(height)? else {
+        return Ok(MissingTxsServed::Refused(MissingTxsRefused::UnknownBlock));
+    };
+    let listed = &body.block.transaction_hashes;
+    let mut seen = vec![false; listed.len()];
+    let mut wanted = Vec::with_capacity(request.missing_tx_indices.len());
+    for &index in &request.missing_tx_indices {
+        let at = usize::try_from(index).ok();
+        let (Some(slot), Some(txid)) = (
+            at.and_then(|at| seen.get_mut(at)),
+            at.and_then(|at| listed.get(at)),
+        ) else {
+            return Ok(MissingTxsServed::Refused(
+                MissingTxsRefused::IndexOutOfRange {
+                    index,
+                    count: listed.len(),
+                },
+            ));
+        };
+        if *slot {
+            return Ok(MissingTxsServed::Refused(
+                MissingTxsRefused::DuplicateIndex { index },
+            ));
+        }
+        *slot = true;
+        wanted.push((index, txid));
     }
+    let mut txs = Vec::with_capacity(wanted.len());
+    for (index, txid) in wanted {
+        let Some(TxBody::Full(blob)) = tx_body(&snap, txid)? else {
+            return Ok(MissingTxsServed::Refused(MissingTxsRefused::TxNotHeld {
+                index,
+            }));
+        };
+        txs.push(TxBlobEntry {
+            blob,
+            prunable_hash: [0; HASH_SIZE],
+        });
+    }
+    Ok(MissingTxsServed::Answer(NewCompactBlock {
+        b: BlockCompleteEntry {
+            pruned: false,
+            block: body.block.serialize(),
+            block_weight: 0,
+            txs,
+            bundle_references: references_at(&snap, height)?,
+        },
+        current_blockchain_height: request.current_blockchain_height,
+    }))
 }
 
 #[cfg(test)]

@@ -61,7 +61,7 @@ pub mod reader;
 mod shape;
 mod vocabulary;
 
-pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, NoRow, Present, Raw, Unshaped};
+pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, Present, Raw};
 
 /// A value with exactly one byte encoding.
 ///

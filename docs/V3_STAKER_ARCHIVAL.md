@@ -266,7 +266,8 @@ over-claim and is named here so it cannot recur:
    (`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md` §3.3) does not apply.
 3. **Serving participation (the modeled floor).** The sim's
    `floor_replicas` / `floor_decay_pop` / `foundation_floor_aged`
-   knobs model how many **serving** replicas the floor contributes to
+   knobs (deleted 2026-11-08 with the decaying floor, last at `b4f753d90`;
+   `STAKER_ARCHIVAL_SIM.md` P10) modelled how many **serving** replicas the floor contributes to
    coverage and retrieval latency — an availability lever. The L13
    "~57 % backstop" and the L17 floor-on arms are serving-layer
    measurements; they size degraded-retrieval exposure, **not** the

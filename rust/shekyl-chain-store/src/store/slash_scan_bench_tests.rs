@@ -13,40 +13,40 @@
 //! — one more epoch of grace. The cost of a slash is `M + 1` epochs, plus
 //! one, whatever the epoch is.
 //!
-//! The chain, under `RuleSet::fakechain(fixed 7, SEB 100 / cap 50)`:
-//! `P` complete-tree personas join in epoch 0 — one **real** bond post
-//! per block from [`FIRST_SPEND_HEIGHT`], each spending the coinbase that
-//! matured for its height (CEN-J27, since slice 6's 4.J row: a bond post
-//! is judged by I13/I15 over its `ToKey` inputs, so a listed join is a
-//! proof over a coinbase the chain mined, built by the harness spender
-//! over [`Grown`]'s tree) — then [`CREDIT_BLOCKS`] blocks each carrying
-//! [`CREDITS_PER_BLOCK`] padded serve credits close shard 0, so the scan's
-//! universe is one shard. The credits are personas 0 and 1's **on shard
-//! 1**, the open one, and are there for their bytes ([`padded_credit`]).
-//! Each pair on shard 0 is issued three draws in every epoch from 1
-//! through the regtest door ([`ChainStore::regtest_issue_draws`],
-//! `SO-D10f`: nothing admits a draw yet), none passed — which is how every
-//! observation settles Missed. Each epoch's deadline connect (`199`,
-//! `299`, …) settles that epoch: epoch 0 has no draw and is not in
-//! standing either (`good_through` starts the epoch after the join),
-//! epochs `1..M-1` are misses that do not yet fill the window, and the
-//! epoch-`M` deadline connect (`last_block(M + 1) = 1_299`) slashes every
+//! The chain, under `RuleSet::GENESIS.with_levers(fixed 7, SEB 100 / cap 50)`:
+//! the captured shard-fill chain's prefix closes shard 0 with real spends
+//! (`store/shard_fill.rs`, height 131, in epoch 1), so the scan's universe
+//! is one shard; then `P` complete-tree personas join in the same epoch,
+//! [`JOIN_EPOCH`] — one **real** bond post per block from the block after
+//! the close, each spending the lowest coinbase matured and unspent
+//! (CEN-J27: a bond post is judged by I13/I15 over its `ToKey` inputs, so a
+//! listed join is a proof over a coinbase the chain mined, built by the
+//! harness spender over [`Grown`]'s tree). Every epoch below is counted
+//! from the join's ([`shifted`]): real spends close shard 0 no sooner than
+//! height 131, in epoch 1, so no persona can join a closed shard in epoch 0.
+//! Each pair on shard 0 is planted three draws in every epoch from the
+//! join's plus one
+//! (`store_tests::plant_issued_draws`), none passed — which is how every
+//! observation settles Missed. Each epoch's deadline connect settles that
+//! epoch: the join's has no draw and is not in standing either
+//! (`good_through` starts the epoch after the join), the next `M − 1` are
+//! misses that do not yet fill the window, and the deadline connect of the
+//! `M`-th (`last_block` one epoch of grace later) slashes every
 //! persona on shard 0. Both tests assert that — the watermark, the log,
 //! `slash_applied`, the emptied records, the burn (SI-8).
 //!
 //! One join per block is the rate the chain sustains, not a choice: a
-//! join spends the lowest matured coinbase and one coinbase matures per
-//! block, so by any height `H` at most `H − FIRST_SPEND_HEIGHT + 1` have
-//! matured, whatever the packing. With the credits inside epoch 0 as
-//! well, the personas a chain admits are [`MAX_PERSONAS`] — the bench's
-//! default. *Records-was:* until CEN-J27 the joins were fixture bodies
-//! over a 1-byte height, four per block from height 10 and sixty-four by
-//! default; the sixty-four already overran epoch 0 once the first
-//! spending height became the harness's (`66 + 16 + 31 > 100`), which the
-//! ignored bench did not report.
+//! join spends the lowest matured coinbase, and past the ten the captured
+//! chain leaves unspent one coinbase matures per block. With the joins
+//! inside epoch 0, the personas a chain admits are [`max_personas`] — the
+//! bench's default. *Records-was:* until CEN-J27 the joins were fixture
+//! bodies over a 1-byte height, four per block from height 10 and
+//! sixty-four by default; the sixty-four already overran epoch 0 once the
+//! first spending height became the harness's, which the ignored bench did
+//! not report.
 //!
 //! **`slash_writes_land_at_the_m_epoch_deadline`** is the witness: four
-//! personas, 1 300 connects, in the unit lane of every run. Until the
+//! personas, `(M + 2)·SEB` connects, in the unit lane of every run. Until the
 //! grace was derived from the epoch (DRS-E4 commit 5's ruling on §6 row
 //! 5) it was a fixed ten thousand blocks that the schedule lever did not
 //! shorten — 11 200 connects for the same slash, nine times the eleven
@@ -73,8 +73,8 @@
 //! `tip − ((k + n)·SEB + reorg_cap)` at every boundary (`prune.rs`), so a
 //! retiring node's `0x04` `slash_log` family is *rows at or above the
 //! floor*, and a reader of the log hands A2 the floor (SI-26). The
-//! witness runs to [`WITNESS_TIP`], `slash_deadline_height(M)` =
-//! `(M + 2)·SEB − 1`, which sits under [`WINDOW`], `(k + n)·SEB + cap`
+//! witness runs to [`WITNESS_TIP`], `slash_deadline_height(SLASHING_EPOCH)`
+//! = `(SLASHING_EPOCH + 2)·SEB − 1`, which sits under [`WINDOW`], `(k + n)·SEB + cap`
 //! under the same pair ([`SlashLogFloor::window`]) — a relation asserted
 //! at compile time where both are declared, not a header claim: the floor
 //! is `None` and the family is the whole log. Nothing here assumes that:
@@ -87,7 +87,7 @@
 //! reason both lengths are derived and the read is not a literal.
 //!
 //! **`slash_scan_bench`** (`#[ignore]`) is the measurement §3.1 owes for
-//! "the scan runs once per epoch on the floor": [`MAX_PERSONAS`] personas
+//! "the scan runs once per epoch on the floor": [`max_personas`] personas
 //! by default, and it prints
 //!
 //! - the judge and connect times of an ordinary connect (the mean over the
@@ -123,25 +123,24 @@ use std::time::{Duration, Instant};
 
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{ARCHIVAL_BOND_FLOOR_ATOMIC, FAILURE_WINDOW_M, FAILURE_WINDOW_N};
-use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{
-    Corrupt, FakechainSchedule, RuleSet, SettlementCheck, SlashLogFloor, Trust,
-};
+use shekyl_chain_rules::{CappedEpoch, Corrupt, RuleSet, SettlementCheck, SlashLogFloor};
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
-    CompleteTreeSet, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
-    SigmaWorkMilli, SlashedHolding,
+    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SlashedHolding,
 };
-use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_LENGTH};
+use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Ct, Transaction};
 
-use super::connect_fixtures::{Grown, Listed, FIRST_SPEND_HEIGHT};
-use super::store_tests::{cleanup, tmp, TestErr};
+use super::connect_fixtures::{
+    connect_chain_anchored, spend, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
+};
+use super::shard_fill;
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
 use crate::codec::{Canonical, SettlementEpochBlocks, SlashLogEntry};
+use crate::test_paths::TestPath;
 use shekyl_chain_rules::EpochFloor;
 
 const SEB: u64 = 100;
@@ -149,28 +148,71 @@ const RETENTION: u64 = 50;
 /// Fixed difficulty: over a thousand blocks at the fixture's constant
 /// spacing LWMA would floor the difficulty, and the fixture's zero longhash
 /// passes any fixed target.
-const RULES: RuleSet = RuleSet::fakechain(NonZeroU128::new(7), pair(SEB, RETENTION));
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
+/// The rule set and undo retention a bench chain is built under, and the
+/// name its captured-prefix snapshots go by (`shard_fill::store_with_prefix`:
+/// one name, one pair).
+#[derive(Clone, Copy)]
+struct Under {
+    rules: RuleSet,
+    retention: u64,
+    schedule_key: &'static str,
+}
+
+impl Under {
+    /// [`RULES`] with [`RETENTION`]: every chain here unless a test says.
+    const BENCH: Self = Self {
+        rules: RULES,
+        retention: RETENTION,
+        schedule_key: "d7-seb100-cap50",
+    };
+
+    /// The bench pair with a 90-block reorg cap and retention: a shard is
+    /// final 90 blocks after it closes, so shard 0 (closed at height 131)
+    /// is final only at 221, after epoch 2 opens. A test that needs an
+    /// epoch whose members exist while its archive is still width 0 runs
+    /// here.
+    const LATE_FINAL: Self = Self {
+        rules: RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, 90)),
+        retention: 90,
+        schedule_key: "d7-seb100-cap90",
+    };
+}
+
 /// The witness's persona count: enough that the per-persona loop is a loop,
 /// few enough that the chain builds in the unit lane in debug.
 const WITNESS_PERSONAS: u64 = 4;
 
-const fn pair(seb: u64, cap: u64) -> FakechainSchedule {
+const fn pair(seb: u64, cap: u64) -> CappedEpoch {
     let Some(epoch) = SettlementEpochBlocks::new(seb) else {
         panic!("a zero epoch");
     };
-    match FakechainSchedule::new(epoch, BlockCount::from_raw(cap)) {
+    match CappedEpoch::new(epoch, BlockCount::from_raw(cap)) {
         Ok(pair) => pair,
         Err(_) => panic!("the cap is not inside the epoch"),
     }
 }
 
-/// The witness's tip: the epoch-`M` slashing connect, `(M + 2)·SEB − 1`
-/// under the schedule — the schedule's expression, not a literal.
-/// (`u64::from` is not `const`.)
+/// The epoch the personas join in: the one the captured prefix closes
+/// shard 0 in, which `SlashedChain::build_with` asserts against the chain.
+const JOIN_EPOCH: u64 = 1;
+
+/// Epoch `n` of the layout these tests were written against, where the
+/// personas joined in epoch 0: the chain's epoch `JOIN_EPOCH + n`.
+const fn shifted(n: u64) -> u64 {
+    JOIN_EPOCH + n
+}
+
+/// The slashing epoch: the `M`-th after the join's (`u64::from` is not
+/// `const`).
 #[allow(clippy::cast_lossless)]
+const SLASHING_EPOCH: u64 = shifted(FAILURE_WINDOW_M as u64);
+
+/// The witness's tip: the slashing connect, `(SLASHING_EPOCH + 2)·SEB − 1`
+/// under the schedule — the schedule's expression, not a literal.
 const WITNESS_TIP: u64 = RULES
     .settlement_schedule()
-    .slash_deadline_height(FAILURE_WINDOW_M as u64);
+    .slash_deadline_height(SLASHING_EPOCH);
 /// The slash log's window under the same pair, `(k + n)·SEB + cap`
 /// ([`SlashLogFloor::window`], `SLK-5`).
 const WINDOW: u64 =
@@ -192,33 +234,13 @@ const _: () = assert!(
      'the floor is None' claim is false"
 );
 
-/// Blocks carrying padded serve credits, [`CREDITS_PER_BLOCK`] each of
-/// [`CREDIT_PAD`] record bytes: eleven × two × 140 KB is past one shard
-/// before the joins' own bytes are counted, and a block of two is under
-/// the penalty-free zone (the prune tests connect the same pair under the
-/// same rules).
-const CREDIT_BLOCKS: u64 = 11;
-const CREDITS_PER_BLOCK: u64 = 2;
-const CREDIT_PAD: u64 = 140_000;
-const _: () = assert!(
-    CREDIT_BLOCKS * CREDITS_PER_BLOCK * CREDIT_PAD >= SHARD_LENGTH.to_raw(),
-    "the credits' records alone close shard 0"
-);
-/// The personas a chain admits with every join and every credit inside
-/// epoch 0: one join per block from `FIRST_SPEND_HEIGHT`, then the credit
-/// blocks, all below `SEB`. The bench's default, and its ceiling.
-const MAX_PERSONAS: u64 = SEB - FIRST_SPEND_HEIGHT - CREDIT_BLOCKS;
-const _: () = assert!(
-    MAX_PERSONAS >= WITNESS_PERSONAS && WITNESS_PERSONAS >= CREDITS_PER_BLOCK,
-    "the witness fits epoch 0 and has a persona per credit slot"
-);
-/// The shard the padding credits name: **not** shard 0, the one shard in
-/// the scan's universe and the one every challenge is on — a recorded pass
-/// there would exempt the crediting persona from the slash
-/// (`slash::passed`). Shard 1 is open through the whole chain; a credit on
-/// an open shard is a `ShardClose::Open` arm of the epoch close and
-/// nothing to the slash.
-const CREDIT_SHARD: u64 = 1;
+/// The personas a chain admits with every join inside [`JOIN_EPOCH`]: one
+/// join per block from the block after shard 0's close. The bench's
+/// default, and its ceiling.
+fn max_personas() -> u64 {
+    (JOIN_EPOCH + 1) * SEB - u64::try_from(prefix()).expect("small")
+}
+
 /// Blocks per `store.write`: the bench measures the judge and the connect,
 /// not redb's commit.
 const PER_BATCH: u64 = 50;
@@ -227,7 +249,7 @@ fn personas() -> u64 {
     std::env::var("SHEKYL_SLASH_BENCH_PERSONAS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(MAX_PERSONAS)
+        .unwrap_or_else(max_personas)
 }
 
 /// The `i`-th bench persona is the harness persona at slot `i`
@@ -237,22 +259,16 @@ fn slot(i: u64) -> u32 {
     u32::try_from(i).expect("a persona slot")
 }
 
-/// The height the `i`-th persona's join connects at: one per block from
-/// the first spending height, in slot order.
-const fn join_height(i: u64) -> BlockHeight {
-    BlockHeight::from_raw(FIRST_SPEND_HEIGHT + i)
+/// The captured prefix the chain starts from: through the block that
+/// closes shard 0.
+fn prefix() -> usize {
+    shard_fill::blocks_closing(shard_fill::shard_fill(), 0)
 }
 
-/// The credits' settlement epoch for the persona at `slot`: the first a
-/// persona may serve is the epoch after its join's (CEN-J5's lower bound;
-/// CEN-J6 bounds nothing for a record with no bad interval, and the credit
-/// window is CEN-J7, Slice C's). Every bench join is in epoch 0, so this
-/// is `1` for each.
-fn credit_epoch(slot: u64) -> u64 {
-    RULES
-        .settlement_schedule()
-        .epoch_at_height(join_height(slot).to_raw())
-        + 1
+/// The height the `i`-th persona's join connects at: one per block from
+/// the block after the captured prefix, in slot order.
+fn join_height(i: u64) -> BlockHeight {
+    BlockHeight::from_raw(u64::try_from(prefix()).expect("small") + i)
 }
 
 /// The slash log's retirement floor at `snap`'s tip under `RULES` — the
@@ -292,62 +308,14 @@ fn ids_in_table_order(personas: u64) -> Vec<PCanonicalId> {
     ids
 }
 
-/// A serve credit for the bench persona at `slot` on [`CREDIT_SHARD`] at
-/// its [`credit_epoch`] whose one pruned pass record is `key`'s bytes
-/// padded to `CREDIT_PAD`: the record is the one archival region no landed
-/// rule reads (CEN-J8/J9/J10 will — the debt is `docs/FOLLOWUPS.md`,
-/// "Padded serve-credit records in the store's prune and bench tests"), so
-/// its length is the fixture's free variable, and twenty-two of them close
-/// shard 0. Two per block alternate personas 0 and 1 because the record's
-/// pass bit is keyed `(persona, shard, epoch, height)`: two of one
-/// persona's in one block would be one row. *Records-was:* until the
-/// CEN-I13 flip these were fixture spends with the opaque `fcmp_proof`
-/// padded; until CEN-J27 all were persona 0's, one per block.
-fn padded_credit(key: u64, slot: u32) -> Transaction {
-    let persona = Persona::at(slot);
-    let mut tx = fixture::serve_credit_only_with(
-        persona.serve_credit_vin(CREDIT_SHARD, credit_epoch(u64::from(slot))),
-    );
-    let Ct::Fcmp {
-        prunable: Some(prunable),
-        ..
-    } = &mut tx.ct
-    else {
-        unreachable!("fixture::serve_credit_only_with carries its RF-D1 region");
-    };
-    let mut record = key.to_le_bytes().to_vec();
-    record.resize(usize::try_from(CREDIT_PAD).expect("fits"), 0xA5);
-    prunable.serve_credit_pruned = vec![record];
-    tx
-}
-
-/// What block `h` lists: nothing below the first spending height, the
-/// `i`-th persona's join at [`join_height`]`(i)`, then the credit blocks.
+/// What block `h` lists past the captured prefix: the `i`-th persona's
+/// join at [`join_height`]`(i)`, and nothing else.
 fn listing(h: u64, personas: u64) -> Vec<Listed> {
-    let Some(k) = h.checked_sub(FIRST_SPEND_HEIGHT) else {
-        return Vec::new();
-    };
+    let k = h - join_height(0).to_raw();
     if k < personas {
         return vec![Listed::Join { slot: slot(k) }];
     }
-    if k - personas < CREDIT_BLOCKS {
-        return (0..CREDITS_PER_BLOCK)
-            .map(|j| {
-                Listed::Body(padded_credit(
-                    1_000_000 + h * CREDITS_PER_BLOCK + j,
-                    slot(j),
-                ))
-            })
-            .collect();
-    }
     Vec::new()
-}
-
-/// The heights carrying padding credits, ascending — the ServeCredit rows
-/// the snapshot carries are one per `(persona, height)`.
-fn credit_heights(personas: u64) -> impl Iterator<Item = u64> {
-    let first = join_height(personas).to_raw();
-    first..first + CREDIT_BLOCKS
 }
 
 /// What one pair is issued in one epoch: `None` is no draw at all, and
@@ -361,9 +329,9 @@ const SERVED: &[bool] = &[true, true, false];
 /// Two draws: below the floor of three, so not an observation.
 const SHORT: &[bool] = &[false, false];
 
-/// The witness's plan: every pair misses every epoch from 1.
+/// The witness's plan: every pair misses every epoch after the join's.
 fn every_epoch_missed(epoch: u64, _persona: u64) -> Option<&'static [bool]> {
-    (epoch >= 1).then_some(MISSED)
+    (epoch >= shifted(1)).then_some(MISSED)
 }
 
 /// The draws `plan` issues in `epoch`, each pair's on shard 0 at
@@ -410,8 +378,7 @@ fn folded(mut digest: IssuedDigest, epoch: SettlementEpoch, draws: &[IndexedDraw
     digest
 }
 
-/// Issue `epoch`'s planned draws through the regtest door, with the
-/// digest they fold to.
+/// Plant `epoch`'s planned draws, with the digest they fold to.
 fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
     let draws = planned_draws(epoch, personas, plan);
     if draws.is_empty() {
@@ -423,14 +390,7 @@ fn issue(store: &ChainStore, epoch: u64, personas: u64, plan: Plan) {
         .expect("read")
         .issued_digest(epoch, EpochFloor::NONE)
         .expect("read");
-    store
-        .regtest_issue_draws(
-            Trust::UNANCHORED,
-            epoch,
-            &draws,
-            folded(digest, epoch, &draws),
-        )
-        .expect("the draws are issued");
+    super::store_tests::plant_issued_draws(store, epoch, &draws, folded(digest, epoch, &draws));
 }
 
 #[derive(Clone, Copy, Default)]
@@ -452,24 +412,58 @@ fn mean(timings: &[Timing]) -> Timing {
 /// asserts and then reads the timings.
 struct SlashedChain {
     store: ChainStore,
-    path: std::path::PathBuf,
+    /// The store's directory, removed when this drops (after the store).
+    _path: TestPath,
     personas: u64,
-    /// `M`, the slashing epoch's raw value.
+    /// The slashing epoch's raw value, [`SLASHING_EPOCH`].
     m: u64,
+    /// What the captured prefix burned: its spends' fees.
+    prefix_burned: AtomicUnits,
     /// `last_block(M + SLASH_GRACE_EPOCHS)`: the connect that slashes.
     slashing_height: u64,
-    /// Epoch 0's deadline: the first deadline connect.
+    /// The join epoch's deadline: the first deadline connect after the
+    /// joins.
     first_deadline: u64,
     /// The height whose listed bodies carried the running archival total
     /// past `W` — where shard 0 closed, read off the chain as it was built.
     shard_closed: u64,
     /// The chain as built, for a test that connects one more block by hand.
     grown: Grown,
+    /// The rule set the chain was built and is connected under: [`RULES`],
+    /// or a test's own pair ([`Self::build_under`]).
+    rules: RuleSet,
+    /// The undo retention its store was opened with.
+    retention: u64,
     timings: Vec<Timing>,
     built: Duration,
 }
 
 impl SlashedChain {
+    /// Close the store and open it again over the same file, as a restart
+    /// does. Nothing rules-side survives: a connector's drawable memo is
+    /// not persisted, so the caller's next memo is cold.
+    fn reopen(&mut self) {
+        let schedule = self.rules.settlement_schedule();
+        let horizons = Horizons::new(
+            schedule.blocks(),
+            BlockCount::from_raw(self.retention),
+            self.rules.reorg_cap(),
+        )
+        .expect("cap ≤ retention < epoch");
+        // The file's lock is held while the old handle lives, so a scratch
+        // store stands in the field while the real one closes and reopens.
+        let scratch = tmp("reopen-scratch");
+        let closing = std::mem::replace(
+            &mut self.store,
+            ChainStore::with_horizons(&scratch, ApplyPolicy::Full, horizons).expect("scratch"),
+        );
+        drop(closing);
+        let reopened =
+            ChainStore::with_horizons(&self._path, ApplyPolicy::Full, horizons).expect("reopen");
+        drop(std::mem::replace(&mut self.store, reopened));
+        drop(scratch);
+    }
+
     /// The witness's chain: every pair misses every epoch from 1, built to
     /// the epoch-`M` slashing connect.
     fn build(label: &str, personas: u64) -> Self {
@@ -480,40 +474,70 @@ impl SlashedChain {
     /// `plan` once the epoch's blocks are connected — an epoch ahead of the
     /// deadline connect that settles it.
     fn build_with(label: &str, personas: u64, through: u64, plan: Plan) -> Self {
+        Self::build_under(label, personas, through, plan, Under::BENCH)
+    }
+
+    /// [`Self::build_with`] under `under`'s rule set and retention: a test
+    /// whose subject turns on the reorg cap (finality is the close height
+    /// plus the cap, `closed_and_final`) states its own pair. The epoch is
+    /// [`SEB`] whatever the pair.
+    fn build_under(label: &str, personas: u64, through: u64, plan: Plan, under: Under) -> Self {
+        let Under {
+            rules,
+            retention,
+            schedule_key,
+        } = under;
+        assert_eq!(rules.settlement_schedule().blocks().get(), SEB);
         assert!(
             SEB.is_multiple_of(PER_BATCH),
             "an epoch ends on a batch boundary"
         );
+        let max = max_personas();
         assert!(
-            (CREDITS_PER_BLOCK..=MAX_PERSONAS).contains(&personas),
-            "{personas} personas: a persona per credit slot, and the joins and the shard \
-             must close inside epoch 0 (at most {MAX_PERSONAS})"
+            (1..=max).contains(&personas),
+            "{personas} personas: the joins must land inside the join epoch (at most {max})"
         );
-        let schedule = RULES.settlement_schedule();
-        let m = u64::from(FAILURE_WINDOW_M);
+        let schedule = rules.settlement_schedule();
+        let m = SLASHING_EPOCH;
         let slashing_height = schedule.slash_deadline_height(m);
         let total = through + 1;
 
         let path = tmp(label);
         let horizons = Horizons::new(
             schedule.blocks(),
-            BlockCount::from_raw(RETENTION),
-            RULES.reorg_cap(),
+            BlockCount::from_raw(retention),
+            rules.reorg_cap(),
         )
         .expect("cap ≤ retention < epoch");
-        let store = ChainStore::with_horizons(&path, ApplyPolicy::Full, horizons).expect("create");
-
-        let mut grown = Grown::new();
-        let mut timings: Vec<Timing> = Vec::with_capacity(usize::try_from(total).expect("fits"));
-        // The running archival total over the listed bodies, the model
-        // `prune_tests` spells in full: coinbases write no length row, so
-        // shard 0 closes at the first height whose bodies carry it to `W`.
-        let mut archival_total = 0u64;
-        let mut shard_closed = None;
+        // The captured prefix closes shard 0 (`shard_fill`); it is loaded,
+        // not timed, and its slots in `timings` are zero.
+        let (store, mut grown) =
+            shard_fill::store_with_prefix(&path, schedule_key, rules, horizons, prefix());
+        let shard_closed = u64::try_from(prefix()).expect("small") - 1;
+        assert_eq!(
+            (
+                schedule.epoch_at_height(shard_closed),
+                schedule.epoch_at_height(join_height(0).to_raw())
+            ),
+            (JOIN_EPOCH, JOIN_EPOCH),
+            "shard 0 closes, and the personas join, in the join epoch"
+        );
+        // The captured spends pay fees, and fees burn (CEN-F17): what the
+        // prefix burned is the baseline the slash's burns fold onto.
+        let prefix_burned = store
+            .begin_read()
+            .expect("read")
+            .total_burned()
+            .expect("read");
+        drop(store);
+        let store = ChainStore::with_horizons(&path, ApplyPolicy::Full, horizons).expect("reopen");
+        let mut timings: Vec<Timing> = vec![Timing::default(); prefix()];
         let wall = Instant::now();
-        let mut h = 0u64;
+        let mut h = u64::try_from(prefix()).expect("small");
         while h < total {
-            let end = (h + PER_BATCH).min(total);
+            // Batches end on multiples of `PER_BATCH`, so an epoch ends on
+            // one whatever height the prefix leaves.
+            let end = ((h / PER_BATCH + 1) * PER_BATCH).min(total);
             let out: Result<(), TestErr> = store.write(|batch| {
                 let view = batch.chain_view();
                 for height in h..end {
@@ -523,14 +547,10 @@ impl SlashedChain {
                     // `record` rides inside the judge interval. It is the
                     // wallet-tree insert, microseconds beside the proof
                     // `realise` already spent outside this timer.
-                    let judged = grown.judge_listing(&view, &RULES, &txs)?;
+                    let judged = grown.judge_listing(&view, &rules, &txs)?;
                     let judge = started.elapsed();
-                    archival_total += txs.iter().map(|tx| tx.archival_len().to_raw()).sum::<u64>();
-                    if shard_closed.is_none() && archival_total >= SHARD_LENGTH.to_raw() {
-                        shard_closed = Some(height);
-                    }
                     let started = Instant::now();
-                    batch.connect(judged, RULES)?;
+                    batch.connect(judged, rules)?;
                     timings.push(Timing {
                         judge,
                         connect: started.elapsed(),
@@ -544,22 +564,18 @@ impl SlashedChain {
                 issue(&store, h / SEB - 1, personas, plan);
             }
         }
-        let shard_closed = shard_closed.expect("the credits close shard 0");
-        let credits_from = join_height(personas).to_raw();
-        assert!(
-            (credits_from..credits_from + CREDIT_BLOCKS).contains(&shard_closed)
-                && shard_closed < SEB,
-            "shard 0 closes inside the credit blocks, inside epoch 0: {shard_closed}"
-        );
         Self {
             store,
-            path,
+            _path: path,
             personas,
             m,
             slashing_height,
-            first_deadline: schedule.slash_deadline_height(0),
+            first_deadline: schedule.slash_deadline_height(shifted(0)),
+            prefix_burned,
             shard_closed,
             grown,
+            rules,
+            retention,
             timings,
             built: wall.elapsed(),
         }
@@ -578,7 +594,7 @@ impl SlashedChain {
             "the watermark is the slashing epoch"
         );
         let floor = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
-        let mut burned = AtomicUnits::ZERO;
+        let mut burned = self.prefix_burned;
         for p in ids_in_table_order(self.personas) {
             let record = snap
                 .bond_record(&p)
@@ -620,8 +636,9 @@ impl SlashedChain {
     }
 
     /// The rows the pass settled (`SO-D7`: written ahead of the slash they
-    /// decide): Missed on no pass of three for every epoch from 1 through
-    /// `M`, and none for epoch 0, in which no draw was issued.
+    /// decide): Missed on no pass of three for every epoch after the join's
+    /// through the slashing one, and none for the join's, in which no draw
+    /// was issued.
     fn assert_settled_missed_from_epoch_one(&self) {
         let snap = self.store.begin_read().expect("read");
         let shard = ShardId::from_raw(0);
@@ -629,12 +646,17 @@ impl SlashedChain {
         assert_eq!(missed.outcome(), SettlementOutcome::Missed);
         for p in ids_in_table_order(self.personas) {
             assert_eq!(
-                snap.settlement_row(&p, shard, SettlementEpoch::from_raw(0), EpochFloor::NONE)
-                    .expect("read"),
+                snap.settlement_row(
+                    &p,
+                    shard,
+                    SettlementEpoch::from_raw(shifted(0)),
+                    EpochFloor::NONE
+                )
+                .expect("read"),
                 None,
                 "no draw, no row"
             );
-            for e in 1..=self.m {
+            for e in shifted(1)..=self.m {
                 assert_eq!(
                     snap.settlement_row(&p, shard, SettlementEpoch::from_raw(e), EpochFloor::NONE)
                         .expect("read"),
@@ -703,26 +725,10 @@ impl SlashedChain {
                 .expect("distinct keys");
         }
         want.set_last_slash_epoch(m).expect("the one row");
-        // Nobody served shard 0 — the challenged shard — but the padding
-        // credits that closed it are recorded: personas 0 and 1 on
-        // `CREDIT_SHARD` at their credit epoch, one row per persona per
-        // carrying height, and no other.
-        for height in credit_heights(self.personas) {
-            for j in 0..CREDITS_PER_BLOCK {
-                want.push_serve_credit(
-                    &Persona::at(slot(j)).id(),
-                    ShardId::from_raw(CREDIT_SHARD),
-                    SettlementEpoch::from_raw(credit_epoch(j)),
-                    BlockHeight::from_raw(height),
-                )
-                .expect("distinct (persona, height) pairs");
-            }
-        }
         for family in [
             SnapshotFamily::SlashLog,
             SnapshotFamily::SlashApplied,
             SnapshotFamily::LastSlashEpoch,
-            SnapshotFamily::ServeCredit,
         ] {
             assert_eq!(got.rows(family), want.rows(family), "{family}");
         }
@@ -789,69 +795,49 @@ impl SlashedChain {
         let back = ArchivalSnapshot::read_body(&mut body.as_slice()).expect("reads");
         assert_eq!(back, got);
     }
-
-    fn finish(self) {
-        drop(self.store);
-        cleanup(&self.path);
-    }
 }
 
 /// `keccak256(body)` of the `0x04` body at the witness's slashing tip
-/// under `RULES`, `WITNESS_PERSONAS` personas: 18 836 bytes, 60 rows — four
-/// bonds, the twenty-two padding credits, thirteen closed epochs' budget
-/// rows and the twelve settled epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
+/// under `RULES`, `WITNESS_PERSONAS` personas: 24 896 bytes, 40 rows — four
+/// bonds, fourteen closed epochs' budget rows and the thirteen settled
+/// epochs' Σwork rows, and the slash families above. A fingerprint of bytes,
 /// not a domain: the plain hash, so the pin registers nothing in
-/// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin. Pinned
-/// 2026-10-02 (`ARW-Q18`). Re-pinned twice on 2026-10-04 with no layout
-/// change, and once more at their merge: the emission speed factor became
-/// per block (22, the design's, where the per-minute convention had run
-/// 21), which halves the emission each closed epoch's budget row records;
-/// and the fixture personas gained derived keys and recomputed ids (E6
-/// slice 8 row 4) — same byte count, same row count, the bond rows' keys
-/// and ids moved, the codec did not. Re-pinned 2026-10-08 at the CEN-I13
-/// flip: the thirty-one padding bodies became serve credits
-/// ([`padded_credit`]), which the record carries as thirty-one
-/// `ServeCredit` rows — 31 × (4 + 56) = 1 860 bytes, the whole delta from
-/// 17 536 — and nothing else moved: the slash families are spelled and
-/// asserted above; the bond rows are the same joins; the budget rows are
-/// inflow; and every Σwork row is zero and no `R_market` row exists, as
-/// before, because a complete-tree persona is not a market member
-/// (`shekyl_archival_retention::market_member_at_epoch`:
-/// `is_support_complete_tree ⇒ false`),
-/// so its credits earn no work and count in no shard. Re-pinned
-/// 2026-10-08 again at CEN-J27: the joins became real bond posts, so the
-/// four personas are the harness's (`Persona::at(0..4)`, whose keys and
-/// ids differ from the fixture tag personas') — the bond, slash-log and
-/// slash-applied rows carry the new ids at the same widths — and the
-/// padding became twenty-two credits on eleven heights by personas 0 and
-/// 1 in place of thirty-one by persona 0: nine `ServeCredit` rows fewer,
-/// 9 × 60 = 540 bytes, the whole delta from 19 396. The budget rows are
-/// emission inflow and a join pays no fee, so they did not move; the
-/// Σwork rows are zero as before. Re-pinned 2026-10-09 at `SO-D11`: an
-/// epoch's Σwork row is written by its slash pass, an epoch after its
-/// close, so the tip holds thirteen budget rows (epochs 0–12) and twelve
-/// Σwork rows (epochs 0–11) where it held thirteen of each — one row
-/// fewer, 4 + 16 = 20 bytes, the whole delta from 18 856. Nothing else
-/// moved. Re-pinned 2026-10-12 with the receipt key (FN-DSA increment 3,
-/// `FN_DSA_HYBRID.md` `FND-17`): every bond record carries its persona's
-/// receipt key, 1 837 bytes fixed-width with no length prefix, and the four
-/// personas' joins commit theirs — 4 × 1 837 = 7 348 bytes, the whole delta
-/// from 18 836, the row count unchanged at 60. Nothing else moved: the slash
-/// families are spelled and asserted above, and the credit, budget and
-/// Σwork rows do not read a bond's keys. *Records-was:*
+/// `CRYPTO_DOMAIN_REGISTRY.tsv` and moves no cSHAKE count-pin.
+///
+/// The chain starts from the captured shard fill and the four harness
+/// personas (`Persona::at(0..4)`) join in epoch [`JOIN_EPOCH`] by real bond
+/// posts. Each bond record carries its persona's receipt key (1 837 bytes,
+/// fixed width, `FN_DSA_HYBRID.md` `FND-17`). An epoch's Σwork row is
+/// written by its slash pass, an epoch after its close, so the tip holds
+/// one more budget row than Σwork rows. The slash families are spelled and
+/// asserted above.
+///
+/// *Records-was* (each until the change named after it):
 /// `6b1d14e89834bee02ad080ca3e9809ef3bd39e4411513d9ee474c1f2c501f76a`
-/// (ARW-Q18); `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
-/// (speed factor alone); `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
-/// (derived keys alone); `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
-/// (both, 17 536 bytes, 39 rows, until the I13 flip);
+/// (2026-10-02, `ARW-Q18`);
+/// `2af8d16279df18ccd9dde4d8e889150e68679634d87e71791970cef8167fba11`
+/// (the per-block speed factor alone);
+/// `283d9d1e126bfed44003d412e2e93b65652e56929038ddb549d56e30db7a1e2d`
+/// (the derived persona keys alone);
+/// `8723491ad1cd242eb2c49a7ebdc6e72fe0d7bf04c6fa569098f7bc86a20effd1`
+/// (both, 17 536 bytes, 39 rows, until CEN-I13, 2026-10-08);
 /// `d765602075af61f158b360063e38595dfc967138fc4b83d8a3dbf499e75fc42b`
-/// (the I13 flip, 19 396 bytes, 70 rows, until CEN-J27);
+/// (19 396 bytes, 70 rows, until CEN-J27, 2026-10-08);
 /// `4d44488217508fac2d48422da0312ef31fdbe958935d0903832e05edb3fcb0a4`
-/// (CEN-J27, 18 856 bytes, 61 rows, until `SO-D11`);
+/// (18 856 bytes, 61 rows, until `SO-D11`, 2026-10-09);
 /// `ec2d0b760803781c389d97d7e019933ca84e5b7e01c3f067e5c8510fd797f001`
-/// (`SO-D11`, 18 836 bytes, 60 rows, until the receipt key).
+/// (18 836 bytes, 60 rows, until the receipt key, 2026-10-12);
+/// `937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f`
+/// (26 184 bytes, 60 rows, until `NI-R7` / `NI-R10`, 2026-11-03);
+/// `ae8dc7a86f9a1a1597dd7805221da8ebb9dc36de3c4364b2388036de9db81a71`
+/// (26 184 bytes, 60 rows, until the salt
+/// `name_id ‖ shekyl-master-derive-v3`, 2026-11-04);
+/// `2a73b959226a3ad761c596d21355b090e4ad39ab7d5cdc6c00657d6da181f5c8`
+/// (26 184 bytes, 60 rows, until the switch's C7, 2026-11-11, which
+/// deleted the serve-credit family and started the chain from the captured
+/// shard fill).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "937f578b349f5815e27b2a6f8228a7338478b39b1ecd7556122a4b732dcafb2f";
+    "88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own
@@ -870,8 +856,56 @@ fn body_sections(body: &[u8]) -> Vec<std::ops::Range<usize>> {
         }
         sections.push(start..at);
     }
-    assert_eq!(at, body.len(), "the ten families are the whole body");
+    assert_eq!(at, body.len(), "the families are the whole body");
     sections
+}
+
+/// A chain replayed from blocks it did not build knows which coinbases
+/// those blocks spent (#1381). `shard_fill::regrown` replays the captured
+/// prefix that way; a replay that learned only the spends it built offered
+/// the capture's spent coinbases again, so the bench's joins past the
+/// capture's reserved coinbases spent one the chain had spent, and CEN-I7
+/// refused the block. The witness's four joins stayed inside the reserved
+/// ones and never saw it. The chain here is built in the test, not read
+/// from the frozen shard-fill chain (`CHAIN_FORGE.md` `CF-R17`): three
+/// blocks that each spend a coinbase, connected by a `Grown` that built
+/// them, then replayed block by block into one that built nothing.
+#[test]
+fn a_replayed_chain_offers_only_coinbases_its_blocks_have_not_spent() {
+    let path = tmp("replayed-chain-coinbases");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let listing = spendable_prefix(vec![vec![spend()], vec![spend()], vec![spend()]]);
+    let (built, connected) = connect_chain_anchored(&store, &listing);
+
+    let mut replayed = Grown::new();
+    for (height, listed) in (0u64..).zip(&connected) {
+        replayed.record(built.block(BlockHeight::from_raw(height)), listed);
+    }
+
+    // The subject (rule 47): the chain spent coinbases, so a replay that
+    // missed them would offer more than the chain that built them.
+    let newest = replayed
+        .height()
+        .to_raw()
+        .checked_sub(FIRST_SPEND_HEIGHT)
+        .expect("the chain reaches the first spending height");
+    let spent = (0..=newest).count() - built.matured().len();
+    assert_eq!(spent, 3, "the chain spent one coinbase a block");
+    assert_eq!(
+        replayed.matured(),
+        built.matured(),
+        "the replay offers what the chain that built the blocks offers"
+    );
+    let snap = store.begin_read().expect("read");
+    for height in replayed.matured() {
+        let image = replayed
+            .coinbase_key_image(BlockHeight::from_raw(height))
+            .expect("every coinbase pays the harness miner, and the replay has noted it");
+        assert!(
+            !snap.has_key_image(&image).expect("read"),
+            "coinbase {height} is offered as unspent, and the chain spent it"
+        );
+    }
 }
 
 /// The 9b slash writes, witnessed in the unit lane: `M` epochs of misses
@@ -889,7 +923,6 @@ fn slash_writes_land_at_the_m_epoch_deadline() {
     chain.assert_nothing_slashed_before_m();
     chain.assert_slashed();
     chain.assert_snapshot_pins_the_slash_families();
-    chain.finish();
 }
 
 #[test]
@@ -904,7 +937,7 @@ fn slash_scan_bench() {
     let m = chain.m;
     let schedule = RULES.settlement_schedule();
     let ordinary_from = usize::try_from(chain.first_deadline + 1).expect("fits");
-    let ordinary_to = usize::try_from(schedule.slash_deadline_height(1)).expect("fits");
+    let ordinary_to = usize::try_from(schedule.slash_deadline_height(shifted(1))).expect("fits");
     let ordinary = mean(&chain.timings[ordinary_from..ordinary_to]);
     eprintln!(
         "slash_scan_bench: {} personas, {} blocks built in {:?} (M = {m}, N = {FAILURE_WINDOW_N}); shard 0 closed at {}",
@@ -917,7 +950,7 @@ fn slash_scan_bench() {
         "  ordinary connect (mean of heights {}..{}): judge {:?}, connect {:?}",
         ordinary_from, ordinary_to, ordinary.judge, ordinary.connect
     );
-    for e in 0..=m {
+    for e in shifted(0)..=m {
         let height = schedule.slash_deadline_height(e);
         let t = chain.timings[usize::try_from(height).expect("fits")];
         let mark = if height == chain.slashing_height {
@@ -935,7 +968,6 @@ fn slash_scan_bench() {
         "  slashing judge / ordinary judge = {:.2}",
         slashing.judge.as_secs_f64() / ordinary.judge.as_secs_f64().max(f64::EPSILON)
     );
-    chain.finish();
 }
 
 #[path = "settlement_slash_tests.rs"]

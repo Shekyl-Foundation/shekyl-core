@@ -69,14 +69,13 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
-use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
+use shekyl_types::archival::BondRecord;
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::schedule::ChainRules;
-use crate::source::ServeCredit;
 
 #[path = "connector_bundles.rs"]
 mod bundles;
@@ -88,15 +87,16 @@ mod reads;
 mod run_fault;
 #[path = "switch.rs"]
 mod switch;
-#[cfg(test)]
+#[cfg(any(test, feature = "forge"))]
 pub(crate) use bundles::ApplyAdmitting;
-pub use bundles::{BundleOffered, LearnDraws, Learned, OfferBundle};
+pub use bundles::{
+    file_bundle, BundleOffered, FiledBundle, LearnDraws, Learned, OfferBundle, OfferFault,
+    FILED_FEED_CAPACITY,
+};
 pub(crate) use run_fault::{fault_reply, halt_on_corrupt};
 pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
-#[cfg(test)]
-pub use switch::AnchorForTests;
 pub use switch::{
-    AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    AltBlocksHeld, DeepReorg, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
     PopBeyondReorgCap, RefusePromotion, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
 };
 
@@ -109,37 +109,85 @@ pub struct Applied {
     /// The curve-tree root **after** each connected block's drain — the
     /// verdict's derivation (`ValidatedBlock::root_after`, DRS-E3), one per
     /// entry of `connected`, in the same order. The replay compares each
-    /// against the trace's recorded root at that height (CTW-5): the
-    /// per-height oracle the LMDB trace makes possible while it exists.
+    /// against the baseline's `root_after` at that height (CTW-5).
     pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
     /// Each connected block's weight, long-term weight and the long-term
     /// effective median it was judged under — the verdict's derivation
     /// (`ValidatedBlock::weights`, CEN-G6/G6b, slice 7), one per entry of
     /// `connected`, in the same order. The replay compares each against
-    /// the trace's three recorded values at that height: the C++'s
-    /// `block_info` columns and the exporter's re-derived median — the
-    /// parity oracle for the medians while the LMDB trace exists.
+    /// the baseline's three weight facts at that height.
     pub weights: Vec<(BlockHeight, Weights)>,
     /// Each connected block's paid emission — the reward F14b priced, its
     /// split, the accumulator G12 advanced (`ValidatedBlock::emission`,
     /// slice 7 commit 5) — one per entry of `connected`. The replay
-    /// compares the accumulator against the trace's `coins_generated` at
-    /// that height: the C++'s `block_info.bi_coins`, hence the paid reward
-    /// at every height by difference — the penalty's parity oracle on the
-    /// one captured block over the median.
+    /// compares the accumulator and the burn against the baseline's
+    /// `coins_generated` and `burned` at that height.
     pub emission: Vec<(BlockHeight, PaidEmission)>,
     /// Each connected block's archival transition — what the verdict says
-    /// the block does to the bond records, the serve credits, the slash log
+    /// the block does to the bond records, the slash log
     /// and the epoch state (`ValidatedBlock::archival`, DRS-E4 commit 4) —
     /// one per entry of `connected`. The scenario driver reads it for the
     /// blocks it mines and compares it with what the store wrote from it
     /// (E4 commit 5: `BondRecordOf`, `BudgetAccruingOf`).
     pub archival: Vec<(BlockHeight, ArchivalDelta)>,
     /// The census rows the connected blocks' verdicts exercised — the
-    /// union of each `ChainValid`'s coverage, for the grader's clause (1).
+    /// union of each `ChainValid`'s coverage.
     pub exercised: BTreeSet<&'static str>,
     /// A refusal — `form`'s or `validate`'s verdict — and where.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
+}
+
+/// How an [`Apply`] settled against the blocks that were submitted.
+///
+/// A verdict, not a buffer: every field is [`Copy`], and a caller matches
+/// it by value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settlement {
+    /// Every submitted block connected.
+    Landed {
+        /// How many connected.
+        landed: usize,
+    },
+    /// A strict prefix connected, and the next block was refused.
+    Refused {
+        /// How many connected before the refusal.
+        landed: usize,
+        /// The refusal of the next block.
+        refused: InvalidBlock,
+    },
+    /// A strict prefix connected and nothing was refused. Those blocks
+    /// are placed again.
+    Short {
+        /// How many connected.
+        landed: usize,
+    },
+    /// The reply does not describe the submission: more blocks connected
+    /// than were submitted, or a refusal at or past the submission. The
+    /// caller halts rather than inventing an arrival.
+    Broken,
+}
+
+impl Applied {
+    /// How this apply settled against a submission of `submitted` blocks.
+    ///
+    /// The connector connects a strict prefix and, when it refuses, the
+    /// refusal is the next block (`connected.len() < submitted`). A
+    /// refusal at or past the submission, or more connected blocks than
+    /// were submitted, is [`Settlement::Broken`]. A short prefix with no
+    /// refusal is [`Settlement::Short`].
+    #[must_use]
+    pub fn take_settlement(&mut self, submitted: usize) -> Settlement {
+        let landed = self.connected.len();
+        if landed > submitted {
+            return Settlement::Broken;
+        }
+        match self.refused.take() {
+            Some((_, refused)) if landed < submitted => Settlement::Refused { landed, refused },
+            Some(_) => Settlement::Broken,
+            None if landed < submitted => Settlement::Short { landed },
+            None => Settlement::Landed { landed },
+        }
+    }
 }
 
 /// What a [`Rewind`] or a [`PopBlocks`] did.
@@ -188,46 +236,13 @@ pub struct Rewind {
     pub to: BlockHeight,
 }
 
-/// Pop `count` blocks from the tip, in one write closure: `pop_blocks`
+/// Pop `count` blocks from the tip, in one write closure: `dev_chain_pop`
 /// (`DRS_X_STORE_FLIP.md` DX-Q3, Q7). The target is the tip the writer
 /// holds less `count`, read when the message runs.
 #[derive(Clone, Copy, Debug)]
 pub struct PopBlocks {
     /// How many.
     pub count: u64,
-}
-
-/// Write the out-of-band serve credit at the tip, in its own store
-/// transaction, through the store's regtest door
-/// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3). Not
-/// journaled: a later `Rewind` below the attributed height does not carry
-/// it away, which is why the pipeline refuses one.
-#[derive(Clone, Copy, Debug)]
-pub struct Inject(pub ServeCredit);
-
-/// What an [`Inject`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Injected {
-    /// The height the store attributed the bit to: the tip when it was
-    /// written.
-    pub at: BlockHeight,
-}
-
-/// Write issued draws into `epoch`'s index, in their own store transaction,
-/// through the store's regtest door (`ChainStore::regtest_issue_draws`;
-/// `ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D10f`): the stand-in for admission,
-/// which does not exist yet, so a scenario's slash pass has draws to
-/// settle. `digest` is the epoch's running digest with these draws folded
-/// in; the caller folds it, as admission will. Not journaled, like
-/// [`Inject`].
-#[derive(Clone, Debug)]
-pub struct IssueDraws {
-    /// The epoch the draws were issued in.
-    pub epoch: SettlementEpoch,
-    /// The draws, each with whether it was passed.
-    pub draws: Vec<IndexedDraw>,
-    /// The epoch's digest after them.
-    pub digest: IssuedDigest,
 }
 
 /// The redb-side logical state now (commit 2), for the digest sink.
@@ -245,10 +260,10 @@ pub struct ArchivalState;
 
 /// The redb side's covered-tip checkpoint, read in **one** snapshot: the
 /// recorded tip, the logical-state digest and the archival rows. The
-/// trace's two checkpoint records came from one LMDB snapshot the walker
-/// took after the daemon's last write; this is the redb side's one read
-/// after the replay's, so the two encodings describe the same state and
-/// the tip says which. A tip other than the trace's covered tip is the
+/// baseline's two checkpoint records came from one read of the store that
+/// wrote them, after that run's last write; this is the redb side's one
+/// read after the replay's, so the two encodings describe the same state
+/// and the tip says which. A tip other than the trace's covered tip is the
 /// pipeline's signal not to compare.
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointState;
@@ -409,6 +424,16 @@ pub struct ConnectorArgs {
     pub store: Arc<ChainStore>,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
+    /// The tip follower's wake ([`crate::service::Follow::shown`]): fired
+    /// when the bundle queue admits a bundle at the tip, so the posted job
+    /// is rebuilt with the section that names it (module docs of
+    /// `connector_bundles`). `None` where no follower builds jobs.
+    pub bundle_queued: Option<Arc<tokio::sync::Notify>>,
+    /// The ranker's wake (`service` module docs, *The ranked list*): fired
+    /// after every write that can change which seeds the node needs: a
+    /// tip move, and an alternative stored, promoted, refused or retired.
+    /// `None` where nothing ranks.
+    pub ranked: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// The store behind its latch: the only way to a write closure, refusing
@@ -435,44 +460,6 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.write(f);
-        self.latch(result)
-    }
-
-    /// The store's regtest door, in its own transaction, behind the same
-    /// latch: the one write that is not a batch. The store refuses it
-    /// under an anchored trust, on an empty chain and for a persona with
-    /// no record; each of those is the store's `Cannot`, terminal like any
-    /// other store fault — the replay cannot reach the daemon's archival
-    /// state without the bit, so the run is over.
-    fn inject(
-        &mut self,
-        trust: shekyl_chain_rules::Trust,
-        credit: ServeCredit,
-    ) -> Result<BlockHeight, RunFault> {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self
-            .store
-            .regtest_inject_serve_credit(trust, credit.persona, credit.shard, credit.epoch)
-            .map_err(RunFault::Store);
-        self.latch(result)
-    }
-
-    /// The store's regtest draw issue, behind the same latch as
-    /// [`Self::inject`] and terminal on the same refusals.
-    fn issue_draws(
-        &mut self,
-        trust: shekyl_chain_rules::Trust,
-        issue: &IssueDraws,
-    ) -> Result<(), RunFault> {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self
-            .store
-            .regtest_issue_draws(trust, issue.epoch, &issue.draws, issue.digest)
-            .map_err(RunFault::Store);
         self.latch(result)
     }
 
@@ -515,12 +502,16 @@ pub struct Connector {
     /// every write that sets it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8). `None`
     /// is clear.
     degraded: tokio::sync::watch::Sender<Option<FollowingDegraded>>,
+    /// The most recent switch deeper than the lock window
+    /// ([`DeepReorg`]): an event, overwritten by
+    /// the next, never read by anything that decides whether this node is
+    /// following. Not persisted: the warning line is the durable record.
+    deep_reorg: tokio::sync::watch::Sender<Option<DeepReorg>>,
     rules: ChainRules,
-    /// What the run takes on the release's word — `rules.trust()`, read
-    /// once at start. A field rather than a call so a test can reach the
-    /// checkpoint arm of the fork choice with a fixture table no regtest
-    /// run carries ([`AnchorForTests`]).
-    trust: shekyl_chain_rules::Trust,
+    /// [`ConnectorArgs::bundle_queued`].
+    bundle_queued: Option<Arc<tokio::sync::Notify>>,
+    /// [`ConnectorArgs::ranked`].
+    ranked: Option<Arc<tokio::sync::Notify>>,
     /// Drawable sets the count has already built, keyed by the epoch and
     /// the opening block's hash. Not chain state (`SO-D12b`).
     memo: DrawableMemo,
@@ -539,9 +530,11 @@ impl Actor for Connector {
         let mut connector = Self {
             tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
             degraded: tokio::sync::watch::Sender::new(degraded),
+            deep_reorg: tokio::sync::watch::Sender::new(None),
             writer: Writer::live(args.store),
             rules: args.rules,
-            trust: args.rules.trust(),
+            bundle_queued: args.bundle_queued,
+            ranked: args.ranked,
             memo: DrawableMemo::new(),
         };
         // The bundle queue and the body store are reconciled at open
@@ -563,6 +556,35 @@ impl Actor for Connector {
 }
 
 impl Connector {
+    /// Write the `following_degraded` latch if it is clear, and publish
+    /// the evidence on the watch. `true` when this call set it. One
+    /// writer: the connector's own transaction (DX-Q2 item 8).
+    pub(crate) fn note_degraded(&mut self, evidence: FollowingDegraded) -> Result<bool, RunFault> {
+        let set = self.writer.write(|batch| {
+            batch
+                .raise_following_degraded(&evidence)
+                .map_err(RunFault::Store)
+        })?;
+        if set {
+            self.degraded.send_replace(Some(evidence));
+        }
+        Ok(set)
+    }
+
+    /// Report a switch deeper than the lock window: a warning, and the most
+    /// recent record replaced. Refuses nothing and sets no latch.
+    pub(crate) fn note_deep_reorg(&mut self, reorg: DeepReorg) {
+        tracing::warn!(
+            depth = reorg.depth.to_raw(),
+            fork_at = reorg.fork_at.to_raw(),
+            old_tip = %reorg.old_tip,
+            new_tip = %reorg.new_tip,
+            "a reorganization popped more blocks than the lock window; outputs a wallet \
+             treated as spendable may have been un-confirmed"
+        );
+        self.deep_reorg.send_replace(Some(reorg));
+    }
+
     /// Publish the tip after a committed write (module docs: `TipChanged`).
     /// A read that fails here leaves the last publication standing: the
     /// next write meets the same store.
@@ -572,6 +594,16 @@ impl Connector {
                 now.seq += 1;
                 now.tip = tip;
             });
+        }
+        self.seeds_may_have_moved();
+    }
+
+    /// Wake the ranker: a write may have changed the seeds the node needs
+    /// ([`ConnectorArgs::ranked`]). The ranker reads a fresh snapshot, so
+    /// a wake for a write that changed nothing costs one read.
+    pub(crate) fn seeds_may_have_moved(&self) {
+        if let Some(ranked) = &self.ranked {
+            ranked.notify_one();
         }
     }
 }
@@ -588,6 +620,22 @@ pub struct RaiseAlarm(pub FollowingDegraded);
 #[derive(Clone, Copy, Debug)]
 pub struct WatchLatch;
 
+/// A receiver of the most recent deep reorganization: `None` until one.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchDeepReorg;
+
+impl Message<WatchDeepReorg> for Connector {
+    type Reply = tokio::sync::watch::Receiver<Option<DeepReorg>>;
+
+    async fn handle(
+        &mut self,
+        _: WatchDeepReorg,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.deep_reorg.subscribe()
+    }
+}
+
 impl Message<RaiseAlarm> for Connector {
     type Reply = Result<bool, RunFault>;
 
@@ -597,15 +645,7 @@ impl Message<RaiseAlarm> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let evidence = msg.0;
-        let set = self.writer.write(|batch| {
-            batch
-                .raise_following_degraded(&evidence)
-                .map_err(RunFault::Store)
-        })?;
-        if set {
-            self.degraded.send_replace(Some(evidence));
-        }
-        Ok(set)
+        self.note_degraded(evidence)
     }
 }
 
@@ -629,29 +669,12 @@ impl Message<WatchTip> for Connector {
     }
 }
 
-/// The death rule's second bound (`shekyl_chain_store`'s `store/alt.rs`):
-/// after a connect at `height`, every alt block at or below the last anchor
-/// at or below it leaves with its bodies. Its fork point would be below the
-/// anchor, which CEN-E2 refuses at offer and at the switch, so nothing can
-/// promote it. The store's own connect applies the cap; the anchors are the
-/// release's trust, which the store does not hold.
-pub(crate) fn retire_below_the_anchor(
-    batch: &shekyl_chain_store::store::WriteBatch<'_, '_>,
-    trust: &shekyl_chain_rules::Trust,
-    height: BlockHeight,
-) -> Result<u64, shekyl_chain_store::store::StoreError> {
-    match trust.anchors().last_at_or_below(height) {
-        Some(anchor) => batch.retire_alt_blocks(anchor.height),
-        None => Ok(0),
-    }
-}
-
 impl Message<Apply> for Connector {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
-        let trust = self.trust;
+        let trust = self.rules.trust();
         let memo = &mut self.memo;
         let applied = self.writer.write(|batch| {
             let mut applied = Applied::default();
@@ -671,7 +694,6 @@ impl Message<Apply> for Connector {
                 let height = judged.height;
                 applied.exercised.extend(judged.exercised());
                 batch.connect(judged.valid, judged.rule_set)?;
-                retire_below_the_anchor(batch, &trust, height)?;
                 connect_step::record_connected(&mut applied, height, judged.facts);
             }
             Ok(applied)
@@ -822,40 +844,6 @@ fn heights_popped(after: BlockHeight, tip: BlockHeight) -> impl Iterator<Item = 
     })
 }
 
-impl Message<Inject> for Connector {
-    type Reply = Result<Injected, RunFault>;
-
-    async fn handle(&mut self, msg: Inject, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        let Inject(credit) = msg;
-        if !matches!(self.rules, ChainRules::Regtest { .. }) {
-            return Err(RunFault::InjectOffRegtest {
-                credit,
-                rules: self.rules,
-            });
-        }
-        let at = self.writer.inject(self.trust, credit)?;
-        Ok(Injected { at })
-    }
-}
-
-impl Message<IssueDraws> for Connector {
-    type Reply = Result<(), RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: IssueDraws,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        if !matches!(self.rules, ChainRules::Regtest { .. }) {
-            return Err(RunFault::IssueOffRegtest {
-                epoch: msg.epoch,
-                rules: self.rules,
-            });
-        }
-        self.writer.issue_draws(self.trust, &msg)
-    }
-}
-
 impl Message<Digest> for Connector {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
@@ -951,5 +939,71 @@ fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, Bloc
                 .ok_or(RunFault::NoNextHeight { tip: t.height })?,
             t.hash,
         )),
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
+    use shekyl_types::{BlockHash, BlockHeight};
+
+    use super::{Applied, Settlement};
+
+    fn refusal() -> InvalidBlock {
+        InvalidBlock::new(CenRow::A2, Locus::Block)
+    }
+
+    fn connected(n: u64) -> Vec<(BlockHeight, BlockHash)> {
+        (0..n)
+            .map(|height| (BlockHeight::from_raw(height), BlockHash::NULL))
+            .collect()
+    }
+
+    #[test]
+    fn a_complete_run_landed() {
+        let mut applied = Applied {
+            connected: connected(2),
+            ..Applied::default()
+        };
+        assert_eq!(applied.take_settlement(2), Settlement::Landed { landed: 2 });
+    }
+
+    #[test]
+    fn a_short_prefix_is_placed_again() {
+        let mut applied = Applied {
+            connected: connected(1),
+            ..Applied::default()
+        };
+        assert_eq!(applied.take_settlement(3), Settlement::Short { landed: 1 });
+    }
+
+    #[test]
+    fn a_refusal_of_the_next_block_names_that_block() {
+        let refused = refusal();
+        let mut applied = Applied {
+            connected: connected(1),
+            refused: Some((BlockHeight::from_raw(1), refused)),
+            ..Applied::default()
+        };
+        assert_eq!(
+            applied.take_settlement(2),
+            Settlement::Refused { landed: 1, refused }
+        );
+        assert!(applied.refused.is_none());
+    }
+
+    #[test]
+    fn a_refusal_past_the_submission_or_an_overlong_prefix_is_broken() {
+        let mut over = Applied {
+            connected: connected(3),
+            ..Applied::default()
+        };
+        assert_eq!(over.take_settlement(2), Settlement::Broken);
+        let mut past = Applied {
+            connected: connected(2),
+            refused: Some((BlockHeight::from_raw(2), refusal())),
+            ..Applied::default()
+        };
+        assert_eq!(past.take_settlement(2), Settlement::Broken);
     }
 }

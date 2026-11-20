@@ -24,7 +24,7 @@ name: ci/rpc-channel-model
 
 on:
   pull_request:
-    branches: [dev]
+    types: [opened, synchronize, reopened]
     paths:
       - "rust/shekyl-rpc-channel/model/**"
       - "docs/formal/proverif/lib/noise.pvl"

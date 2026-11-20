@@ -22,10 +22,10 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
-    DrawableMemo, Fault, FormAttempt, HeaderView, PaidEmission, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
+    DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
+    RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
@@ -38,9 +38,9 @@ use crate::schema::SPENT_KEYS;
 mod grown;
 
 pub(super) use grown::{
-    anchor, at, body, connect_chain, connect_chain_anchored, connect_chain_burning, credited,
-    endow_genesis, grown_over, height_maturing, key_images, output_of, prefix_to, serve_credit,
-    spend, spend_paying, spendable_prefix, spends, Grown, Listed, FIRST_SPEND_HEIGHT,
+    anchor, at, connect_chain, connect_chain_anchored, connect_chain_burning, endow_genesis,
+    grown_over, height_maturing, key_images, output_of, prefix_to, spend, spend_paying,
+    spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 
 /// The coinbase for `height`: the rules harness's, which satisfies every
@@ -82,11 +82,9 @@ pub(super) fn candidate_over(
             previous,
             nonce: 7,
             curve_tree_root: root,
-            // The empty set's root: a candidate carrying no witness is judged
-            // against it (CEN-B4, slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
+            // The empty section's root: a candidate carrying no references is
+            // judged against it (CEN-J29).
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
@@ -136,7 +134,6 @@ impl FixtureSubstrate {
 
 impl Substrate for FixtureSubstrate {
     type Fault = Infallible;
-    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Infallible> {
         Ok(Self::CLOCK)
@@ -173,8 +170,7 @@ pub(super) fn expected_target<'id, V: HeaderView<'id>>(
 ) -> Result<Target, V::Fault> {
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     match target_claim(view, connecting, rules) {
-        Ok(Ok(target)) => Ok(target),
-        Ok(Err(refused)) => panic!("the fixture chain derives no target: {refused}"),
+        Ok(target) => Ok(target),
         Err(Fault::View(fault)) => Err(fault),
         Err(_) => panic!("the fixture chain's headers are not a chain"),
     }
@@ -217,7 +213,7 @@ pub(super) fn formed<'id, V: HeaderView<'id>>(
     formed_under(view, candidate, &RuleSet::GENESIS)
 }
 
-/// [`formed`] under an explicit rule set (a Fakechain set for tests that
+/// [`formed`] under an explicit rule set (a levered set for tests that
 /// run a shortened schedule).
 pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     view: &V,
@@ -230,11 +226,14 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     Ok(
         match form(
             candidate,
-            rules,
+            &FormClaims {
+                rule_set: rules,
+                seed,
+                target: expected_target(view, rules)?,
+                references: &references,
+                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+            },
             &FixtureSubstrate,
-            seed,
-            expected_target(view, rules)?,
-            &references,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
@@ -290,7 +289,7 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
     ) {
         Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
@@ -312,7 +311,7 @@ pub(super) fn judge_with_memo<'b, 'id>(
         formed_under(view, candidate, rules)?,
         view,
         rules,
-        &Trust::UNANCHORED,
+        &Trust::UNPINNED,
         memo,
     ) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),

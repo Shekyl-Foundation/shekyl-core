@@ -17,7 +17,7 @@ use stub::{connect, formed, with_view};
 fn main() {
     with_view(|outer| {
         with_view(|inner| {
-            let valid = validate(formed(), &inner, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            let valid = validate(formed(), &inner, &RuleSet::GENESIS, &Trust::UNPINNED)
                 .unwrap()
                 .unwrap();
             connect(&outer, valid); // judged against `inner`: does not compile

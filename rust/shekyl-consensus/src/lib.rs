@@ -1,22 +1,16 @@
-//! Modular consensus system for Shekyl.
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Shekyl's output lock windows, the consensus constants the tree, the
+//! validator and the wallet read from one place.
 //!
-//! Provides a pluggable proof mechanism supporting PoW, PoS, and hybrid
-//! consensus modes. New proof types can be added by implementing the
-//! `ConsensusProof` trait and registering with the `ConsensusRegistry`.
+//! Consensus is proof of work with one proof type (rule
+//! `70-modular-consensus`): there is no proof trait or registry here, and
+//! one is added only with an accepted design for a second proof type.
 
 #![deny(unsafe_code)]
-
-pub mod error;
-pub mod proof;
-pub mod randomx;
-pub mod registry;
-pub mod types;
-
-pub use error::ConsensusError;
-pub use proof::{ConsensusProof, ProofType};
-pub use randomx::RandomXProof;
-pub use registry::ConsensusRegistry;
-pub use types::{BlockHeader, ChainState, CumulativeDifficulty, Difficulty};
 
 /// The minimum number of blocks a non-coinbase output is locked for before it is
 /// spendable.

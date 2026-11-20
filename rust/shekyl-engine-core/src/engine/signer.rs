@@ -58,7 +58,7 @@
 //! pending-tx engine over the secret-holding signer instance. They
 //! share a name family but are layered, not overlapping.
 
-use super::error::SignerError;
+use super::error::{SignerError, SignerFault};
 use super::key_actor::KeyEngineHandle;
 use super::traits::key::KeyEngine;
 
@@ -93,9 +93,9 @@ pub trait EngineSignerKind: private::Sealed + 'static {
     /// same compile-forced guarantee as the `!Clone` archival keys. The multisig
     /// signer kind is a per-version family (MS-1, no const generics):
     /// `MultisigSignerV2` (spend-auth version `0x02`, Option E′) sets this to
-    /// `shekyl_multisig::FrostCeremony`, its four-blob two-round-trip FROST
-    /// ceremony; a future V4 marker gets its own type, so "a V4 wallet ran an E′
-    /// ceremony" is a compile error.
+    /// `shekyl_multisig::Role`, the role a member plays in an E′ ceremony,
+    /// whose steps are `shekyl_multisig::ceremony`'s; a future V4 marker gets
+    /// its own type, so "a V4 wallet ran an E′ ceremony" is a compile error.
     type SigningCeremony;
 }
 
@@ -162,37 +162,8 @@ impl private::Sealed for MultisigSignerV2 {}
 
 #[cfg(feature = "multisig")]
 impl EngineSignerKind for MultisigSignerV2 {
-    /// The four-blob, two-round-trip, pqc-last FROST ceremony (`shekyl-multisig`).
-    type SigningCeremony = shekyl_multisig::FrostCeremony;
-}
-
-/// engine-core's durable impl of the ceremony's persist-before-use capability
-/// ([`shekyl_multisig::NonceCounterSink`]).
-///
-/// The proposer's held FROST nonce is released to the share-producing path only
-/// after this sink durably advances the monotonic nonce counter (the ceremony
-/// then mints a `ConsumedNonce`). engine-core owns the ledger, so it — not
-/// `shekyl-multisig`, which owns no I/O — carries the durable write. S2 wires the
-/// body to the wallet ledger's crash-atomic `save_state` path (the
-/// `persist_bond_record` discipline); here it is the compile-time proof that the
-/// cross-crate capability is impl-able from the ledger side.
-#[cfg(feature = "multisig")]
-#[allow(dead_code)] // constructed + wired to the ceremony in MS-5 S2
-pub(crate) struct MultisigNonceSink {
-    _private: (),
-}
-
-#[cfg(feature = "multisig")]
-impl shekyl_multisig::NonceCounterSink for MultisigNonceSink {
-    fn persist_nonce_counter(
-        &mut self,
-        _intent_hash: [u8; 32],
-        _counter: u64,
-    ) -> Result<(), shekyl_multisig::NonceCounterError> {
-        Err(shekyl_multisig::NonceCounterError(
-            "durable nonce-counter persist not yet wired to the ledger (MS-5 S2)".to_string(),
-        ))
-    }
+    /// The E′ ceremony's roles (`shekyl_multisig::ceremony`).
+    type SigningCeremony = shekyl_multisig::Role;
 }
 
 // ----------------------------------------------------------------------------
@@ -232,7 +203,7 @@ pub struct TransferSigningContext {
 }
 
 impl TransferSigningContext {
-    /// Construct from an assembled [`TxToSign`]. Crate-internal only.
+    /// Construct from an assembled [`TxToSign`](crate::engine::traits::key::TxToSign). Crate-internal only.
     pub(crate) fn from_tx(tx: super::traits::key::TxToSign) -> Self {
         Self { tx }
     }
@@ -250,7 +221,7 @@ impl TransferSigningContext {
 pub struct SignedTransfer {
     /// Serialized signed-transaction bytes. Phase 1 stub
     /// matches the existing
-    /// [`build_pending_tx_in_state`](super::pending::build_pending_tx_in_state)
+    /// `build_pending_tx_in_state`
     /// behavior (`tx_bytes: Vec::new()`); Phase 2a's tx-builder
     /// integration replaces this with the actual on-wire body.
     pub(crate) tx_bytes: Vec<u8>,
@@ -260,8 +231,8 @@ pub struct SignedTransfer {
     /// OUTBOUND PREREQUISITE pin 1). Zeroize-on-drop; non-`Clone` —
     /// which also makes `SignedTransfer` itself non-`Clone`, keeping
     /// the secret single-copy through the pipeline. `Debug` is safe:
-    /// [`shekyl_engine_state::TxSecretKey`]'s impl is redacted.
-    pub(crate) tx_key_secret: shekyl_engine_state::TxSecretKey,
+    /// [`shekyl_crypto_pq::TxKey`]'s impl is redacted.
+    pub(crate) tx_key: shekyl_crypto_pq::TxKey,
 }
 
 impl SignedTransfer {
@@ -439,8 +410,8 @@ impl Signer for LocalSigner {
         let bulletproof = shekyl_bulletproofs::Bulletproof::read_plus(
             &mut signatures.bulletproof_plus.as_slice(),
         )
-        .map_err(|_| SignerError::RemoteFailure {
-            reason: "bulletproof parse failed during wire encode",
+        .map_err(|_| SignerError::Internal {
+            fault: SignerFault::BulletproofParse,
         })?;
 
         let wire_input = shekyl_tx_builder::WireEncodeInput {
@@ -472,15 +443,14 @@ impl Signer for LocalSigner {
             fcmp_layers: signatures.tree_depth,
         };
 
-        let tx_bytes = shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| {
-            SignerError::RemoteFailure {
-                reason: "final wire encode failed",
-            }
-        })?;
+        let tx_bytes =
+            shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
+                fault: SignerFault::WireEncode,
+            })?;
 
         Ok(SignedTransfer {
             tx_bytes,
-            tx_key_secret: signatures.tx_key_secret,
+            tx_key: signatures.tx_key,
         })
     }
 }
@@ -511,9 +481,7 @@ mod tests {
     use super::*;
     use crate::engine::error::KeyEngineError;
     use crate::engine::traits::key::{FcmpPlusPlusContext, FeeDirective, KeyEngine, TxToSign};
-    use shekyl_crypto_pq::account::{
-        rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
-    };
+    use shekyl_crypto_pq::account::{rederive_account, AllKeysBlob, Network, MASTER_SEED_BYTES};
     use shekyl_tx_builder::TreeContext;
 
     /// Deterministic test seed. Distinct from
@@ -532,12 +500,8 @@ mod tests {
     };
 
     fn deterministic_keys() -> AllKeysBlob {
-        rederive_account(
-            &SIGNER_TEST_MASTER_SEED,
-            DerivationNetwork::Fakechain,
-            SeedFormat::Raw32,
-        )
-        .expect("rederive_account against fakechain raw32 seed")
+        rederive_account(&SIGNER_TEST_MASTER_SEED, Network::Regtest)
+            .expect("rederive_account against a regtest master seed")
     }
 
     fn empty_tx_to_sign() -> TxToSign {
@@ -555,8 +519,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         }
     }
@@ -592,6 +555,11 @@ mod tests {
             .sign_transfer(context)
             .await
             .expect_err("empty TxToSign cannot be signed");
-        assert!(matches!(err, SignerError::RemoteFailure { .. }));
+        assert!(matches!(
+            err,
+            SignerError::Internal {
+                fault: SignerFault::Primitive
+            }
+        ));
     }
 }

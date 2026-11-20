@@ -237,25 +237,28 @@ fn a_forged_busy_reply_is_not_busy() {
     let daemon = StaticKeypair::generate().unwrap();
     let other = StaticKeypair::generate().unwrap();
     let client = StaticKeypair::generate().unwrap();
-    let busy_for = |wire: &[u8], who: &StaticKeypair| {
-        let mut mac1 = [0u8; MAC1_LEN];
-        mac1.copy_from_slice(&wire[MESSAGE1_LEN..]);
-        who.public().busy_reply(&mac1)
-    };
     let (earlier, earlier_wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
     let (waiting, wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-    let genuine = busy_for(&wire, &daemon);
+    let (noise, mac1) = wire.split_at(MESSAGE1_LEN);
+    assert!(
+        daemon.mac1_verifies(noise, mac1).is_some(),
+        "the client's mac1, under the daemon's bundle"
+    );
+    // A busy reply is the proved tag's method. Another bundle answers its
+    // own mac of the same Noise bytes, which is not this message's reply.
+    let genuine = daemon.busy_for(noise);
     assert!(waiting.is_busy(&genuine));
-    assert!(earlier.is_busy(&busy_for(&earlier_wire, &daemon)));
+    let (earlier_noise, _) = earlier_wire.split_at(MESSAGE1_LEN);
+    assert!(earlier.is_busy(&daemon.busy_for(earlier_noise)));
 
     assert!(!waiting.is_busy(&[0u8; BUSY_LEN]), "zeros");
     assert!(!waiting.is_busy(&[0xa5; BUSY_LEN]), "other bytes");
     assert!(
-        !waiting.is_busy(&busy_for(&wire, &other)),
+        !waiting.is_busy(&other.busy_for(noise)),
         "authenticated under a bundle other than the daemon's"
     );
     assert!(
-        !waiting.is_busy(&busy_for(&earlier_wire, &daemon)),
+        !waiting.is_busy(&daemon.busy_for(earlier_noise)),
         "the reply to an earlier message 1"
     );
     let mut flipped = genuine;
@@ -296,9 +299,13 @@ fn a_flood_of_valid_mac1_messages_is_held_to_the_budget() {
     };
     let (d, m2) = d.write_message2().unwrap();
     let c = c.read_message2(&m2).unwrap();
-    let (c, m3) = c.write_message3(b"request").unwrap();
+    let (c, m3) = c
+        .write_message3(&[1, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        .unwrap();
     let d = d.read_message3(&m3).unwrap();
-    let (pending, m4) = d.write_message4(b"grant").unwrap();
+    let (pending, m4) = d
+        .write_message4(&[1, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        .unwrap();
     let (c, _) = c.read_message4(&m4).unwrap();
     let (mut client_send, mut client_recv) = c.into_directions();
     let (first, _) = client_send.seal(b"first", TRANSPORT_AD).unwrap();
@@ -362,4 +369,45 @@ fn a_flood_of_valid_mac1_messages_is_held_to_the_budget() {
     let (reply, _) = session.send.seal(b"still here", TRANSPORT_AD).unwrap();
     let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
     assert_eq!(opened, b"still here");
+}
+
+/// RT-O31: message 3 and message 4 are each one size. A payload one byte
+/// long, sealed properly, is refused by length, on both sides. Red edit (the
+/// pre-flight's "payload length"): let `read_message3` take any length from
+/// `MESSAGE3_OVERHEAD` up and pad the payload to 16 bytes, and the one-byte
+/// message 3 is read. The typed payload is a second guard, so both go.
+#[test]
+fn a_payload_of_any_other_length_is_refused() {
+    let view = [1, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let daemon = StaticKeypair::generate().unwrap();
+    let client = StaticKeypair::generate().unwrap();
+    let budget = HandshakeBudget::new(Instant::now());
+    let handshake = || {
+        let (c, m1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
+        let Ok(Message1Admission::Continue(d)) =
+            Daemon::new(&NETWORK, &daemon).read_message1(&m1, &budget, Instant::now())
+        else {
+            panic!("admitted");
+        };
+        let (d, m2) = d.write_message2().unwrap();
+        (c.read_message2(&m2).unwrap(), d)
+    };
+
+    let (c, d) = handshake();
+    let (_, short) = c.seal_message3(&[1]).unwrap();
+    assert_eq!(short.len(), MESSAGE3_OVERHEAD + 1);
+    assert_eq!(
+        d.read_message3(&short).err(),
+        Some(HandshakeError::Message3)
+    );
+
+    let (c, d) = handshake();
+    let (c, m3) = c.write_message3(&view).unwrap();
+    let d = d.read_message3(&m3).unwrap();
+    let (_, short) = d.seal_message4(&[1], &mut OsRng).unwrap();
+    assert_eq!(short.len(), MESSAGE4_OVERHEAD + 1);
+    assert_eq!(
+        c.read_message4(&short).err(),
+        Some(HandshakeError::Message4)
+    );
 }

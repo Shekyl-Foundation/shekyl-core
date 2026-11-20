@@ -5,6 +5,9 @@
 
 //! Tor control-protocol **client**. Any caller. Not an owner of a Tor instance.
 //!
+//! [`awake`] waits on the process clock. A tokio timer on Windows counts
+//! through every sleep; these waits end when that clock says so.
+//!
 //! # Capability families
 //!
 //! Two identities in this tree speak the control protocol, and they must not
@@ -30,12 +33,13 @@
 //! this crate. A caller that only needs types already on `WalletTorControl`'s
 //! public surface names the wallet crate.
 
+pub mod awake;
 pub mod binary;
 pub mod control;
 pub mod directory_cache;
-pub mod inherit;
 pub mod onion_identity;
-pub mod spawn_lock;
+#[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+pub mod outside_kill;
 pub mod supervisor;
 
 #[cfg(test)]

@@ -95,8 +95,8 @@ use std::time::{Duration, Instant};
 
 use kameo::actor::Spawn as _;
 use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
-use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_crypto_pq::account::Network;
+use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_p_fetch::{
     DiscardTxs, ExpectedShard, FetchError, FetchTarget, PFetchClient, RequestHeader,
     ServingEndpoint, Stall, Timeouts,
@@ -105,14 +105,14 @@ use shekyl_tor_control_client::control::onion::{
     AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
 };
 use shekyl_tor_control_client::control::{
-    ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
-    DiskWrites, EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout,
-    TorControlClient, TorControlClientConfig, TorLaunch, WaitReadyError,
+    parse_socks_listeners, wait_until_ready, BootstrapReadiness, Command, DiskWrites,
+    EventReceiver, EventSink, ManagedTor, Signal, SocksPort, SocksTimeout, TorControlClient,
+    TorControlClientConfig, TorLaunch, WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
 
-use shekyl_p_serve::{PServeEndpoint, TestKeySigner};
+use shekyl_p_serve::{PServeEndpoint, TestReceiptKeySigner};
 
 use crate::fixture::{FixtureShardProvider, FramedObject};
 use crate::measure::{FailureKind, Observation};
@@ -195,7 +195,7 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
 /// taken from the caller — by design.
 ///
 /// SPIKE-F-4 relocated the onion-key derivation onto the *production* GF-9 path
-/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed`).
+/// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_onion_keypair`).
 /// A consequence the old spike-local label used to mask: feeding a real wallet's
 /// `master_seed_64` here would now serve at the persona's **actual production
 /// `.onion`** — the co-activation Model D forbids (`BOND_CONSTRUCTION.md:667`,
@@ -262,18 +262,13 @@ impl ManagedInstance {
                 disable_network: false,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: None,
+                handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
             }),
             events,
             readiness,
         });
 
-        match wait_until_ready(
-            &control,
-            &mut ready_rx,
-            tokio::time::Instant::now() + BOOTSTRAP_TIMEOUT,
-        )
-        .await
-        {
+        match wait_until_ready(&control, &mut ready_rx, BOOTSTRAP_TIMEOUT).await {
             Ok(()) => {}
             Err(WaitReadyError::Timeout | WaitReadyError::Failed) => {
                 return Err(ApparatusError::Bootstrap);
@@ -315,10 +310,10 @@ pub struct Persona {
     /// spike measures what ships, not a lookalike.
     pub endpoint: PServeEndpoint,
     /// What a daemon reads from the bond record before dialling: the
-    /// endpoint column and the identity key (`SF-D13`). Read once here at
+    /// endpoint column and the receipt key (`SF-D13`). Read once here at
     /// bring-up, from the same material the onion was published from.
     serving: ServingEndpoint,
-    verifying_key: HybridPublicKey,
+    verifying_key: FnDsaHybridPublicKey,
     /// The wallet host's tor — one per persona, the conformant shape.
     tor: ManagedInstance,
 }
@@ -332,10 +327,10 @@ impl Persona {
 
     /// The key this persona countersigns under — what a reader on another
     /// host needs beside the onion to verify the body (`SF-D8`). In
-    /// production this is the bond record's identity key; here it is the
+    /// production this is the bond record's receipt key; here it is the
     /// ephemeral test key minted at bring-up.
     #[must_use]
-    pub fn verifying_key(&self) -> &HybridPublicKey {
+    pub fn verifying_key(&self) -> &FnDsaHybridPublicKey {
         &self.verifying_key
     }
 
@@ -352,7 +347,7 @@ impl Persona {
     /// The typed fetch target, as a scheduler would build it from a bond
     /// record. The shard is named by the expectation, not the target.
     #[must_use]
-    pub fn target(&self) -> FetchTarget<HybridPublicKey> {
+    pub fn target(&self) -> FetchTarget {
         FetchTarget {
             endpoint: self.serving,
             verifying_key: self.verifying_key.clone(),
@@ -392,7 +387,7 @@ impl ClientLeg {
     pub async fn fetch_once(
         &self,
         lane: usize,
-        target: &FetchTarget<HybridPublicKey>,
+        target: &FetchTarget,
         expected: &ExpectedShard,
     ) -> Result<usize, FailureKind> {
         fetch_via(&self.lanes[lane % self.lanes.len()], target, expected)
@@ -452,12 +447,12 @@ impl std::fmt::Display for FetchFault {
 /// the failure under a class Tor would be blamed for.
 pub async fn fetch_via(
     client: &PFetchClient,
-    target: &FetchTarget<HybridPublicKey>,
+    target: &FetchTarget,
     expected: &ExpectedShard,
 ) -> Result<usize, FetchFault> {
     let header = RequestHeader::fresh(
         shekyl_types::BlockHeight::from_raw(APPARATUS_ANCHOR_HEIGHT),
-        APPARATUS_ANCHOR_HASH,
+        shekyl_types::BlockHash::from_bytes(APPARATUS_ANCHOR_HASH),
     )
     .expect("OS entropy source failed; the apparatus cannot mint request nonces");
     let fetched = tokio::time::timeout(
@@ -687,8 +682,7 @@ impl Apparatus {
         for (slot, tor) in serving_tors.into_iter().enumerate() {
             let tor = tor.ok_or(ApparatusError::Bootstrap)?;
             let slot = PSlot::from_raw(u32::try_from(slot).expect("slot fits u32"));
-            let identity =
-                derive_onion_identity(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot);
+            let identity = derive_onion_identity(&seed, Network::Mainnet, slot);
             let service_id = identity.service_id().clone();
             // The "bond record" the client leg will dial from: the endpoint
             // column is the onion's public key, and the two encodings of it
@@ -698,11 +692,11 @@ impl Apparatus {
             if serving.onion_address() != service_id.hostname() {
                 return Err(ApparatusError::NoServiceId);
             }
-            // An ephemeral attestation key per persona: the spike measures
+            // An ephemeral receipt key per persona: the spike measures
             // the shipped serve path, and signing is on it. Its own height is
             // the apparatus's fixed chain view; the client leg anchors its
             // requests against the same number.
-            let signer = Arc::new(TestKeySigner::ephemeral(
+            let signer = Arc::new(TestReceiptKeySigner::ephemeral(
                 shekyl_types::BlockHeight::from_raw(APPARATUS_OWN_HEIGHT),
             ));
             let verifying_key = signer.public_key().clone();
@@ -989,19 +983,13 @@ impl Apparatus {
         if let Some(wait) = wait.filter(|w| !w.is_zero()) {
             tokio::time::sleep(wait).await;
         }
-        let reply = ask_timed(
-            &self.client_tor.control,
-            Command::Signal(Signal::NewNym),
+        let reply = tokio::time::timeout(
             NEWNYM_ASK_TIMEOUT,
+            self.client_tor.control.ask(Command::Signal(Signal::NewNym)),
         )
         .await
-        .map_err(|e| match e {
-            AskError::Timeout => ApparatusError::NewnymUnanswered,
-            AskError::Control(c) => ApparatusError::Control(c.to_string()),
-            AskError::ActorGone => {
-                ApparatusError::Control("tor control actor gone during SIGNAL NEWNYM".to_owned())
-            }
-        })?;
+        .map_err(|_| ApparatusError::NewnymUnanswered)?
+        .map_err(|e| ApparatusError::Control(format!("SIGNAL NEWNYM: {e}")))?;
         if reply.status() != 250 {
             return Err(ApparatusError::Control(format!(
                 "SIGNAL NEWNYM answered {}",
@@ -1118,10 +1106,11 @@ impl Apparatus {
 /// Map the production client's error taxonomy onto the measurement's.
 ///
 /// `SF-D6` types outcomes by what the *scheduler* should do next; §6.4 types
-/// them by whether Tor or the apparatus is to blame. The two agree on the
-/// no-complete-exchange side (a stall is the network) and collapse on the
-/// completed side: every decided refusal — miss, malformed, bad
-/// countersignature, content — means the apparatus, not the path, is wrong.
+/// them by whether Tor or the apparatus is to blame. A stall on a dial that
+/// was attempted is the network. A missing route was never a dial, so it is
+/// the apparatus. On the completed side every decided refusal — miss,
+/// malformed, bad countersignature, content — means the apparatus, not the
+/// path, is wrong.
 fn classify(e: &FetchError) -> FailureKind {
     match e {
         // The SOCKS dial against an `.onion` is what builds the rendezvous, so
@@ -1143,7 +1132,13 @@ fn classify(e: &FetchError) -> FailureKind {
         // `content-length`. Pre-head I/O is `ClosedBeforeHead` at the
         // emission site — `Stall::Io` is body-phase only.
         FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
-        FetchError::Miss
+        // A completed refusal is the apparatus. So is `NoRoute`: this
+        // harness builds every client with a fixed proxy, and a
+        // route-reading client that found none sent nothing, so Tor was
+        // not asked. Filing that stall under `Circuit` would record a
+        // failed rendezvous for a dial that never started.
+        FetchError::Stall(Stall::NoRoute)
+        | FetchError::Miss
         | FetchError::Rejected
         | FetchError::Unavailable
         | FetchError::Unsigned
@@ -1161,7 +1156,7 @@ fn classify(e: &FetchError) -> FailureKind {
 async fn probe_once(
     client: Arc<PFetchClient>,
     index: usize,
-    target: FetchTarget<HybridPublicKey>,
+    target: FetchTarget,
     expected: ExpectedShard,
     deadline: Instant,
 ) -> Result<bool, ApparatusError> {
@@ -1417,6 +1412,11 @@ mod tests {
         assert_eq!(
             classify(&FetchError::Stall(Stall::ClosedBeforeHead)),
             FailureKind::Circuit
+        );
+        // No proxy: the harness never dialled. That is the apparatus, not Tor.
+        assert_eq!(
+            classify(&FetchError::Stall(Stall::NoRoute)),
+            FailureKind::Refused
         );
         assert_eq!(
             classify(&FetchError::Stall(Stall::HeadTimeout)),

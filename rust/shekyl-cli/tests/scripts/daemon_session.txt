@@ -5,8 +5,8 @@
 #     --network testnet --daemon-address 127.0.0.1:<rpc> \
 #     --wallet-dir <dir> --wallet <name> --password-file <path>
 #
-# The daemon is on the wallet's own network. A `shekyld --network regtest` daemon
-# reports `fakechain`, and the wallet refuses it on identity.
+# The daemon is on the wallet's own network; a daemon on any other network,
+# regtest included, is refused on identity.
 #
 # `send` is expected to refuse, and the envelope's code says why. On a chain
 # still at genesis it is WALLET_NOT_SYNCED, whatever the recipient: the build

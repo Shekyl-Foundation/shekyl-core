@@ -33,7 +33,7 @@
 use shekyl_block_template::Fill;
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
 use shekyl_economics::{EconomicParams, TxVolume};
-use shekyl_harness_spender::Spender;
+use shekyl_harness_spender::{SpendPlan, Spender};
 use shekyl_types::BlockWeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::Transaction;
@@ -77,7 +77,7 @@ async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>, Transaction, Tr
     let mut scenario = Scenario::open(name);
     let mined = scenario.mine(AT).await;
     let (a, b) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), Family::Main.fee()),
@@ -123,6 +123,124 @@ async fn two_spends_connect_and_the_per_slot_rows_record() {
     scenario.close().await;
 }
 
+/// Seams T1–T4 (`CHAIN_FORGE.md` §5.3) through the full signing stack on
+/// a real chain. The planning thread draws each spend's seeds
+/// ([`SpendPlan::next_spend`]) and hands them to [`Spender::drawing`]; the
+/// spender holds no generator. The same plan builds the same spends byte
+/// for byte, including when the second spend is built before the first.
+/// Another plan seed, or the OS, builds another body. The seeded spends
+/// connect, judged like any other. A re-sign under the same plan
+/// ([`shekyl_harness_spender::Drawn::signed_under`]) is byte for byte the
+/// same too: it is its own statement and takes the plan's next seeds.
+#[tokio::test]
+async fn seeded_spenders_build_byte_identical_spends_that_connect() {
+    let mut scenario = Scenario::open("spend-seeded");
+    let mined = scenario.mine(AT).await;
+    let network = scenario.network_id();
+    let wallet = scenario.wallet();
+    let fee = Family::Main.fee();
+    let spender = Spender::on(network, &mined);
+    let build = |seed: &[u8; 32]| {
+        let mut plan = SpendPlan::from_seed(seed);
+        let first = plan.next_spend();
+        let second = plan.next_spend();
+        (
+            spender
+                .drawing(first)
+                .spend_coinbase(wallet, h(0), h(AT), fee),
+            spender
+                .drawing(second)
+                .spend_coinbase(wallet, h(1), h(AT), fee),
+        )
+    };
+    let (a, b) = build(&[7u8; 32]);
+    let (a_again, b_again) = build(&[7u8; 32]);
+    assert_eq!(
+        a.serialize(),
+        a_again.serialize(),
+        "one seed, one first spend"
+    );
+    assert_eq!(
+        b.serialize(),
+        b_again.serialize(),
+        "one seed, one second spend"
+    );
+    // The seeds name the spend. Building the second one first does not move
+    // either body: a counter inside the shared spender would.
+    let mut reversed = SpendPlan::from_seed(&[7u8; 32]);
+    let first = reversed.next_spend();
+    let second = reversed.next_spend();
+    let b_first = spender
+        .drawing(second)
+        .spend_coinbase(wallet, h(1), h(AT), fee);
+    let a_second = spender
+        .drawing(first)
+        .spend_coinbase(wallet, h(0), h(AT), fee);
+    assert_eq!(
+        a.serialize(),
+        a_second.serialize(),
+        "the first spend's seeds, built second"
+    );
+    assert_eq!(
+        b.serialize(),
+        b_first.serialize(),
+        "the second spend's seeds, built first"
+    );
+    let (other, _) = build(&[8u8; 32]);
+    assert_ne!(
+        a.serialize(),
+        other.serialize(),
+        "another seed, another body"
+    );
+    let from_os = spender.spend_coinbase(wallet, h(0), h(AT), fee);
+    assert_ne!(
+        a.serialize(),
+        from_os.serialize(),
+        "the OS draws another body"
+    );
+    let mut resigns = SpendPlan::from_seed(&[7u8; 32]);
+    // The two spends take the first two draws. The re-sign is the third.
+    let _first = resigns.next_spend();
+    let _second = resigns.next_spend();
+    let resign_seeds = resigns.next_spend();
+    let resigned =
+        spender
+            .drawing(resign_seeds)
+            .signed_under(&a, wallet, h(0), h(AT), None, &network);
+    let mut resigns_again = SpendPlan::from_seed(&[7u8; 32]);
+    let _first = resigns_again.next_spend();
+    let _second = resigns_again.next_spend();
+    let resigned_again = spender.drawing(resigns_again.next_spend()).signed_under(
+        &a,
+        wallet,
+        h(0),
+        h(AT),
+        None,
+        &network,
+    );
+    assert_eq!(
+        resigned.serialize(),
+        resigned_again.serialize(),
+        "one plan, one re-sign"
+    );
+    assert_ne!(
+        resigned.serialize(),
+        a.serialize(),
+        "a re-sign draws its own seeds"
+    );
+    let resigned_from_os = spender.signed_under(&a, wallet, h(0), h(AT), None, &network);
+    assert_ne!(
+        resigned.serialize(),
+        resigned_from_os.serialize(),
+        "the OS re-sign draws another body"
+    );
+    scenario
+        .mine_listing(vec![a, b])
+        .await
+        .unwrap_or_else(|outcome| panic!("seeded spends connect: {outcome}"));
+    scenario.close().await;
+}
+
 /// CEN-L1 across slots: a twin of the first spend at another fee is a
 /// different body over the same key image, admissible alone, and refused
 /// behind the first at `Listed(1)`, input 0 — the second occurrence, as
@@ -131,7 +249,7 @@ async fn two_spends_connect_and_the_per_slot_rows_record() {
 #[tokio::test]
 async fn l1_refuses_a_twin_spend_listed_behind_the_first() {
     let (mut scenario, mined, a, _b) = matured("spend-twin-l1").await;
-    let twin = Spender::over(&mined).spend_coinbase(
+    let twin = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT),
@@ -196,7 +314,7 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
     mined.push(two);
     let after = AT + 1;
     let (fresh, respend) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(2), h(after), Family::Main.fee()),
@@ -222,7 +340,7 @@ async fn i7_refuses_a_respend_at_the_slot_behind_a_fresh_spend() {
 #[tokio::test]
 async fn h19_refuses_a_flipped_range_proof_and_the_unflipped_block_connects() {
     let (mut scenario, mined, a, b) = matured("spend-h19-flip").await;
-    let flipped = Spender::over(&mined).spend_coinbase_breaking_range_proof(
+    let flipped = Spender::on(scenario.network_id(), &mined).spend_coinbase_breaking_range_proof(
         scenario.wallet(),
         h(1),
         h(AT),
@@ -255,7 +373,7 @@ async fn h19_names_the_bad_proof_among_good_ones() {
     let mined = scenario.mine(AT + 1).await;
     let at = AT + 1;
     let listed = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         let fee = Family::Main.fee();
         vec![
@@ -303,7 +421,7 @@ async fn bodies_at_the_fills_bound_are_admitted() {
     // that connect are built at the later height, against that height's
     // reference.
     let mut mined = scenario.mine(FIRST_SPEND_HEIGHT).await;
-    let sample = Spender::over(&mined).spend_coinbase(
+    let sample = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(FIRST_SPEND_HEIGHT),
@@ -331,7 +449,7 @@ async fn bodies_at_the_fills_bound_are_admitted() {
         "the prefix reaches the spending height"
     );
 
-    let spender = Spender::over(&mined);
+    let spender = Spender::on(scenario.network_id(), &mined);
     let wallet = scenario.wallet();
     let fee = Family::Main.fee();
     let listed: Vec<Transaction> = std::thread::scope(|scope| {
@@ -385,7 +503,11 @@ async fn bodies_at_the_fills_bound_are_admitted() {
         coinbase_weight <= COINBASE_RESERVE,
         "the built coinbase is within the derived reserve"
     );
-    let limit = block.weights.medians.limit().to_raw();
+    let limit = block
+        .weights
+        .medians
+        .limit(&shekyl_economics::EconomicParams::default())
+        .to_raw();
     assert_eq!(
         limit,
         zone.saturating_mul(2),

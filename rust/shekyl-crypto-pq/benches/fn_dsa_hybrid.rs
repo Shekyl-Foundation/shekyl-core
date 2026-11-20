@@ -23,7 +23,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::{
     derive_archival_p_keys, derive_p_receipt_ed_seed, derive_p_receipt_fn_dsa_seed,
 };
@@ -122,10 +122,9 @@ fn bench_keygen(c: &mut Criterion) {
     });
 }
 
-/// The persona whose slot the next two arms derive: mainnet, BIP-39, slot 0.
+/// The persona whose slot the next two arms derive: mainnet, slot 0.
 const PERSONA_MASTER: [u8; MASTER_SEED_BYTES] = [0x33; MASTER_SEED_BYTES];
-const PERSONA_NETWORK: DerivationNetwork = DerivationNetwork::Mainnet;
-const PERSONA_FORMAT: SeedFormat = SeedFormat::Bip39;
+const PERSONA_NETWORK: Network = Network::Mainnet;
 const PERSONA_SLOT: u32 = 0;
 
 /// One persona slot's whole key derivation, the unit engine assembly pays
@@ -140,7 +139,6 @@ fn bench_persona_slot(c: &mut Criterion) {
             derive_archival_p_keys(
                 black_box(&PERSONA_MASTER),
                 PERSONA_NETWORK,
-                PERSONA_FORMAT,
                 black_box(PERSONA_SLOT),
             )
             .expect("persona derivation")
@@ -155,18 +153,8 @@ fn bench_persona_slot(c: &mut Criterion) {
 /// from this arm and the persona arm, which are the same inputs, and not
 /// from `fn_dsa_hybrid_keygen_from_seeds`, which is not.
 fn bench_persona_receipt_keygen(c: &mut Criterion) {
-    let ed25519 = derive_p_receipt_ed_seed(
-        &PERSONA_MASTER,
-        PERSONA_NETWORK,
-        PERSONA_FORMAT,
-        PERSONA_SLOT,
-    );
-    let fn_dsa = derive_p_receipt_fn_dsa_seed(
-        &PERSONA_MASTER,
-        PERSONA_NETWORK,
-        PERSONA_FORMAT,
-        PERSONA_SLOT,
-    );
+    let ed25519 = derive_p_receipt_ed_seed(&PERSONA_MASTER, PERSONA_NETWORK, PERSONA_SLOT);
+    let fn_dsa = derive_p_receipt_fn_dsa_seed(&PERSONA_MASTER, PERSONA_NETWORK, PERSONA_SLOT);
     c.bench_function("fn_dsa_hybrid_persona_receipt_keygen", |b| {
         b.iter(|| {
             HybridEd25519FnDsa::keypair_from_seeds(black_box(&ed25519), black_box(&fn_dsa))

@@ -3,6 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use super::*;
 
 const RATE: Kind = Kind::Quantity {
@@ -21,6 +24,7 @@ const THREADS: Kind = Kind::Integer {
 };
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
+const LISTEN: Kind = Kind::Listen(EndpointRule::Loopback);
 const ENDPOINTS: Kind = Kind::List(&ENDPOINT);
 
 fn code(r: Result<Value, Fault>) -> Code {
@@ -186,34 +190,46 @@ fn curve25519_basepoint() -> [u8; 32] {
     b
 }
 
+/// A fixture path that is absolute on the host running the test: `unix`
+/// as written on Unix, `C:` and backslashes on Windows, where `/bin/x` is
+/// not absolute and the path kinds refuse it for that before anything else
+/// (DC-F40).
+fn abs(unix: &str) -> String {
+    if cfg!(windows) {
+        format!("C:{}", unix.replace('/', "\\"))
+    } else {
+        unix.to_owned()
+    }
+}
+
 #[test]
 fn commands_are_file_only_arrays_with_named_placeholders() {
     const NOTIFY: Kind = Kind::Command {
         placeholders: &["height", "hash"],
     };
     let ok = toml::Value::Array(vec![
-        toml::Value::String("/usr/bin/logger".into()),
+        toml::Value::String(abs("/usr/bin/logger")),
         toml::Value::String("block {height} {hash} 100%".into()),
     ]);
     assert!(matches!(NOTIFY.parse_file(&ok), Ok(Value::Command(ref a)) if a.len() == 2));
     let unknown = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height} {txid}".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unknown)), Code::ValuePlaceholder);
     let unmatched = toml::Value::Array(vec![
-        toml::Value::String("/bin/x".into()),
+        toml::Value::String(abs("/bin/x")),
         toml::Value::String("{height".into()),
     ]);
     assert_eq!(code(NOTIFY.parse_file(&unmatched)), Code::ValueSyntax);
     let relative = toml::Value::Array(vec![toml::Value::String("logger".into())]);
     assert_eq!(code(NOTIFY.parse_file(&relative)), Code::ValueSyntax);
+    assert_eq!(code(NOTIFY.parse_cli(&[abs("/bin/x")])), Code::ValueSurface);
     assert_eq!(
-        code(NOTIFY.parse_cli(&["/bin/x".into()])),
-        Code::ValueSurface
-    );
-    assert_eq!(
-        code(NOTIFY.parse_file(&toml::Value::String("/bin/x {height}".into()))),
+        code(NOTIFY.parse_file(&toml::Value::String(format!(
+            "{} {{height}}",
+            abs("/bin/x")
+        )))),
         Code::ValueSyntax
     );
 }
@@ -221,11 +237,64 @@ fn commands_are_file_only_arrays_with_named_placeholders() {
 #[test]
 fn a_path_is_absolute_only() {
     assert!(matches!(
-        Kind::Path.parse_text("/etc/shekyl"),
+        Kind::PATH.parse_text(&abs("/etc/shekyl")),
         Ok(Value::Path(_))
     ));
-    assert_eq!(code(Kind::Path.parse_text("etc/shekyl")), Code::ValueSyntax);
-    assert_eq!(code(Kind::Path.parse_text("./x")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("etc/shekyl")), Code::ValueSyntax);
+    assert_eq!(code(Kind::PATH.parse_text("./x")), Code::ValueSyntax);
+    // `none` is a word only where the row takes it; elsewhere it is a
+    // relative path, refused.
+    assert_eq!(code(Kind::PATH.parse_text("none")), Code::ValueSyntax);
+}
+
+/// A path row that names a default file may take `none`: no file at all.
+/// The word is never read as a path. The row names the word; [`Kind::PATH`]
+/// does not. Red edit: drop the keyword check in `Kind::Path`'s parse
+/// (`none` is refused as a relative path).
+#[test]
+fn a_path_row_may_take_none_for_no_file() {
+    let or_none = Kind::Path {
+        keywords: &["none"],
+    };
+    assert_eq!(or_none.parse_text("none"), Ok(Value::Word("none")));
+    assert!(matches!(
+        or_none.parse_text(&abs("/etc/shekyl/shekyld-mainnet.toml")),
+        Ok(Value::Path(_))
+    ));
+    assert_eq!(code(or_none.parse_text("None")), Code::ValueSyntax);
+}
+
+/// A value the operator set either confirms a parent that refuses its row
+/// or asks for something that parent forbids. Absence is the empty
+/// collection, the word `none`, the word `off`, or a switch that is off.
+/// The integer `0` is a request. Red edit: classify an empty list as
+/// [`Bearing::Request`].
+#[test]
+fn a_value_that_asks_for_nothing_confirms() {
+    let confirm = |value: Value| assert_eq!(value.bearing(), Bearing::Confirmation, "{value:?}");
+    let request = |value: Value| assert_eq!(value.bearing(), Bearing::Request, "{value:?}");
+
+    confirm(Value::List(Vec::new()));
+    confirm(Value::Map(BTreeMap::new()));
+    confirm(Value::Word("none"));
+    confirm(Value::Word("off"));
+    confirm(Value::Switch(false));
+    confirm(
+        Kind::List(&ENDPOINT)
+            .parse_cli(&["none".to_owned()])
+            .expect("`none` is the empty list"),
+    );
+
+    request(Value::List(vec![Value::Integer(0)]));
+    request(Value::Map(BTreeMap::from([(
+        "k".into(),
+        Value::Integer(1),
+    )])));
+    request(Value::Word("on"));
+    request(Value::Word("unlimited"));
+    request(Value::Switch(true));
+    request(Value::Integer(0));
+    request(Value::Path(PathBuf::from(abs("/etc/shekyl"))));
 }
 
 #[test]
@@ -271,4 +340,94 @@ fn a_map_takes_key_value_pairs_from_its_closed_key_set() {
         code(CATEGORIES.parse_cli(&["net=loud".into()])),
         Code::ValueWord
     );
+}
+
+const DURATION: Kind = Kind::Quantity {
+    dimension: Dimension::Duration,
+    min: 0,
+    keywords: &[],
+};
+
+#[test]
+fn a_duration_is_an_integer_and_an_ig6_unit() {
+    assert_eq!(
+        DURATION.parse_text("5min"),
+        Ok(Value::Duration(std::time::Duration::from_secs(5 * 60)))
+    );
+    assert_eq!(
+        DURATION.parse_text("30s"),
+        Ok(Value::Duration(std::time::Duration::from_secs(30)))
+    );
+    assert_eq!(code(DURATION.parse_text("5m")), Code::ValueUnit);
+}
+
+#[test]
+fn a_hash_is_64_hexadecimal_characters() {
+    let hex = "ab".repeat(32);
+    assert_eq!(Kind::Hash.parse_text(&hex), Ok(Value::Hash(hex.clone())));
+    assert_eq!(
+        Kind::Hash.parse_text(&hex.to_ascii_uppercase()),
+        Ok(Value::Hash(hex))
+    );
+    assert_eq!(code(Kind::Hash.parse_text("abcd")), Code::ValueSyntax);
+    assert_eq!(
+        code(Kind::Hash.parse_text(&"z".repeat(64))),
+        Code::ValueSyntax
+    );
+}
+
+#[test]
+fn a_name_is_kept_as_given_when_its_owners_rule_holds() {
+    const SHORT: Kind = Kind::Name(NameRule {
+        describe: "a name of at most three letters",
+        check: |name| {
+            if name.len() <= 3 && name.bytes().all(|b| b.is_ascii_lowercase()) {
+                Ok(())
+            } else {
+                Err("at most three lower-case letters")
+            }
+        },
+    });
+    assert_eq!(SHORT.parse_text("abc"), Ok(Value::Name("abc".to_owned())));
+    let refused = SHORT.parse_text("abcd").unwrap_err();
+    assert_eq!(refused.code, Code::ValueRange);
+    assert!(refused
+        .params
+        .contains(&("rule", "at most three lower-case letters".to_owned())));
+    assert_eq!(
+        SHORT.parse_file(&toml::Value::String("ab".to_owned())),
+        Ok(Value::Name("ab".to_owned()))
+    );
+    assert_eq!(
+        code(SHORT.parse_file(&toml::Value::Integer(1))),
+        Code::ValueSyntax
+    );
+}
+
+/// A listener takes an endpoint, or an address alone whose port its owner
+/// names; the address rule holds either way, and a bracket without a port,
+/// a hostname or a zero port is refused.
+#[test]
+fn a_listener_is_an_endpoint_or_an_address_alone() {
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1").unwrap(),
+        Value::Host("127.0.0.1".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("::1").unwrap(),
+        Value::Host("::1".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1:11030").unwrap(),
+        Value::Endpoint("127.0.0.1:11030".parse().unwrap())
+    );
+    assert_eq!(
+        LISTEN.parse_text("127.0.0.1").unwrap().render(),
+        "127.0.0.1"
+    );
+    assert_eq!(code(LISTEN.parse_text("0.0.0.0")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("0.0.0.0:11030")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("127.0.0.1:0")), Code::ValueRange);
+    assert_eq!(code(LISTEN.parse_text("[::1]")), Code::ValueSyntax);
+    assert_eq!(code(LISTEN.parse_text("localhost")), Code::ValueSyntax);
 }

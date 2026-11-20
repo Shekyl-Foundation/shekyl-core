@@ -1,0 +1,54 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The shekyl-core crates the GUI wallet's release build links
+# (shekyl-gui-wallet, src-tauri/Cargo.toml), pinned here because that
+# manifest lives in another repository and the shipped crate set
+# (shipped_graph.py, CHAIN_FORGE.md §5.5, CF-R26) must include them.
+#
+# This is the projection of that manifest that shipped_graph.py's
+# gui_projection() computes: every shekyl-core path dependency on a shipped
+# edge (dev-dependencies are a test build's), each with its spec less the
+# path, and the feature table keeping only entries that name a feature or
+# a shekyl-core dependency. `release-features` is what the GUI release
+# passes to cargo (its release workflow's `--features`, and tauri's
+# `build.features` in tauri.conf.json and tauri.release.conf.json).
+#
+# Kept current by gui-drift.yml's `gui-pin` job: on every shekyl-core change
+# under rust/ or to this file or its readers, it checks out the GUI wallet at
+# the branch gui-drift resolves (the same-named branch, else dev) and fails
+# when this pin and that manifest differ. Update this file in the same PR as
+# the GUI wallet change that adds, drops or re-features a shekyl-core edge.
+
+release-features = []
+
+[package]
+name = "shekyl-gui-wallet"
+
+[dependencies]
+shekyl-shard-visual = {}
+shekyl-scanner = {}
+shekyl-rpc-client = {}
+shekyl-rpc-types = {}
+shekyl-rpc-transport = {}
+shekyl-spawn = {}
+shekyl-tor-status = {}
+shekyl-engine-core = {}
+shekyl-engine-file = {}
+shekyl-engine-prefs = {}
+shekyl-engine-state = {}
+shekyl-consensus = {}
+shekyl-difficulty = {}
+shekyl-wallet-contract = {}
+shekyl-wire = {}
+shekyl-crypto-pq = {}
+shekyl-address = {}
+shekyl-units = {}
+shekyl-os-account = {}
+shekyl-types = {}
+
+[features]
+default = []
+multisig = []

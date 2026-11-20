@@ -1,0 +1,3 @@
+scope	rows	rows_without_carried	originated_share_of_carried_pct	per_minute_share_median_pct	per_minute_share_p95_pct	median_outbound_bytes_per_s	stem_bytes	stem_over_median_outbound_second_pct	minutes_outbound_under_17_cells_per_s_pct	minutes_outbound_under_170_cells_per_s_pct
+all_rows	41322	15	0.1846	0.0328	1.1002	390306	8738	2.24	0.039	6.372
+live_daemon	27129	14	0.2931	0.0806	1.7890	336190	8738	2.60	0.055	9.223

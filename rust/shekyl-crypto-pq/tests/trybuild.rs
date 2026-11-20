@@ -10,8 +10,7 @@
 //!
 //! The type has no public byte constructor. `OutputData` stores it (not an
 //! 8+1 pair a late accessor could re-wrap), and those fields are `pub(crate)`
-//! so a deserialized FFI-boundary value cannot be written onto a derived
-//! output. If a future edit opens any of those, every existing runtime test
+//! so a field taken from one output cannot be written onto another. If a future edit opens any of those, every existing runtime test
 //! still passes and the guarantee silently evaporates: a comment cannot fail.
 //! This test can.
 //!
@@ -24,8 +23,8 @@
 //! # Reading a failure in `encrypted_field_has_no_byte_constructor.stderr`
 //!
 //! That snapshot contains rustc's `help:` block, which lists the associated
-//! functions a caller might have meant — currently `assemble` and
-//! `from_ffi_json_unverified`. Trybuild compares stderr whole and offers no
+//! functions a caller might have meant — currently `assemble`, which is
+//! crate-private. Trybuild compares stderr whole and offers no
 //! wildcards, so the snapshot cannot be trimmed to the error line alone.
 //! A mismatch there therefore means one of two things, and they are worth
 //! telling apart before reaching for `TRYBUILD=overwrite`:
@@ -38,11 +37,38 @@
 //!   invariant changed; regenerate.
 //!
 //! The other two fixtures carry no suggestion block and are immune to both.
+//!
+//! # Cadence
+//!
+//! `trybuild` checks the fixtures in a cargo project of its own, where this
+//! crate's whole dependency tree compiles again (about 19 minutes on the CI
+//! runner, and the workspace's profile does not reach it). Since 2026-11-09
+//! the test is `#[ignore]`d and run every night by the `trybuild-ignored`
+//! lane (`scripts/ci/ignored_set_trybuild.sh`); a pull request's Rust job
+//! only checks that it is still here. `cargo test --test trybuild --
+//! --ignored` runs it locally.
 
 #[test]
+#[ignore = "checks its fixtures over the crate's whole dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
 fn an_unencrypted_output_field_cannot_be_constructed_downstream() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_overwritten.rs");
+    t.compile_fail("tests/trybuild/multisig_enc_fields_cannot_be_overwritten.rs");
     t.compile_fail("tests/trybuild/enc_fields_cannot_be_literal_constructed.rs");
     t.compile_fail("tests/trybuild/encrypted_field_has_no_byte_constructor.rs");
+}
+
+/// The transaction key (R-21): no downstream crate makes one from chosen
+/// bytes — not by an associated function, not by a literal, not by a
+/// literal of its stored form. The stored form deserializes (the wallet's
+/// sealed record holds it) and `TxKey::open` opens what was stored: that is
+/// the one door, named in `shekyl_crypto_pq::tx_key`'s docs, and a
+/// fixture cannot close it.
+#[test]
+#[ignore = "checks its fixtures over the crate's whole dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
+fn a_transaction_key_cannot_be_made_from_bytes_downstream() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/trybuild/tx_key_has_no_byte_constructor.rs");
+    t.compile_fail("tests/trybuild/tx_key_cannot_be_literal_constructed.rs");
+    t.compile_fail("tests/trybuild/stored_tx_key_cannot_be_literal_constructed.rs");
 }

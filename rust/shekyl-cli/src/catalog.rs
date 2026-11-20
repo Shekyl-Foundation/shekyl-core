@@ -12,6 +12,7 @@
 //! new command that is missing from either side fails to compile or
 //! fails the tree test.
 
+use shekyl_economics::FeePriority;
 use std::fmt::Write as _;
 
 /// One node of the command language.
@@ -31,12 +32,60 @@ pub(crate) enum CommandId {
     Address,
     Status,
     Chain,
+    ChainHeight,
+    ChainDifficulty,
+    ChainStats,
+    ChainAlt,
+    ChainSpent,
+    ChainCoinbase,
+    ChainCoinbaseSum,
+    Block,
+    BlockShow,
+    BlockHeader,
+    BlockHeaderList,
+    Peer,
+    PeerList,
+    PeerStats,
+    PeerConnections,
+    P2p,
+    P2pStats,
+    Sync,
+    SyncStatus,
+    Daemon,
+    DaemonStatus,
+    DaemonStop,
+    Txpool,
+    TxpoolStats,
+    TxpoolList,
+    TxpoolFlush,
+    Ban,
+    BanList,
+    BanAdd,
+    BanRemove,
+    BanShow,
+    Rpc,
+    RpcClient,
+    RpcClientAdd,
+    RpcClientSet,
+    RpcClientRemove,
+    RpcClientList,
+    RpcBundle,
+    RpcBundleShow,
+    RpcKey,
+    RpcKeyCreate,
+    RpcKeyShow,
+    Option,
+    OptionSet,
+    OptionShow,
     Version,
     Tx,
     TxList,
     TxShow,
+    TxRelay,
     TxNote,
     TxAbandon,
+    TxAlarm,
+    TxResend,
     Request,
     RequestNew,
     RequestList,
@@ -92,8 +141,11 @@ const IDS: &[CommandId] = &[
     CommandId::Tx,
     CommandId::TxList,
     CommandId::TxShow,
+    CommandId::TxRelay,
     CommandId::TxNote,
     CommandId::TxAbandon,
+    CommandId::TxAlarm,
+    CommandId::TxResend,
     CommandId::Request,
     CommandId::RequestNew,
     CommandId::RequestList,
@@ -131,6 +183,51 @@ const IDS: &[CommandId] = &[
     CommandId::Address,
     CommandId::Status,
     CommandId::Chain,
+    CommandId::ChainHeight,
+    CommandId::ChainDifficulty,
+    CommandId::ChainStats,
+    CommandId::ChainAlt,
+    CommandId::ChainSpent,
+    CommandId::ChainCoinbase,
+    CommandId::ChainCoinbaseSum,
+    CommandId::Block,
+    CommandId::BlockShow,
+    CommandId::BlockHeader,
+    CommandId::BlockHeaderList,
+    CommandId::Peer,
+    CommandId::PeerList,
+    CommandId::PeerStats,
+    CommandId::PeerConnections,
+    CommandId::P2p,
+    CommandId::P2pStats,
+    CommandId::Sync,
+    CommandId::SyncStatus,
+    CommandId::Daemon,
+    CommandId::DaemonStatus,
+    CommandId::DaemonStop,
+    CommandId::Txpool,
+    CommandId::TxpoolStats,
+    CommandId::TxpoolList,
+    CommandId::TxpoolFlush,
+    CommandId::Ban,
+    CommandId::BanList,
+    CommandId::BanAdd,
+    CommandId::BanRemove,
+    CommandId::BanShow,
+    CommandId::Rpc,
+    CommandId::RpcClient,
+    CommandId::RpcClientAdd,
+    CommandId::RpcClientSet,
+    CommandId::RpcClientRemove,
+    CommandId::RpcClientList,
+    CommandId::RpcBundle,
+    CommandId::RpcBundleShow,
+    CommandId::RpcKey,
+    CommandId::RpcKeyCreate,
+    CommandId::RpcKeyShow,
+    CommandId::Option,
+    CommandId::OptionSet,
+    CommandId::OptionShow,
     CommandId::Version,
     CommandId::Help,
     CommandId::Exit,
@@ -148,6 +245,9 @@ pub(crate) enum FlagKind {
     Value,
     /// A value drawn from a closed set. Tab offers the set.
     OneOf(&'static [&'static str]),
+    /// A list: the flag repeated, one value each time (`INPUT_GRAMMAR.md`
+    /// IG-6). Read with [`Split::values`].
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,16 +277,35 @@ impl Flag {
             kind: FlagKind::OneOf(words),
         }
     }
+
+    const fn list(name: &'static str) -> Self {
+        Self {
+            name,
+            kind: FlagKind::List,
+        }
+    }
 }
 
 const NO_FLAGS: &[Flag] = &[];
 const YES: &[Flag] = &[Flag::switch("--yes")];
 const SEND_FLAGS: &[Flag] = &[
-    Flag::one_of("--priority", &["economy", "standard", "high"]),
+    Flag::one_of("--priority", &FeePriority::NAMES),
     Flag::switch("--yes"),
 ];
 const ADDRESS_FLAGS: &[Flag] = &[Flag::switch("--full"), Flag::value("--out")];
 const FEE_FLAGS: &[Flag] = &[Flag::value("--inputs"), Flag::value("--outputs")];
+const TX_SHOW_FLAGS: &[Flag] = &[Flag::switch("--body")];
+const CHAIN_STATS_FLAGS: &[Flag] = &[Flag::value("--last")];
+const HEADER_LIST_FLAGS: &[Flag] = &[Flag::value("--from"), Flag::value("--to")];
+const COINBASE_SUM_FLAGS: &[Flag] = &[Flag::value("--from"), Flag::value("--to")];
+const TXPOOL_LIST_FLAGS: &[Flag] = &[Flag::switch("--short")];
+const BAN_ADD_FLAGS: &[Flag] = &[Flag::value("--duration")];
+const CEILING_FLAGS: &[Flag] = &[Flag::list("--ceiling")];
+const PEER_LIST_FLAGS: &[Flag] = &[
+    Flag::switch("--white"),
+    Flag::switch("--gray"),
+    Flag::value("--max"),
+];
 const TX_LIST_FLAGS: &[Flag] = &[
     Flag::switch("--in"),
     Flag::switch("--out"),
@@ -271,7 +390,92 @@ fn meta(id: CommandId) -> Meta {
             flags: ADDRESS_FLAGS,
         },
         Status => root("status", "status"),
-        Chain => root("chain", "chain"),
+        // Bare `chain` is the wallet's chain health. The children are the
+        // daemon's words (`INPUT_GRAMMAR.md` §13).
+        Chain => Meta {
+            word: "chain",
+            synonyms: &[],
+            usage: "chain",
+            parent: None,
+            bare: true,
+            omit_history: false,
+            flags: NO_FLAGS,
+        },
+        ChainHeight => child("height", "chain height", Chain),
+        ChainDifficulty => child("difficulty", "chain difficulty", Chain),
+        ChainStats => flagged("stats", "chain stats --last <n>", Chain, CHAIN_STATS_FLAGS),
+        ChainAlt => child("alt", "chain alt", Chain),
+        ChainSpent => child("spent", "chain spent <key-image>", Chain),
+        ChainCoinbase => interior("coinbase", "chain coinbase", Some(Chain)),
+        ChainCoinbaseSum => flagged(
+            "sum",
+            "chain coinbase sum --from <height> --to <height>",
+            ChainCoinbase,
+            COINBASE_SUM_FLAGS,
+        ),
+        Block => interior("block", "block", None),
+        BlockShow => child("show", "block show <hash|height>", Block),
+        BlockHeader => interior("header", "block header", Some(Block)),
+        BlockHeaderList => flagged(
+            "list",
+            "block header list --from <height> --to <height>",
+            BlockHeader,
+            HEADER_LIST_FLAGS,
+        ),
+        Peer => interior("peer", "peer", None),
+        PeerList => flagged(
+            "list",
+            "peer list [--white] [--gray] [--max <n>]",
+            Peer,
+            PEER_LIST_FLAGS,
+        ),
+        PeerStats => child("stats", "peer stats", Peer),
+        PeerConnections => child("connections", "peer connections", Peer),
+        P2p => interior("p2p", "p2p", None),
+        P2pStats => child("stats", "p2p stats", P2p),
+        Sync => interior("sync", "sync", None),
+        SyncStatus => child("status", "sync status", Sync),
+        Daemon => interior("daemon", "daemon", None),
+        DaemonStatus => child("status", "daemon status", Daemon),
+        DaemonStop => child("stop", "daemon stop", Daemon),
+        Txpool => interior("txpool", "txpool", None),
+        TxpoolStats => child("stats", "txpool stats", Txpool),
+        TxpoolList => flagged("list", "txpool list [--short]", Txpool, TXPOOL_LIST_FLAGS),
+        TxpoolFlush => child("flush", "txpool flush [id]", Txpool),
+        Ban => interior("ban", "ban", None),
+        BanList => child("list", "ban list", Ban),
+        BanAdd => flagged(
+            "add",
+            "ban add <ip> [--duration <quantity>]",
+            Ban,
+            BAN_ADD_FLAGS,
+        ),
+        BanRemove => child("remove", "ban remove <ip>", Ban),
+        BanShow => child("show", "ban show <ip>", Ban),
+        Rpc => interior("rpc", "rpc", None),
+        RpcClient => interior("client", "rpc client", Some(Rpc)),
+        RpcClientAdd => flagged(
+            "add",
+            "rpc client add <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
+            RpcClient,
+            CEILING_FLAGS,
+        ),
+        RpcClientSet => flagged(
+            "set",
+            "rpc client set <fingerprint> --ceiling <grant> [--ceiling <grant>]...",
+            RpcClient,
+            CEILING_FLAGS,
+        ),
+        RpcClientRemove => child("remove", "rpc client remove <fingerprint>", RpcClient),
+        RpcClientList => child("list", "rpc client list", RpcClient),
+        RpcBundle => interior("bundle", "rpc bundle", Some(Rpc)),
+        RpcBundleShow => child("show", "rpc bundle show", RpcBundle),
+        RpcKey => interior("key", "rpc key", Some(Rpc)),
+        RpcKeyCreate => child("create", "rpc key create", RpcKey),
+        RpcKeyShow => child("show", "rpc key show", RpcKey),
+        Option => interior("option", "option", None),
+        OptionSet => child("set", "option set <name> <value>", Option),
+        OptionShow => child("show", "option show [<name>]", Option),
         Version => root("version", "version"),
         Tx => interior("tx", "tx", None),
         TxList => Meta {
@@ -283,14 +487,17 @@ fn meta(id: CommandId) -> Meta {
             omit_history: false,
             flags: TX_LIST_FLAGS,
         },
-        TxShow => child("show", "tx show <id>", Tx),
+        TxShow => flagged("show", "tx show <id> [--body]", Tx, TX_SHOW_FLAGS),
+        TxRelay => child("relay", "tx relay <id>", Tx),
         TxNote => child("note", "tx note <txid> [<text...>]", Tx),
         TxAbandon => child("abandon", "tx abandon <txid>", Tx),
+        TxAlarm => child("alarm", "tx alarm", Tx),
+        TxResend => child("resend", "tx resend <txid>", Tx),
         Request => interior("request", "request", None),
         RequestNew => Meta {
             word: "new",
             synonyms: &[],
-            usage: "request new <amount> <label> [--expiry <unix|1h|7d>]",
+            usage: "request new <amount> <label> [--expiry <unix|1h|5min|7d>]",
             parent: Some(Request),
             bare: false,
             omit_history: false,
@@ -572,6 +779,15 @@ impl Split<'_> {
             .find(|(flag, _)| *flag == name)
             .map(|(_, value)| *value)
     }
+
+    /// Every value a list flag was given, in order (IG-6).
+    pub(crate) fn values(&self, name: &str) -> Vec<&str> {
+        self.values
+            .iter()
+            .filter(|(flag, _)| *flag == name)
+            .map(|(_, value)| *value)
+            .collect()
+    }
 }
 
 /// Reject unknown flags and flags whose value is missing or outside the set.
@@ -602,7 +818,7 @@ pub(crate) fn split_flags<'a>(
             let flag = known_flag(flags, arg)?;
             match flag.kind {
                 FlagKind::Switch => record(flag, None, &mut switches, &mut values)?,
-                FlagKind::Value | FlagKind::OneOf(_) => {
+                FlagKind::Value | FlagKind::OneOf(_) | FlagKind::List => {
                     let raw = args.get(index + 1).copied().unwrap_or("");
                     if raw.is_empty() || raw.starts_with("--") {
                         return Err(missing_flag_value(flag));
@@ -663,7 +879,10 @@ fn record<'a>(
     switches: &mut Vec<&'static str>,
     values: &mut Vec<(&'static str, &'a str)>,
 ) -> Result<(), String> {
-    if switches.contains(&flag.name) || values.iter().any(|(name, _)| *name == flag.name) {
+    let repeats = matches!(flag.kind, FlagKind::List);
+    if switches.contains(&flag.name)
+        || (!repeats && values.iter().any(|(name, _)| *name == flag.name))
+    {
         return Err(format!("{} was given twice", flag.name));
     }
     match value {
@@ -919,8 +1138,11 @@ const HELP_GROUPS: &[(&str, &[CommandId])] = &[
         &[
             CommandId::TxList,
             CommandId::TxShow,
+            CommandId::TxRelay,
             CommandId::TxNote,
             CommandId::TxAbandon,
+            CommandId::TxAlarm,
+            CommandId::TxResend,
         ],
     ),
     (
@@ -973,6 +1195,47 @@ const HELP_GROUPS: &[(&str, &[CommandId])] = &[
             CommandId::CheckReserve,
             CommandId::Sign,
             CommandId::Verify,
+        ],
+    ),
+    (
+        "Daemon",
+        &[
+            CommandId::ChainHeight,
+            CommandId::ChainDifficulty,
+            CommandId::ChainStats,
+            CommandId::ChainAlt,
+            CommandId::ChainSpent,
+            CommandId::ChainCoinbaseSum,
+            CommandId::BlockShow,
+            CommandId::BlockHeaderList,
+            CommandId::PeerList,
+            CommandId::PeerStats,
+            CommandId::PeerConnections,
+            CommandId::P2pStats,
+            CommandId::SyncStatus,
+            CommandId::DaemonStatus,
+            CommandId::DaemonStop,
+            CommandId::TxpoolStats,
+            CommandId::TxpoolList,
+            CommandId::TxpoolFlush,
+            CommandId::BanList,
+            CommandId::BanAdd,
+            CommandId::BanRemove,
+            CommandId::BanShow,
+            CommandId::OptionSet,
+            CommandId::OptionShow,
+        ],
+    ),
+    (
+        "Clients of the node (enrollment, over the channel or the owner's leg)",
+        &[
+            CommandId::RpcClientAdd,
+            CommandId::RpcClientSet,
+            CommandId::RpcClientRemove,
+            CommandId::RpcClientList,
+            CommandId::RpcBundleShow,
+            CommandId::RpcKeyCreate,
+            CommandId::RpcKeyShow,
         ],
     ),
     (
@@ -1114,7 +1377,7 @@ fn value_words(id: CommandId, args: &[&str]) -> Option<Vec<&'static str>> {
     let flag = meta(id).flags.iter().find(|flag| flag.name == last)?;
     match flag.kind {
         FlagKind::OneOf(words) => Some(words.to_vec()),
-        FlagKind::Switch | FlagKind::Value => None,
+        FlagKind::Switch | FlagKind::Value | FlagKind::List => None,
     }
 }
 

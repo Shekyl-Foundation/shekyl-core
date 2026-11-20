@@ -49,7 +49,7 @@ pub(crate) mod support {
                 .checked_add(amount)
                 .ok_or("input amount overflow")?;
             let constructed = construct_output(
-                &TEST_TX_KEY,
+                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient,
@@ -116,7 +116,7 @@ pub(crate) mod support {
         // `(combined_ss, output_index)` collapses pseudo-out blinding to zero.
         let recipient_output_index = (n_in as u64) + 100;
         let out_constructed = construct_output(
-            &TEST_TX_KEY,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &recipient,
@@ -128,7 +128,7 @@ pub(crate) mod support {
         let output = OutputInfo {
             dest_key: out_constructed.output_key,
             amount: AtomicUnits::from_raw(payment),
-            commitment_mask: out_constructed.z,
+            commitment_mask: out_constructed.commitment_mask(),
             enc_amount: out_constructed.enc_amount_wire(),
             enc_label: out_constructed.enc_label_wire(),
         };
@@ -173,6 +173,7 @@ pub(crate) mod support {
         );
 
         sign_transaction(
+            &shekyl_network::Network::Testnet.network_id(),
             prefix_hash,
             &spend_inputs,
             &[output],

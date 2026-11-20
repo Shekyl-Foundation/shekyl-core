@@ -16,27 +16,6 @@ SET(CMAKE_FIND_ROOT_PATH @prefix@ /usr)
 
 SET(ENV{PKG_CONFIG_PATH} @prefix@/lib/pkgconfig)
 
-SET(Readline_ROOT_DIR @prefix@)
-SET(Readline_INCLUDE_DIR @prefix@/include)
-SET(Readline_LIBRARY @prefix@/lib/libreadline.a)
-SET(Terminfo_LIBRARY @prefix@/lib/libtinfo.a)
-
-SET(LIBUNWIND_INCLUDE_DIR @prefix@/include)
-SET(LIBUNWIND_LIBRARIES @prefix@/lib/libunwind.a)
-SET(LIBUNWIND_LIBRARY_DIRS @prefix@/lib)
-
-SET(Boost_IGNORE_SYSTEM_PATH ON)
-SET(BOOST_ROOT @prefix@)
-SET(BOOST_INCLUDEDIR @prefix@/include)
-SET(BOOST_LIBRARYDIR @prefix@/lib)
-SET(Boost_IGNORE_SYSTEM_PATHS_DEFAULT OFF)
-SET(Boost_NO_SYSTEM_PATHS ON)
-SET(Boost_USE_STATIC_LIBS ON)
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  SET(Boost_USE_STATIC_RUNTIME ON)
-endif()
-
-SET(OPENSSL_ROOT_DIR @prefix@)
 SET(ARCHITECTURE @arch@)
 
 # for libraries and headers in the target directories

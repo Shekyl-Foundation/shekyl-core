@@ -48,7 +48,7 @@ The following can be set when running make: make FOO=bar
 ```
 SOURCES_PATH: downloaded sources will be placed here
 BASE_CACHE: built packages will be placed here
-FALLBACK_DOWNLOAD_PATH: If a source file can't be fetched, try here before giving up
+MIRROR_DOWNLOAD_PATH: fetch sources from here first, then from each package's own path, then from its alternates; every file is checked against its pinned hash
 DEBUG: disable some optimizations and enable more runtime checking
 HOST_ID_SALT: Optional salt to use when generating host package ids
 BUILD_ID_SALT: Optional salt to use when generating build package ids

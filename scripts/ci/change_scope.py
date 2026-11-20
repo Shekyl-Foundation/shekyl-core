@@ -50,8 +50,70 @@ the reason and answers `docs_only=false`, so everything runs. A wrong
 `true` skips the real matrix on a source change; a wrong `false` costs
 runner minutes. Only the first can merge broken code.
 
+Beside `docs_only`, the Rust job's scope (`rust-audit-test.yml`), decided by
+dependency, not by topic:
+
+- `rust_job`: `run` or `skip`. The job runs when a changed file is a crate
+  or a crate's input, or when a changed script or action belongs to the job
+  (`scripts/ci/job_owners.tsv`). A change owned by other jobs only, such as
+  a documentation gate, skips it.
+- `rust_tests`: `all`, `none`, or the changed workspace packages. The job
+  runs every test of the named packages and of every package that depends
+  on them, through nextest's `rdeps()`, so a changed fixture or helper runs
+  its consumers' tests too: a change to `shekyl-economics` runs the
+  economics sim's tests, which pin the shipped constants, and a change to
+  the sim alone runs the sim. A file's readers count beside its owner: a
+  crate whose test reads a workflow file or a script (the same literal scan,
+  over `.github/` and `scripts/` paths too), or that compiles another
+  crate's file through `#[path = "…"]`, which cargo has no edge for, is in
+  scope when that file changes. `none` is a job that runs for its own gate
+  steps (a changed script it executes) with no test to run. `all` is for an
+  input every crate shares: the workspace manifest and lock, the toolchain,
+  the cargo and nextest configuration, `config/` (read by build scripts), the
+  job's own workflow file, this classifier and its ownership table, any path
+  nothing claims, and any error (fail-closed, as above).
+- `rust_doc_pkgs`: the `-p` arguments for the doctest run, the reverse
+  closure of `rust_tests` cut to packages with a library target, since
+  `cargo test --doc` refuses a package without one.
+- `sim_narrations`: `run` or `skip`, for the economics sim's narration pins
+  (`rust-audit-test.yml`'s economics-sim-narrations job). The pins are
+  `#[ignore]`d, so `rust_tests` reaching the sim does not run them. They run
+  when a changed file is one of what a narration is made of (ruled
+  2026-11-16): the consensus configuration the sim and the economics crate
+  read, the economics crates, the block-weight rule, and the sim with its
+  pin list (`SIM_NARRATION_INPUTS`). #1323 changed the surge factor in
+  `config/` and `block_weight.rs` and merged green while the narrations
+  moved; both are inputs. A change that reaches the sim only through a
+  shared input (the lockfile, the toolchain, the Rust job's workflow) does
+  not run them; the nightly lane does.
+
+- `bench_rows`: `all`, `none`, or the benchmark rows a pull request's
+  capture runs (`benchmarks.yml`), each `<crate>::<gungraun-target>`. A row
+  is a `[[gated_row]]` of the measurement ledger with a path set, the code
+  whose change can move its counts. A row runs when the change's reverse
+  closure holds a package one of its path set's paths lies in, or when a
+  changed file lies under one of those paths. The closure is the
+  `rust_tests` packages and everything that links them: without the
+  dev-dependency edges, which join nearly every member to nearly every
+  other and do not change what a row counts. `all` wherever `rust_tests` is `all`,
+  and for a change to the capture's own inputs: `scripts/bench/`, the
+  benchmark workflow and the ledger. A wallet change runs the wallet rows
+  and not the block path's; the push to `dev` captures every row whatever
+  this says.
+
+The ownership table is the truth for `scripts/ci/**` and `.github/**`
+outside the workflow files, which own the jobs they define; the selftest
+holds the table to the tree (every tracked path claimed, no missing path or
+job, a job whose steps name a script is among its owners). Outside those
+two directories a row whose path ends in `/` claims a whole directory
+(`contrib/depends/`, the depends jobs' tree): a file under it is the named
+jobs' and no crate's, unless a crate reads it.
+
 Usage:
-  change_scope.py --base <sha> --head <sha>   # writes docs_only=… to $GITHUB_OUTPUT
+  change_scope.py --base <sha> --head <sha>   # writes docs_only=…, rust_job=…,
+                                              # rust_tests=…, rust_doc_pkgs=…,
+                                              # bench_rows=…
+                                              # to $GITHUB_OUTPUT
   change_scope.py --files a b c               # classify the given paths
   change_scope.py --selftest                  # pinned cases against this tree
 """
@@ -63,7 +125,48 @@ import subprocess
 import sys
 
 PROSE_SUFFIXES = (".md", ".mdc")
+# A `#[path = "…"]` literal compiles the named file into the module that
+# names it; across crates, cargo has no edge for that, so the literal is one.
+MODULE_SUFFIXES = (".rs",)
+WORKFLOW_SUFFIXES = (".yml", ".yaml")
 SELF = "scripts/ci/change_scope.py"
+JOB_OWNERS = "scripts/ci/job_owners.tsv"
+RUST_WORKFLOW = ".github/workflows/rust-audit-test.yml"
+RUST_JOB = "rust-audit-test:rust-audit-and-test"
+# The economics sim and the job that runs its narration pins.
+SIM = "shekyl-economics-sim"
+SIM_NARRATIONS_JOB = "rust-audit-test:economics-sim-narrations"
+# What a narration is made of (ruled 2026-11-16): the consensus
+# configuration the sim and the economics crate read, the economics crates,
+# the block-weight rule, and the sim with its pin list. The selftest asserts
+# each exists, so a rename cannot leave the pins with no input.
+SIM_NARRATION_INPUTS = (
+    "config/consensus_constants.json",
+    "config/economics_params.json",
+    "config/relay_policy.json",
+    "rust/shekyl-chain-rules/src/rules/block_weight.rs",
+    "scripts/ci/ignored_set_economics_sim.sh",
+    "scripts/ci/ignored_set_mode.sh",
+)
+SIM_NARRATION_DIRS = ("rust/shekyl-economics/", "rust/shekyl-economics-sim/")
+WORKFLOW_DIR = ".github/workflows/"
+# The paths the ownership table claims. A workflow file owns its own jobs;
+# any other file under the workflows directory is a plain owned path.
+OWNED_DIRS = ("scripts/ci/", ".github/")
+# The directories the table claims by one row each (`<dir>/`), outside
+# OWNED_DIRS; the selftest holds the list to the table.
+CLAIMED_DIRS = ("contrib/depends/",)
+
+
+def is_workflow(path):
+    return path.startswith(WORKFLOW_DIR) and path.endswith(WORKFLOW_SUFFIXES)
+# An input every crate's build or test run shares: any change runs everything.
+ALL_EXACT = ("rust/Cargo.toml", "rust/Cargo.lock", "rust/rust-toolchain.toml", SELF, JOB_OWNERS)
+ALL_PREFIXES = ("rust/.cargo/", "rust/.config/", "config/")
+# The nextest run excludes this crate (it needs the C library); the doctest
+# list follows.
+NEXTEST_EXCLUDED = ("shekyl-randomx-differential",)
+JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 CONSUMER_DIRS = ("rust/", "src/", "tests/", "cmake/", "contrib/")
 # A step that builds in a directory under docs/ makes it a consumer tree.
 DOCS_WORKING_DIRECTORY = re.compile(r"working-directory:\s*(docs/[A-Za-z0-9_./-]+)")
@@ -75,7 +178,11 @@ CONSUMING_WORKFLOWS = (
 # A string literal: double-quoted, no newline. Escapes are rare in paths and a
 # miss here only widens what counts as an input (fail-closed).
 LITERAL = re.compile(r'"([^"\n]*)"')
-DOCS_IN_LITERAL = re.compile(r'(?:^|[/"\s(])(docs/[^"\n]*)')
+# A tracked input inside a literal: a `docs/` path (the docs-only question),
+# or a `.github/` or `scripts/` path (the Rust-scope question: a test that
+# reads a workflow file or a script runs when that file changes, whichever
+# jobs own it).
+TRACKED_IN_LITERAL = re.compile(r'(?:^|[/"\s(])((?:docs|\.github|scripts)/[^"\n]*)')
 WHITESPACE = re.compile(r"\s")
 # Where a literal stops being a fixed path: a format placeholder or a glob.
 PATH_STOP = re.compile(r'[{}*$%<>?\[\]]')
@@ -180,34 +287,54 @@ def read_text(path):
 
 
 class Inputs:
-    """The docs paths and prose file names the consumers read."""
+    """The `docs/`, `.github/` and `scripts/` paths and the prose file names
+    the consumers read, each with the consumers that name it."""
 
     def __init__(self, consumers):
         self.exact = set()      # a fixed path: the file, or a directory above files
         self.prefixes = set()   # a path cut at a placeholder: a plain prefix
         self.resolved = set()   # prose paths a literal resolves to, outside docs/
+        self.named_by = {}      # input (exact, prefix or resolved) -> the consumers naming it
         for path in consumers:
             here = os.path.dirname(path)
             root = crate_root(path)
             for lit in LITERAL.findall(code_text(path)):
                 if WHITESPACE.search(lit):
                     continue
-                if lit.endswith(PROSE_SUFFIXES) and not PATH_STOP.search(lit):
+                if lit.endswith(PROSE_SUFFIXES + MODULE_SUFFIXES) and not PATH_STOP.search(lit):
                     rel = lit.lstrip("/")
                     for base in {here, root}:
-                        self.resolved.add(os.path.normpath(os.path.join(base, rel)))
+                        self._add(self.resolved, os.path.normpath(os.path.join(base, rel)), path)
                 if path.startswith("docs/") and lit.startswith("../") and not PATH_STOP.search(lit):
                     for base in {here, root}:
                         target = os.path.normpath(os.path.join(base, lit))
                         if target.startswith("docs/"):
-                            self.exact.add(target)
-                for m in DOCS_IN_LITERAL.finditer(lit):
+                            self._add(self.exact, target, path)
+                for m in TRACKED_IN_LITERAL.finditer(lit):
                     tail = m.group(1)
                     stop = PATH_STOP.search(tail)
                     if stop:
-                        self.prefixes.add(tail[: stop.start()])
+                        self._add(self.prefixes, tail[: stop.start()], path)
                     else:
-                        self.exact.add(os.path.normpath(tail))
+                        self._add(self.exact, os.path.normpath(tail), path)
+
+    def _add(self, inputs, key, consumer):
+        inputs.add(key)
+        self.named_by.setdefault(key, set()).add(consumer)
+
+    def readers(self, path):
+        """The consumers that read `path`, by the same rules as `reads`."""
+        keys = set()
+        if path in self.exact:
+            keys.add(path)
+        keys.update(e for e in self.exact if path.startswith(e + "/"))
+        keys.update(p for p in self.prefixes if path.startswith(p))
+        if path in self.resolved:
+            keys.add(path)
+        out = set()
+        for k in keys:
+            out.update(self.named_by.get(k, ()))
+        return out
 
     def reads(self, path):
         if path in self.exact:
@@ -247,13 +374,357 @@ def changed_files(base, head):
     return files
 
 
-def emit(docs_only):
-    line = f"docs_only={'true' if docs_only else 'false'}"
+def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all", sim_narrations="run"):
+    lines = [
+        f"docs_only={'true' if docs_only else 'false'}",
+        f"rust_job={rust_job}",
+        f"rust_tests={rust_tests}",
+        f"rust_doc_pkgs={rust_doc_pkgs}",
+        f"bench_rows={bench_rows}",
+        f"sim_narrations={sim_narrations}",
+    ]
     out = os.environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    print(f"scope: {line}")
+            f.write("\n".join(lines) + "\n")
+    for line in lines:
+        print(f"scope: {line}")
+
+
+# ---- The Rust job's scope ----------------------------------------------------
+
+
+class Workspace:
+    """The workspace members, their directories and the edges between them.
+
+    `cargo metadata --no-deps` parses the workspace manifests alone (no
+    registry, no network): each member's declared dependencies, every kind
+    (normal, dev, build, target-specific, optional), with the path of a
+    member it names. That is the same member-to-member graph nextest's
+    `rdeps()` walks, since features add no edge between members that is not
+    declared. `+stable` keeps rustup from installing the pinned toolchain on
+    a runner that lacks it; the metadata does not depend on the version.
+    """
+
+    def __init__(self, metadata):
+        members = set(metadata["workspace_members"])
+        self.dir_of = {}      # package name -> its directory, relative to the repo root
+        self.has_lib = {}
+        self.deps = {}        # package name -> the member names it declares
+        self.links = {}       # the same, without the dev-dependency edges
+        by_id = {p["id"]: p for p in metadata["packages"] if p["id"] in members}
+        manifests = {p["manifest_path"]: p["name"] for p in by_id.values()}
+        root = metadata["workspace_root"]
+        for p in by_id.values():
+            rel = os.path.relpath(os.path.dirname(p["manifest_path"]), os.path.dirname(root))
+            self.dir_of[p["name"]] = rel.replace(os.sep, "/") + "/"
+            self.has_lib[p["name"]] = any(
+                k in ("lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro")
+                for t in p["targets"] for k in t["kind"]
+            )
+            names, linked = set(), set()
+            for d in p["dependencies"]:
+                path = d.get("path")
+                name = None
+                if path:
+                    name = manifests.get(os.path.join(path, "Cargo.toml"))
+                elif d["name"] in manifests.values():
+                    name = d["name"]
+                if name:
+                    names.add(name)
+                    if d.get("kind") != "dev":
+                        linked.add(name)
+            self.deps[p["name"]] = names
+            self.links[p["name"]] = linked
+        if len(self.dir_of) < 50:
+            raise RuntimeError(f"only {len(self.dir_of)} workspace members read; refusing to scope")
+
+    @classmethod
+    def read(cls, rust_dir="rust"):
+        import json
+        last = None
+        for cargo in (["cargo", "+stable"], ["cargo"]):
+            try:
+                out = subprocess.run(
+                    [*cargo, "metadata", "--no-deps", "--offline", "--format-version", "1"],
+                    cwd=rust_dir, check=True, capture_output=True, text=True,
+                ).stdout
+                return cls(json.loads(out))
+            except (OSError, subprocess.CalledProcessError, ValueError) as e:
+                last = e
+        raise RuntimeError(f"cargo metadata failed: {last}")
+
+    def package_of(self, path):
+        """The member whose directory holds `path` (the deepest one), else None."""
+        best = None
+        for name, d in self.dir_of.items():
+            if path.startswith(d) and (best is None or len(d) > len(self.dir_of[best])):
+                best = name
+        return best
+
+    def rdeps(self, names, edges=None):
+        """`names` and every member that depends on one of them, transitively,
+        over `edges` (every declared edge unless given)."""
+        edges = self.deps if edges is None else edges
+        out = set(names)
+        grew = True
+        while grew:
+            grew = False
+            for name, deps in edges.items():
+                if name not in out and deps & out:
+                    out.add(name)
+                    grew = True
+        return out
+
+    def linked_rdeps(self, names):
+        """[`rdeps`] without the dev-dependency edges: the members whose
+        compiled code a change to `names` reaches. A test's reach is wider
+        (a dev-dependency changes what a test can observe); a benchmark
+        row counts code its crate links, and a dev-dependency edge joins
+        nearly every member to nearly every other."""
+        return self.rdeps(names, self.links)
+
+
+def read_owners(path=JOB_OWNERS):
+    """path -> set of `workflow:job` owners (`none` -> empty set)."""
+    owners = {}
+    for line in read_text(path).splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        p, _, jobs = line.partition("\t")
+        if not _:
+            raise RuntimeError(f"{path}: a row without a tab: {line!r}")
+        owners[p] = set() if jobs == "none" else set(jobs.split(","))
+    if not owners:
+        raise RuntimeError(f"{path}: no rows")
+    return owners
+
+
+def dir_claim(path, owners):
+    """The directory row (`<dir>/`) that claims `path`, the deepest one,
+    else None. Inside OWNED_DIRS every path has a row of its own."""
+    rows = [d for d in owners if d.endswith("/") and path.startswith(d)]
+    return max(rows, key=len) if rows and not path.startswith(OWNED_DIRS) else None
+
+
+def workflow_jobs(path):
+    """The job ids a workflow file defines."""
+    jobs, in_jobs = [], False
+    for line in read_text(path).splitlines():
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        m = JOB_HEADER.match(line)
+        if in_jobs and m:
+            jobs.append(m.group(1))
+    return jobs
+
+
+def workflow_name(path):
+    return os.path.basename(path).rsplit(".", 1)[0]
+
+
+def jobs_naming(path, needle):
+    """The `workflow:job` ids of `path`'s jobs whose steps name `needle`
+    outside a comment line."""
+    out, job, in_jobs = set(), None, False
+    for line in read_text(path).splitlines():
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        m = JOB_HEADER.match(line)
+        if in_jobs and m:
+            job = m.group(1)
+            continue
+        if in_jobs and job and needle in line and not line.lstrip().startswith("#"):
+            out.add(f"{workflow_name(path)}:{job}")
+    return out
+
+
+def workflow_owners(path, workflows):
+    """A workflow file owns the jobs it defines, and the jobs of other
+    workflows that call it as a reusable workflow."""
+    owners = {f"{workflow_name(path)}:{j}" for j in workflow_jobs(path)}
+    for wf in workflows:
+        if wf != path:
+            owners |= jobs_naming(wf, path)
+    return owners
+
+
+def rust_scope(files, inputs, trees, workspace, owners, workflows):
+    """(rust_job, rust_tests, reasons): `rust_tests` is 'all', 'none' or a
+    set of package names. Any file nothing claims decides for 'all'.
+
+    Every changed file is placed twice: by what it is (a member's file, a
+    workflow file, a path the ownership table claims) and by who reads it
+    (the consumers whose literals name it). A workflow file or a script is
+    owned by jobs and may also be read by a crate's test, as the schema
+    snapshot workflow is; both answers count."""
+    pkgs, job_run, reasons = set(), False, []
+
+    def everything(why):
+        reasons.append(why)
+        return "run", "all", reasons
+
+    def place_reader(f, r):
+        """A consumer that reads `f`: a member's file scopes its package; a
+        script with a row scopes its jobs. Anything else cannot be placed."""
+        nonlocal job_run
+        p = workspace.package_of(r)
+        if p is not None:
+            pkgs.add(p)
+            reasons.append(f"{f}: read by {r} ({p})")
+            return True
+        if r in owners:
+            if RUST_JOB in owners[r]:
+                job_run = True
+            reasons.append(f"{f}: read by {r}, owned by {', '.join(sorted(owners[r])) or 'no job'}")
+            return True
+        return False
+
+    for f in files:
+        if f in ALL_EXACT or f.startswith(ALL_PREFIXES):
+            return everything(f"{f}: an input every crate shares")
+        claimed = False
+        if is_workflow(f):
+            if f == RUST_WORKFLOW:
+                return everything(f"{f}: the Rust job's own workflow")
+            if f not in workflows:
+                return everything(f"{f}: a workflow file not in the tree")
+            claimed = True
+            if RUST_JOB in workflow_owners(f, workflows):
+                job_run = True
+                reasons.append(f"{f}: a workflow the Rust job calls")
+            else:
+                reasons.append(f"{f}: owns its own jobs, not the Rust job")
+        elif f.startswith(OWNED_DIRS):
+            if f not in owners:
+                return everything(f"{f}: no row in {JOB_OWNERS}")
+            claimed = True
+            if RUST_JOB in owners[f]:
+                job_run = True
+                reasons.append(f"{f}: a file the Rust job runs")
+            else:
+                reasons.append(f"{f}: owned by {', '.join(sorted(owners[f])) or 'no job'}")
+        elif (d := dir_claim(f, owners)) is not None:
+            claimed = True
+            if RUST_JOB in owners[d]:
+                job_run = True
+                reasons.append(f"{f}: under {d}, a directory the Rust job runs")
+            else:
+                reasons.append(f"{f}: under {d}, owned by {', '.join(sorted(owners[d])) or 'no job'}")
+        readers = sorted(inputs.readers(f))
+        for r in readers:
+            if not place_reader(f, r):
+                return everything(f"{f}: read by {r}, which is in no workspace member and has no row in {JOB_OWNERS}")
+        if claimed:
+            continue
+        if not readers and is_prose(f, trees):
+            reasons.append(f"{f}: prose no crate reads")
+            continue
+        p = workspace.package_of(f)
+        if p is not None:
+            pkgs.add(p)
+            reasons.append(f"{f}: {p}")
+            continue
+        if not readers:
+            return everything(f"{f}: in no workspace member and claimed by nothing")
+    excluded = pkgs & set(NEXTEST_EXCLUDED)
+    if excluded:
+        # The job builds this crate and never runs its tests (its own
+        # workflow does, under the C library); nothing depends on it.
+        reasons.append(f"{', '.join(sorted(excluded))}: excluded from this job's test run")
+        pkgs -= excluded
+        job_run = True
+    if pkgs:
+        return "run", pkgs, reasons
+    if job_run:
+        return "run", "none", reasons
+    return "skip", "none", reasons
+
+
+def doc_pkgs(workspace, tests):
+    """The `-p` arguments for `cargo test --doc` over the reverse closure of
+    the scoped packages: those with a library target, minus the crate the
+    nextest run excludes."""
+    if tests in ("all", "none"):
+        return ""
+    names = sorted(n for n in workspace.rdeps(tests) if workspace.has_lib[n] and n not in NEXTEST_EXCLUDED)
+    return " ".join(f"-p {n}" for n in names)
+
+
+# ---- The benchmark capture's scope -------------------------------------------
+
+LEDGER = "docs/benchmarks/measurement_ledger.toml"
+BENCH_WORKFLOW = ".github/workflows/benchmarks.yml"
+# A change here can move any row or the way rows are captured and compared.
+BENCH_INPUT_DIRS = ("scripts/bench/",)
+BENCH_INPUT_FILES = (LEDGER, BENCH_WORKFLOW)
+CAPTURE_SCRIPT = "scripts/bench/capture_rust_baseline.sh"
+BENCH_ROW = re.compile(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*')
+
+
+def pr_capture_rows(path=CAPTURE_SCRIPT):
+    """The rows of the capture script's `BENCHES` array, the set a pull
+    request's capture draws from, as `<crate>::<gungraun-target>`. The
+    nightly set (`NIGHTLY_BENCHES`) is not a pull request's to run."""
+    block = re.search(r"^BENCHES=\(\n(.*?)^\)", read_text(path), re.M | re.S)
+    rows = {f"{m.group(1)}::{m.group(2)}" for line in (block.group(1).splitlines() if block else []) if (m := BENCH_ROW.fullmatch(line))}
+    if not rows:
+        raise RuntimeError(f"{path}: no BENCHES row")
+    return rows
+
+
+def read_gated_rows(path=LEDGER):
+    """[(bench, spec)]: each `[[gated_row]]` of the ledger that is a row of
+    the pull-request set, with its path set's included paths. A row on an
+    undefined path set, a pull-request row with no gated row, or none at
+    all, is an error: the caller fails closed to `all`."""
+    import tomllib
+
+    data = tomllib.loads(read_text(path))
+    specs = {s["id"]: tuple(p for p in s["spec"] if not p.startswith((":!", ":(exclude)", ":^"))) for s in data.get("path_set", [])}
+    captured = pr_capture_rows()
+    rows = [(row["bench"], specs[row["path_set"]]) for row in data.get("gated_row", []) if row["bench"] in captured]
+    unnamed = captured - {bench for bench, _ in rows}
+    if unnamed:
+        raise RuntimeError(f"{path}: no gated row for {sorted(unnamed)}")
+    return rows
+
+
+def under(path, root):
+    """`path` is `root` or lies beneath it."""
+    root = root.rstrip("/")
+    return path == root or path.startswith(root + "/")
+
+
+def bench_rows(files, tests, workspace, rows):
+    """`all`, `none` or the sorted rows `files` can move (module docstring)."""
+    if tests == "all":
+        return "all"
+    if any(f in BENCH_INPUT_FILES or f.startswith(BENCH_INPUT_DIRS) for f in files):
+        return "all"
+    closure = workspace.linked_rdeps(tests) if isinstance(tests, set) else set()
+    hit = sorted(
+        bench
+        for bench, spec in rows
+        if any(workspace.package_of(p.rstrip("/") + "/") in closure for p in spec)
+        or any(under(f, p) for f in files for p in spec)
+    )
+    return " ".join(hit) if hit else "none"
+
+
+def sim_narrations_scope(files):
+    """(`run` or `skip`, reason) for the sim's narration pins over the
+    changed `files`."""
+    for f in files:
+        if f in SIM_NARRATION_INPUTS or f.startswith(SIM_NARRATION_DIRS):
+            return "run", f"{f}: a narration input"
+    return "skip", "no narration input changed"
+
+
+def rust_tests_value(tests):
+    return tests if isinstance(tests, str) else " ".join(sorted(tests))
 
 
 SELFTEST = [
@@ -272,7 +743,7 @@ SELFTEST = [
     ("README.md", True),                                  # quoted only in a cmake comment
     ("rust/shekyl-tor/src/lib.rs", False),                # any .rs, doc comment or not
     ("CMakeLists.txt", False),
-    ("src/p2p/net_node.inl", False),
+    ("src/cryptonote_basic/account.cpp", False),
     (".github/workflows/build.yml", False),
     ("scripts/ci/change_scope.py", False),
     ("docs/formal/checkct/dynamic/src/main.rs", False),   # a crate the rust job builds under docs/
@@ -338,8 +809,299 @@ def selftest():
     if got:
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
-    print(f"selftest: {len(SELFTEST) + 8 - bad} of {len(SELFTEST) + 8} hold")
+    bad += rust_selftest(inputs, trees)
+    print(f"selftest: {'FAILED' if bad else 'ok'} ({bad} wrong)")
     return 1 if bad else 0
+
+
+# (path, expected rust_job, expected rust_tests) for a change of that file alone
+RUST_SELFTEST = [
+    ("rust/shekyl-units/src/lib.rs", "run", {"shekyl-units"}),
+    ("rust/shekyl-wire/fuzz/Cargo.toml", "run", {"shekyl-wire"}),          # an excluded crate maps to the member above it
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run", {"shekyl-fcmp"}),   # maps to the fuzzed crate; fuzz-harness.yml builds the harness
+    ("rust/shekyl-mempool/Cargo.toml", "run", {"shekyl-mempool"}),         # a dependency edit: rdeps covers the consumers
+    ("rust/Cargo.toml", "run", "all"),
+    ("rust/Cargo.lock", "run", "all"),
+    ("rust/rust-toolchain.toml", "run", "all"),
+    ("rust/.config/nextest.toml", "run", "all"),
+    ("rust/.cargo/config.toml", "run", "all"),
+    ("config/anything.h", "run", "all"),                                   # read by build scripts
+    ("CMakeLists.txt", "run", "all"),                                      # claimed by nothing
+    ("external/randomx-v2/src/x.c", "run", "all"),
+    (SELF, "run", "all"),
+    (JOB_OWNERS, "run", "all"),
+    (RUST_WORKFLOW, "run", "all"),
+    (".github/workflows/docs-gates.yml", "skip", "none"),                  # owns its own jobs
+    (".github/workflows/report-dev-red.yml", "skip", "none"),              # called by the reporter jobs, not the Rust job
+    (".github/actions/install-rust/action.yml", "run", "none"),            # the Rust job uses it
+    (".github/CODEOWNERS", "skip", "none"),
+    ("scripts/ci/nextest_report.py", "run", "none"),                       # the Rust job runs it: its gate steps, no test
+    ("scripts/ci/ignored_set_mode.sh", "run", "none"),                     # sourced by the lane scripts the job runs
+    ("scripts/ci/check_doc_links.py", "skip", "none"),                     # a documentation gate
+    ("scripts/ci/p17_remote_dial.ps1", "skip", "none"),                    # claimed, run by no job
+    ("docs/design/CRYPTO_DOMAIN_REGISTRY.tsv", "run", None),               # the crates whose tests include_str! it
+    ("docs/test_vectors/PQC_HYBRID_V2_KAT.json", "run", None),             # read at test time
+    ("docs/FOLLOWUPS.md", "skip", "none"),                                 # prose (docs-only decides the job anyway)
+    ("rust/shekyl-randomx-differential/src/lib.rs", "run", "none"),        # built here, tested by its own workflow
+    (".github/workflows/schema-snapshot.yml", "run", None),                # owns its jobs, and three crates' tests read it
+    ("scripts/armed_lever.py", "run", {"shekyl-cli"}),                     # outside scripts/ci: a regtest test runs it
+]
+
+# The narration pins' scope: (changed files, expected sim_narrations).
+SIM_NARRATIONS_SELFTEST = [
+    # #1323's shape: the surge factor in config/, its crates, merged green
+    # while the narrations moved.
+    (["config/consensus_constants.json", "rust/shekyl-economics/src/params.rs",
+      "rust/shekyl-chain-rules/src/rules/block_weight.rs"], "run"),
+    (["rust/shekyl-economics/src/params.rs"], "run"),                       # a crate the sim calls
+    (["rust/shekyl-chain-rules/src/rules/block_weight.rs"], "run"),
+    (["rust/shekyl-economics-sim/tests/fixtures/stage2_narration.txt"], "run"),  # a pin's fixture
+    (["scripts/ci/ignored_set_economics_sim.sh"], "run"),                  # the pin list
+    (["scripts/ci/ignored_set_mode.sh"], "run"),                           # sourced by it
+    (["rust/shekyl-tor/src/lib.rs"], "skip"),                              # nothing the sim reads
+    (["scripts/ci/nextest_report.py"], "skip"),                            # the Rust job's, not the pins'
+    (["scripts/ci/check_doc_links.py"], "skip"),
+    (["config/relay_policy.json"], "run"),                                 # the economics crate's fee floor reads it
+    (["rust/shekyl-economics-sim/src/engine.rs"], "run"),                  # the sim
+    (["rust/Cargo.lock"], "skip"),                                         # every crate's tests run; the pins do not
+    (["rust/rust-toolchain.toml"], "skip"),
+    ([".github/workflows/rust-audit-test.yml"], "skip"),                   # the scratch push of #1414 ran them on this
+    (["config/tor_pins.json"], "skip"),                                    # config/, not a narration input
+    (["rust/shekyl-chain-rules/src/rules/difficulty.rs"], "skip"),               # another rule
+    (["rust/shekyl-fcmp/src/lib.rs"], "skip"),                             # in the sim's closure, not a narration input
+    ([".github/actions/install-rust/action.yml"], "skip"),
+]
+# A workflow file or an owned path a crate's test reads: the readers, not
+# only the owners, decide (rule 47: the readers are asserted to exist).
+WORKFLOW_READERS = {
+    ".github/workflows/schema-snapshot.yml": {"shekyl-chain-store", "shekyl-engine-state", "shekyl-peerlist"},
+}
+# `#[path = "…"]` crossing a crate boundary compiles another member's file
+# into this one's tests. Cargo has no edge for it, so rdeps() alone misses
+# the includer; the literal scan places it. The selftest asserts that for
+# every such include in the tree, and that the scan found the known one,
+# whose includer has no dependency edge to lean on.
+MOD_PATH = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
+KNOWN_CROSS_CRATE_PATH = ("rust/shekyl-rpc-channel/src/pinned_handshake.rs", "shekyl-rpc-channel-xcheck")
+
+
+def rust_selftest(inputs, trees):
+    bad = 0
+    workspace = Workspace.read()
+    owners = read_owners()
+    workflows = sorted(w for w in git("ls-files", WORKFLOW_DIR).splitlines() if w.endswith((".yml", ".yaml")))
+    for path, want_job, want_tests in RUST_SELFTEST:
+        job, tests, reasons = rust_scope([path], inputs, trees, workspace, owners, workflows)
+        ok = job == want_job and (want_tests is None and isinstance(tests, set) and tests or tests == want_tests)
+        bad += not ok
+        print(f"[{'ok' if ok else 'WRONG'}] {path}: rust_job={job} rust_tests={rust_tests_value(tests)} — {reasons[-1]}")
+    # A mixed change takes the union; one shared input decides for all.
+    job, tests, _ = rust_scope(["docs/FOLLOWUPS.md", "rust/shekyl-units/src/lib.rs", "scripts/ci/check_doc_links.py"], inputs, trees, workspace, owners, workflows)
+    if (job, tests) != ("run", {"shekyl-units"}):
+        print(f"WRONG: prose + a crate + a docs gate gave {job} {rust_tests_value(tests)}")
+        bad += 1
+    job, tests, _ = rust_scope(["rust/shekyl-units/src/lib.rs", "rust/Cargo.lock"], inputs, trees, workspace, owners, workflows)
+    if tests != "all":
+        print(f"WRONG: a crate + the lock file gave {rust_tests_value(tests)}")
+        bad += 1
+    # A file jobs own and crates read scopes both.
+    for path, want in WORKFLOW_READERS.items():
+        job, tests, _ = rust_scope([path], inputs, trees, workspace, owners, workflows)
+        got = tests if isinstance(tests, set) else set()
+        if job != "run" or not want <= got:
+            print(f"WRONG: {path} is read by {sorted(want)}; the scope gave {job} {rust_tests_value(tests)}")
+            bad += 1
+    # No workflow file or owned path falls back to all, bar the three that
+    # share with every crate (the ruling of 2026-11-09).
+    tracked_owned = git("ls-files", *OWNED_DIRS).splitlines()
+    fell_back = []
+    for path in tracked_owned:
+        if path in ALL_EXACT or path == RUST_WORKFLOW:
+            continue
+        job, tests, reasons = rust_scope([path], inputs, trees, workspace, owners, workflows)
+        if tests == "all":
+            fell_back.append(f"{path}: {reasons[-1]}")
+    if fell_back:
+        print(f"WRONG: {len(fell_back)} owned path(s) fall back to all: {fell_back[:5]}")
+        bad += 1
+    # Every cross-crate `#[path]` include scopes the includer's package.
+    crossings, uncovered = [], []
+    for src in git("ls-files", "rust/*.rs").splitlines():
+        here, me = os.path.dirname(src), workspace.package_of(src)
+        for lit in MOD_PATH.findall(code_text(src)):
+            target = os.path.normpath(os.path.join(here, lit))
+            them = workspace.package_of(target)
+            if them is None or them == me:
+                continue
+            crossings.append((src, them))
+            _, tests, _ = rust_scope([target], inputs, trees, workspace, owners, workflows)
+            if not (isinstance(tests, set) and me in tests):
+                uncovered.append(f"{src} includes {target} ({them}); a change there gave {rust_tests_value(tests)}")
+    if KNOWN_CROSS_CRATE_PATH not in crossings:
+        print(f"WRONG: the #[path] scan did not find {KNOWN_CROSS_CRATE_PATH}; {len(crossings)} crossing(s) found")
+        bad += 1
+    if uncovered:
+        print(f"WRONG: {len(uncovered)} cross-crate #[path] include(s) do not scope the includer: {uncovered[:5]}")
+        bad += 1
+    # Subject assertions (rule 47): the graph the scope stands on was read.
+    if len(workspace.dir_of) < 100:
+        print(f"WRONG: {len(workspace.dir_of)} workspace members read")
+        bad += 1
+    units = workspace.rdeps({"shekyl-units"})
+    if len(units) < 50:
+        print(f"WRONG: rdeps(shekyl-units) is {len(units)} members; the graph is missing edges")
+        bad += 1
+    # A dev-dependency is an edge: a fixture's change runs its consumers' tests.
+    if "shekyl-mempool" not in workspace.rdeps({"shekyl-store-codec"}):
+        print("WRONG: shekyl-mempool (store-codec is its dev-dependency) is not in rdeps(shekyl-store-codec)")
+        bad += 1
+    if any(workspace.deps[n] & set(NEXTEST_EXCLUDED) for n in workspace.deps):
+        print("WRONG: a member depends on the crate the nextest run excludes; its scope would be cut")
+        bad += 1
+    docs = doc_pkgs(workspace, {"shekyl-tor-transit-spike"})
+    if docs != "":
+        print(f"WRONG: a binary-only crate got doctest packages: {docs}")
+        bad += 1
+    if "-p shekyl-randomx-differential" in doc_pkgs(workspace, {"shekyl-units"}):
+        print("WRONG: the crate the nextest run excludes is in the doctest list")
+        bad += 1
+    if "-p shekyl-economics-sim" in doc_pkgs(workspace, {"shekyl-economics"}):
+        print("WRONG: the sim has no library target and cannot take cargo test --doc")
+        bad += 1
+    # The narration pins run where the sim can move.
+    for paths, want in SIM_NARRATIONS_SELFTEST:
+        got, why = sim_narrations_scope(paths)
+        ok = got == want
+        bad += not ok
+        print(f"[{'ok' if ok else 'WRONG'}] {' + '.join(paths)}: sim_narrations={got} — {why}")
+    if SIM not in workspace.dir_of:
+        print(f"WRONG: {SIM} is not a workspace member; the narration scope has no subject")
+        bad += 1
+    tree = set(git("ls-files").splitlines())
+    for path in SIM_NARRATION_INPUTS:
+        if path not in tree:
+            print(f"WRONG: narration input {path} is not in the tree")
+            bad += 1
+    for d in SIM_NARRATION_DIRS:
+        if not any(t.startswith(d) for t in tree):
+            print(f"WRONG: narration input {d} holds no tracked file")
+            bad += 1
+    # The ownership table against the tree.
+    tracked = [t for t in git("ls-files", *OWNED_DIRS).splitlines() if not is_workflow(t)]
+    missing = [t for t in tracked if t not in owners]
+    if missing:
+        print(f"WRONG: {len(missing)} tracked path(s) have no row in {JOB_OWNERS}: {missing[:5]}")
+        bad += 1
+    dirs = sorted(p for p in owners if p.endswith("/"))
+    if tuple(dirs) != CLAIMED_DIRS:
+        print(f"WRONG: the directory rows of {JOB_OWNERS} are {dirs}, not CLAIMED_DIRS {list(CLAIMED_DIRS)}")
+        bad += 1
+    for d in dirs:
+        if d.startswith(OWNED_DIRS) or not any(t.startswith(d) for t in tree):
+            print(f"WRONG: directory row {d} is inside {OWNED_DIRS} or holds no tracked file")
+            bad += 1
+        else:
+            for path in sorted(t for t in tree if t.startswith(d)):
+                job, tests, reasons = rust_scope([path], inputs, trees, workspace, owners, workflows)
+                if tests == "all":
+                    print(f"WRONG: {path}, under directory row {d}, falls back to all: {reasons[-1]}")
+                    bad += 1
+                    break
+    if "contrib/depends/" in dirs:
+        job, tests, reasons = rust_scope(["contrib/depends/Makefile"], inputs, trees, workspace, owners, workflows)
+        if (job, tests) != ("skip", "none"):
+            print(f"WRONG: the depends Makefile gave {job} {rust_tests_value(tests)}: {reasons}")
+            bad += 1
+    stale = [p for p in owners if p not in tracked and p not in dirs]
+    if stale:
+        print(f"WRONG: {len(stale)} row(s) in {JOB_OWNERS} name a path that is not tracked (or is a workflow file): {stale[:5]}")
+        bad += 1
+    jobs = {f"{workflow_name(w)}:{j}" for w in workflows for j in workflow_jobs(w)}
+    unknown = sorted({o for os_ in owners.values() for o in os_ if o not in jobs})
+    if unknown:
+        print(f"WRONG: {JOB_OWNERS} names job(s) no workflow defines: {unknown[:5]}")
+        bad += 1
+    if len(jobs) < 30:
+        print(f"WRONG: only {len(jobs)} jobs read from the workflows")
+        bad += 1
+    under = []
+    for path in owners:
+        named_by = set()
+        for w in workflows:
+            needle = os.path.dirname(path) if path.endswith("/action.yml") else path
+            named_by |= jobs_naming(w, needle)
+        if named_by - owners[path]:
+            under.append(f"{path} <- {sorted(named_by - owners[path])}")
+    if under:
+        print(f"WRONG: {len(under)} path(s) are named by a job their row does not list: {under[:5]}")
+        bad += 1
+    for job in (RUST_JOB, SIM_NARRATIONS_JOB):
+        if job not in jobs:
+            print(f"WRONG: {job} is not a job the workflows define")
+            bad += 1
+    return bad + bench_selftest(inputs, trees, workspace, owners, workflows)
+
+
+# (path, rows that must be in scope, rows that must not; "all"/"none" exact)
+BENCH_SELFTEST = [
+    ("rust/shekyl-engine-state/src/lib.rs", {"shekyl-engine-state::ledger_iai"}, {"shekyl-chain-ingest::block_path_iai", "shekyl-pow-randomx::verify_header_iai"}),
+    ("rust/shekyl-chain-store/src/store/connect.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-engine-file::open_iai", "shekyl-pow-randomx::verify_header_iai"}),
+    ("rust/shekyl-pow-randomx/src/vm.rs", {"shekyl-pow-randomx::verify_header_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # Crates the block path links and its path set does not list: the
+    # closure reaches the row through a listed crate that links them.
+    ("rust/shekyl-crypto-hash/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-curve-io/src/lib.rs", {"shekyl-chain-ingest::block_path_iai"}, set()),
+    ("rust/shekyl-chain-ingest/src/target.rs", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    ("rust/shekyl-chain-ingest/benches/fixtures/block_path_spend_1in_2out_unit.corpus", {"shekyl-chain-ingest::block_path_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    # The network and sync rows. A path set names packages. The runtime
+    # and the RPC server are dev-dependencies of the bench crate, so a
+    # change there reaches only the rows that name that package. Naming
+    # `shekyl-chain-ingest` selects every row that names it, which is why
+    # a template change also runs the block path, the body exchange and
+    # the wallet read.
+    ("rust/shekyl-chain-sync-runtime/src/serve.rs", {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai"}),
+    ("rust/shekyl-daemon-rpc/src/reads.rs", {"shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-levin/src/reader.rs", {"shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/shekyl-block-template/src/lib.rs", {"shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-p2p-transport::c5_iai"}),
+    # Noise reaches the transport, and through it the runtime and the RPC
+    # server; since RT-W11 it reaches `shekyl-rpc-transport` too (the RPC
+    # channel's initiator lives there, Rick 2026-11-15), and through it
+    # `shekyl-chain-ingest` and `shekyl-engine-core`, so the block path, the
+    # template and the engine's rows run. The ledger, which reaches neither,
+    # stays out.
+    ("rust/shekyl-noise/src/direction.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-engine-core::engine_trait_bench_ledger_balance_iai"}, {"shekyl-engine-state::ledger_iai"}),
+    ("rust/shekyl-p2p-transport/src/channel.rs", {"shekyl-p2p-transport::c5_iai", "shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::wallet_block_read_iai"}, {"shekyl-engine-state::ledger_iai", "shekyl-chain-ingest::block_path_iai", "shekyl-chain-ingest::block_template_iai"}),
+    ("rust/shekyl-engine-core/src/lib.rs", set(), {"shekyl-chain-ingest::serve_bodies_iai", "shekyl-chain-ingest::levin_bodies_iai", "shekyl-chain-ingest::block_template_iai", "shekyl-chain-ingest::wallet_block_read_iai", "shekyl-p2p-transport::c5_iai"}),
+    ("rust/Cargo.lock", "all", None),
+    ("scripts/bench/compare.py", "all", None),
+    (BENCH_WORKFLOW, "all", None),
+    (LEDGER, "all", None),
+    ("scripts/ci/check_doc_links.py", "none", None),
+]
+
+
+def bench_selftest(inputs, trees, workspace, owners, workflows):
+    bad = 0
+    rows = read_gated_rows()
+    names = {bench for bench, _ in rows}
+    for path, want, never in BENCH_SELFTEST:
+        _, tests, _ = rust_scope([path], inputs, trees, workspace, owners, workflows)
+        got = bench_rows([path], tests, workspace, rows)
+        if isinstance(want, str):
+            ok = got == want
+        else:
+            hit = set(got.split())
+            ok = got not in ("all", "none") and want <= hit and not (never & hit) and (want | never) <= names
+        print(f"[{'ok' if ok else 'WRONG'}] {path}: bench_rows={got}")
+        bad += 0 if ok else 1
+    # A row whose path set does not reach its own crate would stay out of
+    # scope when that crate changes: the closure could not find it.
+    for bench, spec in rows:
+        crate = bench.split("::")[0]
+        if not any(workspace.package_of(p.rstrip("/") + "/") == crate for p in spec):
+            print(f"WRONG: gated row {bench}: no path of its path set lies in {crate}")
+            bad += 1
+    return bad
 
 
 def main():
@@ -354,14 +1116,29 @@ def main():
     try:
         files = args.files or changed_files(args.base, args.head)
         trees = docs_consumer_trees(consuming_workflow_text())
-        docs_only, reasons = classify(files, Inputs(consumer_files()), trees)
+        inputs = Inputs(consumer_files())
+        docs_only, reasons = classify(files, inputs, trees)
+        if docs_only:
+            job, tests, more = "skip", "none", ["docs only: the Rust job is skipped"]
+            docs = ""
+            bench = "none"
+            narrations = "skip"
+        else:
+            workspace = Workspace.read()
+            owners = read_owners()
+            workflows = sorted(w for w in git("ls-files", WORKFLOW_DIR).splitlines() if w.endswith((".yml", ".yaml")))
+            job, tests, more = rust_scope(files, inputs, trees, workspace, owners, workflows)
+            docs = doc_pkgs(workspace, tests)
+            bench = bench_rows(files, tests, workspace, read_gated_rows())
+            narrations, why = sim_narrations_scope(files)
+            more = more + [f"sim narrations {narrations}: {why}"]
     except Exception as e:  # fail closed on anything
         print(f"scope: cannot decide ({e}); running everything (fail-closed)")
         emit(False)
         return 0
-    for r in reasons:
+    for r in reasons + more:
         print(f"scope: {r}")
-    emit(docs_only)
+    emit(docs_only, job, rust_tests_value(tests), docs, bench, narrations)
     return 0
 
 

@@ -20,13 +20,6 @@ pub enum KeyError {
     #[error("rederived public material does not match keys-file declaration")]
     PublicBytesMismatch,
 
-    /// The keys file declared a `(network, seed_format)` pair that the
-    /// derivation layer rejects as not permitted (e.g., mainnet with a
-    /// raw 32-byte seed). The keys-file integrity check should have
-    /// rejected this earlier; this variant is the defensive path.
-    #[error("keys file declares unsupported (network, seed_format) pair")]
-    UnsupportedDerivationPair,
-
     /// HKDF expand, scalar reduction, or ML-KEM seed expansion produced
     /// an invalid intermediate value. Almost certainly indicates a bug
     /// in `shekyl-crypto-pq`; the variant exists so a future audit can
@@ -149,6 +142,16 @@ pub(crate) enum KeyEngineError {
     /// Non-crypto structural failure during signing (address decode, wire encode, …).
     #[error("key engine primitive failure: {detail}")]
     Primitive { detail: &'static str },
+
+    /// The OS's random source failed while drawing the transaction key, so
+    /// nothing was built (`shekyl_crypto_pq::TxKey::random`).
+    #[error(transparent)]
+    Randomness(#[from] shekyl_crypto_pq::tx_key::RandomnessUnavailable),
+    /// The transaction builder refused or failed the signing pass; the
+    /// fault keeps its variant by identity, bounded (no inner text: the
+    /// signer logs that locally at debug).
+    #[error("signing failed: {0}")]
+    Sign(shekyl_tx_builder::SignFault),
 
     /// Proof generation failed inside the key actor (WI-RPC-3 inbound
     /// tx proofs / reserve proofs). Wraps [`shekyl_proofs::error::ProofError`]

@@ -402,8 +402,12 @@ fn main() -> ExitCode {
     // The verify round trip, ONCE and OUTSIDE the timer. `verify` is real work
     // and the denominator is the prover invocation alone, so folding it into
     // the series would inflate the figure the 15 % arm is taken against.
-    let paths_verified = match prove_and_verify(&corpus, &graded_path, CANONICAL_INPUTS, [0xA5; 32])
-    {
+    let paths_verified = match prove_and_verify(
+        &corpus,
+        &graded_path,
+        CANONICAL_INPUTS,
+        shekyl_types::TxSignableHash::from_bytes([0xA5; 32]),
+    ) {
         Ok(true) => true,
         Ok(false) => {
             eprintln!("the graded path did not verify against its own root; refusing the record");
@@ -422,7 +426,11 @@ fn main() -> ExitCode {
         DEFAULT_TOLERANCE_PCT,
         MAX_WALL_SECONDS,
         args.min_conditioning_s,
-        || match prove_only(&inputs, &graded_path, [0xA5; 32]) {
+        || match prove_only(
+            &inputs,
+            &graded_path,
+            shekyl_types::TxSignableHash::from_bytes([0xA5; 32]),
+        ) {
             Ok(r) => {
                 // Keep the proof bytes alive past the timer so the optimizer
                 // cannot elide the work the denominator is defined as.
@@ -580,10 +588,20 @@ fn run_control(depth: u8, min_conditioning_s: f64) -> ControlExperiment {
     // invalid proof could license the sparse path at the grading depth, which
     // is the single claim this experiment exists to make.
     let both_verified = matches!(
-        prove_and_verify(&dense_corpus, &dense_path, CANONICAL_INPUTS, [0x01; 32]),
+        prove_and_verify(
+            &dense_corpus,
+            &dense_path,
+            CANONICAL_INPUTS,
+            shekyl_types::TxSignableHash::from_bytes([0x01; 32])
+        ),
         Ok(true)
     ) && matches!(
-        prove_and_verify(&dense_corpus, &sparse_path, CANONICAL_INPUTS, [0x02; 32]),
+        prove_and_verify(
+            &dense_corpus,
+            &sparse_path,
+            CANONICAL_INPUTS,
+            shekyl_types::TxSignableHash::from_bytes([0x02; 32])
+        ),
         Ok(true)
     );
 
@@ -595,7 +613,14 @@ fn run_control(depth: u8, min_conditioning_s: f64) -> ControlExperiment {
         MAX_WALL_SECONDS,
         min_conditioning_s,
         || {
-            std::hint::black_box(prove_only(&dense_inputs, &dense_path, [0x01; 32]).ok());
+            std::hint::black_box(
+                prove_only(
+                    &dense_inputs,
+                    &dense_path,
+                    shekyl_types::TxSignableHash::from_bytes([0x01; 32]),
+                )
+                .ok(),
+            );
         },
     );
     let sparse = sustained_within_conditioned(
@@ -604,7 +629,14 @@ fn run_control(depth: u8, min_conditioning_s: f64) -> ControlExperiment {
         MAX_WALL_SECONDS,
         min_conditioning_s,
         || {
-            std::hint::black_box(prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).ok());
+            std::hint::black_box(
+                prove_only(
+                    &sparse_inputs,
+                    &sparse_path,
+                    shekyl_types::TxSignableHash::from_bytes([0x02; 32]),
+                )
+                .ok(),
+            );
         },
     );
 

@@ -324,9 +324,7 @@ impl Drop for SpawnedDaemon {
 
 /// The script in `tests/scripts/daemon_session.txt`, against a live
 /// daemon this test starts: testnet with both connectors off, so it holds
-/// the testnet genesis and nothing else. Not regtest: that daemon reports
-/// `fakechain`, and the shipped wallet path refuses it on identity
-/// (`FakechainPolicy::Refuse`). Ignored: CI does not build `shekyld` in the
+/// the testnet genesis and nothing else. Ignored: CI does not build `shekyld` in the
 /// Rust lane. Run with `SHEKYLD_BIN` set and `--ignored`.
 #[test]
 #[ignore = "daemon pattern: needs SHEKYLD_BIN and spawns shekyld --network testnet offline"]

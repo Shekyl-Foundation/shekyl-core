@@ -32,10 +32,11 @@
 
 // Stage 3a: the escalation is CONSENSUS code now, so this module deps it rather
 // than restating it. Nothing here computes a ramp.
-use shekyl_economics::escalation::{
-    staker_pool_share_at, ClosedShardCount, EscalationParams, ScaledShare,
-};
-use shekyl_economics::params::{EconomicParams, SCALE};
+use shekyl_economics::escalation::{staker_pool_share_at, ClosedShardCount, EscalationParams};
+use shekyl_economics::params::SCALE;
+
+use crate::baseline::{Override, ParamSet};
+use crate::engine::SimParams;
 
 /// Fixed-point scale for shares (`250_000 = 25 %`). **Sourced from**
 /// `shekyl_economics::params::SCALE` rather than restated — it is the unit
@@ -43,12 +44,12 @@ use shekyl_economics::params::{EconomicParams, SCALE};
 /// from the chain it is modelling.
 pub const SHARE_SCALE: u64 = SCALE;
 
-/// The §6.1 floor: today's `staker_pool_share`. **Read from the shipped config**
-/// via [`EconomicParams::default`], not restated, so the sim's floor is the
-/// chain's floor by construction.
+/// The §6.1 floor: the run's `staker_pool_share`, read from the run's
+/// [`EconomicParams`], not restated, so the sim's floor is the chain's floor
+/// by construction, and a run that overrides the share moves it.
 #[must_use]
-pub fn floor_share() -> u64 {
-    EconomicParams::default().staker_pool_share
+pub fn floor_share(run: &SimParams) -> u64 {
+    run.economic().staker_pool_share
 }
 
 /// Asymptote candidates (all strictly `< SHARE_SCALE`, so `actually_destroyed`
@@ -94,6 +95,12 @@ pub const KNEE_ARCHIVAL_LEN_BYTES: u64 = 6_750_000_000_000;
 
 /// One §6.1-conformant escalation candidate: a saturating banded-PL lift of the
 /// staker share from [`floor_share`] to `asymptote` as `n` rises to `knee`.
+///
+/// A candidate is the run with two economic overrides,
+/// `economic.escalation_asymptote_share` and `economic.escalation_knee_n`
+/// (ESR-16 completion, ruling 6), resolved once through the override door
+/// ([`SimParams::with_more`]): the shape is the one `EconomicParams::validate`
+/// accepts, and the floor is the run's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EscalationCurve {
     /// Saturation share, fixed-point `SHARE_SCALE`. Must be `> floor_share()` and
@@ -101,9 +108,47 @@ pub struct EscalationCurve {
     pub asymptote: u64,
     /// Closed-shard count at which `share` reaches `asymptote`.
     pub knee_shards: u64,
+    /// The run's escalation with this candidate's two overrides.
+    params: EscalationParams,
 }
 
 impl EscalationCurve {
+    /// The candidate `(asymptote, knee_shards)` on `run`.
+    ///
+    /// # Panics
+    ///
+    /// When the run's economic validator refuses the candidate. Every
+    /// member of [`family`] and [`flat_25`] is shape-legal by construction
+    /// (the band is inside §6.1); a refusal is a band edited out of it.
+    #[must_use]
+    pub fn on(run: &SimParams, asymptote: u64, knee_shards: u64) -> Self {
+        let cell = run
+            .with_more(Self::overrides(asymptote, knee_shards))
+            .unwrap_or_else(|e| panic!("escalation candidate ({asymptote}, {knee_shards}): {e}"));
+        Self {
+            asymptote,
+            knee_shards,
+            params: cell.economic().escalation(),
+        }
+    }
+
+    /// The two economic overrides a candidate is.
+    #[must_use]
+    pub fn overrides(asymptote: u64, knee_shards: u64) -> Vec<Override> {
+        vec![
+            Override {
+                set: ParamSet::Economic,
+                field: "escalation_asymptote_share".into(),
+                value: asymptote,
+            },
+            Override {
+                set: ParamSet::Economic,
+                field: "escalation_knee_n".into(),
+                value: knee_shards,
+            },
+        ]
+    }
+
     /// The staker-pool share at `n` closed shards, fixed-point `SHARE_SCALE`.
     ///
     /// **Delegates to the consensus function** — this module owns *which
@@ -113,19 +158,7 @@ impl EscalationCurve {
     /// statement about the sim rather than about consensus.
     #[must_use]
     pub fn share(&self, n: u64) -> u64 {
-        staker_pool_share_at(ClosedShardCount::new(n), &self.params()).to_raw()
-    }
-
-    /// This candidate as consensus [`EscalationParams`] (well-formed by
-    /// [`EscalationParams::try_new`] — band members are shape-legal by construction).
-    #[must_use]
-    pub fn params(&self) -> EscalationParams {
-        EscalationParams::try_new(
-            ScaledShare::from_raw(floor_share()),
-            self.knee_shards,
-            ScaledShare::from_raw(self.asymptote),
-        )
-        .expect("escalation family members are §6.1-conformant by construction")
+        staker_pool_share_at(ClosedShardCount::new(n), &self.params).to_raw()
     }
 
     /// The share as a fraction (for reporting / the fiat conversion in A1).
@@ -139,14 +172,11 @@ impl EscalationCurve {
 /// winner from the members A1 shows clear (under 0%/yr Kryder) without failing
 /// W9/W10.
 #[must_use]
-pub fn family() -> Vec<EscalationCurve> {
+pub fn family(run: &SimParams) -> Vec<EscalationCurve> {
     let mut curves = Vec::with_capacity(ASYMPTOTE_BAND.len() * KNEE_BAND.len());
     for &asymptote in &ASYMPTOTE_BAND {
         for &knee_shards in &KNEE_BAND {
-            curves.push(EscalationCurve {
-                asymptote,
-                knee_shards,
-            });
+            curves.push(EscalationCurve::on(run, asymptote, knee_shards));
         }
     }
     curves
@@ -157,38 +187,60 @@ pub fn family() -> Vec<EscalationCurve> {
 /// alone returns the last of three equal maxima, the shallowest
 /// (`ECONOMICS_SIM_PHASE0.md` §P0.1); A6, OQ-4 and A2 read this instead.
 #[must_use]
-pub fn steepest() -> EscalationCurve {
-    family()
+pub fn steepest(run: &SimParams) -> EscalationCurve {
+    family(run)
         .into_iter()
         .max_by_key(|c| (c.asymptote, std::cmp::Reverse(c.knee_shards)))
-        .unwrap_or_else(flat_25)
+        .unwrap_or_else(|| flat_25(run))
 }
 
 /// The **status-quo** curve: the frozen 25% share, no escalation. The A1
 /// baseline every candidate is measured against (does escalation clear where the
 /// flat share does not?).
 #[must_use]
-pub fn flat_25() -> EscalationCurve {
-    EscalationCurve {
-        asymptote: floor_share(),
-        // Any representable knee: the value is inert here because
-        // `asymptote == floor` makes the ramp flat (span 0), so
-        // `staker_pool_share_at` returns the floor for every `n` regardless of
-        // the knee. MIN_KNEE_N keeps it shape-legal now that `try_new` rejects
-        // sub-ramp knees.
-        knee_shards: EscalationParams::MIN_KNEE_N,
-    }
+pub fn flat_25(run: &SimParams) -> EscalationCurve {
+    // Any representable knee: the value is inert here because
+    // `asymptote == floor` makes the ramp flat (span 0), so
+    // `staker_pool_share_at` returns the floor for every `n` regardless of
+    // the knee. MIN_KNEE_N keeps it shape-legal now that `try_new` rejects
+    // sub-ramp knees.
+    EscalationCurve::on(run, floor_share(run), EscalationParams::MIN_KNEE_N)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A run that overrides an escalation field still builds every
+    /// candidate: the candidate's two values replace the run's on that
+    /// path, and the run's own set keeps its override.
+    #[test]
+    fn a_run_that_overrides_the_escalation_still_builds_its_candidates() {
+        let knee = EscalationParams::MIN_KNEE_N * 2;
+        let run = SimParams::with_overrides(vec![Override {
+            set: ParamSet::Economic,
+            field: "escalation_knee_n".into(),
+            value: knee,
+        }])
+        .expect("in band");
+        assert_eq!(run.economic().escalation_knee_n, knee);
+        let curves = family(&run);
+        assert_eq!(curves.len(), ASYMPTOTE_BAND.len() * KNEE_BAND.len());
+        for c in &curves {
+            assert_eq!(
+                c.share(c.knee_shards),
+                c.asymptote,
+                "the candidate's knee, not the run's"
+            );
+        }
+        assert_eq!(flat_25(&run).share(0), floor_share(&run));
+    }
+
     #[test]
     fn floor_at_zero_plateau_at_knee() {
-        for c in family() {
+        for c in family(&SimParams::default()) {
             // n = 0 ⇒ exactly the 25% floor.
-            assert_eq!(c.share(0), floor_share());
+            assert_eq!(c.share(0), floor_share(&SimParams::default()));
             // n ≥ knee ⇒ exactly the asymptote (plateau), never above.
             assert_eq!(c.share(c.knee_shards), c.asymptote);
             assert_eq!(c.share(c.knee_shards * 10), c.asymptote);
@@ -197,12 +249,15 @@ mod tests {
 
     #[test]
     fn monotone_and_bounded_below_full_burn() {
-        for c in family() {
+        for c in family(&SimParams::default()) {
             let mut prev = 0u64;
             for n in (0..=c.knee_shards).step_by((c.knee_shards / 50).max(1) as usize) {
                 let s = c.share(n);
                 assert!(s >= prev, "share must be monotone in n");
-                assert!(s >= floor_share(), "never below the 25% floor");
+                assert!(
+                    s >= floor_share(&SimParams::default()),
+                    "never below the 25% floor"
+                );
                 assert!(
                     s < SHARE_SCALE,
                     "asymptote < 100% — deflation must survive: {s}"
@@ -214,9 +269,9 @@ mod tests {
 
     #[test]
     fn flat_25_never_escalates() {
-        let f = flat_25();
-        assert_eq!(f.share(0), floor_share());
-        assert_eq!(f.share(1_000_000), floor_share());
+        let f = flat_25(&SimParams::default());
+        assert_eq!(f.share(0), floor_share(&SimParams::default()));
+        assert_eq!(f.share(1_000_000), floor_share(&SimParams::default()));
     }
 
     #[test]
@@ -225,8 +280,8 @@ mod tests {
         // step in n captures a large fraction of the total lift. This is the
         // exact property the `pv = A - F` form violated (a jump to the asymptote
         // at the knee).
-        for c in family() {
-            let span = c.asymptote - floor_share();
+        for c in family(&SimParams::default()) {
+            let span = c.asymptote - floor_share(&SimParams::default());
             let step = (c.knee_shards / 200).max(1);
             let mut prev = c.share(0);
             let mut n = step;
@@ -273,20 +328,14 @@ mod tests {
         // At a fixed asymptote and a mid shard count, a larger knee gives a
         // lower share (the lift is spread over more shards — §6.0 slower).
         let n = KNEE_BAND[0] * 4 / 5;
-        let fast = EscalationCurve {
-            asymptote: 750_000,
-            knee_shards: KNEE_BAND[0],
-        };
-        let slow = EscalationCurve {
-            asymptote: 750_000,
-            knee_shards: KNEE_BAND[2],
-        };
+        let fast = EscalationCurve::on(&SimParams::default(), 750_000, KNEE_BAND[0]);
+        let slow = EscalationCurve::on(&SimParams::default(), 750_000, KNEE_BAND[2]);
         assert!(fast.share(n) > slow.share(n));
     }
 
     #[test]
     fn the_steepest_member_has_the_top_asymptote_and_the_smallest_knee() {
-        let c = steepest();
+        let c = steepest(&SimParams::default());
         assert_eq!(c.asymptote, *ASYMPTOTE_BAND.iter().max().expect("a band"));
         assert_eq!(c.knee_shards, *KNEE_BAND.iter().min().expect("a band"));
     }

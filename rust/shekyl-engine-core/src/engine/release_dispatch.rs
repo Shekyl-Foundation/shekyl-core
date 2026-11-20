@@ -188,7 +188,8 @@ pub(crate) enum ReleaseRequestError {
     /// pending-post seal) — fail-closed, never an invented-empty set over a
     /// bad seal. This is our own store, so a failure here is internal
     /// corruption, not a reachable-daemon condition: distinct from
-    /// [`DaemonUnreachable`], which the caller can retry.
+    /// [`DaemonUnreachable`](ReleaseRequestError::DaemonUnreachable), which the
+    /// caller can retry.
     #[error("engine state read ({context}): {detail}")]
     State {
         /// Which read refused.
@@ -199,9 +200,9 @@ pub(crate) enum ReleaseRequestError {
     /// A daemon query needed to *prepare* the exit failed transiently — the
     /// dispatch-tip clock read here. Every such site is **before** the seal,
     /// so nothing was assembled or propagated and the caller may retry at
-    /// will. Kept distinct from [`State`] (a local sealed-store read) so
-    /// wallet-RPC can name a reachable daemon outage as retryable rather than
-    /// an opaque internal fault.
+    /// will. Kept distinct from [`State`](ReleaseRequestError::State) (a local
+    /// sealed-store read) so wallet-RPC can name a reachable daemon outage as
+    /// retryable rather than an opaque internal fault.
     #[error("daemon unreachable ({context}): {detail}")]
     DaemonUnreachable {
         /// Which daemon query failed.
@@ -306,7 +307,14 @@ impl ReleaseRequestError {
 /// without driving the engine to the dispatch stage; the seam's tripwire
 /// pins that the release call sits behind exactly this predicate.
 fn released_on_first_send_failure(e: &BroadcastSubmitError) -> bool {
-    matches!(e, BroadcastSubmitError::PersonaMismatch { .. })
+    // Nothing left the wallet: a persona mismatch, or a seal whose
+    // durability was not confirmed, which `seal_reporting` has already
+    // removed (Rick, 2026-11-19). The just-taken seal is released so the
+    // lane can be retried.
+    matches!(
+        e,
+        BroadcastSubmitError::PersonaMismatch { .. } | BroadcastSubmitError::SealNotSaved(_)
+    )
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as submit_drain
@@ -355,7 +363,7 @@ where
     /// (§7.4 pin: the principal's daemon session cannot be passed here — it
     /// does not implement the marker). `pruning_landed` is the shared SP-R0
     /// witness every funding-output spender takes; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     ///
     /// [`ClaimSourceFor`]: super::emission_source::ClaimSourceFor
     // The `dead_code` staging allow retired with PR-C: the production caller
@@ -543,29 +551,13 @@ where
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })
             .map_err(StakeEngineError::from)?;
-        if paths.len() != selection.records.len() {
-            return Err(StakeEngineError::from(BondAssemblyError::build(
-                "assemble_tx",
-                format!(
-                    "expected {} paths, got {}",
-                    selection.records.len(),
-                    paths.len()
-                ),
-            ))
-            .into());
-        }
-        // Non-empty: the sweep refuses an empty eligible set structurally.
-        let first = paths.first().ok_or_else(|| {
-            StakeEngineError::from(BondAssemblyError::build(
-                "assemble_tx",
-                "assemble_tx returned no paths",
-            ))
-        })?;
-        let tree_ctx = tree_context_from(&first.tree);
+        // One path per input asked for, in that order, all to one tree: the
+        // batch's own properties (R-26), so the records zip with its paths.
+        let tree_ctx = tree_context_from(&paths.tree());
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(paths)
+            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path.leaf_chunk.iter().map(leaf_entry_from_chunk).collect(),
@@ -612,16 +604,28 @@ where
             reference_height,
             terminal: None,
         };
-        let admission = store
-            .mutate(move |block| {
-                // One locked decision, shared with the bond-post/claim/drain
-                // seams: persona dedup first (remedy: wait), then cross-kind
-                // gindex overlap (remedy: retry), then the generation guard.
-                let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+        let (admission, durability) = store
+            .seal_reporting(
+                move |block| {
+                    // One locked decision, shared with the bond-post/claim/drain
+                    // seams: persona dedup first (remedy: wait), then cross-kind
+                    // gindex overlap (remedy: retry), then the generation guard.
+                    let admission = block.seal_release(sealed, dispatch_tip, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_release(&persona).is_some(),
+            )
             .await
-            .map_err(|e| ReleaseRequestError::state("pending-release seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, and the exit
+                // answers the save's cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    ReleaseRequestError::Submit(BroadcastSubmitError::SealNotSaved(cause))
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    ReleaseRequestError::state("pending-release seal", e)
+                }
+            })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(ReleaseRequestError::ReleasePending),
@@ -643,6 +647,10 @@ where
         //   the wallet and no daemon gave a verdict, so the seal this call
         //   just took is released (`remove_release`: byte-prune +
         //   reservation release + generation bump in one seal).
+        // - `SealNotSaved`: the seal's save was not confirmed, so nothing
+        //   was sent; `seal_reporting` removed the seal under its own guard,
+        //   so the removal here finds nothing, and the exit answers with the
+        //   save's own code (Rick, 2026-11-19).
         // - A definite `RejectedTerminal` is recorded on the record, which
         //   stays sealed with its reservation. "Never admitted, never
         //   relayed" holds only for an honest daemon: a lying one keeps valid
@@ -652,7 +660,13 @@ where
         // - `RejectedRetryable` and `Ambiguous` keep the record live as
         //   before; the end date ends them too.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        match submitter.submit_bound(assembled.bound_tx.clone()).await {
+        match submitter
+            .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
+                assembled.bound_tx.clone(),
+                durability,
+            ))
+            .await
+        {
             Ok(submit) => Ok(ReleaseReceipt {
                 release: assembled,
                 submit,
@@ -742,6 +756,16 @@ mod tests {
             submitter_persona: PCanonicalId::from_bytes([2; 32]),
         };
         assert!(released_on_first_send_failure(&mismatch));
+
+        let unconfirmed = BroadcastSubmitError::SealNotSaved(
+            super::super::error::PersistenceError::DurabilityUnconfirmed(
+                shekyl_engine_file::Unconfirmed::ClassicRename,
+            ),
+        );
+        assert!(
+            released_on_first_send_failure(&unconfirmed),
+            "an unconfirmed seal sent nothing: the lane reopens (Rick, 2026-11-19)"
+        );
 
         let retryable = BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable {
             cause: RetryableRejectCause::StaleRoot,
@@ -857,7 +881,13 @@ mod tests {
         let guard_at = code
             .find(guard)
             .expect("the release must be gated on the tested predicate, not inlined");
-        let release_at = code.find(release_call).expect("checked non-empty above");
+        // The seal's own unseal (`seal_reporting`) also calls it, before the
+        // send; the release this pin is about is the first one after the
+        // predicate.
+        let release_at = guard_at
+            + code[guard_at..]
+                .find(release_call)
+                .expect("the predicate's branch releases the sealed record");
         let record_at = code.find(record_call).expect("checked non-empty above");
         assert!(
             guard_at < release_at && release_at < record_at,
@@ -888,6 +918,7 @@ mod tests {
     fn bondless_source() -> crate::engine::emission_source::EmissionClaimSource {
         crate::engine::emission_source::EmissionClaimSource {
             chain_height: shekyl_types::ChainCount::from_raw(10_001),
+            tip_hash: crate::engine::test_support::test_block_hash_at(10_000),
             current_settled_epoch: shekyl_archival_retention::settlement_epoch_at_height(10_001),
             bond: None,
             epochs: Vec::new(),
@@ -905,7 +936,7 @@ mod tests {
     #[test]
     fn an_unvouchable_record_is_refused_before_it_can_read_as_no_bond() {
         use crate::engine::daemon::synced_chain_facts::{
-            CoherentChainView, SyncedChainFacts, TimelineBreak,
+            ChainAnchor, CoherentChainView, SyncedChainFacts, TimelineBreak,
         };
         use crate::engine::emission_source::{ClaimSourceFor, Vouching};
         use shekyl_types::{BlockHash, ChainCount};
@@ -950,10 +981,11 @@ mod tests {
         )
         .expect("synced");
         let view = CoherentChainView::reconcile(
-            &stale_high
-                .bracket(stale_high.top_hash())
-                .expect("bracketed"),
-            ChainCount::from_raw(10_001),
+            &stale_high,
+            ChainAnchor {
+                height: shekyl_types::BlockHeight::from_raw(10_000),
+                hash: BlockHash::from_bytes([0xCD; 32]),
+            },
         );
         assert!(view.rolled_back(), "the fixture must actually roll back");
         let fetched = ClaimSourceFor::for_test_with_vouching(
@@ -970,10 +1002,11 @@ mod tests {
         // And the control: an agreeing, vouched record is admitted, so the
         // refusals above are the gate and not a helper that refuses all.
         let agreeing = CoherentChainView::reconcile(
-            &stale_high
-                .bracket(stale_high.top_hash())
-                .expect("bracketed"),
-            ChainCount::from_raw(20_001),
+            &stale_high,
+            ChainAnchor {
+                height: shekyl_types::BlockHeight::from_raw(20_000),
+                hash: BlockHash::from_bytes([0xAB; 32]),
+            },
         );
         let fetched = ClaimSourceFor::for_test_with_vouching(
             p_id,

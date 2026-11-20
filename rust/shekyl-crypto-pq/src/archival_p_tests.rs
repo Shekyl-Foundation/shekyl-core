@@ -8,8 +8,7 @@ use super::*;
 const MASTER: [u8; MASTER_SEED_BYTES] = [0x33u8; MASTER_SEED_BYTES];
 
 fn keys() -> ArchivalPKeys {
-    derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-        .expect("derive P keys")
+    derive_archival_p_keys(&MASTER, Network::Mainnet, 0).expect("derive P keys")
 }
 
 /// The identity-only fast path is byte-identical to the full bundle's
@@ -20,16 +19,9 @@ fn keys() -> ArchivalPKeys {
 #[test]
 fn identity_pk_matches_the_full_bundle() {
     for slot in [0u32, 1, 7, 4_000_000] {
-        let full =
-            derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
-                .expect("full bundle");
-        let fast = derive_archival_p_identity_pk(
-            &MASTER,
-            DerivationNetwork::Mainnet,
-            SeedFormat::Bip39,
-            slot,
-        )
-        .expect("identity-only");
+        let full = derive_archival_p_keys(&MASTER, Network::Mainnet, slot).expect("full bundle");
+        let fast =
+            derive_archival_p_identity_pk(&MASTER, Network::Mainnet, slot).expect("identity-only");
         assert_eq!(
             fast.to_canonical_bytes().expect("encode fast"),
             full.hybrid_bond_id()
@@ -38,18 +30,6 @@ fn identity_pk_matches_the_full_bundle() {
             "slot {slot}: identity-only derivation diverged from the bundle"
         );
     }
-}
-
-/// The identity-only path keeps the permitted-seed-format gate.
-#[test]
-fn identity_pk_refuses_a_forbidden_seed_format() {
-    assert!(derive_archival_p_identity_pk(
-        &MASTER,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Raw32,
-        0
-    )
-    .is_err());
 }
 
 #[test]
@@ -109,21 +89,9 @@ fn identity_debit_and_address_keys_are_independent() {
 /// label drift. A change to any label string flips the derived bytes.
 #[test]
 fn wrong_label_yields_different_key() {
-    // Same (seed, net, fmt, slot); only the label differs.
-    let account = p_expand_32(
-        &MASTER,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        ARCHIVAL_P_ACCOUNT_SIGN_INFO,
-        0,
-    );
-    let bond = p_expand_32(
-        &MASTER,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        ARCHIVAL_P_BOND_SPEND_ED_INFO,
-        0,
-    );
+    // Same (seed, net, slot); only the label differs.
+    let account = p_expand_32(&MASTER, Network::Mainnet, ARCHIVAL_P_ACCOUNT_SIGN_INFO, 0);
+    let bond = p_expand_32(&MASTER, Network::Mainnet, ARCHIVAL_P_BOND_SPEND_ED_INFO, 0);
     assert_ne!(
         account.as_slice(),
         bond.as_slice(),
@@ -134,13 +102,7 @@ fn wrong_label_yields_different_key() {
     let mut tweaked = ARCHIVAL_P_ACCOUNT_SIGN_INFO.to_vec();
     let last = tweaked.len() - 1;
     tweaked[last] ^= 0x01;
-    let perturbed = p_expand_32(
-        &MASTER,
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        &tweaked,
-        0,
-    );
+    let perturbed = p_expand_32(&MASTER, Network::Mainnet, &tweaked, 0);
     assert_ne!(
         account.as_slice(),
         perturbed.as_slice(),
@@ -148,9 +110,9 @@ fn wrong_label_yields_different_key() {
     );
 
     // GF-9 serving key is a distinct label from the identity account-sign seed:
-    // the two L=32 Ed25519 seeds under the same (seed, net, fmt, slot) must
+    // the two L=32 Ed25519 seeds under the same (seed, net, slot) must
     // differ, or the serving `.onion` would leak the on-chain identity key.
-    let hs_id = derive_p_hs_id_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+    let hs_id = derive_p_hs_id_seed(&MASTER, Network::Mainnet, 0);
     assert_ne!(
         account.as_slice(),
         hs_id.as_slice(),
@@ -161,10 +123,8 @@ fn wrong_label_yields_different_key() {
 /// `p_slot` separation: distinct slots derive distinct personas.
 #[test]
 fn distinct_slots_yield_distinct_personas() {
-    let k0 =
-        derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0).unwrap();
-    let k1 =
-        derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 1).unwrap();
+    let k0 = derive_archival_p_keys(&MASTER, Network::Mainnet, 0).unwrap();
+    let k1 = derive_archival_p_keys(&MASTER, Network::Mainnet, 1).unwrap();
     assert_ne!(
         k0.hybrid_sign_pk.to_canonical_bytes().unwrap(),
         k1.hybrid_sign_pk.to_canonical_bytes().unwrap()
@@ -200,9 +160,8 @@ fn receipt_key_recovers_from_the_seed() {
         )
         .expect("a receipt made before a restore verifies after it");
 
-    let ed = derive_p_receipt_ed_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
-    let fn_dsa =
-        derive_p_receipt_fn_dsa_seed(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0);
+    let ed = derive_p_receipt_ed_seed(&MASTER, Network::Mainnet, 0);
+    let fn_dsa = derive_p_receipt_fn_dsa_seed(&MASTER, Network::Mainnet, 0);
     let (composed, _) =
         HybridEd25519FnDsa::keypair_from_seeds(&ed, &fn_dsa).expect("seeded keygen");
     assert_eq!(
@@ -217,19 +176,10 @@ fn receipt_key_recovers_from_the_seed() {
 #[test]
 fn receipt_key_is_scoped_to_slot_and_network() {
     let here = keys();
-    let other_slot =
-        derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 1)
-            .expect("slot 1");
-    let other_net =
-        derive_archival_p_keys(&MASTER, DerivationNetwork::Stagenet, SeedFormat::Bip39, 0)
-            .expect("stagenet");
-    let other_seed = derive_archival_p_keys(
-        &[0x34u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("another wallet");
+    let other_slot = derive_archival_p_keys(&MASTER, Network::Mainnet, 1).expect("slot 1");
+    let other_net = derive_archival_p_keys(&MASTER, Network::Stagenet, 0).expect("stagenet");
+    let other_seed = derive_archival_p_keys(&[0x34u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("another wallet");
     for (what, other) in [
         ("slot", &other_slot),
         ("network", &other_net),
@@ -248,26 +198,22 @@ fn receipt_key_is_scoped_to_slot_and_network() {
 /// would show as equal public bytes.
 #[test]
 fn receipt_key_shares_no_seed_with_its_siblings() {
-    let net = DerivationNetwork::Mainnet;
-    let fmt = SeedFormat::Bip39;
-    let receipt_ed = derive_p_receipt_ed_seed(&MASTER, net, fmt, 0);
-    let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(&MASTER, net, fmt, 0);
+    let net = Network::Mainnet;
+    let receipt_ed = derive_p_receipt_ed_seed(&MASTER, net, 0);
+    let receipt_fn_dsa = derive_p_receipt_fn_dsa_seed(&MASTER, net, 0);
     assert_ne!(receipt_ed.as_slice(), receipt_fn_dsa.as_slice());
     for (what, sibling) in [
-        (
-            "account-sign",
-            derive_p_account_sign_seed(&MASTER, net, fmt, 0),
-        ),
-        ("ml-dsa", derive_p_ml_dsa_seed(&MASTER, net, fmt, 0)),
+        ("account-sign", derive_p_account_sign_seed(&MASTER, net, 0)),
+        ("ml-dsa", derive_p_ml_dsa_seed(&MASTER, net, 0)),
         (
             "bond-spend ed25519",
-            derive_p_bond_spend_ed_seed(&MASTER, net, fmt, 0),
+            derive_p_bond_spend_ed_seed(&MASTER, net, 0),
         ),
         (
             "bond-spend ml-dsa",
-            derive_p_bond_spend_ml_dsa_seed(&MASTER, net, fmt, 0),
+            derive_p_bond_spend_ml_dsa_seed(&MASTER, net, 0),
         ),
-        ("hs-id", derive_p_hs_id_seed(&MASTER, net, fmt, 0)),
+        ("hs-id", derive_p_hs_id_seed(&MASTER, net, 0)),
     ] {
         assert_ne!(
             receipt_ed.as_slice(),
@@ -298,11 +244,4 @@ fn info_string_layout_is_frozen() {
     expected.push(0x00);
     expected.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
     assert_eq!(info, expected);
-}
-
-/// The seed format gate rejects an impermissible (network, format) pair.
-#[test]
-fn rejects_impermissible_seed_format() {
-    let r = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Raw32, 0);
-    assert!(r.is_err(), "mainnet must reject raw32");
 }

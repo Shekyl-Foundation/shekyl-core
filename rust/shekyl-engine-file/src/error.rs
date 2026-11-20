@@ -32,19 +32,16 @@
 //!   without an explicit rotation or restore opt-in — a file-system check
 //!   alone is insufficient (rule 35: secrets must not be re-written on every
 //!   autosave path).
-//! - [`WalletFileError::AtomicWriteRename`] carries the `io::Error` from the
-//!   `rename(2)` step specifically, so callers can distinguish "wrote the
-//!   tmp OK but could not atomically swap it in" from generic I/O.
-//! - [`WalletFileError::AtomicWriteFinalizeStaged`] is its sibling for the
-//!   step *before* the swap (clearing the staged file's temporary marking).
-//!   Two variants rather than one so `AtomicWriteRename` keeps meaning the
-//!   rename: a single variant covering both would name a step the failure
-//!   may never have reached.
+//! - [`WalletFileError::SaveStep`] carries the `io::Error` of the atomic
+//!   write's step that failed, and the step: writing the staged file,
+//!   syncing its folder, or renaming it over the target. A reader of the
+//!   error never infers the step from the error's kind.
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
+use shekyl_os_account::private_file::{HeldOpen, Step};
 use std::io;
 use std::path::PathBuf;
 
@@ -119,46 +116,37 @@ pub enum WalletFileError {
     #[error("wallet is already open by another process (lock held on {path})")]
     AlreadyLocked { path: PathBuf },
 
-    /// The atomic-write sequence wrote a fresh temp file successfully but
-    /// could not `rename(2)` it into place.
+    /// A step of the atomic write of `target` failed with the disk's error:
+    /// writing the staged file (removing a leftover, creating, writing and
+    /// syncing it), syncing its folder before the rename, or the rename
+    /// itself ([`Step`]). Another program holding a file past the wait is
+    /// [`Self::HeldOpen`]; a read-only target is [`Self::ReadOnly`].
     ///
     /// The original target (if any) is **untouched** — that is the
-    /// guarantee. Removal of the staged file is attempted and logged on
-    /// failure, but not guaranteed: a leftover `.<random>.shekyl-tmp`
-    /// sibling is possible and is clutter, never a wallet artifact.
-    #[error("atomic rename into {target} failed: {source}")]
-    AtomicWriteRename {
+    /// guarantee. Removal of the staged file is attempted on failure, but
+    /// not guaranteed: a leftover `<name>.new` sibling is possible and is
+    /// clutter, never a wallet artifact, and the next write of the target
+    /// removes it.
+    #[error("saving {target} failed at its {step} step: {source}")]
+    SaveStep {
+        step: Step,
         target: PathBuf,
         #[source]
         source: io::Error,
     },
 
-    /// The atomic-write sequence wrote and fsynced the staged file but
-    /// could not **finalize** it for the swap, so no `rename(2)` was ever
-    /// attempted and the target is untouched.
-    ///
-    /// Distinct from [`Self::AtomicWriteRename`] on purpose. On Windows
-    /// finalizing is `SetFileAttributesW(FILE_ATTRIBUTE_NORMAL)`, clearing
-    /// the `FILE_ATTRIBUTE_TEMPORARY` that the staged file is created with.
-    /// It must succeed *before* the rename, because `rename` does not clear
-    /// it and the attribute would otherwise ride onto the target — leaving a
-    /// permanent wallet artifact marked temporary, which is false metadata
-    /// and a standing cache-manager hint for every later writer that does
-    /// not flush explicitly. It does **not** undo the preceding `sync_all`
-    /// (`FlushFileBuffers` flushes unconditionally). That is a different
-    /// failure from a refused swap, with a different remedy, so it gets a
-    /// different variant: collapsing the two would leave
-    /// `AtomicWriteRename` unable to mean what its own name says.
-    ///
-    /// Structurally Unix-unreachable — `tempfile`'s `imp::keep` is `Ok(())`
-    /// there — but the variant is not `cfg`-gated, because an error type
-    /// that changes shape by platform makes every caller platform-aware.
-    #[error("atomic write into {target}: the staged file could not be finalized: {source}")]
-    AtomicWriteFinalizeStaged {
-        target: PathBuf,
-        #[source]
-        source: io::Error,
-    },
+    /// Another program held a file the Windows replace needs (a leftover
+    /// staged file, or the target) open past the replace's wait, most
+    /// likely an antivirus scanner or a search indexer. The target is
+    /// untouched. Its own variant because its remedy, excluding the
+    /// wallet's folder from scanning, is not the disk's (Rick, 2026-11-18).
+    #[error("{0}")]
+    HeldOpen(HeldOpen),
+
+    /// The target's read-only attribute is set, and the rename over it was
+    /// refused for it (Windows; Rick, 2026-11-19). The target is untouched.
+    #[error("{target} is read-only, so it could not be replaced")]
+    ReadOnly { target: PathBuf },
 
     /// The keys file decoded cleanly but declared a `network` byte that
     /// does not map to any known [`Network`]. Envelope-level validation
@@ -216,7 +204,7 @@ pub enum WalletFileError {
     /// A preferences-layer operation failed (HMAC mismatch on save,
     /// Bucket-3 field slipped through a save path, oversize body,
     /// TOML serialization failure, …). Surfaces
-    /// [`PrefsError`](shekyl_engine_prefs::PrefsError) verbatim so
+    /// [`PrefsError`] verbatim so
     /// the FFI can map each variant to an actionable user message
     /// without this crate having to mirror the prefs taxonomy.
     ///
@@ -230,16 +218,13 @@ pub enum WalletFileError {
 }
 
 impl WalletFileError {
-    /// Convenience: wraps an `io::Error` from a `rename(2)` call into the
-    /// dedicated variant. Centralizing the wrap here keeps the orchestrator
-    /// free of ad-hoc `Err(WalletFileError::AtomicWriteRename { … })`
-    /// construction at every call site.
-    pub(crate) fn rename(target: PathBuf, source: io::Error) -> Self {
-        Self::AtomicWriteRename { target, source }
-    }
-
-    /// Companion to [`Self::rename`] for the finalize step that precedes it.
-    pub(crate) fn finalize_staged(target: PathBuf, source: io::Error) -> Self {
-        Self::AtomicWriteFinalizeStaged { target, source }
+    /// The disk's error at `step` of writing `target`
+    /// ([`Self::SaveStep`]).
+    pub(crate) fn save_step(step: Step, target: PathBuf, source: io::Error) -> Self {
+        Self::SaveStep {
+            step,
+            target,
+            source,
+        }
     }
 }

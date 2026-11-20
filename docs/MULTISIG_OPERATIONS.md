@@ -3,8 +3,7 @@
 > **Protocol version:** V3.1 (equal-participants, coordinator-less)
 >
 > **Product path:** **Option E′** (`spend_auth_version = 0x02`) — dealer-mode
-> FROST on `y`, plaintext `b`, **no mandatory prover / no 1/N permanent-loss
-> assignment**. See `PQC_MULTISIG.md` §15.4a and
+> FROST on `y`, plaintext `b`, no prover role. See `PQC_MULTISIG.md` §15.4a and
 > `V3_1_MULTISIG_RUST_ENGINE.md` §0.5.
 >
 > **Spec:** `docs/PQC_MULTISIG.md`
@@ -12,11 +11,6 @@
 > **Analysis:** `docs/PQC_MULTISIG_V3_1_ANALYSIS.md`
 >
 > **Wire format:** `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md`
->
-> **Historical:** Sections that still describe a rotating designated prover,
-> ProverOutput / ProverReceipt, or 1/N recovery playbooks are **Option D
-> scaffold** (deleted, not shipped). They remain until rewritten; do not
-> treat them as E′ operational guidance.
 
 ## Overview
 
@@ -35,10 +29,8 @@ proof construction is not assigned to a single permanent loser.
 - **Per-output forward privacy** via ephemeral KEM
 - **Dealer-mode setup** — owner is trusted KeyGen; no DKG in the
   default path
-- **Multi-relay transport** for censorship resistance
-- **File-based transport** for air-gapped operation
-- ~~Rotating prover assignment / 1/N permanent loss~~ — **Option D only;
-  deleted under E′**
+- **Files are the transport**: members pass sealed ceremony files by any
+  means they choose; a file shows only that it is a Shekyl multisig file
 
 ---
 
@@ -53,9 +45,8 @@ proof construction is not assigned to a single permanent loser.
 | **3-of-5** | Tolerates 2 compromised keys | Tolerates 2 offline members | Medium | Organization treasury |
 | **5-of-5** | All must agree | All must be online | High | High-value cold storage (max N) |
 
-Target consensus cap: `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G;
-decided — code still `= 7` until MSW-1). After MSW-1, configurations
-with `n_total > 5` are unreachable.
+The cap is `MAX_MULTISIG_PARTICIPANTS = 5` (MSW-G): the wallet, the
+address and consensus refuse `n_total > 5`.
 
 **Rules of thumb:**
 
@@ -63,8 +54,10 @@ with `n_total > 5` are unreachable.
   to N. 2-of-3 means any two can spend.
 - If you need maximum security (cold storage), keep M high relative to N.
   5-of-5 means every member must agree.
-- Never use 1-of-N — this is just single-sig with extra steps. If any
-  one key is compromised, funds are lost.
+- 1-of-N groups cannot be made: the wallet, the address and consensus
+  all refuse a threshold below 2. With one signer it would be a shared
+  key under a multisig label, and any one compromised device would lose
+  the funds.
 - Availability and security trade off directly: higher M means more
   security but lower availability (more people must be online to spend).
 
@@ -76,9 +69,6 @@ For most users, 2-of-3 is the right starting point:
 - An attacker must compromise two keys (security).
 - Only two people need to coordinate for any spend (operational
   simplicity).
-- The **Option D** 1/N loss limitation (§6.1, historical) is **not**
-  the E′ product path. Under E′, plan for ordinary M-of-N availability
-  (enough shares online), not prover rebalancing.
 
 ### When to Use Larger Groups
 
@@ -93,39 +83,45 @@ Move to 3-of-5 or higher when:
 
 ---
 
-## 2. Group Setup (DKG Ceremony)
+## 2. Group Setup (Dealer Mode)
 
 ### Prerequisites
 
-- All N participants have Shekyl wallets with PQC key material
-- Each participant knows the hybrid public keys of all others
-- Communication channel exists between all participants
+- One participant, the owner, runs the setup. The owner generates every
+  key and is trusted with all of them until the member files are
+  delivered (`PQC_MULTISIG.md` §5.2).
+- Every participant has a Shekyl wallet to load its member file into.
+- A private channel from the owner to each participant: a member file
+  holds that participant's secrets.
 
 ### Steps
 
-1. **Exchange public keys**: Each participant exports their hybrid public
-   key (hex) and shares it with all others.
+1. **Create group**: In the GUI, navigate to Multisig → Setup Group.
+   Enter N (total participants) and M (required signatures).
 
-2. **Create group**: In the GUI, navigate to Multisig → Setup Group.
-   Enter N (total participants), M (required signatures), and all
-   participant public keys.
+2. **Key split**: The wallet generates the group's keys, splits the
+   group's FROST key M-of-N, and writes one member file per participant
+   (`PQC_MULTISIG.md` §6.6). No key-generation round runs, so the
+   participants need not be online together.
 
-3. **DKG execution**: The wallet runs `dkg-pedpop` to establish the
-   shared group key. This requires all N participants to be online
-   simultaneously.
+3. **Deliver the files, then keep them**: The owner gives each
+   participant its own member file over the private channel. Each
+   participant stores that file before the owner deletes its extra
+   copies. The file is the backup. It holds this participant's FROST
+   share, the group scalar `b`, both KEM secrets and the transport
+   secret, and none of those can be regenerated from a wallet seed or
+   from the group descriptor (`PQC_MULTISIG.md` §6.6, §8.4).
 
-4. **Fingerprint verification**: After DKG completes, each participant
-   sees the same 3-representation fingerprint. **All participants must
-   confirm their fingerprint matches** before transacting. This is the
-   only human verification step — do not skip it.
+4. **Fingerprint verification**: Each participant loads its member file
+   and sees the group's 3-representation fingerprint. **All participants
+   must confirm their fingerprint matches** before transacting. This is
+   the only human verification step — do not skip it.
 
-5. **Loss acknowledgment**: The GUI requires explicit acknowledgment of
-   the 1/N loss limitation before the group is finalized.
-
-6. **Export group descriptor**: After setup, export the group descriptor
-   file (Settings → Group Descriptor → Export). This single JSON file
-   contains everything needed to restore the group from seeds.
-   **Store it with your wallet backup.**
+5. **The descriptor is not the backup.** The group descriptor is the
+   group's public identity: the threshold, the public keys and the
+   address fingerprint. It holds no share and no KEM secret, so a seed
+   plus the descriptor does not restore the ability to receive or spend.
+   Store the member file with the wallet backup.
 
 ### Address Format
 
@@ -144,16 +140,17 @@ data.
 
 **Setup:**
 1. Each partner creates a Shekyl wallet on their own device.
-2. Both exchange public keys (in person — do not send over email).
-3. One partner initiates group creation as 2-of-2 (both must agree) or
-   2-of-3 with a third key on a separate backup device.
+2. One partner is the owner and creates the group as 2-of-2 (both must
+   agree) or 2-of-3, with the third member file on a separate device.
+3. The owner delivers each member file in person.
 4. Both verify fingerprints match by reading them aloud to each other.
-5. Both export group descriptors and store backups separately.
+5. Each partner stores its member file with its own backup. The owner
+   deletes its extra copies only after that.
 
 **Daily operation:**
 - Either partner can propose a spend.
-- The other reviews and signs via relay (if both online) or file
-  transport (if one is offline).
+- The other reviews and signs; the partners pass the ceremony files
+  between their devices (§7).
 - For the 2-of-3 variant: the backup device key is used only if one
   partner is unavailable. Store it in a safe or with a trusted person.
 
@@ -164,21 +161,21 @@ spending.
 
 **Setup:**
 1. Each of the 5 keyholders creates a wallet.
-2. Designate a setup coordinator (any member) who collects public keys
-   and initiates the DKG.
-3. All 5 must be online simultaneously for DKG. Schedule a 30-minute
-   window.
+2. Designate the owner (any member), who runs the setup and delivers
+   each keyholder its member file in person or over a private channel.
+3. Each keyholder loads its member file; no shared online window is
+   needed.
 4. All 5 verify fingerprints — use a group video call where each reads
    their fingerprint.
-5. All 5 export and back up their group descriptors independently.
+5. Each keyholder stores its member file with its own backup. The owner
+   deletes its extra copies only after every keyholder has confirmed
+   that.
 
 **Operations:**
 - Establish internal rules: "spending above X requires 24h delay for
   review" (enforced socially, not by protocol).
-- Use a shared relay for day-to-day operations plus file transport for
-  high-value transactions.
-- Assign one member as "consolidation lead" who periodically proposes
-  consolidation transactions to reduce the impact of 1/N loss.
+- Agree how files travel (a shared folder, encrypted email, USB for
+  high-value transactions) and a time for each signing session (§7).
 
 ### 3.3 Migrating from Single-Sig to Multisig
 
@@ -214,98 +211,99 @@ If an attacker floods the chain with fake multisig outputs, the
 
 ## 5. Spending Funds
 
-### 5.1 Proposing a Transaction
+### 5.1 Who Does What
 
-Any group member can propose a spend:
+A proposal names exactly M signers and, among them, one **responder**.
+The member who proposes collects the others' files, builds the proofs
+and broadcasts. The responder (often the device kept in a safe) takes
+part once per round and keeps nothing between visits. Every other
+signer is a **holder**: its wallet keeps one secret between the two
+rounds, in the same protected store as its share. The full protocol is
+`PQC_MULTISIG.md` §11.
 
-1. **Create SpendIntent**: Specify recipients, amounts, and fee. The
-   wallet automatically selects inputs, computes the chain state
-   fingerprint, and assigns provers.
+### 5.2 Proposing a Transaction
 
-2. **Broadcast to group**: The SpendIntent is encrypted with the group's
-   shared secret and sent to all members via configured relays (or
-   exported as a file for air-gapped operation).
+1. **Create the proposal**: specify recipients, amounts and fee. The
+   wallet selects inputs, computes the chain state fingerprint, and
+   names the signers and the responder.
+2. **Send it**: the wallet writes a `Proposal` file, sealed under the
+   group's key and signed with your envelope key. Pass it to the holders,
+   or, in a 2-of-N group, to the responder (§7).
+3. **Each signer checks it**: a receiving wallet checks the proposal
+   against its own view of the chain and its own records, then shows you
+   what it spends and to whom. Approving it is your decision. If a check
+   fails, the wallet refuses, shows which check, and sends nothing: tell
+   the group yourself.
 
-3. **14-check validation**: Each receiving member validates the intent
-   against structural, temporal, chain-state, and balance checks.
+### 5.3 The Two Rounds
 
-### 5.2 Proving
+**Round 1.** Each holder's wallet writes a `Commitment` for the
+proposer. The proposer forwards the proposal and the commitments to the
+responder, whose wallet answers with a `ResponderShare`; the proposer
+forwards all of it to the holders, whose wallets answer with a
+`SignatureShare`.
 
-The assigned prover for each output constructs the FCMP++ membership
-proof:
+**Round 2.** The proposer's wallet builds the proofs and writes a
+`FinalTx` for every other signer. Each signer's wallet builds the
+transaction itself from the proposal, checks the proofs against it, and
+only then signs it, writing a `HybridSig`. A signer never signs bytes its
+own wallet did not build or check.
 
-1. The prover generates the proof using their assigned outputs.
-2. The `ProverOutput` is broadcast to all members with an FCMP++ proof
-   commitment for equivocation detection.
-3. All members verify the proof before signing.
+A 2-of-N spend is four files: `Proposal`, `ResponderShare`, `FinalTx`,
+`HybridSig`. Each holder adds four files and two visits.
 
-### 5.3 Signing
-
-Each of M required signers produces a `SignatureShare`:
-
-1. Run invariant checks I1–I5 (SpendIntent validation, chain state,
-   FCMP++ proof, BP+ determinism, prover assignment).
-2. Sign the transaction hash with the hybrid signature scheme.
-3. Broadcast the `SignatureShare` with commitments to tx_hash,
-   fcmp_proof, and bp_plus_proof.
+Keep your wallet open from the moment it commits to a proposal until it
+has written its share: the proposer until its `FinalTx`, a holder until
+its `SignatureShare`. The secret it signs with is never written to disk,
+so a wallet closed in between gives up its part of that proposal. No
+funds are at risk: the group starts a new proposal for the same spend. A
+proposer that has written its `FinalTx` can close its wallet and finish
+later from that file, and a signer's second-round answer needs nothing
+kept.
 
 ### 5.4 Assembly
 
-Once M signatures are collected:
-
-1. Run assembly consensus check (I6) — all M shares must commit to the
-   same tx_hash, fcmp_proof, and bp_plus_proof.
-2. Assemble the final transaction.
-3. Broadcast to the network.
+The proposer's wallet checks every signer's signatures, assembles the
+transaction, checks the whole of it again, and broadcasts it.
 
 ### 5.5 Confirmation
 
-`tx_counter` advances only after observing the transaction confirmed
-on-chain at N confirmations (default: 3).
+The spend is done when the transaction is confirmed on-chain. Until its
+session ends, your wallet will not commit to another proposal that spends
+any of the same inputs.
 
 ---
 
 ## 6. Failure Recovery
 
-> **Option E′ note:** permanent key loss for a participant is an
-> **M-of-N threshold** problem (can the remaining members still meet
-> `m_required`?), not a rotating-prover 1/N permanent-loss problem.
-> §6.1 and §9.1 below still describe the **deleted Option D** playbook
-> and will be rewritten; do not follow them as E′ ops guidance.
-
 ### 6.1 A Participant Lost Their Keys
 
-> **Historical (Option D scaffold).**
+**Severity:** depends on the group: any M members can still spend.
 
-**Severity:** Medium (1/N of outputs at risk)
+If participant P permanently loses its member file:
 
-In V3.1, each participant is the designated prover for approximately 1/N
-of group outputs. If participant P permanently loses their keys, the
-outputs assigned to P as prover cannot be spent.
-
-**What to do:**
-1. Immediately propose a consolidation: spend all outputs NOT assigned
-   to P into new outputs (which will be reassigned to surviving provers).
-2. The consolidated outputs are safe. Only the ~1/N that were P's
-   prover assignments may be permanently lost.
-3. Consider creating a new group with a replacement participant and
-   migrating remaining funds.
+1. If at least M members remain, the group can still spend. Propose a
+   sweep of every output to a new group with a replacement for P.
+2. If fewer than M remain, the group can no longer spend. There is no
+   recovery: plan the threshold and the backups so that this needs more
+   than `n − m` simultaneous losses.
 
 **Prevention:**
-- All participants should keep encrypted backups of their seed phrases.
+- Every member keeps an encrypted backup of its member file (§6.2).
 - Export and securely store the group descriptor file.
-- For high-value groups, consider periodic consolidation to rebalance
-  prover assignments.
 
-### 6.2 Restoring a Group After Wallet Reinstall
+### 6.2 Restoring a Member After Wallet Reinstall
+
+The member file is what restores this participant. A wallet seed and
+the group descriptor do not: the descriptor is public, and the share
+and the KEM secrets are not derived from the seed (`PQC_MULTISIG.md`
+§6.6).
 
 1. Reinstall the Shekyl wallet.
-2. Restore your individual wallet from seed.
-3. Import the group descriptor file (Settings → Group Descriptor →
-   Import).
-4. The wallet rebuilds group state by scanning the chain from the
-   group's creation height.
-5. Verify the fingerprint matches your saved copy.
+2. Import the member file from the backup made at setup.
+3. The wallet rescans the chain. Receive and spend state come back
+   from the file plus the chain (`PQC_MULTISIG.md` §8.4).
+4. Verify the fingerprint matches the saved copy.
 
 ### 6.3 Suspecting a Participant's Device Is Compromised
 
@@ -315,8 +313,8 @@ If you suspect participant P's device is compromised:
 
 1. **Do not sign any new intents.** Alert all other participants
    out-of-band (phone, in person).
-2. Check for invariant violations in the Dashboard. A compromised
-   participant might produce equivocating proofs.
+2. Check the wallet's refusals: a wallet that refuses a file shows which
+   check failed and which member sent it.
 3. If P's key is confirmed compromised:
    - Immediately sweep all outputs to a new group (without P) using the
      remaining M-1 honest signers (if M-1 >= threshold) or contact
@@ -330,83 +328,47 @@ If you suspect participant P's device is compromised:
 The Dashboard shows a yellow alert: "Signed intent not broadcast."
 
 **Causes:**
-- Relay was down during assembly.
+- A ceremony file never reached the proposer.
 - Network issue prevented broadcast.
-- The assembler went offline mid-process.
+- The proposer went offline mid-process.
 
 **What to do:**
-- If the intent hasn't expired: any member can retry the broadcast.
-- If the intent expired: create a new intent for the same transaction.
-  The `tx_counter` has not advanced (it only advances on-chain
-  confirmation), so the new intent will work normally.
-
-### 6.5 Transaction Counter Divergence
-
-The Dashboard shows: "Transaction counter divergence."
-
-**Meaning:** Your wallet missed a confirmed transaction, so your
-`tx_counter` is behind the group's.
-
-**What to do:**
-1. Wait for the automatic `CounterProof` exchange. Another member will
-   send you chain evidence of the transaction you missed.
-2. Your wallet verifies the proof against your local chain view
-   (8 verification rules).
-3. If your chain isn't synced to the relevant block yet, wait for sync
-   to complete — do not reject valid proofs prematurely.
-4. Once verified, your counter updates and you can sign new intents.
-
-**If CounterProof verification fails:** see §6.6.
-
-### 6.6 CounterProof Verification Failure
-
-The Dashboard shows a red alert: "CounterProof verification failed."
-
-**Meaning:** A CounterProof from another participant failed one of the
-8 verification rules. This could indicate:
-
-- A malicious participant sending a fabricated proof
-- A chain reorganization that invalidated the proof
-- A bug in the sender's wallet
-
-**What to do:**
-1. Do not accept the counter value.
-2. Contact the participant who sent the proof out-of-band.
-3. If a chain reorg occurred, wait for your chain to stabilize and ask
-   them to resend.
-4. If you suspect malice, alert all other participants and consider
-   migrating to a new group without the suspected party.
-5. As a last resort, perform a full wallet rescan to rebuild state from
-   the chain.
+- If the session hasn't expired (its reference block can still be used,
+  §7): the proposer retries the broadcast, or another member sends it
+  the missing file again.
+- If it expired: create a new intent for the same transaction. Its inputs
+  are free again once the old session has ended.
 
 ---
 
-## 7. Relay Configuration
+## 7. Signing Sessions
 
-For censorship resistance, configure at least 3 relays operated by
-distinct operators:
+The wallet moves no bytes over a network for multisig. Each step of a
+spend is a **ceremony file** the wallet writes; members pass the files by
+any means: a shared folder, encrypted email, a messenger, a USB stick.
+A file is sealed under the group's key and signed by its sender, and
+shows only its size and that it is a Shekyl multisig file, so the
+channel needs no trust.
 
-1. Navigate to Multisig → Settings → Relay Configuration.
-2. Add relay URLs with their operator IDs.
-3. The UI warns if fewer than 3 distinct operators are configured.
+A spend is one session:
 
-All multisig messages are encrypted end-to-end. Relay operators see
-only encrypted blobs and cannot determine message types, roles, or
-transaction details.
+1. **Agree a time.** The signers who will take part are named in the
+   proposal, so agree who they are and when. A session lasts about three
+   hours (`PROOF_VALIDITY_HORIZON` blocks from the proposal's reference
+   block); after that no block can include the transaction and the
+   proposal must be made again.
+2. **Pass files.** The proposer sends the proposal; each signer imports
+   the files it receives, the wallet checks them, and it writes the next
+   file for the others. Import files in any order: the wallet tells you
+   which step each one is.
+3. **Bring the safe-held device out once.** A device kept offline comes
+   out for the session, takes part, and goes back. It does not need a
+   network connection or a correct clock; a device without a chain view
+   cannot tell whether the session has expired, and signing an expired
+   proposal produces a transaction no block will include, not a loss.
 
-### File Transport as Alternative
-
-For maximum security or air-gapped operation, use file-based transport
-(Multisig → File Transport tab):
-
-1. Export the signing request as a file.
-2. Transfer it via USB drive, encrypted email, or any secure channel.
-3. The recipient imports, signs, and exports the response.
-4. Collect M response files and assemble.
-
-File transport has equal status with relay transport. It is not an
-"advanced" option — it is the trust anchor for security-conscious
-treasuries.
+Filenames are random and say nothing about the file. The wallet shows
+each file's meaning after it opens it, and never writes that to disk.
 
 ---
 
@@ -421,7 +383,7 @@ treasuries.
 | **Coercion of one member** | M-1 others can refuse to sign |
 | **Single point of failure** | Key loss doesn't destroy all funds |
 | **Insider threat (below threshold)** | <M colluding insiders can't spend |
-| **Relay censorship** | Multi-relay + file transport as fallback |
+| **A channel that drops or reads files** | Files are sealed and signed; pass them another way |
 
 ### What Multisig Does NOT Defend Against
 
@@ -430,7 +392,6 @@ treasuries.
 | **M keys compromised simultaneously** | By definition, M keys = full control |
 | **Social engineering of M signers** | Protocol can't prevent humans from being tricked |
 | **Protocol bugs** | Any software can have bugs; audit mitigates |
-| **All relays colluding** | Messages could be delayed (not stolen); file transport is the escape hatch |
 | **Quantum attack on ML-DSA-65** | V3.1 uses hybrid PQC; classical fallback exists |
 | **Physical coercion of M members** | Out of scope for cryptographic protocol |
 
@@ -453,19 +414,11 @@ For your specific situation, answer these questions:
 These are known limitations. They are not bugs — they are engineering
 trade-offs documented for transparency.
 
-### 9.1 1/N Prover Loss
+### 9.1 Key Loss Is Threshold Loss
 
-> **Historical (Option D scaffold).** Under Option E′ there is no
-> rotating prover assignment and no 1/N permanent-loss lock from that
-> mechanism. Key-loss risk is ordinary threshold failure (`m_required`
-> cannot be met).
-
-If a participant permanently disappears under the **deleted** Option D
-model, approximately 1/N of group
-outputs become unspendable. This is inherent to V3.1's rotating prover
-model. **Mitigation:** periodic consolidation to rebalance prover
-assignments. **Future fix:** V4 will use threshold FCMP++ proving to
-eliminate this limitation.
+Any M members can spend. If more than `n − m` members permanently lose
+their member files, the group can no longer spend, and nothing recovers
+it. Choose `m` and the backups with that in mind (§6.1).
 
 ### 9.2 ML-DSA-65 Signing Latency
 
@@ -498,10 +451,13 @@ support ML-DSA-65. V3.1 signing requires a full desktop or laptop.
 Hardware wallet support is a V3.2 goal. See `docs/FOLLOWUPS.md` for
 vendor outreach recommendations and technical constraints.
 
-### 9.5 All Participants Online for DKG
+### 9.5 A Trusted Owner at Setup
 
-The DKG ceremony requires all N participants to be online
-simultaneously. After DKG, daily operation is asynchronous.
+Setup is dealer mode: the owner generates every key and holds every
+member's share until the member files are delivered. Participants who
+cannot trust one owner with that wait for a key-generation ceremony
+mode, which would be a later `spend_auth_version` (`PQC_MULTISIG.md`
+§5.2). After setup, daily operation is asynchronous.
 
 ### 9.6 No Partial Key Rotation
 
@@ -594,23 +550,18 @@ Bitcoin multisig unusable for small amounts.
 
 ## 11. Message Types
 
-The protocol defines 11 message types (see `SHEKYL_MULTISIG_WIRE_FORMAT.md`
-for binary layouts):
+Each ceremony file carries one message (see `SHEKYL_MULTISIG_WIRE_FORMAT.md`
+for the layouts):
 
 | Type | ID | Description |
 |------|----|-------------|
-| SpendIntent | 0x01 | Transaction proposal |
-| ProverOutput | 0x02 | FCMP++ proof from assigned prover |
-| SignatureShare | 0x03 | Partial signature from a signer |
-| Veto | 0x04 | Abort request with reason |
-| ProverReceipt | 0x05 | Acknowledgment of prover assignment |
-| Heartbeat | 0x06 | Liveness and sync beacon |
-| CounterProof | 0x07 | Chain evidence for counter recovery |
-| GroupStateSummary | 0x08 | Group state synchronization |
-| InvariantViolation | 0x09 | Report of failed invariant check |
-| RotationIntent | 0x0A | Reserved for V4 |
-| EquivocationProof | 0x0B | Evidence of conflicting proofs |
+| Proposal | 0x0C | The spend intent and the proposer's first round |
+| Commitment | 0x0D | A holder's first round |
+| SigningSet | 0x0E | Other members' files, forwarded as received |
+| ResponderShare | 0x0F | The responder's round |
+| SignatureShare | 0x03 | A holder's share |
+| FinalTx | 0x10 | The proofs, for every signer to check and sign |
+| HybridSig | 0x11 | A signer's post-quantum signatures |
 
-All messages are wrapped in a `MultisigEnvelope` with AEAD encryption.
-The message type is encrypted inside the payload to prevent role-pattern
-leakage.
+The message type is inside the file's ciphertext, so nothing that
+carries a file sees which step it is.

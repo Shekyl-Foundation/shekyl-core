@@ -8,15 +8,16 @@
 //! retention: CEN-K10 is deleted); an alternative's bodies are
 //! the store's, promoted from it whatever the pool decided, and offered to
 //! the pool for relay (CEN-K9); a connect past the cap retires an alt row
-//! and its bodies; CEN-M8's anchor spares a re-admission the proof; and the
-//! door verifies nothing the shared function does not.
+//! and its bodies; CEN-M8's anchor spares a re-admission the proof; a pass
+//! judged on one network is not a pass on another; and the door verifies
+//! nothing the shared function does not.
 //!
 //! Two drivers mine one prefix and then different branches; one's blocks
 //! arrive at the other as alternatives (the switch tests' shape).
 
 use shekyl_chain_rules::{
-    judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView, PolicyRow, ReferenceClaims,
-    RuleCoverage, Tip, TxSlot,
+    judge_lone_stateless, judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView,
+    PolicyRow, ReferenceClaims, RuleCoverage, Tip, TxSlot,
 };
 use shekyl_chain_store::pool::PoolStore;
 use shekyl_harness_spender::Spender;
@@ -49,13 +50,15 @@ async fn offer_branch(x: &Scenario<FreeHash>, branch: &[Mined]) -> crate::Switch
 }
 
 /// An empty pool at `path`, over `x`'s chain.
-async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
+async fn open_pool(x: &mut Scenario<FreeHash>, path: impl AsRef<std::path::Path>) -> Pool {
+    let path: &std::path::Path = path.as_ref();
     x.read_chain(|view, rule_set| {
         Pool::open(
             path,
             shekyl_types::UnixSeconds::from_raw(1),
             view,
             rule_set,
+            &shekyl_network::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("open")
@@ -74,7 +77,7 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     let mut y = Scenario::open("pool-returns-y");
     y.mine(AT).await;
     let paid = paying_the_floor(&mut x, &prefix, 0).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let _a = x
         .mine_listing(vec![paid.clone(), cheap.clone()])
         .await
@@ -114,7 +117,6 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     assert!(record.public, "a block carried it");
     assert!(shown(&record), "and the node shows it");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -206,7 +208,6 @@ async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_b
         .len()
         .expect("len");
     assert_eq!(filed, 0, "nothing was filed");
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
 }
@@ -243,7 +244,7 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     y.mine(AT).await;
     let shared = paying_the_floor(&mut x, &prefix, 0).await;
     let stem = paying_the_floor(&mut x, &prefix, 2).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let _a = x
         .mine_listing(vec![shared.clone()])
         .await
@@ -317,9 +318,15 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     assert!(carried.public, "a block published it");
     assert!(shown(&carried));
 
-    // The pool file is discardable (SPL-Q8): discard it.
+    // The pool file is discardable (SPL-Q8): discard it before the switch.
+    // Closing the pool leaves the file; the directory guard removes it only
+    // when the test ends.
     drop(pool);
-    drop(std::fs::remove_file(&path));
+    std::fs::remove_file(&path).expect("the operator discards the pool file");
+    assert!(
+        !path.path().exists(),
+        "the pool file is gone before the switch"
+    );
     let plan = offer_branch(&x, &b[1..]).await;
     let switched = x.reorganize(&plan).await.expect("switch");
     assert!(
@@ -342,7 +349,7 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     y.mine(AT).await;
     let mut z = Scenario::open("pool-switch-back-z");
     z.mine(AT).await;
-    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let cheap = Spender::on(x.network_id(), &prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
     let a = x
         .mine_listing(vec![cheap.clone()])
         .await
@@ -385,7 +392,6 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     );
     assert_eq!(x.digest().await.expect("d"), z.digest().await.expect("d"));
     drop(pool);
-    drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
     z.close().await;
@@ -395,14 +401,14 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
 /// cap wide enough for a long branch to sit inside it, and small enough to
 /// cross in a test.
 fn rules_with_cap(cap: u64) -> crate::schedule::ChainRules {
-    crate::schedule::ChainRules::Regtest {
-        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
-        schedule: shekyl_chain_rules::FakechainSchedule::new(
+    crate::schedule::ChainRules::harness_regtest(
+        Some(std::num::NonZeroU128::MIN),
+        shekyl_chain_rules::CappedEpoch::new(
             shekyl_chain_rules::SettlementEpochBlocks::new(100).expect("non-zero"),
             shekyl_types::BlockCount::from_raw(cap),
         )
         .expect("the cap sits inside the epoch"),
-    }
+    )
 }
 
 /// Offer every block of `branch` to `x` and require each to be held.
@@ -525,7 +531,15 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
-            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("open");
             let admitted = pool
                 .admit(spend, now, view, rule_set, &policy)
                 .expect("no fault");
@@ -545,8 +559,15 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
 
             // Reopened: no anchor in the file, so the proof is verified.
             let before = probes::fcmp_verifies();
-            let (_, _, reconciled) =
-                Pool::open(&path, now, view, rule_set, &policy).expect("reopen");
+            let (_, _, reconciled) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("reopen");
             (
                 same,
                 (probes::fcmp_verifies() - before, reconciled.admitted),
@@ -555,7 +576,51 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
         .await;
     assert_eq!(same, (0, vec![txid]), "the cache spares the proof");
     assert_eq!(reopened, (1, vec![txid]), "an open trusts no anchor");
-    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// A [`StatelessPass`] is a judgement on one network (the review of #1266).
+/// The same transaction, rule set and reference on another id is not that
+/// pass: the signatures are verified again, and the cached pass is not
+/// returned.
+#[tokio::test]
+async fn a_pass_from_one_network_is_not_a_pass_on_another() {
+    let (mut scenario, mined) = matured("pool-net-pass").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let other = [0x11; 16];
+    let (reused, accepted, verified) = scenario
+        .read_chain(|view, rule_set| {
+            let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+            let claims =
+                ReferenceClaims::for_transaction(view, connecting, &spend).expect("claims");
+            let network = &shekyl_network::HARNESS_NETWORK_ID;
+            let pass = judge_lone_stateless(&spend, rule_set, network, &claims, None)
+                .expect("the fixture admits");
+            assert!(
+                pass.holds_under(&spend, rule_set, network, &claims),
+                "the pass holds on the network it was judged on"
+            );
+            assert!(
+                !pass.holds_under(&spend, rule_set, &other, &claims),
+                "another network is not this pass"
+            );
+
+            let before = probes::signature_verifies();
+            let again = judge_lone_stateless(&spend, rule_set, network, &claims, Some(&pass))
+                .expect("the same network reuses");
+            assert_eq!(again, pass);
+            let spared = probes::signature_verifies() - before;
+
+            let before = probes::signature_verifies();
+            let judged = judge_lone_stateless(&spend, rule_set, &other, &claims, Some(&pass));
+            let same_pass = judged.as_ref().ok() == Some(&pass);
+            let verified = probes::signature_verifies() - before;
+            (spared, same_pass, verified)
+        })
+        .await;
+    assert_eq!(reused, 0, "the same network reuses the pass");
+    assert!(!accepted, "another network does not accept the cached pass");
+    assert!(verified >= 1, "the other network is judged: {verified}");
     scenario.close().await;
 }
 
@@ -575,6 +640,7 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
                 view,
                 &KeyImages::default(),
                 rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
                 &AdmissionPolicy::GENESIS,
                 None,
             )
@@ -588,8 +654,15 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
             let claims =
                 ReferenceClaims::for_transaction(view, connecting, &spend).expect("claims");
             let mut coverage = RuleCoverage::EMPTY;
-            judge_slot_stateless(&spend, TxSlot::Lone, rule_set, &claims, &mut coverage)
-                .expect("the shared function admits it");
+            judge_slot_stateless(
+                &spend,
+                TxSlot::Lone,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &claims,
+                &mut coverage,
+            )
+            .expect("the shared function admits it");
             let after_shared = count();
             (
                 (after_door.0 - before.0, after_door.1 - before.1),

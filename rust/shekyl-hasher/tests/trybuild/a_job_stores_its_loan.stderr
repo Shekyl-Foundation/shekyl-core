@@ -1,0 +1,9 @@
+error[E0521]: borrowed data escapes outside of closure
+  --> tests/trybuild/a_job_stores_its_loan.rs:16:9
+   |
+14 |     let mut kept: Option<&Loan<'_>> = None;
+   |         -------- `kept` declared here, outside of the closure body
+15 |     hasher.lend(Class::Chain, seed, stop, |loan| {
+   |                                            ---- `loan` is a reference that is only valid in the closure body
+16 |         kept = Some(loan);
+   |         ^^^^^^^^^^^^^^^^^ `loan` escapes the closure body here

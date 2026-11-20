@@ -27,16 +27,29 @@
 //! the leader drops — it finished, or its read was cancelled — the flight
 //! leaves the map. A refusal leaves with it.
 //!
+//! **What a flight may cost** (`INPUT_GRAMMAR.md` IG-Q90). A bounded
+//! caller that would open a flight takes the desk's one bounded permit; a
+//! cached view and a flight already in the air take none. While the
+//! permit is out, a bounded caller that would open another is refused
+//! ([`ViewRefusal::Busy`]) and nothing is queued; that refusal is the
+//! caller's, so it is never published to a flight's waiters. The host
+//! takes no permit. Every flight then takes one of the desk's
+//! [`VIEW_SLOTS`] lane slots before it reads, so views never hold more of
+//! the fetch client than that: the client is sized to the bundle
+//! producer's reads plus this lane, and a producer read never waits
+//! behind a view.
+//!
 //! A view fetch is a real fetch — the point of the surface is that it
 //! generates shard-fetch traffic — so the body streams through a
 //! discarding sink and the only things kept are the aggregate's fields.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use shekyl_p_fetch::DiscardTxs;
 use shekyl_types::{ArchivalLength, BlockHash, ShardId, ShardView};
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 
 use crate::facts::{FactsFault, HolderSource, ShardFacts, ShardStanding};
 use crate::read::{Attempt, FetchScheduler, NeedBudget, Read, ReadFailure};
@@ -59,6 +72,25 @@ fn assemble(read: &Read) -> ShardView {
         time_range_seconds: span.time_range_seconds(),
         close_height: read.close.height,
     }
+}
+
+/// The fetch client's slots the shard view's flights may hold at once,
+/// the host's and the bounded caller's together: one for the bounded
+/// permit's flight and one the host's flight takes beside it, so the host
+/// does not wait behind a stranger. The node sizes its client to the
+/// producer's reads plus these.
+pub const VIEW_SLOTS: NonZeroUsize = match NonZeroUsize::new(2) {
+    Some(slots) => slots,
+    None => panic!("the view lane has a slot"),
+};
+
+/// Who asks for a view (`RPC_CHANNEL.md` §6.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewCaller {
+    /// The host's administrator: no permit.
+    Host,
+    /// A bounded connection: a flight it opens takes the bounded permit.
+    Bounded,
 }
 
 /// Why a view was not produced. Each is a state the viewer shows, never a
@@ -87,6 +119,11 @@ pub enum ViewRefusal {
     /// entropy. This daemon's fault, not the shard's.
     #[error("the daemon could not form the request: {0}")]
     Local(#[source] ReadFailure),
+    /// A bounded caller would open a flight while another bounded
+    /// caller's holds the permit. Nothing was fetched or queued; a cached
+    /// view or a flight in the air would have answered.
+    #[error("another bounded caller's view of a shard is being fetched")]
+    Busy { shard_id: ShardId },
 }
 
 /// A view kept for a closed shard, and what it was keyed on.
@@ -142,6 +179,11 @@ type SharedView = Arc<Result<ShardView, ViewRefusal>>;
 pub struct ViewDesk<F, H> {
     scheduler: Arc<FetchScheduler<F, H>>,
     budget: NeedBudget,
+    /// The bounded callers' one flight (IG-Q90).
+    bounded: Semaphore,
+    /// The fetch client's slots every view flight holds one of
+    /// ([`VIEW_SLOTS`]).
+    lane: Semaphore,
     cache: Mutex<HashMap<ShardId, Cached>>,
     /// Flights in progress, shared with each [`Leader`] so a cancelled
     /// read removes its own entry and no other shard's.
@@ -154,6 +196,8 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
         Self {
             scheduler,
             budget,
+            bounded: Semaphore::new(1),
+            lane: Semaphore::new(VIEW_SLOTS.get()),
             cache: Mutex::new(HashMap::new()),
             flights: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -175,20 +219,32 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
     ///
     /// # Errors
     ///
-    /// [`ViewRefusal`]: the shard is open, could not be retrieved, or the
-    /// daemon could not form the request.
-    pub async fn view(&self, shard_id: ShardId) -> Result<ShardView, ViewRefusal> {
+    /// [`ViewRefusal`]: the shard is open, could not be retrieved, the
+    /// daemon could not form the request, or (a bounded `caller` only) the
+    /// bounded permit is out.
+    pub async fn view(
+        &self,
+        shard_id: ShardId,
+        caller: ViewCaller,
+    ) -> Result<ShardView, ViewRefusal> {
         loop {
             let (leader, mut waiting) = self.enlist(shard_id);
             let Some(leader) = leader else {
                 match shared_view(&mut waiting).await {
                     Some(shared) => return owned_view(&shared),
-                    // The leader was cancelled before it published. This
-                    // caller may lead the next flight.
+                    // The leader was cancelled, or refused for its own
+                    // permit, before it published. This caller may lead
+                    // the next flight.
                     None => continue,
                 }
             };
-            let shared = Arc::new(self.view_uncontended(shard_id).await);
+            let outcome = self.view_uncontended(shard_id, caller).await;
+            if let Err(busy @ ViewRefusal::Busy { .. }) = outcome {
+                // The leader's own refusal: the flight ends unpublished,
+                // and a waiter leads it under its own permit.
+                return Err(busy);
+            }
+            let shared = Arc::new(outcome);
             leader.publish(Arc::clone(&shared));
             return owned_view(&shared);
         }
@@ -211,7 +267,11 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
         (Some(leader), waiting)
     }
 
-    async fn view_uncontended(&self, shard_id: ShardId) -> Result<ShardView, ViewRefusal> {
+    async fn view_uncontended(
+        &self,
+        shard_id: ShardId,
+        caller: ViewCaller,
+    ) -> Result<ShardView, ViewRefusal> {
         // This standing serves the cache check only. The read takes its own
         // snapshot and the view is assembled from that one, so a reorg
         // between here and the read costs at most a fetch the cache could
@@ -229,6 +289,20 @@ impl<F: ShardFacts, H: HolderSource> ViewDesk<F, H> {
                 return Err(open_refusal(shard_id, open_shard, archival_through_tip));
             }
         }
+        // A flight opens here, and only here: the cache missed.
+        let _permit = match caller {
+            ViewCaller::Host => None,
+            ViewCaller::Bounded => Some(
+                self.bounded
+                    .try_acquire()
+                    .map_err(|_| ViewRefusal::Busy { shard_id })?,
+            ),
+        };
+        let _slot = self
+            .lane
+            .acquire()
+            .await
+            .expect("the view lane is never closed");
         let read = match self
             .scheduler
             .read(shard_id, Arc::new(DiscardTxs), self.budget)

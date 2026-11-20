@@ -1,0 +1,12 @@
+[
+  {
+    "hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "height": 1197,
+    "difficulty_cumulative": "0x6f2e8d41b7",
+    "block": [
+      "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    ],
+    "parent": "8888888888888888888888888888888888888888888888888888888888888888"
+  }
+]

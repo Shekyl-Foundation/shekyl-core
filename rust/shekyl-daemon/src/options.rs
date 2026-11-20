@@ -16,28 +16,38 @@
 //! table order with its source and the grant the row names; the RPC applies
 //! the caller's grants. What show prints, set accepts.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use shekyl_daemon_config::resolve::Resolved;
 use shekyl_daemon_config::{
     apply_logging, link_limits, runtime_owner, Network, RuntimeOwner, TABLE,
 };
-use shekyl_daemon_rpc::options::{OptionsFacts, Refusal, ShowRefusal, ShownRow, VisibleRow};
+use shekyl_daemon_rpc::options::{
+    OptionSource, OptionsFacts, Refusal, ShowRefusal, ShownRow, VisibleRow,
+};
+use shekyl_node::LinkLimits;
 use shekyl_options::{Code, Diagnostic, Kind, Row, Source, Value, Visibility};
+
+/// Where the link rows' values go when `option set` changes them: the
+/// network's gate ([`shekyl_node::Network::set_limits`]) in the daemon.
+pub type LinkSink = Arc<dyn Fn(LinkLimits) + Send + Sync>;
 
 /// The daemon's options handle.
 pub struct DaemonOptions {
     live: Mutex<Resolved>,
     network: Network,
+    link: LinkSink,
 }
 
 impl DaemonOptions {
-    /// A handle over the values the start resolved, on `network`.
+    /// A handle over the values the start resolved, on `network`, with the
+    /// link rows' owner.
     #[must_use]
-    pub fn new(resolved: Resolved, network: Network) -> Self {
+    pub fn new(resolved: Resolved, network: Network, link: LinkSink) -> Self {
         Self {
             live: Mutex::new(resolved),
             network,
+            link,
         }
     }
 
@@ -45,21 +55,31 @@ impl DaemonOptions {
     /// the networks its row names (IG-8).
     fn exists(&self, row: &Row) -> bool {
         match row.visibility {
-            Visibility::Dev { networks } => networks.contains(&self.network.name()),
+            Visibility::Dev { gate } => gate.admits(self.network),
             Visibility::Public => true,
             Visibility::Rejected { .. } | Visibility::Reserved { .. } => false,
         }
     }
 }
 
-/// The source word on the wire (RT-O25): one of four, with no path or line.
-fn source_word(source: &Source) -> &'static str {
+/// The source on the wire (RT-O25): one of four, with no path or line.
+const fn source_of(source: &Source) -> OptionSource {
     match source {
-        Source::Cli => "cli",
-        Source::File { .. } => "file",
-        Source::Runtime => "runtime",
+        Source::Cli => OptionSource::Cli,
+        Source::File { .. } => OptionSource::File,
+        Source::Runtime => OptionSource::Runtime,
         // A machine source is a derived fact, never a row of the table.
-        Source::Default | Source::Machine => "default",
+        Source::Default | Source::Machine => OptionSource::Default,
+    }
+}
+
+/// The source word a refusal carries: the same four.
+fn source_word(source: &Source) -> &'static str {
+    match source_of(source) {
+        OptionSource::Cli => "cli",
+        OptionSource::File => "file",
+        OptionSource::Runtime => "runtime",
+        OptionSource::Default => "default",
     }
 }
 
@@ -68,9 +88,9 @@ fn source_word(source: &Source) -> &'static str {
 fn refusal(d: &Diagnostic) -> Refusal {
     Refusal {
         code: d.code.to_string(),
-        option: d.option.clone(),
+        option: d.option.clone().into(),
         source: source_word(&d.source).to_owned(),
-        params: d
+        parameter: d
             .params
             .iter()
             .map(|(k, v)| ((*k).to_owned(), v.clone()))
@@ -81,7 +101,9 @@ fn refusal(d: &Diagnostic) -> Refusal {
 
 /// One row as `option_show` prints it, from the live values.
 fn shown(row: &Row, live: &Resolved) -> ShownRow {
-    let source = live.source(row.name).map_or("default", source_word);
+    let source = live
+        .source(row.name)
+        .map_or(OptionSource::Default, source_of);
     let value = live.get(row.name);
     if matches!(row.kind, Kind::Secret) {
         ShownRow::secret(row.name, source, value.is_some())
@@ -158,7 +180,7 @@ impl OptionsFacts for DaemonOptions {
         if link {
             let (upload, download) =
                 link_limits(&live).expect("the runtime constructor admitted both rates");
-            shekyl_ffi::link_ffi::set_limits(upload, download);
+            (self.link)(LinkLimits { upload, download });
         }
         if logging {
             apply_logging(&live).expect("the runtime constructor admitted the logging rows");
@@ -198,7 +220,7 @@ impl OptionsFacts for DaemonOptions {
                             .param(
                                 "networks",
                                 match row.visibility {
-                                    Visibility::Dev { networks } => networks.join(", "),
+                                    Visibility::Dev { gate } => gate.networks(),
                                     _ => String::new(),
                                 },
                             )
@@ -225,13 +247,58 @@ impl OptionsFacts for DaemonOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_daemon_config::{choosers, resolve};
+    use shekyl_daemon_config::{after_file, Platform};
     use shekyl_options::{read_cli, Grant};
 
-    fn handle(args: &[&str]) -> DaemonOptions {
+    /// A handle whose link sink records what it was given.
+    fn recording(args: &[&str]) -> (DaemonOptions, Arc<Mutex<Vec<LinkLimits>>>) {
         let cli = read_cli(&TABLE, args.iter().map(std::ffi::OsString::from)).unwrap();
-        let (network, _mode) = choosers(&cli);
-        DaemonOptions::new(resolve(&TABLE, network, cli, Vec::new()).unwrap(), network)
+        // The values a start hands this handle: everything `load` does
+        // after its file step, with no file opened.
+        let platform = Platform {
+            home: Some(std::path::PathBuf::from("/srv/op")),
+            service_parent: None,
+            session_dir: None,
+            service_rendezvous: None,
+        };
+        let loaded = after_file(cli, &platform, None).unwrap();
+        let given = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&given);
+        let handle = DaemonOptions::new(
+            loaded.resolved,
+            loaded.config.network,
+            Arc::new(move |limits| sink.lock().unwrap().push(limits)),
+        );
+        (handle, given)
+    }
+
+    fn handle(args: &[&str]) -> DaemonOptions {
+        recording(args).0
+    }
+
+    /// A set of the link rows reaches the link owner with both rates at
+    /// once, as the gate takes them; a set of a logging row does not.
+    #[test]
+    fn a_link_set_reaches_the_link_owner_with_both_rates() {
+        let (h, given) = recording(&["--network", "regtest"]);
+        h.set(&[pair("p2p-upload-max", "1MiB/s")]).unwrap();
+        assert_eq!(
+            given.lock().unwrap().as_slice(),
+            [LinkLimits {
+                upload: Some(1024 * 1024),
+                download: None
+            }]
+        );
+        h.set(&[pair("log-level", "debug")]).unwrap();
+        assert_eq!(given.lock().unwrap().len(), 1, "logging is not the link's");
+        h.set(&[pair("p2p-upload-max", "unlimited")]).unwrap();
+        assert_eq!(
+            given.lock().unwrap()[1],
+            LinkLimits {
+                upload: None,
+                download: None
+            }
+        );
     }
 
     /// IG-8: on mainnet no development lever exists, so none is shown and a
@@ -296,7 +363,7 @@ mod tests {
         let h = handle(&["--network", "regtest"]);
         let rows = h.set(&[pair("p2p-upload-max", "1MiB/s")]).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].source(), "runtime");
+        assert_eq!(rows[0].source(), OptionSource::Runtime);
         assert!(rows[0].runtime());
         assert_eq!(rows[0].value(), Some(Some("1MiB/s")));
         h.set(&[pair("p2p-upload-max", "unlimited")]).unwrap();
@@ -357,7 +424,7 @@ mod tests {
         assert_eq!(names, table);
         let level = all.iter().find(|v| v.row.name() == "log-level").unwrap();
         assert_eq!(level.grant, Grant::Status);
-        assert_eq!(level.row.source(), "cli");
+        assert_eq!(level.row.source(), OptionSource::Cli);
         let onion = all.iter().find(|v| v.row.name() == "tor-onion").unwrap();
         assert_eq!(onion.grant, Grant::Config);
         assert_eq!(

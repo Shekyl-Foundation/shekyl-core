@@ -147,7 +147,7 @@ pub enum CoinbaseGrammarError {
         /// How many `0x0C` fields were present.
         count: usize,
     },
-    /// A tag outside [`COINBASE_TAGS`].
+    /// A tag outside `COINBASE_TAGS`.
     ForeignTag {
         /// The tag that is not in the grammar.
         tag: u8,
@@ -305,8 +305,8 @@ fn canonical_nonce(fields: &[TxExtraField], n_outputs: usize) -> Option<&[u8]> {
 /// The coinbase extra grammar.
 ///
 /// CEN-I19 runs on the parsed fields either way, so a wrong KEM or leaf is
-/// that verdict. The layout itself is [`canonical_nonce`]: the success arm
-/// is the slice match, and everything else is named by [`diagnose`].
+/// that verdict. The layout itself is `canonical_nonce`: the success arm
+/// is the slice match, and everything else is named by `diagnose`.
 pub fn check_coinbase_extra_shape(
     fields: &[TxExtraField],
     n_outputs: usize,
@@ -466,9 +466,10 @@ mod tests {
     use super::*;
     use crate::tx_extra::{
         admitted_leaf_blob, conforming_pqc_leaf_blob, PqcExtraField, PqcFieldShapeError,
-        HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
-        TX_EXTRA_TAG_PADDING, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
+        HYBRID_KEM_CT_BYTES, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS, TX_EXTRA_TAG_PADDING,
+        TX_EXTRA_TAG_PQC_MULTISIG,
     };
+    use crate::tx_extra::{KemCiphertext, MultisigEntry};
 
     use crate::tx_extra::CONFORMING_DRAW_COMMITMENT as COMMITMENT;
     use crate::tx_extra::DRAW_COMMITMENT_LEN;
@@ -667,16 +668,15 @@ mod tests {
                 TX_EXTRA_TAG_ADDITIONAL_PUBKEYS,
             ),
             (
-                TxExtraField::PqcViewTagHints(vec![1]),
-                TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS,
-            ),
-            (
-                TxExtraField::PqcSpendAuthPubkeys(vec![1]),
-                TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS,
-            ),
-            (
-                TxExtraField::ArchivalAttestation(Vec::new()),
-                TX_EXTRA_TAG_ARCHIVAL_ATTESTATION,
+                // A coinbase cannot pay a multisig group: its grammar is
+                // closed, and `0x0D` is outside it.
+                TxExtraField::PqcMultisig(vec![MultisigEntry::new(
+                    0,
+                    vec![KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES])],
+                    vec![0x22; MultisigEntry::enc_key_hashes_len(1)],
+                )
+                .expect("one member, right lengths")]),
+                TX_EXTRA_TAG_PQC_MULTISIG,
             ),
         ];
         for (field, tag) in foreign {
@@ -810,8 +810,8 @@ mod tests {
             "coinbase tx_extra 0x02 nonce is 3 bytes; exactly 8 required"
         );
         assert_eq!(
-            CoinbaseGrammarError::ForeignTag { tag: 0x0B }.to_string(),
-            "coinbase tx_extra carries 0x0b; only 0x01, 0x02, 0x0c, 0x06, 0x07 are admitted"
+            CoinbaseGrammarError::ForeignTag { tag: 0x04 }.to_string(),
+            "coinbase tx_extra carries 0x04; only 0x01, 0x02, 0x0c, 0x06, 0x07 are admitted"
         );
     }
 

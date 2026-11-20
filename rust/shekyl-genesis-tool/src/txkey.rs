@@ -14,20 +14,27 @@
 //! # Derivation (publish verbatim; `docs/GENESIS_ALLOCATIONS.md`)
 //!
 //! ```text
-//! M = varint(len(net)) ‖ net_ascii            net ∈ {"mainnet","testnet","stagenet"}
-//!     ‖ varint(n_recipients)
+//! R = varint(n_recipients)
 //!     ‖ for each recipient, in file order:
 //!         spend_pk(32) ‖ view_pk(32)
 //!         ‖ varint(len(ek)) ‖ ek              ML-KEM-768 encap key
 //!         ‖ amount_atomic as u64 LE (8 bytes)
 //!
-//! seed      = cSHAKE256-32(customization = "shekyl/genesis-txkey-v2", input = M)
+//! seed      = frame("shekyl/genesis-txkey-v3", name_id, [R])   32 bytes
 //! tx_secret = seed reduced mod ℓ  (Scalar::from_bytes_mod_order, ≡ C++ sc_reduce32)
 //! tx_pub    = tx_secret · G       (compressed Ed25519; the tx_extra 0x01 field)
 //! ```
 //!
-//! varint is the shekyl-wire wire varint. The customization string follows the
-//! house `b"shekyl/<domain>-v1"` convention (rule 30); a KAT in
+//! The frame and the reduction are `shekyl-crypto-pq`'s
+//! (`TxKey::from_genesis_seed`, its `GENESIS_TXKEY` domain): the one place
+//! a transaction key is made. This module writes `R`.
+//!
+//! `frame` is the signing envelope's (`shekyl_network::envelope`): cSHAKE256
+//! under the customization, over the 16-byte binding then each field behind
+//! its u64-LE length. The binding is the network's `name_id`, the value its
+//! name derives (`shekyl/network-name-v1`) and the one every key derivation
+//! is salted with, so genesis commits to the network's name through it
+//! (NI-R12). varint is the shekyl-wire varint. A KAT in
 //! `tests/golden_kat.rs` pins the derivation.
 //!
 //! # Why a public tx key is sound here
@@ -42,32 +49,32 @@
 //! derivation therefore reveals nothing beyond what is already published, and
 //! buys full reproducibility of the pinned genesis bytes.
 
-use curve25519_dalek::edwards::EdwardsPoint;
-use curve25519_dalek::scalar::Scalar;
 use shekyl_address::Network;
+use shekyl_crypto_pq::TxKey;
 use shekyl_wire::varint::write_varint;
 
-use crate::recipients::{network_str, Recipient};
+use crate::recipients::Recipient;
 
-/// cSHAKE256 customization string for the genesis tx-key derivation.
+/// The genesis transaction's key for `net` over the validated recipients,
+/// per the module-doc spec: [`TxKey::from_genesis_seed`] over the network's
+/// `name_id` and the recipients field `R`, under
+/// [`shekyl_crypto_pq::tx_key::GENESIS_TXKEY`].
 ///
-/// v2 remints the preimage onto **payment identity** (spend/view/ek +
-/// amount), not the Bech32m spelling. v1 hashed the canonical address
-/// string, so a layout correction rotated the founding tx; that coupling
-/// is deleted pre-genesis. The `v1` literal is retired unused.
-pub const GENESIS_TXKEY_CUSTOMIZATION: &[u8] = b"shekyl/genesis-txkey-v2";
-
-/// Derive the deterministic genesis tx secret scalar (canonical 32-byte form)
-/// for `net` over the validated recipients, per the module-doc spec.
-///
-/// The output is **not secret** — it is recomputable by anyone holding the
+/// The key is **not secret** — it is recomputable by anyone holding the
 /// published recipients file; see the module docs for why that is sound.
 #[must_use]
-pub fn derive_genesis_tx_secret(net: Network, recipients: &[Recipient]) -> [u8; 32] {
+pub fn genesis_tx_key(net: Network, recipients: &[Recipient]) -> TxKey {
+    // The table row's `name_id` (`shekyl_network`), never a literal here:
+    // genesis commits to the network's name through this key (NI-R12).
+    TxKey::from_genesis_seed(&net.name_id(), &recipients_field(recipients))
+}
+
+/// The derivation's one field `R`: the recipients' payment identities and
+/// amounts, in file order. Payment identity (spend/view/ek + amount), never
+/// an address's spelling, so a change of address format cannot rotate the
+/// founding transaction.
+fn recipients_field(recipients: &[Recipient]) -> Vec<u8> {
     let mut m: Vec<u8> = Vec::new();
-    let net_str = network_str(net).as_bytes();
-    write_varint(net_str.len(), &mut m).expect("writing to a Vec is infallible");
-    m.extend_from_slice(net_str);
     write_varint(recipients.len(), &mut m).expect("writing to a Vec is infallible");
     for r in recipients {
         m.extend_from_slice(&r.address.spend_key);
@@ -77,15 +84,5 @@ pub fn derive_genesis_tx_secret(net: Network, recipients: &[Recipient]) -> [u8; 
         m.extend_from_slice(ek);
         m.extend_from_slice(&r.amount.to_le_bytes());
     }
-
-    let seed = shekyl_crypto_hash::cshake256_32(GENESIS_TXKEY_CUSTOMIZATION, &m);
-    Scalar::from_bytes_mod_order(seed).to_bytes()
-}
-
-/// The tx public key `R = r·G` for a canonical secret scalar, compressed —
-/// the payload of the genesis `tx_extra` `0x01` field.
-#[must_use]
-pub fn tx_pubkey(tx_secret: &[u8; 32]) -> [u8; 32] {
-    let r = Scalar::from_bytes_mod_order(*tx_secret);
-    EdwardsPoint::mul_base(&r).compress().to_bytes()
+    m
 }

@@ -1,0 +1,200 @@
+# Rule 40, FFI discipline — the retired rule
+
+**Status:** CLOSED-as-record, retired 2026-11-08 (ruled by Rick). The FFI
+surface it governed is deleted: there is no `shekyl-ffi`, no `shekyl_ffi.h`,
+and the tree holds no first-party C or C++ (PR #1299). What still binds
+is in [`25-rust-architecture`](../../.cursor/rules/25-rust-architecture.mdc):
+"do not add a C ABI to reach a Rust crate", and §"Boundary reads and
+reserves" and §"Refuse, never panic" below, re-scoped to every decoder of
+untrusted bytes with their FFI-only bullets dropped. Do not implement from
+this record; the body below is why the surface stayed
+coarse while it existed, and the design records that cite "rule 40" read
+against it.
+
+## The FFI surface is an audit obligation
+
+Every FFI export is permanent. Every export must justify its existence at the
+boundary. Growing the surface requires explicit rationale.
+
+## Coarse calls over fine calls
+
+Prefer one FFI call that does a complete operation over multiple calls that
+orchestrate primitives:
+
+- `shekyl_scan_and_recover` (one call) over `scan_output` + `compute_key_image`
+- `shekyl_sign_fcmp_transaction` (one call) over `parse_witness` + `prove` +
+  `assemble_proofs`
+
+Orchestration in C++ holding intermediate secrets is exactly where contract
+mismatches happen. Coarse calls keep secret lifetime entirely inside Rust.
+
+## ShekylBuffer for variable-length data, raw pointers for fixed-size
+
+Variable-length blobs cross FFI as opaque `ShekylBuffer` byte arrays with
+Rust-defined canonical encoding. C++ never parses Rust-emitted bytes; Rust
+never parses C++-emitted bytes. The encoding is versioned in Rust.
+
+Fixed-size data crosses as `*const u8` with a documented length (e.g.,
+`*const u8 // 32 bytes`). Both sides agree on the length at compile time.
+
+## Direct-write output pointers
+
+Output pointers point into the destination data structure, not into
+intermediate buffers. The destination owns the wipe responsibility.
+
+```c
+// Good: writes directly into transfer_details fields
+shekyl_scan_and_recover(..., out_y: &td.m_y.data[0], ...)
+
+// Bad: requires C++ to manage scratch + wipe
+uint8_t y_scratch[32];
+shekyl_scan_and_recover(..., out_y: y_scratch, ...);
+memcpy(&td.m_y.data[0], y_scratch, 32);
+memwipe(y_scratch, 32);  // hope you remembered
+```
+
+## Secret material always uses raw output pointers
+
+The variable-length versus fixed-length distinction governs non-secret data.
+Secret material — private keys, seeds, shared secrets, KEM decapsulation
+keys, commitment masks, any HKDF intermediate that derives to a secret — is
+output exclusively via raw `*mut u8` pointers into a destination buffer that
+C++ controls. Never via `ShekylBuffer`.
+
+Rationale. A `ShekylBuffer` holds bytes in Rust's heap until the caller
+frees it. For secret material this means the bytes exist in un-`mlock`'d,
+non-`MADV_DONTDUMP`'d memory for the window between Rust's allocation and
+C++'s copy-and-free. The destination-owns-the-buffer pattern eliminates
+that window: C++ places the buffer on an already-`mlock`'d page or inside
+a zeroizing struct, and Rust writes directly into it.
+
+This rule composes with "coarse calls over fine calls." If a coarse call
+outputs secret material, it does so via an out-pointer into the final
+destination, not via a `ShekylBuffer` that will be moved afterward.
+
+The rule applies to what crosses the FFI boundary, not to what is
+manipulated inside the function. A coarse call like
+`shekyl_sign_fcmp_transaction` may handle many secrets internally while
+returning a `ShekylBuffer` for the (public) proof blob — the
+`ShekylBuffer` return is governed by the variable-length-non-secret rule;
+the internal secrets never cross the boundary at all.
+
+Length is not the criterion for secret material. Even when a secret is
+variable-length (rare; most secrets are fixed-size), the output pattern
+is still `*mut u8` with a documented maximum length plus a length-out
+parameter. Never `ShekylBuffer` for a secret.
+
+## Constant-time failure discipline
+
+Secret-dependent code paths must produce identical observable behavior on
+success and failure. "Observable" includes:
+
+- CPU cycles spent (timing side-channel)
+- Memory write pattern to the output buffer
+- Branch pattern inside the Rust function
+
+For FFI functions that take a secret as input and return an error code,
+the failure path must write to the output buffer with the same timing
+and access pattern as the success path — typically by zeroing the full
+output region before returning the error code. The caller is entitled to
+assume that on any non-NULL-check return, the output buffer has been
+written to, even if the contents are zero on failure.
+
+```rust
+// Good: output buffer gets written identically on both paths
+pub unsafe extern "C" fn shekyl_scalar_wide_reduce(
+    in64_ptr: *const u8,
+    out32_ptr: *mut u8,
+) -> i32 {
+    if in64_ptr.is_null() || out32_ptr.is_null() {
+        return -4;  // NULL_POINTER; no write, see below
+    }
+    let in64 = unsafe { slice::from_raw_parts(in64_ptr, 64) };
+    let scalar = Scalar::from_bytes_mod_order_wide(
+        &in64.try_into().expect("slice::from_raw_parts guarantees len 64")
+    );
+    let bytes = scalar.to_bytes();
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out32_ptr, 32) };
+    0
+}
+
+// Bad: success writes 32 bytes, failure writes 0 bytes; observable timing
+pub unsafe extern "C" fn shekyl_scalar_wide_reduce_bad(
+    in64_ptr: *const u8,
+    out32_ptr: *mut u8,
+) -> i32 {
+    let scalar = Scalar::from_bytes_mod_order_wide(&read_64(in64_ptr));
+    if scalar == Scalar::ZERO {
+        return -3;  // out32_ptr NOT written — timing differs from success path
+    }
+    write_32(out32_ptr, scalar.to_bytes());
+    0
+}
+```
+
+The NULL-pointer check is the one exception: NULL input means the caller
+gave us no buffer to write to, and there is no secret-dependent work
+being done at that point. NULL checks may return early without writing.
+All other failures must write.
+
+## Error handling: distinct codes, not booleans
+
+FFI returns specific error codes for distinct failure modes:
+
+- `0` success
+- `-1` version mismatch
+- `-2` authentication failure
+- `-3` invalid format
+- `-4` null pointer
+
+Returning `bool` collapses error semantics and prevents the verifier from
+making security decisions based on failure mode (e.g., rejecting before AEAD
+decryption to prevent timing side channels).
+
+## Bounded deserialization
+
+Any `ShekylBuffer` accepted from the C++ side has a documented maximum
+length. Unbounded deserialization (e.g., the historical
+`pqc_authentication` blob) is a DoS surface and a parsing-bug surface.
+Enforce the bound at the Rust entry point before doing anything else.
+
+## Boundary reads and reserves (SA-R-7)
+
+- A byte slice is reconstructed from an FFI `(ptr, len)` through
+  `legacy_util::slice_from_ptr`, never a private clone and never bare
+  `from_raw_parts` — the seam owns the null check and `from_raw_parts`'
+  language-level `isize::MAX` byte bound (UB even when the caller really
+  provided the memory). Byte-identical unguarded clones have already
+  been found and absorbed twice (`wallet_envelope_ffi`,
+  `engine_file_ffi`); any new one is a bug on arrival.
+- A count that sizes an allocation is bounded **before** the reserve via
+  `legacy_util::bounded_capacity` — and the bound has two axes: the
+  backing bound (a count the remaining bytes cannot back is malformed)
+  and, for cheap-per-element counts, a **protocol ceiling** (a genuinely
+  backed blob can still buy amplification at 4 wire bytes per element;
+  `MAX_TREE_DEPTH` on branch layers is the precedent). Apply whichever
+  is tighter; never cap at an arbitrary large constant.
+- Both patterns are pinned by `tests/ffi_boundary_ratchet.rs`, which
+  fails in both directions: a **net-new** raw site fails CI, and a
+  removed one must tighten its baseline row. The pins are per-file NET
+  counts — a same-file swap (one raw site removed, another added)
+  passes mechanically, so a diff touching a raw site in a pinned file
+  is reviewed against the seam obligations above even when the pin
+  stays green. That boundary is deliberate: call-site identity pinning
+  is a pseudo-parser whose churn punishes legitimate refactors (false
+  confidence is worse than an honest boundary). A reviewed raw site (typed slices,
+  sub-pointer arithmetic, a local guarded helper with its own error
+  type) bumps its pin in the same commit with a rationale.
+- Crate-root `#![allow]` of the cast lints is forbidden in FFI boundary
+  crates — it silently overrides the workspace deny exactly where the
+  lints matter most. Site-level allows only, each with a one-line
+  value-preserving rationale.
+
+## Refuse, never panic, on the untrusted path
+
+Malformed input from across the boundary parses to `None` or a typed
+error and the export returns its failure shape. A panic across `extern
+"C"` is UB, and even a caught one turns a hostile input into a crash the
+C++ host did not choose. Panics (and `expect`) are reserved for
+programmer invariants the caller cannot influence — and the message must
+name the invariant, not the input.

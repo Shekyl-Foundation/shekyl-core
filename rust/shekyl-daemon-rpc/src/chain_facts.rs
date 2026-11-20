@@ -7,19 +7,17 @@
 //! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.2–§3.3, RK-D3; RK-D7 is
 //! carried in `docs/design/RPC_WIRE.md`).
 //!
-//! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
-//! needs and decides the rest itself. [`FfiChainFacts`] is today's only
-//! implementation, reading the C++ core through `shekyl_rpc_chain_tip` and
-//! its siblings (`src/rpc/rpc_facts_ffi.h`). When the Rust chain
-//! store lands (DRS-E) a second implementation reads it directly and this
-//! one is deleted; the handlers and their tests do not move.
+//! A handler never touches the network: it asks a [`ChainFacts`] for what
+//! it needs and decides the rest itself. The live implementation is
+//! [`crate::store_facts::StoreFacts`]. The p2p facts (connections, net
+//! stats, the peer lists, the stem tallies) are a [`P2pFacts`] the node
+//! supplies over `shekyl-p2p`'s board; chain sync's facts are the node's
+//! (`SyncView`).
 //!
-//! The shim holds **no policy**: it converts PODs to typed facts and maps
-//! return codes onto [`FactsFault`]. A core-reported `0` target is C5's
+//! A core-reported `0` target is C5's
 //! sentinel and decodes as `None` — never [`ChainCount::from_raw`]`(0)`.
-//! `get_version` and `sync_info` forward that count, so `0` on their wire is
-//! only `None`. `get_info` still writes `0` when the node is synchronized,
-//! and that rule lives in the C++ handler, not here.
+//! `version` and `sync_status` forward that count, so `0` on their wire is
+//! only `None`.
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `ChainTip.chain_height` is COUNT, not ordinal.
@@ -50,13 +48,13 @@
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: `BlockHeaderFacts.depth` is a span, not an ordinal.
 //! use shekyl_daemon_rpc::chain_facts::BlockHeaderFacts;
-//! use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
+//! use shekyl_types::{SectionRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
 //! let _ = BlockHeaderFacts {
 //!     hash: BlockHash::from_bytes([0u8; 32]),
 //!     prev_hash: BlockHash::from_bytes([0u8; 32]),
 //!     miner_tx_hash: TxHash::from_bytes([0u8; 32]),
 //!     curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-//!     attestation_root: AttestationRoot::from_bytes([0u8; 32]),
+//!     section_root: SectionRoot::from_bytes([0u8; 32]),
 //!     pow_hash: None,
 //!     height: BlockHeight::from_raw(1),
 //!     depth: BlockHeight::from_raw(0),
@@ -74,14 +72,11 @@
 //! };
 //! ```
 
-use std::sync::Arc;
-
 use shekyl_types::{
-    AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, TxHash,
+    BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot, SectionRoot, TxHash,
 };
 
-use crate::core::{ConnectionsSnapshot, CoreRpc, P2pRead, PeerEntry, SyncSpansSnapshot};
-use crate::ffi;
+use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
 
 /// What this daemon **is**: the two identity facts a client checks at
 /// connect that are not tip facts (VC-2).
@@ -94,13 +89,13 @@ use crate::ffi;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonIdentity {
     /// The network this daemon runs.
-    pub nettype: shekyl_rpc_types::DaemonNetwork,
+    pub nettype: shekyl_rpc_types::Network,
     /// Hash of block 0.
     pub genesis_hash: BlockHash,
 }
 
 /// What the chain tip looks like right now, plus the one build fact
-/// (`release_build`) that rides the same POD because `get_version` reports
+/// (`release_build`) that rides the same POD because `version` reports
 /// it and C++'s build system is its only owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainTip {
@@ -112,14 +107,20 @@ pub struct ChainTip {
     pub top_hash: BlockHash,
     /// The core's target count. `None` when the core reported `0`: that
     /// raw value is an absence, not a [`ChainCount`] (C5). Synchronization
-    /// is [`Self::synchronized`]. `get_version` and `sync_info` forward this
-    /// count, and write `None` as `null`; `get_info` reports the same fact
+    /// is [`Self::synchronized`]. `version` and `sync_status` forward this
+    /// count, and write `None` as `null`; `daemon_status` reports the same fact
     /// from its own snapshot.
     pub target_height: Option<ChainCount>,
     /// Whether the protocol layer considers this node synchronized.
     pub synchronized: bool,
     /// `SHEKYL_VERSION_IS_RELEASE`.
     pub release_build: bool,
+    /// Whether the chain store's writer is halted on an invariant
+    /// (`DAEMON_REDB_STORE.md` §3.6.2), read beside the tip: `None` while it
+    /// connects, else the height the halting connect or pop was working at
+    /// and the `SI-` row of the store-invariant register that caught it. A
+    /// halted writer's tip is stale (IG-Q92).
+    pub halt: Option<(BlockHeight, u32)>,
 }
 
 /// What the chain holds at one height: the block's hash, or `None` when — and
@@ -153,7 +154,7 @@ pub struct BlockHeaderFacts {
     /// 40); the facts layer is where each root's kind is known, so it is
     /// named here and stays named until the handler renders hex.
     pub curve_tree_root: CurveTreeRoot,
-    pub attestation_root: AttestationRoot,
+    pub section_root: SectionRoot,
     /// `None` unless the caller asked for it and was entitled to. Raw bytes:
     /// a proof-of-work hash is not any block's identity.
     pub pow_hash: Option<[u8; 32]>,
@@ -187,20 +188,17 @@ pub struct BlockHeaderAt {
     pub chain_height: ChainCount,
 }
 
-/// Why a facts read could not be served. Each variant is a distinct C return
-/// code (rule 40: codes, not booleans), so the transport can choose between
+/// Why a facts read could not be served. Each variant is a distinct class
+/// (a class, not a boolean), so the transport can choose between
 /// "try again" and "this daemon is broken".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactsFault {
-    /// The core handle was null — the server is torn down.
-    NullHandle,
-    /// The core is not initialized yet (`BUSY` on the wire).
+    /// The handle behind the read is not supplied yet, or has been taken
+    /// down (`BUSY` on the wire).
     NotReady,
-    /// A core / P2P read threw inside the C++ shim (logged there with the
-    /// exception text); the shim's exception barrier turned it into a
-    /// code instead of an unwind across the C ABI.
+    /// A read failed inside the node (logged there with its text).
     Internal,
-    /// The store contradicted itself, and the shim refused to paper over it
+    /// The store contradicted itself, and the read refused to paper over it
     /// (it logs which read disagreed). This daemon's data is inconsistent —
     /// never reported to the caller as a fact about their request.
     ///
@@ -218,32 +216,12 @@ pub enum FactsFault {
     /// reported as a size of `0` — an empty store is `0`, and a store that
     /// cannot be read is not that (RK-D23).
     StoreUnreadable,
-    /// The p2p hub is not up in this process, so there is no board to count
-    /// sessions on. Raised by [`crate::info_facts::sessions`],
-    /// and never reported as zero sessions: a node whose p2p layer has not
-    /// started is not a node with no peers, and a reader told "no peers"
-    /// raises an alarm an operator would act on (RK-D23).
-    HubAbsent,
-    /// A code outside the documented set — a contract violation, never a
-    /// guessed fact.
-    Unknown(i32),
-}
-
-impl FactsFault {
-    pub(crate) fn from_code(code: i32) -> Self {
-        match code {
-            ffi::SHEKYL_RPC_FACTS_ERR_NULL => Self::NullHandle,
-            ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY => Self::NotReady,
-            ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL => Self::Internal,
-            ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT => Self::Inconsistent,
-            other => Self::Unknown(other),
-        }
-    }
 }
 
 /// C5: a reported target of `0` is not a chain count. Inland never wraps
 /// `0` as [`ChainCount`]. The absence is the core reporting no target;
 /// synchronization is [`ChainTip::synchronized`].
+#[cfg(test)]
 pub(crate) fn decode_target_count(raw: u64) -> Option<ChainCount> {
     (raw != 0).then(|| ChainCount::from_raw(raw))
 }
@@ -257,11 +235,9 @@ pub(crate) fn decode_target_count(raw: u64) -> Option<ChainCount> {
 /// harness reserved for what genuinely needs a daemon. That is the whole
 /// reason the handler tests in `methods` can exist at all.
 ///
-/// It is *also* where a Rust store would plug in when DRS-E lands (RK-D7),
-/// and the deletion register schedules the FFI shims for that moment — but
-/// that is the second reason, not the first. Stated the other way round, a
-/// one-impl trait reads as speculative generality to a rule-15 pass, against
-/// a program that is not yet scoped.
+/// [`crate::store_facts::StoreFacts`] is the production implementation
+/// (RK-D7). The trait stays because the handler tests drive a double, not
+/// because a second production implementation is still owed.
 pub trait ChainFacts: Send + Sync {
     fn chain_tip(&self) -> Result<ChainTip, FactsFault>;
     /// The daemon's identity facts (`nettype`, genesis hash). Constant for
@@ -270,7 +246,7 @@ pub trait ChainFacts: Send + Sync {
     /// The block hash at `height`, with the tip as of the same read.
     /// Absence is data ([`BlockHashAt::hash`] is `None`), not a fault.
     fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault>;
-    /// The whole header projection at `height`. `fill_pow_hash` is both the
+    /// The whole header projection at `height`. The `pow` switch is both the
     /// request and the entitlement — the caller has already applied the
     /// restricted-listener rule — and computing it is the expensive part.
     fn block_header_at(
@@ -309,7 +285,7 @@ pub struct BlockAt {
     pub chain_height: ChainCount,
 }
 
-/// The block itself: RK-3's header projection plus what only `get_block`
+/// The block itself: RK-3's header projection plus what only `block_show`
 /// carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockFacts {
@@ -322,32 +298,56 @@ pub struct BlockFacts {
     /// the field duplicates `blob`, and RK-W retires it.
     pub json: Option<String>,
     pub tx_hashes: Vec<TxHash>,
+    /// The block's bundle references, undecoded, as its header's root
+    /// commits them: the main chain's row, or an alt block's own record.
+    /// Empty when it admits none.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those references this node holds.
+    pub bundle_bodies: Vec<Vec<u8>>,
+    /// The draws the count rule issued at this block, `count(h)`
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3): consensus state every node
+    /// writes at connect. `None` where this node holds no row for the
+    /// block: an alternative block, a height below the draw rows' floor
+    /// (SI-34), or one the rule has not run for. A bundle filed for the
+    /// block carries the same count in its reference (`SCS-P39`).
+    pub draws: Option<u32>,
 }
 
-/// The facts the p2p handlers consume (`sync_info`, `/get_net_stats`,
-/// `/get_peer_list`, `get_connections`).
+/// The facts the p2p handlers consume (`sync_status`, `p2p_stats`,
+/// `peer_list`, `peer_connections`).
 ///
 /// Separate from [`ChainFacts`] because the two have no overlap and no shared
-/// lock domain: these read `m_p2p` and the global throttle, and none of them
-/// touches the blockchain. `sync_info` needs both and takes both, which makes
-/// the fact that it reads two unsynchronised sources visible at its
-/// signature rather than buried in a handler.
+/// lock domain: these read the network's board, link totals and peer lists,
+/// and none of them touches the blockchain. `sync_status` needs both and
+/// takes both, which makes the fact that it reads two unsynchronised
+/// sources visible at its signature rather than buried in a handler.
 ///
-/// The values are the C++ objects' **raw** fields; every elapsed time and
-/// rate on the wire is derived from them in [`crate::methods`].
+/// The values are the board's **raw** fields; every elapsed time and rate
+/// on the wire is derived from them in [`crate::methods`]. The node
+/// supplies the one implementation, over `shekyl-p2p`'s `Network`
+/// (`P2P_3_REMNANT_CUTOVER_BRIEF.md` §2.1, "RPC facts").
 pub trait P2pFacts: Send + Sync {
     fn net_stats(&self) -> Result<NetStats, FactsFault>;
     /// The live connections and the single instant they were read at.
     fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault>;
-    /// The block-download queue and the stripe this node wants next.
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault>;
-    /// The peerlist, white entries then gray. `public_only` selects a
-    /// different p2p call, not a filter over one result.
-    /// [`P2pRead::Offline`] for a daemon started offline.
+    /// The peerlist, white entries then gray. `public_only` keeps the
+    /// clearnet entries only. [`P2pRead::Offline`] for a daemon started
+    /// offline.
     fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault>;
     /// Whether P2P runs, from the daemon's configuration: read before a
     /// method that reads no peer list answers about peers or connections.
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
+
+    /// The relay owner's per-successor stem tallies (`DAEMON_RELAY_PRIVACY.md`
+    /// §55). The handler serializes the value. The body is that object, not
+    /// a status envelope.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] before the node is up. A node owns its
+    /// network for its whole life, so once up the tallies are always there
+    /// to read; an offline node's are empty.
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::wire::p2p::RelayStats, FactsFault>;
 }
 
 /// The dynamic base-fee estimate: three priced tiers.
@@ -365,248 +365,4 @@ pub struct NetStats {
     pub total_bytes_in: u64,
     pub total_packets_out: u64,
     pub total_bytes_out: u64,
-}
-
-/// Production [`ChainFacts`] over the C++ core, sharing the daemon's live
-/// [`CoreRpc`] handle. Both reads block briefly on the C++ side; the
-/// transport dispatches them via `spawn_blocking`.
-pub struct FfiChainFacts {
-    core: Arc<CoreRpc>,
-}
-
-impl FfiChainFacts {
-    pub fn new(core: Arc<CoreRpc>) -> Self {
-        Self { core }
-    }
-}
-
-/// How a lookup names the block for the two FFI exports that share a selector.
-fn lookup_selector(at: BlockLookup) -> (Option<[u8; 32]>, u64) {
-    match at {
-        BlockLookup::Hash(h) => (Some(h), 0),
-        BlockLookup::Height(h) => (None, h.to_raw()),
-    }
-}
-
-/// The fee POD becomes typed facts only when C++ wrote every tier it claimed.
-///
-/// `fee_count` is the runtime half of the arity `FeeTiers` enforces on
-/// the wire: it must equal `fees.len()`, which is what makes a POD that
-/// arrived `OK` with a shorter write a fault rather than a base fee
-/// padded with zeros.
-fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, FactsFault> {
-    if usize::from(pod.fee_count) != pod.fees.len() {
-        return Err(FactsFault::Inconsistent);
-    }
-    Ok(FeeEstimate { fees: pod.fees })
-}
-
-/// One place where a header POD becomes typed facts.
-///
-/// Two exports fill this same POD — `shekyl_rpc_block_header_at` and
-/// `shekyl_rpc_block_at` — and a second copy of nineteen field assignments
-/// is a second thing to forget when a field is added.
-fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
-    BlockHeaderFacts {
-        hash: BlockHash::from_bytes(pod.hash),
-        prev_hash: BlockHash::from_bytes(pod.prev_hash),
-        miner_tx_hash: TxHash::from_bytes(pod.miner_tx_hash),
-        curve_tree_root: CurveTreeRoot::from_bytes(pod.curve_tree_root),
-        attestation_root: AttestationRoot::from_bytes(pod.attestation_root),
-        pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
-        height: BlockHeight::from_raw(pod.height),
-        depth: BlockCount::from_raw(pod.depth),
-        timestamp: pod.timestamp,
-        difficulty: u128::from(pod.difficulty_hi) << 64 | u128::from(pod.difficulty_lo),
-        cumulative_difficulty: u128::from(pod.cumulative_difficulty_hi) << 64
-            | u128::from(pod.cumulative_difficulty_lo),
-        reward: pod.reward,
-        block_weight: pod.block_weight,
-        long_term_weight: Some(pod.long_term_weight),
-        num_txes: pod.num_txes,
-        nonce: pod.nonce,
-        major_version: pod.major_version,
-        minor_version: pod.minor_version,
-        orphan_status: pod.orphan_status != 0,
-    }
-}
-
-/// Production [`P2pFacts`] over the same live handle.
-pub struct FfiP2pFacts {
-    core: Arc<CoreRpc>,
-}
-
-impl FfiP2pFacts {
-    pub fn new(core: Arc<CoreRpc>) -> Self {
-        Self { core }
-    }
-}
-
-impl P2pFacts for FfiP2pFacts {
-    fn net_stats(&self) -> Result<NetStats, FactsFault> {
-        let pod = self.core.net_stats().map_err(FactsFault::from_code)?;
-        Ok(NetStats {
-            start_time: pod.start_time,
-            total_packets_in: pod.total_packets_in,
-            total_bytes_in: pod.total_bytes_in,
-            total_packets_out: pod.total_packets_out,
-            total_bytes_out: pod.total_bytes_out,
-        })
-    }
-
-    fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
-        self.core.connections().map_err(FactsFault::from_code)
-    }
-
-    fn sync_spans(&self) -> Result<SyncSpansSnapshot, FactsFault> {
-        self.core.sync_spans().map_err(FactsFault::from_code)
-    }
-
-    fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
-        self.core
-            .peer_list(public_only)
-            .map_err(FactsFault::from_code)
-    }
-
-    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
-        CoreRpc::p2p_state().map_err(FactsFault::from_code)
-    }
-}
-
-impl ChainFacts for FfiChainFacts {
-    fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
-        let pod = self.core.identity().map_err(FactsFault::from_code)?;
-        // An unknown discriminant is a fault, never a default: a daemon
-        // reporting a network this build does not know is a daemon this
-        // build cannot vouch for (VC-D14), and the identity axis is the one
-        // place a silent fallback would read as agreement.
-        let nettype = shekyl_rpc_types::DaemonNetwork::from_cryptonote(pod.nettype)
-            .ok_or(FactsFault::Inconsistent)?;
-        Ok(DaemonIdentity {
-            nettype,
-            genesis_hash: BlockHash::from_bytes(pod.genesis_hash),
-        })
-    }
-
-    fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
-        let pod = self.core.chain_tip().map_err(FactsFault::from_code)?;
-        Ok(ChainTip {
-            chain_height: ChainCount::from_raw(pod.chain_height),
-            top_hash: BlockHash::from_bytes(pod.top_hash),
-            target_height: decode_target_count(pod.target_height),
-            synchronized: pod.synchronized != 0,
-            release_build: pod.release_build != 0,
-        })
-    }
-
-    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
-        let pod = self.core.fee_estimate().map_err(FactsFault::from_code)?;
-        fee_estimate_from_pod(pod)
-    }
-
-    fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
-        let pod = self
-            .core
-            .block_hash_at(height.to_raw())
-            .map_err(FactsFault::from_code)?;
-        Ok(BlockHashAt {
-            hash: (pod.found != 0).then(|| BlockHash::from_bytes(pod.hash)),
-            chain_height: ChainCount::from_raw(pod.chain_height),
-        })
-    }
-
-    fn block_header_at(
-        &self,
-        at: BlockLookup,
-        fill_pow_hash: bool,
-    ) -> Result<BlockHeaderAt, FactsFault> {
-        let (hash, height) = lookup_selector(at);
-        let pod = self
-            .core
-            .block_header_at(hash.as_ref(), height, fill_pow_hash)
-            .map_err(FactsFault::from_code)?;
-        let chain_height = ChainCount::from_raw(pod.chain_height);
-        if pod.found == 0 {
-            return Ok(BlockHeaderAt {
-                header: None,
-                chain_height,
-            });
-        }
-        Ok(BlockHeaderAt {
-            header: Some(header_facts_from_pod(&pod)),
-            chain_height,
-        })
-    }
-
-    fn block_at(&self, at: BlockLookup, fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
-        let (hash, height) = lookup_selector(at);
-        let (pod, blob, json, tx_hashes) = self
-            .core
-            .block_at(hash.as_ref(), height, fill_pow_hash)
-            .map_err(FactsFault::from_code)?;
-        let chain_height = ChainCount::from_raw(pod.chain_height);
-        if pod.found == 0 {
-            return Ok(BlockAt {
-                block: None,
-                chain_height,
-            });
-        }
-        Ok(BlockAt {
-            block: Some(BlockFacts {
-                header: header_facts_from_pod(&pod),
-                blob,
-                json: Some(json),
-                tx_hashes: tx_hashes.into_iter().map(TxHash::from_bytes).collect(),
-            }),
-            chain_height,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ffi;
-
-    #[test]
-    fn fault_codes_map_one_to_one_and_unknown_is_never_guessed() {
-        assert_eq!(
-            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_NULL),
-            FactsFault::NullHandle
-        );
-        assert_eq!(
-            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_NOT_READY),
-            FactsFault::NotReady
-        );
-        assert_eq!(
-            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INTERNAL),
-            FactsFault::Internal
-        );
-        assert_eq!(
-            FactsFault::from_code(ffi::SHEKYL_RPC_FACTS_ERR_INCONSISTENT),
-            FactsFault::Inconsistent
-        );
-        assert_eq!(FactsFault::from_code(-77), FactsFault::Unknown(-77));
-    }
-
-    #[test]
-    fn a_fee_pod_that_did_not_write_every_tier_is_inconsistent() {
-        let three = ffi::FeeEstimateFactsFfi {
-            fees: [1, 2, 3],
-            fee_count: 3,
-            reserved: [0; 7],
-        };
-        let ok = fee_estimate_from_pod(three).expect("three tiers is the contract");
-        assert_eq!(ok.fees, [1, 2, 3]);
-
-        for count in [0, 2, 4] {
-            let mut short = three;
-            short.fee_count = count;
-            assert_eq!(
-                fee_estimate_from_pod(short),
-                Err(FactsFault::Inconsistent),
-                "fee_count {count} must not be read as a shorter answer"
-            );
-        }
-    }
 }

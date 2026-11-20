@@ -11,8 +11,8 @@
 # registries — `CenRow` for the consensus flag, `PolicyRow` for the policy
 # flag — one variant per ENFORCED row (bucket ≠ 3) of CONSENSUS_RULE_CENSUS.md
 # §4, in census order, each marked `pending`, `implemented(path)`,
-# `enforced_at(path, "test")`, `by_construction(path, "falsifier")` or
-# `held_by_store("crate", "test")`. The registry is the crate's claim about
+# `enforced_at(path, "test")`, `by_construction(path, "falsifier")`,
+# `held_by_store("crate", "test")` or `retired_by(Row, …)`. The registry is the crate's claim about
 # which rules exist, which rows this crate enforces at a site other than the
 # per-block stages, which rows hold by construction, and which rows a Rust
 # crate below the validator holds; the census is the denominator that claim
@@ -31,8 +31,9 @@
 #   grammar   — one `census_rows!` per flag, a parseable header, every entry
 #               `Var pending,`, `Var implemented(rust::path),`,
 #               `Var enforced_at(rust::path, "test_fn"),`,
-#               `Var by_construction(rust::path, "falsifier"),` or
-#               `Var held_by_store("crate", "test_fn"),`, no attribute on an
+#               `Var by_construction(rust::path, "falsifier"),`,
+#               `Var held_by_store("crate", "test_fn"),` or
+#               `Var retired_by(Row, …),`, no attribute on an
 #               entry (a `#[cfg]` the gate cannot evaluate would let the
 #               compiled enum and the counted enum differ);
 #   at-open   — an `enforced_at` row (CHAIN_RULES_SLICE_3.md Q4) is enforced by
@@ -56,6 +57,13 @@
 #               or `tests/` (rule 47). Counted as implemented (the enforcement
 #               is Rust's), printed separately, excluded from per-block
 #               completeness by `RuleSet::enforced`;
+#   retired   — a `retired_by` row is retired by ruling (`SO-D12g`): its
+#               check left with the carrier class at the switch (`SO-D12`
+#               4b), and the entry names the successor rows that carry its
+#               subject. Each successor must be an entry of the same
+#               registry that Rust enforces — never pending, never itself
+#               retired. Not implemented; printed as its own subtraction from
+#               the per-block denominator, so `E` stays fixed;
 #   G1 direct — the crate's Cargo.toml names neither `redb` nor
 #               `shekyl-chain-store` in any dependency table (the transitive
 #               half is `check_chain_rules_no_store.sh`, which needs cargo).
@@ -67,12 +75,12 @@
 # assertion), so this gate does not run cargo and does not need to.
 #
 # Each line prints
-# `implemented I / enforced E   at-open O   by-construction B   held-by-store S   ratified R / enforced E`
+# `implemented I / enforced E   at-open O   by-construction B   held-by-store S   retired T   ratified R / enforced E`
 # with E fixed, so coverage cannot improve by moving rows out of scope. `I`
 # includes the at-open, by-construction and held-by-store rows (Rust
-# enforces them); `O`, `B` and `S` are SUBTRACTIONS, not further
-# denominators, printed so the per-block completeness denominator,
-# `E − O − B − S`, can be read off the line.
+# enforces them) and never a retired row; `O`, `B`, `S` and `T` are
+# SUBTRACTIONS, not further denominators, printed so the per-block
+# completeness denominator, `E − O − B − S − T`, can be read off the line.
 #
 # Rule 47: the gate asserts its own subject. A missing registry file, a
 # registry `lib.rs` does not compile (`mod census;` absent), a flag with no
@@ -124,20 +132,23 @@ INVOCATION_RE = re.compile(r"\bcensus_rows!\s*\{")
 HEADER_RE = re.compile(r"^pub\s+enum\s+([A-Z][A-Za-z0-9]*)\s*:\s*([A-Z][A-Za-z]*)\s*\{$")
 # One entry: `Var pending,`, `Var implemented(a::b::c),`,
 # `Var enforced_at(a::b::c, "test_fn"),`,
-# `Var by_construction(a::b::c, "falsifier"),` or
-# `Var held_by_store("crate-name", "test_fn"),`. The variant is the census id
+# `Var by_construction(a::b::c, "falsifier"),`,
+# `Var held_by_store("crate-name", "test_fn"),` or
+# `Var retired_by(J29, J32),`. The variant is the census id
 # without `CEN-` (`D1b`, `K1a`); a path is a plain Rust path; a test is an
 # identifier; a store holder is a workspace crate name (`rust/<name>/`). Any
 # other status form is an unparseable entry.
 _RUST_PATH = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*"
 _CRATE_NAME = r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
+_VARIANT = r"[A-Z]+\d+[a-z]?"
 ENTRY_RE = re.compile(
     r"^(?P<var>[A-Z]+\d+[a-z]?)\s+"
     r"(?:(?P<pending>pending)"
     rf"|(?P<implemented>implemented)\(\s*(?P<impl_path>{_RUST_PATH})\s*\)"
     rf'|(?P<enforced_at>enforced_at)\(\s*(?P<site>{_RUST_PATH})\s*,\s*"(?P<proof>[A-Za-z_]\w*)"\s*\)'
     rf'|(?P<by_construction>by_construction)\(\s*(?P<property>{_RUST_PATH})\s*,\s*"(?P<falsifier>(?:doctest:|trybuild:)?[A-Za-z_]\w*)"\s*\)'
-    rf'|(?P<held_store>held_by_store)\(\s*"(?P<krate>{_CRATE_NAME})"\s*,\s*"(?P<store_test>[A-Za-z_]\w*)"\s*\))'
+    rf'|(?P<held_store>held_by_store)\(\s*"(?P<krate>{_CRATE_NAME})"\s*,\s*"(?P<store_test>[A-Za-z_]\w*)"\s*\)'
+    rf"|(?P<retired>retired_by)\(\s*(?P<successors>{_VARIANT}(?:\s*,\s*{_VARIANT})*)\s*\))"
     r"\s*,$"
 )
 # The crate whose registry this is. A `held_by_store` entry naming it is a
@@ -161,11 +172,12 @@ DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 @dataclass(frozen=True)
 class Entry:
     variant: str  # "A1"
-    status: str  # "pending" | "implemented" | "enforced_at" | "by_construction" | "held_by_store"
+    status: str  # "pending" | "implemented" | "enforced_at" | "by_construction" | "held_by_store" | "retired"
     path: str | None  # implemented / enforced_at: the rule type's Rust path; by_construction: the property's
     proof: str | None  # enforced_at: the `#[test]` that proves the site refuses; by_construction: the falsifier
     holder: tuple[str, str] | None  # held_by_store: (crate, test)
     line: int  # 1-based, in the registry file
+    successors: tuple[str, ...] = ()  # retired: the variants of the rows that carry its subject
 
     @property
     def id(self) -> str:
@@ -188,6 +200,10 @@ class Entry:
     @property
     def held_by_store(self) -> bool:
         return self.status == "held_by_store"
+
+    @property
+    def retired(self) -> bool:
+        return self.status == "retired"
 
 
 @dataclass(frozen=True)
@@ -221,6 +237,7 @@ class Figures:
     at_open: int  # rows this crate enforces outside the per-block stages
     by_construction: int  # rows that hold by construction (type system / parser), with a falsifier
     held_by_store: int  # rows a Rust crate below the validator holds, with the test that proves it
+    retired: int  # rows retired by ruling, each naming its successors; never implemented
     enforced: int  # the census denominator; never moves for an at-open, a by-construction or a store-held row
     ratified: int
     by_subsystem: dict[str, tuple[int, int]]  # subsystem -> (implemented, enforced)
@@ -228,11 +245,14 @@ class Figures:
     at_open_rows: tuple[tuple[str, str, str], ...]  # (id, site, proof test)
     by_construction_rows: tuple[tuple[str, str, str], ...]  # (id, property, falsifier)
     held_by_store_rows: tuple[tuple[str, str, str], ...]  # (id, crate, test)
+    retired_rows: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (id, successor ids)
 
     @property
     def per_block(self) -> int:
-        """What `Coverage::is_complete_for` measures against: `E − O − B − S`."""
-        return self.enforced - self.at_open - self.by_construction - self.held_by_store
+        """What `Coverage::is_complete_for` measures against: `E − O − B − S − T`."""
+        return (
+            self.enforced - self.at_open - self.by_construction - self.held_by_store - self.retired
+        )
 
 
 # --------------------------------------------------------------------------
@@ -320,9 +340,26 @@ def _parse_one(start_line: int, body: str) -> Registry:
             status, path, proof, holder = "enforced_at", em.group("site"), em.group("proof"), None
         elif em.group("by_construction"):
             status, path, proof, holder = "by_construction", em.group("property"), em.group("falsifier"), None
-        else:
+        elif em.group("held_store"):
             status, path, proof, holder = "held_by_store", None, None, (em.group("krate"), em.group("store_test"))
-        entries.append(Entry(variant=em.group("var"), status=status, path=path, proof=proof, holder=holder, line=n))
+        else:
+            status, path, proof, holder = "retired", None, None, None
+        successors = (
+            tuple(v.strip() for v in em.group("successors").split(","))
+            if em.group("retired")
+            else ()
+        )
+        entries.append(
+            Entry(
+                variant=em.group("var"),
+                status=status,
+                path=path,
+                proof=proof,
+                holder=holder,
+                line=n,
+                successors=successors,
+            )
+        )
     if header is None:
         raise Refused(f"registry: `census_rows!` at line {start_line} has no header")
     if not closed:
@@ -401,6 +438,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
     at_open = [e for e in implemented if e.at_open]
     by_construction = [e for e in implemented if e.by_construction]
     held_by_store = [e for e in implemented if e.held_by_store]
+    retired = [e for e in reg.entries if e.retired and e.id in subsystem_of]
     by_sub: dict[str, list[int]] = {}
     for r in enforced:
         by_sub.setdefault(r.subsystem, [0, 0])[1] += 1
@@ -413,6 +451,7 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
         at_open=len(at_open),
         by_construction=len(by_construction),
         held_by_store=len(held_by_store),
+        retired=len(retired),
         enforced=len(enforced),
         ratified=sum(1 for r in enforced if r.bucket in RATIFIED_BUCKETS),
         by_subsystem={k: (v[0], v[1]) for k, v in by_sub.items()},
@@ -420,7 +459,31 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
         at_open_rows=tuple((e.id, e.path or "", e.proof or "") for e in at_open),
         by_construction_rows=tuple((e.id, e.path or "", e.proof or "") for e in by_construction),
         held_by_store_rows=tuple((e.id, e.holder[0], e.holder[1]) for e in held_by_store if e.holder),
+        retired_rows=tuple((e.id, tuple(f"CEN-{v}" for v in e.successors)) for e in retired),
     )
+
+
+def check_retired(registries: dict[str, Registry], errors: list[str]) -> None:
+    """Every successor a `retired_by` entry names is an entry of the same
+    registry that Rust enforces: a retired row hands its subject to a row that
+    holds, never to a pending one, and never to another retired one."""
+    for reg in registries.values():
+        by_variant = {e.variant: e for e in reg.entries}
+        for e in reg.entries:
+            if not e.retired:
+                continue
+            for succ in e.successors:
+                target = by_variant.get(succ)
+                if target is None:
+                    errors.append(
+                        f"retired entry {e.id} (line {e.line}) names successor CEN-{succ}, "
+                        f"which is not an entry of registry {reg.name}"
+                    )
+                elif not target.implemented:
+                    errors.append(
+                        f"retired entry {e.id} (line {e.line}) names successor CEN-{succ}, "
+                        f"whose status is {target.status}: a successor must be enforced"
+                    )
 
 
 def check_at_open(entries: list[Entry], crate_src: str | None, errors: list[str]) -> None:
@@ -670,6 +733,7 @@ def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
     check_at_open(all_entries, inputs.crate_src, errors)
     check_by_construction(all_entries, inputs.crate_src, errors)
     check_held_by_store(all_entries, inputs.crate_sources, errors)
+    check_retired(registries, errors)
     return errors, {flag: figures(rows, reg) for flag, reg in registries.items()}
 
 
@@ -683,7 +747,15 @@ def summary(figs: dict[str, Figures]) -> str:
     w = max(
         len(str(n))
         for f in figs.values()
-        for n in (f.implemented, f.enforced, f.ratified, f.at_open, f.by_construction, f.held_by_store)
+        for n in (
+            f.implemented,
+            f.enforced,
+            f.ratified,
+            f.at_open,
+            f.by_construction,
+            f.held_by_store,
+            f.retired,
+        )
     )
     out = []
     for flag in sorted(figs, key=lambda f: list(FLAG_OF.values()).index(f)):
@@ -692,10 +764,10 @@ def summary(figs: dict[str, Figures]) -> str:
             f"{LABEL[flag] + ':':<11}"
             f"implemented {f.implemented:>{w}} / enforced {f.enforced:<{w}}   "
             f"at-open {f.at_open:>{w}}   by-construction {f.by_construction:>{w}}   "
-            f"held-by-store {f.held_by_store:>{w}}   "
+            f"held-by-store {f.held_by_store:>{w}}   retired {f.retired:>{w}}   "
             f"ratified {f.ratified:>{w}} / enforced {f.enforced:<{w}}   "
             f"(E = {flag}-rows − bucket 3; "
-            "per-block completeness over E − at-open − by-construction − held-by-store)"
+            "per-block completeness over E − at-open − by-construction − held-by-store − retired)"
         )
     return "\n".join(out)
 
@@ -721,6 +793,10 @@ def describe(figs: dict[str, Figures]) -> str:
             out.append("  held by store (Rust-enforced below the validator; holder crate and test named):")
             for rid, krate, test in f.held_by_store_rows:
                 out.append(f"    {rid}: {krate} :: {test}")
+        if f.retired_rows:
+            out.append("  retired by ruling (SO-D12g; not enforced; successors named):")
+            for rid, successors in f.retired_rows:
+                out.append(f"    {rid}: {', '.join(successors)}")
     return "\n".join(out)
 
 
@@ -868,9 +944,9 @@ def selftest() -> None:
     if figs["C"].implemented_ids != ("CEN-A2",):
         raise SystemExit(f"selftest implemented ids: got {figs['C'].implemented_ids}")
     text = summary(figs)
-    if "consensus: implemented 1 / enforced 5   at-open 0   by-construction 0   held-by-store 0   ratified 4 / enforced 5" not in text:
+    if "consensus: implemented 1 / enforced 5   at-open 0   by-construction 0   held-by-store 0   retired 0   ratified 4 / enforced 5" not in text:
         raise SystemExit(f"selftest summary shape:\n{text}")
-    if "policy:    implemented 0 / enforced 1   at-open 0   by-construction 0   held-by-store 0   ratified 1 / enforced 1" not in text:
+    if "policy:    implemented 0 / enforced 1   at-open 0   by-construction 0   held-by-store 0   retired 0   ratified 1 / enforced 1" not in text:
         raise SystemExit(f"selftest summary shape (policy):\n{text}")
     desc = describe(figs)
     if "4.A: implemented 1 / enforced 3" not in desc:
@@ -879,6 +955,21 @@ def selftest() -> None:
     # a status the grammar does not name is an unparseable entry, not a
     # status the figures could miscount
     _expect_refusal(_reg("        A4 pending,\n", '        A4 held_by_cxx("tests/x.cpp", "t"),\n'), "unparseable entry at line 10", "held_by_cxx is not a status form")
+    # retired_by — a retired row names enforced successors of its own
+    # registry; it is not implemented, E stays fixed, and per-block drops by it
+    retired_reg = _REGISTRY_OK.replace("        A1 pending,\n", "        A1 retired_by(A2),\n")
+    figs_r = _expect_ok(_inputs(registry=retired_reg), "a retired row naming an enforced successor")
+    if (figs_r["C"].implemented, figs_r["C"].retired, figs_r["C"].enforced, figs_r["C"].per_block) != (1, 1, 5, 4):
+        raise SystemExit(f"selftest retired figures: {figs_r['C']}")
+    if figs_r["C"].retired_rows != (("CEN-A1", ("CEN-A2",)),):
+        raise SystemExit(f"selftest retired rows: {figs_r['C'].retired_rows}")
+    if "retired by ruling" not in describe(figs_r) or "CEN-A1: CEN-A2" not in describe(figs_r):
+        raise SystemExit("selftest describe lacks the retired rows")
+    _expect_refusal(_reg("        A1 pending,\n", "        A1 retired_by(A4),\n"), "whose status is pending", "a retired row naming a pending successor")
+    _expect_refusal(_reg("        A1 pending,\n", "        A1 retired_by(A9),\n"), "which is not an entry of registry CenRow", "a retired row naming no entry")
+    _expect_refusal(_reg("        A1 pending,\n", "        A1 retired_by(M1),\n"), "which is not an entry of registry CenRow", "a retired row naming the other registry's row")
+    _expect_refusal(_inputs(registry=retired_reg.replace("        A4 pending,\n", "        A4 retired_by(A1),\n")), "whose status is retired", "a retired row naming a retired successor")
+    _expect_refusal(_reg("        A1 pending,\n", "        A1 retired_by(),\n"), "unparseable entry", "a retired row naming no successor")
     # enforced_at — the proof test is a definition in the crate, not a mention
     _SRC_OK = "#[test]\nfn e5_refuses() {}\n// e5_refuses_not_this in a comment\n"
     at_open_reg = _REGISTRY_OK.replace("        L1 pending,\n", '        L1 enforced_at(crate::anchors::E5, "e5_refuses"),\n')
@@ -889,7 +980,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest at-open rows: {figs2['C'].at_open_rows}")
     if "CEN-L1: crate::anchors::E5 :: e5_refuses" not in describe(figs2):
         raise SystemExit("selftest describe lacks the at-open citation")
-    if "implemented 2 / enforced 5   at-open 1   by-construction 0   held-by-store 0   ratified 4" not in summary(figs2):
+    if "implemented 2 / enforced 5   at-open 1   by-construction 0   held-by-store 0   retired 0   ratified 4" not in summary(figs2):
         raise SystemExit(f"selftest at-open summary:\n{summary(figs2)}")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="fn e5_refuses() {}\n"), "proof test 'e5_refuses' is not a `#[test] fn` defined in the crate", "at-open proof fn without #[test]")
     _expect_refusal(_inputs(registry=at_open_reg, crate_src="#[test]\nfn other() { e5_refuses(); }\n"), "proof test 'e5_refuses' is not a `#[test] fn`", "at-open proof only called, not defined")
@@ -909,7 +1000,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest by-construction rows: {figs3['C'].by_construction_rows}")
     if "CEN-L1: crate::view::ChainView :: l1_falsifier" not in describe(figs3):
         raise SystemExit("selftest describe lacks the by-construction citation")
-    if "implemented 2 / enforced 5   at-open 0   by-construction 1   held-by-store 0   ratified 4" not in summary(figs3):
+    if "implemented 2 / enforced 5   at-open 0   by-construction 1   held-by-store 0   retired 0   ratified 4" not in summary(figs3):
         raise SystemExit(f"selftest by-construction summary:\n{summary(figs3)}")
     _expect_refusal(_inputs(registry=bc_reg, crate_src="fn l1_falsifier() {}\n"), "falsifier 'l1_falsifier' is not a `#[test] fn`", "by-construction falsifier without #[test]")
     # a falsifier shared by two rows names both in its body (slice 5 Q6), or it is one test counted twice
@@ -949,7 +1040,7 @@ def selftest() -> None:
         raise SystemExit(f"selftest held-by-store rows: {figs4['C'].held_by_store_rows}")
     if "CEN-L1: shekyl-chain-store :: l1_held" not in describe(figs4):
         raise SystemExit("selftest describe lacks the held-by-store citation")
-    if "implemented 2 / enforced 5   at-open 0   by-construction 0   held-by-store 1   ratified 4" not in summary(figs4):
+    if "implemented 2 / enforced 5   at-open 0   by-construction 0   held-by-store 1   retired 0   ratified 4" not in summary(figs4):
         raise SystemExit(f"selftest held-by-store summary:\n{summary(figs4)}")
     _expect_refusal(_inputs(registry=hs_reg, crates={}), "holder crate 'shekyl-chain-store' is not a workspace crate", "store holder crate missing")
     _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn` defined in 'shekyl-chain-store'", "store holder fn without #[test]")

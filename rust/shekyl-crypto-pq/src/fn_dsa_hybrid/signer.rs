@@ -16,11 +16,11 @@ use fn_dsa::{SigningKey as _, SigningKey1024};
 use rand::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::heap_secret::HeapSecret;
 use crate::rng::HedgedOsRng;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "seeded-rng"))]
 use crate::seeded_rng::SeededRng;
 use crate::CryptoError;
+use shekyl_heap_secret::HeapSecret;
 
 use super::{
     nest_fn_dsa_signature, sign_decoded_key, FnDsaHybridSecretKey, FnDsaHybridSignature,
@@ -177,7 +177,7 @@ impl FnDsaHybridSigner {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "seeded-rng"))]
 impl FnDsaHybridSigner {
     /// Deterministic nested sign for vectors and benches. FN-DSA draws from a
     /// ChaCha20 stream over `rng_seed` instead of the OS. For one key, domain,

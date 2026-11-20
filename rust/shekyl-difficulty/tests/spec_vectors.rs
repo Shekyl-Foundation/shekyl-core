@@ -65,7 +65,7 @@ fn chain_height() -> BlockHeight {
 }
 
 fn expected(v: u128) -> Difficulty {
-    Difficulty::from_raw(v)
+    Difficulty::new(v).expect("a §8.1 vector's output is non-zero")
 }
 
 // (1) Perfectly stable hashrate (§8.1).
@@ -218,4 +218,57 @@ fn vector_7_selfish_mine_attack_regression() {
         "selfish-mine vector must produce next_D > stable 990_000; \
          this is the September 2018 attack-class defense."
     );
+}
+
+// (8) The floor (§5.3 step 10; Rick, 2026-11-07). Every solvetime at the
+// `+6T` clamp (`ts[i] = B + i*7T`) gives `L = 6T * N(N+1)/2`, so the tail is
+// `avg_D * 99 / 600`. It is zero for `avg_D <= 6`, where canonical zawy12
+// returns 0 and Shekyl returns one; at 7 it is one without the floor and at
+// 13 it is two, so the floor changes nothing above zero. Red edit: drop step
+// 10, and the first six fail with 0.
+#[test]
+fn vector_8_floor_at_one_under_a_maximally_slow_window() {
+    let ts = ts_window((0..=N).map(|i| B + i * 7 * T_SECONDS));
+    for (avg_d, want) in [
+        (1, 1),
+        (2, 1),
+        (3, 1),
+        (4, 1),
+        (5, 1),
+        (6, 1),
+        (7, 1),
+        (13, 2),
+        (400, 66),
+    ] {
+        let cd: Vec<CumulativeDifficulty> = (0..=N)
+            .map(|i| CumulativeDifficulty::from_raw(u128::from(i) * avg_d))
+            .collect();
+        let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 8 must compute");
+        assert_eq!(
+            next_d,
+            expected(want),
+            "floor vector avg_D = {avg_d}: expected {want}, got {next_d}"
+        );
+    }
+}
+
+// (9) The floor's way back (§5.3 step 10). At difficulty one every hash is a
+// block, so solvetimes collapse; with every timestamp equal the running max
+// gives `solvetime[1] = T` (the synthetic anchor) and zero after, L takes the
+// minimum-L floor, and the tail is `avg_D * 99 * (N+1) / (10N)`: about ten
+// times the last window. From a window of ones the next difficulty is 10.
+#[test]
+fn vector_9_a_window_at_the_floor_climbs_about_tenfold() {
+    let ts = ts_window((0..=N).map(|_| B));
+    for (avg_d, want) in [(1, 10), (10, 100), (100, 1_000)] {
+        let cd: Vec<CumulativeDifficulty> = (0..=N)
+            .map(|i| CumulativeDifficulty::from_raw(u128::from(i) * avg_d))
+            .collect();
+        let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 9 must compute");
+        assert_eq!(
+            next_d,
+            expected(want),
+            "climb vector avg_D = {avg_d}: expected {want}, got {next_d}"
+        );
+    }
 }

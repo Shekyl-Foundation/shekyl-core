@@ -134,7 +134,6 @@ existing `AtomicUnits` everywhere a raw `u64` *amount* persists or flows.
 | `shekyl-wire` transaction `fee` | `fee: u64` | the oxide `fcmp.rs` `ProofBase.fee` was deleted in the slice-1 wire extraction; the fee now lives on the genesis tx in `shekyl-wire` (see the `tx-builder wire.rs:26` row below) |
 | [`tx-builder wire.rs:26`](../../rust/shekyl-tx-builder/src/wire.rs) | `fee: u64` | |
 | economics [`burn.rs:27-29`](../../rust/shekyl-economics/src/burn.rs), [`params.rs`](../../rust/shekyl-economics/src/params.rs) `EconomicParams::emission_curve_asymptote`, emission returns | reward/fee/supply | |
-| staking [`registry.rs:9`](../../rust/shekyl-consensus/src/registry.rs) `StakeEntry.amount` | | |
 
 ## 5. PR B — Secret-material hardening (Priority 1, security; `35-secure-memory.mdc`)
 
@@ -163,7 +162,6 @@ field per §1).
 | [`ledger_block.rs:107,140`](../../rust/shekyl-engine-state/src/ledger_block.rs) `tip_hash`, `ReorgBlocks` | persisted |
 | [`sync_state_block.rs:75,86`](../../rust/shekyl-engine-state/src/sync_state_block.rs) `creation_anchor_hash`, `pending_tx_hashes` | persisted |
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
-| [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
 | `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | **LANDED — RTN-7** (2026-09-18): `BlockHash` / `CurveTreeRoot` / `Vec<TxHash>`, plus `attestation_root: AttestationRoot` and `BondPost.p_canonical_id: PCanonicalId`. Type-only; every parity KAT unchanged. |
 | `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return**, `Block::hash()`, `prefix_hash()` | **LANDED — RTN-7** (2026-09-18): `TxHash`, `BlockHash`, and the new `PrefixHash` (the txid preimage's *first* component, minted beside `PqcAuthHash` and `PrunableHash` rather than as a signing-specific name — Q3). ~160 call sites in 12 crates; the component surface (`prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`) was typed with `PDM-Q-F26` the day before. Held by `scripts/ci/check_wire_raw_hash_surface.py`. |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
@@ -208,7 +206,7 @@ The classification test, applied to every time-shaped `u64`:
 | `StakeClaim.from_height/to_height`, `stake_lock_until`, `eligible_height`, `block_height`, `spent_height`, reorg `fork_height`, `built_at_height` | **Height** | `BlockHeight` | Chain-objective; compared against on-chain events. |
 | engine-rpc `TransferParams.unlock_time` | **N/A — drop it** | — | V3 `TxRequest` is `{dest, amount, priority}` ([plan §"Send"](WALLET_REWRITE_PLAN.md)) — no unlock field. This RPC `unlock_time: u64` is legacy CryptoNote RPC shape that contradicts the V3 design. Don't newtype it; remove it (or, if a send-time lock is ever wanted, `unlock_height: BlockHeight`). |
 | `PaymentRequest.created_at` / `expiry` | **Wall-clock** | `Timestamp` | Off-chain invoice. Travels in a `shekyl:…?expiry=` URI to a *payer* who may be unsynced or a different wallet — wall-clock is evaluable offline and human-set. Not consensus; the merchant's own wallet owns the lifecycle. |
-| `SpendIntent.created_at` / `expires_at` | **Wall-clock** | `Timestamp` | Coordination-TTL among cosigners. Chain-binding is *already* handled separately by `reference_block_height` + `reference_block_hash` + `chain_state_fingerprint` + `tx_counter`; `expires_at` is purely a "proposal is stale" hint, evaluable by a cosigner momentarily behind on sync. |
+| `SpendIntent.created_at` | **Wall-clock** | `Timestamp` | Display only. The intent's deadline is its reference block's age as consensus measures it (R-13), so the former `expires_at` and the `tx_counter` are deleted; chain binding is `reference_block_height` + `reference_block_hash` + `chain_state_fingerprint`. |
 | `AddressProvenance.first_imported_at` / `last_used_at` | **Wall-clock** | `Timestamp` | Pure wallet-local audit metadata. "When did *I* import this" is a wallet action, not a chain event; height is not meaningful if the wallet was offline at import. |
 
 ### 7.3 The type trio
@@ -275,7 +273,7 @@ surface — landing on its own PR per §3, **not** bundled into a Rust crate mov
    (`amount` is 0) — resolve **shed-or-type** explicitly rather than leaving them bare.
    The third of this family, `get_output_distribution(amount, from_height, to_height,
    start_height, …)` (`:2715`), was shed: deleted 2026-10-05 with its callerless chain
-   ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md) §6).
+   ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §6).
 4. **Archival consensus scalars are bare** (`bond_wire.rs:70` `shard_ids: Vec<u64>`;
    `settlement_epoch`, `leaf_index_in_segment`, `global_output_index`) — they enter the
    §9.11 sig-preimage; a `ShardId`/`SettlementEpoch` transposition breaks the signature or
@@ -298,7 +296,7 @@ crypto and less prone to the cross-domain confusion that bites the wallet path.
 - `HybridSignature` & `HybridPublicKey.ml_dsa` blobs ([`signature.rs:28,49-50`](../../rust/shekyl-crypto-pq/src/signature.rs))
 - `DleqProof.{c,s}` ([`dleq.rs:28`](../../rust/shekyl-proofs/src/dleq.rs))
 - `ml_kem_ct` / `x25519_eph_pk` ([`tx_proof.rs:230-231`](../../rust/shekyl-proofs/src/tx_proof.rs))
-- FROST shares/keys ([`frost_sal.rs`](../../rust/shekyl-fcmp/src/frost_sal.rs), [`frost_dkg.rs:232`](../../rust/shekyl-fcmp/src/frost_dkg.rs))
+- FROST shares/keys ([`frost_sal.rs`](../../rust/shekyl-fcmp/src/frost_sal.rs))
 - Selene leaf x-coords ([`leaf.rs:55-59`](../../rust/shekyl-fcmp/src/leaf.rs))
 
 ## 9. Explicitly out of scope

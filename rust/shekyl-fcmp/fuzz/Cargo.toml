@@ -9,8 +9,23 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-shekyl-fcmp = { path = ".." }
+# `seeded-rng` (test-only, `scripts/ci/check_test_only_features.py`): the
+# prover's seeded form, `proof::prove_with_rng`, so the proof
+# `fuzz_block_header_tree_root` verifies is the same proof every run. This
+# crate is its own workspace and never ships.
+shekyl-fcmp = { path = "..", features = ["seeded-rng"] }
 shekyl-curve-generators = { path = "../../shekyl-curve-generators" }
+shekyl-types = { path = "../../shekyl-types" }
+# `fuzz_block_header_tree_root` proves one real output once: its secrets
+# from the production derivation (`shekyl-crypto-pq`), its points with the
+# curve crate `shekyl-fcmp` itself uses, at the same version and features,
+# and the proof's blinds from a seeded `ChaCha20Rng` (the workspace's
+# `rand_chacha`, which `shekyl-fcmp` uses for the verify's batch weights)
+# through the prover's seeded form.
+# All three are already in this crate's tree through `shekyl-fcmp`.
+shekyl-crypto-pq = { path = "../../shekyl-crypto-pq" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+rand_chacha = "0.3"
 
 [[bin]]
 name = "fuzz_fcmp_proof_deserialize"

@@ -1,0 +1,200 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Compile every fuzz harness (the CI lane's fuzz brief, Part A, ruled
+# 2026-11-12, amended 2026-11-15).
+#
+# Each `rust/<crate>/fuzz/` is its own workspace, outside the main one, so
+# `cargo clippy --all-targets` never sees it: an API change in the fuzzed
+# crate breaks the harness silently. This workflow type-checks each fuzz
+# crate on the pinned stable toolchain against its committed lockfile
+# (`--locked`), one job per crate, in parallel. Running the harnesses
+# needs nightly and is the nightly tier's (Part B).
+#
+# The matrix is not written here. `scripts/ci/check_fuzz_inventory.py
+# --matrix` derives it from the tree and the change: every fuzz crate the
+# change reaches, through the crates it depends on by path (the scope
+# classifier's reverse closure, `change_scope.py`'s `rust_tests`), or by
+# its own files; every fuzz crate when the change touches what all of them
+# build against (the workspace lockfile, the toolchain pin, the inventory
+# script, this workflow). A fuzz crate added to the tree is in the matrix
+# without an edit here, and the inventory check refuses this workflow if
+# it stops reading the script.
+#
+# `fuzz-harness-pass` is the workflow's one verdict: a job skipped by scope
+# is a pass, anything else must be green.
+
+name: ci/fuzz-harness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+# Only a pull request's run is cancelled: a merge queues behind the
+# running `dev` run, which finishes, and a newer merge replaces the queued
+# one (`scripts/ci/check_dev_push_runs_finish.py`).
+concurrency:
+  group: fuzz-harness-${{ github.ref }}
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scope:
+    name: "Fuzz harnesses: scope and inventory"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # the classifier and the inventory read the tree; no build
+    outputs:
+      crates: ${{ steps.matrix.outputs.crates }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: the inventory, derived from the tree
+        run: |
+          python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/check_fuzz_inventory.py
+      - name: the coverage floors, one per target, each moved only with its run
+        # Against HEAD^1 (the base, in a pull request's merge commit): the
+        # full history is fetched above.
+        run: python3 scripts/ci/check_fuzz_inventory.py --floors
+      - id: matrix
+        name: the fuzz crates this change reaches
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A push to dev and a manual dispatch compile every harness. A
+          # pull request compiles the ones its change reaches; a classifier
+          # that cannot answer fails closed to every one.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.sha }}"
+            out=$(mktemp)
+            if GITHUB_OUTPUT="$out" python3 scripts/ci/change_scope.py --base "$base" --head "$head"; then
+              rust_tests=$(sed -n 's/^rust_tests=//p' "$out")
+              changed=$(git diff --name-only "$base" "$head")
+            else
+              rust_tests=all
+              changed=
+            fi
+          else
+            rust_tests=all
+            changed=
+          fi
+          crates=$(RUST_TESTS="$rust_tests" CHANGED="$changed" python3 scripts/ci/check_fuzz_inventory.py --matrix)
+          echo "rust_tests=$rust_tests"
+          echo "crates=$crates"
+          echo "crates=$crates" >> "$GITHUB_OUTPUT"
+
+  compile:
+    # One job for every fuzz crate the change reaches (ruled 2026-11-16), in
+    # place of a leg per crate. The crates share one target directory, so
+    # the dependencies they have in common (shekyl-fcmp, shekyl-crypto-pq,
+    # the oxide crates) type-check once, not once per crate; a leg per crate
+    # was a runner allocation each, with each leg checking the whole tree
+    # beneath its crate from cold. fuzz-harness-pass is the verdict; this
+    # job is skipped whole when no crate is reached.
+    name: "Fuzz harnesses: compile"
+    needs: scope
+    if: needs.scope.outputs.crates != '[]'
+    runs-on: ubuntu-latest
+    # Every crate from cold, one after another, sharing their dependencies.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: install Rust toolchain
+        # The pinned stable toolchain (rust/rust-toolchain.toml):
+        # libfuzzer-sys 0.4 type-checks on stable.
+        uses: ./.github/actions/install-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache for the shared target directory. Saved by pushes to
+          # dev only.
+          workspaces: rust -> target-fuzz
+          key: fuzz-harnesses
+          save-if: ${{ github.event_name == 'push' }}
+      - name: cargo check --locked, every crate reached
+        shell: bash
+        env:
+          CRATES: ${{ needs.scope.outputs.crates }}
+          CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target-fuzz
+        run: |
+          # A lockfile cargo refuses to update is a crate this harness
+          # depends on that changed its dependencies: the fuzz lockfiles
+          # are regenerated from the workspace's, and committed. Every
+          # crate is checked, and every failure is named, before the
+          # verdict.
+          listed=$(jq -r '.[]' <<<"$CRATES")
+          mapfile -t crates <<<"$listed"
+          # The job runs only when the scope listed a crate (rule 47: an
+          # empty list here would check nothing and pass).
+          if [ -z "$listed" ] || [ "${#crates[@]}" -eq 0 ]; then
+            echo "::error::no fuzz crate to check in ${CRATES} — missing subject"
+            exit 1
+          fi
+          failed=()
+          for crate in "${crates[@]}"; do
+            echo "::group::rust/$crate/fuzz"
+            if cargo check --locked --manifest-path "rust/$crate/fuzz/Cargo.toml"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::rust/$crate/fuzz did not type-check. If cargo refused to update its Cargo.lock, run python3 scripts/ci/check_fuzz_inventory.py --regenerate and commit the fuzz lockfiles."
+              failed+=("$crate")
+            fi
+          done
+          echo "checked ${#crates[@]} fuzz crate(s): ${crates[*]}"
+          if [ "${#failed[@]}" -ne 0 ]; then
+            echo "did not type-check: ${failed[*]}"
+            exit 1
+          fi
+
+  fuzz-harness-pass:
+    name: "Fuzz harnesses: pass"
+    needs: [scope, compile]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # reads two job results
+    steps:
+      - name: every harness the change reaches compiled
+        shell: bash
+        run: |
+          scope="${{ needs.scope.result }}"
+          compile="${{ needs.compile.result }}"
+          echo "scope=$scope compile=$compile"
+          if [ "$scope" != "success" ]; then
+            echo "::error::the scope job did not succeed ($scope)"
+            exit 1
+          fi
+          case "$compile" in
+            success|skipped) ;;
+            *) echo "::error::a fuzz harness did not compile ($compile)"; exit 1 ;;
+          esac
+
+  # Every push run on `dev` reports to `report-dev-red.yml`: a red job
+  # opens or threads its own tracking issue, and a job green again closes
+  # its issue. `needs` lists every other job in this file, so a red in any
+  # of them reports; scripts/ci/check_dev_red_reporter.py holds the list
+  # and this condition to the file. Only a push run on `dev` reports: a
+  # pull request's red is read on the pull request. A job past its
+  # `timeout-minutes` is cancelled, not failed, and the reporter counts it
+  # red. A run cancelled as a whole (a newer merge superseded it) reports
+  # nothing, which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [scope, compile, fuzz-harness-pass]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

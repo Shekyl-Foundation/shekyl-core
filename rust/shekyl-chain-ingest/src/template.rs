@@ -6,7 +6,7 @@
 //! The node's one block template (`DRS_X_STORE_FLIP.md` DX-Q3, N2).
 //!
 //! The tip follower builds it for the block after the tip, and the miner
-//! and `get_block_template` read the job it posts. Nothing else builds a
+//! and `block_template` read the job it posts. Nothing else builds a
 //! block for this node.
 //!
 //! **One snapshot.** [`produce`] takes a [`ReadSnapshot`] and no store, so
@@ -31,29 +31,35 @@
 //! the block it went into is filed or is never going to be. Neither is
 //! derived from anything another template shares. The witness is the
 //! daemon that served the template, whether its built-in miner found the
-//! block or an external one on `get_block_template` did.
+//! block or an external one on `block_template` did.
 //!
 //! **The extra nonce.** Every coinbase reserves its eight bytes, zeroed;
 //! the job carries their offset and the header nonce's.
+//!
+//! **The section** (`SO-D12` 4b, C4). The block admits the bundles the
+//! queue holds inside its window, as [`fill_section`] packs them under the
+//! budget, read on the same snapshot through the store's bundle view over a
+//! memo this build files (`remember_window_epochs`). The header commits
+//! their root; the posting keeps the references and their bodies, and the
+//! door re-attaches them to the block mined on it, whoever mined it.
 
 use std::sync::{Mutex, PoisonError};
 
-use rand::RngCore;
-use shekyl_archival_retention::empty_attestation_root;
+use shekyl_archival_retention::{section_root, BundleBody, BundleRef};
 use shekyl_block_template::{
     build, EmissionOperands, Fill, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_bundle_producer::WitnessRing;
-use shekyl_chain_rules::{Fault, RuleSet};
-use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
+use shekyl_chain_rules::{fill_section, remember_window_epochs, DrawableMemo, Fault, RuleSet};
+use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreBundleView, StoreError};
+use shekyl_crypto_pq::TxKey;
 use shekyl_economics::EconomicParams;
 use shekyl_mempool::{select_shown, Evicted, Pool};
 use shekyl_miner::{Job, ListedBody};
-use shekyl_types::{AttestationRoot, BlockHash, Timestamp, TxHash};
+use shekyl_types::{BlockHash, SectionRoot, Timestamp, TxHash};
 use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
-use zeroize::Zeroizing;
 
 use crate::connector::{chain_facts_on, ChainFacts, FactsStop};
 use crate::router::{claim_next, next_seed, ClaimStop};
@@ -75,6 +81,22 @@ pub(crate) struct Produced {
     pub(crate) coinbase_weight: u64,
     /// What CEN-M10 took from the pool after the selection.
     pub(crate) evicted: Vec<(TxHash, Evicted)>,
+    /// The block's bundle section, when it admits any: what the header's
+    /// root commits.
+    pub(crate) section: Option<PostedSection>,
+}
+
+/// A template's bundle section: the references its header's root commits,
+/// in section order, and the body each names. The door attaches them to a
+/// block mined on the template (`Door::offer_local`).
+#[derive(Clone, Debug)]
+pub(crate) struct PostedSection {
+    /// The references, as the block carries them.
+    pub(crate) references: shekyl_types::archival::BundleReferences,
+    /// Their bodies, in the same order.
+    pub(crate) bodies: Vec<BundleBody>,
+    /// The root the header commits over them.
+    pub(crate) root: [u8; 32],
 }
 
 /// Why [`produce`] built nothing.
@@ -84,10 +106,16 @@ pub(crate) enum NoTemplate {
     Facts(FactsStop),
     /// The seed, the target or the next seed could not be claimed.
     Claim(ClaimStop),
-    /// The seed for the next block is not one the caches hold yet.
-    SeedNotHeld,
+    /// The cache for the next block's seed is not built yet.
+    SeedNotWarm {
+        /// The seed.
+        seed: BlockHash,
+    },
     /// The pool's selection could not read the chain.
     Selection(Fault<StoreError>),
+    /// The bundle section could not be read: the queue, the window's
+    /// drawable sets, or the bundle view.
+    Section(Fault<StoreError>),
     /// The pool file faulted while evicting what the parent refused.
     PoolFile(StoreError),
     /// The OS random source failed, for the coinbase secret or the witness
@@ -160,7 +188,7 @@ pub(crate) fn produce(
     let (height, seed, target) = claim_next(snap, producer.rules).map_err(NoTemplate::Claim)?;
     debug_assert_eq!(height, facts.connecting, "one snapshot, one tip");
     if !holds(&seed) {
-        return Err(NoTemplate::SeedNotHeld);
+        return Err(NoTemplate::SeedNotWarm { seed });
     }
     let next_seed = next_seed(snap, height).map_err(NoTemplate::Claim)?;
     let rule_set = producer.rules.in_force(height);
@@ -173,7 +201,13 @@ pub(crate) fn produce(
         None => Listing::default(),
         Some(pool) => list(snap, producer, &facts, &rule_set, pool)?,
     };
-    let template = secrets.build(producer, &facts, &rule_set, &listed)?;
+    let section = section(snap, height, &rule_set)?;
+    let root = section
+        .as_ref()
+        .map_or_else(shekyl_archival_retention::empty_section_root, |section| {
+            section.root
+        });
+    let template = secrets.build(producer, &facts, &rule_set, &listed, root)?;
     let offsets = template
         .block
         .blob_offsets()
@@ -202,7 +236,59 @@ pub(crate) fn produce(
         block_reward: template.block_reward,
         coinbase_weight,
         evicted,
+        section,
     })
+}
+
+/// The section the block at `height` carries (module docs): the queue's
+/// bundles [`fill_section`] packs, with their bodies. `None` when it packs
+/// none.
+pub(crate) fn section(
+    snap: &ReadSnapshot<'_>,
+    height: shekyl_types::BlockHeight,
+    rule_set: &RuleSet,
+) -> Result<Option<PostedSection>, NoTemplate> {
+    let queued = snap
+        .queued_bundles()
+        .map_err(|e| NoTemplate::Section(Fault::View(e)))?;
+    if queued.is_empty() {
+        return Ok(None);
+    }
+    let view = SnapshotView::new(snap);
+    let mut memo = DrawableMemo::new();
+    remember_window_epochs(&view, height, rule_set, &mut memo)
+        .map_err(|read| NoTemplate::Section(read.into()))?;
+    let bundles = StoreBundleView::new(&view, &memo, height, rule_set.settlement_schedule());
+    let refs: Vec<BundleRef> = queued
+        .iter()
+        .map(|entry| entry.queued.reference.clone())
+        .collect();
+    let packed = fill_section(&refs, height, &bundles, rule_set)
+        .map_err(|e| NoTemplate::Section(Fault::View(e)))?;
+    if packed.is_empty() {
+        return Ok(None);
+    }
+    let mut bodies = Vec::with_capacity(packed.len());
+    for reference in &packed {
+        let body = queued
+            .iter()
+            .find(|entry| entry.queued.reference == *reference)
+            .map(|entry| entry.body.clone())
+            .expect("fill_section packs only references it was given");
+        bodies.push(body);
+    }
+    // `fill_section` packs a non-empty section of at most W₂ ≤ 500
+    // references, each a parsed reference: a section, with a root.
+    let root = section_root(&packed).expect("a packed section's count fits the root");
+    let references = shekyl_types::archival::BundleReferences::new(
+        packed.iter().map(BundleRef::encode).collect(),
+    )
+    .expect("a packed section is a non-empty section of non-empty references");
+    Ok(Some(PostedSection {
+        references,
+        bodies,
+        root,
+    }))
 }
 
 /// The bodies the fill admits, and what CEN-M10 evicted.
@@ -225,7 +311,7 @@ struct Listing {
 /// between the two locks evicts nothing. A listed body the pool stopped
 /// showing between them — a make-room eviction, a same-tip reconcile, a
 /// flush — posts nothing and evicts nothing ([`NoTemplate::BodyGone`]): a
-/// job must not name a body an outside miner's `submit_block` cannot find,
+/// job must not name a body an outside miner's `block_submit` cannot find,
 /// and the follower builds again without it.
 fn list(
     snap: &ReadSnapshot<'_>,
@@ -253,7 +339,10 @@ fn list(
         }
         pool.shown_bodies()
     };
-    let selected = select_shown(&shown, &view, rule_set, bound, |weight, fee| {
+    // The id an emission's auths sign (CEN-J25, NI-F11): the chain's own,
+    // from the trust its rules pin.
+    let network = producer.rules.trust().network_id();
+    let selected = select_shown(&shown, &view, rule_set, &network, bound, |weight, fee| {
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;
@@ -308,11 +397,11 @@ fn judged_at_parent(pool: &Pool, parent: BlockHash) -> bool {
     pool.judged_at().is_some_and(|tip| tip.hash == parent)
 }
 
-/// One template's secrets: the coinbase's transaction secret and its draw
-/// commitment. The build takes a wiped copy of the secret; the witness
-/// key and seed behind the commitment stay in the ring.
+/// One template's secrets: the coinbase's transaction key and its draw
+/// commitment. Each build borrows the key; the witness key and seed behind
+/// the commitment stay in the ring.
 struct Secrets {
-    tx_key: Zeroizing<[u8; 32]>,
+    tx_key: TxKey,
     draw: shekyl_types::archival::DrawCommitment,
 }
 
@@ -321,10 +410,7 @@ impl Secrets {
         witness: &WitnessRing,
         connecting: shekyl_types::BlockHeight,
     ) -> Result<Self, NoTemplate> {
-        let mut tx_key = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng
-            .try_fill_bytes(tx_key.as_mut())
-            .map_err(|e| NoTemplate::Random(e.to_string()))?;
+        let tx_key = TxKey::random().map_err(|e| NoTemplate::Random(e.to_string()))?;
         let draw = witness
             .draw(connecting)
             .map_err(|e| NoTemplate::Random(e.to_string()))?;
@@ -337,17 +423,15 @@ impl Secrets {
         facts: &ChainFacts,
         rule_set: &RuleSet,
         listed: &[Transaction],
+        root: [u8; 32],
     ) -> Result<Template, TemplateError> {
-        // Copied cell to cell: no bare copy of the secret on this stack.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        tx_key_secret.copy_from_slice(self.tx_key.as_ref());
         build(&TemplateContext {
             height: facts.connecting,
             previous: facts.previous,
             curve_tree_root: facts.curve_tree_root,
-            // This node mints no attestation records, so every template
-            // commits the empty set's root (CEN-B4's witness-less arm).
-            attestation_root: AttestationRoot::from_bytes(empty_attestation_root()),
+            // The section's root (module docs); the empty section's when
+            // the block admits no bundle.
+            section_root: SectionRoot::from_bytes(root),
             major_version: rule_set.header_major_version(),
             now: producer.now,
             median_timestamp: facts.median_timestamp,
@@ -361,7 +445,7 @@ impl Secrets {
             },
             params: producer.params,
             miner: producer.keys,
-            tx_key_secret,
+            tx_key: &self.tx_key,
             extra_nonce: [0; COINBASE_NONCE_BYTES],
             draw_commitment: self.draw,
             listed,

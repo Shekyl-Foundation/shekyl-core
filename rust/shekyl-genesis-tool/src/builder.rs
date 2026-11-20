@@ -21,6 +21,7 @@
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_network::GenesisTimestamp;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
 use shekyl_wire::tx_extra::{
@@ -28,9 +29,9 @@ use shekyl_wire::tx_extra::{
 };
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
-use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
+use crate::txkey::genesis_tx_key;
 use crate::{invalid, GenesisToolError};
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, SectionRoot, TxHash};
 
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
@@ -68,8 +69,8 @@ pub fn build_genesis_tx(
     net: Network,
     recipients: &[Recipient],
 ) -> Result<BuiltGenesis, GenesisToolError> {
-    let tx_secret = derive_genesis_tx_secret(net, recipients);
-    let tx_pub = tx_pubkey(&tx_secret);
+    let tx_key = genesis_tx_key(net, recipients);
+    let tx_pub = tx_key.public_bytes();
 
     let mut outputs = Vec::with_capacity(recipients.len());
     let mut enc_amounts = Vec::with_capacity(recipients.len());
@@ -89,7 +90,7 @@ pub fn build_genesis_tx(
 
         let index = u64::try_from(i).expect("recipient index fits u64");
         let od = construct_output(
-            &tx_secret,
+            &tx_key,
             &x25519_pk,
             &r.address.ml_kem_encap_key,
             &r.address.spend_key,
@@ -184,27 +185,83 @@ pub fn build_genesis_tx(
     })
 }
 
-/// Assemble the genesis block around a built coinbase tx.
-///
-/// Mirrors C++ `generate_genesis_block`: major [`GENESIS_BLOCK_MAJOR_VERSION`],
-/// minor [`HEADER_MINOR_VERSION`], timestamp 0, zero
-/// previous hash, the empty curve-tree root, the empty attestation root, and
-/// the configured nonce — which survives verbatim because genesis difficulty
-/// is 1 (the first nonce tried always satisfies the PoW check).
-pub fn genesis_block(tx: Transaction, nonce: u32) -> Result<Block, GenesisToolError> {
-    let attestation_root = shekyl_archival_retention::attestation_wire::attestation_root(&[])
-        .map_err(|e| invalid(format!("empty attestation root: {e:?}")))?;
+/// The genesis header nonce: zero on every network (`NETWORK_IDENTITY.md`
+/// NI-Q1). Genesis is not mined, so its nonce carries no work; a network's
+/// identity is its genesis content, never this field.
+pub const GENESIS_HEADER_NONCE: u32 = 0;
+
+/// Assemble the genesis block around a built coinbase tx: major
+/// [`GENESIS_BLOCK_MAJOR_VERSION`], minor [`HEADER_MINOR_VERSION`], the
+/// network's mint time (`NETWORK_IDENTITY.md` NI-R18), zero previous hash,
+/// the empty curve-tree root, the empty section root (genesis admits no
+/// bundle), and nonce [`GENESIS_HEADER_NONCE`]. Every header field but the
+/// mint time is the same on every network; the coinbase is that network's.
+pub fn genesis_block(
+    tx: Transaction,
+    timestamp: GenesisTimestamp,
+) -> Result<Block, GenesisToolError> {
     Ok(Block {
         header: BlockHeader {
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
             minor_version: HEADER_MINOR_VERSION,
-            timestamp: 0,
+            timestamp: timestamp.get(),
             previous: BlockHash::NULL,
-            nonce,
+            nonce: GENESIS_HEADER_NONCE,
             curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
-            attestation_root: AttestationRoot::from_bytes(attestation_root),
+            section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
         miner_transaction: tx,
         transaction_hashes: Vec::new(),
     })
+}
+
+/// `network`'s genesis block as the node connects it: the table's coinbase
+/// under [`genesis_block`]'s header at the table's mint time, refused when that block is not the one
+/// the table pins (`NETWORK_IDENTITY.md` NI-Q3).
+///
+/// # Errors
+///
+/// The table's coinbase is not hex, does not decode, or the assembled block
+/// hashes to something other than the pin. The node maps this onto its open
+/// error; a scenario chain panics, because a build whose table and header
+/// disagree cannot connect.
+pub fn pinned_genesis(network: Network) -> Result<Block, GenesisToolError> {
+    let genesis = network.genesis();
+    let bytes = hex::decode(genesis.tx_hex()).map_err(|error| {
+        invalid(format!(
+            "{network}'s genesis transaction is not hex: {error}"
+        ))
+    })?;
+    let tx = Transaction::from_bytes(&bytes).map_err(|error| {
+        invalid(format!(
+            "{network}'s genesis transaction did not decode: {error}"
+        ))
+    })?;
+    let block = genesis_block(tx, genesis.timestamp())?;
+    let pinned = BlockHash::from_bytes(genesis.hash());
+    if block.hash() != pinned {
+        return Err(invalid(format!(
+            "{network}'s assembled genesis is {:?}, and the table pins {pinned:?}",
+            block.hash()
+        )));
+    }
+    Ok(block)
+}
+
+#[cfg(test)]
+mod pinned_tests {
+    use super::*;
+
+    #[test]
+    fn every_networks_pinned_genesis_is_the_block_the_table_names() {
+        for network in Network::ALL {
+            let block =
+                pinned_genesis(network).unwrap_or_else(|error| panic!("{network}: {error}"));
+            assert_eq!(
+                block.hash().to_bytes(),
+                network.genesis().hash(),
+                "{network}"
+            );
+        }
+    }
 }

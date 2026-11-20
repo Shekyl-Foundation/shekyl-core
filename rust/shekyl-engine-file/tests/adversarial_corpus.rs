@@ -81,7 +81,6 @@ use shekyl_engine_state::{
     WALLET_LEDGER_FORMAT_VERSION,
 };
 use std::collections::BTreeMap;
-use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
 // On-disk byte offsets referenced by the surgery helpers. Pinned here rather
@@ -127,14 +126,14 @@ const TEST_NETWORK: Network = Network::Testnet;
 /// repeated-byte "seed" is obviously synthetic and never leaves the
 /// tempdir.
 struct Fixture {
-    master_seed: [u8; 64],
+    master_seed: [u8; 32],
     address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
 }
 
 impl Fixture {
     fn new() -> Self {
         Self {
-            master_seed: [0x11; 64],
+            master_seed: [0x11; 32],
             address: {
                 let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                 a[0] = 0x01; // classical address version byte
@@ -145,7 +144,7 @@ impl Fixture {
 
     fn capability(&self) -> CapabilityContent<'_> {
         CapabilityContent::Full {
-            master_seed_64: &self.master_seed,
+            seed: &self.master_seed,
         }
     }
 
@@ -175,7 +174,6 @@ fn make_valid_wallet(tmp: &tempfile::TempDir, password: &[u8]) -> PathBuf {
         base_path: &base,
         password,
         network: TEST_NETWORK,
-        seed_format: 0x00,
         capability: &cap,
         creation_timestamp: 0x6000_0000,
         restore_height_hint: 0,
@@ -391,7 +389,6 @@ fn state_file_swapped_from_another_wallet_is_refused() {
             base_path: base,
             password: TEST_PW,
             network: TEST_NETWORK,
-            seed_format: 0x00,
             capability: &cap,
             creation_timestamp: 0x6000_0000,
             restore_height_hint: 0,
@@ -587,7 +584,7 @@ fn ledger_invariant_orphan_tx_key_is_refused() {
     tx_keys.insert(
         orphan_hash,
         TxSecretKeys {
-            primary: TxSecretKey::new(Zeroizing::new([0xCD; 32])),
+            primary: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0xCD; 32]).store()),
         },
     );
     let tx_meta = TxMetaBlock::new(tx_keys, BTreeMap::new());

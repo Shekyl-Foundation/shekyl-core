@@ -12,7 +12,7 @@
 
 use super::*;
 use shekyl_archival_retention::{
-    claim_window_floor, settlement_retention_floor, SLASH_GRACE_EPOCHS,
+    claim_window_floor, settlement_retention_floor, MAX_CLAIM_AGE_W, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::SettlementEpochBlocks;
 
@@ -41,10 +41,15 @@ fn the_claimable_floor_is_the_claim_window_and_the_failure_windows_bound() {
     for h in heights() {
         let floor = EpochFloor::<Claimable>::under(h, schedule);
         let epoch = schedule.epoch_at_height(h.to_raw());
-        assert_eq!(kept(floor), claim_window_floor(epoch), "at {h:?}");
         assert_eq!(
             kept(floor),
-            settlement_retention_floor(schedule, h).to_raw(),
+            claim_window_floor(epoch, shekyl_archival_retention::archival_params()),
+            "at {h:?}"
+        );
+        assert_eq!(
+            kept(floor),
+            settlement_retention_floor(schedule, h, shekyl_archival_retention::archival_params())
+                .to_raw(),
             "at {h:?}"
         );
     }

@@ -23,8 +23,21 @@
 //!   (the positive control fails too). Fix that; do not regenerate.
 //! - **No error** — a pool verdict reached `connect`. That is a finding
 //!   against the store's brand, not a snapshot to refresh.
+//!
+//! # Cadence
+//!
+//! `trybuild` builds the programs in a cargo project of its own, where the
+//! dependency tree compiles again. These programs link `shekyl-chain-rules`
+//! and reuse its harness's build when that ran first (two minutes on the CI
+//! runner), and would pay the whole tree alone (about 19 minutes). Since
+//! 2026-11-09 both tests are `#[ignore]`d and run every night, after the
+//! chain-rules harness, by the `trybuild-ignored` lane
+//! (`scripts/ci/ignored_set_trybuild.sh`); a pull request's Rust job only
+//! checks that they are still here. `cargo test --test trybuild --
+//! --ignored` runs them locally.
 
 #[test]
+#[ignore = "builds its programs over chain-rules' dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
 fn a_verdict_judged_over_the_pool_view_does_not_connect() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/verdict_over_the_batch_view_connects.rs");
@@ -34,6 +47,7 @@ fn a_verdict_judged_over_the_pool_view_does_not_connect() {
 /// S6 (the review of #1102): the block arrivals and the every-entry reads
 /// are not the pool's public surface; `RelayView` is the one named reader.
 #[test]
+#[ignore = "builds its programs over chain-rules' dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
 fn a_block_arrival_and_an_unfiltered_read_are_not_public() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/the_relay_view_reads_every_entry.rs");

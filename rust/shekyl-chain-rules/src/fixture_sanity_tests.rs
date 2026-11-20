@@ -52,13 +52,9 @@ fn judge_at(shape: TxShape, slot: TxSlot, tx: &Transaction) {
         let mut candidate = candidate_on(&chain, Vec::new());
         candidate.block.miner_transaction = tx.clone();
         let formed = formed_on(&chain, repriced(&chain, candidate));
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .unwrap_or_else(|refused| panic!("{}", refused_message(shape, slot, "validate", &refused)));
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)).unwrap_or_else(
+            |refused| panic!("{}", refused_message(shape, slot, "validate", &refused)),
+        );
     });
 }
 
@@ -86,7 +82,7 @@ fn refused_message(shape: TxShape, slot: TxSlot, site: &str, refused: &InvalidBl
 #[test]
 fn every_well_formed_shape_passes_at_every_slot_it_names() {
     let shapes = TxShape::all();
-    assert_eq!(shapes.len(), 4, "the chain reaches every variant");
+    assert_eq!(shapes.len(), 3, "the chain reaches every variant");
     for shape in shapes {
         let tx = shape.build();
         for &slot in shape.valid_at() {
@@ -127,7 +123,7 @@ fn the_coinbase_fixture_is_valid_at_genesis() {
             formed(candidate(Vec::new())),
             &view,
             &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            &Trust::UNPINNED,
         ))
         .expect("the genesis candidate");
     });

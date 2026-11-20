@@ -1,0 +1,23 @@
+[
+  {
+    "name": "log-level",
+    "source": "default",
+    "runtime": true,
+    "value": "warn",
+    "secret": false
+  },
+  {
+    "name": "p2p-upload-max",
+    "source": "file",
+    "runtime": true,
+    "value": "unlimited",
+    "secret": false
+  },
+  {
+    "name": "tor-socks-password",
+    "source": "file",
+    "runtime": false,
+    "secret": true,
+    "assigned": true
+  }
+]

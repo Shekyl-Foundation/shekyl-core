@@ -41,12 +41,12 @@ fn hex32(bytes: impl AsRef<[u8]>) -> String {
 const ORACLE_CORPUS: [(&[u8], &str); 2] = [
     (
         include_bytes!("vectors/regtest_coinbase_h0.tx"),
-        // mainnet genesis miner_tx (regtest h0 shares GENESIS_TX)
-        "a0fdfc7e4dab84e393f79ccf2c2f3783a95a9c1cdd9268c8d6221fdd9d582a90",
+        // regtest's genesis miner_tx (h0)
+        "3a96f09b3b1cabc7b4bf7e3b0d91dbd9410f3f7180ee0874ec26503be1753b6e",
     ),
     (
         include_bytes!("vectors/regtest_coinbase_h1.tx"),
-        "f60fbfed8d7e087d6fbcf17915c93760726e50fc02d8ed7ae0888dc1015b5997",
+        "146c03912711e4e2116059f88a976d7160738b0ad30199972abfa24a6e222855",
     ),
 ];
 

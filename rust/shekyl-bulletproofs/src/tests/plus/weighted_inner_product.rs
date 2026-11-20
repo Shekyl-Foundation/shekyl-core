@@ -5,9 +5,9 @@ use rand_core::OsRng;
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar, traits::Identity};
 
 use crate::{
-    batch_verifier::BulletproofsPlusBatchVerifier,
+    batch_verifier::{BatchTerms, BulletproofsPlusBatchVerifier},
     plus::{
-        weighted_inner_product::{WipStatement, WipWitness},
+        weighted_inner_product::{WipStatement, WipVerifierStatement, WipWitness},
         BpPlusGenerators, GeneratorsList, PointVector, ScalarVector,
     },
 };
@@ -19,18 +19,20 @@ fn test_zero_weighted_inner_product() {
     let y = Scalar::random(&mut OsRng);
 
     let generators = BpPlusGenerators::new().reduce(1);
-    let statement = WipStatement::new(generators, P, y);
+    let statement = WipStatement::new(generators.clone(), P, y);
     let witness =
         WipWitness::new(ScalarVector::new(1), ScalarVector::new(1), Scalar::ZERO).unwrap();
 
     let transcript = Scalar::random(&mut OsRng);
-    let proof = statement
-        .clone()
-        .prove(&mut OsRng, transcript, &witness)
-        .unwrap();
+    let proof = statement.prove(&mut OsRng, transcript, &witness).unwrap();
 
     let mut verifier = BulletproofsPlusBatchVerifier::default();
-    statement.verify(&mut OsRng, &mut verifier, transcript, proof);
+    WipVerifierStatement::new(generators, BatchTerms::point(P), y).verify(
+        &mut OsRng,
+        &mut verifier,
+        transcript,
+        proof,
+    );
     assert!(verifier.verify());
 }
 
@@ -75,15 +77,17 @@ fn test_weighted_inner_product() {
             + (g * a.clone().weighted_inner_product(&b, &y_vec))
             + (h * alpha);
 
-        let statement = WipStatement::new(generators, P, y);
+        let statement = WipStatement::new(generators.clone(), P, y);
         let witness = WipWitness::new(a, b, alpha).unwrap();
 
         let transcript = Scalar::random(&mut OsRng);
-        let proof = statement
-            .clone()
-            .prove(&mut OsRng, transcript, &witness)
-            .unwrap();
-        statement.verify(&mut OsRng, &mut verifier, transcript, proof);
+        let proof = statement.prove(&mut OsRng, transcript, &witness).unwrap();
+        WipVerifierStatement::new(generators, BatchTerms::point(P), y).verify(
+            &mut OsRng,
+            &mut verifier,
+            transcript,
+            proof,
+        );
     }
     assert!(verifier.verify());
 }

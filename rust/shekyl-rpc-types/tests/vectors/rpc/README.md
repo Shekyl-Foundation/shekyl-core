@@ -1,202 +1,148 @@
-# RPC oracle vectors (C++ epee provenance)
+# RPC wire vectors
 
-Each `<method>_<case>_v1.json` is the **byte output of epee's
-`store_t_to_json`** over the C++ `COMMAND_RPC_<METHOD>::response` built from
-fixed facts — captured by a `tests/unit_tests/rpc_oracle_vectors.cpp` that lives only in the
-commit that precedes each method's C++ deletion (RK-1 onward,
-`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.5). The Rust parity tests
-(`../../rpc_parity.rs`) feed the same fixed facts to the native handlers and
-assert **parsed** equality (RK-D4: key order and whitespace are epee's, not
-the contract's; `KV_SERIALIZE_OPT` omissions are part of the contract and
-are mirrored by `skip_serializing_if`).
+## The 3.x corpus is retired
 
-**The JSON files are LF; the `.bin` files are byte-exact.** That split is the
-whole rule, and it follows from what each is for. `RK-D4` says whitespace is
-not part of the wire contract and the parity suite compares *parsed* values,
-so for JSON nothing reads these bytes as bytes — the line endings were epee's
-CRLF only because that is what the capture happened to emit. For `.bin`, the
-bytes **are** the contract, and their harnesses compare them byte for byte.
+The 3.x oracle corpus (`<method>_<case>_v<N>.json` and `.bin`, epee's
+captures of the C++ handlers) and its two parity suites, `rpc_parity.rs` and
+`rpc_bin_parity.rs`, are deleted (Rick, 2026-11-12). Their purpose, RK-1's
+parity with the C++ handlers at the cutover
+(`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.5), is discharged: the C++ is
+gone and 4.0 renames the wire. The last commit that holds them is
+`f993270e85`.
 
-This directory is `-text` in `.gitattributes` so git never rewrites EOL, which
-`.bin` requires. That also means git will not normalise a CRLF a Windows
-editor introduces, so `json_vectors_are_lf` keeps the JSON from drifting back.
+One 3.x reply is kept: `get_version_synced_v47.json`, a 3.70 daemon's
+`get_version` result. `tests/skew.rs` reads it to show that this build's
+version-first read refuses a 3.x daemon on the wire axis before it decodes
+anything else (RK-Q11, RK-D25).
 
-Ruled 2026-09-05. The earlier rule kept the JSON at epee's exact bytes for
-provenance — "the oracle's output, modulo edits" being a weaker pin than the
-oracle's output. True, but a weaker pin only costs something if something
-leans on the strength, and nothing did: the values are what every test reads,
-and `RK-W` redesigns this wire on purpose. A tool normalising the captures was
-caught in review and reverted; on inspection the property it violated had no
-consumer, so it was retired deliberately rather than defended by habit.
+## The wire vectors (`wire/`)
 
-The emitter is deleted with the structs it captures, so each slice writes its
-own and takes it away again; these files are the oracle's memory. **RK-5c
-was the most recent slice to run one**, for `get_info`, and it was the first
-of a second kind: the five `get_info_*_v1.json` files are not a hand-built
-response serialized. The C++ handler was first split into a gather step and
-a pure `build_get_info(facts, restricted)`, and the emitter ran that
-function over fixed facts — because the handler decided things (a
-synchronized sentinel, the restricted stand-ins, a subtraction across two
-counts, a burn computation that can refuse) and a serializer-only capture
-would pin none of them (`docs/design/DAEMON_RPC_KV_GET_INFO.md` §4.4). The
-split, the builder and the emitter went with the handler. **RK-5b was the
-slice before it** (`get_last_block_header`,
-`get_block_header_by_hash`, `get_block_headers_range`, `hard_fork_info`,
-`get_fee_estimate`), and it is gone with those structs too. To read one, or
-to see how a capture was set up, check out the commit that added
-`tests/unit_tests/rpc_oracle_vectors.cpp` in the slice you care about —
-`git log --diff-filter=A --follow -- tests/unit_tests/rpc_oracle_vectors.cpp`
-lists every one of them. `hard_fork_info` and its two vectors were deleted
-with the method at 3.44, so that capture has no file here.
+One request and one reply for every shape of every row of the method table
+(`shekyl_rpc_types::wire::TABLE`, 42 methods, 100 files), ruled by Rick on
+2026-11-12. They were written by hand from `docs/design/INPUT_GRAMMAR.md`
+and never generated from the types or copied from a Rust fixture:
 
-Once a method's C++ is deleted there is nothing left to capture from *for that
-method*, so a later shape change to it cannot be re-captured and must be argued
-from the `_v1` / `_v2` pair instead (see
-`v2_is_v1_minus_exactly_the_two_retired_members`, which does exactly that for
-RK-4c's two). That is a per-method fact, not a date: a slice whose structs are
-still standing can and must still capture.
+- Part C: §17 (the method census), §18 (the field census) and §19 (the
+  glossary);
+- Part F: §25 and §26, IG-Q73…IG-Q94 (slots, selectors, keywords, the
+  verdict, the writer), with IG-Q55 and IG-Q56 as 4.1 reads them;
+- `RPC_CHANNEL.md` §6.1 and §6.4, for the grant keywords and the option
+  row's two forms.
 
-**"Cannot be re-captured" is not "must not be changed."** Byte-exactness with
-epee was never a requirement — every consumer of this daemon is first-party
-and ships with it, so the vectors exist to prove a *deliberate* shape change
-is the only change, not to freeze the shape. RK-5b is the worked example: it
-changes `get_block_header_by_hash` on purpose (a deleted request field, a
-per-element found discriminator, a refusal where there was a silent blank) and
-carries `CORE_RPC_VERSION` 3.27 for it. A later slice reading only the
-paragraph above could inherit the constraint backwards and treat an
-un-recapturable method as frozen; it is not. **A `_v2` is derived, never authored.** Each pair carries a delta test that
-re-derives `_v2` from `_v1`, so a hand-edited `_v2` fails rather than standing
-as its own authority — demonstrated, not assumed: changing
-`get_fee_estimate_v2.json`'s `quantization_mask` turns its delta test red.
-Three delta shapes exist, and
-RK-5b added the third:
+The set was first written on 2026-11-12 at `f993270e85` for 4.0. At 4.1 the
+same day the switched methods were split into one pair per shape, each
+field a request did not select taken out of its reply (`RPC_WIRE.md`
+RW-Q4 as amended).
 
-- **subtraction** — `_v2` is `_v1` minus exactly these fields
-  (`v2_is_v1_minus_exactly_the_two_retired_members`,
-  `fee_v2_is_v1_minus_exactly_the_redundant_scalar`,
-  `the_get_version_side_cases_are_their_predecessors_minus_exactly_hard_forks`)
-- **substitution** — `_v1` with one value replaced
-  (`the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
-  which walks every link of that chain rather than its newest pair, and
-  names per link any member that bump adds or removes)
-- **transform, plus a named extension** — for a change of *shape*, where no
-  subtraction from `_v1` produces `_v2`. `by_hash_v2_is_v1_reshaped_into_slots`
-  writes the reshaping as code; the cases `_v1` structurally cannot express —
-  a slot with no header, because the C++ returned an error and discarded the
-  batch — are asserted separately in
-  `a_missing_slot_is_the_case_v1_could_not_express`, so the extension is named
-  rather than hidden inside a shape comparison.
+At 4.3 the files were edited by hand from the grammar as IG-Q102 amends it
+(the 4b switch): a header's `section_root` in place of `attestation_root`,
+each block's `section` and `section_body` (empty here: no block in these
+files admits a bundle), and no `complete_tree` on an `archival_claim_show`
+bond.
+At 4.5 each block in `block_show` and `block_list` carries `draws`, its draw
+count (IG-Q107); every file shows a count, `1`.
 
-**Never hand-edit a vector.** A wire
-change is a decision with a `CORE_RPC_VERSION` bump, recorded in the design
-doc, and gets a new `_v2` file beside the old one.
+At 4.4 `daemon_status.reply.json` gained `randomx_cache_places` in its Status
+part, by hand from the grammar's field census: the places the node's
+hasher has in use for RandomX caches, an upper bound on that memory
+(`RANDOMX_CACHE_ACTOR.md` §5.6).
 
-`get_version_synced_v2.json` is a pair of the second kind. Its `_v1` is a
-faithful C++ capture; the constant it reports is not re-capturable, because
-`CORE_RPC_VERSION` **moved to Rust** (`shekyl-rpc-types::chain`) and C++ no
-longer defines it. So the bump that RK-4c's wire change earned (3.24 → 3.25)
-cannot be recorded by re-running the emitter, and hand-editing `_v1` would
-destroy the one property that makes it an oracle. The `_v2` is instead held
-honest by `the_get_version_chain_differs_by_exactly_the_version_at_every_link`,
-which substitutes the live constant across every consecutive pair and requires
-each result to equal its successor exactly — so a file may differ from its
-predecessor by that constant and by the members that link declares added or
-removed, no link may be skipped, and the newest may not go stale against the
-constant. `get_version_absent_target_v1.json` is the one `_v1` here that is
-not a C++ capture: it is `get_version_synced_v6.json` minus `hard_forks`
-(the member `get_version` drops at 3.44), derived by the subtraction test
-above, and takes a new case name
-because `synced_v7` onward carry a target. It replaced a per-pair test
-that was renamed at each bump, which is how a chain with a missing vector
-passed.
+### Layout
 
-**3.46 restated the target, and every vector it moved is derived.** "No
-target" became `null` on `get_info`, `get_version` and `sync_info`, and
-`get_info` stopped writing `0` for a synchronized node (RK-D15, RK-Q7). No
-C++ stood to capture from, so each successor is its predecessor with only
-the named members restated, and
-`the_3_46_vectors_are_their_predecessors_with_exactly_the_target_restated`
-holds each pair to that: `get_version_absent_target_v2`,
-`get_version_all_defaults_v3` (which also gains `current_height: 0`),
-`sync_info_empty_v3`, and the `_v2` of four `get_info` fixtures. The
-synchronized `get_info` fixtures take the core's target, 1234567, which is
-what `shekyl-daemon-rpc`'s method tests produce from the capture's own
-facts. `get_version_syncing_v3`, `sync_info_v3` and `get_info_syncing_v1`
-carried a target already; their replies did not move and they have no
-successor. The side cases keep their predecessor's `version`, as before.
+A method whose reply has fields a request switch selects has one pair per
+set of switches turned on, named by them: `<method>.plain.*`,
+`<method>.pow.*`, `<method>.prune.*` and `<method>.pow-prune.*`. Those are
+`block_header_show` and `block_header_list` (`pow`), `block_list`,
+`tx_show` and `tx_list` (`prune`), and `block_show` (both, four shapes).
+`block_list` takes no `pow`, so its headers never carry one. Every other
+method has `<method>.request.json` and `<method>.reply.json`.
 
-**3.47 added `has_peers` to `get_info`, and all five fixtures have a
-successor.** Each is its predecessor plus that member
-(`the_3_47_get_info_vectors_are_their_predecessors_plus_exactly_has_peers`):
-`true` everywhere but the peerless fixture. `synced_restricted_v3` is the
-one to read: `has_peers: true` beside two connection counts of `0`, which
-is the case the member exists for. `get_version_synced_v24` is the
-chain's 3.47 link; its members do not move.
+A request file is the call's `params` object and a reply file is its
+`result`; neither carries the JSON-RPC envelope, which is the same for
+every method and is held by the daemon's envelope tests
+(`shekyl-daemon-rpc`, `handlers/rpc_tests.rs`). A method with no parameters
+has the request `{}`; an omitted `params` is the same request. A reply that
+says only that the call succeeded is `{}`.
 
-**3.48 withheld Status and Peers from a restricted reply, and one fixture
-moves.** `get_info_synced_restricted_v4` is `_v3` minus exactly the
-fourteen keys of those two parts
-(`the_3_48_restricted_vector_is_its_predecessor_minus_exactly_status_and_peers`,
-which also asserts that each removed key held its stand-in). The other
-four fixtures are full replies and have no successor.
-`get_version_synced_v25` is the chain's 3.48 link.
+The values are plausible and consistent with each other: a tip at height
+1199, hashes of 64 hex characters, padded base64, amounts in decimal atomic
+units, `HexU128` as `0x` hex, durations in seconds and ratios in micro. A
+`prune` reply carries the pruned body, and a plain one the whole body.
 
-**3.49 moved no `get_info` vector.** The two connection counts changed
-source (the seam board, every connector) and so meaning, which is why the
-version moved (RK-D8), but the fixtures hold 8 outbound and 12 inbound
-under either source. `get_version_synced_v26` is the chain's 3.49 link.
+`daemon_status` is the host's full-disclosure reply, with every part shown.
+Where a value has several forms, each file shows one or two:
 
-**3.50 split the pool count, and the four host fixtures have a
-successor.** They held `tx_pool_size: 12`, every entry. Each successor
-holds `9`, the entries broadcast, and gains
-`tx_pool_unbroadcast_count: 3`
-(`the_3_50_vectors_split_the_same_pool_into_broadcast_and_not_yet_broadcast`).
-The restricted fixture already held `9` and does not move: that every
-caller now reads that number under that key is the change.
-`get_version_synced_v27` is the chain's 3.50 link.
+- `block_header_list`, `block_list`, `txpool_flush` and `tx_relay` show an
+  item and `{"missing": null}`. `tx_list` shows all four slot states: an
+  item, `missing`, `archived` and `null`.
+- `chain_height` and `daemon_status` show `writer` as `{"live": null}`.
+- `daemon_status` shows a usable managed Tor with a reachable onion and no
+  quiet line. Every other Tor state is in `tor/`, below.
+- `tx_submit` shows `already-in-pool` with publication `public`. The other
+  verdicts and causes are pinned in `tests/wire_contract.rs` and
+  `tests/skew.rs`.
+- `mine_status` shows the idle miner, with no job, a `null` address and a
+  diagnostic `cause`.
+- `option_show` shows a value row and a secret row.
+- `relay_stats` shows a tally whose connector is `null`.
 
-**3.51 retired a fixture and moved no vector.** `get_info` refuses when
-the store holds more burned than generated (RK-Q9), where it answered
-`burn_pct: 0`. `get_info_burn_refusal_v1` to `_v4` record that old reply.
-They stay, held to each other by the derivation tests, and no test decodes
-the newest as a current reply: the daemon does not send it. The refusal is
-tested in `shekyl-daemon-rpc`. `get_version_synced_v28` is the chain's
-3.51 link.
+### What the tests check
 
-**3.52 retired the duplicate names, and four fixtures have a successor.**
-Each is its predecessor minus exactly six keys: `difficulty`,
-`difficulty_top64`, `cumulative_difficulty`,
-`cumulative_difficulty_top64`, `block_size_limit` and `block_size_median`
-(`the_3_52_get_info_vectors_are_their_predecessors_minus_exactly_the_duplicate_names`,
-which first checks each retired key against the name that stays). The
-burn-refusal fixture has no successor: there is no current reply to
-derive. `get_version_synced_v29` is the chain's 3.52 link.
+`tests/wire_vectors.rs` walks the table:
 
-**3.53 re-encoded two amounts, and four fixtures have a successor.**
-`already_generated_coins` and `total_burned` are decimal strings; each
-successor is its predecessor with those two numbers written as strings and
-nothing else
-(`the_3_53_get_info_vectors_are_their_predecessors_with_the_two_amounts_as_strings`).
-`get_version_synced_v30` is the chain's 3.53 link.
+1. Every shape of every row has both files, and every file in `wire/` names
+   one. A shape's request turns on exactly the switches its name says.
+2. Each vector conforms to its row's shape (`schema::conforms`), a reply
+   read against the switches its request turned on
+   (`schema::conforms_asked`).
+3. Each vector reads as the method's type and writes back as the same JSON
+   value.
+4. That written form reads again as an equal value.
+5. Every field a switch selects, in every shape, is edited: removed from a
+   reply whose request asked for it, added to one whose request did not.
+   Each edit must make the reply fail to conform. This is every shape's red
+   edit.
 
-**3.54 retired the network's names from `get_info`, and four fixtures have a
-successor.** Each is its predecessor minus exactly `nettype`, `mainnet`,
-`testnet` and `stagenet`
-(`the_3_54_get_info_vectors_are_their_predecessors_minus_exactly_the_network_names`,
-which first checks the three booleans against the string they repeated).
-`get_version` keeps its `nettype`: it is the one place a daemon names its
-network. `get_version_synced_v31` is the chain's 3.54 link.
+A failure names the file. The dispatch is a `match` over `wire::Id` with no
+wildcard arm, so a new row does not compile there until it is added.
 
-**3.55 — `get_peer_list` entries lose `last_seen`.** `get_peer_list_v4` is
-`_v3` minus that one member, held to its delta
-(`the_v4_peer_list_is_its_v3_minus_only_last_seen`): the listing is read
-from the Rust peer lists, which carry no clock
-(`P2P_3_SLICE_1_PEERLIST_BRIEF.md` §4), so there is no value to report.
-`get_version_synced_v32` is the chain's 3.55 link. The `_v1`/`_v2`
-vectors of `get_peer_list`, `get_connections` and `sync_info` went with
-the stripe-seed sweep the same day, and with them the two delta tests
-that held them: `_v2` to `_v1` minus exactly the identifier fields of
-3.28 (PWD-I1), and `_v3` to `_v2` minus exactly the stripe fields of 3.35
-(PDM-Q7). The `_v4` delta covers neither (it is `get_peer_list` only), so
-those two deltas are no longer asserted and the three `_v3` vectors rest
-on their parity tests alone.
+### Adding a row
+
+A new method needs its files, and they are written first, by hand, from the
+grammar row that rules the method: §17's parameters, and §18's fields under
+§19's terms, one pair per shape if its request takes a switch that selects
+reply fields. Then add its arm to `row_faults`. If a file the grammar admits
+does not read through the type, either the grammar or the type is wrong.
+Settle that in the PR that adds the row, and never by editing the vector to
+match the type.
+
+## The Tor status vectors (`tor/`)
+
+`daemon_status`'s Tor fields (4.2), written by hand from `INPUT_GRAMMAR.md`
+§23 as Part G and Rick's rulings of 2026-11-12 amend it, so that every
+one-key object's hand-written decoder in `shekyl-tor-status` is proved
+against the RPC's reading, the reply type and its schema, not only the
+crate's own JSON (Rick, 2026-11-12). Each file is the Status part's five
+Tor fields, `posture`, `origination`, `sync_connector`, `tor_quiet` and
+`tor`. `tests/tor_vectors.rs` splices each into `wire/daemon_status.reply.json`
+and reads the whole reply as `DaemonStatus`.
+
+- `known/` (26): every `tor.cause` key, `clock-skew` with each of its
+  three payloads, `unusable` with each of its three and `exited` with a
+  code and `null`; every `tor.onion.cause` key and the `publishing` onion;
+  the quiet line; an operator's Tor and Tor off. Each conforms to the
+  schema, decodes, holds nothing unknown and encodes back to the same
+  document.
+- `unknown/` (14): a key or keyword this build does not know, in each closed
+  set: the cause, `clock-skew`'s and `unusable`'s payloads, the onion's
+  cause and state, the quiet line, `origination`, both halves of
+  `posture`, `tor.state`, the bootstrap's `pace`, a fix, `carriage` and a
+  sync connector. The schema refuses each, since it lists this build's
+  sets; the reply type reads each, the status reports that it holds
+  something unknown, the send flow's one accessor reads it as not
+  address-hiding, and the renderer says once to update.
+- `refused/` (4): a one-key object with no key or two (the cause, the quiet
+  line, the onion's cause), which the reply type refuses.
+
+`shekyl-cli` reads the same set through its daemon client, over HTTP and
+the JSON-RPC envelope (`console/tests.rs`).

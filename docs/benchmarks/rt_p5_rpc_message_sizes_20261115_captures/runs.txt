@@ -1,0 +1,3 @@
+dry start=2026-11-16T02:48:41Z seconds=662 rc=0
+registered_1 start=2026-11-16T03:00:27Z seconds=708 rc=0
+registered_2 start=2026-11-16T03:12:15Z seconds=607 rc=0

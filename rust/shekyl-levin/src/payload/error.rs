@@ -43,12 +43,20 @@ pub enum Error {
         /// Observed blob width.
         got: usize,
     },
-    /// `attestation_witness` exceeded the transport cap.
-    #[error("attestation_witness is {got} bytes, max {max}")]
-    WitnessTooLarge {
-        /// Observed length.
+    /// `bundle_references` named more references than one section holds.
+    #[error("bundle_references holds {got} references, max {max}")]
+    TooManyReferences {
+        /// Observed count.
         got: usize,
-        /// `ATTESTATION_WITNESS_MAX_BYTES`.
+        /// `MAX_BUNDLE_REFERENCES`.
+        max: usize,
+    },
+    /// `bundle_bodies` carried more bodies than one section has references.
+    #[error("bundle_bodies holds {got} bodies, max {max}")]
+    TooManyBundleBodies {
+        /// Observed count.
+        got: usize,
+        /// `MAX_BUNDLE_REFERENCES`.
         max: usize,
     },
     /// `network_address.type` was not 1–4.

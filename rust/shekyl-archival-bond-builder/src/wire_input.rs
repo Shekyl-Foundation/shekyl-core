@@ -4,14 +4,14 @@
 // BSD-3-Clause
 
 //! The one map from a retention [`ArchivalBondPostVin`] onto the consensus
-//! [`Input::BondPost`](shekyl_wire::Input::BondPost).
+//! [`Input::BondPost`].
 //!
 //! JoinMarket copies `bond_spend_pk` and the serving endpoint onto
-//! [`BondPostKind::JoinMarket`](shekyl_wire::BondPostKind::JoinMarket); the
+//! [`BondPostKind::JoinMarket`]; the
 //! receipt key is the same typed value on both sides.
-//! Reinstate and Release are [`BondPostKind::Other`](shekyl_wire::BondPostKind::Other)
+//! Reinstate and Release are [`BondPostKind::Other`]
 //! of [`BondKind::tag`]. A compact holdings descriptor copies its shard ids;
-//! a complete tree is [`Holdings::CompleteTree`](shekyl_wire::Holdings::CompleteTree).
+//! a complete tree is [`Holdings::CompleteTree`].
 //!
 //! Which of those kinds a wallet will produce is the wallet's decision,
 //! applied before it calls [`bond_post_input`]. This function maps every

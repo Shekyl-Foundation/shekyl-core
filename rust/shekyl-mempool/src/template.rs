@@ -7,7 +7,7 @@
 //! successor): which held transactions a block built on `parent` lists,
 //! as a pure function of the pool, the parent's chain and a weight budget.
 //!
-//! Candidates are what the node shows ([`shown`](crate::shown): public — a
+//! Candidates are what the node shows ([`shown`]: public — a
 //! stem-phase transaction is never in a template), most fee per unit of
 //! weight first (ties: the earliest held, then
 //! the hash). Each is judged again by [`tx_against`] at `TxSlot::Lone`
@@ -21,9 +21,9 @@
 //! transaction waits for the reconcile to judge it again.
 //!
 //! The rows that hold across a block's transactions are asked as each is
-//! selected: CEN-L1 by the key images already selected (above), and CEN-G7,
-//! G9 and G10 — one serve credit per `(P, shard, E)`, one emission claim per
-//! `(P, E)`, one bond post per `P` — by the validator's
+//! selected: CEN-L1 by the key images already selected (above), and CEN-G9
+//! and G10 — one emission claim per `(P, E)`, one bond post per `P` — by the
+//! validator's
 //! [`BlockArchivalKeys`]. Two transactions each valid against the parent
 //! may still be refused together: two JoinMarket posts by one persona,
 //! funded by different key images, is the case. The later one is not
@@ -43,12 +43,13 @@ use shekyl_chain_rules::{
     StatelessPass, TxSlot, VerifiedReference,
 };
 use shekyl_chain_store::pool::ReceivedHour;
+use shekyl_network::NetworkId;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
+use crate::policy::{AdmissionRank, FeeRate};
 use crate::pool::{key_images_of, Pool};
-use crate::rate::{AdmissionRank, FeeRate};
 use crate::relay::shown;
 use crate::view::{KeyImages, PoolView};
 
@@ -80,7 +81,7 @@ pub struct Selected {
     /// refused, not selected — the reconcile judges them again.
     pub stale: Vec<TxHash>,
     /// Candidates valid against the parent that a block listing them after
-    /// the selected ones is refused on, with the row (G7, G9 or G10): not
+    /// the selected ones is refused on, with the row (G9 or G10): not
     /// selected, and not evicted.
     pub conflicted: Vec<(TxHash, CenRow)>,
     /// Candidates valid against the parent that the producer's admission
@@ -129,12 +130,13 @@ struct Candidate<'a> {
     tx: &'a Transaction,
     weight: u64,
     fee: AtomicUnits,
-    rank: AdmissionRank,
+    rank: AdmissionRank<ReceivedHour>,
     anchor: Option<VerifiedReference>,
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
-/// `rule_set`, within `budget` weight (module docs). A candidate too heavy
+/// `rule_set` on the pool's network (the id an emission's auths sign,
+/// CEN-J25), within `budget` weight (module docs). A candidate too heavy
 /// for what is left is skipped, and a lighter one after it may still fit.
 ///
 /// # Errors
@@ -180,7 +182,7 @@ pub fn select_admitting<'id, V: ChainView<'id>>(
             anchor: held.pass.and_then(|pass| pass.proven()),
         })
         .collect();
-    choose(candidates, parent, rule_set, budget, admit)
+    choose(candidates, parent, rule_set, pool.network(), budget, admit)
 }
 
 /// [`select_admitting`] over a [`Pool::shown_bodies`] snapshot. The pool
@@ -193,6 +195,7 @@ pub fn select_shown<'id, V: ChainView<'id>>(
     shown_bodies: &[ShownBody],
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
     admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -211,7 +214,7 @@ pub fn select_shown<'id, V: ChainView<'id>>(
             anchor: body.pass.and_then(|pass| pass.proven()),
         })
         .collect();
-    choose(candidates, parent, rule_set, budget, admit)
+    choose(candidates, parent, rule_set, network, budget, admit)
 }
 
 /// The one scan both entry points run.
@@ -219,6 +222,7 @@ fn choose<'id, V: ChainView<'id>>(
     mut candidates: Vec<Candidate<'_>>,
     parent: &V,
     rule_set: &RuleSet,
+    network: &NetworkId,
     budget: u64,
     mut admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
@@ -240,6 +244,7 @@ fn choose<'id, V: ChainView<'id>>(
             TxSlot::Lone,
             &view,
             rule_set,
+            network,
             candidate.anchor,
             FormAttempt::FIRST,
         ) {

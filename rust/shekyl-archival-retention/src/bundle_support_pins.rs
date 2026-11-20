@@ -12,8 +12,8 @@
 //! shares no code with this crate. Do not recompute them here.
 
 use super::{
-    body, bundle_commitment, hex, kept_at, records_bytes, root, vector_refs, BundleKept, BundleRef,
-    PassBitmap, H, SEED,
+    body, bundle_commitment, hex, kept_at, records_bytes, root, testnet, vector_refs, BundleKept,
+    BundleRef, PassBitmap, H, SEED,
 };
 
 /// The twelve-draw vector with support draw 0 also set. The support
@@ -34,12 +34,12 @@ fn a_support_bit_is_in_the_commitment_preimage() {
     let three = records_bytes(3);
     let supported = twelve_with_one_support();
     assert_eq!(
-        hex(&bundle_commitment(&supported, &three)),
-        "f626f6c4af284f660f45679bd3c8126f9d3ddc914e80f3649ca9ad020f31a16d"
+        hex(bundle_commitment(&testnet(), &supported, &three).as_bytes()),
+        "9c38f67160bd04aa29dfa503736f0be3905f787debfdb1f0cf1b9ec701a2e213e6d8a7f944ef70745fa0ac0dc890400a4ca56c74eee9325148d08a7f476b4ac3"
     );
     assert_ne!(
-        bundle_commitment(&kept_at(H, 12, &[0x01, 0x0A]), &three),
-        bundle_commitment(&supported, &three),
+        bundle_commitment(&testnet(), &kept_at(H, 12, &[0x01, 0x0A]), &three),
+        bundle_commitment(&testnet(), &supported, &three),
         "a support bit is in the preimage"
     );
 }

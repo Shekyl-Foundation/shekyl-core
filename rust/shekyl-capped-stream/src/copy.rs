@@ -201,6 +201,10 @@ where
 /// `decode` turns one read into session frames. A slow [`crate::Session::recv`]
 /// stops this function on a full inbound queue, and TCP pushes back on
 /// the peer. A tripped cap closes instead of waiting that out.
+///
+/// The returned cause is what this shared code observed. It is not stored
+/// on `inbound`: the connector stamps it with its own table and seals the
+/// session, so the first end a session holds is the connector's.
 pub async fn read_capped<R, F>(
     read: &mut R,
     inbound: InboundEnd,
@@ -214,9 +218,7 @@ where
     F: FnMut(&[u8]) -> Result<Vec<Vec<u8>>, CloseKind>,
 {
     let _lease = gate.lease(LinkDirection::Down, conn);
-    let cause = read_queued(read, &inbound, overfull, gate, conn, &mut decode).await;
-    inbound.close(cause);
-    cause
+    read_queued(read, &inbound, overfull, gate, conn, &mut decode).await
 }
 
 async fn read_queued<R, F>(

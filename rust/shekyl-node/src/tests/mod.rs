@@ -10,13 +10,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use shekyl_daemon_config::{load, Network, Platform, TABLE};
+use shekyl_daemon_config::{after_file, Network, Platform, TABLE};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
-use shekyl_difficulty::Difficulty;
-use shekyl_miner::Job;
 use shekyl_options::read_cli;
-use shekyl_rpc_types::DaemonNetwork;
-use shekyl_timing_engine::Tick;
 use shekyl_types::BlockHash;
 
 use super::*;
@@ -25,9 +21,32 @@ mod bans;
 mod mining;
 mod open;
 mod pool;
+mod producer;
 
 fn config_at(dir: &Path) -> DaemonConfig {
     dev_config(dir, &[])
+}
+/// A network plan with no connectors: an in-process node binds nothing and
+/// dials nothing, whatever the configuration declares. The address file
+/// sits under the data directory, as the daemon's plan puts it.
+fn test_plan(config: &DaemonConfig) -> NetworkPlan {
+    NetworkPlan {
+        network_id: [0; 16],
+        seeds: None,
+        allow_local: true,
+        reserved_descriptors: 0,
+        limits: LinkLimits::default(),
+        relay_noise: false,
+        clearnet: None,
+        tor: TorPlan::None,
+        peers: PeerPlan {
+            address_file: config.data_dir.join("p2pstate.bin"),
+            operator: Vec::new(),
+            exclusive: Vec::new(),
+            disclose_early: false,
+        },
+        bans: Vec::new(),
+    }
 }
 /// Wait until the follower's posting reads `want`.
 fn wait_for_posting(posting: &mut tokio::sync::watch::Receiver<Posting>, want: &Posting) {
@@ -49,7 +68,9 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: stop,
+        plan: test_plan(&config),
     })
     .expect("node")
 }
@@ -57,7 +78,7 @@ fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
 /// `extra` options, once its first template is posted.
 fn open_posted(dir: &Path, extra: &[&str]) -> Node {
     std::fs::create_dir_all(dir).expect("dir");
-    let address = mining_address(shekyl_address::Network::Mainnet);
+    let address = mining_address(shekyl_address::Network::Regtest);
     let mut args = vec!["--mine-address", address.as_str(), "--dev-difficulty", "1"];
     args.extend(extra);
     let config = config_on(dir, "regtest", &args);
@@ -66,7 +87,9 @@ fn open_posted(dir: &Path, extra: &[&str]) -> Node {
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
     })
     .expect("node");
     let mut posting = node.posting();
@@ -91,12 +114,12 @@ fn a_runtime() -> tokio::runtime::Runtime {
 /// difficulty one, and submit it. Waits for the next template first,
 /// so the block extends the current tip.
 fn mine_one(node: &Node, above: u64) -> BlockHash {
-    use shekyl_daemon_rpc::mining_methods::{get_block_template, submit_block};
+    use shekyl_daemon_rpc::mining_methods::{block_submit, block_template};
     let handles = node.handles();
     let started = std::time::Instant::now();
     let reply = loop {
-        match get_block_template(&*handles.mining) {
-            Ok(reply) if reply.height > above => break reply,
+        match block_template(&*handles.mining) {
+            Ok(reply) if reply.height.0 > above => break reply,
             _ => {
                 assert!(
                     started.elapsed() < Duration::from_secs(60),
@@ -106,22 +129,19 @@ fn mine_one(node: &Node, above: u64) -> BlockHash {
             }
         }
     };
-    let blob = hex::decode(&reply.blocktemplate_blob).expect("hex");
     let made = a_runtime()
-        .block_on(submit_block(
+        .block_on(block_submit(
             &*handles.door,
-            shekyl_rpc_types::mining::SubmitBlockRequest {
-                body: hex::encode(&blob),
-            },
+            shekyl_rpc_types::wire::block::BlockBody { body: reply.body },
         ))
         .expect("it connects");
-    BlockHash::from_bytes(made.block_id.to_bytes())
+    BlockHash::from_bytes(made.hash.to_bytes())
 }
-/// A full address on `network`, from a fixed seed's keys.
+/// A full address on `network`, from a fixed seed's keys derived on that
+/// network (the salt is the network's name, NI-R10).
 fn mining_address(network: shekyl_address::Network) -> String {
-    use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
-    let blob = rederive_account(&[0x5a; 64], DerivationNetwork::Mainnet, SeedFormat::Bip39)
-        .expect("the keys");
+    use shekyl_crypto_pq::account::rederive_account;
+    let blob = rederive_account(&[0x5a; 64], network).expect("the keys");
     shekyl_address::ShekylAddress::new(
         network,
         *blob.spend_pk.as_canonical_bytes(),
@@ -134,20 +154,35 @@ fn mining_address(network: shekyl_address::Network) -> String {
 }
 /// A node opened on `network` that mines to [`mining_address`].
 fn open_mining(dir: &Path, network: &str, address: shekyl_address::Network) -> Node {
+    open_mining_with(dir, network, address, config_on)
+}
+/// [`open_mining`] on an open network (`Declaration::Open`): no view until
+/// chain sync's owner publishes one, which no in-process test starts.
+fn open_mining_open(dir: &Path, network: &str, address: shekyl_address::Network) -> Node {
+    open_mining_with(dir, network, address, config_open)
+}
+fn open_mining_with(
+    dir: &Path,
+    network: &str,
+    address: shekyl_address::Network,
+    config: fn(&Path, &str, &[&str]) -> DaemonConfig,
+) -> Node {
     std::fs::create_dir_all(dir).expect("dir");
     let address = mining_address(address);
-    let config = config_on(dir, network, &["--mine-address", &address]);
+    let config = config(dir, network, &["--mine-address", &address]);
     Node::open(OpenArgs {
         config: &config,
         version: "test".to_owned(),
         protocol_version: 1,
         release_build: false,
+        supervisor: None,
         request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
     })
     .expect("node")
 }
 fn genesis_hash() -> BlockHash {
-    BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain))
+    BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(Network::Regtest))
 }
 fn put_chain_version(path: &std::path::Path, version: u64) {
     use shekyl_chain_store::codec::{PropertyCellBytes, SchemaVersion};
@@ -190,28 +225,62 @@ fn dev_config(dir: &Path, extra: &[&str]) -> DaemonConfig {
     config_on(dir, "regtest", extra)
 }
 fn config_on(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
+    config_with(dir, network, &["--clearnet", "off"], extra)
+}
+/// A configuration on an open network: clearnet left on, no closed peer
+/// list (`Declaration::Open`). An in-process node binds nothing: the
+/// `Network` is built by the daemon, which these tests do not start.
+fn config_open(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
+    config_with(dir, network, &[], extra)
+}
+fn config_with(dir: &Path, network: &str, connectors: &[&str], extra: &[&str]) -> DaemonConfig {
     let log = dir.join("shekyld.log");
-    let mut args = vec![
-        "--network",
-        network,
-        "--clearnet",
-        "off",
+    let mut args = vec!["--network", network];
+    args.extend(connectors);
+    args.extend([
         "--tor",
         "off",
         "--data-dir",
         dir.to_str().expect("utf8"),
         "--log-file",
         log.to_str().expect("utf8"),
-    ];
+    ]);
     args.extend(extra);
     let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
-    load(
+    // Everything `load` does after its file step, with no file opened.
+    // `load` would read the network's default file,
+    // `/etc/shekyl/shekyld-<network>.toml`, where a fleet host's daemon
+    // keeps its configuration: a test that took it read that host's peers
+    // and refused them against its own connectors
+    // (`config.value.conflict`). These tests are about the node, not
+    // about reading a file.
+    after_file(
         cli,
         &Platform {
             home: Some(dir.to_path_buf()),
-            program_data: None,
+            service_parent: None,
+            session_dir: None,
+            service_rendezvous: None,
         },
+        None,
     )
     .expect("config")
     .config
+}
+
+/// The line the DRS bench reads back (`scripts/bench/drs_artifact.py`,
+/// `STORE_DURABILITY_RE`): the marker, then the policy word, and the store's
+/// own constant named in the parenthetical. A drift here refuses the first
+/// flip run at its seed, before generation.
+#[test]
+fn the_store_durability_line_names_the_constant_the_bench_reads() {
+    let line = crate::store_durability_line();
+    assert_eq!(
+        line,
+        "Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)"
+    );
+    assert!(matches!(
+        shekyl_chain_store::store::DURABILITY,
+        redb::Durability::Immediate
+    ));
 }

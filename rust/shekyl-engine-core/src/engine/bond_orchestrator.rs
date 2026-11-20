@@ -9,7 +9,7 @@
 //! Public half only: pending gate, daemon-claimed-tip `anchor_t0`, anchored
 //! [`ReferenceBlock`], funding sweep, curve-tree paths, `AssembleBond` ask,
 //! persist-before-return via an independently constructed
-//! [`PendingPostStore`](super::pscan::dispatch::PendingPostStore). Secrets stay
+//! [`PendingPostStore`]. Secrets stay
 //! inside the stake actor (rule 36).
 
 use std::sync::Arc;
@@ -376,6 +376,12 @@ pub enum FirstStakeError {
     /// The durable staker record could not be written.
     #[error("persisting the bond record failed: {0}")]
     Persist(String),
+    /// The bond post's seal was saved, but the save was not confirmed on
+    /// disk, so nothing was sent; the seal was removed and a `stake`
+    /// re-invoke resumes (Rick, 2026-11-19). The cause is the save's, and
+    /// names its fix.
+    #[error("the bond post was not sent: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
     /// The actor/assembly path failed. If this surfaced after the durable
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
@@ -443,7 +449,7 @@ use super::Engine;
 pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: shekyl_types::BlockHeight,
-    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<[u8; 32]>,
+    block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
 ) -> Result<ReferenceBlock, BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
@@ -475,7 +481,7 @@ pub(crate) async fn anchored_reference_block(
     Ok(ReferenceBlock {
         height: reference_height,
         curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash: BlockHash::from_bytes(block_hash),
+        block_hash,
     })
 }
 
@@ -499,7 +505,7 @@ where
     /// go-live is gated only by the #332 staker-activation entry that wires
     /// this orchestrator (nothing else guards it; activation sequencing must
     /// be handled there, not assumed from a witness gap). Tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`]. This carries no suppression —
+    /// `SpentRecordsDurablyPruned::for_test`. This carries no suppression —
     /// it is reached from wired code; go-live retires with the RPC stake entry
     /// (`docs/FOLLOWUPS.md`).
     pub(crate) async fn assemble_bond_post(
@@ -588,9 +594,9 @@ where
         }
         // `FundingSelection` is non-empty by construction (the sweep refuses a
         // zero-record consume), so `selection.records` carries ≥1 record and
-        // the length-checked `paths[0]` below cannot index an empty vec — this
-        // holds even for a degenerate `floor == 0`, which is why the guarantee
-        // lives in the sweep rather than an assumed `floor > 0` here.
+        // the post spends at least one input — this holds even for a
+        // degenerate `floor == 0`, which is why the guarantee lives in the
+        // sweep rather than an assumed `floor > 0` here.
 
         let assemble_inputs: Vec<AssembleInput> = selection
             .records
@@ -614,32 +620,19 @@ where
                 }
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })?;
-        if paths.len() != selection.records.len() {
-            return Err(BondAssemblyError::build(
-                "assemble_tx",
-                format!(
-                    "expected {} paths, got {}",
-                    selection.records.len(),
-                    paths.len()
-                ),
-            )
-            .into());
-        }
-        // Non-empty: floor gate + length agreement with a non-empty sweep.
-        let first = paths.first().ok_or_else(|| {
-            BondAssemblyError::build("assemble_tx", "assemble_tx returned no paths")
-        })?;
-
+        // One path per input asked for, in that order, all to one tree: the
+        // batch's own properties (R-26), so the records zip with its paths.
+        let tree = paths.tree();
         let tree_ctx = TreeContext {
-            reference_block: first.tree.reference_block,
-            tree_root: first.tree.tree_root,
-            tree_depth: first.tree.tree_depth,
+            reference_block: tree.reference_block,
+            tree_root: tree.tree_root,
+            tree_depth: tree.tree_depth,
         };
 
         let funding: Vec<FundingInputContext> = selection
             .records
             .into_iter()
-            .zip(paths)
+            .zip(paths.into_paths().map(|(_, path)| path.into_parts()))
             .map(|(record, path)| FundingInputContext {
                 record,
                 leaf_chunk: path
@@ -673,31 +666,44 @@ where
             reference_height,
             terminal: None,
         };
-        let admission = store
-            .mutate(|block| {
-                // Seal-time reservation re-check under the write lock — the
-                // drain seam's guard, which this path was missing. The
-                // `reserved` snapshot read before assembly is stale: a
-                // same-persona claim or drain assembled concurrently may have
-                // reserved one of these funding inputs since, and persona
-                // dedup alone does not see a cross-kind gindex collision.
-                //
-                // It matters beyond the doomed record it avoids.
-                // `PendingPostBlock::remove_settled` retires a claim or drain
-                // when the inputs it reserved leave the live funding set, and
-                // reads that absence as proof THAT record's transaction
-                // confirmed. The inference holds only while one record can
-                // reserve a given gindex: if a post and a drain share an input,
-                // the post confirming spends it and retires the drain too —
-                // reopening a lane whose transaction never landed. This post is
-                // not itself retired that way (its evidence is the pscan's own
-                // bond-post match), but it can falsify someone else's, so the
-                // guard belongs here as much as on the paths it protects.
-                let admission = block.seal_post(sealed, snapshot_generation);
-                (admission == SealAdmission::Admit, admission)
-            })
+        let persona = sealed.persona;
+        let (admission, durability) = store
+            .seal_reporting(
+                |block| {
+                    // Seal-time reservation re-check under the write lock — the
+                    // drain seam's guard, which this path was missing. The
+                    // `reserved` snapshot read before assembly is stale: a
+                    // same-persona claim or drain assembled concurrently may have
+                    // reserved one of these funding inputs since, and persona
+                    // dedup alone does not see a cross-kind gindex collision.
+                    //
+                    // It matters beyond the doomed record it avoids.
+                    // `PendingPostBlock::remove_settled` retires a claim or drain
+                    // when the inputs it reserved leave the live funding set, and
+                    // reads that absence as proof THAT record's transaction
+                    // confirmed. The inference holds only while one record can
+                    // reserve a given gindex: if a post and a drain share an input,
+                    // the post confirming spends it and retires the drain too —
+                    // reopening a lane whose transaction never landed. This post is
+                    // not itself retired that way (its evidence is the pscan's own
+                    // bond-post match), but it can falsify someone else's, so the
+                    // guard belongs here as much as on the paths it protects.
+                    let admission = block.seal_post(sealed, snapshot_generation);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                move |block| block.remove_post(&persona).is_some(),
+            )
             .await
-            .map_err(|e| BondAssemblyError::build("pending-post seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, and the stake
+                // answers the save's cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    BondAssemblyError::SealNotSaved(cause)
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    BondAssemblyError::build("pending-post seal", e)
+                }
+            })?;
         match admission {
             SealAdmission::Admit => {}
             SealAdmission::PersonaLive => return Err(BondAssemblyError::PendingPostExists.into()),
@@ -707,6 +713,12 @@ where
                 return Err(BondAssemblyError::InputRaced.into())
             }
         }
+        // A seal whose save was not confirmed was removed under the seal's
+        // own guard (`seal_reporting`), so the dispatch driver never selects
+        // bytes whose record a power loss could take; the stake answers with
+        // the save's own code (Rick, 2026-11-19).
+        super::dispatch_durability::require_confirmed(durability)
+            .map_err(BondAssemblyError::SealNotSaved)?;
 
         Ok(assembled)
     }
@@ -726,7 +738,7 @@ where
         store: &PendingPostStore<WalletFilePendingSealStore<S, D, L, E, R, P>>,
         curve_tree: &CurveTreeHandle,
         chain_tip: BlockHeight,
-        tip_hash_at: impl FnOnce(BlockHeight) -> Option<[u8; 32]>,
+        tip_hash_at: impl FnOnce(BlockHeight) -> Option<BlockHash>,
         p_slot: PSlot,
         holdings: &HoldingsDescriptor,
         fee: AtomicUnits,
@@ -756,7 +768,10 @@ where
             .map(|s| s.funding_outputs().to_vec())
             .unwrap_or_default();
 
-        let floor = AtomicUnits::from_raw(bond_floor(holdings));
+        let floor = AtomicUnits::from_raw(bond_floor(
+            holdings,
+            shekyl_archival_retention::archival_params(),
+        ));
         // Align with the wire builder / retention verifier: a zero floor is
         // structurally invalid holdings, not a sweep-to-empty success that
         // would later index an empty `paths` vector. Typed refusal before
@@ -1005,7 +1020,12 @@ where
         let assembled =
             Self::assemble_bond_post(self_arc.clone(), handle, ticket, holdings, fee, &witness)
                 .await
-                .map_err(|e| FirstStakeError::Engine(engine_failure_detail(&e)))?;
+                .map_err(|e| match e {
+                    StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
+                        FirstStakeError::SealNotSaved(error)
+                    }
+                    e => FirstStakeError::Engine(engine_failure_detail(&e)),
+                })?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),

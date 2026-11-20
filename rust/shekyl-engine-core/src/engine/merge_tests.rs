@@ -172,15 +172,15 @@ fn apply_advances_synced_height_for_blocks_without_events() {
     assert_eq!(ledger.height(), shekyl_types::BlockHeight::from_raw(3));
     assert_eq!(
         ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(1)),
-        Some(&[0x11; 32])
+        Some(&BlockHash::from_bytes([0x11; 32]))
     );
     assert_eq!(
         ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(2)),
-        Some(&[0x22; 32])
+        Some(&BlockHash::from_bytes([0x22; 32]))
     );
     assert_eq!(
         ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
-        Some(&[0x33; 32])
+        Some(&BlockHash::from_bytes([0x33; 32]))
     );
 }
 
@@ -561,11 +561,11 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
     );
     assert_eq!(
         ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(3)),
-        Some(&[0xA3; 32])
+        Some(&BlockHash::from_bytes([0xA3; 32]))
     );
     assert_eq!(
         ledger.block_hash_at(shekyl_types::BlockHeight::from_raw(4)),
-        Some(&[0xA4; 32])
+        Some(&BlockHash::from_bytes([0xA4; 32]))
     );
 }
 
@@ -913,7 +913,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     assert_eq!(stored_ct.ml_kem, ct.ml_kem);
 
     let stored_handle = td.output_handle.as_ref().expect("output_handle set");
-    let expected_handle = derive_output_handle(&view_secret, tx_hash.as_bytes(), internal_idx);
+    let expected_handle = derive_output_handle(&view_secret, &tx_hash, internal_idx);
     assert_eq!(*stored_handle, expected_handle);
 }
 
@@ -1110,7 +1110,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
     // sentinels per transfer so a misdirected overwrite is
     // visible regardless of iteration order.
     let sentinel_ct = ciphertext_for_seed(0xEE);
-    let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
+    let sentinel_handle = derive_output_handle(&[0xCC; 32], &TxHash::from_bytes([0xCC; 32]), 0xCC);
     for td in &mut ledger.transfers {
         if td.tx_hash == tx_hash_a
             && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
@@ -1165,7 +1165,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
         stored_ct_a.x25519, sentinel_ct.x25519,
         "pre-populated source_ciphertext must not be overwritten"
     );
-    let derived_handle_a = derive_output_handle(&view_secret, tx_hash_a.as_bytes(), internal_idx_a);
+    let derived_handle_a = derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
     assert_eq!(
         td_a.output_handle.expect("output_handle filled"),
         derived_handle_a,
@@ -1355,7 +1355,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     assert!(new.output_handle.is_some());
     assert_eq!(
         new.output_handle.expect("output_handle filled"),
-        derive_output_handle(&view_secret, new_tx.as_bytes(), new_idx),
+        derive_output_handle(&view_secret, &new_tx, new_idx),
     );
 }
 

@@ -3,12 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Origin-guard rig and the live `get_info` gates.
+//! Origin-guard rig and the live `daemon_status` gates.
 //!
 //! A `#[path]` child of the regtest harness, so `regtest_e2e` stays the shared
 //! daemon lifecycle. The stem/sink pair holds a transaction un-broadcast for
 //! longer than one assertion, which one daemon cannot do. The restricted-listener
-//! and in-process console gates that read `get_info` live here with it.
+//! and console gates that read `daemon_status` live here with it.
+//! The embargo walks are [`embargo`].
 
 // The production debug-macro lint treats a file as test code only when the
 // file itself carries this attribute. The parent harness is already
@@ -18,11 +19,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
-use serde_json::json;
-use shekyl_rpc_client::Rpc;
+use shekyl_rpc_client::{wire, Rpc};
 use shekyl_rpc_transport::HttpRpc;
-use shekyl_rpc_types::GetInfoResponse;
+use shekyl_rpc_types::hash::HashHex;
+use shekyl_rpc_types::kinds::NoParams;
+use shekyl_rpc_types::wire::daemon::{DaemonStatus, GrantName};
+use shekyl_rpc_types::wire::shared::{Slot, SlotState};
 use shekyl_types::TxHash;
 use tokio::sync::RwLock;
 
@@ -42,12 +44,23 @@ use super::*;
 /// sink. A transaction the origin's own wallet submits is a local origin, and
 /// a local origin takes the stem slot whatever the epoch draw
 /// (`Relay::plan_relay`), so the origin sends it to the sink on the stem and
-/// records it `stem`, embargoed. The sink runs `--no-sync`, never reports
-/// itself synchronized, and drops the transaction on receipt — so nothing
-/// fluffs it back. It stays `stem` on the origin until the origin's own
-/// embargo expires. The flag is load-bearing: a second daemon that
-/// synchronizes normally stems the transaction straight back, the origin
-/// upgrades the second arrival to fluff, and the hold is over in seconds.
+/// records it `stem`, embargoed. The sink admits it
+/// (`restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
+/// asserts that) and has nowhere to send it. Its only session is the
+/// origin's, the one the stem arrived on: a stem goes out on an outbound
+/// session other than its source, and a fluff to every peer but its source.
+/// The sink's closed peer is an unanswered port on `127.0.0.1`
+/// (`Peering::Listening`). Once the origin's session is up, that host is
+/// held and the sink does not dial it again (Rick, 2026-11-09), so the
+/// pair holds one session, the origin's. A sink that dialed the origin
+/// first would take that session and leave the origin no stem successor.
+/// The transaction stays `stem` on the origin until the origin's own
+/// embargo expires. A second
+/// session between the two would carry the stem straight back, the origin
+/// would take the second arrival as a fluff, and the hold would be over in
+/// seconds. The sink also runs `--dev-sync off`: it requests nothing and
+/// follows the origin by announcements alone, which still keeps it at the
+/// origin's tip.
 ///
 /// **What the rig does not fix.** The embargo is a draw (geometric, mean
 /// 190 s on clearnet) with no lever, so a short one can end mid-assertion.
@@ -55,34 +68,38 @@ use super::*;
 /// state back, and a caller brackets its assertions with it.
 pub(super) struct StemSinkPair {
     origin: RegtestDaemon,
-    /// Held only to keep the process alive and to clean it up on drop.
-    _sink: RegtestDaemon,
+    /// The origin's one peer, a second daemon; the stems it receives are
+    /// read from its own pool.
+    sink: RegtestDaemon,
 }
 
-/// One entry of the unrestricted `/get_transaction_pool` reply — the three
-/// members that say where a transaction is in its relay.
-#[derive(Debug, Deserialize)]
-struct PoolRelayEntry {
-    id_hash: String,
-    relayed: bool,
-    last_relayed_time: u64,
+/// `tx_list` for one id, as `rpc`'s caller is answered.
+async fn tx_slot(rpc: &HttpRpc, txid: TxHash) -> Slot<wire::tx::TxEntry> {
+    rpc.call::<wire::TxList>(wire::tx::TxListQuery {
+        id: vec![HashHex::from_bytes(txid.to_bytes())],
+        prune: true,
+    })
+    .await
+    .expect("tx_list")
+    .pop()
+    .expect("one slot for one id")
 }
 
-#[derive(Debug, Deserialize)]
-struct PoolRelayResp {
-    /// Absent when the pool is empty: the C++ serializer drops an empty
-    /// sequence, so the default is the wire's own encoding of "none".
-    #[serde(default)]
-    transactions: Vec<PoolRelayEntry>,
+/// Whether `rpc`'s caller is shown `txid` in the pool's list.
+async fn pool_lists(rpc: &HttpRpc, txid: TxHash) -> bool {
+    rpc.call::<wire::TxpoolList>(NoParams)
+        .await
+        .expect("txpool_list")
+        .iter()
+        .any(|entry| entry.id.to_bytes() == txid.to_bytes())
 }
 
 /// Where the origin holds a transaction, read from its unrestricted listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StemHold {
-    /// Sent on the stem and embargoed: not broadcast.
-    Held,
-    /// Admitted, and the stem send has not been recorded yet.
-    NotYetSent,
+    /// In its stem phase: admitted and not shown, whether the stem send has
+    /// gone out or not (the wire does not say which).
+    Stem,
     /// Broadcast: the embargo ended, or the transaction came back fluffed.
     Broadcast,
     /// Not in the pool at all.
@@ -96,35 +113,43 @@ impl StemSinkPair {
     /// a node becomes synchronized from a handshake with a peer at its own
     /// height, and an unsynchronized node withholds a local origin instead
     /// of stemming it.
-    pub(super) async fn start() -> StemSinkPair {
+    /// Spawn the pair mining coinbase to `seed`'s primary address (N2).
+    pub(super) async fn start_for_seed(
+        seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
+    ) -> StemSinkPair {
         let serial = serial_lock().lock_owned().await;
         let origin_p2p = RegtestDaemon::free_port();
         let sink_p2p = RegtestDaemon::free_port_excluding(&[origin_p2p]);
-        let sink = RegtestDaemon::spawn(RegtestSpawn::new(None).with_peering(Peering::Linked {
-            p2p_port: sink_p2p,
-            peer_p2p_port: origin_p2p,
-            sink: true,
-        }))
+        let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
+        let sink = RegtestDaemon::spawn(
+            RegtestSpawn::new(None)
+                .with_ports_taken([origin_p2p])
+                .with_peering(Peering::Listening {
+                    p2p_port: sink_p2p,
+                    requests: false,
+                }),
+        )
         .await;
         let origin = RegtestDaemon::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_restricted_listener()
+                .with_mine_address(mine_address)
                 .with_peering(Peering::Linked {
                     p2p_port: origin_p2p,
                     peer_p2p_port: sink_p2p,
-                    sink: false,
                 }),
         )
         .await;
-        let pair = StemSinkPair {
-            origin,
-            _sink: sink,
-        };
+        let pair = StemSinkPair { origin, sink };
         pair.await_linked().await;
         pair
     }
 
     /// The daemon a wallet submits to. It carries both listeners.
+    pub(super) fn sink(&self) -> &RegtestDaemon {
+        &self.sink
+    }
+
     pub(super) fn origin(&self) -> &RegtestDaemon {
         &self.origin
     }
@@ -133,28 +158,14 @@ impl StemSinkPair {
         let deadline = Instant::now() + Duration::from_secs(60);
         let mut last = String::new();
         while Instant::now() < deadline {
-            let reply: shekyl_rpc_types::P2pReply<shekyl_rpc_types::GetConnectionsResponse> = self
+            let connections = self
                 .origin
                 .rpc
-                .json_rpc_call("get_connections", None)
+                .call::<wire::PeerConnections>(NoParams)
                 .await
-                .expect("origin get_connections");
-            let connections = reply
-                .into_running()
-                .expect("a linked daemon's P2P runs; it must not report offline");
-            let outbound = connections
-                .connections
-                .iter()
-                .filter(|c| !c.incoming)
-                .count();
-            let synchronized = self
-                .origin
-                .rpc
-                .json_rpc_call::<GetInfoResponse>("get_info", None)
-                .await
-                .expect("origin get_info")
-                .health
-                .synchronized;
+                .expect("origin peer_connections");
+            let outbound = connections.iter().filter(|c| !c.inbound).count();
+            let synchronized = self.origin.status().await.synchronized;
             if outbound >= 1 && synchronized {
                 return;
             }
@@ -169,67 +180,45 @@ impl StemSinkPair {
 
     /// Where the origin holds `txid` now.
     ///
-    /// Read from the unrestricted `/get_transaction_pool`, which is the only
-    /// reply that carries the relay state: `relayed` is set when a send is
-    /// recorded, and `last_relayed_time` is written as `0` for exactly the
-    /// entries the pool marks `dandelionpp_stem` (`tx_pool.cpp`,
-    /// `get_transactions_and_spent_keys_info`). A broadcast entry carries
-    /// the time of its broadcast there.
+    /// Read from the host's `tx_list`, whose pool entry carries the relay
+    /// state as the pool's one bit (IG-Q57): `public` is whether the node
+    /// shows the entry, `false` through its stem phase.
     pub(super) async fn stem_held(&self, txid: TxHash) -> StemHold {
-        let pool: PoolRelayResp = self
-            .origin
-            .rpc
-            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
-            .await
-            .expect("origin /get_transaction_pool");
-        let wanted = hex::encode(txid.as_bytes());
-        match pool.transactions.iter().find(|t| t.id_hash == wanted) {
-            None => StemHold::Absent,
-            Some(entry) if !entry.relayed => StemHold::NotYetSent,
-            Some(entry) if entry.last_relayed_time == 0 => StemHold::Held,
-            Some(_) => StemHold::Broadcast,
+        match tx_slot(&self.origin.rpc, txid).await {
+            Slot::Item(entry) if entry.pooled && entry.public.0 == Some(false) => StemHold::Stem,
+            Slot::Item(entry) if entry.pooled => StemHold::Broadcast,
+            _ => StemHold::Absent,
         }
     }
 }
 
-/// The restricted listener's posture reaches two native handlers.
+/// The restricted listener's posture reaches the handlers.
 ///
-/// This test was the regression guard for the FFI bridge's origin context,
-/// and every leg of it has since moved off the bridge: `/get_transactions`
-/// and `/is_key_image_spent` in RK-4c (now
-/// `native_handlers_apply_their_own_request_caps`), the header methods in
-/// RK-5b, and `/get_info` in RK-5c. What it asserts is still worth
-/// asserting live — that the listener a request arrives on decides what the
-/// handler discloses — but it says nothing about the bridge any more, and
-/// its name no longer claims to. **The bridge's guard is
-/// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`**,
-/// on the pool routes, which are the bridged subjects that remain.
+/// The listener a request arrives on decides what the handler discloses
+/// and whether it is bounded. Two legs:
 ///
-/// Two legs, both native:
-///
-/// - `/get_info`: the listener's posture becomes the handler's
-///   `Disclosure`. A restricted caller's reply carries no Status and no
-///   Peers part, and says it is restricted; the unrestricted listener's
-///   carries both, with real values. Until `CORE_RPC_VERSION` 3.48 the
-///   restricted reply carried the parts with stand-ins, and this test was
-///   named for them.
-/// - `get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT` is refused on
-///   the restricted listener.
+/// - `daemon_status`: the listener's grants become the reply's parts. The
+///   view listener holds no `status` or `peers` grant and is not the host,
+///   so its reply carries no Status, Peers or host-only part, and its
+///   `grant` list says so; the admin listener's carries all three, with
+///   real values (RK-D23).
+/// - `block_header_list` over `RESTRICTED_BLOCK_COUNT` hashes is refused on
+///   the view listener (`bound.block`).
 ///
 /// Admin-only method gating is
 /// `admin_methods_are_refused_only_on_the_restricted_listener` in
-/// `shekyl-daemon-rpc`. The WE result-envelope shape is
-/// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
-/// histogram deletion gate is `get_output_histogram_stays_unrouted`.
+/// `shekyl-daemon-rpc`. The histogram deletion gate is
+/// `get_output_histogram_stays_unrouted`.
 ///
 /// Both listeners come from one daemon, so the postures are compared against
-/// the same chain in the same process, and the unrestricted rows are the
+/// the same chain in the same process, and the admin rows are the
 /// blast-radius check: the restricted posture must not narrow the admin
 /// listener.
 #[tokio::test]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() {
-    /// `RESTRICTED_BLOCK_COUNT`, the cap on `get_block_header_by_hash`.
+    use shekyl_rpc_client::ErrorClass;
+    /// `RESTRICTED_BLOCK_COUNT`, the cap on `block_header_list` by hash.
     const BLOCK_CAP: usize = 1000;
 
     let daemon = RegtestDaemon::start_with_restricted_listener().await;
@@ -240,116 +229,113 @@ async fn restricted_listener_is_withheld_status_and_capped_by_native_handlers() 
         .await
         .expect("unrestricted rpc client");
 
-    // Hashes that resolve to nothing: a cap is a request-shape refusal and
-    // fires before any lookup, so the chain's contents are irrelevant.
-    let hashes = |n: usize| -> Vec<String> { (0..n).map(|i| format!("{i:064x}")).collect() };
-
-    // ── /get_info: the listener decides the disclosure ──────────────────
-    let admin_info: GetInfoResponse = unrestricted
-        .rpc_call("get_info", None::<serde_json::Value>)
+    // ── daemon_status: the listener decides the disclosure ──────────────
+    let admin_info: DaemonStatus = unrestricted
+        .call::<wire::DaemonStatus>(NoParams)
         .await
-        .expect("admin get_info");
-    let restricted_info: GetInfoResponse = restricted
-        .rpc_call("get_info", None::<serde_json::Value>)
+        .expect("admin daemon_status");
+    let restricted_info: DaemonStatus = restricted
+        .call::<wire::DaemonStatus>(NoParams)
         .await
-        .expect("restricted get_info");
-    let admin_status = admin_info
-        .node
-        .shown()
-        .expect("the admin listener is shown Status");
+        .expect("restricted daemon_status");
     assert!(
-        restricted_info.restricted && !admin_info.restricted,
-        "each listener must say which it is"
+        admin_info.grant.contains(&GrantName::Status)
+            && !restricted_info.grant.contains(&GrantName::Status),
+        "each listener must say which it is: admin {:?}, restricted {:?}",
+        admin_info.grant,
+        restricted_info.grant
     );
-    // A restricted caller is not shown Status or Peers, so the reply does
-    // not carry them (RK-Q8). If either part is here, the handler answered
-    // a restricted caller as it answers the host's administrator, or went
-    // back to writing values that mean "not this value".
-    assert_eq!(
-        restricted_info.node,
-        shekyl_rpc_types::Hidden::Withheld,
+    // A caller without the `status` and `peers` grants is not shown those
+    // parts, and the reply does not carry them. If either part is here, the
+    // handler answered the view listener as it answers the host.
+    assert!(
+        restricted_info.started.is_withheld() && restricted_info.revision.is_withheld(),
         "a restricted listener must not disclose Status: the start time, free \
-         space, the store's size, the build's version, the connection counts"
-    );
-    assert_eq!(
-        restricted_info.peers,
-        shekyl_rpc_types::Hidden::Withheld,
-        "a restricted listener must not disclose Peers: the socket counts and \
-         the peerlist sizes"
-    );
-    assert_eq!(
-        admin_info.peers,
-        shekyl_rpc_types::Hidden::Shown(shekyl_rpc_types::InfoP2p::Offline),
-        "the admin listener is shown Peers, and this daemon runs `--offline`: \
-         the part is the state offline, with no count"
+         space, the store's size, the build's revision, the connection counts"
     );
     assert!(
-        admin_status.start_time > 0 && !admin_status.version.is_empty(),
-        "the admin listener must still report the start time and the version — \
+        restricted_info.connector.is_withheld(),
+        "a restricted listener must not disclose Peers: the connectors' counts"
+    );
+    assert!(
+        restricted_info.txpool_private_count.is_withheld(),
+        "a restricted listener is not the host"
+    );
+    assert!(
+        !admin_info.connector.is_withheld(),
+        "the admin listener is shown Peers"
+    );
+    let started = admin_info.started.shown().expect("admin is shown Status");
+    let revision = admin_info
+        .revision
+        .clone()
+        .shown()
+        .expect("admin is shown Status");
+    let disk_free = admin_info.disk_free.shown().expect("admin is shown Status");
+    assert!(
+        started.0 > 0 && !revision.0.is_empty(),
+        "the admin listener must still report the start time and the revision — \
          otherwise the assertions above would hold for a daemon that reports \
-         nothing to anyone; got {admin_status:?}"
+         nothing to anyone"
     );
     assert_ne!(
-        admin_status.free_space,
+        disk_free.0,
         u64::MAX,
         "the admin listener must report the volume's real free space"
     );
     // The two listeners describe the same chain.
-    assert_eq!(restricted_info.health.height, admin_info.health.height);
+    assert_eq!(restricted_info.height, admin_info.height);
     // Health is told to both. This daemon runs `--offline`, which binds no
-    // p2p hub at all. It still answers, and says it is offline: a state,
-    // with no `has_peers` beside it (Rick, 2026-10-14). Offline is
-    // configuration, so the handler does not ask a board that is not
-    // there. A handler that asked would refuse this request, and the
-    // harness would never have seen the daemon come up.
+    // p2p hub at all. It still answers, and says it is offline, with
+    // `peered: null` beside it (Rick, 2026-10-14).
     for (listener, info) in [("restricted", &restricted_info), ("admin", &admin_info)] {
-        assert_eq!(
-            info.health.p2p,
-            shekyl_rpc_types::HealthP2p::Offline,
+        assert!(
+            info.offline && info.peered.0.is_none(),
             "{listener}: the harness starts this daemon offline, and it says so"
         );
     }
 
-    // ── JSON-RPC: the header cap ────────────────────────────────────────
-    //
-    // Over the block cap the handler refuses, so the reply is an error
-    // envelope and `result` never appears.
-    let hdr: serde_json::Value = restricted
-        .rpc_call(
-            "json_rpc",
-            Some(jsonrpc_body(
-                "get_block_header_by_hash",
-                &json!({ "hashes": hashes(BLOCK_CAP + 1) }),
-            )),
-        )
+    // ── the header cap ──────────────────────────────────────────────────
+    let hashes: Vec<HashHex> = (0..=BLOCK_CAP)
+        .map(|i| {
+            let mut bytes = [0u8; 32];
+            bytes[24..].copy_from_slice(&(i as u64).to_be_bytes());
+            HashHex::from_bytes(bytes)
+        })
+        .collect();
+    let refused = restricted
+        .call_or_refusal::<wire::BlockHeaderList>(wire::block::HeaderRange {
+            select: wire::block::HeaderRangeSelect::Hash(hashes),
+            pow: false,
+        })
         .await
-        .expect("restricted get_block_header_by_hash over cap");
+        .expect("block_header_list answers")
+        .expect_err("a bounded listener refuses more than the cap");
+    assert_eq!(refused.class, ErrorClass::OverResourceBound, "{refused:?}");
+    assert_eq!(refused.diagnostic.code, "bound.block", "{refused:?}");
     assert_eq!(
-        hdr.pointer("/error/message").and_then(|m| m.as_str()),
-        Some("Too many block headers requested in restricted mode"),
-        "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
-         if this succeeds the handler answered a restricted caller without its cap"
+        refused
+            .diagnostic
+            .parameter
+            .get("bound")
+            .map(String::as_str),
+        Some("1000"),
+        "the refusal names the cap: {refused:?}"
     );
 }
 
 /// A restricted listener does not disclose a transaction this node has not
 /// broadcast.
 ///
-/// This is the origin guard anchored on the property the fix protects —
-/// `include_sensitive` — and not on a symptom of it. The bridge's REST
-/// template passes each handler its caller's origin; each pool handler turns
-/// that into the flag it reads the pool with, and a restricted caller must
-/// read the broadcast set only. The earlier anchors were request caps, then
-/// `/get_info`'s field trimming, and each left with the route that carried
-/// it (`DAEMON_RPC_KV_CUTOVER.md` §7, 2026-08-28). The pool routes are the
-/// subjects that outlive `/get_info`, so this exists before that route moves.
+/// This is the origin guard anchored on the property it protects — the
+/// pool scope a caller reads with (`scope_for`, RT-O9.3) — and not on a
+/// symptom of it. A caller that is not the host must read the broadcast set
+/// only.
 ///
-/// **Four reads take the flag, and all four are here.** Three cross the
-/// bridge (`dispatch_json`): `/get_transaction_pool`,
-/// `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`. The fourth,
-/// `/get_transactions`, is native and reads the pool through the facts
-/// export with the same flag. `/is_key_image_spent` is not a subject: it
-/// reads the broadcast set for every caller.
+/// **Four reads take the scope, and all four are here:** `txpool_list`,
+/// `txpool_stats`, `daemon_status`'s `txpool_count`, and `tx_list` by id.
+/// `chain_spent` reads the scope too, and answers `unspent` for a spend the
+/// caller may not see.
 ///
 /// **The verdict is deterministic, and the state is not.** The transaction
 /// is held un-broadcast by [`StemSinkPair`], for as long as the origin's
@@ -373,7 +359,8 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     const MINE_BATCH_BLOCKS: u64 = 10;
     const MAX_MINE_BATCHES: usize = 24;
 
-    let pair = StemSinkPair::start().await;
+    let seed = [0x5eu8; shekyl_crypto_pq::account::SEED_BYTES];
+    let pair = StemSinkPair::start_for_seed(&seed).await;
     let origin = pair.origin();
     let restricted = HttpRpc::new(origin.restricted_url().to_owned())
         .await
@@ -385,82 +372,45 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     // RK-D14, on a live node. The origin holds a handshaken session to the
     // sink. Its restricted listener withholds Status, so it reports no
     // connection counts, and it still says the node has peers, because
-    // Health is told to every caller. Before `has_peers` a wallet on this
-    // listener could only read two counts written as zero, and raised a
-    // false "daemon has no peers" alarm in place of its resubmit probe (the
-    // pre-flight's §3.1).
-    let restricted_info: GetInfoResponse = restricted
-        .rpc_call("get_info", None::<serde_json::Value>)
+    // Health is told to every caller.
+    let restricted_info = restricted
+        .call::<wire::DaemonStatus>(NoParams)
         .await
-        .expect("restricted get_info");
-    let admin_info: GetInfoResponse = admin
-        .rpc_call("get_info", None::<serde_json::Value>)
+        .expect("restricted daemon_status");
+    let admin_info = admin
+        .call::<wire::DaemonStatus>(NoParams)
         .await
-        .expect("admin get_info");
+        .expect("admin daemon_status");
     assert!(
-        restricted_info.health.p2p.has_peers() == Some(true)
-            && admin_info.health.p2p.has_peers() == Some(true),
+        restricted_info.peered.0 == Some(true) && admin_info.peered.0 == Some(true),
         "a node with a handshaken session has peers, on both listeners"
     );
-    assert_eq!(
-        restricted_info.node,
-        shekyl_rpc_types::Hidden::Withheld,
+    assert!(
+        restricted_info.peer_outbound_count.is_withheld(),
         "the restricted listener's reply carries no connection counts at all, \
-         so `has_peers` above did not come from them"
+         so `peered` above did not come from them"
     );
     assert!(
         matches!(
             admin_info
-                .node
+                .peer_outbound_count
                 .shown()
                 .expect("the admin listener is shown Status")
-                .connections,
-            shekyl_rpc_types::StatusConnections::Running { outgoing, .. } if outgoing >= 1
+                .0,
+            Some(outbound) if outbound.0 >= 1
         ),
         "the admin listener reports the session the pair was started with"
     );
 
     let (wallet, _tmp, address) = mainnet_wallet(origin.rpc_port(), 0x5e).await;
     let arc = Arc::new(RwLock::new(wallet));
-    mine_until_spendable(origin, &arc, &address, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
-
-    let pool_hashes = |reply: &serde_json::Value| -> Vec<String> {
-        reply
-            .get("tx_hashes")
-            .and_then(serde_json::Value::as_array)
-            .map(|hashes| {
-                hashes
-                    .iter()
-                    .filter_map(|h| h.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let pool_ids = |reply: &serde_json::Value| -> Vec<String> {
-        reply
-            .get("transactions")
-            .and_then(serde_json::Value::as_array)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|e| e.get("id_hash").and_then(|h| h.as_str()).map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let pool_total = |reply: &serde_json::Value| -> u64 {
-        reply
-            .pointer("/pool_stats/txs_total")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_else(|| panic!("pool stats carry txs_total; got {reply}"))
-    };
+    mine_until_spendable(origin, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
 
     for attempt in 1..=ATTEMPTS {
-        let amount = AtomicUnits::from_raw(unlocked_balance(&arc).await.to_raw() / 4);
+        let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
         let txid = submit_transfer(
             origin,
             &arc,
-            &address,
             crate::engine::pending::TxDestination::Address(address.clone()),
             amount,
             MINE_BATCH_BLOCKS,
@@ -468,60 +418,39 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         )
         .await;
         let hex_id = hex::encode(txid.as_bytes());
-        let by_hash = json!({ "txs_hashes": [hex_id] });
 
-        // The stem send is recorded a moment after the accept. Wait for it,
-        // briefly: `NotYetSent` is also un-broadcast, but it is the state the
-        // single-node form raced, and the bracket is on `Held`.
-        let mut before = pair.stem_held(txid).await;
-        let sent_by = Instant::now() + Duration::from_secs(10);
-        while before == StemHold::NotYetSent && Instant::now() < sent_by {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            before = pair.stem_held(txid).await;
-        }
+        // The bracket is on the stem phase: `public: false` before and after
+        // the reads, whether or not the stem send has gone out (the wire
+        // does not say which; the restricted listener must hide the entry
+        // in either case).
+        let before = pair.stem_held(txid).await;
 
-        let restricted_pool: serde_json::Value = restricted
-            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+        let restricted_listed = pool_lists(&restricted, txid).await;
+        let restricted_stats = restricted
+            .call::<wire::TxpoolStats>(NoParams)
             .await
-            .expect("restricted /get_transaction_pool");
-        let restricted_hashes: serde_json::Value = restricted
-            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
+            .expect("restricted txpool_stats");
+        let restricted_status = restricted
+            .call::<wire::DaemonStatus>(NoParams)
             .await
-            .expect("restricted /get_transaction_pool_hashes");
-        let restricted_stats: serde_json::Value = restricted
-            .rpc_call("get_transaction_pool_stats", None::<serde_json::Value>)
-            .await
-            .expect("restricted /get_transaction_pool_stats");
-        let restricted_tx: shekyl_rpc_types::GetTransactionsResponse = restricted
-            .rpc_call("get_transactions", Some(by_hash.clone()))
-            .await
-            .expect("restricted /get_transactions");
+            .expect("restricted daemon_status");
+        let restricted_tx = tx_slot(&restricted, txid).await;
 
-        let admin_pool: serde_json::Value = admin
-            .rpc_call("get_transaction_pool", None::<serde_json::Value>)
+        let admin_listed = pool_lists(&admin, txid).await;
+        let admin_stats = admin
+            .call::<wire::TxpoolStats>(NoParams)
             .await
-            .expect("unrestricted /get_transaction_pool");
-        let admin_hashes: serde_json::Value = admin
-            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
-            .await
-            .expect("unrestricted /get_transaction_pool_hashes");
-        let admin_stats: serde_json::Value = admin
-            .rpc_call("get_transaction_pool_stats", None::<serde_json::Value>)
-            .await
-            .expect("unrestricted /get_transaction_pool_stats");
-        let admin_tx: shekyl_rpc_types::GetTransactionsResponse = admin
-            .rpc_call("get_transactions", Some(by_hash))
-            .await
-            .expect("unrestricted /get_transactions");
+            .expect("admin txpool_stats");
+        let admin_tx = tx_slot(&admin, txid).await;
 
         let after = pair.stem_held(txid).await;
-        if before != StemHold::Held || after != StemHold::Held {
+        if before != StemHold::Stem || after != StemHold::Stem {
             eprintln!(
-                "attempt {attempt}: the transaction was not held across the reads \
+                "attempt {attempt}: the transaction was not in its stem phase across the reads \
                  ({before:?} before, {after:?} after); discarding the attempt"
             );
             // Clear the pool so the next attempt's counts are its own.
-            origin.generate_blocks(1, &address).await;
+            origin.generate_blocks(1).await;
             assert_eq!(
                 origin.tx_pool_size().await,
                 0,
@@ -535,92 +464,83 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
         // judged before any verdict, so one run names every route that
         // disclosed and not only the first.
         let mut disclosed = Vec::new();
-        if pool_ids(&restricted_pool).contains(&hex_id) {
-            disclosed.push("/get_transaction_pool listed it");
+        if restricted_listed {
+            disclosed.push("txpool_list listed it");
         }
-        if pool_hashes(&restricted_hashes).contains(&hex_id) {
-            disclosed.push("/get_transaction_pool_hashes named it");
+        if restricted_stats.count.0 != 0 {
+            disclosed.push("txpool_stats counted it");
         }
-        if pool_total(&restricted_stats) != 0 {
-            disclosed.push("/get_transaction_pool_stats counted it");
+        if restricted_status
+            .txpool_count
+            .shown()
+            .expect("the pool part is shown")
+            .0
+            .map(|count| count.0)
+            != Some(0)
+        {
+            disclosed.push("daemon_status counted it");
         }
-        let missed = restricted_tx
-            .missed_tx
-            .iter()
-            .any(|h| h.as_bytes() == txid.as_bytes());
-        if !restricted_tx.txs.is_empty() || !missed {
-            disclosed.push("/get_transactions returned it by hash");
+        if !matches!(restricted_tx, Slot::State(SlotState::Missing(_))) {
+            disclosed.push("tx_list returned it by id");
         }
         assert!(
             disclosed.is_empty(),
             "a restricted listener must not disclose a transaction this node has \
-             not broadcast, and it did for {hex_id}: {disclosed:?}. A route named \
-             here read the pool with the unrestricted flag — its handler lost the \
-             caller's origin, or stopped deriving the flag from it"
+             not broadcast, and it did for {hex_id}: {disclosed:?}. A read named \
+             here used the host's scope — its handler lost the caller's \
+             authority, or stopped deriving the scope from it"
         );
 
-        // Blast radius, and the subject's own existence: the unrestricted
-        // listener shows the same transaction on the same four reads. Without
-        // these, everything above holds for a daemon with an empty pool.
+        // Blast radius, and the subject's own existence: the host is shown
+        // the same transaction on the same reads. Without these, everything
+        // above holds for a daemon with an empty pool.
         let mut withheld = Vec::new();
-        if !pool_ids(&admin_pool).contains(&hex_id) {
-            withheld.push("/get_transaction_pool");
+        if !admin_listed {
+            withheld.push("txpool_list");
         }
-        if !pool_hashes(&admin_hashes).contains(&hex_id) {
-            withheld.push("/get_transaction_pool_hashes");
+        if admin_stats.count.0 != 1 {
+            withheld.push("txpool_stats");
         }
-        if pool_total(&admin_stats) != 1 {
-            withheld.push("/get_transaction_pool_stats");
-        }
-        let returned = admin_tx
-            .txs
-            .iter()
-            .any(|t| t.tx_hash.as_bytes() == txid.as_bytes());
-        if !returned || !admin_tx.missed_tx.is_empty() {
-            withheld.push("/get_transactions");
+        if !matches!(admin_tx, Slot::Item(_)) {
+            withheld.push("tx_list");
         }
         assert!(
             withheld.is_empty(),
-            "the unrestricted listener must show the held transaction {hex_id} on \
-             every pool read, and did not on: {withheld:?}"
+            "the host must be shown the held transaction {hex_id} on every pool \
+             read, and was not on: {withheld:?}"
         );
         eprintln!("attempt {attempt}: held across the reads; hidden on four, shown on four");
 
-        // The other half: hidden because it is not broadcast, not hidden
-        // whatever its state. Mine the transaction and pop the block. A
-        // popped transaction returns to the pool recorded as carried by a
-        // block, which is in the broadcast set — so the restricted listener
-        // must now show the transaction it withheld a moment ago. A listener
-        // that hid every pool transaction would pass everything above.
-        origin.generate_blocks(1, &address).await;
-        assert_eq!(
-            origin.tx_pool_size().await,
-            0,
-            "the held transaction must be mined out of the pool"
-        );
-        origin.pop_blocks(1).await;
-        let broadcast_hashes: serde_json::Value = restricted
-            .rpc_call("get_transaction_pool_hashes", None::<serde_json::Value>)
-            .await
-            .expect("restricted /get_transaction_pool_hashes after the pop");
-        let broadcast_tx: shekyl_rpc_types::GetTransactionsResponse = restricted
-            .rpc_call("get_transactions", Some(json!({ "txs_hashes": [hex_id] })))
-            .await
-            .expect("restricted /get_transactions after the pop");
-        assert!(
-            pool_hashes(&broadcast_hashes).contains(&hex_id),
-            "once the transaction is in the broadcast set a restricted listener \
-             must name it; if it does not, the listener hides the pool wholesale \
-             and the assertions above proved nothing about the flag"
-        );
-        assert!(
-            broadcast_tx
-                .txs
-                .iter()
-                .any(|t| t.tx_hash.as_bytes() == txid.as_bytes()),
-            "once the transaction is in the broadcast set a restricted listener \
-             must return it by hash; got {broadcast_tx:?}"
-        );
+        // The stem reached the sink, a second daemon, over p2p after the
+        // handshake: it admitted the peer-delivered transaction to its own
+        // pool (brief §5, "admitted and relayed after the handshake").
+        let sink = pair.sink();
+        let admitted_by = Instant::now() + Duration::from_secs(20);
+        loop {
+            if matches!(tx_slot(&sink.rpc, txid).await, Slot::Item(_)) {
+                break;
+            }
+            if Instant::now() >= admitted_by {
+                sink.panic_with_log(
+                    "the sink did not admit the transaction its peer stemmed to it",
+                    format!("{hex_id} not in its pool after 20 s"),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        eprintln!("attempt {attempt}: the sink admitted the stemmed transaction");
+
+        // The other half, that a restricted listener names what the node
+        // shows, is `restricted_listener_names_a_transaction_this_node_shows`
+        // below: the C++ rig mined this transaction and popped the block so
+        // it came back carried, which is public, but the Rust template lists
+        // only what the node shows (criterion 2), so a stem-phase entry is
+        // not mined and that lever is gone. The entry joins the broadcast
+        // set when an embargo ends, which is the relay owner's (the record,
+        // "Stem, fluff, embargo and arrival connector are the relay
+        // owner's"); on the flip binary neither this node's nor the sink's
+        // ended within 600 s of the stem (2026-10-29), a finding carried in
+        // FOLLOWUPS, so this test does not wait on it.
         return;
     }
     origin.panic_with_log(
@@ -632,51 +552,78 @@ async fn restricted_listener_hides_a_transaction_this_node_has_not_broadcast() {
     );
 }
 
-/// The console commands that read `get_info` answer on the daemon's **own**
-/// console.
-///
-/// RK-5c's half of the gate above. `get_info` is served in Rust, and seven
-/// console commands read it. Four were already rendered in Rust over a
-/// bridged leg and now call the method directly; three — `diff`, `version`
-/// and `print_pool_stats` — were rendered in C++ by calling the handler,
-/// and moved because that handler is deleted next.
-///
-/// On the in-process arm nothing crosses HTTP: the console calls the native
-/// method over the live core, with full disclosure, since the operator at
-/// the daemon's own console is the host's administrator. What this pins is
-/// that each command reaches that core and renders its own text rather than
-/// a transport failure — the failure RK-4c shipped, silently, because
-/// nothing exercised this arm.
-///
-/// `print_pool_stats` also reads `/get_transaction_pool_stats`, which is
-/// still served from the C++ dispatch table (RK-6). That bridged leg is
-/// covered here so that the slice which deletes the route turns this red.
-#[tokio::test]
+/// The positive control for the test above: a restricted listener names a
+/// transaction the node shows. An offline node has no route, so its own
+/// transaction is shown the moment it is admitted (RD's NoRoute fluff at
+/// the origin), and every pool read on the restricted listener carries it:
+/// the hiding above is the flag, not the listener hiding the pool
+/// wholesale.
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn get_info_console_commands_answer_on_the_in_process_arm() {
-    let mut daemon = RegtestDaemon::start_with_console().await;
-    let info: GetInfoResponse = daemon
-        .rpc()
-        .json_rpc_call("get_info", None)
+async fn restricted_listener_names_a_transaction_this_node_shows() {
+    use shekyl_units::AtomicUnits;
+
+    const MINE_BATCH_BLOCKS: u64 = 10;
+    const MAX_MINE_BATCHES: usize = 24;
+
+    let seed = [0x5fu8; shekyl_crypto_pq::account::SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed_with_restricted_listener(&seed).await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
         .await
-        .expect("get_info");
-    let top_hash = hex::encode(info.health.top_block_hash.to_bytes());
-    let version = info
-        .node
-        .shown()
-        .expect("the harness's own listener is shown Status")
-        .version
-        .clone();
+        .expect("restricted rpc client");
+    let (wallet, _tmp, address) = mainnet_wallet(daemon.rpc_port(), 0x5f).await;
+    let arc = Arc::new(RwLock::new(wallet));
+    mine_until_spendable(&daemon, &arc, MINE_BATCH_BLOCKS, MAX_MINE_BATCHES).await;
+
+    let amount = AtomicUnits::from_raw(spendable_balance(&arc).await.to_raw() / 4);
+    let txid = submit_transfer(
+        &daemon,
+        &arc,
+        crate::engine::pending::TxDestination::Address(address),
+        amount,
+        MINE_BATCH_BLOCKS,
+        MAX_MINE_BATCHES,
+    )
+    .await;
+    let hex_id = hex::encode(txid.as_bytes());
+
+    assert!(
+        pool_lists(&restricted, txid).await,
+        "a restricted listener names a transaction the node shows ({hex_id})"
+    );
+    let stats = restricted
+        .call::<wire::TxpoolStats>(NoParams)
+        .await
+        .expect("restricted txpool_stats");
+    assert_eq!(
+        stats.count.0, 1,
+        "the restricted stats count the shown transaction; got {stats:?}"
+    );
+    let by_id = tx_slot(&restricted, txid).await;
+    assert!(
+        matches!(by_id, Slot::Item(_)),
+        "a restricted listener returns a shown transaction by id; got {by_id:?}"
+    );
+}
+
+/// `daemon status`, `chain difficulty`, `version` and `txpool stats`
+/// answer through `shekyl-cli` on an offline regtest daemon.
+#[tokio::test]
+#[ignore = "requires SHEKYLD_BIN and SHEKYL_CLI_BIN; spawns a live daemon"]
+async fn daemon_words_answer_through_shekyl_cli() {
+    let daemon = RegtestDaemon::start().await;
+    let top_hash = daemon.top_block_hash().await;
+    let version = daemon.version().await;
     assert!(!version.is_empty(), "the daemon reports a version");
 
-    let out = daemon.console("status");
+    let out = daemon.console("daemon status");
     assert!(
-        out.contains("Height: 1/1 (100.0%)") && out.contains("uptime"),
+        out.contains("Block count: 1/1 (100.0%)") && out.contains("uptime"),
         "the in-process status line must read the live core, start time \
          included; got:\n{out}"
     );
 
-    let out = daemon.console("diff");
+    let out = daemon.console("chain difficulty");
     assert!(
         out.contains(&format!("BH: 1, TH: {top_hash}, DIFF: ")),
         "the in-process diff must name the live tip; got:\n{out}"
@@ -689,14 +636,19 @@ async fn get_info_console_commands_answer_on_the_in_process_arm() {
          ({version}); got:\n{out}"
     );
 
-    let out = daemon.console("print_pool_stats");
+    let out = daemon.console("txpool stats");
     assert!(
-        out.contains("0 tx(es), 0 bytes total") && out.contains("no backlog"),
+        out.contains("0 tx(es), 0 weight total") && out.contains("no backlog"),
         "the in-process print_pool_stats must render an empty pool from both \
          of its legs; got:\n{out}"
     );
 
-    for command in ["status", "diff", "version", "print_pool_stats"] {
+    for command in [
+        "daemon status",
+        "chain difficulty",
+        "version",
+        "txpool stats",
+    ] {
         let out = daemon.console(command);
         assert!(
             !out.contains("no reply") && !out.contains("console command failed"),
@@ -704,3 +656,6 @@ async fn get_info_console_commands_answer_on_the_in_process_arm() {
         );
     }
 }
+
+#[path = "regtest_e2e_embargo.rs"]
+mod embargo;

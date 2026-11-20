@@ -3,7 +3,7 @@
 //! Verifies `sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit`
 //! over curve25519 commitments. The commitment-sum arithmetic and the
 //! typed-side cleartext terms are **single-sourced** in
-//! [`shekyl_ct_balance`](shekyl_ct_balance) (the same definitions construct
+//! [`shekyl_ct_balance`] (the same definitions construct
 //! uses, so construct and verify cannot diverge —
 //! `docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2 / §11.1 Q2). This module
 //! adds only the bond-specific term posture, and encodes it in a type: the

@@ -70,7 +70,7 @@ reconstitutes what was moved.
 
 ## Carve-outs, and why they are not exceptions
 
-**The compiled seed list** (`src/p2p/net_node.inl`, `get_seed_nodes`) is
+**The compiled seed list** (`rust/shekyl-dialer/src/seeds.rs`, `seeds`) is
 shipped protocol data. Every node binary contains these addresses;
 bootstrap does not work without them. They are public by necessity, and
 removing them from the source would not unpublish them. **Their

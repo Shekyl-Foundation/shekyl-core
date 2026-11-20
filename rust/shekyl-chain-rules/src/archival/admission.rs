@@ -51,6 +51,28 @@ pub struct AdmissionPlan {
     issued_short: u32,
     revealed: Vec<BlockHeight>,
     epochs: Vec<EpochIssues>,
+    support: Vec<SupportIssue>,
+}
+
+/// One support draw an admitted bundle issued, as
+/// `archival_support_issued[(epoch(h), P, h, j)]` holds it: the shard it
+/// selected and whether the bundle passed it (`ARCHIVAL_SUPPORT_DRAW.md`
+/// §3; the switch's C5). `j` is the draw's place in the bundle's support
+/// bitmap. Writes no serve credit and folds into no digest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportIssue {
+    /// `epoch(h)`.
+    pub epoch: SettlementEpoch,
+    /// The complete tree drawn.
+    pub persona: PCanonicalId,
+    /// The block that issued the draw: the bundle's `h`.
+    pub issuing_height: BlockHeight,
+    /// The draw's place in the support bitmap.
+    pub draw: u32,
+    /// The shard it selected.
+    pub shard: ShardId,
+    /// Whether the bundle passed it.
+    pub passed: bool,
 }
 
 /// The issued draws of one epoch, and the digest terms those draws fold.
@@ -71,6 +93,13 @@ impl AdmissionPlan {
     #[must_use]
     pub fn revealed(&self) -> &[BlockHeight] {
         &self.revealed
+    }
+
+    /// The support draws the bundles issued, in bundle order and then
+    /// bitmap order.
+    #[must_use]
+    pub fn support(&self) -> &[SupportIssue] {
+        &self.support
     }
 
     /// Issued draws grouped by the epoch of the block that drew them.
@@ -144,6 +173,7 @@ pub fn admission_plan(
     let mut revealed = BTreeSet::new();
     let mut counted: BTreeMap<(PCanonicalId, ShardId), u32> = BTreeMap::new();
     let mut by_epoch: BTreeMap<SettlementEpoch, Vec<IndexedDraw>> = BTreeMap::new();
+    let mut support = Vec::new();
 
     for bundle in admitted {
         let h = bundle.kept.h;
@@ -151,6 +181,17 @@ pub fn admission_plan(
             return Err(AdmissionPlanFault::RepeatedReveal { height: h });
         }
         let draw_epoch = schedule.epoch_at(h);
+        // The support stream's rows, from the same bundle and the same `h`
+        // as its economy rows: issued into `epoch(h)`, not the including
+        // block's epoch.
+        support.extend(bundle.support.iter().map(|seat| SupportIssue {
+            epoch: draw_epoch,
+            persona: seat.persona,
+            issuing_height: h,
+            draw: seat.draw,
+            shard: seat.shard,
+            passed: seat.passed,
+        }));
         let same_epoch = draw_epoch == epoch;
         for (ordinal, draw) in bundle.draws.iter().enumerate() {
             let j = u32::try_from(ordinal).map_err(|_| AdmissionPlanFault::OrdinalPastWidth)?;
@@ -194,6 +235,7 @@ pub fn admission_plan(
             .into_iter()
             .map(|(epoch, draws)| EpochIssues { epoch, draws })
             .collect(),
+        support,
     })
 }
 

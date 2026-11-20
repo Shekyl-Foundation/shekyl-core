@@ -26,7 +26,7 @@ pub enum TransferState {
     /// proven by this wallet. The money is on chain and the row names the
     /// sender's transaction (`tx_hash`); it is excluded from every
     /// spendable balance (rule 82: a failure mode is first-class, not a
-    /// log line). `unspendable_reason` says which half failed.
+    /// log line). `unspendable_reason` names which check failed.
     Unspendable,
     /// Terminal failure: daemon refused the dispatch; the tx never mined
     /// (OUTGOING journal `TerminalRejected` only — rule 82 failed-send history).

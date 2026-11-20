@@ -41,7 +41,7 @@
 //! What is real: the miner's keys and the coinbase that paid them (`0x06`
 //! KEM ciphertext, `0x07` leaf entry), recovered by the production scanner
 //! (`recover_combined_ss`, `scan_output`, `compute_output_key_image`); the
-//! path (`assemble_path`); the signature and the wire bytes (`open_spend`,
+//! path (`assemble_paths`); the signature and the wire bytes (`open_spend`,
 //! over proofs from `sign_transaction_with_terms`). Nothing is a filler
 //! point or a conforming blob.
 //!
@@ -64,6 +64,10 @@
 #![forbid(unsafe_code)]
 
 pub mod bond;
+pub mod captured;
+mod draw;
+#[cfg(feature = "seeded-rng")]
+mod drawn;
 pub mod persona;
 mod spender;
 
@@ -72,6 +76,10 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::{Block, Input, Transaction};
 
 pub use bond::PostedBond;
+#[cfg(feature = "seeded-rng")]
+pub use draw::{SpendPlan, SpendSeeds};
+#[cfg(feature = "seeded-rng")]
+pub use drawn::Drawn;
 pub use persona::{complete_tree, shard_set, Persona};
 pub use shekyl_chain_rules::newest_admissible_reference;
 pub use shekyl_harness_wallet::{MinerWallet, Owner, Recipient};

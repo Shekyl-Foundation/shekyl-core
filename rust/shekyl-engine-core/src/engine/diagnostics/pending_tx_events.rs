@@ -52,11 +52,15 @@ pub enum BuildErrorKind {
     /// Recipient failed validation (zero amount, malformed address).
     InvalidRecipient,
 
-    /// Snapshot failed well-formedness, or Custom is out of band.
+    /// The daemon's fee snapshot failed well-formedness.
     FeeRefused,
 
     /// Output coverage cannot meet amount + fee.
     InsufficientFunds,
+
+    /// The spend needs more inputs, or the request more outputs, than one
+    /// transaction may carry (`MAX_INPUTS`, `MAX_OUTPUTS`).
+    TransactionTooLarge,
 
     /// The configured `Signer` surface is unavailable (e.g., HW
     /// signer disconnected; cooperative-signing peer offline).
@@ -91,7 +95,7 @@ pub enum BuildErrorKind {
     /// A precondition the build relies on failed, or proof / signature
     /// construction did — a bug, never a state the request put the wallet
     /// in. Mirrors [`SendError::BuildInvariant`](crate::engine::error::SendError::BuildInvariant)
-    /// and [`SendError::Tx`](crate::engine::error::SendError::Tx).
+    /// and [`SendError::Sign`](crate::engine::error::SendError::Sign).
     InternalInvariant,
 
     /// The wallet has the balance but the FCMP++ curve tree is still
@@ -134,7 +138,7 @@ pub enum BuildErrorKind {
 ///   [`TxRecipient`](crate::engine::pending::TxRecipient) entries in the
 ///   request.
 /// - `priority` — the requested
-///   [`FeePriority`](crate::engine::pending::FeePriority) tier (already
+///   [`FeePriority`] tier (already
 ///   public-API by virtue of being on the caller-facing request).
 ///
 /// Bounded numeric + bounded enum projections; no caller-attacker
@@ -220,37 +224,56 @@ pub enum DiscardReason {
 /// enum, no `String` payload (PR 4 §5.4.7 R6 memory-amplifier closure
 /// carries to the watchdog stream verbatim).
 ///
-/// The first four variants project the kernel's decision surface
-/// ([`AlarmReason`](crate::engine::submit_watchdog::AlarmReason) plus the two
-/// driver-level conditions the kernel cannot represent). The
-/// `#[non_exhaustive]` discipline lets the F40 re-scan executor add its
-/// own alarm reasons additively.
-#[non_exhaustive]
+/// The kernel's reasons come first. The last three are driver-level
+/// conditions the kernel cannot represent.
+///
+/// Exhaustive on purpose: since A19 each reason reaches the user through
+/// the wallet contract (`tx_alarm`), and a reason the contract had to fold
+/// into a catch-all would tell the user nothing. A new reason is a new
+/// contract keyword in the same change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WatchdogAlarmReason {
-    /// The probe found the tx present-but-unconfirmed past the escape
-    /// horizon: repeating the resubmit is pointless (F31), and the
-    /// censoring / eclipse case (§7.5) lands exactly here. Projects
-    /// [`AlarmReason::PresentButUnconfirmedPastHorizon`](crate::engine::submit_watchdog::AlarmReason::PresentButUnconfirmedPastHorizon).
-    PresentButUnconfirmedPastHorizon,
+    /// The daemon still holds the transaction past its own publication
+    /// budget. Projects
+    /// [`AlarmReason::HeldOverdue`](crate::engine::submit_watchdog::AlarmReason::HeldOverdue).
+    HeldOverdue,
 
-    /// Past horizon and the daemon reports no peers: relay is
-    /// impossible and no wallet action can fix it. Projects
+    /// Pool-resident, and the zone holds no origin row. Projects
+    /// [`AlarmReason::OriginUntracked`](crate::engine::submit_watchdog::AlarmReason::OriginUntracked).
+    OriginUntracked,
+
+    /// Published, and unmined past the fee ladder's lookback, measured
+    /// from the first observation of publication. Projects
+    /// [`AlarmReason::PublishedUnmined`](crate::engine::submit_watchdog::AlarmReason::PublishedUnmined).
+    PublishedUnmined,
+
+    /// The daemon reports no peers: relay is impossible and no wallet
+    /// action can fix it. Projects
     /// [`AlarmReason::DaemonPeerless`](crate::engine::submit_watchdog::AlarmReason::DaemonPeerless).
     DaemonPeerless,
 
-    /// Past horizon and the daemon was started offline: it relays nothing
-    /// by configuration. Projects
+    /// The daemon was started offline: it relays nothing by
+    /// configuration. Projects
     /// [`AlarmReason::DaemonOffline`](crate::engine::submit_watchdog::AlarmReason::DaemonOffline).
     DaemonOffline,
 
     /// The kernel called for the rung-1 resubmit-same-bytes probe, but
-    /// the retained bytes are gone — a wallet restart crossed the await
-    /// (`DAEMON_SUBMIT_VERDICT.md` §5.3 decision 2, ephemeral held-bytes
-    /// store). The probe rung degrades to the operator-alarm rung,
-    /// preserving §2.6's "every exit is verdict, confirmation, or
-    /// operator alarm."
-    ProbeBytesUnavailable,
+    /// the send was dispatched before this session: a restart crossed the
+    /// await. Its bytes are saved, but resending them — perhaps to a
+    /// different daemon than the one they went to — is the user's
+    /// decision, not the watchdog's (A19; the held-bytes reversion
+    /// clause's auto-versus-confirm axis stays closed). The probe rung
+    /// becomes the operator-alarm rung, preserving §2.6's "every exit is
+    /// verdict, confirmation, or operator alarm"; the user resends
+    /// (`tx_resend`) or abandons (`abandon_tx`).
+    DispatchedBeforeThisSession,
+
+    /// The kernel called for the probe, but the held send's journal row
+    /// holds no bytes to re-offer: a `PresumedDead` row the user then
+    /// abandoned, or a confirmation pruned past the reorg margin that a
+    /// deeper reorg undid. Nothing can be resent; the user abandons the
+    /// send or waits for refresh to settle it.
+    HeldBytesMissing,
 
     /// The probe was rejected with a **retryable** cause
     /// ([`RetryableRejectCause`]: stale root / reference too recent /
@@ -278,9 +301,8 @@ pub enum WatchdogProbeOutcome {
     /// through full admission and fresh relay. The wait restarts.
     ReofferedAfterAbsence,
 
-    /// `AlreadyInPool`: present-but-unconfirmed. No relay pulse (F31);
-    /// the alarm rung follows.
-    PresentInPool,
+    /// `AlreadyInPool`. The relay state is the daemon's, passed through.
+    InPool(shekyl_rpc_client::Publication),
 
     /// `AlreadyInChain`: confirmation observed by verdict. Refresh
     /// remains the settlement authority; the wait epoch restarts.
@@ -316,7 +338,8 @@ pub enum WatchdogProbeOutcome {
 /// | `BuildAttempted` | C5 `LocalPendingTx::build` entry, after request validation. |
 /// | `BuildSucceeded` | C5 `LocalPendingTx::build` exit, after `Reservation` + `output_locks` inserted (P7-atomic). |
 /// | `BuildFailed` | C5 `LocalPendingTx::build` error paths; mapped from [`SendError`](crate::engine::error::SendError) via [`BuildErrorKind`]. |
-/// | `SubmitAttempted` | C5 `LocalPendingTx::submit` entry, after F2 ownership-boundary dispatch. |
+/// | `SubmitAttempted` | C5 `LocalPendingTx::submit`, once the dispatch record is saved and before the bytes leave. |
+/// | `SubmitNotSaved` | `LocalPendingTx::submit`, when the dispatch save failed and nothing was sent (A19). |
 /// | `SubmitSucceeded` | C5 `LocalPendingTx::submit` happy-path exit; paired with daemon-`Accepted` outcome. |
 /// | `SubmitPendingResolution` | C5 `LocalPendingTx::submit` ambiguous-daemon-outcome exit; reservation stays in `in_flight` per F2 ownership-boundary. |
 /// | `SubmitSnapshotInvalidated` | C5 `LocalPendingTx::submit` lazy-R5 staleness-check exit before daemon dispatch. |
@@ -389,6 +412,13 @@ pub enum PendingTxDiagnostic {
     /// entry after F2 ownership-boundary dispatch.
     SubmitAttempted {
         /// The reservation the consumer asked to submit.
+        reservation_id: ReservationId,
+    },
+
+    /// A19: the dispatch record could not be saved, so the submit sent
+    /// nothing; the reservation is back in `consumer_held`.
+    SubmitNotSaved {
+        /// The reservation whose submit was refused.
         reservation_id: ReservationId,
     },
 
@@ -596,7 +626,7 @@ pub enum PendingTxDiagnostic {
 /// Emit one [`PendingTxDiagnostic`] event onto the given sink.
 ///
 /// Helper parallel to the inline `sink.emit(event)` pattern PR 4's
-/// `LocalRefresh` body uses for [`RefreshDiagnostic`]; consolidating
+/// `LocalRefresh` body uses for [`RefreshDiagnostic`](crate::engine::RefreshDiagnostic); consolidating
 /// the dispatch behind a free function makes the C5 emission-site
 /// rewrites a search-and-call rather than a search-and-method-
 /// rewrite (and forecloses sink-method-name drift between the

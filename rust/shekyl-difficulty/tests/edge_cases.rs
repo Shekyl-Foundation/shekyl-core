@@ -47,7 +47,7 @@ fn genesis_short_circuit_returns_genesis_difficulty() {
         let result = lwma1_next(h(height), &[], &[]);
         assert_eq!(
             result,
-            Ok(Difficulty::from_raw(GENESIS_DIFFICULTY)),
+            Ok(Difficulty::new(GENESIS_DIFFICULTY).expect("GENESIS_DIFFICULTY > 1")),
             "chain_height = {height} must short-circuit to \
              GENESIS_DIFFICULTY (got {result:?})"
         );
@@ -60,7 +60,10 @@ fn genesis_short_circuit_ignores_inputs() {
     // inspected. A non-empty (but consensus-invalid) input must
     // still produce GENESIS_DIFFICULTY.
     let result = lwma1_next(h(0), &[ts(42), ts(43), ts(44)], &[cd(100)]);
-    assert_eq!(result, Ok(Difficulty::from_raw(GENESIS_DIFFICULTY)));
+    assert_eq!(
+        result,
+        Ok(Difficulty::new(GENESIS_DIFFICULTY).expect("GENESIS_DIFFICULTY > 1"))
+    );
 }
 
 #[test]
@@ -141,12 +144,12 @@ fn step_8_overflow_guard_at_boundary_unguarded_branch() {
         .expect("step-8 at-boundary (unguarded) must compute");
     // Sanity: result is positive and bounded by a large multiple
     // of the input avg_D (no wraparound).
-    assert!(result > Difficulty::ZERO);
+    assert!(result > Difficulty::ONE);
     let upper = threshold.checked_mul(10).expect(
         "sanity-check upper bound (10 * threshold) must fit in u128 \
          for the pinned consensus parameters",
     );
-    assert!(result < Difficulty::from_raw(upper));
+    assert!(result < Difficulty::new(upper).expect("upper > 0"));
 }
 
 #[test]
@@ -171,7 +174,7 @@ fn step_8_overflow_guard_just_above_threshold_guarded_branch() {
         .collect();
     let result = lwma1_next(h(N), &timestamps, &cumulative)
         .expect("step-8 just-above-threshold (guarded) must compute");
-    assert!(result > Difficulty::ZERO);
+    assert!(result > Difficulty::ONE);
 }
 
 #[test]
@@ -216,8 +219,8 @@ fn solvetime_one_negative_t_regression() {
     let result =
         lwma1_next(h(N), &timestamps, &cumulative).expect("solvetime[1] = -T must compute");
     assert!(
-        result > Difficulty::ZERO,
-        "regression must not overflow or zero out"
+        result > Difficulty::ONE,
+        "regression must not overflow or fall to the floor"
     );
 }
 

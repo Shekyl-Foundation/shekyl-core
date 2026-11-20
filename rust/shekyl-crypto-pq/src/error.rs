@@ -27,8 +27,8 @@ pub enum CryptoError {
     SerializationError(String),
 }
 
-/// Error codes returned by `verify_multisig` and exposed via FFI debug function.
-/// Each variant maps to one of the 10 adversarial checks.
+/// Why a `pqc_auth` slot is refused: the multisig checks of
+/// `verify_multisig` and the parse and signature refusals both schemes share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[repr(u8)]
 pub enum PqcVerifyError {
@@ -56,15 +56,26 @@ pub enum PqcVerifyError {
     #[error("duplicate keys in multisig group")]
     DuplicateKeys = 8,
 
-    // Discriminant 9 (the former GroupIdMismatch, "check 9") is **retired**: E′
-    // deleted the group_id check — the group's identity is the address
-    // fingerprint (`shekyl-address`), not a per-output container hash, and the
-    // check recomputed the id from the same blob the leaf already binds. The FFI
-    // error-code space (`shekyl_pqc_verify`, codes 1–11) keeps 9 unused so 10/11
-    // do not shift under existing C++ consumers.
+    // Discriminant 9 (the former GroupIdMismatch) is **retired**: E′ deleted
+    // the group_id check — the group's identity is the address fingerprint
+    // (`shekyl-address`), not a per-output container hash. The numbers are
+    // stable names for a refusal, so a retired one is never given a new
+    // meaning.
     #[error("cryptographic signature verification failed")]
     CryptoVerifyFailed = 10,
 
     #[error("deserialization of key or signature blob failed")]
     DeserializationFailed = 11,
+
+    #[error("multisig container version is not 0x02")]
+    ContainerVersion = 12,
+
+    #[error("a revealed multisig key does not hash to the committed hash at its index")]
+    KeyHashMismatch = 13,
+
+    #[error("multisig signer bitmap names a non-member or does not have m bits set")]
+    SignerBitmap = 14,
+
+    #[error("signature blob's signer indices are not the key blob's signer bitmap")]
+    SignerListMismatch = 15,
 }

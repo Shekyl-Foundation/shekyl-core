@@ -1,0 +1,58 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# cargo-nextest settings for this workspace. nextest reads this file from
+# `.config/nextest.toml` under the workspace root. The `default` profile is
+# nextest's own and is left unchanged for local runs.
+#
+# CI's Rust job runs the workspace tests with `--profile ci`
+# (`.github/workflows/rust-audit-test.yml`). nextest runs each test in its
+# own process and runs tests from every test binary at once; `cargo test`
+# ran the binaries one after another, so a slow binary held the whole step.
+
+[profile.ci]
+# Run every test and report every failure, not just the first.
+fail-fast = false
+# A failing test runs once more. A test that then passes does not fail the
+# run, and it is not hidden either: `scripts/ci/nextest_report.py` lists
+# it under "Flaky" in the job summary and raises a warning on the pull
+# request. A test that fails both times fails the run.
+retries = 1
+# Name a test that is still running after a minute, again each minute, and
+# kill it at the thirtieth. The kill is a failure, so the retry above runs
+# it once more: a hung test fails by name within an hour, not at the job's
+# timeout five hours on. Thirty is about twice the slowest green tests
+# seen: in #1285's run (2026-11-07), with every binary running at once,
+# six tests took 11m49s to 14m40s.
+slow-timeout = { period = "60s", terminate-after = 30 }
+# The closing summary lists slow tests as well as failures, so the run
+# names the tests that set the step's length.
+final-status-level = "slow"
+# A failing test's output is printed when it fails and again after the
+# summary, where it is easy to find.
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml, with each test's time. The Rust
+# job uploads it.
+path = "junit.xml"
+
+# The trybuild harnesses whose programs compile a whole dependency tree
+# (chain-rules, mempool, crypto-pq) are `#[ignore]`d and run by the
+# nightly `trybuild-ignored` lane (scripts/ci/ignored_set_trybuild.sh);
+# the one left in this run (shekyl-logging's) checks little and needs no
+# slot of its own.
+
+# The hasher's shell tests (shekyl-hasher src/shell_tests.rs) derive real
+# RandomX caches, 256 MiB each, and one test holds up to three: 768 MiB.
+# nextest runs each test in its own process, so the in-binary lock those
+# tests take does not serialise them here; this group does, in every
+# profile (the `default` profile's overrides apply to `ci` too).
+[test-groups]
+hasher-shell = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(shekyl-hasher) & test(/^shell_tests::/)'
+test-group = 'hasher-shell'

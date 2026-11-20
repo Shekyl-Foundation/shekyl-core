@@ -8,12 +8,13 @@
 use std::sync::Arc;
 
 use shekyl_p_transport::{PTorClient, PTransportError, TorSocksEndpoint};
-use shekyl_rpc_client::{RejectCause, Rpc, SubmitVerdict};
+use shekyl_rpc_client::{Rejection, Rpc, Verdict};
 use shekyl_types::PCanonicalId;
 use shekyl_wire::Transaction;
 
 use super::bond_assembly::PBoundBytes;
-use super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
+use super::dispatch_durability::DurableTxBytes;
+use super::error::{AmbiguousErrorKind, CenRowName, RetryableRejectCause, TerminalErrorKind};
 use super::pending::TxHash;
 use super::posture::BroadcastPosture;
 use super::prpc::PRpc;
@@ -180,7 +181,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
     canonical_tx_id_opt(tx_bytes).expect("wallet-built tx_bytes parse as canonical shekyl-wire")
 }
 
-/// Map a daemon [`SubmitVerdict`] onto a [`TxSubmitOutcome`]
+/// Map a daemon [`Verdict`] onto a [`TxSubmitOutcome`]
 /// (`DAEMON_SUBMIT_VERDICT.md` §2.1 → wallet projection).
 ///
 /// `hash` is the **locally**-computed transaction id; the daemon reply
@@ -191,7 +192,7 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// A 1:1 structural mapping by design: the daemon's Rust admission
 /// engine computes the verdict atomically at commit-check time, so
 /// there is no client-side flag triage left to do (the legacy
-/// `send_raw_transaction` boolean-flag collapse this function used to
+/// `tx_submit` boolean-flag collapse this function used to
 /// perform is deleted with that endpoint). The per-cause *dispositions*
 /// (§2.5) are applied downstream via [`outcome_to_result`] and the
 /// orchestrator's finalizers, keeping mapping and policy separable.
@@ -199,18 +200,20 @@ pub(crate) fn canonical_tx_id(tx_bytes: &[u8]) -> TxHash {
 /// Transport-agnostic: shared by the principal `DaemonClient` and the
 /// per-`P` [`PTransactionSubmitter`] (SP-T4a) — a daemon verdict is
 /// interpreted the same regardless of which circuit carried it.
-pub(crate) fn submit_outcome_from_verdict(
-    verdict: &SubmitVerdict,
-    hash: TxHash,
-) -> TxSubmitOutcome {
+pub(crate) fn submit_outcome_from_verdict(verdict: &Verdict, hash: TxHash) -> TxSubmitOutcome {
     match verdict {
-        SubmitVerdict::Accepted => TxSubmitOutcome::Submitted { hash },
-        SubmitVerdict::AlreadyInPool => TxSubmitOutcome::AlreadyInPool { hash },
-        SubmitVerdict::AlreadyInChain { height } => TxSubmitOutcome::AlreadyInChain {
+        Verdict::Accepted => TxSubmitOutcome::Submitted { hash },
+        Verdict::AlreadyInPool { publication } => TxSubmitOutcome::AlreadyInPool {
             hash,
-            height: *height,
+            relay: *publication,
         },
-        SubmitVerdict::Rejected { cause } => TxSubmitOutcome::Rejected { cause: *cause },
+        Verdict::AlreadyInChain { mined_height } => TxSubmitOutcome::AlreadyInChain {
+            hash,
+            height: mined_height.0,
+        },
+        Verdict::Rejected { cause } => TxSubmitOutcome::Rejected {
+            cause: cause.clone(),
+        },
     }
 }
 
@@ -244,40 +247,50 @@ pub(crate) fn outcome_to_result(outcome: TxSubmitOutcome) -> Result<SubmitSucces
             hash,
             kind: BroadcastKind::Accepted,
         }),
-        TxSubmitOutcome::AlreadyInPool { hash } => Ok(SubmitSuccess::Broadcast {
+        TxSubmitOutcome::AlreadyInPool { hash, .. } => Ok(SubmitSuccess::Broadcast {
             hash,
             kind: BroadcastKind::AlreadyInPool,
         }),
         TxSubmitOutcome::AlreadyInChain { hash, height } => {
             Ok(SubmitSuccess::AlreadyInChain { hash, height })
         }
-        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(cause)),
+        TxSubmitOutcome::Rejected { cause } => Err(submitter_error_from_cause(&cause)),
     }
 }
 
-/// Split a [`RejectCause`] into the terminal / retryable error classes
+/// Split a [`Rejection`] into the terminal / retryable error classes
 /// per the §2.5 disposition table. Factored out of [`outcome_to_result`]
 /// so the cause→class mapping is a single, testable site.
-fn submitter_error_from_cause(cause: RejectCause) -> SubmitterError {
+fn submitter_error_from_cause(cause: &Rejection) -> SubmitterError {
     let terminal = |kind| SubmitterError::RejectedTerminal { kind };
     let retryable = |cause| SubmitterError::RejectedRetryable { cause };
     match cause {
-        RejectCause::Malformed => terminal(TerminalErrorKind::Malformed),
-        RejectCause::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
-        RejectCause::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
-        RejectCause::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
-        RejectCause::JoinMarketUnsupported => terminal(TerminalErrorKind::JoinMarketUnsupported),
-        RejectCause::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
-        RejectCause::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
-        RejectCause::ReferenceNotFound => retryable(RetryableRejectCause::ReferenceNotFound),
+        Rejection::Malformed => terminal(TerminalErrorKind::Malformed),
+        // Terminal with its row, which rides inside the cause (IG-Q76). A
+        // row this wallet cannot carry whole takes the fail-safe
+        // disposition.
+        Rejection::ConsensusRule(row) => match CenRowName::parse(&row.0) {
+            Some(row) => terminal(TerminalErrorKind::ConsensusRule { row }),
+            None => terminal(TerminalErrorKind::Unrecognized),
+        },
+        Rejection::FeeTooLow => terminal(TerminalErrorKind::FeeTooLow),
+        Rejection::DoubleSpendConflict => terminal(TerminalErrorKind::DoubleSpend),
+        Rejection::Unrecognized => terminal(TerminalErrorKind::Unrecognized),
+        Rejection::StaleRoot => retryable(RetryableRejectCause::StaleRoot),
+        Rejection::ReferenceTooRecent => retryable(RetryableRejectCause::ReferenceTooRecent),
+        Rejection::ReferenceUnknown => retryable(RetryableRejectCause::ReferenceNotFound),
     }
 }
 
 /// Broadcast signed transaction bytes to the network.
+///
+/// Takes [`DurableTxBytes`], not raw bytes: a caller can only hand over
+/// bytes whose record is already durably on disk
+/// ([`dispatch_durability`](super::dispatch_durability), A19).
 pub(crate) trait TransactionSubmitter: Send + Sync + 'static {
     fn submit(
         &self,
-        tx_bytes: Vec<u8>,
+        tx: DurableTxBytes,
     ) -> impl std::future::Future<Output = Result<SubmitSuccess, SubmitterError>> + Send;
 }
 
@@ -296,7 +309,8 @@ impl<D> TransactionSubmitter for DaemonTransactionSubmitter<D>
 where
     D: DaemonEngine,
 {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Debug-only consistency guard: the `DaemonEngine` impl's accept outcome must
         // carry the same hash this computes locally. Computed only in debug builds so
         // release does no extra parse. Graceful on a malformed blob (the daemon path
@@ -307,8 +321,17 @@ where
             .daemon
             .submit_transaction(tx_bytes)
             .await
-            .map_err(|_| SubmitterError::Ambiguous {
-                kind: AmbiguousErrorKind::DaemonUnavailable,
+            .map_err(|error| {
+                // The verdict's absence is ambiguous to the caller (Two
+                // Generals), but what the transport saw is not a secret:
+                // the log says it, so an operator reading "unavailable"
+                // can tell a refused connection from a reply that was not
+                // a verdict.
+                let error: crate::engine::error::IoError = error.into();
+                tracing::warn!(%error, "submit: the daemon gave no verdict");
+                SubmitterError::Ambiguous {
+                    kind: AmbiguousErrorKind::DaemonUnavailable,
+                }
             })?;
         // The typed verdict carries NO txid field — neither path reads an id back from
         // the daemon (identity is always locally computed, anti-untrusted-daemon).
@@ -318,7 +341,7 @@ where
         // own locally-computed hash straight into the shared mapper, nothing to check.
         #[cfg(debug_assertions)]
         if let TxSubmitOutcome::Submitted { hash }
-        | TxSubmitOutcome::AlreadyInPool { hash }
+        | TxSubmitOutcome::AlreadyInPool { hash, .. }
         | TxSubmitOutcome::AlreadyInChain { hash, .. } = &outcome
         {
             debug_assert_eq!(
@@ -381,7 +404,8 @@ impl PTransactionSubmitter {
 }
 
 impl TransactionSubmitter for PTransactionSubmitter {
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
+        let tx_bytes = tx.into_bytes();
         // Local, fail-closed tx id. The bytes are a wallet-built, fully-assembled
         // signed transaction (for the bond path, the tx carrying the bond vin), so a
         // parse failure is a build-path defect — map it to the same `Malformed`
@@ -448,6 +472,61 @@ pub(crate) enum BroadcastSubmitError {
     /// The pairing was sound; the delegated submit failed.
     #[error(transparent)]
     Submit(#[from] SubmitterError),
+    /// The pending-store save that would seal these bytes failed, or was
+    /// applied and its durability not confirmed
+    /// ([`super::error::PersistenceError`] says which and names the fix).
+    /// Nothing was sent, and the seal was taken back
+    /// ([`PendingPostStore::seal_reporting`](super::pscan::dispatch::PendingPostStore::seal_reporting)).
+    #[error("nothing was sent: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
+}
+
+/// A [`PBoundBytes`] whose record is
+/// durable enough to broadcast.
+///
+/// [`Self::Fresh`] carries the durability the pending-store save just
+/// returned. [`Self::Loaded`] is a record read back from that store while a
+/// save of it confirmed in this process covered it.
+pub(crate) enum BoundForSend {
+    /// Sealed by the save that returned this durability.
+    Fresh(PBoundBytes, shekyl_engine_file::Durability),
+    /// Read back from the pending store, under its coverage.
+    Loaded(super::bond_assembly::LoadedSeal),
+}
+
+impl BoundForSend {
+    /// The persona these bytes are bound to.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        match self {
+            Self::Fresh(bound, _) => bound.persona(),
+            Self::Loaded(seal) => seal.persona(),
+        }
+    }
+
+    /// The transaction bytes, before the hand-off consumes them.
+    ///
+    /// Test broadcasts record the bytes they were handed. Production
+    /// reads them through [`Self::into_durable`].
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Fresh(bound, _) => bound.bytes(),
+            Self::Loaded(seal) => seal.bytes(),
+        }
+    }
+
+    fn into_durable(
+        self,
+    ) -> Result<super::dispatch_durability::DurableTxBytes, super::error::PersistenceError> {
+        match self {
+            Self::Fresh(bound, durability) => {
+                super::dispatch_durability::DurableTxBytes::from_fresh_seal(bound, durability)
+            }
+            Self::Loaded(seal) => {
+                Ok(super::dispatch_durability::DurableTxBytes::from_loaded_seal(seal))
+            }
+        }
+    }
 }
 
 /// Tor's conventional local SOCKS port. A **placeholder** feeding
@@ -463,7 +542,7 @@ const TOR_SOCKS_PLACEHOLDER_PORT: u16 = 9050;
 /// `ThirdParty` variant (invariant B), so this enum states the closed set for
 /// free where a boxed `dyn` shim would pay allocation to erase it.
 /// Match-delegation is output-agnostic (§3.1 part 5): it carries through the
-/// `SubmitVerdict` reshapes unchanged, and "both submitters share the
+/// `Verdict` reshapes unchanged, and "both submitters share the
 /// mapping" is literal — one [`outcome_to_result`], two transports, one
 /// dispatch type.
 ///
@@ -558,26 +637,30 @@ impl<D: DaemonEngine> BroadcastSubmitter<D> {
     /// see the variant docs) and the bytes delegate directly.
     pub(crate) async fn submit_bound(
         &self,
-        bound: PBoundBytes,
+        handoff: BoundForSend,
     ) -> Result<SubmitSuccess, BroadcastSubmitError> {
         if let Self::PerP(submitter) = self {
-            if bound.persona() != submitter.persona() {
+            if handoff.persona() != submitter.persona() {
                 debug_assert!(
                     false,
                     "submit_bound: bytes bound to {:?} handed to a submitter bound to {:?} — \
                      a P-bound tx must be dispatched through the submitter constructed for \
                      its own persona (§3.1 part 4; the P-1 single-mint-site pin makes this \
                      unreachable from production flow)",
-                    bound.persona(),
+                    handoff.persona(),
                     submitter.persona(),
                 );
                 return Err(BroadcastSubmitError::PersonaMismatch {
-                    bytes_persona: *bound.persona(),
+                    bytes_persona: *handoff.persona(),
                     submitter_persona: *submitter.persona(),
                 });
             }
         }
-        Ok(self.submit(bound.into_bytes()).await?)
+        let tx = handoff.into_durable().map_err(|error| {
+            tracing::warn!(%error, "submit_bound: the seal was not confirmed; nothing was sent");
+            BroadcastSubmitError::SealNotSaved(error)
+        })?;
+        Ok(self.submit(tx).await?)
     }
 }
 
@@ -587,396 +670,14 @@ impl<D: DaemonEngine> TransactionSubmitter for BroadcastSubmitter<D> {
     /// (the shared verdict mapping, the watchdog probe rung); the `P`-bound
     /// path goes through [`Self::submit_bound`], and the P-2 store-wrapped
     /// pin keeps retries on that façade.
-    async fn submit(&self, tx_bytes: Vec<u8>) -> Result<SubmitSuccess, SubmitterError> {
+    async fn submit(&self, tx: DurableTxBytes) -> Result<SubmitSuccess, SubmitterError> {
         match self {
-            Self::Local(submitter) => submitter.submit(tx_bytes).await,
-            Self::PerP(submitter) => submitter.submit(tx_bytes).await,
+            Self::Local(submitter) => submitter.submit(tx).await,
+            Self::PerP(submitter) => submitter.submit(tx).await,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    //! Submit-path tests: the transport-agnostic verdict → outcome →
-    //! error-class mapping regressions (`DAEMON_SUBMIT_VERDICT.md` §2.1 /
-    //! §2.5, exercised directly against `SubmitVerdict` values — no live
-    //! daemon), plus the per-`P` `PTransactionSubmitter`'s
-    //! ambiguous-failure + username-non-leak proof (SP-T4a).
-    use super::*;
-
-    /// Every identity-bearing verdict maps 1:1 and carries the locally
-    /// computed hash — never a daemon-supplied id.
-    #[test]
-    fn verdicts_map_structurally() {
-        let hash = TxHash::from_bytes([7u8; 32]);
-        assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::Accepted, hash),
-            TxSubmitOutcome::Submitted { hash }
-        );
-        assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInPool, hash),
-            TxSubmitOutcome::AlreadyInPool { hash }
-        );
-        assert_eq!(
-            submit_outcome_from_verdict(&SubmitVerdict::AlreadyInChain { height: 42 }, hash),
-            TxSubmitOutcome::AlreadyInChain { hash, height: 42 },
-            "the F40 height passes through the projection untouched"
-        );
-        assert_eq!(
-            submit_outcome_from_verdict(
-                &SubmitVerdict::Rejected {
-                    cause: RejectCause::Malformed
-                },
-                hash
-            ),
-            TxSubmitOutcome::Rejected {
-                cause: RejectCause::Malformed
-            }
-        );
-    }
-
-    /// All three identity-bearing outcomes resolve `Ok`, split by
-    /// lock-lifecycle disposition (§2.5): a fresh accept and a
-    /// pool-resident duplicate share the `Broadcast` **variant**
-    /// (network-exposed, F14 lock placed) and differ only in the
-    /// inform-only [`BroadcastKind`] the Engine surface projects; a
-    /// mined duplicate is the distinct `AlreadyInChain` (F40: lock
-    /// placed too, baselined at the carried `height`, which routes the
-    /// release path). All carry the locally computed hash.
-    #[test]
-    fn identity_outcomes_resolve_ok_split_by_disposition() {
-        let hash = TxHash::from_bytes([9u8; 32]);
-        assert_eq!(
-            outcome_to_result(TxSubmitOutcome::Submitted { hash }).expect("identity outcome"),
-            SubmitSuccess::Broadcast {
-                hash,
-                kind: BroadcastKind::Accepted,
-            }
-        );
-        assert_eq!(
-            outcome_to_result(TxSubmitOutcome::AlreadyInPool { hash }).expect("identity outcome"),
-            SubmitSuccess::Broadcast {
-                hash,
-                kind: BroadcastKind::AlreadyInPool,
-            },
-            "pool-resident duplicate: same Broadcast disposition, distinct inform-only kind"
-        );
-        assert_eq!(
-            outcome_to_result(TxSubmitOutcome::AlreadyInChain { hash, height: 77 })
-                .expect("identity outcome"),
-            SubmitSuccess::AlreadyInChain { hash, height: 77 }
-        );
-    }
-
-    /// Terminal causes (release + rebuild recourse) map to
-    /// `DaemonRejectedTerminal` with the matching kind.
-    #[test]
-    fn terminal_causes_map_to_terminal_kinds() {
-        for (cause, expected) in [
-            (RejectCause::Malformed, TerminalErrorKind::Malformed),
-            (RejectCause::FeeTooLow, TerminalErrorKind::FeeTooLow),
-            (
-                RejectCause::DoubleSpendConflict,
-                TerminalErrorKind::DoubleSpend,
-            ),
-            (RejectCause::Unrecognized, TerminalErrorKind::Unrecognized),
-            (
-                RejectCause::JoinMarketUnsupported,
-                TerminalErrorKind::JoinMarketUnsupported,
-            ),
-        ] {
-            let err =
-                outcome_to_result(TxSubmitOutcome::Rejected { cause }).expect_err("terminal cause");
-            assert!(
-                matches!(err, SubmitterError::RejectedTerminal { kind } if kind == expected),
-                "cause {cause:?} must map to terminal kind {expected:?}, got {err:?}"
-            );
-        }
-    }
-
-    /// Retryable causes (reservation preserved, resubmit after the
-    /// per-cause wait) map to `DaemonRejectedRetryable`.
-    #[test]
-    fn retryable_causes_map_to_retryable_class() {
-        for (cause, expected) in [
-            (RejectCause::StaleRoot, RetryableRejectCause::StaleRoot),
-            (
-                RejectCause::ReferenceTooRecent,
-                RetryableRejectCause::ReferenceTooRecent,
-            ),
-            (
-                RejectCause::ReferenceNotFound,
-                RetryableRejectCause::ReferenceNotFound,
-            ),
-        ] {
-            let err = outcome_to_result(TxSubmitOutcome::Rejected { cause })
-                .expect_err("retryable cause");
-            assert!(
-                matches!(
-                    err,
-                    SubmitterError::RejectedRetryable { cause: got } if got == expected
-                ),
-                "cause {cause:?} must map to retryable {expected:?}, got {err:?}"
-            );
-        }
-    }
-
-    /// SP-T4a axis 4 + invariant (a): a broadcast whose **transport** fails
-    /// surfaces as [`SubmitterError::Ambiguous`] — we cannot know whether it
-    /// propagated, so it is *not* a retryable transient — and the error rendering
-    /// must never leak the SOCKS username. No Tor: a closed SOCKS port (`:1`)
-    /// refuses immediately, so the `spawn_blocking` bridge + error mapping run
-    /// fast. The tx bytes are a serialized synthetic coinbase — valid wire, so the
-    /// submitter reaches the transport rather than short-circuiting on the local
-    /// parse guard (which would return `Malformed`, a different arm).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn broadcast_over_a_dead_proxy_is_a_username_free_ambiguous_error() {
-        use shekyl_p_transport::TorSocksEndpoint;
-        use shekyl_types::PCanonicalId;
-
-        use crate::engine::test_support::make_synthetic_block;
-
-        let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
-            .block
-            .miner_transaction
-            .write(&mut tx_bytes)
-            .expect("serialize synthetic coinbase to canonical wire");
-
-        let persona = PCanonicalId::from_bytes([5u8; 32]);
-        // A parallel client for the same persona: `derive_socks_user` is
-        // deterministic, so its username equals the one the submitter's
-        // internally-built transport carries.
-        let username = PTorClient::for_persona(&persona, &TorSocksEndpoint::loopback(1))
-            .expect("proxy config is well-formed")
-            .username()
-            .as_str()
-            .to_owned();
-        let submitter = PTransactionSubmitter::for_persona(
-            persona,
-            &TorSocksEndpoint::loopback(1),
-            "http://127.0.0.1:18081".to_string(),
-        )
-        .expect("proxy config is well-formed");
-
-        let err = submitter
-            .submit(tx_bytes)
-            .await
-            .expect_err("a dead SOCKS proxy must fail the broadcast");
-        assert!(
-            matches!(err, SubmitterError::Ambiguous { .. }),
-            "a broadcast transport failure is ambiguous (maybe-propagated), never a \
-             retryable transient: expected Ambiguous, got {err:?}"
-        );
-        assert!(
-            !format!("{err}").contains(&username),
-            "invariant (a): a submit error must never render the SOCKS username"
-        );
-    }
-
-    /// The local parse-guard: unparseable bytes are a build-path defect that
-    /// **never reaches the network** — `submit` short-circuits to
-    /// `RejectedTerminal { Malformed }` *before* any transport. This guards
-    /// the arm the dead-proxy test deliberately routes around (it feeds valid wire
-    /// to reach the transport). The dead SOCKS port (`:1`) is the tell: if a
-    /// refactor let the guard fall through to the network, the outcome would be
-    /// `Ambiguous`, not `Malformed` — so the assertion distinguishes
-    /// "guarded before the wire" from "reached it" (and a swap to the panicking
-    /// `canonical_tx_id` would panic here instead of returning).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn broadcast_of_unparseable_bytes_is_a_local_malformed_never_reaching_the_network() {
-        use shekyl_p_transport::TorSocksEndpoint;
-        use shekyl_types::PCanonicalId;
-
-        let submitter = PTransactionSubmitter::for_persona(
-            PCanonicalId::from_bytes([3u8; 32]),
-            &TorSocksEndpoint::loopback(1),
-            "http://127.0.0.1:18081".to_string(),
-        )
-        .expect("proxy config is well-formed");
-
-        let err = submitter
-            .submit(b"not a canonical shekyl-wire transaction".to_vec())
-            .await
-            .expect_err("unparseable bytes must fail");
-        assert!(
-            matches!(
-                err,
-                SubmitterError::RejectedTerminal {
-                    kind: TerminalErrorKind::Malformed
-                }
-            ),
-            "a build-path defect is a local Malformed terminal, never a transport \
-             outcome (would be Ambiguous if the guard fell through): got {err:?}"
-        );
-    }
-
-    // ── Posture→submitter dispatch (SP-T4a §3.1) ──
-
-    /// Canonical-wire tx bytes for dispatch tests: a serialized synthetic
-    /// coinbase, so the `DaemonTransactionSubmitter` debug hash-consistency
-    /// guard and the per-`P` parse guard are both satisfied.
-    fn wire_tx_bytes() -> Vec<u8> {
-        use crate::engine::test_support::make_synthetic_block;
-
-        let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
-            .block
-            .miner_transaction
-            .write(&mut tx_bytes)
-            .expect("serialize synthetic coinbase to canonical wire");
-        tx_bytes
-    }
-
-    fn dead_proxy_socks() -> shekyl_p_transport::TorSocksEndpoint {
-        // A closed SOCKS port (`:1`): loopback refuses immediately, so the ②
-        // arm's transport path is exercised fast with no Tor and no timeout.
-        shekyl_p_transport::TorSocksEndpoint::loopback(1)
-    }
-
-    /// The choke point's routing guard, both directions of the fence: a
-    /// `Local` posture resolves to the ① principal arm, and an `OwnRemote`
-    /// posture resolves to the ② per-`P` arm — **never** the principal
-    /// submitter (the first-seen-origin leak the dispatch closes). Fence by
-    /// enumeration: the match names every variant, no catch-all, so a new
-    /// arm cannot slip through unasserted.
-    #[tokio::test]
-    async fn choke_point_routes_each_posture_to_its_own_arm() {
-        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-
-        let persona = PCanonicalId::from_bytes([11u8; 32]);
-        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
-
-        fn arm_name<D>(submitter: &BroadcastSubmitter<D>) -> &'static str {
-            match submitter {
-                BroadcastSubmitter::Local(_) => "local",
-                BroadcastSubmitter::PerP(_) => "per-p",
-            }
-        }
-
-        let local = BroadcastSubmitter::for_posture(
-            BroadcastPosture::Local,
-            persona,
-            Arc::clone(&daemon),
-            &dead_proxy_socks(),
-        )
-        .expect("① construction is infallible");
-        assert_eq!(arm_name(&local), "local");
-
-        let remote = BroadcastSubmitter::for_posture(
-            BroadcastPosture::OwnRemote {
-                base_url: "http://127.0.0.1:18081".to_string(),
-            },
-            persona,
-            daemon,
-            &dead_proxy_socks(),
-        )
-        .expect("proxy config is well-formed");
-        assert_eq!(
-            arm_name(&remote),
-            "per-p",
-            "②→PerP, never the principal submitter (§3.1 part 2 routing guard)"
-        );
-    }
-
-    /// Match-delegation through the ① arm reaches the wrapped principal
-    /// submitter: a `P`-bound submit over the `Local` posture lands on the
-    /// wallet's own daemon (conceded observer) and resolves `Broadcast`,
-    /// with no pairing constraint on this arm by design.
-    #[tokio::test]
-    async fn local_arm_delegates_bound_bytes_to_the_principal_daemon() {
-        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-
-        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
-        let submitter = BroadcastSubmitter::for_posture(
-            BroadcastPosture::Local,
-            PCanonicalId::from_bytes([13u8; 32]),
-            Arc::clone(&daemon),
-            &dead_proxy_socks(),
-        )
-        .expect("① construction is infallible");
-
-        let bytes = wire_tx_bytes();
-        let expected = canonical_tx_id(&bytes);
-        let success = submitter
-            .submit_bound(PBoundBytes::bind_for_test(
-                PCanonicalId::from_bytes([14u8; 32]),
-                bytes,
-            ))
-            .await
-            .expect("loopback submit succeeds");
-        assert_eq!(
-            success,
-            SubmitSuccess::Broadcast {
-                hash: expected,
-                kind: BroadcastKind::Accepted,
-            }
-        );
-        assert_eq!(daemon.submitted_count(), 1);
-    }
-
-    /// The §3.1 part 4 pairing check on the ② arm: matched bytes pass the
-    /// choke point and reach `P`'s transport (the dead proxy proves the
-    /// delegation got that far — `Ambiguous`, not a pre-flight refusal).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn per_p_arm_dispatches_matched_bytes_over_p_s_own_circuit() {
-        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-
-        let persona = PCanonicalId::from_bytes([17u8; 32]);
-        let submitter = BroadcastSubmitter::for_posture(
-            BroadcastPosture::OwnRemote {
-                base_url: "http://127.0.0.1:18081".to_string(),
-            },
-            persona,
-            Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED)),
-            &dead_proxy_socks(),
-        )
-        .expect("proxy config is well-formed");
-
-        let err = submitter
-            .submit_bound(PBoundBytes::bind_for_test(persona, wire_tx_bytes()))
-            .await
-            .expect_err("a dead SOCKS proxy must fail the broadcast");
-        assert!(
-            matches!(
-                err,
-                BroadcastSubmitError::Submit(SubmitterError::Ambiguous { .. })
-            ),
-            "matched pairing must delegate to the transport (whose dead proxy is \
-             ambiguous), never be refused pre-flight: got {err:?}"
-        );
-    }
-
-    /// The pairing check refuses a cross-persona dispatch **before any
-    /// transport** — the `validate_handle` discipline's loud half: in a
-    /// debug build the mismatch is a panic (the fail-closed
-    /// `PersonaMismatch` return is the release-build behavior of the same
-    /// guard). The dead proxy is the tell: if the check fell through to the
-    /// wire, the outcome would be an `Ambiguous` error, not this panic.
-    #[tokio::test(flavor = "multi_thread")]
-    #[should_panic(expected = "submit_bound: bytes bound to")]
-    async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
-        use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
-
-        let submitter = BroadcastSubmitter::for_posture(
-            BroadcastPosture::OwnRemote {
-                base_url: "http://127.0.0.1:18081".to_string(),
-            },
-            PCanonicalId::from_bytes([19u8; 32]),
-            Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED)),
-            &dead_proxy_socks(),
-        )
-        .expect("proxy config is well-formed");
-
-        // A *different* persona's bytes: the §3.1 part 4 equality check must
-        // fire (panic, in this debug build) before the transport is reached —
-        // this `expect_err` is never evaluated.
-        submitter
-            .submit_bound(PBoundBytes::bind_for_test(
-                PCanonicalId::from_bytes([23u8; 32]),
-                wire_tx_bytes(),
-            ))
-            .await
-            .expect_err("unreachable in a debug build: the pairing check panics first");
-    }
-}
+#[path = "transaction_submitter_tests.rs"]
+mod tests;

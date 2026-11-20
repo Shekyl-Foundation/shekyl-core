@@ -22,7 +22,7 @@ WALLET_STATE_MIGRATION.md ·
 [15-deletion-and-debt.mdc](../.cursor/rules/15-deletion-and-debt.mdc) ·
 [30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
 [35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](../.cursor/rules/40-ffi-discipline.mdc) ·
+[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md) ·
 [45-rust-lint-checks.mdc](../.cursor/rules/45-rust-lint-checks.mdc) ·
 [50-testing.mdc](../.cursor/rules/50-testing.mdc) ·
 [75-system-autonomy.mdc](../.cursor/rules/75-system-autonomy.mdc).
@@ -1260,7 +1260,9 @@ freeze CI. Lands with the freeze commit, not in this pass.
 
 Graduates §3.8's cargo-fuzz harness from "local-only" to "nightly
 sidecar CI job." Triggered pre-freeze once the payload framing is
-KAT-locked.
+KAT-locked. **Done 2026-11-15:** the nightly workflow's `fuzz` job runs
+`region2_parser` with every other fuzz target in the tree (the CI lane's
+fuzz brief, Part B).
 
 ## 7. Reference implementation pointers
 

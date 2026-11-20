@@ -75,8 +75,11 @@ fn test() {
     let (input, spend_auth_and_linkability) = {
         let input = rerandomized_output.input();
         let opening = OpenedInputTuple::open(&rerandomized_output, &x, &y).unwrap();
-        let (L_, spend_auth_and_linkability) =
-            SpendAuthAndLinkability::prove(&mut OsRng, [0; 32], &opening);
+        let (L_, spend_auth_and_linkability) = SpendAuthAndLinkability::prove(
+            &mut OsRng,
+            shekyl_types::TxSignableHash::from_bytes([0; 32]),
+            &opening,
+        );
         assert_eq!(L_, L);
         (input, spend_auth_and_linkability)
     };
@@ -162,7 +165,7 @@ fn test() {
             &mut c2_verifier,
             tree,
             1, // Layers
-            [0; 32],
+            shekyl_types::TxSignableHash::from_bytes([0; 32]),
             vec![InputVerification {
                 key_image: L,
                 pqc_key_point: pqc.K,
@@ -184,7 +187,7 @@ fn test() {
             &mut c2_verifier,
             tree,
             1, // Layers
-            [0; 32],
+            shekyl_types::TxSignableHash::from_bytes([0; 32]),
             vec![InputVerification {
                 key_image: L,
                 pqc_key_point: pqc.K,

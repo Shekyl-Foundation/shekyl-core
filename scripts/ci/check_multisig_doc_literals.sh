@@ -23,7 +23,8 @@
 #      earlier draft required a leading `~` and so missed comma forms.
 #
 # Scoped to operator / protocol / design prose under `docs/`. Excludes
-# CHANGELOG (historical arrows), `docs/completed/`, test vectors /
+# CHANGELOG and its waiting entries under `docs/changelog.d/` (historical
+# arrows), `docs/completed/`, test vectors /
 # benchmarks / JSON KATs (MSW-1 owns those). The design carrier
 # (`V3_1_MULTISIG_RUST_ENGINE.md`), the tracking index, and FOLLOWUPS
 # are NO LONGER excluded wholesale — that hole let a new fossil land
@@ -73,6 +74,7 @@ RG_COMMON=(
   -n
   --type md
   --glob '!**/CHANGELOG.md'
+  --glob '!**/changelog.d/**'
   --glob '!**/completed/**'
   --glob '!**/test_vectors/**'
   --glob '!**/benchmarks/**'

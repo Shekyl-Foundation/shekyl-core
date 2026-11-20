@@ -149,7 +149,7 @@ it).
 | Total sent | **Yes (derived)** | Σ(our spent inputs' amounts — known, they are our outputs) − change − fee |
 | Recipient addresses | **No** | one-time output keys; nothing on chain links an output to an address without the recipient's view material |
 | Per-recipient split | **No** | CT commitments hide non-ours output amounts; without addresses there is no per-recipient attribution |
-| Payment-request linkage (rid echoed in `enc_label`, FA-10 `LABEL_KIND_REQUEST`) | **Conditional** — retained `tx_key` ∧ candidate recipient address | every output carries the uniform 8-byte label slot (`shekyl-crypto-pq/src/label.rs`, §5.7.11/FA-10; sentinel or tag, wire-indistinguishable); the sender re-derives `k_label` exactly as the OUTBOUND proof does — `rederive_combined_ss(tx_key_secret, recipient_x25519_pk, recipient_ml_kem_ek, idx)` (`shekyl-proofs/src/tx_proof.rs`) → `derive_output_secrets(...).k_label` (`derivation.rs`) → decrypt + `classify_label_plaintext`. Needs the recipient's *address material* as input, so it is trial-derivation against known addresses (journal rows post-SJ-DQ-1, or the address book) — never blind |
+| Payment-request linkage (rid echoed in `enc_label`, FA-10 `LABEL_KIND_REQUEST`) | **Conditional** — retained `tx_key` ∧ candidate recipient address | every output carries the uniform 8-byte label slot (`shekyl-crypto-pq/src/label.rs`, §5.7.11/FA-10; sentinel or tag, wire-indistinguishable); the sender re-derives `k_label` exactly as the OUTBOUND proof does — `TxKey::rederive_combined_ss(recipient_x25519_pk, recipient_ml_kem_ek, idx)` over the opened stored key (`shekyl-engine-core/src/engine/proofs.rs`) → `derive_output_secrets(...).k_label` (`derivation.rs`) → decrypt + `classify_label_plaintext`. Needs the recipient's *address material* as input, so it is trial-derivation against known addresses (journal rows post-SJ-DQ-1, or the address book) — never blind |
 
 **Consequence (load-bearing for SJ-DQ-4, and for honesty about what
 the journal adds):** replay rebuilds txid, height, fee, total sent,
@@ -301,6 +301,24 @@ only, never the read path.
   daemon), vs. finalize-accept. What does a crash between dispatch and
   verdict leave, and is the residue reconciled by the same paths that
   reconcile retention?
+  **Answered (A19, 2026-11-12):** at dispatch, **saved**, with the signed
+  bytes. The row (`SendRecord::tx_bytes` beside the dispatch facts) and
+  the retained secret are written and the whole ledger saved
+  (`save_state`) under one write guard before the bytes can leave; only
+  that save mints the `DurableTxBytes` the submitter takes
+  (`dispatch_durability.rs`). A failed save undoes the record under the
+  same guard and sends nothing (`-29120 SAVE_NOT_WRITABLE` when the
+  wallet's folder, file or drive is not writable, and one code per other
+  cause, `-29128` to `-29134`, a save Windows cannot confirm and a network
+  drive among them). The verdict's
+  changes are saved again before the submit returns. A crash between the
+  dispatch save and the verdict leaves a `Dispatched` row with no
+  baseline: open locks its inputs at its dispatch height
+  (`lock_unverdicted_dispatches`), and since this session did not send
+  it, the watchdog asks the user rather than resending (`tx_alarm`,
+  `earlier-session`; `tx_resend` or `abandon_tx`). A definite verdict on
+  the resend retires the record through the ordinary finalizer and
+  release paths.
 - **SJ-DQ-3 — state machine and per-edge authority.**
   `Dispatched → Confirmed{height} | TerminalRejected | PresumedDead |
   Abandoned`, plus reorg back-edges (`Confirmed → Dispatched`-class).

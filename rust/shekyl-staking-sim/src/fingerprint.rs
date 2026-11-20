@@ -16,10 +16,10 @@ use crate::model::World;
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// Pinned genesis SEB per [`ARCHIVAL_TIMING_CONSTANTS.md`](../../docs/design/ARCHIVAL_TIMING_CONSTANTS.md).
-pub const SEB_DEFAULT: u64 = 10_000;
-/// Default block time for calendar reporting (seconds).
-pub const BLOCK_TIME_SEC: u64 = 120;
+/// Settlement-epoch length. Owner: `SETTLEMENT_EPOCH_BLOCKS`.
+pub const SEB_DEFAULT: u64 = shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
+/// Block time for calendar reporting. Owner: `T_SECONDS`.
+pub const BLOCK_TIME_SEC: u64 = shekyl_difficulty::T_SECONDS;
 
 /// Minimum completed settlement epochs for an adequate sample.
 pub const MIN_SETTLEMENT_EPOCHS: usize = 20;
@@ -142,6 +142,10 @@ impl Ta1Recorder {
         }
     }
 
+    /// The pair's settlement verdict under the population model's draw
+    /// abstraction: a holder of a seated shard passes every counted draw, so
+    /// `settle_pair` settles it Served; an in-flight fetch passes none. The
+    /// model has no per-draw failure (Appendix B, N1 and R16).
     fn serve_credit_bit(world: &World, actor: usize, shard: usize, deep_threshold: f64) -> bool {
         world.shards[shard].is_deep(deep_threshold)
             && world.holdings[actor][shard]

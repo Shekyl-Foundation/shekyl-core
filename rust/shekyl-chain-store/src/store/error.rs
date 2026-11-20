@@ -34,15 +34,15 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::{AnchorConflict, RuleSet};
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
+use shekyl_chain_rules::{GenesisConflict, RuleSet};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
     AccrualFault, AdmissionWriteFault, BodyHolderFault, CellFault, DigestFault, DrawRowFault,
-    DrawableFault, EdgeFault, FrozenFault, LeafCountFault, LeafDensity, SettlementFault,
-    SlashFault, StoreInvariant, UndoFault,
+    DrawableFault, EdgeFault, HeldRegion, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
+    StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.
@@ -314,17 +314,13 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
-    /// The recorded chain contradicts a pin this binary carries (CEN-E5).
+    /// The recorded chain's genesis is not the one this binary pins
+    /// (CEN-E5): the file is another network's, or a remint.
     ///
     /// The file is coherent; this session is the wrong one for it — the
-    /// same class as [`Self::SettlementEpochMismatch`]. Genesis
-    /// ([`AnchorConflict::remedy`] is refuse-to-run) is another network's
-    /// file, or a remint. A later checkpoint carries a pop the ingest
-    /// driver still owes; this open reports that conflict and does not
-    /// pop, so a session cannot start on a chain that disagrees with its
-    /// pins and then forget to rewind. The payload is the rules crate's
-    /// conflict, not a second shape of it.
-    ReleasePin(AnchorConflict),
+    /// same class as [`Self::SettlementEpochMismatch`]. The payload is the
+    /// rules crate's conflict, not a second shape of it.
+    ForeignGenesis(GenesisConflict),
     /// The session's undo-log retention is not strictly inside its
     /// settlement epoch — zero, or `≥ SEB` (DRS-E1 S-PRUNE, `DRS_E1_SPRUNE.md`
     /// §3, §12). `tip − retention` has to sit above the body horizon, which
@@ -344,7 +340,7 @@ pub enum StoreCannot {
     /// set it runs under (S-CHAIN-W SCW-7: retention `≥ D_max`, or a legal
     /// reorg returns [`PopBelowFloor`](Self::PopBelowFloor)). Refused at
     /// open against the cap the caller names, and by `connect` against the
-    /// set in force at every height — a Fakechain regtest runs a rule set
+    /// set in force at every height — a levered regtest runs a rule set
     /// whose cap fits its retention, never a store field the validator
     /// defers to (PR #861 review).
     RetentionBelowReorgCap {
@@ -364,7 +360,7 @@ pub enum StoreCannot {
         /// The height the block would have been recorded at.
         height: u64,
         /// The rule set the verdict was minted under — the set, not its id:
-        /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
+        /// two levered sets share `RuleSetId::GENESIS`, and the refusal
         /// must be able to say which differed (RD-Q10). Boxed, as
         /// `shekyl_chain_rules::Stale::RuleSet`'s are: two sets by value
         /// sized every `Result` in the store past clippy's 128 bytes once
@@ -374,38 +370,8 @@ pub enum StoreCannot {
         /// The rule set the caller says is in force at `height`.
         in_force: Box<RuleSet>,
     },
-    /// `pop`, or the regtest injection, on a store with no block recorded
-    /// (nothing to pop; no tip to attribute an injected bit to).
+    /// `pop` on a store with no block recorded: nothing to pop.
     ChainEmpty,
-    /// The regtest serve-credit injection
-    /// (`ChainStore::regtest_inject_serve_credit`, DRS-E4 §3.8 item 3) was
-    /// asked for under a [`Trust`](shekyl_chain_rules::Trust) that carries
-    /// a release's anchors — a public network's posture. The door writes
-    /// a bit the rules did not admit and opens on Fakechain only, as the
-    /// C++'s `regtest_inject_archival_serve_credit` refuses off
-    /// `FAKECHAIN` (`blockchain.cpp:4715`).
-    InjectionOffFakechain,
-    /// The regtest serve-credit injection named a persona with no bond
-    /// record. The door writes the one row the rules did not admit, but
-    /// it does not mint a file the reads refuse: every serve-credit read
-    /// arms SI-15 (a credit names a persona with a record), so a bit for a
-    /// stranger would be [`StoreInvariant::ServeCreditWithoutBond`] at the
-    /// next `pass_count`. The C++'s injector has no such check because
-    /// the C++ has no such read belt; the refusal is the belt's, not a
-    /// deviation to grade (rule 16 — the check is read at the
-    /// implementation, not inherited from the absence of one).
-    InjectionForUnbondedPersona {
-        /// The persona the injection named.
-        persona: PCanonicalId,
-    },
-    /// The regtest draw issue
-    /// (`ChainStore::regtest_issue_draws`) named a draw the index already
-    /// holds. The door adds draws; re-issuing one would fold its term into
-    /// the digest a second time.
-    DrawAlreadyIssued {
-        /// The persona the draw names.
-        persona: PCanonicalId,
-    },
     /// `pop` at `tip` cannot run: the height is below the pop floor
     /// (S-CHAIN-W §5.4, SCW-7).
     ///
@@ -503,8 +469,8 @@ pub enum AltCannot {
     /// `previous` chain reaches neither a recorded row nor another alt row
     /// — CEN-K2's orphan. `at` is the first hash the store does not hold.
     /// Not a fault: the chain the caller named does not connect, and the
-    /// ingest door answers the peer accordingly (the C++'s orphan branch,
-    /// `SHEKYL_BLOCK_INGEST_ORPHANED`).
+    /// ingest door answers the peer accordingly
+    /// (`shekyl_peer_policy::BlockIngest::Orphaned`).
     Unlinked {
         /// The first hash on the walk that neither table holds.
         at: BlockHash,
@@ -594,20 +560,6 @@ impl core::fmt::Display for StoreCannot {
                  force at height {height}; re-validate under the rule set in force"
             ),
             Self::ChainEmpty => f.write_str("the chain store has no block recorded"),
-            Self::InjectionOffFakechain => f.write_str(
-                "regtest injection refused: the node's trust carries a release's anchors, so \
-                 this is not a Fakechain",
-            ),
-            Self::InjectionForUnbondedPersona { persona } => write!(
-                f,
-                "regtest injection refused: persona {persona} has no bond record, and a credit \
-                 or a draw without one is a row the reads refuse"
-            ),
-            Self::DrawAlreadyIssued { persona } => write!(
-                f,
-                "regtest draw issue refused: the index already holds this draw for persona \
-                 {persona}"
-            ),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,
                 "cannot pop height {tip}: the pop floor is {floor} (genesis is never poppable; \
@@ -637,8 +589,8 @@ impl core::fmt::Display for StoreCannot {
             } => write!(
                 f,
                 "undo-log retention {} is below the in-force rule set's reorg cap of {}: a legal \
-                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or run a \
-                 Fakechain rule set whose cap fits it",
+                 reorg would meet PopBelowFloor (S-CHAIN-W SCW-7); raise the retention, or shorten \
+                 the reorg cap so it fits inside the retention",
                 retention.to_raw(),
                 reorg_cap.to_raw()
             ),
@@ -648,24 +600,13 @@ impl core::fmt::Display for StoreCannot {
                  session runs {session}: persisted join epochs and serve-credit windows would be \
                  silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
-            Self::ReleasePin(conflict) => match conflict.recorded {
-                Some(recorded) => write!(
-                    f,
-                    "block {height} is {recorded} but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-                None => write!(
-                    f,
-                    "block {height} is absent below the tip but this binary pins {expected}; \
-                     the file is not this release's chain ({remedy:?})",
-                    height = conflict.height,
-                    expected = conflict.expected,
-                    remedy = conflict.remedy(),
-                ),
-            },
+            Self::ForeignGenesis(conflict) => write!(
+                f,
+                "block 0 is {recorded} but this binary pins {expected}; \
+                 the file is another network's chain, and this node does not run on it",
+                recorded = conflict.recorded,
+                expected = conflict.expected,
+            ),
             Self::Pool(cannot) => write!(f, "pool store: {cannot}"),
             Self::Alt(cannot) => write!(f, "alt-chain store: {cannot}"),
             Self::Queue(cannot) => write!(f, "bundle queue: {cannot}"),

@@ -10,6 +10,7 @@
 //! is a different debt from that repeat: a spawn or a pin check drops the
 //! repeat and does not drop the once (`TOR_SUPERVISOR.md` §4.4).
 
+use super::super::posture::{Inbound, InboundCause};
 use super::{Cause, Shown};
 
 /// When an announcement is said.
@@ -31,19 +32,30 @@ pub(super) enum Cadence {
     Once,
 }
 
-/// The shown state and the cause's kind. Detail inside one kind is not a
-/// change (§4.4).
+/// The shown state, the cause's kind, and the inbound facet's kind when it
+/// is down. Detail inside one kind is not a change (§4.4): Tor's skew
+/// seconds, and the lag the consensus check rewrites at every liveness
+/// sample. Keying on that lag made the first statement after every sample
+/// new, and the macOS run of 2026-11-09 said the clock 18 times in four
+/// minutes (§7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SayKey {
     shown: Shown,
     cause: std::mem::Discriminant<Cause>,
+    inbound: Option<std::mem::Discriminant<InboundCause>>,
 }
 
 impl SayKey {
-    pub(super) fn new(shown: Shown, cause: &Cause) -> Self {
+    pub(super) fn new(shown: Shown, cause: &Cause, inbound: Inbound) -> Self {
         Self {
             shown,
             cause: std::mem::discriminant(cause),
+            inbound: match inbound {
+                Inbound::Unreachable { cause, .. } => Some(std::mem::discriminant(&cause)),
+                Inbound::NotOffered | Inbound::Publishing { .. } | Inbound::Reachable { .. } => {
+                    None
+                }
+            },
         }
     }
 }
@@ -101,6 +113,22 @@ impl Announcements {
         self.pending = None;
     }
 
+    /// Retire an armed [`PendingSay::Once`]. Returns whether one was armed.
+    ///
+    /// While `repeats`, the phase's repeat takes that once's deadline: the
+    /// once had replaced it. A pending repeat is left where it is. The origin
+    /// loss is the only [`Cadence::Once`] this supervisor arms, so a retired
+    /// once is that unsaid loss.
+    #[must_use]
+    pub(super) fn forgive_once(&mut self, repeats: bool) -> bool {
+        if let Some(PendingSay::Once { at }) = self.pending {
+            self.pending = repeats.then_some(PendingSay::Repeat { at });
+            true
+        } else {
+            false
+        }
+    }
+
     /// The deadline fired. A due [`PendingSay::Once`] is said. A due
     /// [`PendingSay::Repeat`] is said only while `repeats` and this tick
     /// has no pin check; otherwise the repeat is dropped.
@@ -128,6 +156,13 @@ impl Announcements {
                 false
             }
         }
+    }
+
+    /// The line's key changed and it was already said. Record the key the
+    /// line has now. Do not speak, and do not move the cap: a clock that
+    /// keeps a new figure is the same line.
+    pub(super) fn note_key(&mut self, key: SayKey) {
+        self.said = Some(key);
     }
 
     /// Say `key` under `cadence`, or arm the debt the cap still owes.

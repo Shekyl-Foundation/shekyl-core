@@ -1,35 +1,23 @@
 #![no_main]
+//! A spend intent from untrusted bytes: the canonical decoder, then every
+//! check a member runs that needs no chain view of its own.
 use libfuzzer_sys::fuzz_target;
+use shekyl_address::Network;
+use shekyl_multisig::intent::SpendIntent;
+
+/// The group shape the checks run against: the largest, so every signer
+/// and recipient bound is reachable.
+const N_TOTAL: u8 = 5;
+const M_REQUIRED: u8 = 3;
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() < 100 {
+    let Ok(intent) = SpendIntent::from_canonical_bytes(data) else {
         return;
-    }
-    use shekyl_multisig::intent::{IntentRecipient, SpendIntent};
-    use shekyl_units::AtomicUnits;
-
-    let intent = SpendIntent {
-        version: data[0],
-        intent_id: data[1..33].try_into().unwrap_or([0; 32]),
-        address_fingerprint: data[33..65].try_into().unwrap_or([0; 32]),
-        proposer_index: data[65],
-        proposer_sig: vec![0; 64],
-        created_at: u64::from_le_bytes(data[66..74].try_into().unwrap_or([0; 8])),
-        expires_at: u64::from_le_bytes(data[74..82].try_into().unwrap_or([0; 8])),
-        tx_counter: u64::from_le_bytes(data[82..90].try_into().unwrap_or([0; 8])),
-        reference_block_height: u64::from_le_bytes(data[90..98].try_into().unwrap_or([0; 8])),
-        reference_block_hash: [0; 32],
-        recipients: vec![IntentRecipient {
-            address: vec![1],
-            amount: AtomicUnits::from_raw(100),
-        }],
-        fee: AtomicUnits::from_raw(10),
-        input_global_indices: vec![42],
-        kem_randomness_seed: [0; 32],
-        chain_state_fingerprint: [0; 32],
     };
-
-    let _ = intent.validate_structural(3, data[99] as u64 * 100);
+    // The decoder is exact: the bytes it accepts are the intent's encoding.
+    assert_eq!(intent.to_canonical_bytes().unwrap(), data);
+    let _ = intent.validate_structural(N_TOTAL, M_REQUIRED);
+    let _ = intent.resolve_recipients(Network::Testnet);
+    let _ = intent.validate_temporal(intent.reference_block_height, &intent.reference_block_hash);
     let _ = intent.intent_hash();
-    let _ = intent.to_canonical_bytes();
 });

@@ -20,6 +20,10 @@ license.workspace = true
 # (CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.1) — a dependency that reaches a
 # store is the inversion R8 banned.
 [dependencies]
+# The network id: `Trust` derives it from the genesis pin, and the spend
+# signature's hash binds it (NETWORK_IDENTITY.md NI-Q4). Data, never a
+# network the rules branch on (rule 71).
+shekyl-network = { path = "../shekyl-network" }
 # Chain identities and the recorded facts a rule reads: BlockHeight,
 # BlockHash, TxHash, KeyImage, CurveTreeRoot.
 shekyl-types = { path = "../shekyl-types" }
@@ -108,8 +112,10 @@ rand_chacha = { workspace = true, optional = true }
 # can spend a fixture block's coinbase through a real prover rather than
 # asserting over a filler no wallet could scan.
 harness = [
+  "shekyl-network/harness",
   "dep:curve25519-dalek",
   "dep:shekyl-harness-wallet",
+  "shekyl-harness-wallet/seeded-rng",
   "dep:shekyl-curve-primitives",
   "dep:rand_chacha",
 ]
@@ -121,6 +127,10 @@ harness = [
 serde_json = "1"
 
 [dev-dependencies]
+# `HARNESS_NETWORK_ID`, which this crate's own tests judge harness chains
+# under (`Trust::UNPINNED`): TEST_ONLY, on this dev edge and through the
+# `harness` feature's forward only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.
 # Already pinned in the workspace lockfile; test-only.
@@ -145,7 +155,7 @@ curve25519-dalek = "4"
 # workspace-wide run unifies the feature through the store's dev-edge, which
 # is how this crate's tests built with the first shape alone and why the
 # `-p` run did not (slice 6 row 6, found at commit 9 of the conversion).
-shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
 # The wallet side's lock windows (`DEFAULT_LOCK_WINDOW`, `COINBASE_LOCK_WINDOW`),
 # held equal to `RuleSet`'s maturity pair in test so the daemon's tree
 # insertion and the wallet's eligibility height cannot drift (DRS-E3
@@ -170,6 +180,17 @@ trybuild = "1"
 # a workspace dependency); test-only.
 shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 rand_chacha = { workspace = true }
+
+# The trybuild programs are compiled as a downstream crate and judge
+# verdicts with `Trust::UNPINNED`, which exists for `test` and `harness`
+# builds only, and `cfg(test)` does not cross a crate wall. The workspace
+# run turned `harness` on through the store's dev-edge, which is how the
+# target built before the feature was named here; a `-p` run of the target
+# needs it said (found 2026-11-09 by the first run of the harness alone,
+# `scripts/ci/ignored_set_trybuild.sh`).
+[[test]]
+name = "trybuild"
+required-features = ["harness"]
 
 [lints]
 workspace = true

@@ -8,6 +8,10 @@ license.workspace = true
 
 [dependencies]
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The signing envelope (`shekyl_network::envelope`): each proof frames what it
+# signs under the network id. Already in this crate's graph through
+# `shekyl-crypto-pq` (17-dependency-discipline).
+shekyl-network = { path = "../shekyl-network" }
 shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 curve25519-dalek = "4"

@@ -1,7 +1,8 @@
 ---
 description: Users should never need to understand cryptographic protocols to use the wallet.
 globs:
-  - src/**
+  - rust/shekyl-cli/**
+  - rust/shekyl-wallet*/**
   - src-tauri/src/**
 ---
 

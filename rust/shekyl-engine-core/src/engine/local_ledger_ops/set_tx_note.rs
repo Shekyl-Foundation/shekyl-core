@@ -15,7 +15,7 @@
 //! The write is crash-atomic under a single ledger write guard, the same
 //! discipline as `abandon_tx_persisted` and through the same owner
 //! ([`Engine::save_or_rollback`]): mutate the map via
-//! [`TxMetaBlock::set_note`], save, and on save failure restore the prior
+//! [`TxMetaBlock::set_note`](shekyl_engine_state::tx_meta_block::TxMetaBlock::set_note), save, and on save failure restore the prior
 //! entry (fail closed) so a retry starts from the pre-write state. An empty
 //! note **clears** the entry rather than storing an empty string, so there is
 //! no separate delete method.
@@ -37,7 +37,7 @@
 //! # Size bound
 //!
 //! [`shekyl_engine_state::TX_NOTE_MAX_BYTES`] bounds one note, and
-//! [`TxMetaBlock::set_note`] is the only door into the map — the field behind
+//! [`TxMetaBlock::set_note`](shekyl_engine_state::tx_meta_block::TxMetaBlock::set_note) is the only door into the map — the field behind
 //! it is private — so the bound holds structurally rather than by agreement.
 //! Callers may pre-check the same constant (e.g. RPC before taking a lock),
 //! but that is a fast-fail, never the enforcement. Note *count* is not
@@ -117,9 +117,11 @@ impl<
             SetTxNoteOutcome::Applied { previous, stored } => {
                 // Save under the guard we already hold; on failure the undo
                 // runs before we return, still exclusive.
-                self.save_or_rollback(&mut guard, |state| {
+                let durability = self.save_or_rollback(&mut guard, |state| {
                     state.ledger.tx_meta.restore_note(previous);
                 })?;
+                // A note does not broadcast. An applied write stands.
+                super::super::dispatch_durability::accept_applied(&durability);
                 Ok(stored)
             }
         }
@@ -139,12 +141,11 @@ impl<
 
 #[cfg(test)]
 mod tests {
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_engine_file::SafetyOverrides;
     use shekyl_engine_state::{SetNoteError, TxSecretKey, TX_NOTE_MAX_BYTES};
     use shekyl_rpc_transport::HttpRpc;
     use shekyl_types::TxHash;
-    use zeroize::Zeroizing;
 
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::{Credentials, DaemonClient, Engine, SoloSigner};
@@ -158,7 +159,7 @@ mod tests {
     fn mark_known(engine: &Engine<SoloSigner>, txid: TxHash) {
         engine.ledger.write().ledger.record_retained_tx_key(
             txid.to_bytes(),
-            TxSecretKey::new(Zeroizing::new([0xAB; 32])),
+            TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([0xAB; 32]).store()),
         );
     }
 
@@ -171,8 +172,8 @@ mod tests {
         DaemonClient::new(rpc)
     }
 
-    fn seed(mul: u8) -> [u8; MASTER_SEED_BYTES] {
-        let mut s = [0u8; MASTER_SEED_BYTES];
+    fn seed(mul: u8) -> [u8; SEED_BYTES] {
+        let mut s = [0u8; SEED_BYTES];
         for (i, b) in s.iter_mut().enumerate() {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(mul);
         }
@@ -313,7 +314,7 @@ mod tests {
         mark_known(&engine, txid);
         engine.set_tx_note(txid, "keep me".to_owned()).expect("set");
         // Release the advisory lock before reopening.
-        engine.close(&creds).expect("close");
+        engine.close(&creds).await.expect("close");
 
         // Reopen the same wallet files: the note is durable state.
         let opened = Engine::<SoloSigner>::open_full(

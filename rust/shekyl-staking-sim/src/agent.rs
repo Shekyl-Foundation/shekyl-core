@@ -7,39 +7,41 @@
 //! churn-stability pre-commitment). Each actor re-chooses its shard portfolio by
 //! ranking shards on net marginal value:
 //!
-//! `net(s) = price · (1/R_eff(s)) · g(age(s)) − storage_unit_cost − [deep] bond_carry`
+//! `net(s) = price · (1/R_eff(s)) · g(age(s)) − storage_unit_cost − carry(s)`
 //!
 //! and greedily filling under two budgets: total shards ≤ `storage_capacity`, and
-//! posted deep-shard bonds `Σ bond(age) ≤ capital` (the per-shard retention bond —
-//! the keystone Sybil/deep-history lever). The bond is flat (`bond_rate` per deep
-//! shard) when `bond_age_scale = 0` and age-scaled otherwise (older shards cost
-//! more capital to bond — L4). `price` is the previous epoch's work→reward exchange
+//! posted bonds `Σ bond(age) ≤ capital` (the per-shard retention bond — the
+//! keystone Sybil/deep-history lever). Which held shards post a bond is
+//! [`BondScope`]: every held shard by default, as production's `bond_floor_of`
+//! does. The bond is flat (`bond_rate` per bonded shard) when `bond_age_scale = 0`
+//! and age-scaled otherwise (older shards cost more capital to bond — L4).
+//! `carry(s)` is [`CarryShape`]: capital carry on the posted bond plus an
+//! operating cost per held shard. `price` is the previous epoch's work→reward exchange
 //! rate, carrying the competitive-share servo's dilution into the marginal decision.
 
-use crate::model::Rng;
-use crate::model::{bond_age, bond_duration, fetch_latency, g_age, CompositionParams, World};
+use crate::model::{bond_age, bond_duration, fetch_latency, World};
+use crate::reward::{shard_value, RewardArm};
+use crate::rng::SplitMix64;
 
 #[derive(Debug, Clone)]
 pub struct AgentParams {
     /// Flow cost per held shard (storage/bandwidth). Stops agents from holding
     /// everything when marginal reward is ~0.
     pub storage_unit_cost: f64,
-    /// Capital locked per deep-history shard (the swept bond rate: low/mid/high).
+    /// Capital locked per bonded shard (the swept bond rate: low/mid/high).
     /// `0` disables the bond (the toothless-cap baseline).
     pub bond_rate: f64,
     /// Age-scaling of the bond *magnitude* (L4). Resolved to `0` (flat) — kept as a
     /// parameter only so the 1c counter-evidence sweeps remain reproducible.
     pub bond_age_scale: f64,
-    /// Flow opportunity cost of capital locked in one deep-shard bond.
-    pub bond_carry: f64,
-    /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a bond.
+    /// The per-epoch carry on a holding beyond its storage (A6).
+    pub carry: CarryShape,
+    /// `age ≥ deep_threshold` ⇒ deep history. Under [`BondScope::DeepOnly`]
+    /// it also decides which shards bond.
     pub deep_threshold: f64,
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior (every shard costs one unit).
     pub deep_shard_size: f64,
-    /// Composition axis: per-shard size multiplier on top of `deep_shard_size`
-    /// (`spread = 1.0` ⇒ every shard one unit ⇒ byte-identical).
-    pub comp: CompositionParams,
     // --- L9 duration axis (iteration 2; inert when `bond_dur_base == 0`) ---
     /// Flat retention-commitment horizon in epochs.
     pub bond_dur_base: f64,
@@ -93,6 +95,74 @@ pub struct AgentParams {
     /// dodge is defeated, the tail is held). This is the agent the seal must hold against,
     /// not only the rational one that never dodges.
     pub dodge_pref: f64,
+    /// The reward arm the agent values shards under: the work term it is paid
+    /// on (`reward::shard_value`).
+    pub reward_arm: RewardArm,
+    /// A7: which held shards post a bond.
+    pub bond_scope: BondScope,
+    /// R10: epochs a voluntary exit's bond stays in the release escrow
+    /// (`World::release_exit`), slashable, before it is spendable again.
+    /// Production's `RELEASE_COOLDOWN_EPOCHS` on the production arm; 0 (refund
+    /// at once) on the registered arm.
+    pub exit_cooldown_epochs: u32,
+}
+
+/// Which held shards post a bond (A7, ruled 2026-11-08).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BondScope {
+    /// Every held shard posts the bond. Production's shape: `bond_floor_of`
+    /// is the floor times the held set. The default.
+    EveryHeld,
+    /// Deep shards only (`age ≥ deep_threshold`). The registered arm's scope,
+    /// and a named arm beside the default (`a7_*_deep_*`).
+    DeepOnly,
+}
+
+/// The per-epoch carry on a holding beyond its storage (A6, ruled 2026-11-08).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CarryShape {
+    /// Capital carry proportional to the posted bond (`capital_rate` per unit
+    /// of bond per epoch), plus `operating_per_shard` on every held shard. The
+    /// default. The operating cost is the coupling half's calibration; it is
+    /// not `storage_unit_cost`, which scales with a shard's bytes.
+    Split {
+        capital_rate: f64,
+        operating_per_shard: f64,
+    },
+    /// A flat amount per bonded shard, whatever the bond: A6 as registered.
+    /// The registered arm's shape; it goes when that arm goes.
+    FlatPerBond(f64),
+}
+
+impl CarryShape {
+    /// The carry on one held shard that posts `bond` when `bonds` is true.
+    #[must_use]
+    pub fn per_shard(self, bonds: bool, bond: f64) -> f64 {
+        match self {
+            Self::Split {
+                capital_rate,
+                operating_per_shard,
+            } => (if bonds { capital_rate * bond } else { 0.0 }) + operating_per_shard,
+            Self::FlatPerBond(carry) => {
+                if bonds {
+                    carry
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+}
+
+impl AgentParams {
+    /// Whether holding `shard` posts a bond (and carries its cost).
+    #[must_use]
+    pub fn bonds(&self, shard: &crate::model::Shard) -> bool {
+        match self.bond_scope {
+            BondScope::EveryHeld => true,
+            BondScope::DeepOnly => shard.is_deep(self.deep_threshold),
+        }
+    }
 }
 
 /// One actor's best-response. Mutates `world.holdings[actor]` (and `world.locks`).
@@ -116,7 +186,11 @@ fn best_response(
     // L18: spendable bond budget = endowment minus capital still frozen in release
     // cooldown from earlier voluntary drops. `frozen_capital` is 0 when no drop is
     // cooling (every pre-L18 scenario), so `capital` is unchanged there.
-    let capital = (world.actors[actor].capital - world.frozen_capital(actor)).max(0.0);
+    // R10: a bond still in the release escrow from an earlier exit cannot fund
+    // a new one either.
+    let capital =
+        (world.actors[actor].capital - world.frozen_capital(actor) - world.released_capital(actor))
+            .max(0.0);
     let bonded = ap.bond_rate > 0.0;
     let was_held = world.holdings[actor].clone();
 
@@ -145,7 +219,7 @@ fn best_response(
     let precharged: Vec<bool> = (0..n_shard)
         .map(|s| {
             world.holdings[actor][s]
-                && world.shards[s].is_deep(ap.deep_threshold)
+                && ap.bonds(&world.shards[s])
                 && (world.locks[actor][s] > 0 || cooldown_active)
         })
         .collect();
@@ -155,16 +229,12 @@ fn best_response(
     let cap_storage = cap_storage as f64;
     // Storage a shard occupies: deep shards cost `deep_shard_size` units (the L8 storage
     // leg / granularity lever); hot shards cost one unit.
-    // Composition axis: scaled per shard, so a heavy shard both eats more of the storage
-    // budget and costs more to carry — while its VALUE term below stays byte-blind, which
-    // is channel 1's actual shape.
     let stor_cost = |s: usize| {
-        let base = if world.shards[s].is_deep(ap.deep_threshold) {
+        if world.shards[s].is_deep(ap.deep_threshold) {
             ap.deep_shard_size
         } else {
             1.0
-        };
-        base * ap.comp.size(&world.shards[s])
+        }
     };
 
     let mut new_held = vec![false; n_shard];
@@ -188,7 +258,7 @@ fn best_response(
     }
 
     // Net marginal value of the remaining (unlocked) shards.
-    let mut ranked: Vec<(usize, f64, bool, f64)> = Vec::with_capacity(n_shard);
+    let mut ranked: Vec<(usize, f64, bool, bool, f64)> = Vec::with_capacity(n_shard);
     for s in 0..n_shard {
         if new_held[s] {
             continue; // already forced in
@@ -198,9 +268,9 @@ fn best_response(
         let r_eff = if held { r[s].max(1) } else { r[s] + 1 };
         let age = world.shards[s].age;
         let deep = world.shards[s].is_deep(ap.deep_threshold);
-        let value = price * (1.0 / r_eff as f64) * g_age(age, age_weight);
-        let mut cost = ap.storage_unit_cost * ap.comp.size(&world.shards[s])
-            + if deep { ap.bond_carry } else { 0.0 };
+        let bonds = ap.bonds(&world.shards[s]);
+        let value = shard_value(ap.reward_arm, price, r_eff, age, age_weight);
+        let mut cost = ap.storage_unit_cost + ap.carry.per_shard(bonds, bond_cost(age));
         // Anticipatory lock cost: acquiring a deep shard commits storage for its
         // (age-scaled) duration, foregone if value later drops. Charged only on a
         // *fresh* acquisition (not already held), proportional to the horizon — so
@@ -223,7 +293,7 @@ fn best_response(
         } else {
             0.0
         };
-        ranked.push((s, value - cost + dodge_bonus, deep, bond_cost(age)));
+        ranked.push((s, value - cost + dodge_bonus, deep, bonds, bond_cost(age)));
     }
     // Highest net first.
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -232,7 +302,7 @@ fn best_response(
     // new deep acquisitions started this epoch, capped by `acq_rate` (bandwidth bound;
     // 0 = unlimited).
     let mut fresh_fetches = 0usize;
-    for (s, net, deep, bond) in ranked {
+    for (s, net, deep, bonds, bond) in ranked {
         if net <= 0.0 {
             break;
         }
@@ -246,7 +316,7 @@ fn best_response(
         // `used_bond`; only a fresh deep acquisition (or any deep shard in the no-cooldown
         // regime) draws from the remaining budget. Skip shards whose bond would overrun it;
         // keep scanning (a cheaper deep shard may fit).
-        let charges_bond = deep && bonded && !precharged[s];
+        let charges_bond = bonds && bonded && !precharged[s];
         if charges_bond && used_bond + bond > capital {
             continue;
         }
@@ -301,12 +371,9 @@ fn best_response(
         let deep = world.shards[s].is_deep(ap.deep_threshold);
         if new_held[s] && !was_held[s] {
             // Egress is the shard's own bytes (the possession read is whole-shard,
-            // `SF-D1`), so the backfill lag scales with size too.
-            world.inflight[actor][s] = fetch_latency(
-                deep,
-                ap.deep_shard_size * ap.comp.size(&world.shards[s]),
-                ap.fetch_latency_per_unit,
-            );
+            // `SF-D1`), so the backfill lag scales with its size.
+            world.inflight[actor][s] =
+                fetch_latency(deep, ap.deep_shard_size, ap.fetch_latency_per_unit);
         } else if !new_held[s] {
             world.inflight[actor][s] = 0;
         }
@@ -328,11 +395,12 @@ fn best_response(
     // C-1) = the full C-epoch freeze; do not "fix" the decrement-before-act by pushing `+1` or
     // the drop epoch is double-counted. Pushed per dropped shard, so re-adding the same shard
     // inside the window needs *fresh* capital (the 2× anti-dodge bite — P2B-7 Pin 3).
-    // Slash-style losses (L11 exit, age-1 recycle) clear holdings outside `best_response` and
-    // never reach here, so only voluntary drops cool. Inert when `release_cooldown_epochs == 0`.
+    // Exits (a voluntary L11 `Release`, an L17 slash) and the age-1 recycle clear holdings
+    // outside `best_response` and never reach here, so only voluntary drops cool. Inert when
+    // `release_cooldown_epochs == 0`.
     if ap.release_cooldown_epochs > 0 && bonded {
         for s in 0..n_shard {
-            if was_held[s] && !new_held[s] && world.shards[s].is_deep(ap.deep_threshold) {
+            if was_held[s] && !new_held[s] && ap.bonds(&world.shards[s]) {
                 world.cooling[actor].push((ap.bond_rate, ap.release_cooldown_epochs));
             }
         }
@@ -348,7 +416,7 @@ pub fn run_epoch(
     price: f64,
     ap: &AgentParams,
     age_weight: f64,
-    rng: &mut Rng,
+    rng: &mut SplitMix64,
 ) -> usize {
     let before: Vec<Vec<bool>> = world.holdings.clone();
 

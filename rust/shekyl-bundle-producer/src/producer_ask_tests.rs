@@ -30,7 +30,7 @@ fn published(seq: u64) -> TipPublication {
 /// A block of ours at height 100, still learning: the connector has not
 /// answered.
 fn learning() -> (Producer, Recorded) {
-    let ring = Arc::new(WitnessRing::new());
+    let ring = Arc::new(WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID));
     let producer = Producer::new(
         Arc::clone(&ring),
         Box::new(StdRng::seed_from_u64(1)),

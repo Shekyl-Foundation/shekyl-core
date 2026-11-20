@@ -1,0 +1,225 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The probe of this node's own onion, and the descriptor rounds that
+//! fire it (`TOR_SUPERVISOR.md` §4.5).
+//!
+//! [`Flight`] owns the probe nonce. The dial task holds only the request
+//! bytes, so ending the dial cannot erase a nonce. Cancelling drops the
+//! nonce on this task first: a handshake that arrives after that is not
+//! this probe, and the next probe's nonce is never the one removed.
+//!
+//! A descriptor round's marks are one fold. An open round is ended here two
+//! ways: one descriptor's round stuck for five minutes
+//! ([`Drive::round_stuck`]), and every open round when the sink dropped
+//! events ([`Drive::round_resync`]).
+
+use shekyl_node::Network;
+use shekyl_p2p::ProbeHandshake;
+use shekyl_timing_engine::Tick;
+use shekyl_tor_control_client::control::{DescriptorKey, HsDescEvent, UploadRounds};
+use shekyl_tor_control_client::supervisor::{
+    directory_input_of, round_inputs, Inbound, InboundCause, Input,
+};
+use shekyl_tor_control_daemon::{probe_own_onion, ProbeDial};
+use tokio::task::JoinHandle;
+
+use super::Drive;
+
+/// The probe in flight: its nonce, and the dial carrying the request.
+///
+/// Drop removes the nonce on this task, then aborts the dial. The dial
+/// task holds only the request bytes, so aborting it cannot erase a nonce
+/// a later probe has minted.
+pub(super) struct Flight {
+    handshake: Option<ProbeHandshake>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        // The nonce leaves the set before the dial is aborted, and it
+        // leaves on this task. A handshake that arrives after that is not
+        // this probe. Fields drop after this body, so the nonce has to go
+        // here, ahead of the abort.
+        self.handshake.take();
+        self.task.abort();
+    }
+}
+
+impl Drive {
+    /// Dial this node's own onion with a fresh probe nonce (§4.5). The
+    /// managed route and the onion are read now (`TSR-F10`). The nonce
+    /// stays on this driver until [`Self::cancel_probe`].
+    pub(super) fn probe(&mut self) -> Input {
+        self.cancel_probe();
+        let Some(service) = self.service.clone() else {
+            return Input::ProbeNotDialed;
+        };
+        let Some(proxy) = self.network.managed_route(self.probe_pair.shared()) else {
+            return Input::ProbeNotDialed;
+        };
+        let Some(mut handshake) = self.network.mint_probe() else {
+            return Input::ProbeNotDialed;
+        };
+        let minted_at = handshake.minted_at.get();
+        let request = std::mem::take(&mut handshake.request);
+        let port = self.virtual_port;
+        let task = tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let dialed = probe_own_onion(&proxy, &service, port, &request).await;
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            match dialed {
+                ProbeDial::Delivered => {
+                    tracing::info!(
+                        target: "tor",
+                        elapsed_ms,
+                        "the onion probe's request was delivered"
+                    );
+                }
+                other => {
+                    tracing::info!(
+                        target: "tor",
+                        elapsed_ms,
+                        "the onion probe's dial ended: {other:?}"
+                    );
+                }
+            }
+        });
+        self.probe = Some(Flight {
+            handshake: Some(handshake),
+            task,
+        });
+        tracing::info!(target: "tor", "probing this node's onion");
+        Input::ProbeDialed { minted_at }
+    }
+
+    /// End the probe in flight. Its [`Flight`] removes the nonce on this
+    /// task, then aborts the dial, before another probe can mint.
+    pub(super) fn cancel_probe(&mut self) {
+        self.probe.take();
+    }
+
+    /// This onion's `HS_DESC`. The coalescer owns an upload's line, so that
+    /// line is not also a directory answer. A line it does not own is the
+    /// directory check's. One line has one consumer (`TOR_SUPERVISOR.md` §4.5).
+    pub(super) fn read_hs_desc(&mut self, event: &HsDescEvent) -> Vec<Input> {
+        let mut inputs = Vec::new();
+        let owned = self
+            .rounds
+            .as_ref()
+            .is_some_and(|rounds| rounds.owns_line(event));
+        if !owned {
+            inputs.extend(directory_input_of(event));
+        }
+        if let Some(rounds) = self.rounds.as_mut() {
+            let marks = rounds.observe(event);
+            for input in round_inputs(&marks, || self.network.probe_delay_draw()) {
+                say_round(&input);
+                inputs.push(input);
+            }
+        }
+        inputs
+    }
+
+    /// A descriptor's round has been open five minutes: uploads with
+    /// neither `UPLOADED` nor `FAILED`, no event lost on our side unless the
+    /// sink says so. Said once at debug (Status counts it), and ended in the
+    /// coalescer, so that descriptor's next uploads start a round of their
+    /// own instead of joining one that will never end (§10).
+    pub(super) fn round_stuck(&mut self, descriptor: DescriptorKey) -> Vec<Input> {
+        tracing::debug!(
+            target: "tor",
+            events_dropped = self.events.dropped(),
+            "a descriptor upload round has been open for five minutes; ending it"
+        );
+        let Some(mark) = self
+            .rounds
+            .as_mut()
+            .and_then(|rounds| rounds.end_round(descriptor))
+        else {
+            return Vec::new();
+        };
+        round_inputs(&[mark], || self.network.probe_delay_draw())
+    }
+
+    /// The sink dropped events since the last look: an open round's ends may
+    /// be among them, so every open round ends now and the next can trigger.
+    /// The end is not said by [`say_round`]: a resync is not a round's own end.
+    pub(super) fn round_resync(&mut self) -> Vec<Input> {
+        let dropped = self.events.dropped();
+        if dropped == self.dropped_seen {
+            return Vec::new();
+        }
+        self.dropped_seen = dropped;
+        let marks = self
+            .rounds
+            .as_mut()
+            .map(UploadRounds::resync)
+            .unwrap_or_default();
+        round_inputs(&marks, || self.network.probe_delay_draw())
+    }
+
+    /// Publish the inbound facet on the managed route's link. Before a route
+    /// is installed there is nothing to name; [`Self::publish_route`]
+    /// publishes the core's facet when one is.
+    pub(super) fn publish_inbound(&self, inbound: Inbound) {
+        let Some(incarnation) = self.incarnation else {
+            return;
+        };
+        let facet = link_inbound(inbound);
+        if self.network.publish_tor_inbound(incarnation, facet) {
+            tracing::info!(target: "tor", "this node's onion: {facet:?}");
+        }
+    }
+}
+
+/// Tor reported a clock jump while Running (§4.5, "Overdue"): draw the
+/// probe's delay from the CSPRNG, as a round's probe does. Tor's own
+/// `ClockJumped` is already logged; the probe logs itself when it runs, and
+/// does not while the clock is named.
+pub(super) fn jump_probe(network: &Network) -> Input {
+    tracing::debug!(target: "tor", "a probe delay is drawn after Tor's clock jump");
+    Input::JumpProbeDrawn {
+        draw: network.probe_delay_draw(),
+    }
+}
+
+/// A descriptor round's mark, said as it arrives. The probe's delay draw is
+/// not said: its point is that no directory can predict the probe, and a
+/// log line is one more copy of it.
+pub(super) fn say_round(input: &Input) {
+    if let Input::UploadRoundEnded { tally, .. } = input {
+        tracing::info!(
+            target: "tor",
+            uploaded = tally.uploaded,
+            refused = tally.refused,
+            begun = tally.begun,
+            "descriptor round: ended"
+        );
+    }
+}
+
+/// The core's inbound facet as the link carries it. The core's clock is the
+/// process clock the link's ticks read.
+fn link_inbound(inbound: Inbound) -> shekyl_p2p::InboundFacet {
+    use shekyl_p2p::{InboundCause as LinkCause, InboundFacet};
+    match inbound {
+        Inbound::NotOffered => InboundFacet::NotOffered,
+        Inbound::Publishing { .. } => InboundFacet::Publishing,
+        Inbound::Reachable { evidence_at } => InboundFacet::Reachable {
+            evidence_at: Tick::new(evidence_at),
+        },
+        Inbound::Unreachable { cause, since } => InboundFacet::Unreachable {
+            cause: match cause {
+                InboundCause::ProbeTimedOut => LinkCause::ProbeTimedOut,
+                InboundCause::UploadsRefused => LinkCause::UploadsRefused,
+                InboundCause::ClockBehind { .. } => LinkCause::ClockBehind,
+                InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
+            },
+            since: Tick::new(since),
+        },
+    }
+}

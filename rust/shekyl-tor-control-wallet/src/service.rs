@@ -56,6 +56,7 @@ use tokio::sync::{oneshot, watch};
 
 use crate::onion_service::{publish_onion, OnionPublishAbort};
 use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
     parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
@@ -80,6 +81,10 @@ pub use shekyl_tor_control_client::control::onion::OnionPow;
 pub use shekyl_tor_control_client::control::{ControlError, EventSink, ServiceId, TorExit};
 #[doc(inline)]
 pub use shekyl_tor_control_client::onion_identity::OnionIdentity;
+// Where this crate's tor writes its notice log, inside the configured data
+// directory: a wallet that shows or keeps that log names it from here.
+#[doc(inline)]
+pub use shekyl_tor_control_client::control::LOG_FILE_NAME;
 
 /// The service-level posture — what the rest of the wallet sees. One long-lived
 /// watch, owned by the supervisor, outliving every incarnation (the §3b
@@ -600,6 +605,7 @@ async fn supervise(
                 disable_network: config.disable_network,
                 disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
+                handshake: shekyl_tor_control_client::control::HandshakeWait::Bounded,
             }),
             events: config.events.clone(),
             readiness,
@@ -670,7 +676,7 @@ async fn stop_and_reap(
         actor.stop_gracefully().await.ok();
         exit_rx.await.ok()
     };
-    match tokio::time::timeout(REAP_TIMEOUT, teardown).await {
+    match awake::timeout(REAP_TIMEOUT, teardown).await {
         Ok(exit) => exit,
         Err(_timeout) => {
             // Teardown wedged past the grace budget — force the actor down so it
@@ -709,10 +715,13 @@ fn after_failure(
     delay
 }
 
-/// Sleep `delay`, returning `true` if the shutdown signal arrived instead.
+/// Sleep `delay` of awake time, returning `true` if shutdown arrived first.
+///
+/// The gap between incarnations is patience, the same clock as the
+/// bootstrap deadline. Time that clock leaves out has not been waited.
 async fn wait_or_shutdown(delay: Duration, shutdown: &mut oneshot::Receiver<()>) -> bool {
     tokio::select! {
-        () = tokio::time::sleep(delay) => false,
+        () = awake::sleep(delay) => false,
         _ = &mut *shutdown => true,
     }
 }
@@ -749,7 +758,12 @@ async fn drive_incarnation(
     ctx: &mut IncarnationCtx<'_>,
     mut ready_rx: watch::Receiver<BootstrapState>,
 ) -> IncarnationEnd {
-    let deadline = tokio::time::Instant::now() + ctx.policy.bootstrap_deadline;
+    // Patience on the process clock (`awake`): bootstrap, SOCKS discovery,
+    // and the stable-hold below. The vanguard reconcile arm is the
+    // exception. Its delay comes from a guard's `SystemTime` expiry, and
+    // that time of day passes during an S3 sleep, which this clock leaves
+    // out, so that arm stays on tokio's timer.
+    let deadline = awake::deadline_after(ctx.policy.bootstrap_deadline);
     // Phase 1: to Ready (or death/deadline/shutdown).
     loop {
         tokio::select! {
@@ -757,7 +771,7 @@ async fn drive_incarnation(
             () = ctx.actor.wait_for_shutdown() => {
                 return IncarnationEnd::Failed(ServiceFailure::Exited(None));
             }
-            () = tokio::time::sleep_until(deadline) => {
+            () = awake::sleep_until(deadline) => {
                 return IncarnationEnd::Failed(ServiceFailure::BootstrapTimeout);
             }
             changed = ready_rx.changed() => {
@@ -794,7 +808,7 @@ async fn drive_incarnation(
     // control error is preserved rather than collapsed into a generic exit.
     let reply = tokio::select! {
         _ = &mut *ctx.shutdown => return IncarnationEnd::Shutdown,
-        () = tokio::time::sleep(ctx.policy.socks_discovery_deadline) => {
+        () = awake::sleep(ctx.policy.socks_discovery_deadline) => {
             return IncarnationEnd::Failed(ServiceFailure::Control(ControlError::Timeout));
         }
         r = ctx.actor.ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()])) => r,
@@ -887,7 +901,7 @@ async fn drive_incarnation(
     // rather than re-firing `Degraded`, and republish `recovering: false` — the
     // alarm-clear edge. A tor that never reaches a sustained Ready (a genuine
     // flapper) never forgives — it keeps alarming.
-    let reset_deadline = tokio::time::Instant::now() + ctx.policy.stable_reset;
+    let reset_deadline = awake::deadline_after(ctx.policy.stable_reset);
     let mut forgiven = false;
     loop {
         // Vanguard reconcile rides its own arm: L3 nodes average ~31.5 h and
@@ -899,6 +913,9 @@ async fn drive_incarnation(
         // number a reader would mistake for rotation policy.
         let reconcile = async {
             match ctx.vanguards.next_deadline() {
+                // Wall time, on purpose: `next_deadline` is how long until a
+                // guard's `SystemTime` expiry. This clock leaves an S3 sleep
+                // out, so it would keep an expired guard across one.
                 Some(delay) => tokio::time::sleep(delay).await,
                 None => std::future::pending().await,
             }
@@ -915,7 +932,7 @@ async fn drive_incarnation(
                 // without colliding with this arm's own borrow of it.
                 reconcile_due = true;
             }
-            () = tokio::time::sleep_until(reset_deadline), if !forgiven => {
+            () = awake::sleep_until(reset_deadline), if !forgiven => {
                 let was_degraded = *ctx.degraded;
                 *ctx.attempt = 0;
                 *ctx.degraded = false;
@@ -1028,8 +1045,8 @@ mod tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
-            &[0x5cu8; 32],
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_keypair(
+            shekyl_onion_key::OnionKeypair::ephemeral().expect("OS CSPRNG"),
         );
         let spec = OnionServiceSpec::new(identity, 80, target, 8).expect("loopback spec");
         assert_eq!(
@@ -1198,7 +1215,7 @@ mod tests {
     }
 }
 
-/// Live supervision tests — a real tor, real bootstrap, a real `SIGKILL`.
+/// Live supervision tests — a real tor, real bootstrap, a real kill from outside.
 /// `#[ignore]`-gated off the unit lane; hard-fail (never skip) when run.
 #[cfg(test)]
 mod live_tests {
@@ -1277,17 +1294,15 @@ mod live_tests {
     }
 
     /// The §3c core property end-to-end: a managed tor bootstraps to
-    /// `Ready{socks_addr}`, is murdered with SIGKILL (the crash the supervisor
+    /// `Ready{socks_addr}`, is killed from outside (the crash the supervisor
     /// exists for), and the service — without any caller action — republishes
     /// `Restarting` and then a fresh `Ready`, after which a clean shutdown
     /// leaves no orphan. The SOCKS endpoint is read from the posture channel
     /// both times (the consumers-never-cache contract exercised for real).
-    // Unix-only: the crash is delivered with `pkill -9` (deliberately an
-    // *external* SIGKILL with no handle — the shape of a real crash; exposing
-    // the child pid just for the test would soften the scenario). The
-    // integration lane is Linux; off Unix the test does not exist, so the crate
-    // stays cross-platform-buildable by construction.
-    #[cfg(unix)]
+    // The crash is an *external* kill with no handle, the shape of a real
+    // crash (`outside_kill`: a process named tor, its command line containing
+    // the data directory as text). Exposing the child pid just for the test
+    // would soften the scenario.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn crash_is_survived_respawn_reaches_ready_again() {
@@ -1333,20 +1348,16 @@ mod live_tests {
         // The safe accessor returns the same live endpoint while Ready.
         assert_eq!(service.current_socks(), Some(first_addr));
 
-        // Murder the incarnation the way a real crash would: SIGKILL, no
-        // SIGTERM, no control-connection close. The unique DataDirectory arg
+        // Kill the incarnation the way a real crash would: from outside, no
+        // stop, no control-connection close. The unique DataDirectory arg
         // identifies exactly our child.
-        let killed = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("pkill")
-                .arg("-9")
-                .arg("-f")
-                .arg(data_dir.to_str().expect("utf8 tmpdir")),
-        )
-        .expect("pkill runs");
-        assert!(killed.success(), "pkill must find the managed tor");
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(&data_dir),
+            "the managed tor under this data directory was found and killed"
+        );
 
         // The supervisor must notice and retry on its own...
-        await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
+        await_posture(&mut posture, 30, "Restarting after the kill", |p| {
             matches!(p, TorPosture::Restarting { .. } | TorPosture::Starting)
         })
         .await;
@@ -1376,8 +1387,7 @@ mod live_tests {
     /// is a slow slash. With an onion configured, `Ready` *means the onion is
     /// published at the derived address* (the publish runs before `Ready` and
     /// fail-stops on any other outcome), so reaching `Ready` again after a
-    /// SIGKILL is exactly the proof that the second incarnation republished.
-    #[cfg(unix)]
+    /// kill is exactly the proof that the second incarnation republished.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn onion_is_republished_on_every_incarnation() {
@@ -1391,8 +1401,8 @@ mod live_tests {
             .expect("bind loopback target")
             .local_addr()
             .expect("local addr");
-        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_hs_id_seed(
-            &[0x5cu8; 32],
+        let identity = shekyl_tor_control_client::onion_identity::OnionIdentity::from_keypair(
+            shekyl_onion_key::OnionKeypair::ephemeral().expect("OS CSPRNG"),
         );
         // The address the persona advertises is known before spawn (the caller
         // holds it from the spec), so witnesses can be told where to connect
@@ -1422,16 +1432,12 @@ mod live_tests {
         .await;
 
         // Crash it; the republish must happen again on the fresh incarnation.
-        let killed = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("pkill")
-                .arg("-9")
-                .arg("-f")
-                .arg(data_dir.to_str().expect("utf8 tmpdir")),
-        )
-        .expect("pkill runs");
-        assert!(killed.success(), "pkill must find the managed tor");
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(&data_dir),
+            "the managed tor under this data directory was found and killed"
+        );
 
-        await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
+        await_posture(&mut posture, 30, "Restarting after the kill", |p| {
             matches!(p, TorPosture::Restarting { .. } | TorPosture::Starting)
         })
         .await;
@@ -1451,7 +1457,6 @@ mod live_tests {
     /// the alarm clears in place (`Ready { recovering: false }`). This is the one
     /// path the pure-core KATs can't reach — it needs a real incarnation to reach
     /// `Ready`, fail, then recover.
-    #[cfg(unix)]
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn degraded_episode_clears_only_after_sustained_ready() {
@@ -1492,14 +1497,10 @@ mod live_tests {
         );
 
         // Crash it → one failure → degrade_after=1 trips the sticky alarm.
-        let killed = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("pkill")
-                .arg("-9")
-                .arg("-f")
-                .arg(data_dir.to_str().expect("utf8 tmpdir")),
-        )
-        .expect("pkill runs");
-        assert!(killed.success(), "pkill must find the managed tor");
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(&data_dir),
+            "the managed tor under this data directory was found and killed"
+        );
 
         // The crash must actually trip the alarm (degrade_after=1) — assert the
         // `Degraded` edge before the recovery, so the test can't pass on a

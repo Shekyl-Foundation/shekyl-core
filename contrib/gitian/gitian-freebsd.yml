@@ -132,8 +132,17 @@ script: |
     cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_SKIP_RPATH=ON
     make ${MAKEOPTS}
     chmod 755 bin/*
-    cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
+    cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
+    # The rc.d script that runs shekyld as the machine's service
+    # (contrib/packaging/freebsd/shekyld; RPC_CHANNEL.md §7.1). The archive
+    # is FreeBSD's only delivery, so the script travels in it.
+    mkdir bin/rc.d
+    cp ../contrib/packaging/freebsd/shekyld bin/rc.d/shekyld
+    # The tunnel's rc.d script (RPC_CHANNEL.md §8; Rick, 2026-11-16).
+    cp ../contrib/packaging/freebsd/shekyl-rpc-tunnel bin/rc.d/shekyl-rpc-tunnel
+    chmod 755 bin/rc.d
+    chmod 555 bin/rc.d/shekyld bin/rc.d/shekyl-rpc-tunnel
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
     find ${DISTNAME}/ | sort | tar --no-recursion --owner=0 --group=0 -c -T - | bzip2 -9 > ${OUTDIR}/${DISTNAME}.tar.bz2

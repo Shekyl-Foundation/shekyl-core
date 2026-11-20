@@ -52,6 +52,9 @@ fn the_crate_depends_on_no_verifier() {
         "shekyl-chain-rules",
         "shekyl-chain-store",
         "shekyl-difficulty",
+        // The network id the door judges signatures under (NI-Q4): a leaf
+        // data crate, no verifier.
+        "shekyl-network",
         "shekyl-types",
         "shekyl-units",
         "shekyl-wire",

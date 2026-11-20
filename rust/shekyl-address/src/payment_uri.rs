@@ -208,6 +208,40 @@ pub fn format_payment_uri(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AddressError, Network, PaymentAddress, ShekylAddress};
+    use shekyl_encoding::EncodingError;
+
+    /// The URI parser hands its address on as written, so the address
+    /// codec's one-string rule reaches a URI: a URI carrying an
+    /// upper-cased address does not pay.
+    #[test]
+    fn a_uri_address_has_one_string() {
+        let address = ShekylAddress::new(
+            Network::Mainnet,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; crate::MSG_SIGN_PK_LEN],
+            vec![0xcc; crate::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        for (written, pays) in [(address.clone(), true), (address.to_uppercase(), false)] {
+            let uri =
+                parse_payment_uri(&format_payment_uri(&written, None, None, None, None)).unwrap();
+            assert_eq!(
+                uri.address, written,
+                "the parser passes the address through"
+            );
+            let decoded = PaymentAddress::decode(&uri.address, Network::Mainnet);
+            assert_eq!(decoded.is_ok(), pays);
+            if !pays {
+                assert!(matches!(
+                    decoded,
+                    Err(AddressError::Bech32m(EncodingError::NotLowercase))
+                ));
+            }
+        }
+    }
 
     #[test]
     fn parse_minimal_address_only() {

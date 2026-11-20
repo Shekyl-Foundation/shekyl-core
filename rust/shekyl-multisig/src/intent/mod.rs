@@ -1,0 +1,612 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+// All rights reserved. BSD-3-Clause
+
+//! SpendIntent: the proposal that starts a multisig spend
+//! (`PQC_MULTISIG.md` §9.1–§9.4).
+//!
+//! **The intent is the only input a signer trusts** (R-7). A proposer writes
+//! it, signs the `Proposal` file that carries it with its envelope key
+//! (`shekyl_crypto_pq::multisig_envelope`, R-6), and every signer rebuilds
+//! every signing input from it alone: the recipients and fee, the inputs, the
+//! reference block, the signer set and the responder (R-5), and
+//! `kem_randomness_seed`, the root from which the outputs, the commitment
+//! blinds, the pseudo-out blinds and each input's rerandomization are
+//! derived (one registered label per derived value, `PQC_MULTISIG.md` §9.5).
+//! Nothing another member sends later can change what a signer signs.
+//!
+//! **The deadline is the reference block** (R-13). An intent expires when no
+//! block can list a spend anchored at its reference block any more, measured
+//! as consensus measures it (`shekyl_curve_tree::reference`, CEN-I11). There
+//! is no wall-clock expiry: devices in one session do not agree to the
+//! second, and a device kept in a safe may have a wrong clock. `created_at`
+//! is shown to people and checked against nothing.
+
+use std::num::NonZeroUsize;
+
+use shekyl_address::multisig_address::MIN_MULTISIG_THRESHOLD;
+use shekyl_address::Network;
+use shekyl_crypto_pq::multisig_intent::IntentSeed;
+use shekyl_curve_tree::reference;
+use shekyl_types::BlockHeight;
+use shekyl_units::AtomicUnits;
+
+mod payee;
+pub use payee::{IntentPayee, IntentRecipient, PayeeError, ResolvedPayee, ResolvedRecipient};
+
+/// Current SpendIntent version. Version 3 gives each recipient a kind: a
+/// single-signer address with the label block its output encrypts, or a
+/// group's address payload, so every member builds each output from the
+/// intent alone (R-7). Version 2 added the signer set and the responder
+/// (R-5) and dropped the proposer signature and the wall-clock expiry
+/// (R-6, R-13). Pre-genesis, so an older version is refused, not migrated.
+pub const SPEND_INTENT_VERSION: u8 = 3;
+
+// `CT_TYPE_FCMP_PLUS_PLUS_PQC` comes from the JSON authority at
+// `config/consensus_constants.json` (`build.rs`). The canonical wire ct-type
+// `shekyl_wire::transaction::CT_TYPE_FCMP` is pinned to it by the runtime
+// tripwire `wire_ct_type_matches_consensus_authority` below, and the
+// generated value itself is pinned to the genesis dense baseline (`1`) by the
+// const-evaluated `assert!` below. The reference-block window is not here:
+// `shekyl_curve_tree::reference` owns it and is pinned against CEN-I11.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/consensus_constants_generated.rs"
+));
+
+const _: () = assert!(
+    CT_TYPE_FCMP_PLUS_PLUS_PQC == 1,
+    "CT_TYPE_FCMP_PLUS_PLUS_PQC diverged from the genesis dense baseline (1, GENESIS_TX_WIRE_FORMAT.md §2.0); changing the wire type number is a consensus rule change"
+);
+
+/// Maximum recipients per intent: the consensus cap on a transaction's
+/// outputs (`shekyl_wire::transaction::MAX_OUTPUTS`). A change payment is a
+/// recipient, the group's own address, so an intent lists every output the
+/// transaction will carry. Pinned by `max_recipients_is_the_output_cap`
+/// ([`SpendIntent::validate_structural`] enforces it).
+pub const MAX_RECIPIENTS: u32 = 16;
+
+/// Maximum inputs per intent: the consensus cap on a transaction's key-image
+/// inputs (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, CEN-I4), so an
+/// intent no transaction can carry is refused before anyone signs. Pinned to
+/// that constant by `max_inputs_is_the_consensus_cap` below
+/// ([`SpendIntent::validate_structural`] enforces it).
+pub const MAX_INPUTS: u32 = 8;
+
+/// Maximum address byte length ([`SpendIntent::validate_structural`]).
+pub const MAX_ADDRESS_LEN: u32 = 65536;
+
+/// Errors during SpendIntent validation (SS9.2 invariant checks).
+#[derive(Debug, thiserror::Error)]
+pub enum SpendIntentError {
+    #[error("wrong version: expected {SPEND_INTENT_VERSION}, got {0}")]
+    WrongVersion(u8),
+
+    #[error("field '{0}' too long to serialize (length exceeds u32 wire prefix)")]
+    FieldTooLong(&'static str),
+
+    #[error("the canonical bytes do not parse at '{0}'")]
+    Malformed(&'static str),
+
+    #[error("address_fingerprint mismatch")]
+    AddressFingerprintMismatch,
+
+    #[error("no {m}-of-{n} multisig group exists (a group needs 2..=n signers)")]
+    GroupShape { n: u8, m: u8 },
+
+    #[error("proposer_index {0} >= n_total")]
+    ProposerOutOfRange(u8),
+
+    #[error("the intent names {got} signers; the group signs with {expected}")]
+    SignerCount { expected: u8, got: usize },
+
+    #[error("the signer indices are not strictly ascending")]
+    SignersNotAscending,
+
+    #[error("signer index {0} >= n_total")]
+    SignerOutOfRange(u8),
+
+    #[error("the proposer is not one of the signers")]
+    ProposerNotSigner,
+
+    #[error("the responder is not one of the signers")]
+    ResponderNotSigner,
+
+    #[error("the responder is the proposer")]
+    ResponderIsProposer,
+
+    #[error("reference block {height} is not yet usable at tip {tip}")]
+    RefBlockTooFresh { height: u64, tip: u64 },
+
+    #[error("reference block {height} has aged out at tip {tip}: the intent has expired")]
+    RefBlockTooStale { height: u64, tip: u64 },
+
+    #[error("reference_block_hash mismatch at height {height}")]
+    RefBlockHashMismatch { height: u64 },
+
+    #[error("input {index} not owned by group or already spent")]
+    InputNotOwned { index: u64 },
+
+    #[error("the recipients are not sorted, or one is repeated")]
+    RecipientsNotSorted,
+
+    #[error("recipient {index} cannot be paid on this group's network: {source}")]
+    Recipient {
+        index: usize,
+        #[source]
+        source: PayeeError,
+    },
+
+    #[error("{0} inputs; an intent spends 1..={MAX_INPUTS}")]
+    InputCount(usize),
+
+    #[error("input {0} is listed twice")]
+    DuplicateInput(u64),
+
+    #[error("{0} recipients; an intent pays at most {MAX_RECIPIENTS}")]
+    RecipientCount(usize),
+
+    #[error("a recipient address of {0} bytes exceeds {MAX_ADDRESS_LEN}")]
+    AddressTooLong(usize),
+
+    #[error("balance mismatch: inputs={inputs}, outputs+fee={outputs_plus_fee}")]
+    BalanceMismatch { inputs: u64, outputs_plus_fee: u64 },
+
+    #[error("chain_state_fingerprint mismatch")]
+    ChainStateMismatch,
+
+    #[error("serialization error: {0}")]
+    Serialization(String),
+}
+
+/// SpendIntent: the proposal message for a multisig spend (SS9.1).
+#[derive(Clone, Debug)]
+pub struct SpendIntent {
+    pub version: u8,
+    pub intent_id: [u8; 32],
+
+    /// The group's identity, signed into the canonical bytes and enforced by
+    /// invariant I1. This is the address fingerprint —
+    /// `shekyl_address::address_fingerprint` over the group's
+    /// `MultisigAddressPayload` — computed by the wallet and passed in; this
+    /// crate carries and enforces agreement on it but does not compute it (it
+    /// holds no address dependency). It replaces the former `group_id`, an
+    /// identity nothing produced: the wallet enforces that the value corresponds
+    /// to the address, the ceremony enforces that all participants agree on it.
+    pub address_fingerprint: [u8; 32],
+
+    /// The member who proposed the spend. Its `Proposal` file's envelope
+    /// signature is the proposal's signature, and the file's sender index
+    /// must equal this field.
+    pub proposer_index: u8,
+    /// The `m` members who will sign, strictly ascending, the proposer among
+    /// them (R-5). In the intent hash, so every file of the ceremony binds it.
+    pub signers: Vec<u8>,
+    /// The ephemeral responder (R-2): one of `signers`, not the proposer.
+    pub responder_index: u8,
+
+    /// Unix seconds when the proposer wrote the intent. Shown to people;
+    /// validated against nothing (R-13).
+    pub created_at: u64,
+    pub reference_block_height: u64,
+    pub reference_block_hash: [u8; 32],
+
+    pub recipients: Vec<IntentRecipient>,
+    pub fee: AtomicUnits,
+    pub input_global_indices: Vec<u64>,
+
+    pub kem_randomness_seed: IntentSeed,
+    pub chain_state_fingerprint: [u8; 32],
+}
+
+impl SpendIntent {
+    /// Compute `intent_hash = shekyl_crypto_hash::keccak256(canonical_serialize(SpendIntent))` (SS9.4).
+    ///
+    /// Fallible because canonical serialization is: a field whose length
+    /// exceeds the u32 wire prefix has no well-defined canonical encoding
+    /// (silently truncating the prefix would collide distinct intents), so
+    /// it has no well-defined hash-identity either. `validate_structural`
+    /// bounds every length well below `u32::MAX`, so this only fires on an
+    /// unvalidated, pathologically-large intent.
+    pub fn intent_hash(&self) -> Result<[u8; 32], SpendIntentError> {
+        let canonical = self.to_canonical_bytes()?;
+        Ok(shekyl_crypto_hash::keccak256(&canonical))
+    }
+
+    /// Append a `u32`-LE length taken from `len`, failing with
+    /// `FieldTooLong(field)` if it overflows the u32 wire prefix.
+    fn push_u32_len(
+        buf: &mut Vec<u8>,
+        len: usize,
+        field: &'static str,
+    ) -> Result<(), SpendIntentError> {
+        let n = u32::try_from(len).map_err(|_| SpendIntentError::FieldTooLong(field))?;
+        buf.extend_from_slice(&n.to_le_bytes());
+        Ok(())
+    }
+
+    /// Append a `u32`-LE length prefix followed by `bytes` (see `push_u32_len`).
+    fn push_len_prefixed(
+        buf: &mut Vec<u8>,
+        bytes: &[u8],
+        field: &'static str,
+    ) -> Result<(), SpendIntentError> {
+        Self::push_u32_len(buf, bytes.len(), field)?;
+        buf.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Canonical serialization for hashing (version 3):
+    ///
+    /// ```text
+    /// version(1) ‖ intent_id(32) ‖ address_fingerprint(32) ‖ proposer_index(1) ‖
+    /// u32(len) ‖ signers ‖ responder_index(1) ‖ created_at(8) ‖
+    /// reference_block_height(8) ‖ reference_block_hash(32) ‖
+    /// u32(count) ‖ { kind(1) ‖ u32(len) ‖ address ‖ [label(8)] ‖ amount(8) }* ‖ fee(8) ‖
+    /// u32(count) ‖ input_global_index(8)* ‖ kem_randomness_seed(32) ‖
+    /// chain_state_fingerprint(32)
+    /// ```
+    ///
+    /// A recipient's `label` is present for a single-signer payee only.
+    /// Integers are little-endian. Fails with `FieldTooLong` rather than
+    /// truncating a length that overflows the u32 prefix.
+    pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SpendIntentError> {
+        let mut buf = Vec::with_capacity(256);
+        buf.push(self.version);
+        buf.extend_from_slice(&self.intent_id);
+        buf.extend_from_slice(&self.address_fingerprint);
+        buf.push(self.proposer_index);
+        Self::push_len_prefixed(&mut buf, &self.signers, "signers")?;
+        buf.push(self.responder_index);
+        buf.extend_from_slice(&self.created_at.to_le_bytes());
+        buf.extend_from_slice(&self.reference_block_height.to_le_bytes());
+        buf.extend_from_slice(&self.reference_block_hash);
+
+        Self::push_u32_len(&mut buf, self.recipients.len(), "recipients")?;
+        for r in &self.recipients {
+            buf.push(r.payee.kind());
+            Self::push_len_prefixed(&mut buf, r.payee.address(), "recipient address")?;
+            if let IntentPayee::Single {
+                label_plaintext, ..
+            } = &r.payee
+            {
+                buf.extend_from_slice(label_plaintext);
+            }
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
+        }
+
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
+
+        Self::push_u32_len(
+            &mut buf,
+            self.input_global_indices.len(),
+            "input_global_indices",
+        )?;
+        for idx in &self.input_global_indices {
+            buf.extend_from_slice(&idx.to_le_bytes());
+        }
+
+        self.kem_randomness_seed.encode_into(&mut buf);
+        buf.extend_from_slice(&self.chain_state_fingerprint);
+        Ok(buf)
+    }
+
+    /// Parse [`Self::to_canonical_bytes`]' layout exactly. Every count and
+    /// length is bounded before it is read (signers by the participant cap,
+    /// recipients by [`MAX_RECIPIENTS`], addresses by [`MAX_ADDRESS_LEN`],
+    /// inputs by [`MAX_INPUTS`]), and the bytes must end with the intent.
+    /// Parsing is not validation: [`Self::validate_structural`] still runs.
+    ///
+    /// # Errors
+    ///
+    /// [`SpendIntentError::Malformed`] naming the field that does not parse.
+    pub fn from_canonical_bytes(mut bytes: &[u8]) -> Result<Self, SpendIntentError> {
+        fn take<'b>(
+            bytes: &mut &'b [u8],
+            n: usize,
+            field: &'static str,
+        ) -> Result<&'b [u8], SpendIntentError> {
+            if bytes.len() < n {
+                return Err(SpendIntentError::Malformed(field));
+            }
+            let (head, rest) = bytes.split_at(n);
+            *bytes = rest;
+            Ok(head)
+        }
+        fn arr<const N: usize>(
+            bytes: &mut &[u8],
+            field: &'static str,
+        ) -> Result<[u8; N], SpendIntentError> {
+            Ok(take(bytes, N, field)?.try_into().expect("N bytes"))
+        }
+        fn u64_of(bytes: &mut &[u8], field: &'static str) -> Result<u64, SpendIntentError> {
+            Ok(u64::from_le_bytes(arr(bytes, field)?))
+        }
+        fn count(
+            bytes: &mut &[u8],
+            max: usize,
+            field: &'static str,
+        ) -> Result<usize, SpendIntentError> {
+            let n = usize::try_from(u32::from_le_bytes(arr(bytes, field)?))
+                .map_err(|_| SpendIntentError::Malformed(field))?;
+            if n > max {
+                return Err(SpendIntentError::Malformed(field));
+            }
+            Ok(n)
+        }
+
+        let version = arr::<1>(&mut bytes, "version")?[0];
+        let intent_id = arr(&mut bytes, "intent_id")?;
+        let address_fingerprint = arr(&mut bytes, "address_fingerprint")?;
+        let proposer_index = arr::<1>(&mut bytes, "proposer_index")?[0];
+        let n_signers = count(
+            &mut bytes,
+            usize::from(shekyl_address::multisig_address::MAX_MULTISIG_PARTICIPANTS),
+            "signers",
+        )?;
+        let signers = take(&mut bytes, n_signers, "signers")?.to_vec();
+        let responder_index = arr::<1>(&mut bytes, "responder_index")?[0];
+        let created_at = u64_of(&mut bytes, "created_at")?;
+        let reference_block_height = u64_of(&mut bytes, "reference_block_height")?;
+        let reference_block_hash = arr(&mut bytes, "reference_block_hash")?;
+        let n_recipients = count(&mut bytes, MAX_RECIPIENTS as usize, "recipients")?;
+        let mut recipients = Vec::with_capacity(n_recipients);
+        for _ in 0..n_recipients {
+            let kind = arr::<1>(&mut bytes, "recipient kind")?[0];
+            let len = count(&mut bytes, MAX_ADDRESS_LEN as usize, "recipient address")?;
+            let address = take(&mut bytes, len, "recipient address")?.to_vec();
+            let payee = match kind {
+                IntentPayee::KIND_SINGLE => IntentPayee::Single {
+                    address: String::from_utf8(address)
+                        .map_err(|_| SpendIntentError::Malformed("recipient address"))?,
+                    label_plaintext: arr(&mut bytes, "recipient label")?,
+                },
+                IntentPayee::KIND_GROUP => IntentPayee::Group { address },
+                _ => return Err(SpendIntentError::Malformed("recipient kind")),
+            };
+            let amount = AtomicUnits::from_raw(u64_of(&mut bytes, "recipient amount")?);
+            recipients.push(IntentRecipient { payee, amount });
+        }
+        let fee = AtomicUnits::from_raw(u64_of(&mut bytes, "fee")?);
+        let n_inputs = count(&mut bytes, MAX_INPUTS as usize, "input_global_indices")?;
+        let input_global_indices = (0..n_inputs)
+            .map(|_| u64_of(&mut bytes, "input_global_indices"))
+            .collect::<Result<_, _>>()?;
+        let kem_randomness_seed = IntentSeed::new(&arr(&mut bytes, "kem_randomness_seed")?);
+        let chain_state_fingerprint = arr(&mut bytes, "chain_state_fingerprint")?;
+        if !bytes.is_empty() {
+            return Err(SpendIntentError::Malformed("trailing bytes"));
+        }
+        Ok(Self {
+            version,
+            intent_id,
+            address_fingerprint,
+            proposer_index,
+            signers,
+            responder_index,
+            created_at,
+            reference_block_height,
+            reference_block_hash,
+            recipients,
+            fee,
+            input_global_indices,
+            kem_randomness_seed,
+            chain_state_fingerprint,
+        })
+    }
+
+    /// Validate the invariants that need no chain view (checks 1, 3, 5-6, 11
+    /// of §9.2) for an `m_required`-of-`n_total` group: the version, the
+    /// group shape (R-11), the proposer, the signer set and the responder
+    /// (R-5), the size bounds [`MAX_INPUTS`], [`MAX_RECIPIENTS`] and
+    /// [`MAX_ADDRESS_LEN`], no input listed twice, and the recipients'
+    /// order. Nothing here reads a clock (R-13). Returns the intent's input
+    /// count, which it has checked is at least one.
+    pub fn validate_structural(
+        &self,
+        n_total: u8,
+        m_required: u8,
+    ) -> Result<NonZeroUsize, SpendIntentError> {
+        if self.version != SPEND_INTENT_VERSION {
+            return Err(SpendIntentError::WrongVersion(self.version));
+        }
+        if m_required < MIN_MULTISIG_THRESHOLD || m_required > n_total {
+            return Err(SpendIntentError::GroupShape {
+                n: n_total,
+                m: m_required,
+            });
+        }
+        if self.proposer_index >= n_total {
+            return Err(SpendIntentError::ProposerOutOfRange(self.proposer_index));
+        }
+        if self.signers.len() != usize::from(m_required) {
+            return Err(SpendIntentError::SignerCount {
+                expected: m_required,
+                got: self.signers.len(),
+            });
+        }
+        if self.signers.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(SpendIntentError::SignersNotAscending);
+        }
+        if let Some(&out) = self.signers.iter().find(|&&i| i >= n_total) {
+            return Err(SpendIntentError::SignerOutOfRange(out));
+        }
+        if !self.signers.contains(&self.proposer_index) {
+            return Err(SpendIntentError::ProposerNotSigner);
+        }
+        if !self.signers.contains(&self.responder_index) {
+            return Err(SpendIntentError::ResponderNotSigner);
+        }
+        if self.responder_index == self.proposer_index {
+            return Err(SpendIntentError::ResponderIsProposer);
+        }
+        let inputs = self.input_global_indices.len();
+        let input_count = NonZeroUsize::new(inputs)
+            .filter(|count| count.get() <= MAX_INPUTS as usize)
+            .ok_or(SpendIntentError::InputCount(inputs))?;
+        let mut listed = std::collections::HashSet::with_capacity(inputs);
+        if let Some(&twice) = self
+            .input_global_indices
+            .iter()
+            .find(|&&index| !listed.insert(index))
+        {
+            return Err(SpendIntentError::DuplicateInput(twice));
+        }
+        if self.recipients.len() > MAX_RECIPIENTS as usize {
+            return Err(SpendIntentError::RecipientCount(self.recipients.len()));
+        }
+        if let Some(long) = self
+            .recipients
+            .iter()
+            .map(|r| r.payee.address().len())
+            .find(|&len| len > MAX_ADDRESS_LEN as usize)
+        {
+            return Err(SpendIntentError::AddressTooLong(long));
+        }
+
+        if self.recipients.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(SpendIntentError::RecipientsNotSorted);
+        }
+
+        Ok(input_count)
+    }
+
+    /// Validate the intent against this member's chain view (§9.2 items 6
+    /// and 7): whether a spend anchored at the reference block can still be
+    /// listed, and the reference block's hash.
+    ///
+    /// The window is consensus's, measured from the height the next block
+    /// connects at (`shekyl_curve_tree::reference::{proof_submittable,
+    /// proof_expired}`, pinned against CEN-I11). Its end is the intent's
+    /// deadline (R-13): the last block that can list the spend is
+    /// `reference_block_height + MAX_AGE`, so the last tip at which a signer
+    /// can still submit is one below it. A reference above this member's
+    /// tip has no connecting age, so it is neither expired nor submittable:
+    /// the member's node is behind, and catching up clears it.
+    pub fn validate_temporal(
+        &self,
+        chain_tip_height: u64,
+        local_block_hash_at_ref_height: &[u8; 32],
+    ) -> Result<(), SpendIntentError> {
+        let tip = BlockHeight::from_raw(chain_tip_height);
+        let reference = BlockHeight::from_raw(self.reference_block_height);
+        if reference::proof_expired(tip, reference) {
+            return Err(SpendIntentError::RefBlockTooStale {
+                height: self.reference_block_height,
+                tip: chain_tip_height,
+            });
+        }
+        if !reference::proof_submittable(tip, reference) {
+            return Err(SpendIntentError::RefBlockTooFresh {
+                height: self.reference_block_height,
+                tip: chain_tip_height,
+            });
+        }
+
+        if self.reference_block_hash != *local_block_hash_at_ref_height {
+            return Err(SpendIntentError::RefBlockHashMismatch {
+                height: self.reference_block_height,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Every recipient resolved on `network`, in the intent's recipient
+    /// order (§9.2 item 10). That order is the index the transaction key
+    /// permutes (R-24). It is not the order of the transaction's outputs.
+    ///
+    /// # Errors
+    ///
+    /// [`SpendIntentError::Recipient`] naming the first that does not
+    /// resolve.
+    pub fn resolve_recipients(
+        &self,
+        network: Network,
+    ) -> Result<Vec<ResolvedRecipient>, SpendIntentError> {
+        self.recipients
+            .iter()
+            .enumerate()
+            .map(|(index, r)| {
+                Ok(ResolvedRecipient {
+                    payee: r
+                        .payee
+                        .resolve(network)
+                        .map_err(|source| SpendIntentError::Recipient { index, source })?,
+                    amount: r.amount,
+                })
+            })
+            .collect()
+    }
+
+    /// Validate chain state fingerprint (check 14 from SS9.2, invariant I2).
+    pub fn validate_chain_state(
+        &self,
+        local_fingerprint: &ChainStateFingerprint,
+    ) -> Result<(), SpendIntentError> {
+        let expected = local_fingerprint.compute();
+        if self.chain_state_fingerprint != expected {
+            return Err(SpendIntentError::ChainStateMismatch);
+        }
+        Ok(())
+    }
+
+    /// Validate balance (check 12 from SS9.2).
+    pub fn validate_balance(&self, input_amounts: &[AtomicUnits]) -> Result<(), SpendIntentError> {
+        let inputs_sum = AtomicUnits::checked_sum(input_amounts.iter().copied())
+            .ok_or_else(|| SpendIntentError::Serialization("input amounts overflow u64".into()))?;
+        let outputs_sum = AtomicUnits::checked_sum(self.recipients.iter().map(|r| r.amount))
+            .ok_or_else(|| SpendIntentError::Serialization("output amounts overflow u64".into()))?;
+        let outputs_plus_fee = outputs_sum
+            .checked_add(self.fee)
+            .ok_or_else(|| SpendIntentError::Serialization("outputs + fee overflow u64".into()))?;
+        if inputs_sum != outputs_plus_fee {
+            return Err(SpendIntentError::BalanceMismatch {
+                inputs: inputs_sum.to_raw(),
+                outputs_plus_fee: outputs_plus_fee.to_raw(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Chain state fingerprint computation (SS9.3).
+///
+/// Members must agree on chain state before signing. Constructed from
+/// the proposer's or verifier's local view, then compared.
+pub struct ChainStateFingerprint {
+    pub reference_block_hash: [u8; 32],
+    pub input_global_indices: Vec<u64>,
+    pub input_eligible_heights: Vec<u64>,
+    pub input_amounts: Vec<AtomicUnits>,
+}
+
+impl ChainStateFingerprint {
+    /// Compute the 32-byte fingerprint per SS9.3.
+    pub fn compute(&self) -> [u8; 32] {
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(&self.reference_block_hash);
+
+        let mut sorted_indices = self.input_global_indices.clone();
+        sorted_indices.sort();
+        for idx in &sorted_indices {
+            preimage.extend_from_slice(&idx.to_le_bytes());
+        }
+
+        let mut sorted_heights = self.input_eligible_heights.clone();
+        sorted_heights.sort();
+        for h in &sorted_heights {
+            preimage.extend_from_slice(&h.to_le_bytes());
+        }
+
+        let mut sorted_amounts = self.input_amounts.clone();
+        sorted_amounts.sort();
+        for a in &sorted_amounts {
+            preimage.extend_from_slice(&a.to_raw().to_le_bytes());
+        }
+
+        shekyl_crypto_hash::keccak256(&preimage)
+    }
+}
+
+#[cfg(test)]
+mod tests;

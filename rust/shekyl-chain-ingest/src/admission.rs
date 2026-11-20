@@ -52,7 +52,7 @@ use std::time::Duration;
 
 use shekyl_chain_rules::{effective_median_at, HeaderView, Tip, ViewRead};
 use shekyl_chain_store::store::{ChainStore, SnapshotView, StoreError};
-use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
+use shekyl_economics::EconomicParams;
 use shekyl_types::{BlockHash, TxHash};
 use shekyl_wire::block::MAX_BLOCK_HEADER_SIZE;
 
@@ -78,17 +78,22 @@ impl ArrivalBound {
         let medians = effective_median_at(&view, connecting)?;
         Ok((
             tip.map(|t| t.hash),
-            Self::of_long_term(medians.long_term_effective_median.to_raw()),
+            Self::of_long_term(
+                medians.long_term_effective_median.to_raw(),
+                shekyl_economics::economic_params(),
+            ),
         ))
     }
 
     /// The bound for a long-term effective median of `ltem` (module docs):
-    /// the header bound plus twice the ceiling limit `2 · S · LTEM`.
+    /// the header bound plus twice the ceiling limit, the set's limit at the
+    /// surge ceiling `S · LTEM` (`2 · S · LTEM` at the shipped set).
     #[must_use]
-    pub fn of_long_term(ltem: u64) -> Self {
-        let ceiling_limit = ltem
-            .saturating_mul(BLOCK_WEIGHT_SURGE_FACTOR)
-            .saturating_mul(2);
+    pub fn of_long_term(ltem: u64, params: &EconomicParams) -> Self {
+        let ceiling_limit = shekyl_economics::block_weight_limit(
+            ltem.saturating_mul(params.block_weight_surge_factor),
+            params,
+        );
         Self(
             u64::try_from(MAX_BLOCK_HEADER_SIZE)
                 .expect("the header bound fits u64")
@@ -284,9 +289,10 @@ mod tests {
     #[test]
     fn the_bound_is_the_header_and_twice_the_ceiling_limit() {
         let ltem = 300_000;
-        let bound = ArrivalBound::of_long_term(ltem);
+        let bound = ArrivalBound::of_long_term(ltem, &EconomicParams::default());
         let header = u64::try_from(MAX_BLOCK_HEADER_SIZE).expect("fits");
-        assert_eq!(bound.0, header + 2 * (2 * BLOCK_WEIGHT_SURGE_FACTOR * ltem));
+        let s = shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
+        assert_eq!(bound.0, header + 2 * (2 * s * ltem));
         assert!(bound.admits(bound.0));
         assert!(!bound.admits(bound.0 + 1), "one byte over is refused");
     }

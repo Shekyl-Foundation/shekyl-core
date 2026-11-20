@@ -36,7 +36,7 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 
 [features]
-# Arms `shekyl-p-serve`'s ephemeral `TestKeySigner` as a `PassKey`, so a host
+# Arms `shekyl-p-serve`'s ephemeral `TestReceiptKeySigner` as a `PassKey`, so a host
 # under test can be bound with a key whose public half the test holds. Dev
 # edge only (below); `scripts/ci/check_p_fetch_dep_cut.py` asserts it is
 # unreachable from every production graph.
@@ -64,6 +64,9 @@ tokio = { version = "1", default-features = false, features = [
 # under test (which never launches — the composition test drives it with a
 # binary that cannot pass the hash gate).
 tempfile = "3"
+# Composition tests mint an ephemeral onion. Production takes an
+# `OnionIdentity` and does not name the keypair crate.
+shekyl-onion-key = { path = "../shekyl-onion-key" }
 
 [lints]
 workspace = true

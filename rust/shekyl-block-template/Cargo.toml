@@ -26,7 +26,7 @@ license.workspace = true
 # The wire format: `Block`, `BlockHeader`, `Transaction`, the coinbase
 # `tx_extra` grammar's one constructor (`build_coinbase_extra`, TXE-Q6′).
 shekyl-wire = { path = "../shekyl-wire" }
-# Header/hash newtypes (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`,
+# Header/hash newtypes (`BlockHash`, `CurveTreeRoot`, `SectionRoot`,
 # `BlockHeight`, `BlockCount`, `Timestamp`, `TxHash`).
 shekyl-types = { path = "../shekyl-types" }
 shekyl-units = { path = "../shekyl-units" }
@@ -42,13 +42,6 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # header timestamp is checked against the future limit with the rule's
 # function, not a restatement of it.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
-# The tx public key is `r·G` for the caller's tx secret `r`; the same
-# derivation `shekyl-genesis-tool::txkey::tx_pubkey` performs.
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
-# The coinbase secret `r` is held in a `Zeroizing<[u8; 32]>` (rule 35) and the
-# reduced scalar in a `Zeroizing<Scalar>` — the dalek `zeroize` feature above
-# is what gives `Scalar` its `Zeroize` impl.
-zeroize = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
@@ -61,6 +54,11 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # commit for CEN-B4 to pass it (slice 8 row 10). Already in the graph via
 # the rules crate; dev-only for the same reason as that edge.
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The fill's batch offer against the single-offer walk over random
+# operands (`fill.rs`). The workspace's version, already in `Cargo.lock`.
+proptest = "1"
+# The fixtures' miner keys are `b·G` for fixed scalars.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

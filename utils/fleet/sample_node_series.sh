@@ -121,8 +121,8 @@ fi
 echo "per-node summary (floor = $FLOOR)"
 awk -F'\t' -v floor="$FLOOR" '
   # Candidates are WHITE PLUS GRAY. Outbound connection-making draws on both --
-  # net_node.inl:1841-1847 falls back to gray once white is exhausted, and the
-  # non-pruning branch starts from gray -- so a white-only figure understates
+  # the Rust dialer (shekyl-dialer, owner/wake.rs) refills from
+  # white and falls through to gray candidates -- so a white-only figure understates
   # what a node can recover to, and reports a node with white=0 and a healthy
   # gray list as candidate-less. Candidate-less is the suppression failure this
   # series exists to detect, so understating it is the one direction that

@@ -1,9 +1,6 @@
 ---
 description: Network type selects data, never control flow, on the consensus/validation surface. Apply when adding or reviewing any code that branches on nettype (MAINNET/TESTNET/STAGENET/FAKECHAIN) in cryptonote_core/, checkpoints/, blockchain_db/, or their Rust successors — and when designing test-network seams.
 globs:
-  - src/cryptonote_core/**
-  - src/checkpoints/**
-  - src/blockchain_db/**
   - rust/**
 ---
 
@@ -48,11 +45,11 @@ Nettype selecting a code path is the defect.
    it can never just fall out of an `if`.** If mainnet genuinely needs
    a check that another network cannot run, that is a design decision:
    it gets a ruling with its own falsifier, and the mechanism must be
-   *armed explicitly, pinned, and loud* — the `SEEDHASH_EPOCH`
-   override is the house pattern (must be armed, records its schedule
-   in the datadir and refuses to reopen under a different one, warns
-   loudly that its blocks validate only among nodes running the same
-   override; `blockchain.cpp:644–653`). What is forbidden is
+   *armed explicitly, pinned, and loud* — the regtest settlement-epoch
+   lever is the house pattern (`arm_settlement_epoch_override_for_regtest`,
+   `shekyl-archival-retention`: armed at startup or refused, an invalid
+   or late arm a typed refusal and never a silent fall-back, refused
+   again by the store at open). What is forbidden is
    divergence that announces nothing — the silent skip
    (`CEN-B5`'s FAKECHAIN root-check skip was the counter-example this
    rule was written to retire — retired 2026-09-05, PR #623, once the
@@ -66,17 +63,20 @@ Nettype selecting a code path is the defect.
    arm without the check (census §7 #17, fixed §7 #18). A skipped
    check is not a check the tests exercise on another nettype; it is a
    check nothing exercises.
-3. **Enforcement is two-sided.** The negative side: the
-   `check_network_uniformity.sh` gate flags any *new* public-nettype
-   equality **or inequality** branch in the fenced directories against
-   an annotated allowlist (`!= MAINNET` guards control flow exactly as
-   `== MAINNET` does — the since-deleted `core::update_checkpoints` guard
-   is the worked instance) (rule 47 shape — every allowlist entry names its
-   disposition and its owner). The positive side (stronger, owed by
-   the round that touches the surface): the same validator tests run
-   against **all** network parameter sets — a parameterized suite
-   proves there is nothing to branch on, where the gate only catches
-   someone adding a branch.
+3. **Enforcement is two-sided.** The negative side is
+   `scripts/ci/check_network_uniformity.py` (grep-gates): it flags every
+   test of a `Network` variant (`==`, `!=`, `matches!`, `if let`, a
+   `match` arm) in the non-test code of the Rust consensus crates
+   (`shekyl-chain-rules`, `-chain-ingest`, `-chain-store`, `-difficulty`,
+   `-economics`, `-consensus`, `-mempool`, `-chain-sync`) against an
+   annotated allowlist, one for one: every live hit has an entry, every
+   entry is hit, and the counts match (a duplicated branch is red on the
+   totals). `!=` guards control flow exactly as `==` does. Passing a
+   variant as a value is data and is not a hit. The positive side
+   (stronger, owed by the round that touches the surface): the same
+   validator tests run against **all** network parameter sets — a
+   parameterized suite proves there is nothing to branch on, where a gate
+   only catches someone adding a branch.
 4. **The allowlist shrinks, never grows silently.** Adding an
    allowlist entry is a claim you defend: it requires either the rule
    2 ratification trail or a named migration owner. Data-selection

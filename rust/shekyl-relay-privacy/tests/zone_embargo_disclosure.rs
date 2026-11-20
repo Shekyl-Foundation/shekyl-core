@@ -120,7 +120,9 @@ fn observations_for_95(kl: f64) -> f64 {
 
 #[test]
 fn zone_embargo_discrimination_rises_with_the_hop_gap() {
-    let (clearnet_ticks, clearnet_secs) = embargo_of(175);
+    // The shipped clearnet hop (§72.2: the modal door sequence plus 50 ms).
+    let (clearnet_ticks, clearnet_secs) =
+        embargo_of(DandelionParams::adopted().time_between_hop_ms.ms());
     println!("\n  clearnet embargo: {clearnet_secs}s ({clearnet_ticks} ticks)\n");
 
     // --- Negative control -------------------------------------------------

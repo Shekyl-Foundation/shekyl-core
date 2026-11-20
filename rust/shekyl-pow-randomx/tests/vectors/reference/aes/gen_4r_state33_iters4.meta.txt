@@ -43,6 +43,7 @@ trailing `final_state` segment (cf. `gen_1r_state42_iters4.bin`).
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen gen_4r_state33_iters4
 output_size = 256 bytes

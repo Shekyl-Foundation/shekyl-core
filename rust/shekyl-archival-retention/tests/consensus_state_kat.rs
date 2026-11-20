@@ -49,7 +49,6 @@ fn consensus_state_kat_v1() {
                 serve_credit: r["serve_credit"].as_bool().unwrap_or(false),
                 join_settlement_epoch: r["join_epoch"].as_u64().unwrap_or(0),
                 bad_intervals: bad,
-                is_foundation: r["foundation"].as_bool().unwrap_or(false),
             }
         })
         .collect();
@@ -70,7 +69,7 @@ fn consensus_state_kat_v1() {
     }
 
     // Composed epoch-close replay — the exact computation the daemon delegates
-    // through `shekyl_archival_epoch_close_compute`.
+    // through the epoch-close FFI (deleted by `DEL-008`).
     let ec = &doc["epoch_close"];
     assert!(
         !ec.is_null(),

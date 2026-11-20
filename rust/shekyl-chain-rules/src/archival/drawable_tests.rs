@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::{ReceiptSignPk, SlashLogEntry};
-use shekyl_types::{ArchivalLength, SHARD_LENGTH};
+use shekyl_types::{ArchivalLength, BlockHash, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 
 use shekyl_archival_retention::SLASH_GRACE_EPOCHS;
@@ -182,9 +182,21 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
         SETTLEMENT_EPOCH_BLOCKS / 2,
         SETTLEMENT_EPOCH_BLOCKS - 1,
     ] {
-        let horizon = draw_horizon(r, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
-        let (count, next) = draw_count(d, shortfall, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-            .expect("the schedule's epoch and horizon are non-zero");
+        let horizon = draw_horizon(
+            r,
+            SETTLEMENT_EPOCH_BLOCKS,
+            CHALLENGE_RESPONSE_BLOCKS,
+            shekyl_archival_retention::archival_params(),
+        );
+        let (count, next) = draw_count(
+            d,
+            shortfall,
+            horizon,
+            SETTLEMENT_EPOCH_BLOCKS,
+            carry,
+            shekyl_archival_retention::archival_params(),
+        )
+        .expect("the schedule's epoch and horizon are non-zero");
         assert_eq!(count, 0, "no draw at block {r} of epoch 0");
         carry = next;
     }
@@ -192,7 +204,7 @@ fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
 
     // Whatever seed a block committed to, and whatever it hashes to, there
     // is no pair for a draw to select.
-    const BLOCK_HASH: [u8; 32] = [0x22; 32];
+    const BLOCK_HASH: BlockHash = BlockHash::from_bytes([0x22; 32]);
     for seed in [[0u8; 32], [0x11; 32]] {
         assert_eq!(
             select_draw(&seed, &BLOCK_HASH, 0, d, |_| Ok::<_, ()>(true)),
@@ -594,6 +606,7 @@ fn the_recorded_digest_is_missing_unopened_or_drift() {
     let h_open = BlockHeight::from_raw(200);
     let empty = DrawableEpoch::new(
         epoch,
+        None,
         Vec::<(PCanonicalId, ReceiptSignPk)>::new(),
         Vec::<DrawablePair>::new(),
     )

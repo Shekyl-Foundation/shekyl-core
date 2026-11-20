@@ -72,6 +72,20 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> HeaderView<'id> for Outp
 }
 
 impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for OutputsOnly<F> {
+    type Bundles<'m>
+        = crate::harness::NoBundleRows<Infallible>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        _: &'m crate::DrawableMemo,
+        _: BlockHeight,
+        _: shekyl_archival_retention::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        crate::harness::NoBundleRows::new()
+    }
+
     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
         Ok(false)
     }

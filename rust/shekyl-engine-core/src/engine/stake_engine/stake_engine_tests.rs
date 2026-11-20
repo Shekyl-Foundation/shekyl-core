@@ -45,9 +45,7 @@ use super::*;
 use super::helpers::{
     draw_entry_gap_guarded, entry_gap_degeneracy_run, entry_gap_degeneracy_run_is_minimal,
 };
-use super::persona::{
-    ActivatePersona, ActivePersona, EraseReleasedShards, MintPersonaHandle, ServingBodies,
-};
+use super::persona::{ActivatePersona, ActivePersona, MintPersonaHandle};
 use super::types::PersonaIdentity;
 use crate::engine::bond_assembly::FundingInputContext;
 use crate::engine::emission_claim::self_check_claims;
@@ -110,7 +108,7 @@ async fn active_persona_payment_destination_is_recovered_by_p_dual_scan() {
     let amount = 50_000u64;
     let output_index = 7u64;
     let constructed = construct_output(
-        &[0x5Au8; 32],
+        &shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32]),
         &x25519_pk,
         destination.ml_kem_ek(),
         destination.spend_pk().as_canonical_bytes(),
@@ -177,11 +175,11 @@ fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
     use shekyl_crypto_pq::output::{construct_output, scan_output_recover};
 
     let keys = derive_bundle(0);
-    let tx_key_secret = [0x5Au8; 32];
+    let tx_key = shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32]);
 
     for output_index in [0u64, 1, 7, 255, 1_000_000] {
         let constructed = construct_output(
-            &tx_key_secret,
+            &tx_key,
             &keys.x25519_pk,
             &keys.ml_kem_ek,
             keys.spend_pk.as_canonical_bytes(),
@@ -303,7 +301,7 @@ async fn activate_returns_genesis_frozen_identity() {
 
 // §10.1 robustness #3 — identity is deterministic across a respawn: a fresh
 // actor over a fresh derivation of the same slot projects byte-identical
-// identity. The runtime consumer of the `ARCHIVAL_P_DERIVE_V1` freeze.
+// identity. The runtime consumer of the `ARCHIVAL_P_DERIVE_V2` freeze.
 #[tokio::test]
 async fn identity_is_deterministic_across_respawn() {
     let first = {
@@ -324,10 +322,10 @@ async fn identity_is_deterministic_across_respawn() {
 // SH-2b-1: the actor hands out an onion **serving credential**, and it is the
 // one the pinned derivation says it should be.
 //
-// The oracle is derived independently — `derive_p_hs_id_seed` straight from the
-// master seed, then expanded — rather than read back off the same bundle the
-// actor used. Comparing the actor's answer to the bundle it holds would assert
-// only that a field was copied; going through the derivation asserts the
+// The oracle is derived independently — `derive_p_onion_keypair` straight
+// from the master seed — rather than read back off the same bundle the actor
+// used. Comparing the actor's answer to the bundle it holds would assert only
+// that a field was copied; going through the derivation asserts the
 // credential is the persona's, which is what a `.onion` address means.
 //
 // Compared on `service_id`, deliberately: that is the public half, it is what
@@ -344,13 +342,13 @@ async fn the_onion_credential_matches_the_pinned_derivation() {
             .await
             .expect("held slot yields a credential");
 
-        let seed = shekyl_crypto_pq::archival_p::derive_p_hs_id_seed(
-            &super::test_fixtures::TEST_SEED,
-            shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
-            shekyl_crypto_pq::account::SeedFormat::Bip39,
-            slot,
+        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_keypair(
+            shekyl_crypto_pq::archival_p::derive_p_onion_keypair(
+                &super::test_fixtures::TEST_SEED,
+                shekyl_crypto_pq::account::Network::Mainnet,
+                slot,
+            ),
         );
-        let oracle = shekyl_tor_control_wallet::service::OnionIdentity::from_hs_id_seed(&seed);
 
         assert_eq!(
             minted.service_id(),
@@ -536,6 +534,7 @@ fn spawn_without_ambient_runtime_panics() {
         BTreeSet::new(),
         None,
         ephemeral_body_store(),
+        shekyl_network::HARNESS_NETWORK_ID,
     );
 }
 
@@ -547,9 +546,10 @@ fn message_and_reply_types_are_send() {
     assert_send::<MintPersonaHandle>();
     assert_send::<ActivatePersona>();
     assert_send::<ActivePersona>();
-    assert_send::<ServingBodies>();
-    assert_send::<EraseReleasedShards>();
-    assert_send::<shekyl_p_store::BodyStoreReader>();
+    assert_send::<super::body_store_actor::OpenHeldShard>();
+    assert_send::<super::body_store_actor::ReadHeldChunk>();
+    assert_send::<super::body_store_actor::EraseShards>();
+    assert_send::<shekyl_p_store::HeldShard>();
     assert_send::<PersonaHandle>();
     assert_send::<PersonaIdentity>();
     assert_send::<StakeEngineError>();
@@ -884,11 +884,12 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
             bundles,
             bonded: BTreeSet::new(),
             active: None,
-            bodies: ephemeral_body_store(),
+            network: shekyl_network::HARNESS_NETWORK_ID,
             #[cfg(feature = "conformance")]
-            self_cert: TestSelfCert::Skip,
+            self_cert: crate::engine::stake_engine::types::TestSelfCert::Skip,
             observer: Box::new(Recorder(Arc::clone(&recorded))),
         }),
+        bodies: super::body_store_actor::BodyStoreHandle::spawn(ephemeral_body_store()),
     };
 
     let h0 = handle
@@ -954,7 +955,7 @@ async fn plan_bond_post_emits_gf7_draw_and_schedule_events() {
 // ---- SP-3/SP-5: the offloaded dual-extractor scan-step ----
 
 use shekyl_crypto_pq::kem::HybridKemPublicKey;
-use shekyl_scanner::bench_fixtures::scannable_block_for_recipient;
+use shekyl_scanner::bench_fixtures::{fresh_tx_key, scannable_block_for_recipient};
 use shekyl_types::{BlockHeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{BondPost, BondPostKind, Input};
@@ -972,7 +973,7 @@ fn block_funding(slot: u32) -> ScannableBlock {
         x25519: p.x25519_pk,
         ml_kem: p.ml_kem_ek.to_vec(),
     };
-    scannable_block_for_recipient(1, &kem, p.spend_pk.as_canonical_bytes())
+    scannable_block_for_recipient(1, &kem, p.spend_pk.as_canonical_bytes(), &fresh_tx_key())
 }
 
 /// Append a JoinMarket bond-post for persona `slot` to a block's first tx.
@@ -992,10 +993,7 @@ fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
         bond_credit: 1_000,
         bond_debit: 0,
     };
-    block.transactions[0]
-        .prefix
-        .inputs
-        .push(Input::BondPost(Box::new(post)));
+    block.transactions[0].modify(|tx| tx.prefix.inputs.push(Input::BondPost(Box::new(post))));
     block
 }
 
@@ -1234,14 +1232,14 @@ mod s6_self_cert {
     // reaches the `pub(super)` decision helper by path rather than widening the
     // facade for a test-only item.
     use crate::engine::stake_engine::actor::{run_session_self_cert, StakeEngineStartError};
-    use crate::engine::stake_engine::types::{StakeEngineArgs, TestSelfCert};
-    use kameo::actor::Spawn;
-    use shekyl_crypto_pq::archival_p::ArchivalPKeys;
+    use crate::engine::stake_engine::test_fixtures::{spawn_with_self_cert, TestSelfCert};
 
     /// The **decision**: a stuck RNG (constant output) grades non-conformant,
     /// so the extracted self-cert returns the typed start error. Proves
-    /// fail-stop *decides* correctly without spawning; the full
-    /// spawn→`OpenError` path with a degenerate source is the Round-2 test.
+    /// fail-stop *decides* correctly without spawning. The spawn's fail-stop
+    /// is `degenerate_self_cert_fail_stops_spawn` below; the wallet open's
+    /// refusal is the lifecycle suite's
+    /// `a_failed_random_source_check_refuses_the_open_and_stops_its_actors`.
     #[test]
     fn run_session_self_cert_rejects_stuck_rng() {
         struct ConstRng(u64);
@@ -1256,27 +1254,6 @@ mod s6_self_cert {
             matches!(result, Err(StakeEngineStartError::RngSelfCertFailed(_))),
             "a stuck RNG must fail the session self-cert, got {result:?}"
         );
-    }
-
-    /// Build a handle with an explicit self-cert mode (the bulk-test
-    /// `spawn_over` uses `Skip`; the S6 tests need `RealOsRng`/`Degenerate`).
-    fn spawn_with_self_cert(held: &[u32], mode: TestSelfCert) -> StakeEngineHandle {
-        let bundles: BTreeMap<PSlot, ArchivalPKeys> = held
-            .iter()
-            .map(|&s| (PSlot::from_raw(s), derive_bundle(s)))
-            .collect();
-        let args = StakeEngineArgs {
-            bundles,
-            bonded: BTreeSet::new(),
-            active: None,
-            bodies: ephemeral_body_store(),
-            self_cert: mode,
-            #[cfg(feature = "gf7-hooks")]
-            observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
-        };
-        StakeEngineHandle {
-            actor: StakeEngine::spawn(args),
-        }
     }
 
     /// The **wiring**: the production `OsRng` adapter grades conformant, so a
@@ -1305,8 +1282,8 @@ mod s6_self_cert {
     /// failure (the actor never enters its message loop), the eager
     /// observation (`wait_for_self_cert`) surfaces it as `Err`, and the actor
     /// is dead — any later op collapses to the terminal `StakeActorUnavailable`.
-    /// (At the wallet-open path this same `Err` becomes
-    /// `OpenError::StakeRngSelfCertFailed`.)
+    /// (At the wallet-open path this same failure is logged, and the open
+    /// returns the unit `OpenError::StakeRngSelfCertFailed`.)
     #[tokio::test(flavor = "multi_thread")]
     async fn degenerate_self_cert_fail_stops_spawn() {
         // Force a degenerate source so `on_start` returns Err and the actor
@@ -1347,7 +1324,6 @@ mod emission_claim_assembly {
     use shekyl_tx_builder::{LeafEntry, SpendInput};
     use shekyl_types::BlockHeight;
     use shekyl_wire::{Ct, Transaction};
-    use zeroize::Zeroizing;
 
     use crate::engine::backing_set::{BackingSet, ClaimOperands, MembershipPath};
     use crate::engine::bond_assembly::SpentRecordsDurablyPruned;
@@ -1523,7 +1499,7 @@ mod emission_claim_assembly {
                 // construction; the gate has its own boundary test in
                 // `emission_claim.rs`).
                 fee_floor: 0,
-                tx_key: TxKeyDraw::Fresh,
+                tx_key: shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
             })
             .await
             .expect("emission-claim assembly completes end-to-end");
@@ -1624,31 +1600,36 @@ mod emission_claim_assembly {
         assert_eq!(reward_commits[0].amount_plain, reply.total_reward);
         let vout_reward_sum: u64 = reward_commits.iter().map(|c| c.amount_plain).sum();
 
-        // (2) The erase rule: remove the emission vin WHOLESALE from the
-        // parsed prefix; hash what remains through the wire crate's own
-        // prefix-hash path (independent of the builder's from-parts
-        // hasher).
+        // (2) The erase rule: tx_signable is framed over the prefix with the
+        // emission vin removed WHOLESALE (CEN-J22), hashed through the wire
+        // crate's own path (independent of the builder's from-parts hasher).
+        let net = shekyl_network::HARNESS_NETWORK_ID;
+        let tx_signable = tx.tx_signable(&net);
         let full_prefix_hash = tx.prefix_hash();
+        let un_erased = shekyl_wire::tx_signable(&net, full_prefix_hash, tx.ct.base_hash());
         tx.prefix.inputs.remove(emission_index);
-        let signable = tx.prefix_hash();
+        assert_eq!(
+            tx_signable,
+            shekyl_wire::tx_signable(&net, tx.prefix_hash(), tx.ct.base_hash()),
+            "tx_signable is framed over the vin-less prefix"
+        );
 
-        // Premise arm: the erase is load-bearing — the vin-less hash
-        // differs from the full prefix hash, and the auths REFUSE the
-        // wrong (un-erased) operand. Without this, the accepts below
-        // could go vacuously green if the two hashes ever coincided.
-        assert_ne!(signable, full_prefix_hash, "the erase must change the hash");
-        emission_vin_verify_auth(&vin, &reward_commits, full_prefix_hash.as_bytes())
-            .expect_err("auths must refuse a signable hash that was not erase-derived");
+        // Premise arm: the erase is load-bearing — the message over the full
+        // prefix differs, and the auths REFUSE it. Without this, the accepts
+        // below could go vacuously green if the two ever coincided.
+        assert_ne!(tx_signable, un_erased, "the erase must change the message");
+        emission_vin_verify_auth(&vin, &reward_commits, &un_erased, &net)
+            .expect_err("auths must refuse a message that was not erase-derived");
 
         // The three landed-verifier legs over the PARSED vin and the
         // recomputed operands: membership proof + leaf gate, both role
         // auths, and the economics recompute. A builder/daemon drift in
         // the signable hash, index derivation, commit set, or either
         // auth key refuses here.
-        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, signable.to_bytes())
-            .expect("backing leg verifies against the erase-rule hash");
-        emission_vin_verify_auth(&vin, &reward_commits, signable.as_bytes())
-            .expect("both auth legs verify against the erase-rule hash");
+        emission_vin_verify_backing(&vin, &tree_root, depth, &tx_signable)
+            .expect("backing leg verifies against the erase-rule message");
+        emission_vin_verify_auth(&vin, &reward_commits, &tx_signable, &net)
+            .expect("both auth legs verify against the erase-rule message");
         self_check_claims(source, &vin, vout_reward_sum)
             .expect("claims leg verifies against the paired source");
     }
@@ -1733,16 +1714,17 @@ mod emission_claim_assembly {
             .await
             .expect("slot 0 held");
         let shape = DifferentialShape::build();
-        let tx_key = Zeroizing::new([0x5cu8; 32]);
+        // One key, pinned, so the two assemblies share it.
+        const TX_KEY: [u8; 32] = [0x5cu8; 32];
 
-        // The handler's claim, drawing the fixed key.
+        // The handler's claim, under the pinned key.
         let reply = handle
             .assemble_emission_claim(AssembleEmissionClaim {
                 handle: h,
                 operands: shape.operands(),
                 tree_ctx: shape.tree_ctx.clone(),
                 fee_floor: 0,
-                tx_key: TxKeyDraw::Fixed(tx_key.clone()),
+                tx_key: shekyl_crypto_pq::TxKey::seeded(TX_KEY),
             })
             .await
             .expect("the handler assembles the differential's claim");
@@ -1757,7 +1739,7 @@ mod emission_claim_assembly {
         assert_eq!(claims.total_reward, reply.total_reward);
         let drivers = assemble_emission_claim(
             &shape.keys,
-            &tx_key,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY),
             vec![shape.spend_input(&shape.fee_record)],
             shape.spend_input(&shape.backing_record),
             ClaimTerms {
@@ -1767,6 +1749,8 @@ mod emission_claim_assembly {
                 reward_amount_plain: claims.reward_amount_plain,
             },
             shape.fee,
+            // The id the actor under test was spawned with (`test_fixtures`).
+            &shekyl_network::HARNESS_NETWORK_ID,
             &shape.tree_ctx,
         );
 
@@ -1798,10 +1782,11 @@ mod emission_claim_assembly {
         let root = shape.tree_ctx.tree_root.as_bytes();
         let depth = shape.tree_ctx.tree_depth;
         let full = Transaction::from_bytes(&drivers.bytes).expect("parses");
+        let net = shekyl_network::HARNESS_NETWORK_ID;
         assert_eq!(
-            full.prefix_hash(),
-            drivers.prefix_hash,
-            "the prefix hash the proofs bound"
+            full.tx_signable(&net),
+            drivers.tx_signable,
+            "the message every proof bound"
         );
         let mut erased = full.clone();
         erased
@@ -1809,16 +1794,22 @@ mod emission_claim_assembly {
             .inputs
             .retain(|i| !matches!(i, Input::ArchivalRewardEmission { .. }));
         assert_eq!(
-            erased.prefix_hash(),
-            drivers.signable,
-            "the erase-rule signable hash"
+            shekyl_wire::tx_signable(&net, erased.prefix_hash(), full.ct.base_hash()),
+            drivers.tx_signable,
+            "framed over the erase-rule prefix"
         );
-        emission_vin_verify_backing(&drivers.vin, root, depth, drivers.signable.to_bytes())
-            .expect("the driver's backing proof verifies");
+        emission_vin_verify_backing(
+            &drivers.vin,
+            &shekyl_types::CurveTreeRoot::from_bytes(*root),
+            depth,
+            &drivers.tx_signable,
+        )
+        .expect("the driver's backing proof verifies");
         emission_vin_verify_auth(
             &drivers.vin,
             &drivers.reward_commits,
-            drivers.signable.as_bytes(),
+            &drivers.tx_signable,
+            &net,
         )
         .expect("the driver's dual auth verifies");
         self_check_claims(

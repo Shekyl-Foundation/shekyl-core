@@ -1,0 +1,80 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-forge"
+description = "The chain forge (CHAIN_FORGE.md §11): the plan schema, the seed derivation, a forged chain's manifest and blocks.txt, and the diff. The executor is a test-kind target over the scenario driver. Never a production dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The library's normal edges are the plan's and the manifest's formats and
+# the seed derivation, nothing else: no driver, no harness, no seeded
+# entry point (CHAIN_FORGE.md §11.1). A crate that reads a manifest takes
+# this library alone. No shipped build links this crate
+# (`scripts/ci/shipped_graph.py` classifies it NOT_SHIPPED, and the
+# production graph check refuses it in a shipped graph).
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+hex = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+# The test-kind targets: the cross-architecture probe of the seeded
+# primitives (`tests/primitives_across_architectures.rs`). `seeded-rng` is
+# TEST_ONLY (check_test_only_features.py); a dev edge enables it.
+[dev-dependencies]
+# The scenario driver, public under the TEST_ONLY `forge` feature (seam T5):
+# the executor builds every block through it. This edge is `forge`'s one
+# enabler.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", features = ["forge"] }
+# The corpus the executor writes, through the format's one writer.
+shekyl-corpus = { path = "../shekyl-corpus" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+# The executor's other edges: the spender's seeded spends, the per-source
+# proof seeds, the consensus types it plans with, the trace's hasher and
+# its budget, the runtime the driver's actors run on, the trace's scratch
+# store, and the OS randomness a negative control swaps a source to.
+shekyl-harness-spender = { path = "../shekyl-harness-spender", features = ["seeded-rng"] }
+shekyl-tx-builder = { path = "../shekyl-tx-builder", features = ["seeded-rng"] }
+shekyl-archival-retention = { path = "../shekyl-archival-retention", features = ["seeded-rng"] }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-network = { path = "../shekyl-network" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-hasher = { path = "../shekyl-hasher" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
+# The producer plan (`executor/produce.rs`): the ring the templates draw
+# from, the fetch scheduler the producer reads through, the persona serving
+# its shard over loopback on the production serve loop, and the tip cache
+# its anchor gate reads. `test-signer` (TEST_ONLY) is what exposes
+# `signer_over_tip`; no shipped build has it (check_p_fetch_dep_cut.py).
+shekyl-bundle-producer = { path = "../shekyl-bundle-producer", features = ["seeded-rng"] }
+shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
+shekyl-p-host = { path = "../shekyl-p-host", features = ["test-signer"] }
+shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+# The live cross-check reads the store's rows (`RawRows`), decodes their
+# keys as the store's tables type them (redb) and their values through the
+# store's codec, so it can hold a field rather than a whole row.
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-store-codec = { path = "../shekyl-store-codec" }
+redb = { workspace = true }
+# The identity test's lock 2: another network's table genesis.
+shekyl-genesis-tool = { path = "../shekyl-genesis-tool" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros"] }
+tempfile = { workspace = true }
+rand = "0.8"
+zeroize = { workspace = true }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+rand_chacha = { workspace = true }
+
+[lints]
+workspace = true

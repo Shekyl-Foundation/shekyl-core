@@ -51,6 +51,7 @@ listed above. Total: 1024 bytes.
 Generator
 ---------
 source      = ./_generator/phase2d/gen.cpp (mode t9)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2d/Makefile (`make`)
 command     = ./gen t9 > t9_vm_single_int_smoke.bin
 output_size = 1024 bytes

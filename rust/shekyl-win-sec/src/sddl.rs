@@ -74,6 +74,12 @@ use windows_sys::Win32::Security::{
 use crate::sid::{last_error, SidString};
 use crate::MEDIUM_INTEGRITY_SACL;
 
+/// The rendezvous objects' mandatory-label policy: no read up, and the
+/// default no write up kept. A label's policy is exactly the bits it names,
+/// so a label naming `NR` alone would let a low-integrity process of the
+/// same user write the rendezvous; `NWNR` refuses it both.
+const RENDEZVOUS_LABEL: &str = "NWNR";
+
 /// Why a descriptor could not be built.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SddlError {
@@ -144,6 +150,77 @@ impl OwnerOnlyDescriptor {
         Self::from_sddl(&sddl)
     }
 
+    /// The daemon's data home, `%LOCALAPPDATA%\Shekyl`, when the daemon
+    /// creates it (`RPC_CHANNEL.md` §7.1, Rick, 2026-11-12): owned by
+    /// `owner`, full access for `owner` alone and inherited by what is made
+    /// inside, a protected DACL, and an inheritable no-read-up label.
+    pub fn data_home(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;OICI;FA;;;{o})S:(ML;OICI;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// The rendezvous directory, `%LOCALAPPDATA%\Shekyl\rendezvous`
+    /// (`RPC_CHANNEL.md` §7.1): owned by `owner`, owner-only and protected,
+    /// with its own no-read-up label, so a low-integrity process can neither
+    /// open it nor enumerate the rendezvous inside.
+    pub fn rendezvous_dir(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;OICI;FA;;;{o})S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// A rendezvous file (`RPC_CHANNEL.md` §7.1): owned by `owner`,
+    /// owner-only and protected, with the no-read-up label set in the
+    /// creating call. A label inherited from a directory, or applied after
+    /// creation, silently loses the read-up policy (RT-P8, measured), so the
+    /// label is never left to inheritance.
+    pub fn rendezvous_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;FA;;;{o})S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// A service's console file (`RPC_CHANNEL.md` RT-O37): the console key,
+    /// the node's public bundle, and the pipe's name. The owning account
+    /// may read and write it. BUILTIN\Administrators may read it, which is
+    /// how an administrator reaches the console. The DACL is protected and
+    /// the no-read-up label is set in the creating call. On Unix the same
+    /// reach is mode `0600`: the superuser reads it, and no other account
+    /// does.
+    pub fn console_file(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;FA;;;{o})(A;;FR;;;BA)S:(ML;;{label};;;ME)",
+            o = owner.as_str(),
+            label = RENDEZVOUS_LABEL
+        );
+        Self::from_sddl(&sddl)
+    }
+
+    /// A service's console pipe (`RPC_CHANNEL.md` RT-O37, Rick
+    /// 2026-11-15): owned by `owner`, the service account; access for that
+    /// account and the built-in Administrators, the data home's ruled ACL
+    /// (§7.1); protected; Medium label, as the owner's pipe. The handshake
+    /// over it still authenticates both ends; the descriptor decides only
+    /// who reaches the console's reserved slots.
+    pub fn console_pipe(owner: &SidString) -> Result<Self, SddlError> {
+        let sddl = format!(
+            "O:{o}G:{o}D:P(A;;GA;;;{o})(A;;GA;;;BA){sacl}",
+            o = owner.as_str(),
+            sacl = MEDIUM_INTEGRITY_SACL
+        );
+        Self::from_sddl(&sddl)
+    }
+
     /// The one place the **pipe** policy string is assembled. Both pipe
     /// constructors route through it so the label is the *only* thing that
     /// can differ between them — a second `format!` would be a second policy
@@ -162,7 +239,7 @@ impl OwnerOnlyDescriptor {
 
     /// Hand a finished SDDL string to the OS. Every constructor ends here, so
     /// there is exactly one `unsafe` conversion to review.
-    fn from_sddl(sddl: &str) -> Result<Self, SddlError> {
+    pub(crate) fn from_sddl(sddl: &str) -> Result<Self, SddlError> {
         let wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
 
         let mut psd: *mut c_void = std::ptr::null_mut();

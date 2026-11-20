@@ -35,6 +35,7 @@ order they were `rx_store_vec_i128`'d at `aes_hash.cpp:124-127`.
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen hash_1r_uniform128
 output_size = 64 bytes

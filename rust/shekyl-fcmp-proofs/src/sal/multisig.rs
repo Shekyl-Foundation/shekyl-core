@@ -22,6 +22,7 @@ use modular_frost::{
 };
 
 use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_types::TxSignableHash;
 
 use crate::sal::*;
 
@@ -85,7 +86,7 @@ pub struct SalAlgorithm<
 > {
     rng: R,
     transcript: T,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: TxSignableHash,
     rerandomized_output: RerandomizedOutput,
     x: Scalar,
     L: EdwardsPoint,
@@ -339,7 +340,7 @@ impl<R: Send + Sync + Clone + RngCore + CryptoRng, T: Sync + Clone + Debug + Tra
     pub fn new(
         rng: R,
         mut transcript: T,
-        signable_tx_hash: [u8; 32],
+        signable_tx_hash: TxSignableHash,
         rerandomized_output: RerandomizedOutput,
         x: Scalar,
     ) -> Self {

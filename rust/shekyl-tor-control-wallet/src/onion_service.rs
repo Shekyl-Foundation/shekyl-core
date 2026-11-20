@@ -28,6 +28,7 @@ use kameo::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::vanguard_rotation::VanguardsActive;
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::control::onion::{
     evaluate_add_onion_reply, AddOnion, AddOnionReplyError, OnionFlags, OnionPort, OnionPow,
     ServiceId,
@@ -249,7 +250,7 @@ pub(crate) async fn publish_onion(
 
     let reply = tokio::select! {
         _ = &mut *shutdown => return Err(OnionPublishAbort::Shutdown),
-        () = tokio::time::sleep(reply_deadline) => {
+        () = awake::sleep(reply_deadline) => {
             return Err(OnionPublishAbort::Failed(OnionPublishError::Control(
                 ControlError::Timeout,
             )));
@@ -272,11 +273,12 @@ pub(crate) async fn publish_onion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_onion_key::OnionKeypair;
     use shekyl_tor_control_client::control::onion::evaluate_add_onion_reply;
     use shekyl_tor_control_client::control::ReplyFramer;
 
     fn identity_and_id() -> (OnionIdentity, ServiceId) {
-        let identity = OnionIdentity::from_hs_id_seed(&[0x24u8; 32]);
+        let identity = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"));
         let id = identity.service_id().clone();
         (identity, id)
     }
@@ -303,7 +305,7 @@ mod tests {
         // persona's. Publishing Ready here would advertise an address no
         // witness can reach.
         let (_identity, expected) = identity_and_id();
-        let other = OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+        let other = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
             .service_id()
             .clone();
         let reply = reply_from(&format!("ServiceID={}", other.as_str()));
@@ -344,7 +346,7 @@ mod tests {
     #[test]
     fn reply_error_maps_into_publish_error() {
         let (_identity, expected) = identity_and_id();
-        let published = OnionIdentity::from_hs_id_seed(&[0x99u8; 32])
+        let published = OnionIdentity::from_keypair(OnionKeypair::ephemeral().expect("OS CSPRNG"))
             .service_id()
             .clone();
         assert_eq!(

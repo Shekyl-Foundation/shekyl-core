@@ -252,4 +252,33 @@ invent the delta from the PR #550 timings that motivated the cut
 (Ubuntu tests 187.9 billed min with the rebuild; depends 124.1;
 rust 95.3).
 
+### `ci/cache-saves-on-push`: caches saved by push runs only (2026-11-08)
+
+The repository's Actions cache held 10.7 GB against GitHub's 10 GB
+default, and pull requests saved most of it: each Rust job run saved
+2.6 GB, each schema-snapshot run 1.3 GB and each benchmark capture
+1.2 GB, under the pull request's own ref, where no other run can read it. The `dev` cache every pull request
+restores from was evicted between merges.
+
+#### Before
+
+| Job | Run | dev tip / head | Wall clock | Cache |
+| --- | --- | --- | --- | --- |
+| `Rust: audit, test, determinism` (push, `dev`) | 42436787000 | 29028fd26b | 127m 53s | "No cache found"; saved 2.6 GB |
+| `Rust: audit, test, determinism` (push, `dev`) | 42485829586 | 8d78bbacfb | red at clippy | "No cache found" (the 04:22Z save above was evicted) |
+| `Rust: audit, test, determinism` (PR #1302) | 42422940153 | 7d8cccb306 | 125m 15s | "No cache found"; saved 2.6 GB |
+| `Rust: audit, test, determinism` (PR #1301) | 42435964165 | 52af53b4eb | 240m 06s | "No cache found"; saved 2.6 GB |
+| `Windows (MSVC, daemon)` (push, `dev`) | 42481632714 | df9910ecb8 | 37m 01s | none configured |
+
+Windows steps over a minute on that run: workspace clippy lanes 11.0m,
+WP-W5 scouting 11.3m, daemon build 8.5m, DC-F39 4.2m.
+
+#### After
+
+Pull requests restore and never save; push runs save (`dev` for all
+five workflows, `main` too for the build and Rust workflows). The first
+pull request run after a green `dev` push run is the first that can
+restore, so the after rows are captured from runs after this change
+merges, by the methodology above.
+
 [workflow]: ../.github/workflows/build.yml

@@ -9,26 +9,27 @@
 //!
 //! ```text
 //! payload(i)     = pruned_segment ‖ prunable_hash ‖ pqc_header(i) ‖ key_hashes
-//! signed_hash(i) = keccak256(payload(i))
 //! ```
 //!
-//! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of eight
+//! and, from the same fields, what the network-bound signatures are over
+//! (the signing envelope §2.2):
+//!
+//! ```text
+//! tx_signable    = frame("shekyl/tx-signable-v1", id, [prefix_hash, ct_base_hash])
+//! signed_hash(i) = frame("shekyl/fcmp-spend-signing-v2", id,
+//!                        [tx_signable, pqc_header(i), key_hashes, prunable_hash])
+//! ```
+//!
+//! `tests/fixtures/pqc_signing_preimage_v1.json` holds, for each of five
 //! daemon-accepted transactions, the transaction's bytes and — **per input** —
 //! the payload bytes and the signed hash, as the **specification's output**:
 //! what §1.1 defines for those bytes. The transactions are real: every one
 //! was accepted and connected by a running `shekyld` (the captured chains
-//! under `shekyl-chain-ingest/tests/vectors`, the live-oracle spend, the
-//! serve-credit parity capture), chosen so the shapes a divergence could hide
-//! in are all present — one input, two, six (twice: a captured chain's and
-//! the live oracle's), the bond post's `to_key ‖ bond_post` and the
-//! emission's `to_key ‖ to_key ‖ emission` (mixed archival
-//! arms, whose pseudo-out count is the *spend* subset), and the serve-credit
-//! form, which has **no** preimage at all — not because it is unsigned, but
-//! because consensus forbids it `pqc_auths` (CEN-H20) and its hybrid
-//! countersignature is over the pass record, by the bond's registered key,
-//! with the Ed25519 leg on the vin and the ML-DSA leg in the pruned record
-//! (`shekyl_archival_verify_serve_credit_vin`, CEN-J10). Its zero entry here
-//! is that boundary recorded, and it is why CEN-I18 is vacuous on the form.
+//! under `shekyl-chain-ingest/tests/vectors` and the live-oracle spend),
+//! chosen so the shapes a divergence could hide in are all present — one
+//! input, two, six (twice: a captured chain's and the live oracle's), and the
+//! emission's `to_key ‖ to_key ‖ emission` (mixed archival arms, whose
+//! pseudo-out count is the *spend* subset).
 //!
 //! **Why a fixture and not a live comparison.** The payload was assembled in
 //! C++ (`tx_pqc_verify.cpp`, `get_transaction_signed_payload`) until E6
@@ -42,8 +43,10 @@
 //! against the specification, not against the program that produced it:
 //! the same bytes today, and the claim that outlives the C++.
 //!
-//! The Rust leg below holds [`PqcSigningPreimage`] — the payload bytes, input
-//! by input — and [`Transaction::pqc_signing_payload_hashes`] to the fixture.
+//! The Rust leg below holds the captured payloads to this crate's segments,
+//! and [`Transaction::tx_signable`] and
+//! [`Transaction::pqc_signing_payload_hashes`] to the pins the independent
+//! oracle derives from those payloads.
 //! The C++ leg (`tests/unit_tests/pqc_signing_preimage_kat.cpp`) held the
 //! C++ assembly to it while the assembly existed.
 
@@ -52,7 +55,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::SigningPayloadHash;
-use shekyl_wire::{Ct, PqcSigningPreimage, RetiredKeylessJoinMarket, Transaction};
+use shekyl_wire::{Ct, PqcSigningPreimage, Transaction};
 
 const FIXTURE: &str = "tests/fixtures/pqc_signing_preimage_v1.json";
 
@@ -69,11 +72,7 @@ const DESCRIPTION: &str = "Per-input PQC signing preimage KAT. For each transact
      payloads are the specification's output for these bytes, captured from the \
      C++ assembly (tx_pqc_verify.cpp, get_transaction_signed_payload) by the C++ \
      leg's capture mode before E6 slice 6 commit 7 made shekyl-wire the \
-     derivation of record and deleted that assembly. The serve-credit form has \
-     no preimage (empty lists) because consensus forbids it pqc_auths (CEN-H20): \
-     it is hybrid-signed over the pass record by the bond's registered key, \
-     Ed25519 leg on the vin and ML-DSA leg in the pruned record, verified by \
-     shekyl_archival_verify_serve_credit_vin (CEN-J10), not over this preimage.";
+     derivation of record and deleted that assembly.";
 
 fn hex_str(b: impl AsRef<[u8]>) -> String {
     b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
@@ -153,36 +152,11 @@ impl SubjectBytes {
     }
 }
 
-/// The two fixture bodies that are **keyless JoinMarket bond posts**
-/// (`post_kind` 0), captured from the C++ daemon. Retired from this test's
-/// Rust-side derivation 2026-10-12 (ruling on PR #1046; `FN_DSA_HYBRID.md`
-/// `FND-19`): the receipt key is mandatory, the keyless byte is refused at
-/// parse, and a C++ capture can never contain a key-carrying JoinMarket —
-/// its serializer has no such kind. The fixture file is untouched, because
-/// the C++ leg still parses these bytes; here each is held to exactly one
-/// thing, that it is refused for being the retired form, and to whatever
-/// the test checks without parsing. The JoinMarket's preimage and digest
-/// are witnessed on Rust-built posts instead (`shekyl-chain-rules`,
+/// The subjects, in the fixture's order. No bond post is among them; the
+/// JoinMarket's preimage and digest are
+/// witnessed on Rust-built posts (`shekyl-chain-rules`,
 /// `i18_the_identity_signature_covers_the_join_markets_receipt_key`; the
 /// ingest's `a_join_markets_receipt_key_is_the_records_and_a_release_leaves_it`).
-const RETIRED_KEYLESS_BOND_POSTS: [&str; 2] = [
-    "bond-post-to_key-bond_post",
-    "emission-bond-post-to_key-bond_post",
-];
-
-/// `bytes` is refused by the parser for carrying the retired keyless
-/// JoinMarket byte, and for nothing else — matched on the typed cause
-/// `BondPost::read` returns, not on the sentence it displays.
-fn refused_as_the_retired_keyless_join_market(name: &str, bytes: &[u8]) {
-    let err = Transaction::from_bytes(bytes).expect_err("a keyless JoinMarket no longer parses");
-    assert!(
-        err.get_ref()
-            .is_some_and(RetiredKeylessJoinMarket::downcast_is),
-        "{name}: refused for another reason: {err}"
-    );
-}
-
-/// The eight subjects, in the fixture's order.
 fn subjects() -> Vec<Subject> {
     vec![
         Subject {
@@ -218,35 +192,11 @@ fn subjects() -> Vec<Subject> {
             },
         },
         Subject {
-            name: "bond-post-to_key-bond_post",
-            source: "shekyl-chain-ingest/tests/vectors/bond-post (daemon-accepted, connected)",
-            bytes: SubjectBytes::CapturedChain {
-                shape: "bond-post",
-                txid: "1292cfc5035c57c704b6ad9c04aa462da7bd960839fba301dee97dbe9f58b8cc",
-            },
-        },
-        Subject {
-            name: "emission-bond-post-to_key-bond_post",
-            source: "shekyl-chain-ingest/tests/vectors/emission-claim (daemon-accepted, connected)",
-            bytes: SubjectBytes::CapturedChain {
-                shape: "emission-claim",
-                txid: "3e3c7e7951f66ec01ea1084be1e968712d9a3daf5f974795443e63a362ffa438",
-            },
-        },
-        Subject {
             name: "emission-to_key-to_key-emission",
             source: "shekyl-chain-ingest/tests/vectors/emission-claim (daemon-accepted, connected)",
             bytes: SubjectBytes::CapturedChain {
                 shape: "emission-claim",
                 txid: "a7244fa4c353a496c02e7fac8d635856094761e1834cf0354f9eb04d5b0ef96a",
-            },
-        },
-        Subject {
-            name: "serve-credit-only",
-            source: "shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json (no pqc_auths by consensus, CEN-H20; signed over the pass record instead, CEN-J10: no preimage)",
-            bytes: SubjectBytes::Fixture {
-                path: "tests/fixtures/serve_credit_tx_parity_v1.json",
-                field: "tx_hex",
             },
         },
     ]
@@ -294,9 +244,8 @@ fn emit_pqc_signing_preimage_kat_inputs() {
 }
 
 /// The Rust leg: this crate's derivation reproduces every captured payload
-/// and hash, transaction by transaction, input by input; the eight shapes
-/// are all present; the serve-credit form yields nothing (its signature is
-/// CEN-J10's, over the pass record — see the module doc).
+/// and hash, transaction by transaction, input by input, and the shapes
+/// are all present.
 #[test]
 fn pqc_signing_preimage_matches_the_captured_specification_output() {
     let doc: Value =
@@ -330,69 +279,108 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         );
     }
     let mut input_counts = Vec::new();
-    let mut retired_seen = 0;
     for entry in transactions {
         let name = entry["name"].as_str().expect("name");
         let tx_bytes = hex_bytes(entry["tx_hex"].as_str().expect("tx_hex"));
-        let retired = RETIRED_KEYLESS_BOND_POSTS.contains(&name);
         let payloads: Vec<Vec<u8>> = entry["payloads_hex"]
             .as_array()
             .expect("payloads_hex")
             .iter()
             .map(|p| hex_bytes(p.as_str().expect("hex")))
             .collect();
-        let hashes: Vec<SigningPayloadHash> = entry["signed_hashes_hex"]
+        // The C++ capture's keccak256 of each payload: its own consistency
+        // check, not a hash anything signs now.
+        let hashes: Vec<[u8; 32]> = entry["signed_hashes_hex"]
             .as_array()
             .expect("signed_hashes_hex")
             .iter()
             .map(|h| <[u8; 32]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("32 bytes"))
-            .map(SigningPayloadHash::from_bytes)
             .collect();
         assert_eq!(payloads.len(), hashes.len(), "{name}: one hash per payload");
         for (i, (payload, hash)) in payloads.iter().zip(&hashes).enumerate() {
             assert_eq!(
                 keccak256(payload),
-                hash.to_bytes(),
+                *hash,
                 "{name} input {i}: the fixture's own hash is of its own payload"
             );
         }
-        if retired {
-            // The fixture's own consistency above still holds for these
-            // bytes; the derivation below needs a parse this crate no
-            // longer gives a keyless JoinMarket.
-            refused_as_the_retired_keyless_join_market(name, &tx_bytes);
-            retired_seen += 1;
-            continue;
-        }
         let tx = Transaction::from_bytes(&tx_bytes)
             .unwrap_or_else(|e| panic!("{name}: the pinned bytes parse: {e}"));
-        // The derivation of record, against the specification's output:
-        // the payload bytes input by input, then the hashes the production
-        // callers take.
-        if let Some(preimage) = PqcSigningPreimage::of(&tx) {
-            let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
-                panic!("{name}: a preimage exists only for an Fcmp body");
-            };
-            assert_eq!(
-                pqc_auths.len(),
-                payloads.len(),
-                "{name}: one payload per auth"
-            );
-            for (i, (auth, payload)) in pqc_auths.iter().zip(&payloads).enumerate() {
+        // The captured payloads are where the envelope's fields come from:
+        // each starts with this crate's pruned segment, then the txid's
+        // prunable component — the bytes `tx_signable` and the spend hash
+        // frame (the signing envelope §2.2).
+        if !payloads.is_empty() {
+            let segments = tx.write_segments().expect("the body segments");
+            for (i, payload) in payloads.iter().enumerate() {
+                assert!(
+                    payload.starts_with(&segments.pruned),
+                    "{name} input {i}: the captured payload starts with the pruned segment"
+                );
                 assert_eq!(
-                    preimage.payload(auth),
-                    *payload,
-                    "{name} input {i}: payload bytes"
+                    payload[segments.pruned.len()..segments.pruned.len() + 32],
+                    tx.prunable_hash().to_bytes(),
+                    "{name} input {i}: then the prunable hash"
                 );
             }
-        } else {
-            assert!(payloads.is_empty(), "{name}: no preimage, no payloads");
         }
+        let Ct::Fcmp { pqc_auths, .. } = &tx.ct else {
+            panic!("{name}: every subject is an Fcmp body");
+        };
         assert_eq!(
-            tx.pqc_signing_payload_hashes(),
-            hashes,
-            "{name}: signed hashes"
+            pqc_auths.len(),
+            payloads.len(),
+            "{name}: one payload per auth"
         );
+        // The network-bound message and every input's hash, pinned per
+        // network against `scripts/kat/spend_signing_hash_oracle.py`, which
+        // shares no code with this crate and takes the captured payloads
+        // apart itself (`NETWORK_IDENTITY.md` NI-Q4, NI-F12 (b)).
+        let mut per_network = Vec::new();
+        for net in shekyl_network::Network::ALL {
+            let id = net.network_id();
+            if !payloads.is_empty() {
+                let pinned = entry["tx_signable_by_network"][net.name()]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{name}: no {net} tx_signable pinned"));
+                assert_eq!(
+                    hex_str(tx.tx_signable(&id).as_bytes()),
+                    pinned,
+                    "{name}: tx_signable on {net}"
+                );
+                assert!(
+                    PqcSigningPreimage::of(&tx, &id).is_some(),
+                    "{name}: a body with payloads has a preimage"
+                );
+            } else {
+                assert!(
+                    PqcSigningPreimage::of(&tx, &id).is_none(),
+                    "{name}: no payloads, no preimage"
+                );
+            }
+            let pinned: Vec<SigningPayloadHash> = entry["signed_hashes_by_network"][net.name()]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name}: no {net} hashes pinned"))
+                .iter()
+                .map(|h| {
+                    <[u8; 64]>::try_from(hex_bytes(h.as_str().expect("hex"))).expect("64 bytes")
+                })
+                .map(SigningPayloadHash::from_bytes)
+                .collect();
+            assert_eq!(
+                tx.pqc_signing_payload_hashes(&id),
+                pinned,
+                "{name}: signed hashes on {net}"
+            );
+            per_network.push(pinned);
+        }
+        if !payloads.is_empty() {
+            for (i, a) in per_network.iter().enumerate() {
+                for b in &per_network[i + 1..] {
+                    assert_ne!(a, b, "{name}: two networks sign over the same hash");
+                }
+            }
+        }
         input_counts.push((name.to_owned(), tx.prefix.inputs.len(), payloads.len()));
     }
     // The shapes the fixture exists for are all here: a single input, several,
@@ -405,14 +393,6 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
         input_counts.iter().any(|(_, inputs, _)| *inputs >= 6),
         "a many-input spend"
     );
-    // *Was:* "a bond post" among the derived shapes. The fixture's two bond
-    // posts are keyless JoinMarkets and are retired above; both are still
-    // in the fixture and both were seen refused as that form.
-    assert_eq!(
-        retired_seen,
-        RETIRED_KEYLESS_BOND_POSTS.len(),
-        "each retired bond post is in the fixture and is refused as the retired form"
-    );
     assert!(
         !input_counts
             .iter()
@@ -424,14 +404,5 @@ fn pqc_signing_preimage_matches_the_captured_specification_output() {
             .iter()
             .any(|(name, _, _)| name.contains("-emission")),
         "an emission"
-    );
-    let serve_credit = input_counts
-        .iter()
-        .find(|(name, _, _)| name == "serve-credit-only")
-        .expect("the serve-credit form");
-    assert_eq!(
-        serve_credit.2, 0,
-        "the serve-credit form carries no pqc_auths (CEN-H20) — its countersignature is \
-         over the pass record (CEN-J10) — and so has no preimage"
     );
 }

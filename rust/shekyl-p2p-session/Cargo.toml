@@ -1,0 +1,46 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-p2p-session"
+description = "The session layer: one task per admitted connection runs the Levin handshake both ways, the self-connection nonces, timed sync, the request/response correlation and the dispatch table over Command; owners receive typed messages behind an Established handle (P2P_3_REMNANT_CUTOVER_BRIEF.md §7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-capped-stream = { path = "../shekyl-capped-stream" }
+# The nonce bytes and the timed-sync jitter are drawn from the daemon's CSPRNG.
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-levin = { path = "../shekyl-levin" }
+# The harness's admission (`harness::admit`): the onion a Tor dial names,
+# and the inbound ceiling.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3", optional = true }
+shekyl-peer-policy = { path = "../shekyl-peer-policy", optional = true }
+# Every wake of a session is an owner of the daemon's one timing engine.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
+shekyl-transport-layer = { path = "../shekyl-transport-layer" }
+# `macros` is `select!`: a session task waits on its stop, its wake and
+# its stream at once.
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync"] }
+tracing = "0.1"
+
+[features]
+# The in-memory peer (`harness`): a `Dial` over capped-stream ends with the
+# test on the far side, and the frames a far side writes. For this crate's
+# tests and the owners'; never in a production build.
+harness = ["tokio/time", "dep:shekyl-onion-v3", "dep:shekyl-peer-policy"]
+
+[dev-dependencies]
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-net-address = { path = "../shekyl-net-address" }
+shekyl-p2p-session = { path = ".", features = ["harness"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

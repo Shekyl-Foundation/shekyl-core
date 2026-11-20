@@ -7,12 +7,12 @@
 # A production process spawn in a crate whose image can launch a managed tor
 # hands its child standard input, output and error and no other descriptor
 # (docs/design/DAEMON_CONFIG_CUTOVER.md section 2.10; the helper is
-# rust/shekyl-tor-control-client/src/inherit.rs).
+# rust/shekyl-spawn/src/inherit.rs).
 #
-# WHY. Rust opens every descriptor close-on-exec; C++ in the same process does
-# not promise to (Boost.Asio's sockets, the store's files, a C++ library's
-# own). Without the helper in the child's pre_exec, each such descriptor passes
-# into the operator's notify command or into the managed tor.
+# WHY. Rust opens every descriptor close-on-exec; a C library in the same
+# process does not promise to (the store's, a TLS library's own). Without the
+# helper in the child's pre_exec, each such descriptor passes into the
+# operator's notify command or into the managed tor.
 #
 # THE RULE. The crates are check_spawn_sites_take_the_lock.py's WATCHED set,
 # read from that script, as is its comment-and-string blanking (rule 47), so
@@ -21,23 +21,38 @@
 # (`Command::new(`, std or tokio, under any alias ending in `Command`) names
 # `inherit::` in its code: `inherit::stdio_only(&mut cmd)`, or
 # `inherit::StdioOnly` applied in the launch's own pre_exec before it clears
-# the one descriptor it keeps. A Windows-only spawn names it too; the call is a
-# no-op there.
+# the one descriptor it keeps; or the pair's child setup, which does exactly
+# that in shekyl-spawn (`ChildKeeps`, `keep_in_child`,
+# rust/shekyl-spawn/src/pair.rs). A Windows-only spawn names it too; the call
+# is a no-op there.
 #
-#   Production means under the crate's `src/`, outside any item marked
-#   `#[cfg(test)]` or `#[cfg(all(test, ...))]`, and in a module file whose
-#   declaration (`mod name;`) is not itself so marked, up the module tree.
+#   Production means under the crate's `src/`, outside any item whose
+#   `#[cfg(...)]` cannot hold in a shipped build, and in a module file whose
+#   declaration (`mod name;`) is not itself so marked, up the module tree. A
+#   shipped build has `test` off and `feature = "unpinned-tor-for-tests"`
+#   off. The predicate is evaluated with those two false and every other
+#   option unknown: `cfg(test)`, `cfg(all(test, unix))` and
+#   `cfg(any(test, feature = "unpinned-tor-for-tests"))` come out false and
+#   are test-only; `cfg(any(unix, feature = "unpinned-tor-for-tests"))` and
+#   `cfg(all(unix, not(feature = "unpinned-tor-for-tests")))` come out
+#   unknown and are checked. A predicate the gate cannot parse is checked.
+#   `unpinned-tor-for-tests` is shekyl-tor-control-client's `cfg(test)`
+#   across a crate boundary (`cfg(test)` does not cross it).
+#   `check_test_only_features.py` refuses every edge that is not a
+#   dev-dependency, so the feature is not in a shipped binary.
 #
 #   TEST-ONLY SPAWNS ARE NOT THIS GATE'S SUBJECT: `tests/`, `benches/` and
-#   `examples/`, a build script, a test module, and a file declared only for
-#   tests (the DC-F12 sibling `true` in notify_ffi.rs's tests, the engine's
-#   regtest harness). A test binary is not the daemon's image: the C++ whose
-#   descriptors this guards is not running there. Their count is printed so a
+#   `examples/`, a build script, a test module, a file declared only for
+#   tests (the DC-F12 sibling `true` in notify.rs's tests, the engine's
+#   regtest harness), and a file that opens with its own `#![cfg(test)]`
+#   (the harness's `#[path]` children, which the declaration walk cannot
+#   find by file name). A test binary is not the daemon's image: the libraries
+#   whose descriptors this guards are not running there. Their count is printed so a
 #   production spawn that moved into a test region is visible in the log.
 #
 # A file the check does not see: a second command in a file that already
 # names `inherit::` once, and a command made by `Command::from`. The unit
-# tests beside each call site bite those (notify_ffi.rs, launch.rs).
+# tests beside each call site bite those (notify.rs, launch.rs).
 #
 # SUBJECT. The managed launch and the notify runner are production spawn
 # files. If either is not found as one, the gate has lost its subject and
@@ -64,10 +79,98 @@ from check_spawn_sites_take_the_lock import (  # noqa: E402
 
 SUBJECTS = (
     "shekyl-tor-control-client/src/control/launch.rs",
-    "shekyl-ffi/src/notify_ffi.rs",
+    "shekyl-daemon/src/notify.rs",
 )
-HELPER = re.compile(r"\binherit::")
-TEST_ATTR = re.compile(r"#\[\s*cfg\s*\(\s*(?:test\b|all\s*\(\s*test\b)")
+HELPER = re.compile(r"\binherit::|\bChildKeeps::prepare\b|\bkeep_in_child\s*\(")
+# The options a shipped build has off (see the module comment). An item under
+# a cfg that is false with these off is test-only.
+OFF_IN_SHIPPED = {("test", None), ("feature", "unpinned-tor-for-tests")}
+CFG_TOKEN = re.compile(r'\s*(?:([A-Za-z_][A-Za-z0-9_]*)|"((?:[^"\\]|\\.)*)"|([(),=]))')
+
+
+def cfg_tokens(text):
+    """The tokens of a cfg predicate, or None when `text` holds anything else."""
+    tokens, i = [], 0
+    while i < len(text):
+        if text[i:].strip() == "":
+            break
+        match = CFG_TOKEN.match(text, i)
+        if match is None:
+            return None
+        ident, string, punct = match.groups()
+        tokens.append(("ident", ident) if ident else ("str", string) if string is not None else (punct, punct))
+        i = match.end()
+    return tokens
+
+
+def cfg_value(tokens):
+    """The predicate's value in a shipped build: False, or None when it may
+    hold. Raises ValueError on a form it does not know.
+
+    Three-valued: an option in OFF_IN_SHIPPED is False and any other option
+    is unknown (None). `all` is False when a part is False and True when
+    every part is True; `any` is True when a part is True and False when
+    every part is False; `not` swaps True and False. Anything else is None.
+    """
+    at = 0
+
+    def take(kind):
+        nonlocal at
+        if at >= len(tokens) or tokens[at][0] != kind:
+            raise ValueError(kind)
+        at += 1
+        return tokens[at - 1][1]
+
+    def predicate():
+        nonlocal at
+        name = take("ident")
+        if at < len(tokens) and tokens[at][0] == "(":
+            if name not in ("all", "any", "not"):
+                raise ValueError(name)
+            take("(")
+            parts = []
+            while tokens[at][0] != ")":
+                parts.append(predicate())
+                if tokens[at][0] == ",":
+                    take(",")
+            take(")")
+            if name == "not":
+                if len(parts) != 1:
+                    raise ValueError("not")
+                return {True: False, False: True, None: None}[parts[0]]
+            if name == "all":
+                return False if False in parts else (True if all(p is True for p in parts) else None)
+            return True if True in parts else (False if all(p is False for p in parts) else None)
+        value = None
+        if at < len(tokens) and tokens[at][0] == "=":
+            take("=")
+            value = take("str")
+        return False if (name, value) in OFF_IN_SHIPPED else None
+
+    try:
+        result = predicate()
+    except IndexError as exc:
+        raise ValueError("truncated") from exc
+    if at != len(tokens):
+        raise ValueError("trailing")
+    return result
+
+
+def test_only_cfg(original, start, end):
+    """Whether the attribute `original[start:end]` is a `#[cfg(...)]`, or a
+    file's own `#![cfg(...)]`, that is false in a shipped build."""
+    match = re.match(r"#!?\[\s*cfg\s*\((.*)\)\s*\]\Z", original[start:end], re.S)
+    if match is None:
+        return False
+    tokens = cfg_tokens(match.group(1))
+    if tokens is None:
+        return False
+    try:
+        return cfg_value(tokens) is False
+    except ValueError:
+        return False
+
+
 TEST_DIRS = {"tests", "benches", "examples"}
 
 
@@ -116,15 +219,45 @@ def item_end(code, at):
     return len(code)
 
 
-def production_code(code):
-    """`code` with every test-marked item blanked, newlines kept."""
+def production_code(original):
+    """`original` with every test-marked item blanked, newlines kept.
+
+    A `#[cfg]` counts only where `#[` survives comment and string blanking, so
+    a cfg written in a comment or a string does not hide a spawn. The
+    attribute is then read from `original`: the feature name lives in a
+    string, and the blanked text no longer contains it.
+    """
+    code = code_of(original)
     out = list(code)
-    for match in TEST_ATTR.finditer(code):
-        end = item_end(code, attribute_end(code, match.start()))
-        for k in range(match.start(), end):
+    for match in re.finditer(r"#\[", code):
+        start = match.start()
+        attribute = attribute_end(code, start)
+        if not test_only_cfg(original, start, attribute):
+            continue
+        end = item_end(code, attribute)
+        for k in range(start, end):
             if out[k] != "\n":
                 out[k] = " "
     return "".join(out)
+
+
+def marks_itself_test_only(original):
+    """Whether the file opens with an inner `#![cfg(...)]` that is false in a
+    shipped build. The compiler then drops the whole file, whatever declares
+    it, which covers a `#[path]` child the declaration walk cannot find by
+    its file name. Only the attributes ahead of the first item count: an
+    inner attribute further down belongs to an inline module."""
+    code = code_of(original)
+    at = 0
+    while True:
+        while at < len(code) and code[at].isspace():
+            at += 1
+        if not code.startswith("#![", at):
+            return False
+        end = attribute_end(code, at)
+        if test_only_cfg(original, at, end):
+            return True
+        at = end
 
 
 def declarers(rel):
@@ -156,10 +289,11 @@ def declared_for_tests_only(root, rel, seen=None):
         source = root / parent
         if not source.is_file():
             continue
-        code = code_of(source.read_text(encoding="utf-8", errors="replace"))
+        original = source.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not declaration.search(code):
             continue
-        if not declaration.search(production_code(code)):
+        if not declaration.search(production_code(original)):
             return True
         return declared_for_tests_only(root, parent, seen)
     return False
@@ -176,6 +310,8 @@ def classify(root, rel, watched):
         return "test"
     if declared_for_tests_only(root, rel):
         return "test"
+    if marks_itself_test_only((root / rel).read_text(encoding="utf-8", errors="replace")):
+        return "test"
     return "production"
 
 
@@ -187,7 +323,8 @@ def check(root, watched, subjects):
         if rel.parts and rel.parts[0] in SKIPPED_DIRS:
             continue
         rel = rel.as_posix()
-        code = code_of(path.read_text(encoding="utf-8", errors="replace"))
+        original = path.read_text(encoding="utf-8", errors="replace")
+        code = code_of(original)
         if not SPAWN.search(code):
             continue
         kind = classify(root, rel, watched)
@@ -196,7 +333,7 @@ def check(root, watched, subjects):
         if kind == "test":
             tests.append(rel)
             continue
-        live = production_code(code)
+        live = production_code(original)
         if not SPAWN.search(live):
             tests.append(rel)
             continue
@@ -205,8 +342,8 @@ def check(root, watched, subjects):
             line = live[: SPAWN.search(live).start()].count("\n") + 1
             errors.append(
                 f"{rel}:{line}: a production spawn whose child is not limited to "
-                "stdio (call inherit::stdio_only, or apply inherit::StdioOnly in "
-                "the pre_exec)"
+                "stdio (call inherit::stdio_only, apply inherit::StdioOnly in "
+                "the pre_exec, or keep a pair's end with ChildKeeps)"
             )
     for subject in subjects:
         if subject not in production:
@@ -239,6 +376,10 @@ def selftest():
             {**base, "a/src/other.rs": bare},
             1,
         ),
+        "a pair's child setup in the pre_exec": (
+            {**base, "a/src/other.rs": bare + "\nfn g() { let k = ChildKeeps::prepare(n); }"},
+            0,
+        ),
         "the helper named only in a comment": (
             {**base, "a/src/other.rs": bare + "\n// inherit::stdio_only(&mut c)"},
             1,
@@ -263,6 +404,75 @@ def selftest():
             {lib: "mod launch;\n#[cfg(test)]\nmod harness;\n", launch: good, "a/src/harness.rs": bare},
             0,
         ),
+        "a file declared under the unpinned-tor test feature": (
+            {
+                lib: 'mod launch;\n#[cfg(any(test, feature = "unpinned-tor-for-tests"))]\nmod outside;\n',
+                launch: good,
+                "a/src/outside.rs": bare,
+            },
+            0,
+        ),
+        "a spawn under any(test, unix) is production": (
+            {**base, "a/src/other.rs": "#[cfg(any(test, unix))]\n" + bare},
+            1,
+        ),
+        "a spawn under any(unix, the feature) is production": (
+            {**base, "a/src/other.rs": '#[cfg(any(unix, feature = "unpinned-tor-for-tests"))]\n' + bare},
+            1,
+        ),
+        "a spawn under all(unix, not(the feature)) is production": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(all(unix, not(feature = "unpinned-tor-for-tests")))]\n' + bare,
+            },
+            1,
+        ),
+        "a spawn under not(test) is production": (
+            {**base, "a/src/other.rs": "#[cfg(not(test))]\n" + bare},
+            1,
+        ),
+        "a spawn under another feature is production": (
+            {**base, "a/src/other.rs": '#[cfg(feature = "other")]\n' + bare},
+            1,
+        ),
+        "a spawn under a cfg the gate cannot read is production": (
+            {**base, "a/src/other.rs": "#[cfg(test, unix)]\n" + bare},
+            1,
+        ),
+        "a spawn under all(unix, any(test, the feature)) is test-only": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(all(unix, any(test, feature = "unpinned-tor-for-tests")))]\n' + bare,
+            },
+            0,
+        ),
+        "a spawn under not(any(not(test), unix)) is test-only": (
+            {**base, "a/src/other.rs": "#[cfg(not(any(not(test), unix)))]\n" + bare},
+            0,
+        ),
+        "a feature-gated spawn does not cover a production one": (
+            {
+                **base,
+                "a/src/other.rs": '#[cfg(feature = "unpinned-tor-for-tests")]\n' + bare + "\n" + bare,
+            },
+            1,
+        ),
+        "a commented feature cfg does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": '// #[cfg(feature = "unpinned-tor-for-tests")]\n' + bare,
+            },
+            1,
+        ),
+        "the feature named only in a string does not hide a production spawn": (
+            {
+                **base,
+                "a/src/other.rs": (
+                    'const S: &str = "#[cfg(feature = \\"unpinned-tor-for-tests\\")]";\n' + bare
+                ),
+            },
+            1,
+        ),
         "a file under a module declared for tests only": (
             {
                 lib: "mod launch;\n#[cfg(test)]\nmod engine;\n",
@@ -271,6 +481,22 @@ def selftest():
                 "a/src/engine/e2e.rs": bare,
             },
             0,
+        ),
+        "a file that marks itself cfg(test)": (
+            {**base, "a/src/other.rs": "//! Docs.\n\n#![cfg(test)]\n" + bare},
+            0,
+        ),
+        "a file that marks itself with a second inner attribute first": (
+            {**base, "a/src/other.rs": "#![allow(dead_code)]\n#![cfg(all(test, unix))]\n" + bare},
+            0,
+        ),
+        "a file whose own cfg a shipped build can hold": (
+            {**base, "a/src/other.rs": "#![cfg(unix)]\n" + bare},
+            1,
+        ),
+        "an inner cfg(test) on an inline module only": (
+            {**base, "a/src/other.rs": "mod m {\n    #![cfg(test)]\n}\n" + bare},
+            1,
         ),
         "an integration test": ({**base, "a/tests/t.rs": bare}, 0),
         "a build script": ({**base, "a/build.rs": bare}, 0),

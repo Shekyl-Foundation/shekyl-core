@@ -114,7 +114,8 @@ where
     let path = dir.join(&path);
     drop(remove_file(&path));
     // TODO(shekyl): Consider restricting visibility once downstream consumers are audited.
-    // Currently `pub` is required because shekyl-fcmp and shekyl-ffi import these generators.
+    // Currently `pub` is required because shekyl-fcmp, shekyl-engine-core and a
+    // shekyl-chain-rules bench import these generators.
     File::create(&path)
         .expect("failed to create file in $OUT_DIR")
         .write_all(

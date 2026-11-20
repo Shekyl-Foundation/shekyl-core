@@ -42,7 +42,8 @@ use std::fmt;
 
 use shekyl_archival_retention::{curve_milli, scarcity_micro, work_milli_from_micro};
 
-use crate::population::{reward_curve, AGE_MILLI, AGE_WEIGHT_MILLI};
+use crate::engine::SimParams;
+use crate::population::{reward_curve, AGE_MILLI};
 use crate::stranding::ARCHIVER_CLASSES;
 
 /// Shards per bond when an archiver splits to dodge the plateau — the A4
@@ -86,8 +87,9 @@ pub enum Regime {
 /// reason OQ-1's `|Δ| = 0` holds *at the optimum*, not merely at sampled
 /// strategies.
 #[must_use]
-pub fn best_partition_credit_milli(shards: u64, r_market: u64) -> u64 {
-    let per_shard_micro = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn best_partition_credit_milli(shards: u64, r_market: u64, run: &SimParams) -> u64 {
+    let per_shard_micro =
+        scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     let curve = reward_curve();
     let credit_at = |k: u64| -> u64 {
         let mut total = 0u64;
@@ -108,8 +110,9 @@ pub fn best_partition_credit_milli(shards: u64, r_market: u64) -> u64 {
 /// milli-floor, so the quantization floor applies uniformly — including to the
 /// split bonds, where it is what limits the dodge.
 #[must_use]
-pub fn credited_work_milli(shards: u64, r_market: u64, regime: Regime) -> u64 {
-    let per_shard_micro = scarcity_micro(r_market, AGE_MILLI, AGE_WEIGHT_MILLI);
+pub fn credited_work_milli(shards: u64, r_market: u64, regime: Regime, run: &SimParams) -> u64 {
+    let per_shard_micro =
+        scarcity_micro(r_market, AGE_MILLI, run.archival().reward_age_weight_milli);
     let curve = reward_curve();
     match regime {
         Regime::NaiveCapped => {
@@ -135,7 +138,7 @@ pub fn credited_work_milli(shards: u64, r_market: u64, regime: Regime) -> u64 {
             // still bounds `shards`, so per-bond work remains structurally bounded.
             work_milli_from_micro(per_shard_micro.saturating_mul(shards))
         }
-        Regime::RationalBestResponse => best_partition_credit_milli(shards, r_market),
+        Regime::RationalBestResponse => best_partition_credit_milli(shards, r_market, run),
     }
 }
 
@@ -147,7 +150,12 @@ pub fn credited_work_milli(shards: u64, r_market: u64, regime: Regime) -> u64 {
 /// [`ARCHIVER_CLASSES`]. Shares are computed the way consensus does: a class's
 /// share is its credited work over `Σwork`.
 #[must_use]
-pub fn class_pool_shares(r_market: u64, regime: Regime, naive_fraction: f64) -> Vec<f64> {
+pub fn class_pool_shares(
+    r_market: u64,
+    regime: Regime,
+    naive_fraction: f64,
+    run: &SimParams,
+) -> Vec<f64> {
     let f = naive_fraction.clamp(0.0, 1.0);
     let mut per_class_total: Vec<f64> = Vec::with_capacity(ARCHIVER_CLASSES.len());
     for &(per_mille, shards) in ARCHIVER_CLASSES {
@@ -155,13 +163,13 @@ pub fn class_pool_shares(r_market: u64, regime: Regime, naive_fraction: f64) -> 
         let credited = match regime {
             // Pure regimes ignore the naive fraction — there is one strategy.
             Regime::PlateauDeleted | Regime::SplitDodge | Regime::RationalBestResponse => {
-                credited_work_milli(shards, r_market, regime) as f64
+                credited_work_milli(shards, r_market, regime, run) as f64
             }
             // The naive-fraction sweep: `f` of the class plays unsplit (so the cap
             // binds them), `1-f` splits to dodge it.
             Regime::NaiveCapped => {
-                let naive = credited_work_milli(shards, r_market, Regime::NaiveCapped) as f64;
-                let split = credited_work_milli(shards, r_market, Regime::SplitDodge) as f64;
+                let naive = credited_work_milli(shards, r_market, Regime::NaiveCapped, run) as f64;
+                let split = credited_work_milli(shards, r_market, Regime::SplitDodge, run) as f64;
                 f * naive + (1.0 - f) * split
             }
         };
@@ -191,7 +199,7 @@ const PROBE_R: [u64; 4] = [6, 100, 5_000, 100_000];
 /// OQ-1 — the provisional A2 probe. Prints per-class pool shares under the three
 /// regimes, the equivalence statistic, and the naive-fraction sweep that says how
 /// much naive play it takes before deletion measurably moves distribution.
-pub fn oq1_probe_report(out: &mut impl fmt::Write) -> fmt::Result {
+pub fn oq1_probe_report(out: &mut impl fmt::Write, run: &SimParams) -> fmt::Result {
     writeln!(
         out,
         "\nOQ-1 (D3 round §12.8) — provisional A2 distribution probe: is deleting the\n\
@@ -213,9 +221,9 @@ pub fn oq1_probe_report(out: &mut impl fmt::Write) -> fmt::Result {
         "|Δ| rat-del"
     )?;
     for &r in &PROBE_R {
-        let naive = class_pool_shares(r, Regime::NaiveCapped, 1.0);
-        let rational = class_pool_shares(r, Regime::RationalBestResponse, 0.0);
-        let deleted = class_pool_shares(r, Regime::PlateauDeleted, 0.0);
+        let naive = class_pool_shares(r, Regime::NaiveCapped, 1.0, run);
+        let rational = class_pool_shares(r, Regime::RationalBestResponse, 0.0, run);
+        let deleted = class_pool_shares(r, Regime::PlateauDeleted, 0.0, run);
         let fmt = |v: &[f64]| {
             v.iter()
                 .map(|x| format!("{:.3}", x))
@@ -237,11 +245,11 @@ pub fn oq1_probe_report(out: &mut impl fmt::Write) -> fmt::Result {
         "\n  naive-fraction sweep at r={R} (divergence of mixed play from cap-DELETED):",
         R = PROBE_R[0]
     )?;
-    let deleted = class_pool_shares(PROBE_R[0], Regime::PlateauDeleted, 0.0);
+    let deleted = class_pool_shares(PROBE_R[0], Regime::PlateauDeleted, 0.0, run);
     write!(out, "    f=")?;
     for i in 0..=5 {
         let f = i as f64 / 5.0;
-        let mixed = class_pool_shares(PROBE_R[0], Regime::NaiveCapped, f);
+        let mixed = class_pool_shares(PROBE_R[0], Regime::NaiveCapped, f, run);
         write!(
             out,
             "{:.1}:{:.4}  ",
@@ -295,8 +303,9 @@ mod tests {
         // drop ~2.3% of a small total, but it falls identically on both sides.
         for r in [2u64, 50, 200, 700, 1023, 2000, 4000, 50_000] {
             for h in [256u64, 4_096] {
-                let opt = best_partition_credit_milli(h, r);
-                let deleted = credited_work_milli(h, r, Regime::PlateauDeleted);
+                let opt = best_partition_credit_milli(h, r, &SimParams::default());
+                let deleted =
+                    credited_work_milli(h, r, Regime::PlateauDeleted, &SimParams::default());
                 // Equal, or below only by sub-permille flooring residue.
                 assert!(opt <= deleted, "optimum cannot exceed linear: r={r} h={h}");
                 assert!(
@@ -307,10 +316,12 @@ mod tests {
         }
         // And the two-point max genuinely understates it somewhere — the reason the
         // full search is not gold-plating.
-        let two_point = credited_work_milli(4_096, 700, Regime::NaiveCapped)
-            .max(credited_work_milli(4_096, 700, Regime::SplitDodge));
+        let two_point =
+            credited_work_milli(4_096, 700, Regime::NaiveCapped, &SimParams::default()).max(
+                credited_work_milli(4_096, 700, Regime::SplitDodge, &SimParams::default()),
+            );
         assert!(
-            best_partition_credit_milli(4_096, 700) > two_point,
+            best_partition_credit_milli(4_096, 700, &SimParams::default()) > two_point,
             "the two-point max must be strictly beaten at r=700"
         );
     }
@@ -320,8 +331,13 @@ mod tests {
         // OQ-1's core: with everyone splitting, cap-kept and cap-deleted distribute
         // the pool identically — the plateau's distributional effect is nil against
         // rational actors, so deletion is distribution-NEUTRAL in equilibrium.
-        let deleted = class_pool_shares(R_SHALLOW, Regime::PlateauDeleted, 0.0);
-        let rational = class_pool_shares(R_SHALLOW, Regime::SplitDodge, 0.0);
+        let deleted = class_pool_shares(
+            R_SHALLOW,
+            Regime::PlateauDeleted,
+            0.0,
+            &SimParams::default(),
+        );
+        let rational = class_pool_shares(R_SHALLOW, Regime::SplitDodge, 0.0, &SimParams::default());
         let div = max_share_divergence(&deleted, &rational);
         assert!(
             div < 0.01,
@@ -335,8 +351,13 @@ mod tests {
         // The distortion R1 names: with the cap kept, the class that does NOT split
         // is compressed — its pool share falls relative to the deleted/rational
         // baseline. That is the cost the cap imposes when it "works".
-        let deleted = class_pool_shares(R_SHALLOW, Regime::PlateauDeleted, 0.0);
-        let naive = class_pool_shares(R_SHALLOW, Regime::NaiveCapped, 1.0);
+        let deleted = class_pool_shares(
+            R_SHALLOW,
+            Regime::PlateauDeleted,
+            0.0,
+            &SimParams::default(),
+        );
+        let naive = class_pool_shares(R_SHALLOW, Regime::NaiveCapped, 1.0, &SimParams::default());
         // The largest class (at the wire cap) is the one the plateau compresses.
         let last = ARCHIVER_CLASSES.len() - 1;
         assert!(
@@ -356,11 +377,16 @@ mod tests {
         // The axis the round needs: divergence from the deleted baseline grows with
         // the naive fraction and vanishes when nobody plays naive. So "the curve
         // protects smalls" is true exactly to the extent smalls do not split.
-        let deleted = class_pool_shares(R_SHALLOW, Regime::PlateauDeleted, 0.0);
+        let deleted = class_pool_shares(
+            R_SHALLOW,
+            Regime::PlateauDeleted,
+            0.0,
+            &SimParams::default(),
+        );
         let mut prev = -1.0;
         for i in 0..=10 {
             let f = i as f64 / 10.0;
-            let mixed = class_pool_shares(R_SHALLOW, Regime::NaiveCapped, f);
+            let mixed = class_pool_shares(R_SHALLOW, Regime::NaiveCapped, f, &SimParams::default());
             let div = max_share_divergence(&deleted, &mixed);
             assert!(div >= prev - 1e-9, "divergence must be monotone in naive f");
             prev = div;
@@ -377,8 +403,9 @@ mod tests {
         // ZERO while the single-bond holder still scores — so splitting is not
         // free everywhere, and the round must not treat the dodge as unconditional.
         let deep_r = 500_000; // 4 shards × (1e6/500k = 2 micro) = 8 micro < 1000
-        let split = credited_work_milli(4_096, deep_r, Regime::SplitDodge);
-        let whole = credited_work_milli(4_096, deep_r, Regime::PlateauDeleted);
+        let split = credited_work_milli(4_096, deep_r, Regime::SplitDodge, &SimParams::default());
+        let whole =
+            credited_work_milli(4_096, deep_r, Regime::PlateauDeleted, &SimParams::default());
         assert_eq!(split, 0, "fine splits must quantize to zero at deep r");
         assert!(whole > 0, "the unsplit holding still scores");
     }

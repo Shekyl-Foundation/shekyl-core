@@ -5,10 +5,9 @@
 
 //! Tests for the archival codecs (`codec::archival`): the bond record's round
 //! trip at every genesis-frozen cap, each decode refusal on its own axis,
-//! and the **v7 cross-check** — the C++ `ArchivalBondValue` corpus
-//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`, written and asserted
-//! by `tests/unit_tests/archival_bond_record_v7_corpus.cpp`) rebuilt as
-//! [`BondRecord`]s field by field, so the re-specified codec is shown to
+//! and the **v7 cross-check** — the frozen `ArchivalBondValue` corpus
+//! (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`; frozen, no regenerator)
+//! rebuilt as [`BondRecord`]s field by field, so the re-specified codec is shown to
 //! carry the *same record*, not merely to round-trip itself
 //! (`DRS_E1_SARCH.md` §7, ruled on PR #840).
 
@@ -17,16 +16,16 @@ use std::path::Path;
 
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::archival::{
-    BadInterval, HoldingsKind, MAX_ATTESTATION_WITNESS_BYTES, MAX_BOND_BAD_INTERVALS,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS,
+    BadInterval, BundleReferences, HoldingsKind, MAX_BOND_BAD_INTERVALS, MAX_CLAIMED_EPOCH_ENTRIES,
+    MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, MAX_SECTION_REFERENCES,
 };
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    BondRecord, BundleReferencesBytes, FirstPayingHeight, HeldShard, Holdings, HoldingsError,
+    RMarket, SigmaWorkMilli, SupportSeats, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -310,7 +309,7 @@ fn holdings_answer_held_at_tip_and_project_the_wire_descriptor() {
 }
 
 #[test]
-fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
+fn the_close_row_scalars_are_the_raw_le_word_and_the_references_are_a_section() {
     assert_eq!(RMarket::from_raw(1).encode(), [1, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(RMarket::decode(&[0; 8]), Ok(RMarket::from_raw(0)));
     assert_eq!(
@@ -324,36 +323,53 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
             ..
         })
     ));
-    assert!(AttestationWitnessBytes::well_formed(&[]).is_err());
-    assert!(AttestationWitnessBytes::well_formed(&[1]).is_ok());
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES]).is_ok()
-    );
-    assert!(
-        AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES + 1])
-            .is_err()
-    );
+    // A stored section is `BundleReferences::encode`'s bytes and nothing
+    // else: not empty, not a zero count, not past the bound, not padded.
+    let section = BundleReferences::new(vec![vec![1u8; 80]; MAX_SECTION_REFERENCES])
+        .expect("a full section")
+        .encode();
+    assert!(BundleReferencesBytes::well_formed(&section).is_ok());
+    assert!(BundleReferencesBytes::well_formed(&[]).is_err());
+    assert!(BundleReferencesBytes::well_formed(&0u32.to_le_bytes()).is_err());
+    let over = u32::try_from(MAX_SECTION_REFERENCES + 1).expect("fits");
+    assert!(BundleReferencesBytes::well_formed(&over.to_le_bytes()).is_err());
+    let mut padded = section;
+    padded.push(0);
+    assert!(BundleReferencesBytes::well_formed(&padded).is_err());
 }
 
-/// The frozen complete-tree set (`SO-D12h`): the empty set is written as a
-/// count of zero and read back as a value, and the decode refuses each
-/// shape the type cannot hold — a repeat, a descent, a count past the
-/// bytes, a trailing byte. Red edit: decode through `FromIterator`, which
-/// sorts — the descent then round-trips into a different encoding.
+/// The support row refuses what its type cannot hold, in either half: a
+/// repeated or descending seat, a repeated or descending carried tree, a
+/// carried tree owed nothing, a count past the bytes, a trailing byte.
+/// Seat `j` is bit `j` of the support bitmap, so an order the type sorted
+/// away would renumber the draws; a carried tree owed nothing is not in
+/// the sparse carry. Red edits: decode the seats through `FromIterator`,
+/// which sorts (the descent round-trips into a different encoding); drop
+/// the owes-nothing check (a zero entry round-trips).
 #[test]
-fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
+fn the_support_row_refuses_what_its_type_cannot_hold() {
+    use shekyl_types::archival::{SupportCarryAfter, SupportCount, SupportRow};
     let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
     let invalid = |reason: &'static str| CodecError::Invalid {
-        codec: CompleteTreeSet::NAME,
+        codec: SupportRow::NAME,
         reason,
     };
-    let empty = CompleteTreeSet::default();
-    assert_eq!(empty.encode(), [0, 0, 0, 0]);
-    assert_eq!(CompleteTreeSet::decode(&[0, 0, 0, 0]), Ok(empty));
-    let two = CompleteTreeSet::new(vec![id(1), id(2)]).expect("ascending");
-    assert_eq!(CompleteTreeSet::decode(&two.encode()), Ok(two.clone()));
+    assert_eq!(SupportRow::EMPTY.encode(), [0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        SupportRow::decode(&[0, 0, 0, 0, 0, 0, 0, 0]),
+        Ok(SupportRow::EMPTY)
+    );
+    let row = SupportRow {
+        seats: SupportSeats::new(vec![id(1), id(2)]).expect("ascending"),
+        carry_after: SupportCarryAfter::new(vec![
+            (id(1), SupportCount::new(2)),
+            (id(3), SupportCount::new(1)),
+        ])
+        .expect("ascending, each owed"),
+    };
+    assert_eq!(SupportRow::decode(&row.encode()), Ok(row.clone()));
 
-    let raw = |ids: &[u8]| {
+    let seats = |ids: &[u8]| {
         let mut out = u32::try_from(ids.len())
             .expect("fits")
             .to_le_bytes()
@@ -363,22 +379,53 @@ fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
         }
         out
     };
-    let unordered = invalid("personas are not strictly increasing");
-    assert_eq!(CompleteTreeSet::decode(&raw(&[1, 1])), Err(unordered));
-    assert_eq!(CompleteTreeSet::decode(&raw(&[2, 1])), Err(unordered));
-    let mut short = raw(&[1, 2]);
+    let carry = |entries: &[(u8, u32)]| {
+        let mut out = u32::try_from(entries.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &(b, owed) in entries {
+            out.extend_from_slice(&[b; 32]);
+            out.extend_from_slice(&owed.to_le_bytes());
+        }
+        out
+    };
+    let with = |s: Vec<u8>, c: Vec<u8>| [s, c].concat();
+    let unordered = invalid("seats are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[1, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[2, 1]), carry(&[]))),
+        Err(unordered)
+    );
+    let carried = invalid("carried personas are not strictly increasing");
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(2, 1), (1, 1)]))),
+        Err(carried)
+    );
+    assert_eq!(
+        SupportRow::decode(&with(seats(&[]), carry(&[(1, 0)]))),
+        Err(invalid("a carried persona owes nothing"))
+    );
+    let mut short = with(seats(&[1, 2]), carry(&[]));
     short.truncate(4 + 32);
     assert_eq!(
-        CompleteTreeSet::decode(&short),
+        SupportRow::decode(&short),
         Err(invalid(
             "element count exceeds what the row's bytes can hold"
         ))
     );
-    let mut long = two.encode();
+    let mut long = row.encode();
     long.push(0);
     assert_eq!(
-        CompleteTreeSet::decode(&long),
-        Err(invalid("trailing bytes after the complete-tree set"))
+        SupportRow::decode(&long),
+        Err(invalid("trailing bytes after the support row"))
     );
 }
 
@@ -471,8 +518,8 @@ fn record_from_v7_fields(f: &serde_json::Value) -> BondRecord {
 fn the_v7_corpus_maps_onto_the_record_without_loss() {
     let text = fs::read_to_string(corpus_path()).unwrap_or_else(|e| {
         panic!(
-            "the v7 corpus is missing ({e}); it is written by \
-             tests/unit_tests/archival_bond_record_v7_corpus.cpp with SHEKYL_WRITE_V7_CORPUS=1"
+            "the v7 corpus is missing ({e}); it is frozen and has no regenerator \
+             (docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json)"
         )
     });
     let doc: serde_json::Value = serde_json::from_str(&text).expect("corpus is JSON");

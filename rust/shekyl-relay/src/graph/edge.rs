@@ -539,7 +539,13 @@ fn stem_records(connector: ConnectorId, transit: DerivationMs) {
     let mut z = zone(&mut rng);
     z.on_session_established(id(1), PeerDirection::Outbound, connector, &mut rng);
     let tx = TxId::from_bytes([9u8; 32]);
-    z.record_stem(&[tx], id(1), None, 0, &mut rng);
+    z.record_stem(
+        &[(tx, crate::TxBlob::from(&b"tx"[..]))],
+        id(1),
+        None,
+        0,
+        &mut rng,
+    );
     assert_eq!(z.stem_connector(tx), Some(connector));
     assert_eq!(z.embargo_mean_secs(connector), Some(embargo_mean(transit)));
 }

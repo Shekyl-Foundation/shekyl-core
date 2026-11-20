@@ -11,7 +11,7 @@ downstream consumer, not a source of truth.
 
 ## Development flow
 
-1. **All new code originates in `shekyl-core`.** New Rust crates, FFI exports,
+1. **All new code originates in `shekyl-core`.** New Rust crates,
    encoding logic, address types, and crypto primitives are first-class
    workspace members under `rust/` in the Shekyl repo.
 2. **The fork vendors from Shekyl, not the reverse.** When the fork needs

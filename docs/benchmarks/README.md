@@ -14,7 +14,8 @@ docs/benchmarks/
 ├── shekyl_rust_v0.iai.snapshot         Rust baseline: raw iai-callgrind stdout
 ├── drs_bench_ibd_<engine>_h<H>_<arch>_<ts>.json
                                         DRS-BENCH: consensus-store IBD artifacts
-└── measurement_ledger.toml             which constant rests on which capture, and which path set it budgets
+├── measurement_ledger.toml             which constant rests on which capture, and which path set it budgets
+└── FLOOR_RUN_SHEET.md                  the ledger's floor rows, by floor-device session
 ```
 
 (The tree above names the baseline set; ad-hoc Pi-4 captures,
@@ -59,6 +60,25 @@ gungraun `client_requests`) and `gungraun-runner` on `PATH`
 ```bash
 ./scripts/bench/capture_rust_baseline.sh
 ```
+
+Two variables choose what it captures. `BENCH_SET` is `pr` (the default:
+the rows a pull request and the push to `dev` run) or `nightly` (the rows
+too long for a pull request, which `nightly.yml`'s `bench-full` job
+captures and compares with the night before). `BENCH_ROWS` is `all` (the
+default) or the rows to run, space-separated, each
+`<crate>::<gungraun-target>`:
+
+```bash
+BENCH_ROWS="shekyl-engine-state::balance_iai" ./scripts/bench/capture_rust_baseline.sh
+```
+
+A pull request's capture is scoped this way. Every row has a
+`[[gated_row]]` in `measurement_ledger.toml` with a path set, the code
+whose change can move its counts; `scripts/ci/change_scope.py` names the
+rows the pull request's change can reach (`bench_rows`), and the capture
+runs those. The envelope records what was captured (`captured_rows`), and
+`compare.py` reads a baseline row outside it as out of scope, not deleted.
+The push to `dev` captures every row.
 
 This script:
 
@@ -151,6 +171,11 @@ bench's cost depends on crates other than its own):
 - An iai-callgrind entry **missing** from the PR's envelope is
   treated as `fail` (a deleted bench is the most dangerous
   regression — a "regression" that no longer exists to be caught).
+- A bench that **moved crate** (the same bench target, group,
+  function and run id under another crate, matched one to one) is
+  not missing: it is compared across the move under the same
+  thresholds, so a move that also changed the workload still fails.
+  An ambiguous match is not paired and stays missing.
 - An entry present in the PR but not the baseline is
   informational; the first merge to `dev` seeds it into the
   rolling baseline.
@@ -174,6 +199,18 @@ numbers live that the gate reads.
 - Updated by the `update-baseline` job of the workflow on every
   push to `dev` that touches the same paths the per-PR gate triggers on. A bot-authored commit
   replaces the tip with the fresh capture.
+- After the push, the job's `drift alarm` step compares that capture
+  with the baseline it replaced (`scripts/bench/drift_report.sh`).
+  The capture is every row of the pull-request set. A pull request
+  runs only the rows its change can reach; the nightly full-weight
+  rows are a different capture, and `bench-full-drift` calls the same
+  script on that set. A row past its fail threshold, or a row gone,
+  turns the run red, the log names the row, and the dev-red reporter
+  opens the issue. A warn does not redden the run. The baseline has
+  already moved, so each push is judged against the capture before
+  it: a step that stays inside the warn band does not accumulate, and
+  a count that crossed the fail threshold is red on that push and is
+  then the figure the next is held to.
 - If the branch does not exist (first-time bootstrap), the gate
   posts a `bootstrap-pending` comment on the PR and passes. The
   first subsequent push to `dev` that the workflow sees creates
@@ -211,7 +248,7 @@ sorted largest delta first. Next steps:
 `drs_bench_ibd_*.json` are produced by `scripts/bench/drs_bench.py measure` and
 consumed by `drs_bench.py check`, which routes two of them through the IBD floor
 frozen in `docs/design/DAEMON_REDB_STORE.md` §1.3. The gate itself —
-schema, refusals, comparator, redb-engine probe — lives in
+schema, refusals, comparator, durability readback — lives in
 `scripts/bench/drs_artifact.py`. They are **not** part of the
 `shekyl_rust_v0` envelope and are not read by `compare.py`: that script is
 iai-callgrind only by construction, and its
@@ -223,19 +260,38 @@ dated record of one run on one machine, kept because §1.3's absolute "N hours"
 was deferred until a first LMDB baseline landed in-tree.
 
 **They are conditions-first, by refusal.** `measure` will not emit, and `check`
-will not compare, an artifact missing any of: DRS-D9 durability (with the argv
-that imposed it), CPU / RAM / disk class / **filesystem type**, the height
-actually reached, which verification the fixture exercised, and the peer count.
-`check` additionally refuses two artifacts that disagree about any of those —
-§1.3's floor is a ratio on one machine with one binary, engine being the only
-difference, so a ratio across differing conditions measures the difference and
-not the engine.
+will not compare, an artifact missing any of: DRS-D9 durability (read back from
+the daemon, with the argv the run had), CPU / RAM / disk class / **filesystem
+type**, the height actually reached, which verification the fixture exercised,
+and the peer count. `check` additionally refuses two artifacts that disagree
+about any of those — §1.3's floor is a ratio on one machine, two binaries with
+one backend each, engine being the only difference, so a ratio across differing
+conditions measures the difference and not the engine.
+
+**Durability is read back, not labelled, and the engine follows the line.**
+Neither binary takes a sync-mode option: each opens its one store at a constant
+and logs what it opened with, and `measure` reads that line from the generating
+seed before any block is generated and from the subject before its sync is
+timed. The C++ daemon's line is
+`Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks` (the `safe`
+open at `db_nosync`, no `MDB_NOSYNC` / `MDB_MAPASYNC`); the Rust store's is
+`Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)`.
+Both are DRS-D9, an fsync per commit, each in its engine's spelling: an
+artifact records `sync_mode: "safe"` for `engine: lmdb` and
+`sync_mode: "immediate"` for `engine: redb`, and the gate refuses a label that
+is not its engine's spelling, a line that is not its engine's DRS-D9, and a
+label over the other engine's line. The `engine` itself is derived from which
+line the daemon wrote — one backend per build, never a switch — and
+`engine_selected_by` says so. `check` compares the policy the two artifacts
+share (`DRS-D9 full-fsync-per-commit`, observed), not the engine-specific
+`sync_mode` / line / readback text, which differ between the two binaries by
+construction.
 
 Two refusals are worth knowing before you run it:
 
 - **A store on `tmpfs` or `ramfs` is refused, before any daemon starts.** fsync
-  there has no backing store to flush, so the daemon's `safe` mode is
-  indistinguishable from `MDB_NOSYNC` and the result is a RAM-disk number
+  there has no backing store to flush, so neither `safe` nor `immediate` is
+  distinguishable from no fsync at all and the result is a RAM-disk number
   wearing a strict-durability label. The harness's own first artifact was
   exactly that, from a scratch directory that happened to be a large tmpfs.
 - **`disk_class` must be `hdd` or `ssd_or_nvme`.** "unknown" is refused: §1.3
@@ -247,8 +303,13 @@ is cached and topped up via `--seed-dir` rather than regenerated. Only the
 subject is wiped per run — it is the thing being measured, and an IBD that
 starts from a partial chain is a different experiment.
 
-`scripts/bench/test_drs_bench.py` is the selftest; it and `drs_bench.py
-blockers` run in `docs-gates.yml`.
+The seed and the subject are one binary, `--daemon`. The archived-seed leg,
+which served the seed chain from the archived C++ daemon on its LMDB store
+over the 3.x wire (`--seed-daemon`), is retired (Rick, 2026-11-12): its last
+code is at `f993270e85`. Recorded flip-leg artifacts keep their seed's hash
+and readback note, and `check` still reads them.
+
+`scripts/bench/test_drs_bench.py` is the selftest; it runs in `docs-gates.yml`.
 
 ## Measurement ledger
 
@@ -274,6 +335,21 @@ statement disagrees with git in either direction:
 | `unmeasured` | No capture is in the tree; the constant names what will measure it | It claims a capture, or names no carrier |
 | `estimated` | A prediction for a path not yet built or not yet measured: a band with its unit (`estimate = { low, high, unit }`), the arithmetic (`basis`), and the capture files the arithmetic reads (`basis_captures`, each one exact tracked file) | The band is not two ordered numbers and a unit; a basis capture is not one tracked file; it claims a capture of its own; or it becomes current, stale or retired on a capture the parent tree already held |
 
+Each constant that is not `current` also names its `disposition`, what
+will make it current or why nothing will:
+
+| Disposition | Means | Its key, and what the check holds |
+| --- | --- | --- |
+| `ci` | A gated row re-captures it on the CI runner | `ci_row`, a `[[gated_row]]` bench |
+| `floor` | A floor-device session measures it | none; the constant is listed on [`FLOOR_RUN_SHEET.md`](FLOOR_RUN_SHEET.md), and the sheet lists no constant that is not a floor row |
+| `forge` | Its instrument needs chain state only the chain forge builds (a closed shard, a settled epoch, a claim, a slash, a discard, the design-load chain) | `forge_event`, an event in [`CHAIN_FORGE.md`](../design/CHAIN_FORGE.md)'s catalogue; the carrier says "chain forge" |
+| `retire` | It will not be measured | `replaced_by`, what took its place |
+
+A count from the CI runner is not a device time (rule 76), so a row whose
+figure is a floor time is a `floor` row, whatever bench measures it on CI.
+A constant turning stale or unmeasured takes a disposition in the same
+edit.
+
 A green run means the ledger tells the truth. It does not mean every capture
 is fresh: the stale constants are printed on every run, and each is a
 re-measurement somebody owes.
@@ -292,8 +368,9 @@ If every constant on the path set is `current`, one of three:
   reviewed with the diff. `cleared` is read only by a current constant.
   A path set whose constants are stale or unmeasured leaves the key off.
 - Set the constant `status = "stale"`, `stale_since` to the commit,
-  `carrier` to the benchmark run that will re-measure it, and start the
-  path set's `stale_through` with that commit.
+  `carrier` to the benchmark run that will re-measure it, its
+  `disposition` (above), and start the path set's `stale_through` with
+  that commit.
 
 If a constant on the path set is already `stale`, add a `stale_through`
 entry on the path set:
@@ -352,6 +429,14 @@ What it does not see: a path set lists source paths, so a dependency
 upgrade in `Cargo.lock`, or a change in a crate the path set does not
 list, moves no constant. The paths are a reviewed judgement about where
 the cost lives.
+
+Every commit id in the ledger (`through`, `capture_rev`, `stale_since`, a
+toolchain entry's `commit`) is the full 40-hex id, as `git rev-parse
+<commit>` prints it. The check refuses any other spelling. A shorter or
+upper-case id that still names a commit stays on its row: the refusal is
+the spelling, and the row is still the row. A prefix unique today can
+become ambiguous as the repository grows, and the check would then fail
+on a row nobody touched.
 
 It depends on merge commits. Every entry is a commit id that stays in the
 branch's history. A squash-merge or a rebase-and-merge mints new ids and

@@ -9,7 +9,7 @@ fn sample(round_trips: u32, decoded: u64, seconds: f64) -> BlockSample {
     BlockSample {
         height: 1,
         round_trips,
-        wire_hex_bytes: decoded * 2,
+        wire_bytes: decoded.div_ceil(3) * 4,
         decoded_bytes: decoded,
         seconds,
     }
@@ -62,9 +62,9 @@ fn a_balanced_cost_refuses_to_pick_a_term() {
 
 #[test]
 fn wire_and_decoded_bytes_are_reported_separately() {
-    // The block blob arrives hex-encoded. Conflating the two would understate
-    // the wire by half -- and "bytes" was exactly the ambiguous term in the
-    // model this module replaced.
+    // The block and its bodies arrive base64-encoded. Conflating the two
+    // would understate the wire by a third -- and "bytes" was exactly the
+    // ambiguous term in the model this module replaced.
     let samples: Vec<_> = (0..5).map(|_| sample(3, 1_000, 0.010)).collect();
     let p = project(
         &samples,
@@ -73,7 +73,9 @@ fn wire_and_decoded_bytes_are_reported_separately() {
             samples: 10,
         },
     );
-    assert_eq!(p.projected_wire_hex_bytes, 2 * p.projected_decoded_bytes);
+    // 1 000 decoded bytes are 1 336 base64 bytes (4 per 3, padded).
+    assert_eq!(p.projected_wire_bytes, 1_336 * p.blocks_projected);
+    assert_eq!(p.projected_decoded_bytes, 1_000 * p.blocks_projected);
 }
 
 #[test]

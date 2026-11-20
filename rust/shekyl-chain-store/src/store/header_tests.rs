@@ -15,9 +15,7 @@
 use shekyl_types::BlockCount;
 use shekyl_units::AtomicUnits;
 
-use super::store_tests::{
-    cleanup, probe_row, production_horizons, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE,
-};
+use super::store_tests::{probe_row, production_horizons, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
@@ -25,6 +23,9 @@ use crate::codec::{
     PropertyCellBytes, Raw, SchemaVersion, SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
+use crate::redb_recovery::{
+    bytes_and_mtime, mark_recovery_required, read_only_open_is_repair_aborted,
+};
 use crate::schema::PROPERTIES;
 
 const SLASH: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
@@ -35,7 +36,8 @@ fn stubbed(families: &[ArchivalFamily]) -> ApplyPolicy {
 }
 
 /// Create a store, commit one probe row, drop the handle.
-fn seeded(path: &std::path::Path, policy: ApplyPolicy) {
+fn seeded(path: impl AsRef<std::path::Path>, policy: ApplyPolicy) {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::with_apply_policy(path, policy, EPOCH).expect("create");
     store
         .write(|batch| probe_row(batch, "k", 1))
@@ -49,7 +51,8 @@ fn commit_empty(store: &ChainStore) -> Provenance {
 }
 
 /// Write raw bytes to a `properties` cell, bypassing the store entirely.
-fn raw_put(path: &std::path::Path, key: &str, value: Option<&[u8]>) {
+fn raw_put(path: impl AsRef<std::path::Path>, key: &str, value: Option<&[u8]>) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("raw open");
     let txn = db.begin_write().expect("raw write");
     {
@@ -68,7 +71,8 @@ fn raw_put(path: &std::path::Path, key: &str, value: Option<&[u8]>) {
 /// Read raw bytes from a `properties` cell, bypassing the store. `None` if
 /// the cell — or the whole table — is absent. redb admits one handle per
 /// file per process, so callers drop their `ChainStore` first.
-fn raw_get(path: &std::path::Path, key: &str) -> Option<Vec<u8>> {
+fn raw_get(path: impl AsRef<std::path::Path>, key: &str) -> Option<Vec<u8>> {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("raw open");
     let txn = db.begin_read().expect("raw read");
     let t = match txn.open_table(PROPERTIES) {
@@ -102,7 +106,6 @@ fn a_fresh_store_is_sealed_in_its_first_transaction() {
         raw_get(&path, "settlement_epoch_blocks").as_deref(),
         Some(10_000u64.to_le_bytes().as_slice())
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------- settlement-epoch pin
@@ -171,7 +174,6 @@ fn a_file_reopens_under_its_pinned_schedule_and_refuses_another() {
         .expect("reader under the pinned schedule");
     assert_eq!(ro.settlement_epoch_blocks(), EPOCH);
     assert_eq!(ro.horizons(), production_horizons());
-    cleanup(&path);
 }
 
 #[test]
@@ -190,7 +192,6 @@ fn a_reader_reports_the_retention_it_was_opened_with() {
     let ro = ChainStore::open_read_only(&path, session).expect("reader");
     assert_eq!(ro.horizons(), session);
     assert_eq!(ro.settlement_epoch_blocks(), OTHER_EPOCH);
-    cleanup(&path);
 }
 
 #[test]
@@ -223,7 +224,6 @@ fn a_missing_zero_or_malformed_pin_is_corruption_not_unpinned() {
             assert_eq!(e.class(), ErrorClass::Invariant, "{label}");
         }
     }
-    cleanup(&path);
 }
 
 /// The `following_degraded` latch (DX-Q2 item 8) is clear on a fresh
@@ -273,7 +273,6 @@ fn the_following_degraded_latch_is_one_way_and_keeps_its_first_evidence() {
         raw_get(&path, FollowingDegradedCell::KEY).as_deref(),
         Some(first.encode().as_slice())
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -306,7 +305,6 @@ fn total_burned_is_a_writable_chain_state_cell() {
         Some(12u64.to_le_bytes().as_slice()),
         "the C++ key, LE u64"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -321,7 +319,6 @@ fn a_fresh_store_created_under_a_stub_is_tainted_from_its_first_byte() {
         Some(FamilySet::of(SLASH).encode().as_slice()),
         "persisted at seal, not first commit"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------ refusals
@@ -359,7 +356,6 @@ fn a_different_version_is_refused_in_both_directions() {
             "a refused open must not re-stamp the file"
         );
     }
-    cleanup(&path);
 }
 
 #[test]
@@ -368,15 +364,16 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     let path = tmp("absent-cell");
     seeded(&path, ApplyPolicy::Full);
     raw_put(&path, "schema_version", None);
+    let before = bytes_and_mtime(&path);
     assert!(matches!(
         ChainStore::create(&path, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
+    assert_eq!(bytes_and_mtime(&path), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&path, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
-    cleanup(&path);
 
     // A redb file nothing in this crate wrote: no properties table at all.
     let foreign = tmp("foreign");
@@ -386,10 +383,14 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         txn.open_table(PROBE).expect("some other table");
         txn.commit().expect("c");
     }
+    let before = bytes_and_mtime(&foreign);
     assert!(matches!(
         ChainStore::create(&foreign, EPOCH),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
+    // Judged on a read-only open: a writable one would have written the
+    // engine's allocator state into the file as it closed.
+    assert_eq!(bytes_and_mtime(&foreign), before, "refused unwritten");
     assert!(matches!(
         ChainStore::open_read_only(&foreign, production_horizons()),
         Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
@@ -398,7 +399,60 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
         raw_get(&foreign, "schema_version").is_none(),
         "refusing must not seal a foreign file"
     );
-    cleanup(&foreign);
+}
+
+/// A cleanly shut-down file with redb's recovery bit set is `RepairAborted`
+/// from the read-only door, and the writable open returns the probe row.
+///
+/// Mapping that error to a hard refusal fails this test. The read-only
+/// door is the precondition: a writable open that never saw `RepairAborted`
+/// is not this path. Shortening the file does not construct it.
+#[test]
+fn a_recovery_bit_reopens_the_probe_row() {
+    let path = tmp("repair");
+    seeded(&path, ApplyPolicy::Full);
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    assert!(
+        matches!(
+            ChainStore::open_read_only(&path, production_horizons()),
+            Err(StoreError::Engine(EngineError::Open(
+                redb::DatabaseError::RepairAborted
+            )))
+        ),
+        "the read-only door returns the engine's repair arm"
+    );
+    let store = ChainStore::create(&path, EPOCH).expect("repair");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
+}
+
+/// A newer layout that also needs repair is still a mismatch, and the
+/// probe row survives it. Red if the repair refusal deletes the file or
+/// drops the row. The bytes change: the repair runs before the mismatch
+/// is known.
+#[test]
+fn a_newer_layout_that_needs_repair_is_refused_and_the_probe_remains() {
+    let path = tmp("repair-newer");
+    seeded(&path, ApplyPolicy::Full);
+    let newer = SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+    raw_put(&path, "schema_version", Some(&newer.encode()));
+    mark_recovery_required(&path);
+    assert!(
+        read_only_open_is_repair_aborted(&path),
+        "the bit is the repair arm"
+    );
+    match ChainStore::create(&path, EPOCH) {
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+            assert_eq!((found, expected), (newer, SCHEMA_VERSION));
+        }
+        other => panic!("a newer layout is a mismatch, got {other:?}"),
+    }
+    raw_put(&path, "schema_version", Some(&SCHEMA_VERSION.encode()));
+    let store = ChainStore::create(&path, EPOCH).expect("the repaired file reopens");
+    assert_eq!(super::store_tests::probe_val(&store, "k"), Some(1));
 }
 
 #[test]
@@ -444,7 +498,6 @@ fn a_malformed_header_cell_is_corruption_not_a_version() {
             }),
         }))
     ));
-    cleanup(&path);
 }
 
 // ---------------------------------------------------------- provenance
@@ -489,7 +542,6 @@ fn a_stubbed_commit_taints_the_file_and_a_full_session_cannot_clean_it() {
             .expect("cell"),
         Some(FamilySet::of(SLASH))
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -514,7 +566,6 @@ fn taint_is_a_union_across_sessions() {
         ro.provenance().artifact_stamp(),
         "apply-policy=STUBBED[archival_bond,archival_slash_log] NOT-PARITY-EVIDENCE"
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -536,7 +587,6 @@ fn an_aborted_stubbed_batch_leaves_no_taint() {
         .expect("ro")
         .provenance()
         .is_parity_evidence());
-    cleanup(&path);
 }
 
 #[test]
@@ -548,7 +598,6 @@ fn a_stubbed_commit_with_no_rows_still_taints() {
     seeded(&path, ApplyPolicy::Full);
     let s = ChainStore::with_apply_policy(&path, stubbed(SLASH), EPOCH).expect("reopen");
     assert!(!commit_empty(&s).is_parity_evidence());
-    cleanup(&path);
 }
 
 #[test]
@@ -587,7 +636,6 @@ fn the_taint_commits_atomically_with_the_rows() {
             .value(),
         7
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------- typed cells
@@ -630,7 +678,6 @@ fn a_chain_state_cell_round_trips_through_the_typed_surface() {
         raw_get(&path, ProbeCell::KEY).as_deref(),
         Some(0x0102_0304_0506_0708_u64.encode().as_slice())
     );
-    cleanup(&path);
 }
 
 #[test]
@@ -649,7 +696,6 @@ fn a_corrupt_chain_state_cell_is_refused_on_read() {
             fault: CellFault::Undecodable(_),
         }))
     ));
-    cleanup(&path);
 }
 
 #[test]
@@ -687,9 +733,57 @@ fn a_corrupt_cell_read_through_a_batch_poisons_it() {
         Some(&[1u8, 2, 3][..]),
         "the repair did not land: a poisoned batch aborts"
     );
-    cleanup(&path);
 }
 
 // The write bound is the permission: `upsert_property::<SchemaVersionCell>`
 // and `upsert_property::<ApplyPolicyCell>` do not compile. Pinned by the
 // `compile_fail` doctests on `WriteBatch::upsert_property`.
+
+/// What a power loss between the engine's first commit and the seal leaves
+/// behind: a valid redb file with no table at all. PB-S2's first replay
+/// (2026-11-01) found a node that could not start again from one. A
+/// writable open finishes the creation in place; a read-only open cannot
+/// seal, and still refuses. Red edit: drop the `creation_interrupted`
+/// branch from `with_horizons`, and the open refuses with
+/// `SchemaVersionAbsent`.
+#[test]
+fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
+    let path = tmp("interrupted-create");
+    {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create the path");
+        drop(
+            redb::Builder::new()
+                .create_file(file)
+                .expect("the engine's first commit"),
+        );
+    }
+    assert!(
+        raw_get(&path, "schema_version").is_none(),
+        "the fixture is a file the seal never reached"
+    );
+    assert!(matches!(
+        ChainStore::open_read_only(&path, production_horizons()),
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
+    ));
+    let (store, cut) = open_at(
+        path.path(),
+        ApplyPolicy::Full,
+        production_horizons(),
+        GenesisAdmission::Unpinned,
+    )
+    .expect("the creation is finished");
+    assert_eq!(cut, Some(CutShort::Unsealed));
+    drop(store);
+    assert_eq!(
+        raw_get(&path, "schema_version").as_deref(),
+        Some(SCHEMA_VERSION.encode().as_slice()),
+        "sealed at this binary's layout"
+    );
+    ChainStore::create(&path, EPOCH).expect("and reopens as an ordinary store");
+    ChainStore::open_read_only(&path, production_horizons()).expect("read-only too");
+}

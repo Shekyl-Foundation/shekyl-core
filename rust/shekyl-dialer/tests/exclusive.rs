@@ -12,17 +12,19 @@
 //! so each draw here is the first draw of a fresh dialer under its own
 //! seed.
 
+#[path = "support/rig.rs"]
+mod rig;
+#[path = "support/tables.rs"]
+mod tables;
+
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
 
+use rig::Rig;
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_peer_policy::InboundCeiling;
-use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
+use shekyl_peerlist::{ConnectorId, NetworkAddress, Tick};
 use shekyl_timing_engine::ManualClock;
-use shekyl_transport_layer::Sockets;
 
 fn peer(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
@@ -31,58 +33,27 @@ fn peer(n: u8) -> NetworkAddress {
     }
 }
 
-fn dialer() -> Arc<Dialer> {
-    let hub = Hub::new(
-        Sockets::new(),
-        InboundCeiling::Bounded(8),
-        Arc::new(|_post| {}),
-        Arc::new(ManualClock::new(Tick::new(1))),
-    );
-    let dialer = Arc::new(Dialer::new(
-        hub,
-        RefusedSet::NON_GLOBAL,
-        Arc::new(|| {
-            Some(SyncPayload {
-                current_height: 1,
-                cumulative_difficulty: 1,
-                cumulative_difficulty_top64: 0,
-                top_id: [0; 32],
-            })
-        }),
-    ));
-    dialer.set_network_id([7; 16]);
-    // The link is usable: the plan draws only then (TSR-F1).
-    assert!(
-        matches!(
-            dialer
-                .hub()
-                .links()
-                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
-            RoutePublish::Installed { .. }
-        ),
-        "the test route was not already usable"
-    );
-    dialer
-}
+type TestDialer = Dialer<ManualClock>;
 
 /// The first draw of a fresh dialer under `seed`, after `prepare` set it
 /// up: the gray list holds peers 1 to 6 as operator-named addresses.
-fn first_draw(seed: u64, prepare: impl Fn(&Dialer, &mut SplitMix64)) -> Option<NetworkAddress> {
-    let dialer = dialer();
+fn first_draw(seed: u64, prepare: impl Fn(&TestDialer, &mut SplitMix64)) -> Option<NetworkAddress> {
+    let rig = Rig::new();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(seed);
     for n in 1..=6 {
         dialer
             .admit_operator(&peer(n), Tick::new(1), &mut rng)
             .expect("admitted");
     }
-    prepare(&dialer, &mut rng);
+    prepare(dialer, &mut rng);
     dialer
         .choose(ConnectorId::Clearnet, &mut rng)
-        .map(|(address, _aim, _nonce)| address)
+        .map(|(address, _aim)| address)
 }
 
 /// The first draws of `rounds` fresh dialers.
-fn drawn(rounds: u64, prepare: impl Fn(&Dialer, &mut SplitMix64)) -> BTreeSet<NetworkAddress> {
+fn drawn(rounds: u64, prepare: impl Fn(&TestDialer, &mut SplitMix64)) -> BTreeSet<NetworkAddress> {
     (1..=rounds)
         .filter_map(|seed| first_draw(seed, &prepare))
         .collect()
@@ -112,7 +83,8 @@ fn a_declared_population_is_the_only_source_of_draws() {
 
 #[test]
 fn declaring_the_population_seats_its_addresses_in_gray() {
-    let dialer = dialer();
+    let rig = Rig::new();
+    let dialer = &rig.dialer;
     let mut rng = SplitMix64::new(1);
     assert!(!dialer.shared().lists.is_gray(&peer(9)));
     dialer.set_exclusive(vec![peer(9)], Tick::new(1), &mut rng);
@@ -143,7 +115,8 @@ fn the_candidate_filter_still_applies_inside_the_population() {
 /// starts nothing, and one connector's claim says nothing about another's.
 #[test]
 fn a_connector_has_one_owner_loop() {
-    let dialer = dialer();
+    let rig = Rig::new();
+    let dialer = &rig.dialer;
     assert!(
         dialer.claim_owner(ConnectorId::Tor),
         "the first start claims it"

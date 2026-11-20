@@ -15,6 +15,11 @@ Sources:
 3. `rust/Cargo.toml`: `[profile.release]`, the recognised keys only.
 4. `rust/.cargo/config.toml`: each target's `rustflags`.
 5. `cmake/BuildRust.cmake`: cargo invocations, `-C` tokens, environment.
+   Every binary, the daemon included, is one `cargo build --locked` in
+   this file (`shekyl_rust_bins`); the flags and environment it hands
+   cargo are tokens in the same file, read the same way. (Until
+   2026-11-05 the daemon's run was Corrosion's, which added one linker
+   rustflag of its own from a pinned submodule; both are gone.)
 6. `contrib/gitian/gitian-*.yml`: the toolchain each release build
    installs. A descriptor builds through make. A cargo or rustc
    command, a `RUSTUP_*` variable, or a `+` toolchain selector is
@@ -79,6 +84,13 @@ KNOWN_RUSTFLAGS = frozenset({"target-feature=+crt-static"})
 KNOWN_BUILD_ENV = frozenset({
     "AR", "AR_<T>", "CC", "CC_<T>", "CFLAGS", "CFLAGS_<T>", "CXX",
     "CXXFLAGS", "LDFLAGS", "NM", "RANLIB", "CARGO_TARGET_<T>_LINKER",
+    # Where cargo writes, pinned to the path the link reads (#1228); it
+    # selects a directory, never a codegen setting.
+    "CARGO_TARGET_DIR",
+    # The build identity (DC-Q20), set on the binaries' builds and read
+    # only by `shekyl-version`'s `option_env!` as `&str` and `bool`
+    # constants; no decapsulation crate reads them.
+    "SHEKYL_VERSION_FULL", "SHEKYL_RELEASE_NAME", "SHEKYL_VERSION_IS_RELEASE",
     "CARGO_TARGET_<T>_RUSTFLAGS", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 })
 KNOWN_BUILD_FLAGS = frozenset({
@@ -89,8 +101,11 @@ KNOWN_BUILD_FLAGS = frozenset({
 CARGO_TAIL = frozenset({
     "${RUST_BUILD_FLAG}",
     "${RUST_TARGET_FLAG}",
-    "${_measurement_features}",
     "${_shekyl_rust_bin_pkg_args}",
+    # Empty, or `--features <measurement features>` under
+    # SHEKYL_MEASUREMENT_SPANS, which scripts/ci/check_measurement_spans.py
+    # keeps off every release path; a feature selects code, not codegen.
+    "${_shekyl_rust_bin_features}",
 })
 CARGO_END = frozenset({
     "WORKING_DIRECTORY", "DEPENDS", "COMMENT", "VERBATIM", ")", "COMMAND", "OUTPUT",

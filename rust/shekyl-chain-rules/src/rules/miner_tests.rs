@@ -29,7 +29,7 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
 use crate::trust::Trust;
-use crate::validate::{form, form_judged, validate};
+use crate::validate::{form, form_judged, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
 use crate::view::{RecordedBlock, Tip};
 use crate::{form_header, judge_header};
@@ -51,11 +51,14 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -63,13 +66,8 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -424,14 +422,9 @@ fn cen_f11_genesis_takes_the_configured_emission_and_recomputes_nothing() {
     assert_eq!(emission.tx_volume, TxVolume::window(0, 0));
     let formed = formed_on(&MockChain::default(), candidate(Vec::new()));
     let coverage = MockChain::default().with_view(|view| {
-        *judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("genesis fixture")
-        .coverage()
+        *judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("genesis fixture")
+            .coverage()
     });
     for row in [CenRow::F11, CenRow::F13, CenRow::F15, CenRow::F20] {
         assert!(coverage.contains(row), "{row} recorded at genesis");
@@ -649,7 +642,7 @@ fn cen_f20_a_decreasing_prefix_sum_is_a_corrupt_view() {
     let candidate = candidate_on(&chain, Vec::new());
     let formed = formed_on(&chain, candidate);
     chain.with_view(|view| {
-        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect_err("a decreasing prefix sum faults");
         assert!(
             matches!(fault, Fault::Corrupt(Corrupt::TxCountNotMonotone { .. })),
@@ -778,11 +771,14 @@ fn a_g2_failure_is_refused_before_any_longhash() {
     };
     match form(
         unpaired.clone(),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(&chain),
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &expected_references(&chain, &unpaired),
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &no_hash,
-        expected_seed(&chain),
-        expected_target(&chain, &RuleSet::GENESIS),
-        &expected_references(&chain, &unpaired),
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, CenRow::G2),
@@ -857,11 +853,14 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
     };
     match form(
         candidate.clone(),
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target,
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &no_hash,
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Err(refused)) => assert_eq!(refused.rule, row, "form"),
@@ -879,13 +878,13 @@ fn same_body_row(chain: &MockChain, candidate: Candidate, row: CenRow) {
     .expect("mock")
     .unwrap_or_else(|refused| panic!("{row:?}: the header was refused: {refused}"));
     chain.with_view(|view| {
-        let judged = match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let judged = match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .expect("view")
         {
             Ok(judged) => judged,
             Err(refused) => panic!("{row:?}: judge_header refused: {refused}"),
         };
-        match form_judged(candidate, &judged, &references) {
+        match form_judged(candidate, &judged, &references, &crate::HARNESS_NETWORK_ID) {
             Err(refused) => assert_eq!(refused.rule, row, "form_judged"),
             Ok(_) => panic!("{row:?}: form_judged accepted"),
         }

@@ -11,8 +11,8 @@ use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
-use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
+use shekyl_types::SigningPayloadHash;
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
 
@@ -28,19 +28,19 @@ use super::types::*;
 
 /// Assemble the **full, broadcast-ready** JoinMarket bond transaction inside
 /// the actor (`ARCHIVAL_BOND_WI2_ASSEMBLY.md` §3.3) — the production superset
-/// of [`PlanBondPost`] (which constructs the vin only and remains for the composition
+/// of [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost) (which constructs the vin only and remains for the composition
 /// KAT).
 ///
-/// Carries the same handle + ticket typed contracts as [`PlanBondPost`], plus the
+/// Carries the same handle + ticket typed contracts as [`PlanBondPost`](crate::engine::stake_engine::persona::PlanBondPost), plus the
 /// **public** funding contexts the Engine-side orchestrator selected (§3.2)
 /// and path-assembled: records, membership paths, and the tree context. The
 /// spend secrets are **not** in the message — they are re-derived from each
 /// record's `(ciphertext, index)` inside the handler
-/// ([`derive_p_source_secrets_bundle`], rule 36).
+/// ([`derive_p_source_secrets_bundle`](crate::engine::stake_engine::helpers::derive_p_source_secrets_bundle), rule 36).
 ///
 /// The reply pairs the minted [`PBoundBytes`] with the bond-post placement
 /// offset from this request's entry-gap draw — the same seam discipline as
-/// [`BondPostPlacement`]: the caller that receives the constructed vin receives
+/// [`BondPostPlacement`](crate::engine::stake_engine::persona::BondPostPlacement): the caller that receives the constructed vin receives
 /// where to place them.
 ///
 /// Lint-visible, deliberately: the wired Engine orchestrator consumes this, so
@@ -67,7 +67,7 @@ pub(crate) struct AssembleBond {
 }
 
 /// Reply of [`AssembleBond`]: the persona-bound wire bytes (minted at the
-/// single P-1 site, [`finalize_bond_tx`]), the placement offset, and the
+/// single P-1 site, [`finalize_bond_tx`](crate::engine::bond_assembly::finalize_bond_tx)), the placement offset, and the
 /// funding gindexes for the caller's reservation record (§3.5). Secrets never
 /// cross the boundary.
 ///
@@ -114,7 +114,7 @@ impl Message<AssembleBond> for StakeEngine {
         // pre-SA-2b signing circularity forced a second, public-parts
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
-        let endpoint = OnionIdentity::from_hs_id_seed(keys.hs_id_seed()).public_key();
+        let endpoint = keys.onion_keypair().public_key();
         let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
@@ -158,6 +158,7 @@ impl Message<AssembleBond> for StakeEngine {
         // would close over `bond_spend_sk` instead.
         let assembled = assemble_signed_bond_post(
             BondPostAssembleArgs {
+                network: self.network,
                 keys,
                 persona,
                 funding: msg.funding,
@@ -170,7 +171,7 @@ impl Message<AssembleBond> for StakeEngine {
                 bond_auth_pk: hybrid_pk_bytes,
                 output_site: "change-output construction",
             },
-            |payload_hash| {
+            |payload_hash: &SigningPayloadHash| {
                 let sig = HybridEd25519MlDsa
                     .sign(
                         &keys.hybrid_sign_sk,

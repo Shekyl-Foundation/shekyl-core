@@ -112,7 +112,23 @@ impl<'id, V: HeaderView<'id>> HeaderView<'id> for PoolView<'_, V> {
     }
 }
 
-impl<'id, V: ChainView<'id>> ChainView<'id> for PoolView<'_, V> {
+impl<'v, 'id, V: ChainView<'id>> ChainView<'id> for PoolView<'v, V> {
+    /// The chain's: the pool holds no bundle rows, and a bundle's admission
+    /// reads only the recorded chain.
+    type Bundles<'m>
+        = V::Bundles<'m>
+    where
+        Self: 'm;
+
+    fn bundles<'m>(
+        &'m self,
+        memo: &'m shekyl_chain_rules::DrawableMemo,
+        h_incl: shekyl_types::BlockHeight,
+        schedule: shekyl_chain_rules::SettlementSchedule,
+    ) -> Self::Bundles<'m> {
+        self.chain.bundles(memo, h_incl, schedule)
+    }
+
     /// Spent on the chain (CEN-M6) **or** by a pool entry (CEN-M7) — the
     /// one override. The pool is asked first: it is in memory, and a key
     /// image it holds is refused whatever the chain says.

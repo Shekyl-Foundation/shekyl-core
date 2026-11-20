@@ -23,8 +23,7 @@
 //! facts, and so the production adapter is one file whose job is reading
 //! rows, not deciding anything.
 
-use shekyl_crypto_pq::signature::HybridPublicKey;
-use shekyl_p_fetch::{ExpectedShard, FetchTarget, PassVerifyingKey};
+use shekyl_p_fetch::{ExpectedShard, FetchTarget};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, PCanonicalId, ShardId};
 
 /// Why a facts read could not be served. The scheduler never guesses a
@@ -48,18 +47,14 @@ pub enum FactsFault {
 /// A holder the draw may pick: a persona bonded to the shard, read from its
 /// bond record.
 ///
-/// `K` is the scheme the exchange is closed with. Every holder a
-/// [`HolderSource`] returns is the live scheme's, the bond identity key.
-/// A caller that names its own persona — a challenge read, through
-/// [`FetchScheduler::read_from_nonce`](crate::FetchScheduler::read_from_nonce)
-/// — may name it under another scheme, and the read it gets back holds
-/// that scheme's signature.
+/// Its target is under the receipt key (hybrid scheme 3) the bond record
+/// carries, the key the bundle verifier checks a receipt against.
 #[derive(Clone, Debug)]
-pub struct Holder<K: PassVerifyingKey = HybridPublicKey> {
+pub struct Holder {
     /// The persona's canonical id — what a pass record and a log line name.
     pub id: PCanonicalId,
     /// Where to dial it and whose signature to accept.
-    pub target: FetchTarget<K>,
+    pub target: FetchTarget,
 }
 
 /// Where a closed shard's transactions sit on the chain, read from the

@@ -137,10 +137,10 @@ pub(crate) fn guaranteed_scanner_for_persona(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridKemPublicKey;
-    use shekyl_scanner::bench_fixtures::scannable_block_for_recipient;
+    use shekyl_scanner::bench_fixtures::{fresh_tx_key, scannable_block_for_recipient};
 
     /// The adapter-built scanner recovers a persona's *own* output.
     ///
@@ -154,8 +154,7 @@ mod tests {
     fn adapter_scanner_recovers_a_persona_owned_output() {
         let seed = [0x07u8; MASTER_SEED_BYTES];
         let persona =
-            derive_archival_p_keys(&seed, DerivationNetwork::Fakechain, SeedFormat::Raw32, 0)
-                .expect("derive a test persona");
+            derive_archival_p_keys(&seed, Network::Regtest, 0).expect("derive a test persona");
 
         // One output addressed to the persona — KEM to its (x25519_pk, ml_kem_ek),
         // one-time key to its spend_pk.
@@ -163,8 +162,12 @@ mod tests {
             x25519: persona.x25519_pk,
             ml_kem: persona.ml_kem_ek.to_vec(),
         };
-        let block =
-            scannable_block_for_recipient(1, &kem_pk, persona.spend_pk.as_canonical_bytes());
+        let block = scannable_block_for_recipient(
+            1,
+            &kem_pk,
+            persona.spend_pk.as_canonical_bytes(),
+            &fresh_tx_key(),
+        );
 
         let mut scanner = guaranteed_scanner_for_persona(&persona).expect("build persona scanner");
         let recovered = scanner.scan(block).expect("scan must not error");
@@ -181,20 +184,20 @@ mod tests {
     #[test]
     fn adapter_scanner_rejects_a_foreign_output() {
         let seed = [0x07u8; MASTER_SEED_BYTES];
-        let mine =
-            derive_archival_p_keys(&seed, DerivationNetwork::Fakechain, SeedFormat::Raw32, 0)
-                .expect("derive persona 0");
-        let other =
-            derive_archival_p_keys(&seed, DerivationNetwork::Fakechain, SeedFormat::Raw32, 1)
-                .expect("derive persona 1");
+        let mine = derive_archival_p_keys(&seed, Network::Regtest, 0).expect("derive persona 0");
+        let other = derive_archival_p_keys(&seed, Network::Regtest, 1).expect("derive persona 1");
 
         // Output addressed to `other`.
         let other_kem = HybridKemPublicKey {
             x25519: other.x25519_pk,
             ml_kem: other.ml_kem_ek.to_vec(),
         };
-        let block =
-            scannable_block_for_recipient(1, &other_kem, other.spend_pk.as_canonical_bytes());
+        let block = scannable_block_for_recipient(
+            1,
+            &other_kem,
+            other.spend_pk.as_canonical_bytes(),
+            &fresh_tx_key(),
+        );
 
         // Scanned with `mine` — recovers nothing.
         let mut scanner = guaranteed_scanner_for_persona(&mine).expect("build persona scanner");

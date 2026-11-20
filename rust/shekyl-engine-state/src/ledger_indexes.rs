@@ -24,11 +24,6 @@
 //! atomically, and `debug_assert!`-driven invariant checks fire
 //! after every mutation.
 //!
-//! Mutators that touch *only* the ledger (`freeze`, `thaw`) live as
-//! inherent methods on [`LedgerBlock`] in [`crate::ledger_block`] —
-//! there is no reason to take a `&mut LedgerIndexes` borrow when the
-//! indexes are never read.
-//!
 //! Read-only queries that need no index likewise live on
 //! [`LedgerBlock`] (`unspent_transfers`, `spendable_outputs`). They are
 //! not ledger-*only*: since PR-SJ-1b both take the journal-derived
@@ -45,7 +40,7 @@ use tracing::warn;
 use zeroize::Zeroize;
 
 use crate::{ledger_block::LedgerBlock, transfer::TransferDetails};
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// Runtime-only state derived from chain replay. None of these fields
 /// are persisted in [`LedgerBlock`]; all are rebuilt by replaying
@@ -131,7 +126,7 @@ impl LedgerIndexes {
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: BlockHeight,
-        block_hash: [u8; 32],
+        block_hash: BlockHash,
         transfers: Vec<TransferDetails>,
     ) -> Range<usize> {
         let start = ledger.transfers.len();
@@ -275,22 +270,6 @@ impl LedgerIndexes {
                 self.check_invariants(ledger).unwrap_err()
             );
         }
-    }
-
-    /// Freeze an output by its key image.
-    pub fn freeze_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
-        if let Some(&idx) = self.key_images.get(key_image) {
-            return ledger.freeze(idx);
-        }
-        false
-    }
-
-    /// Thaw an output by its key image.
-    pub fn thaw_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
-        if let Some(&idx) = self.key_images.get(key_image) {
-            return ledger.thaw(idx);
-        }
-        false
     }
 
     /// Handle a blockchain reorg by removing transfers at or above
@@ -547,7 +526,6 @@ mod tests {
             source_ciphertext: None,
             output_handle: None,
             eligible_height: shekyl_types::BlockHeight::from_raw(block_height) + SPENDABLE_AGE,
-            frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
@@ -563,7 +541,7 @@ mod tests {
         ];
         let ledger = LedgerBlock::new(
             transfers,
-            BlockchainTip::new(BlockHeight::from_raw(120), [0; 32]),
+            BlockchainTip::new(BlockHeight::from_raw(120), BlockHash::from_bytes([0; 32])),
             ReorgBlocks::default(),
         );
         let indexes = LedgerIndexes::rebuild_from_ledger(&ledger);
@@ -592,12 +570,12 @@ mod tests {
         let inserted = indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0xCC; 32],
+            BlockHash::from_bytes([0xCC; 32]),
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
         assert_eq!(inserted, 0..1);
         assert_eq!(ledger.tip.synced_height, BlockHeight::from_raw(100));
-        assert_eq!(ledger.tip.tip_hash, Some([0xCC; 32]));
+        assert_eq!(ledger.tip.tip_hash, Some(BlockHash::from_bytes([0xCC; 32])));
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(indexes.key_images.get(&ki(0xAA)).copied(), Some(0));
         indexes.check_invariants(&ledger).expect("after ingest");
@@ -617,7 +595,7 @@ mod tests {
         let inserted = indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(110),
-            [0; 32],
+            BlockHash::from_bytes([0; 32]),
             vec![t1, t2],
         );
         assert_eq!(inserted, 0..1);
@@ -640,7 +618,7 @@ mod tests {
         let prior = indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0x11; 32],
+            BlockHash::from_bytes([0x11; 32]),
             vec![mk_transfer(1, 100, Some(ki(0x10)))],
         );
         assert_eq!(prior, 0..1);
@@ -653,7 +631,7 @@ mod tests {
         let inserted = indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(200),
-            [0x22; 32],
+            BlockHash::from_bytes([0x22; 32]),
             vec![t1, t2],
         );
         assert_eq!(inserted, 1..2);
@@ -662,8 +640,12 @@ mod tests {
 
         // An empty submission returns an empty range whose start
         // equals the current ledger size.
-        let empty =
-            indexes.ingest_block(&mut ledger, BlockHeight::from_raw(300), [0x33; 32], vec![]);
+        let empty = indexes.ingest_block(
+            &mut ledger,
+            BlockHeight::from_raw(300),
+            BlockHash::from_bytes([0x33; 32]),
+            vec![],
+        );
         assert_eq!(empty, 2..2);
         assert!(empty.is_empty());
     }
@@ -675,7 +657,7 @@ mod tests {
         indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0; 32],
+            BlockHash::from_bytes([0; 32]),
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
 
@@ -699,13 +681,13 @@ mod tests {
         indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0xAA; 32],
+            BlockHash::from_bytes([0xAA; 32]),
             vec![mk_transfer(1, 100, Some(ki(0x10)))],
         );
         indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(200),
-            [0xBB; 32],
+            BlockHash::from_bytes([0xBB; 32]),
             vec![mk_transfer(2, 200, Some(ki(0x20)))],
         );
         assert_eq!(ledger.transfers.len(), 2);
@@ -713,7 +695,7 @@ mod tests {
         indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(200));
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(ledger.tip.synced_height, BlockHeight::from_raw(100));
-        assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
+        assert_eq!(ledger.tip.tip_hash, Some(BlockHash::from_bytes([0xAA; 32])));
         assert!(indexes.key_images.contains_key(&ki(0x10)));
         assert!(!indexes.key_images.contains_key(&ki(0x20)));
     }
@@ -726,7 +708,7 @@ mod tests {
         indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0xAA; 32],
+            BlockHash::from_bytes([0xAA; 32]),
             vec![
                 mk_transfer(1, 100, Some(ki(0x10))),
                 mk_transfer(2, 100, Some(ki(0x20))),
@@ -742,7 +724,12 @@ mod tests {
         // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
         ledger.transfers[1].spent = true;
         // Advance the tip past the fork (empty block) so the rewind is well-formed.
-        indexes.ingest_block(&mut ledger, BlockHeight::from_raw(250), [0xBB; 32], vec![]);
+        indexes.ingest_block(
+            &mut ledger,
+            BlockHeight::from_raw(250),
+            BlockHash::from_bytes([0xBB; 32]),
+            vec![],
+        );
 
         indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(150));
 
@@ -761,7 +748,7 @@ mod tests {
         indexes.ingest_block(
             &mut ledger,
             BlockHeight::from_raw(100),
-            [0; 32],
+            BlockHash::from_bytes([0; 32]),
             vec![mk_transfer(1, 100, None)],
         );
 

@@ -9,7 +9,7 @@
 //! `stake_in` is an **ordinary FCMP++ transfer** principal → `P`'s payment
 //! keys, byte-indistinguishable from any other transfer (DQ1, the frozen Q11
 //! genesis wire: no `C_stake`, band, range proof, or minimum). It
-//! **composes** the built [`build_pending_tx_async`](super::Engine::build_pending_tx_async)
+//! **composes** the built [`build_pending_tx`](super::Engine::build_pending_tx)
 //! path and touches **no `P` secret** — `P` is only a public recipient, its
 //! spend, view and ML-KEM keys handed public-only out of `StakeEngine`
 //! (rule 36). A persona has no address: the keys go to the transfer path as
@@ -29,7 +29,7 @@
 //! because this is the transaction whose amount is observed.
 
 use rand_core::RngCore as _;
-use shekyl_standoff::{draw_cover_amount, COVER_RUNG_ATOMIC};
+use shekyl_standoff::draw_cover_amount;
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
@@ -40,15 +40,9 @@ use super::traits::{
 };
 use super::{EngineSignerKind, SendError};
 
-// `shekyl-standoff` mirrors the bond rung locally (it has no retention
-// dependency, being the leaf draw crate). This crate depends on both, so it is
-// the one place that can assert the mirror has not drifted — a divergence would
-// silently move the cover's upper bound off `bond_floor`, so the funded amount
-// could land on a rung boundary and the unprovability property would break.
-const _: () = assert!(
-    COVER_RUNG_ATOMIC == shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC,
-    "cover rung mirror drifted from ARCHIVAL_BOND_FLOOR_ATOMIC"
-);
+// The cover rung is the archival bond floor, passed to the draw from the
+// one parameter set (`archival_params()`), so the cover's upper bound cannot
+// move off `bond_floor`: there is no second copy to drift.
 
 /// Why [`Engine::stake_in`](super::Engine::stake_in) could not build the funding
 /// transfer.
@@ -95,7 +89,7 @@ pub enum StakeInError {
 // The `dead_code` staging allow retired with WI-RPC-5: the production caller
 // the PR-P2 note reserved (the principal-stake RPC surface) landed as the
 // wallet-RPC `stake_in` handler, which calls this `pub` method.
-#[allow(private_bounds)] // same posture as build_pending_tx_async
+#[allow(private_bounds)] // same posture as build_pending_tx
 impl<S, D, L, E, R, P, F> super::Engine<S, D, L, E, R, P, F>
 where
     S: EngineSignerKind,
@@ -141,7 +135,7 @@ where
     /// etc.).
     ///
     /// `&self` (W-B step 1 parity with
-    /// [`build_pending_tx_async`](super::Engine::build_pending_tx_async), which
+    /// [`build_pending_tx`](super::Engine::build_pending_tx), which
     /// is the entire body after the destination resolution): the slow FCMP++
     /// assembly is serialized by the pending-tx implementor's own permit, so an
     /// embedder holds a shared borrow across the build and concurrent read RPCs
@@ -152,7 +146,7 @@ where
     /// build for exclusivity that binds nothing.
     pub async fn stake_in(&self, amount: AtomicUnits) -> Result<PendingTx, StakeInError> {
         let request = self.stake_in_request(amount).await?;
-        self.build_pending_tx_async(&request)
+        self.build_pending_tx(&request)
             .await
             .map_err(StakeInError::Send)
     }
@@ -208,7 +202,10 @@ where
             .try_fill_bytes(&mut probe)
             .map_err(StakeInError::RngSourceFailed)?;
         let mut rng = OsRngGapAdapter;
-        let cover = AtomicUnits::from_raw(draw_cover_amount(&mut rng));
+        let cover = AtomicUnits::from_raw(draw_cover_amount(
+            &mut rng,
+            shekyl_archival_retention::archival_params().bond_floor_atomic,
+        ));
         let funded = amount
             .checked_add(cover)
             .ok_or(StakeInError::CoverOverflow {
@@ -241,7 +238,7 @@ mod tests {
     use super::StakeInError;
     use crate::engine::pending::TxDestination;
     use crate::engine::test_support::{activate_persona, staker_engine};
-    use shekyl_standoff::COVER_RUNG_ATOMIC;
+    use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC as COVER_RUNG_ATOMIC;
     use shekyl_units::AtomicUnits;
 
     /// This suite's deterministic-seed multiplier (`test_support::fixed_seed`).
@@ -262,7 +259,7 @@ mod tests {
     /// A staker with no active persona has nothing to fund.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         let err = engine
             .stake_in_request(AtomicUnits::from_raw(50_000))
             .await
@@ -276,7 +273,7 @@ mod tests {
     /// funding aside.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_request_is_a_single_output_to_the_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         activate_persona(&engine, 3).await;
         let amount = AtomicUnits::from_raw(50_000);
 

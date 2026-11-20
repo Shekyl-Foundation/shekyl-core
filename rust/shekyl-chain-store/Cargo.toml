@@ -57,6 +57,8 @@ pool-commit-fault = []
 workspace = true
 
 [dev-dependencies]
+# HARNESS_NETWORK_ID for the bundle fixtures' witness signatures.
+shekyl-network = { path = "../shekyl-network" }
 # The manifest walk in `codec::snapshot_tests::workflow_gates_this_crate`
 # derives the set of crates whose code can change a stored byte from the
 # workspace's `Cargo.toml`s. A hand-rolled reader that skipped a spelling it
@@ -81,8 +83,13 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # leave a coinbase no scan recovers). Test-only: the store derives nothing
 # consensus-visible from either.
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
-shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
-# The release-admission tests open under `ReleaseAnchors::for_network`.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet", features = ["seeded-rng"] }
+# The decision-citation guard (`test_support::regen_decision_or_refuse`)
+# the shard-fill capture is written under (`store/shard_fill.rs`), the one
+# every armed regenerator in the workspace calls. Already a normal
+# dependency of shekyl-chain-rules (rule 17); test-only here.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# The release-admission tests open under `GenesisPin::for_network`.
 # The store admits a table and does not know which networks exist (rule
 # 71); the test needs the type that selects the production tables. Already
 # a normal dependency of shekyl-chain-rules (rule 17); test-only here.
@@ -99,6 +106,10 @@ shekyl-economics = { path = "../shekyl-economics" }
 # dependency of shekyl-chain-rules (rule 17); test-only here, for the same
 # reason as `shekyl-economics`.
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# Each test store's own directory (`test_paths.rs`), which takes the
+# store's sidecar files with it when the test ends, and the RT-W10
+# harness's scratch output (`store/rt_w10_cost.rs`).
+tempfile = { workspace = true }
 # The v7 cross-check corpus (`codec::archival_tests`) is JSON written by the
 # C++ unit test that still owns the decoder; read with the workspace's
 # serde_json (rule 17: already a workspace dependency, no new crate).

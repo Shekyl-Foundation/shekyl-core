@@ -67,7 +67,7 @@ fn build_paid_to_self(
     use shekyl_crypto_pq::kem::HybridCiphertext;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -89,7 +89,7 @@ fn build_paid_to_self(
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index,
-        tx_hash,
+        tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
     };
     (input, amount)
 }
@@ -138,7 +138,7 @@ fn make_recipient_output_info(
     use shekyl_tx_builder::types::OutputInfo;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -149,7 +149,7 @@ fn make_recipient_output_info(
     OutputInfo {
         dest_key: constructed.output_key,
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: constructed.z,
+        commitment_mask: constructed.commitment_mask(),
         enc_amount: constructed.enc_amount_wire(),
         enc_label: constructed.enc_label_wire(),
     }
@@ -271,7 +271,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
     );
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &derived_spend_pk,
@@ -295,7 +295,7 @@ async fn try_claim_output_for_derived_spend_point_returns_not_mine() {
         enc_label: constructed.enc_label_bytes(),
         label_tag_on_chain: constructed.label_tag(),
         output_index: 0,
-        tx_hash: [0u8; 32],
+        tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
     };
 
     let result = keys.try_claim_output(&input).await.unwrap();
@@ -319,7 +319,7 @@ fn derive_primary_source_secrets_bundle_returns_deterministic_bundle() {
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let output_index = 3u64;
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -358,7 +358,7 @@ fn derive_primary_source_secrets_bundle_rejects_low_order_x25519_component() {
 
     let keys = LocalKeys::from_test_seed(TEST_SEED);
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         keys.keys.spend_pk.as_canonical_bytes(),
@@ -460,7 +460,7 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
     // bundle arithmetic — `construct_output` is unaware of it.
     for (output_index, tx_hash) in inputs.iter().copied() {
         let constructed = construct_output(
-            &TEST_TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             keys.keys.spend_pk.as_canonical_bytes(),
@@ -739,7 +739,6 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
     use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
@@ -774,7 +773,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             input_amounts.push(amount);
 
             let constructed = construct_output(
-                &TEST_TX_KEY_SECRET,
+                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient_spend_pk,
@@ -1056,6 +1055,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         // ── Sign engine path (sole sign call; legacy parallel
         //    sign call removed per the Trim-1 disposition) ───
         let signed_engine = sign_transaction(
+            &shekyl_network::HARNESS_NETWORK_ID,
             signable_tx_hash,
             &engine_inputs,
             &outputs,
@@ -1084,9 +1084,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         let bp_commitments: Vec<CompressedPoint> = outputs
             .iter()
             .map(|out| {
-                let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                    .expect("commitment_mask from OutputInfo is canonical");
-                let c = Commitment::new(mask, out.amount.to_raw());
+                let c = out.commitment_mask.opening(out.amount.to_raw());
                 CompressedPoint::from(c.calculate().compress().to_bytes())
             })
             .collect();
@@ -1121,9 +1119,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            tree.tree_root.as_bytes(),
+            &tree.tree_root,
             tree.tree_depth,
-            signable_tx_hash.to_bytes(),
+            // The message the proof was made over (the signing envelope §2.2).
+            signed_engine.tx_signable,
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1151,10 +1150,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
 /// depth-1 tree (`engine::synthetic_tree`), not a real on-chain tree. The
 /// synthetic fixtures survive `#[cfg(test)]` precisely for the `local_keys`
 /// signing KATs — the A4 reversion clause of `CT5C_ASSEMBLER_CUTOVER.md`, the
-/// same slice that cut production over to the real `assemble_path`. A
+/// same slice that cut production over to the real path assembler. A
 /// real-tree bond round-trip (mirroring `local_pending_tx`'s
 /// `build_then_submit_places_awaiting_confirmation_lock` over `funded_ledger_and_tree`) is
-/// **not** blocked on CT-5 — `assemble_path` is real — but on threading the
+/// **not** blocked on CT-5 — the assembler is real — but on threading the
 /// bond's cleartext `credit_term` through the engine signer, which today
 /// calls the zero-terms `sign_transaction` (`sign_bridge.rs`). That
 /// threading is PR 2c, so the real-tree bond KAT lands as 2c's closing
@@ -1190,13 +1189,12 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
     use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+    use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::kem::HybridCiphertext;
     // (the bond vin carries no on-chain signature; surface-A signing over the
     // tx payload is exercised in the pqc_auths tests, not here — SA-2b)
     use shekyl_curve_io::CompressedPoint;
-    use shekyl_curve_primitives::Commitment;
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
     use shekyl_fcmp::PqcKeyScalar;
     use shekyl_tx_builder::{
@@ -1207,19 +1205,14 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // Wallet keys fund the transaction; the bond persona `P` is a separate
     // identity that authorizes the post (credit paths sign under P_pubkey).
     let keys = LocalKeys::from_test_seed(TEST_SEED);
-    let p_keys = derive_archival_p_keys(
-        &[0x33u8; MASTER_SEED_BYTES],
-        DerivationNetwork::Mainnet,
-        SeedFormat::Bip39,
-        0,
-    )
-    .expect("derive archival P keys");
+    let p_keys = derive_archival_p_keys(&[0x33u8; MASTER_SEED_BYTES], Network::Mainnet, 0)
+        .expect("derive archival P keys");
 
     let holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0,
         "bond floor must be positive for the fixture holdings"
@@ -1245,7 +1238,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     let input_amount: u64 = floor + fee + 1_000_000;
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys.keys.x25519_pk,
         &keys.keys.ml_kem_ek,
         &recipient_spend_pk,
@@ -1315,6 +1308,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // ── Prove: bond_credit rides as the sole output-side cleartext term ─
     let credit_term = built.credit_term();
     let signed = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &outputs,
@@ -1338,6 +1332,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         change_output_index,
     )];
     let self_check_err = sign_transaction_with_terms(
+        &shekyl_network::HARNESS_NETWORK_ID,
         signable_tx_hash,
         &inputs,
         &short_change,
@@ -1368,9 +1363,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     let bp_commitments: Vec<CompressedPoint> = outputs
         .iter()
         .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask from OutputInfo is canonical");
-            let c = Commitment::new(mask, out.amount.to_raw());
+            let c = out.commitment_mask.opening(out.amount.to_raw());
             CompressedPoint::from(c.calculate().compress().to_bytes())
         })
         .collect();
@@ -1407,9 +1400,9 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                tree.tree_root.as_bytes(),
+                &tree.tree_root,
                 tree.tree_depth,
-                signable_tx_hash.to_bytes(),
+                signed.tx_signable,
             ),
             Ok(true)
         ),
@@ -1501,7 +1494,7 @@ fn derive_primary_source_secrets_bundle_diverges_across_distinct_seeds() {
     let keys_b = LocalKeys::from_test_seed([0xAAu8; 32]);
 
     let constructed = construct_output(
-        &TEST_TX_KEY_SECRET,
+        &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
         &keys_a.keys.x25519_pk,
         &keys_a.keys.ml_kem_ek,
         keys_a.keys.spend_pk.as_canonical_bytes(),
@@ -1574,8 +1567,7 @@ async fn sign_transaction_rejects_empty_inputs() {
         },
         fee: FeeDirective {
             fee_no_change: 0,
-            fee_with_change: 0,
-            dust_threshold: 0,
+            fee_with_change: Some(0),
         },
     };
     let err = keys

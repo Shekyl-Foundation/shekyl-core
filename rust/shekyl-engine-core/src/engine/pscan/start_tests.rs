@@ -16,7 +16,7 @@ use super::*;
 
 use std::collections::BTreeMap;
 
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_state::pscan_cursor::{PScanCursor, PSCAN_CURSOR_BLOCK, PSCAN_CURSOR_VERSION};
 use shekyl_engine_state::pscan_state::{
     PSCAN_STATE_BLOCK, PSCAN_STATE_VERSION, PSCAN_STATE_VERSION_KEYLESS_JOIN,
@@ -32,7 +32,7 @@ use crate::engine::{Credentials, EngineCreateParams};
 use crate::engine::test_support::dummy_daemon;
 
 /// This suite's deterministic seed (multiplier 7).
-fn fixed_seed() -> [u8; MASTER_SEED_BYTES] {
+fn fixed_seed() -> [u8; SEED_BYTES] {
     crate::engine::test_support::fixed_seed(7)
 }
 
@@ -217,7 +217,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     engine
         .persist_bond_record(PSlot::from_raw(3))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
 
     let opened = Engine::<SoloSigner>::open_full(
         &base_path,
@@ -270,7 +270,7 @@ async fn staker_auto_start_single_flight_and_shutdown_releases_the_engine() {
     let engine = Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("the shut-down task must not hold the engine arc"))
         .into_inner();
-    engine.close(&creds).expect("close after shutdown");
+    engine.close(&creds).await.expect("close after shutdown");
 }
 
 /// A stopped scan can be started again: the slot is reusable across
@@ -293,7 +293,7 @@ async fn pscan_can_be_restarted_after_shutdown() {
     engine
         .persist_bond_record(PSlot::from_raw(0))
         .expect("persist bond record");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let engine = Engine::<SoloSigner>::open_full(
         &base_path,
         &creds,
@@ -465,4 +465,232 @@ fn the_bond_broadcast_seam_stays_on_the_local_choke_point() {
         "the bond broadcast must route through the persona transport, never a \
          default DaemonClient (T-DS-2)"
     );
+}
+
+/// Records every hand-off it is given and answers each as accepted.
+#[cfg(windows)]
+#[derive(Default)]
+struct CountingBroadcast {
+    sent: std::sync::Mutex<usize>,
+}
+
+#[cfg(windows)]
+impl BondBroadcast for Arc<CountingBroadcast> {
+    async fn submit_bound(
+        &self,
+        _handoff: crate::engine::transaction_submitter::BoundForSend,
+    ) -> Result<
+        crate::engine::transaction_submitter::SubmitSuccess,
+        crate::engine::transaction_submitter::BroadcastSubmitError,
+    > {
+        *self.sent.lock().expect("sent") += 1;
+        Ok(
+            crate::engine::transaction_submitter::SubmitSuccess::Broadcast {
+                hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
+                kind: crate::engine::transaction_submitter::BroadcastKind::Accepted,
+            },
+        )
+    }
+}
+
+/// On a FAT32 volume no staking bytes leave the wallet (Rick, 2026-11-19).
+/// The wallet's own pending store, on that volume: every seal a broadcast
+/// follows (a bond post, a claim, a drain, an exit) is saved unconfirmed,
+/// refused before any send, and taken back; and a bond post left on disk,
+/// as a power loss can leave one, is neither covered by the open's save nor
+/// sent by the dispatch driver.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs SHEKYL_TEST_FAT_DIR: a directory on a FAT32 volume (a scratch VHD)"]
+async fn nothing_staking_leaves_on_a_fat_volume() {
+    use shekyl_engine_file::{Durability, Unconfirmed};
+    use shekyl_engine_state::pending_post_block::{
+        PendingBondPost, PendingDrain, PendingEmissionClaim, PendingRelease, SealAdmission,
+    };
+    use shekyl_engine_state::PendingPostState;
+    use shekyl_types::{BlockCount, ChainCount, GlobalOutputIndex, PSlot};
+
+    use crate::engine::dispatch_durability::require_confirmed;
+    use crate::engine::pscan::dispatch::DispatchTick;
+    use crate::engine::pscan::pending_store::OpenCover;
+
+    let root = std::env::var_os("SHEKYL_TEST_FAT_DIR").expect("SHEKYL_TEST_FAT_DIR is unset");
+    let tmp = tempfile::tempdir_in(root).expect("a directory on the FAT volume");
+    let base_path = tmp.path().join("wallet");
+    let creds = Credentials::password_only(b"correct horse battery staple");
+    let seed = fixed_seed();
+    let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
+    let engine = Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create wallet");
+    let arc = Arc::new(RwLock::new(engine));
+    let gate = arc.read().await.pending_gate.clone();
+    let store = pending_post_store_for_engine(arc.clone(), gate.clone());
+    let on_fat = |durability: &Durability| matches!(durability, Durability::Unconfirmed(Unconfirmed::FileSystem(name)) if name == "FAT32");
+    let persona = |byte: u8| PCanonicalId::from_bytes([byte; 32]);
+    let gindexes = |at: u64| vec![GlobalOutputIndex::from_raw(at)];
+    let reference_height = BlockHeight::from_raw(1_000);
+    let tip = ChainCount::from_raw(1_010);
+    let bond_post = move |byte: u8| PendingBondPost {
+        p_slot: PSlot::from_raw(u32::from(byte)),
+        persona: persona(byte),
+        tx_bytes: vec![byte; 4],
+        bond_post_offset_blocks: BlockCount::from_raw(0),
+        anchor_t0: ChainCount::from_raw(1_005),
+        funding_gindexes: gindexes(u64::from(byte)),
+        state: PendingPostState::Pending,
+        reference_height,
+        terminal: None,
+    };
+
+    // Every broadcast seal: saved unconfirmed, refused, taken back.
+    type Seal = Box<dyn FnOnce(&mut PendingPostBlock) -> SealAdmission + Send>;
+    type Unseal = Box<dyn FnOnce(&mut PendingPostBlock) -> bool + Send>;
+    let seals: [(&str, Seal, Unseal); 4] = [
+        (
+            "bond post",
+            Box::new(move |block| {
+                let g = block.generation();
+                block.seal_post(bond_post(1), g)
+            }),
+            Box::new(move |block| block.remove_post(&persona(1)).is_some()),
+        ),
+        (
+            "claim",
+            Box::new(move |block| {
+                let g = block.generation();
+                block.seal_claim(
+                    PendingEmissionClaim {
+                        persona: persona(2),
+                        tx_bytes: vec![2; 4],
+                        fee_gindexes: gindexes(2),
+                        state: PendingPostState::Pending,
+                        reference_height,
+                        terminal: None,
+                    },
+                    tip,
+                    g,
+                )
+            }),
+            Box::new(move |block| block.remove_claim(&persona(2)).is_some()),
+        ),
+        (
+            "drain",
+            Box::new(move |block| {
+                let g = block.generation();
+                block.seal_drain(
+                    PendingDrain {
+                        persona: persona(3),
+                        tx_bytes: vec![3; 4],
+                        funding_gindexes: gindexes(3),
+                        state: PendingPostState::Pending,
+                        reference_height,
+                        terminal: None,
+                    },
+                    tip,
+                    g,
+                )
+            }),
+            Box::new(move |block| block.remove_drain(&persona(3)).is_some()),
+        ),
+        (
+            "exit",
+            Box::new(move |block| {
+                let g = block.generation();
+                block.seal_release(
+                    PendingRelease {
+                        persona: persona(4),
+                        tx_bytes: vec![4; 4],
+                        funding_gindexes: gindexes(4),
+                        state: PendingPostState::Pending,
+                        reference_height,
+                        terminal: None,
+                    },
+                    tip,
+                    g,
+                )
+            }),
+            Box::new(move |block| block.remove_release(&persona(4)).is_some()),
+        ),
+    ];
+    for (kind, seal, unseal) in seals {
+        let (admission, durability) = store
+            .seal_reporting(
+                |block| {
+                    let admission = seal(block);
+                    (admission == SealAdmission::Admit, admission)
+                },
+                unseal,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("the {kind}'s seal was applied: {e}"));
+        assert_eq!(admission, SealAdmission::Admit, "{kind}");
+        assert!(on_fat(&durability), "{kind}: {durability:?}");
+        assert!(
+            require_confirmed(durability).is_err(),
+            "{kind}: an unconfirmed seal mints no bytes to send"
+        );
+    }
+    let left = store
+        .read(|block| block.sealed_records().count())
+        .await
+        .expect("read the pending records");
+    assert_eq!(left, 0, "every unconfirmed seal was taken back");
+
+    // A bond post on disk, as a power loss can leave one: the open's save is
+    // not confirmed, so the driver neither covers nor sends it.
+    let written = store
+        .mutate_reporting(|block| {
+            let g = block.generation();
+            (block.seal_post(bond_post(5), g) == SealAdmission::Admit, ())
+        })
+        .await
+        .expect("the post's save was applied")
+        .1;
+    assert!(on_fat(&written), "{written:?}");
+    let opened = store.cover_at_open().await.expect("the open's load");
+    assert!(
+        matches!(&opened, OpenCover::Saved(durability) if on_fat(durability)),
+        "{opened:?}"
+    );
+    let broadcast = Arc::new(CountingBroadcast::default());
+    let mut driver = DispatchDriver::new(
+        WalletFilePendingSealStore {
+            engine: arc.clone(),
+        },
+        broadcast.clone(),
+        DispatchConfig {
+            alarm_horizon_blocks: BlockCount::from_raw(100),
+            dispersal_bound: Duration::ZERO,
+        },
+        gate,
+    );
+    for _ in 0..3 {
+        driver
+            .on_tick(
+                tip,
+                crate::engine::pscan::dispatch::TickEvidence {
+                    confirmed_posts: &std::collections::BTreeSet::new(),
+                    live_funding: &std::collections::BTreeSet::new(),
+                    scanned_through: None,
+                },
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("tick");
+    }
+    assert_eq!(
+        *broadcast.sent.lock().expect("sent"),
+        0,
+        "no staking bytes leave a FAT volume"
+    );
+
+    // Close the wallet before its directory: on FAT a file still open
+    // cannot be removed, and a dropped `TempDir` would leave the directory
+    // behind silently.
+    drop(driver);
+    drop(store);
+    let engine = Arc::try_unwrap(arc)
+        .unwrap_or_else(|_| panic!("the test holds the only reference to the engine"))
+        .into_inner();
+    engine.close(&creds).await.expect("close the wallet");
+    tmp.close().expect("the wallet's directory is removed");
 }

@@ -45,7 +45,7 @@
 //! id **before** assembly, and the id is derivable only from the persona's
 //! public identity key — actor-held state. The seam derives it from the
 //! actor's read-only projection
-//! ([`StakeEngineHandle::persona_identity`]) rather than a caller-supplied
+//! ([`StakeEngineHandle::persona_identity`](crate::engine::stake_engine::StakeEngineHandle::persona_identity)) rather than a caller-supplied
 //! id that could disagree with the slot (a mismatch would fetch one
 //! persona's epochs and sign with another's keys — a claim the daemon
 //! rejects, but a foot-gun the seam can simply not have). Deliberately
@@ -258,7 +258,7 @@ where
     /// reward is fully consumed by the loud vout). Go-live remains
     /// compile-blocked on a production [`SpentRecordsDurablyPruned`] mint
     /// (SP-R0), exactly as the bond path; tests pass
-    /// [`SpentRecordsDurablyPruned::for_test`].
+    /// `SpentRecordsDurablyPruned::for_test`.
     ///
     /// The production caller is the cadence driver's epoch-claim leg
     /// (`ENGINE_CADENCE_DRIVER.md` §3 leg 3) — the `claim` RPC method
@@ -353,10 +353,10 @@ where
                 reserved,
                 p_canonical_id,
                 fee: fee.to_raw(),
-                // The production floor (`ENGINE_CADENCE_DRIVER.md` §4):
+                // The production hold (`ENGINE_CADENCE_DRIVER.md` §4):
                 // every production claim rides this choke point, so the
-                // constant is named exactly once.
-                fee_floor: shekyl_economics::EMISSION_CLAIM_FEE_FLOOR,
+                // shipped policy's hold is named exactly once.
+                fee_floor: shekyl_economics::relay_policy().emission_claim_fee_floor,
             },
             block_hash_at,
         )
@@ -383,37 +383,49 @@ where
             reference_height,
             terminal: None,
         };
-        let attempt = store
-            .mutate(move |block| {
-                // §3 "user work always wins", the authoritative half: this
-                // closure runs under the pending write lock, which totally
-                // orders it against every foreground registration and every
-                // foreground snapshot read. A user-initiated staking
-                // operation begun before this instant forces the claim to
-                // yield here; one begun after reads the sealed claim's
-                // reservations and selects around them. Either way the user
-                // never sees `InputRaced` caused by a background claim.
-                if pending_gate.foreground_in_flight() {
-                    return (false, ClaimSealAttempt::YieldToForeground);
-                }
-                // One locked decision, shared with the bond-post and drain
-                // seams: persona dedup first (remedy: wait), then cross-kind
-                // gindex overlap (remedy: retry). Order matters because two
-                // same-persona assemblies select the same inputs and would
-                // otherwise be told to retry a race they cannot win. The
-                // overlap half is also `remove_settled`'s sole-spender premise.
-                //
-                // Deciding and inserting are one call so this seam cannot
-                // re-derive the outcome from a push bool whose refusal arm the
-                // decision above has already ruled out.
-                let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
-                (
-                    admission == SealAdmission::Admit,
-                    ClaimSealAttempt::Decided(admission),
-                )
-            })
+        let (attempt, durability) = store
+            .seal_reporting(
+                move |block| {
+                    // §3 "user work always wins", the authoritative half: this
+                    // closure runs under the pending write lock, which totally
+                    // orders it against every foreground registration and every
+                    // foreground snapshot read. A user-initiated staking
+                    // operation begun before this instant forces the claim to
+                    // yield here; one begun after reads the sealed claim's
+                    // reservations and selects around them. Either way the user
+                    // never sees `InputRaced` caused by a background claim.
+                    if pending_gate.foreground_in_flight() {
+                        return (false, ClaimSealAttempt::YieldToForeground);
+                    }
+                    // One locked decision, shared with the bond-post and drain
+                    // seams: persona dedup first (remedy: wait), then cross-kind
+                    // gindex overlap (remedy: retry). Order matters because two
+                    // same-persona assemblies select the same inputs and would
+                    // otherwise be told to retry a race they cannot win. The
+                    // overlap half is also `remove_settled`'s sole-spender premise.
+                    //
+                    // Deciding and inserting are one call so this seam cannot
+                    // re-derive the outcome from a push bool whose refusal arm the
+                    // decision above has already ruled out.
+                    let admission = block.seal_claim(sealed, dispatch_tip, snapshot_generation);
+                    (
+                        admission == SealAdmission::Admit,
+                        ClaimSealAttempt::Decided(admission),
+                    )
+                },
+                move |block| block.remove_claim(&persona).is_some(),
+            )
             .await
-            .map_err(|e| EmissionClaimRequestError::state("pending-claim seal", e))?;
+            .map_err(|e| match e {
+                // The seal's save failed: nothing was sent, by the save's
+                // cause (Rick, 2026-11-19).
+                super::pscan::pending_store::SealError::NotSaved(cause) => {
+                    EmissionClaimRequestError::Submit(BroadcastSubmitError::SealNotSaved(cause))
+                }
+                super::pscan::pending_store::SealError::Store(e) => {
+                    EmissionClaimRequestError::state("pending-claim seal", e)
+                }
+            })?;
         match attempt {
             ClaimSealAttempt::Decided(SealAdmission::Admit) => {}
             ClaimSealAttempt::YieldToForeground => {
@@ -442,7 +454,12 @@ where
         // so only the record's end date ends it, and the cause names the
         // outcome there.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let sent = submitter.submit_bound(assembled.bound_tx.clone()).await;
+        let sent = submitter
+            .submit_bound(super::transaction_submitter::BoundForSend::Fresh(
+                assembled.bound_tx.clone(),
+                durability,
+            ))
+            .await;
         if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
             store
                 .mutate(|block| {

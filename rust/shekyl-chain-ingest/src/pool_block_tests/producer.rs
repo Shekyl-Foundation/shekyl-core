@@ -18,7 +18,12 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
         let floor = fee_of(&second);
-        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+        Spender::on(scenario.network_id(), &mined).spend_coinbase(
+            scenario.wallet(),
+            h(2),
+            h(AT),
+            floor * 10,
+        )
     };
     let dear_id = dear.txid_parts().hash;
     let path = tmp("pool-template-declined-pool");
@@ -60,7 +65,6 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     assert!(!listed.contains(&dear_id));
     assert!(selected.refused.is_empty() && selected.conflicted.is_empty());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -119,7 +123,9 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                 keys: &keys,
                 params: &params,
                 now,
-                witness: &shekyl_bundle_producer::WitnessRing::new(),
+                witness: &shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 #[cfg(test)]
                 between_locks: None,
             };
@@ -175,7 +181,6 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
         .unwrap_or_else(|outcome| panic!("the producer's block connects: {outcome}"));
     assert_eq!(connected.height, height);
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -242,7 +247,7 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
             keys: &keys,
             params: &params,
             now,
-            witness: &shekyl_bundle_producer::WitnessRing::new(),
+            witness: &shekyl_bundle_producer::WitnessRing::new(shekyl_network::HARNESS_NETWORK_ID),
             #[cfg(test)]
             between_locks: None,
         };
@@ -255,8 +260,6 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
         .any(|(id, _)| id == txid);
     drop(pool);
     drop(older);
-    drop(std::fs::remove_file(&path));
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
     assert!(
         matches!(produced, Err(NoTemplate::PoolOnAnotherTip)),
@@ -265,7 +268,7 @@ async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
     assert!(held, "the entry judged at the newer tip is still held");
 }
 
-/// `pop_blocks` (DX-Q3, Q7) through the service: a count that would pop
+/// `dev_chain_pop` (DX-Q3, Q7) through the service: a count that would pop
 /// genesis is refused before any pop; a count of two pops both blocks and
 /// returns both their transactions to the pool through its door, as a
 /// switch's demoted bodies are; and the writer is up after either, so the
@@ -309,6 +312,7 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
             UnixSeconds::from_raw(1),
             &view,
             &rule_set,
+            &shekyl_network::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("open")
@@ -321,13 +325,13 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
         // A clock ahead of the scenario's blocks, so they connect again.
         Arc::new(crate::service::service_tests::Gated::new()),
         crate::service::ServiceConfig::default(),
-        shekyl_hash_budget::Budget::of_host(),
         Follow {
             job: None,
             pool: Some(PoolWiring {
                 pool: Arc::clone(&pool),
                 policy: AdmissionPolicy::GENESIS,
                 wall: Arc::new(|| UnixSeconds::from_raw(1)),
+                departed: None,
             }),
             ..Default::default()
         },
@@ -376,6 +380,8 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
                     .iter()
                     .map(shekyl_wire::Transaction::serialize)
                     .collect(),
+                bundle_references: Vec::new(),
+                bundle_bodies: Vec::new(),
             })
             .expect("room")
             .reply()
@@ -384,8 +390,6 @@ async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() 
         assert!(matches!(reply, Reply::Connected { .. }), "{reply:?}");
     }
     service.stop().await.expect("stops");
-    drop(std::fs::remove_file(&pool_path));
-    crate::test_support::cleanup(&copy);
     scenario.close().await;
 }
 
@@ -409,7 +413,12 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
         let floor = fee_of(&second);
-        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+        Spender::on(scenario.network_id(), &mined).spend_coinbase(
+            scenario.wallet(),
+            h(2),
+            h(AT),
+            floor * 10,
+        )
     };
     let (id1, id2, id3) = (
         first.txid_parts().hash,
@@ -464,7 +473,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
 
     // Another body over `first`'s image connects; the pool is not told.
-    let twin = Spender::over(&mined).spend_coinbase(
+    let twin = Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
         h(AT),
@@ -502,7 +511,6 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     assert!(pool.relay_view().record(&id2).is_some() && pool.relay_view().record(&id3).is_some());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -516,7 +524,7 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
     let low = paying_the_floor(&mut scenario, &mined, 0).await;
     let fee = fee_of(&low);
     let (high, lower) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(1), h(AT), fee * 4),
@@ -534,7 +542,15 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
-            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                now,
+                view,
+                rule_set,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                &policy,
+            )
+            .expect("open");
             pool.set_limits(Limits { max_weight: room });
             let mut admit = |tx: &shekyl_wire::Transaction| {
                 pool.admit(tx.clone(), now, view, rule_set, &policy)
@@ -574,7 +590,6 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
         "the eviction and the insert were one write"
     );
     drop(store);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -624,7 +639,6 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
     }
     assert!(pool.relay_view().is_empty());
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -685,7 +699,6 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
     assert_eq!(reconciled.admitted.len(), 2, "both still admitted");
     assert_eq!(counts, (0, 0, 0), "signatures, range proofs, FCMP++ proofs");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
@@ -708,9 +721,9 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
             pool.admit(spend.clone(), now, view, rule_set, &policy)
                 .expect("no fault");
             let held = pool.needing_step1(view, rule_set).expect("reads").len();
-            let other = shekyl_chain_rules::RuleSet::fakechain(
+            let other = shekyl_chain_rules::RuleSet::GENESIS.with_levers(
                 Some(std::num::NonZeroU128::new(7).expect("non-zero")),
-                shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+                shekyl_chain_rules::CappedEpoch::PRODUCTION,
             );
             assert_ne!(other, *rule_set, "fixture");
             let listed: Vec<_> = pool
@@ -720,7 +733,14 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
                 .map(|(id, _)| id)
                 .collect();
             // Outside the lock: step 1 for what was listed, then staged.
-            let step1 = shekyl_mempool::stateless(&spend, view, &other, None).expect("judged");
+            let step1 = shekyl_mempool::stateless(
+                &spend,
+                view,
+                &other,
+                &shekyl_network::HARNESS_NETWORK_ID,
+                None,
+            )
+            .expect("judged");
             pool.stage_step1(txid, step1);
             let before = probes::fcmp_verifies();
             let reconciled = pool.reconcile(view, &other, &policy).expect("reconcile");
@@ -732,13 +752,12 @@ async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
     assert_eq!(listed, vec![txid], "a pass that no longer holds is listed");
     assert_eq!(under_lock, 0, "staged: no proof verified under the lock");
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
 
 /// A body flushed between the producer's two pool locks posts nothing and
 /// evicts nothing: a posted job never names a body an outside miner's
-/// `submit_block` would meet as missing; the follower builds again (the
+/// `block_submit` would meet as missing; the follower builds again (the
 /// landing review of #1165, N2; the brief's c2). Red edit: list the bodies
 /// selected at the first lock without asking the pool again.
 #[tokio::test]
@@ -797,7 +816,9 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
                 keys: &keys,
                 params: &params,
                 now,
-                witness: &shekyl_bundle_producer::WitnessRing::new(),
+                witness: &shekyl_bundle_producer::WitnessRing::new(
+                    shekyl_network::HARNESS_NETWORK_ID,
+                ),
                 between_locks: Some(&flush_first),
             };
             produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.job.height)
@@ -809,7 +830,6 @@ async fn a_body_flushed_between_the_producers_locks_posts_nothing() {
         .listing()
         .any(|(id, _)| id == second_id);
     drop(pool);
-    drop(std::fs::remove_file(&path));
     scenario.close().await;
     assert!(
         matches!(produced, Err(NoTemplate::BodyGone)),

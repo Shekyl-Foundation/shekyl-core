@@ -29,14 +29,12 @@ use crate::scenario_archival::{complete_tree, Persona};
 use crate::schedule::ChainRules;
 use crate::source::IngestEvent;
 use crate::test_support::{
-    bare_chain, block_with_nonce, chain, cleanup, h, open_store, tmp, trace_of, Family, Growing,
-    Scripted, FIRST_SPEND_HEIGHT,
+    bare_chain, block_with_nonce, chain, h, open_store, tmp, trace_of, Family, Growing, Scripted,
+    FIRST_SPEND_HEIGHT,
 };
 
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
 
 /// D1's target for the mined chain: half of all hashes pass.
 const MINED_DIFFICULTY: u128 = 2;
@@ -51,10 +49,10 @@ const NONCE_BUDGET: u32 = 1 << 16;
 const WRONG_SEED: [u8; 32] = [0xbb; 32];
 
 fn mined_rules() -> ChainRules {
-    ChainRules::Regtest {
-        fixed_difficulty: Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    }
+    ChainRules::harness_regtest(
+        Some(NonZeroU128::new(MINED_DIFFICULTY).expect("non-zero")),
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    )
 }
 
 /// A seed-sensitive mock longhash: `keccak256(blob ‖ seed)`. Deterministic,
@@ -94,7 +92,7 @@ fn nonce_meeting_target(
     txs: &[Transaction],
     reward: u64,
 ) -> u32 {
-    let difficulty = Difficulty::from_raw(MINED_DIFFICULTY);
+    let difficulty = Difficulty::new(MINED_DIFFICULTY).expect("a test difficulty is non-zero");
     first_nonce(NONCE_BUDGET, |nonce| {
         let block = block_with_nonce(root, height, previous, txs, reward, nonce);
         check_hash(seeded_keccak(&block.pow_blob(), seed).as_bytes(), difficulty)
@@ -171,7 +169,8 @@ impl ResignedBodies {
             .iter()
             .map(|(block, listed)| Linked::new(block, listed))
             .collect();
-        let spender = Spender::over(&below);
+        // The fixture chain is judged under `Trust::UNPINNED`: its id.
+        let spender = Spender::on(shekyl_chain_rules::Trust::UNPINNED.network_id(), &below);
         let wallet = MinerWallet::harness();
         let fee = Family::Main.fee();
         let matured = h(at - FIRST_SPEND_HEIGHT);
@@ -241,10 +240,10 @@ async fn judge(
         PipelineConfig {
             window: NonZeroUsize::new(4).expect("non-zero"),
             hashers: NonZeroUsize::new(2).expect("non-zero"),
+            digest_each_commit: false,
         },
     )
     .await;
-    cleanup(&path);
     match out {
         Ok(report) => Outcome::Report(Box::new(report)),
         Err(fault) => Outcome::Fault(fault),
@@ -381,7 +380,8 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
             };
             let pow = Pow {
                 longhash: &seeded_keccak,
-                difficulty: Difficulty::from_raw(MINED_DIFFICULTY),
+                difficulty: Difficulty::new(MINED_DIFFICULTY)
+                    .expect("a test difficulty is non-zero"),
                 true_seed: seed_for(AT, |at| {
                     chain[usize::try_from(at).expect("seed height fits an index")]
                         .0
@@ -432,17 +432,11 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
             .await;
             (outcome, AT)
         }
-        // A chain whose block `AT` lists one archival body of the kind the
-        // mutation duplicates, beside (or riding) the spend `chain(n)`
-        // would list. The serve credit's twin is the body itself,
-        // `unlock_time` moved; the bond post's is signed over its content,
+        // A chain whose block `AT` lists a bond post beside the spend
+        // `chain(n)` would list. The bond post is signed over its content,
         // so the run supplies a second valid body with the same key — a
         // second **join** for the persona (a Release over no record is
-        // J16's in the slot loop, before G10). A credit names a persona
-        // with a record read off the view before its block (CEN-J4), so
-        // the block below `AT` lists the persona's join; the credit's
-        // epoch is past the join's (CEN-J5). (G9's pair is the driver's —
-        // `Mutation` docs.)
+        // J16's in the slot loop, before G10).
         //
         // The joins are **real**: the persona's post through the
         // production constructor, riding the block's own coinbase spend
@@ -451,52 +445,26 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         // post's funding spend as I13/I15 judge a regular spend's, and a
         // fixture join is refused there before G10 is reached. The twin
         // spends the coinbase that matured one block earlier and no block
-        // spent (block `AT − 1` lists nothing in that case), so both joins
-        // are admissible at `AT` alone and G10 counts the second. The
-        // credit is the one fixture body left: a serve-credit-only
-        // transaction has no funding spend (CEN-H20) and J27 is vacuous on
-        // it. (*Was:* fixture joins with filler proofs, anchored where
-        // listed; green while the funding half was unjudged on the class.)
-        Mutation::DuplicateServeCredit | Mutation::DuplicateBondPost => {
+        // spent (block `AT − 1` lists nothing), so both joins are
+        // admissible at `AT` alone and G10 counts the second.
+        Mutation::DuplicateBondPost => {
             let persona = Persona::at(1);
             let mut growing = Growing::over(&chain(AT - 1));
-            // Block `AT − 1`: the first spendable coinbase, posting the
-            // join the credit will be judged against — or nothing, so that
-            // coinbase stays for the bond post's twin.
-            let below: Vec<Transaction> = match mutation {
-                Mutation::DuplicateServeCredit => vec![growing.spend_of_posting(
-                    AT - 1 - FIRST_SPEND_HEIGHT,
-                    Family::Main,
-                    Some(&persona.join(complete_tree(), ENDPOINT)),
-                )],
-                _ => Vec::new(),
-            };
-            growing.extend(below, 7);
+            // Block `AT − 1` lists nothing, so its coinbase stays for the
+            // twin.
+            growing.extend(Vec::new(), 7);
             // Block `AT`, and the twin built at its height before it is
             // extended (the spender anchors at the connecting height).
-            let (at_block, twins): (Vec<Transaction>, Vec<Transaction>) = match mutation {
-                Mutation::DuplicateServeCredit => (
-                    vec![
-                        growing
-                            .spend_matured(Family::Main)
-                            .expect("a coinbase has matured for AT"),
-                        growing.anchored(persona.serve_credit(7, 11)),
-                    ],
-                    Vec::new(),
-                ),
-                _ => (
-                    vec![growing.spend_of_posting(
-                        AT - FIRST_SPEND_HEIGHT,
-                        Family::Main,
-                        Some(&persona.join(complete_tree(), ENDPOINT)),
-                    )],
-                    vec![growing.spend_of_posting(
-                        AT - 1 - FIRST_SPEND_HEIGHT,
-                        Family::Main,
-                        Some(&persona.join(complete_tree(), ENDPOINT)),
-                    )],
-                ),
-            };
+            let at_block = vec![growing.spend_of_posting(
+                AT - FIRST_SPEND_HEIGHT,
+                Family::Main,
+                Some(&persona.join(complete_tree(), ENDPOINT)),
+            )];
+            let twins = vec![growing.spend_of_posting(
+                AT - 1 - FIRST_SPEND_HEIGHT,
+                Family::Main,
+                Some(&persona.join(complete_tree(), ENDPOINT)),
+            )];
             growing.extend(at_block, 7);
             let chain = growing.finish();
             assert_eq!(chain.len() as u64, n, "the mutated block is the tip");
@@ -590,7 +558,7 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         Mutation::HeaderVersion
         | Mutation::Orphan
         | Mutation::WrongRoot
-        | Mutation::WrongAttestationRoot
+        | Mutation::WrongSectionRoot
         | Mutation::FutureTimestamp
         | Mutation::StaleTimestamp
         | Mutation::WrongReward
@@ -598,7 +566,8 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         | Mutation::SubstitutedBody
         | Mutation::RelistedTransaction
         | Mutation::DoubledListing
-        | Mutation::ForgedSignature => {
+        | Mutation::ForgedSignature
+        | Mutation::TooManyInputs => {
             let chain = chain(n);
             let outcome = judge(
                 &format!("{mutation:?}").to_lowercase(),
@@ -667,7 +636,6 @@ async fn the_mined_chain_replays_clean_under_the_seeded_hasher() {
         report.exercised.contains("CEN-D1"),
         "D1 was judged, not skipped"
     );
-    cleanup(&path);
 }
 
 /// Numbering, one mutated block, and the faults raised before a row is judged.

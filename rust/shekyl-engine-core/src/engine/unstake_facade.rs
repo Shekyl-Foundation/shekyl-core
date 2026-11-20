@@ -101,6 +101,7 @@ use super::drain_orchestrator::{
     DrainError, DrainIntent, DrainMoved, DrainOrchestrationError, TerminalExitObserved,
 };
 use super::emission_source::EmissionSourceError;
+use super::error::PersistenceError;
 use super::fee_policy::FeeEstimatorError;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::pending::TxHash;
@@ -223,6 +224,11 @@ pub enum UnstakeError {
         /// Which daemon query failed, and the transport's own reason.
         detail: String,
     },
+    /// The wallet's daemon target refused before any daemon answered: a
+    /// failed peer check, or a service at this computer. Nothing was sent.
+    /// Retrying cannot succeed; the fault is the remedy (`-29213`, `-29214`).
+    #[error("the daemon target refused: {0}")]
+    DaemonTarget(shekyl_rpc_client::DaemonFault),
     /// The exit's floor fee cannot be funded from the persona pool **yet**
     /// (no spendable funding, an output still mid-drain, or a shortfall the
     /// assembly names). Wait for outputs to mature or land, then retry —
@@ -259,6 +265,11 @@ pub enum UnstakeError {
         /// The daemon's verdict rendering.
         detail: String,
     },
+    /// The exit's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the exit was not sent: {0}")]
+    SealNotSaved(#[source] PersistenceError),
     /// The exit's bytes went out and its fate is the chain's: no verdict, a
     /// retryable one, or a daemon's terminal verdict, which never ends a
     /// submitted record (BD-Q3 Rule 2). The sealed record HOLDS — funds-safe,
@@ -400,6 +411,11 @@ pub enum CollectUnstakedError {
         /// The transport failure's rendering.
         detail: String,
     },
+    /// The sweep pass's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the sweep was not sent: {0}")]
+    SealNotSaved(#[source] PersistenceError),
     /// A non-transient engine fault. Fail closed; not retryable by waiting.
     #[error("engine state ({context}): {detail}")]
     Engine {
@@ -648,7 +664,7 @@ where
     /// remains the DQ-T2.3 slice).
     pub async fn unstake(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<UnstakeOutcome, UnstakeError> {
         // A wallet with no stake engine owns no exit. Answer the seam's
         // `NotStaker` (-29513) here: a non-staker's empty snapshot resolves
@@ -688,7 +704,7 @@ where
             };
 
         // ① local posture; refuses non-loopback by construction.
-        let release_rpc = LocalNodeRpc::new(daemon_address.to_owned(), EXIT_FETCH_TIMEOUT)
+        let release_rpc = LocalNodeRpc::new(daemon, EXIT_FETCH_TIMEOUT)
             .await
             .map_err(|e| UnstakeError::Transport {
                 detail: e.to_string(),
@@ -983,19 +999,26 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
                 bound: v.bound(),
             }
         }
+        // A target refusal on the fee query is not a fee problem and not a
+        // retry. The fee arm is reached before the record fetch.
+        ReleaseRequestError::Fee(FeeEstimatorError::Daemon(fault)) if fault.is_target_refusal() => {
+            UnstakeError::DaemonTarget(fault)
+        }
         ReleaseRequestError::Fee(e) => UnstakeError::FeeEstimate(e),
-        // The fetch's inner class decides the disposition: a
-        // connection/status failure is a reachable daemon outage (retryable),
-        // a malformed response is an untrusted-input rejection (internal).
+        // The fetch's inner class decides the disposition: a transport
+        // failure or a refusal is a reachable daemon outage (retryable), a
+        // malformed response is an untrusted-input rejection (internal).
+        // A target refusal is neither: it is the fault, and it is not retried.
         ReleaseRequestError::Fetch(e) => match e {
-            EmissionSourceError::Rpc(_) | EmissionSourceError::Status(_) => {
-                UnstakeError::DaemonUnreachable {
-                    detail: e.to_string(),
-                }
+            EmissionSourceError::Rpc(error) if error.fault().is_target_refusal() => {
+                UnstakeError::DaemonTarget(error.fault())
             }
-            EmissionSourceError::Malformed(_) => UnstakeError::Engine {
+            EmissionSourceError::Rpc(error) => UnstakeError::DaemonUnreachable {
+                detail: error.to_string(),
+            },
+            EmissionSourceError::Malformed(detail) => UnstakeError::Engine {
                 context: "bond record fetch",
-                detail: e.to_string(),
+                detail,
             },
         },
         // Pre-seal daemon-tip failure: retryable, never the opaque internal
@@ -1006,8 +1029,11 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
             }
         }
         ReleaseRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
-        ReleaseRequestError::Submit(submit) => match &submit {
-            BroadcastSubmitError::PersonaMismatch { .. } => {
+        ReleaseRequestError::Submit(submit) => match submit {
+            // The seam removed the unconfirmed seal; nothing was sent, and
+            // the answer is the save's own code (Rick, 2026-11-19).
+            BroadcastSubmitError::SealNotSaved(error) => UnstakeError::SealNotSaved(error),
+            submit @ BroadcastSubmitError::PersonaMismatch { .. } => {
                 // The one class the seam's release predicate names
                 // (`released_on_first_send_failure`): the seal is already
                 // released, nothing propagated. A terminal verdict is not
@@ -1016,7 +1042,7 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
                     detail: submit.to_string(),
                 }
             }
-            _ => UnstakeError::ExitFateUnknown {
+            submit @ BroadcastSubmitError::Submit(_) => UnstakeError::ExitFateUnknown {
                 detail: submit.to_string(),
             },
         },
@@ -1066,6 +1092,9 @@ fn flatten_collect_error(e: DrainRequestError) -> CollectUnstakedError {
         }
         DrainRequestError::State { context, detail } => {
             CollectUnstakedError::Engine { context, detail }
+        }
+        DrainRequestError::Submit(BroadcastSubmitError::SealNotSaved(error)) => {
+            CollectUnstakedError::SealNotSaved(error)
         }
         DrainRequestError::Submit(e) => CollectUnstakedError::Submit {
             detail: e.to_string(),

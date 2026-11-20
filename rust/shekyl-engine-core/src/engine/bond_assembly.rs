@@ -36,19 +36,67 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Input;
 
+use super::pscan::pending_store::Covered;
+
 // ---------------------------------------------------------------------------
 // PBoundBytes — the byte↔persona pairing, minted only here (pin P-1)
 // ---------------------------------------------------------------------------
 
+/// Bytes read back from the pending store while a save of it confirmed in
+/// this process covered them.
+///
+/// The field is private. [`PBoundBytes::from_pending`] is the constructor,
+/// and it takes the store's [`Covered`] witness, so a fresh assembly cannot
+/// claim this one, and a record read back from an uncovered store cannot be
+/// sent (Rick, 2026-11-19).
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct LoadedSeal {
+    bound: PBoundBytes,
+}
+
+impl LoadedSeal {
+    /// The sealed pairing.
+    #[cfg(test)]
+    pub(crate) fn as_bound(&self) -> &PBoundBytes {
+        &self.bound
+    }
+
+    /// The persona these bytes are bound to.
+    pub(crate) fn persona(&self) -> &PCanonicalId {
+        self.bound.persona()
+    }
+
+    /// The stored transaction bytes.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> &[u8] {
+        self.bound.bytes()
+    }
+
+    /// Consume into the raw bytes. [`DurableTxBytes::from_loaded_seal`](super::dispatch_durability::DurableTxBytes::from_loaded_seal)
+    /// is the production caller.
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.bound.into_bytes()
+    }
+}
+
+impl std::fmt::Debug for LoadedSeal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LoadedSeal(<redacted>)")
+    }
+}
+
 /// `P`-bound transaction bytes — the byte↔persona pairing carried as a value
 /// (`ARCHIVAL_BOND_2D2_SP_T4_BROADCAST.md` §3.1 part 4).
 ///
-/// [`BroadcastSubmitter::submit_bound`] accepts only this type and
-/// equality-checks the carried persona against the submitter's
-/// constructor-bound persona, so `P1`'s bytes cannot ride `P2`'s circuit.
-/// Full per-persona type *branding* is rejected (the persona set is dynamic;
-/// rule-21 reopen in §3.1 part 4) — the pairing is a checked value, not a
-/// type parameter.
+/// [`BroadcastSubmitter::submit_bound`](crate::engine::transaction_submitter::BroadcastSubmitter::submit_bound) accepts a [`BoundForSend`](super::transaction_submitter::BoundForSend)
+/// built from this pairing and equality-checks the carried persona against
+/// the submitter's constructor-bound persona, so `P1`'s bytes cannot ride
+/// `P2`'s circuit. Full per-persona type branding is rejected (the persona
+/// set is dynamic; rule-21 reopen in §3.1 part 4) — the pairing is a checked
+/// value, not a type parameter.
+///
+/// A record read back from the pending store is a [`LoadedSeal`], not a
+/// fresh value of this type. Only [`Self::from_pending`] constructs it.
 ///
 /// **Provenance pins (§3.1.1 part 6), discharged here:**
 ///
@@ -56,18 +104,12 @@ use shekyl_wire::Input;
 ///   to this module: production bytes are minted exactly once, by the
 ///   assemble/finalize path, from the transaction it just encoded. The only
 ///   other production path is [`Self::from_pending`], which re-lifts a
-///   [`PendingBondPost`] this module previously sealed — trusting our own
-///   prior seal, exactly as `PScanAccrual::from_state` trusts the sealed
-///   frontier. Tests use [`Self::bind_for_test`].
+///   [`PendingBondPost`] this module previously sealed. Tests use
+///   `Self::bind_for_test`.
 /// - **P-2 — retries re-send the stored value.** The pending record persists
 ///   the pairing's fields (`persona`, `tx_bytes`); F31/watchdog resubmits
-///   re-lift and re-send the *stored* bytes through the same
-///   `submit_bound` choke path, never a re-encode.
-///
-/// [`BroadcastSubmitter::submit_bound`]: super::transaction_submitter::BroadcastSubmitter::submit_bound
-//
-// Lint-visible: the WI-2 assemble handler mints these and the WI-3 dispatch
-// driver consumes them, so no suppression applies.
+///   re-lift and re-send the stored bytes through the same `submit_bound`
+///   choke path, never a re-encode.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PBoundBytes {
     persona: PCanonicalId,
@@ -92,13 +134,14 @@ impl PBoundBytes {
         Self { persona, bytes }
     }
 
-    /// Re-lift a sealed [`PendingBondPost`] into its transform-shaped twin
-    /// (rule 18) for dispatch. The record's `(persona, tx_bytes)` pair was
-    /// written by this module's assemble path (persist-before-dispatch), so
-    /// the re-lift trusts the seal — pin P-2's "retries re-send the stored
-    /// value" is this function feeding `submit_bound`.
-    pub(crate) fn from_pending(post: &PendingBondPost) -> Self {
-        Self::bind(post.persona, post.tx_bytes.clone())
+    /// Re-lift a sealed [`PendingBondPost`] that was read from the pending
+    /// store, under the store's [`Covered`] witness: a save of the store
+    /// confirmed in this process covered the record when it was read. A
+    /// fresh assembly does not construct a [`LoadedSeal`].
+    pub(crate) fn from_pending(post: &PendingBondPost, _covered: Covered) -> LoadedSeal {
+        LoadedSeal {
+            bound: Self::bind(post.persona, post.tx_bytes.clone()),
+        }
     }
 
     /// The persona these bytes are bound to.
@@ -127,174 +170,12 @@ impl PBoundBytes {
 }
 
 // ---------------------------------------------------------------------------
-// Errors (§3.6, rule 82)
+// Errors (§3.6, rule 82): the `#[path]` sibling `bond_assembly_error.rs`
 // ---------------------------------------------------------------------------
 
-/// Failure surface of the bond-assembly path (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
-/// §3.6). Every arm names its operator-facing disposition: refusals are
-/// caller-recoverable states, defects are fail-closed build errors.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum BondAssemblyError {
-    /// The persona's spendable funding set (unreserved, scan-discovered
-    /// outputs) sums below the bond floor + fee. Fund-from-earnings ramp
-    /// (`ARCHIVAL_TIMING_CONSTANTS.md` §7): the caller waits for more
-    /// earnings; there is **no** reach-across to principal outputs (that
-    /// reach-across is the funding-seam linkage the architecture firewalls).
-    #[error(
-        "insufficient P-side funding: {available} available < {required} required; \
-         the persona funds bonds from its own earnings — wait for further accrual"
-    )]
-    InsufficientFunding {
-        /// Sum of the unreserved spendable records.
-        available: u64,
-        /// `bond_floor(holdings) + fee`.
-        required: u64,
-    },
-
-    /// The persona's eligible funding set is **empty** at the sweep's
-    /// reference height: nothing discovered, or everything is immature or
-    /// reserved by in-flight posts. Structurally distinct from
-    /// [`Self::InsufficientFunding`] (records exist but sum short —
-    /// including all-zero-amount records, a representable CT state): the
-    /// remedies differ, and the claim path maps only *this* arm to its
-    /// structural no-fee-input refusal.
-    #[error(
-        "no spendable P-side funding outputs at the reference height: none discovered, \
-         or all are immature or reserved by in-flight posts; fund the persona or wait \
-         for maturity/confirmation"
-    )]
-    NoSpendableFunding,
-
-    /// The eligible funding set exceeds the per-transaction vin headroom
-    /// ([`MAX_RETENTION_FUNDING_INPUTS`]: the consensus vin cap minus the
-    /// one non-funding vin this transaction carries) and the caller's sweep
-    /// semantics forbid a silent subset
-    /// ([`SweepOverflowPolicy::RefuseTooMany`]). Raised BEFORE assembly, so
-    /// a transaction every public network would reject is never built —
-    /// FAKECHAIN does not enforce the cap, so an e2e cannot catch this. The
-    /// funding is intact and spendable; what does not exist yet is a
-    /// consolidation path for a pool this fragmented (the drain lane
-    /// consolidates `P`-funding in capped passes).
-    #[error(
-        "too many spendable funding outputs for one transaction: {count} eligible, \
-         max {max} (the transaction carries one non-funding input of its own); \
-         the funding is intact — consolidate before retrying"
-    )]
-    TooManyFundingInputs {
-        /// How many records were eligible at the reference height.
-        count: usize,
-        /// The per-transaction funding-input headroom.
-        max: usize,
-    },
-
-    /// The presented input set carries **no funding input at all** — a
-    /// structural shape refusal, not a shortfall. The rule belongs to
-    /// [`bond_post_funding_floor_met`](shekyl_archival_retention::bond_post::bond_post_funding_floor_met):
-    /// a bond post carries at least one real `txin_to_key` spend input, checked
-    /// before any amount rule. This arm is what the producer raises when that
-    /// predicate says no — the condition is not restated here.
-    ///
-    /// Distinct from [`Self::NoSpendableFunding`], which names what the *sweep*
-    /// found eligible at its reference height. This arm is about the set a
-    /// caller actually presented — and it is the exit path that needs it,
-    /// because there the amount rules cannot see the difference: released
-    /// collateral alone covers the fee, so both the sufficiency check and the
-    /// balance equation close with an empty funding vector.
-    #[error(
-        "the transaction carries no funding input: consensus requires at least one \
-         txin_to_key spend input on a bond post"
-    )]
-    FundingInputsRequired,
-
-    /// A live pending post already exists for this persona. JoinMarket-only
-    /// at genesis: one live post per persona (§3.5); the caller waits for the
-    /// pending post to confirm or fail before re-assembling.
-    #[error("a pending bond post already exists for this persona; one live post per persona")]
-    PendingPostExists,
-
-    /// This post's funding inputs are no longer selectable, for either of the
-    /// two reasons the seal-time re-check can find:
-    ///
-    /// - a concurrent **claim or drain** now reserves one of them
-    ///   (`SealAdmission::InputRaced`); or
-    /// - a reservation was **released** between the pre-assembly snapshot and
-    ///   the seal (`SealAdmission::Stale`), so the set this assembly selected
-    ///   against no longer describes the wallet — the released record may have
-    ///   confirmed and spent an input this post still believes is fundable.
-    ///
-    /// Both refuse **before** sealing, so no doomed record is left behind, and
-    /// both take the same remedy: retry against a current snapshot. One variant
-    /// because one remedy; the message names both causes because naming only
-    /// one sends a caller looking for a collision that may not exist.
-    #[error(
-        "this post's funding inputs are no longer current — another live record \
-         holds one, or a reservation was released mid-assembly; retry"
-    )]
-    InputRaced,
-
-    /// The curve-tree / ledger anchoring procedure could not produce a
-    /// submittable [`ReferenceBlock`](shekyl_curve_tree::ReferenceBlock)
-    /// (tree too far behind, ingest missing, ledger hash missing, chain too
-    /// short). Loud resync — never a silent path fail (WI-2 F-6).
-    #[error("bond reference unavailable: {detail}; resync")]
-    ReferenceResyncing {
-        /// Operator-facing detail naming which arm of the anchoring gate fired.
-        detail: &'static str,
-    },
-
-    /// A swept record cleared the spendability filter but has no drained
-    /// leaf in the REFERENCE tree yet (the reference lags tip by
-    /// `REF_ANCHOR_AGE`, so a freshly-matured output can be spendable at
-    /// tip and absent at the reference) — the one path-assembly refusal
-    /// that is wait-and-retry, not a defect. Typed so retry policy (the
-    /// regtest harness today, production retry logic later) matches on the
-    /// variant instead of substring-scanning a rendered
-    /// `ClientError::OutputNotDrained`.
-    #[error(
-        "funding output (gindex {gindex}) is not yet drained into the reference tree; \
-         wait for the tree to catch up and retry"
-    )]
-    OutputNotYetDrained {
-        /// The global output index the reference tree has no leaf for.
-        gindex: u64,
-    },
-
-    /// The funding arithmetic (`floor + fee`, change split, balance rule)
-    /// overflowed u64 — unreachable with consensus-bounded amounts; fail
-    /// closed rather than wrap.
-    #[error("funding amount arithmetic overflowed")]
-    AmountOverflow,
-
-    /// `bond_floor(holdings)` is zero — structurally invalid holdings (empty
-    /// / zero-count descriptor). Same refusal the wire builder and retention
-    /// verifier raise (`BondBuildError::BondFloorZero`); refuse before sweep
-    /// so a zero-`required` never reaches `assemble_tx` as an empty path set.
-    #[error("bond_floor(holdings) is zero; holdings are structurally invalid")]
-    BondFloorZero,
-
-    /// A cryptographic step of the assemble pipeline failed (spend-bundle
-    /// derivation, output construction, proving, PQC auth signing, or wire
-    /// encoding). `stage` names the pipeline step; `detail` is the wrapped
-    /// error's rendering (public error text — never key material). Nothing
-    /// was persisted (§3.6: no partial state, funding never reserved).
-    #[error("bond assembly failed at {stage}: {detail}")]
-    Build {
-        /// Pipeline step that failed.
-        stage: &'static str,
-        /// Rendered cause.
-        detail: String,
-    },
-}
-
-impl BondAssemblyError {
-    /// Shorthand for the pipeline-step failure arm.
-    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
-        Self::Build {
-            stage,
-            detail: err.to_string(),
-        }
-    }
-}
+#[path = "bond_assembly_error.rs"]
+mod assembly_error;
+pub(crate) use assembly_error::BondAssemblyError;
 
 // ---------------------------------------------------------------------------
 // D-A2 — funding sweep (WI-2 §3.2 as amended by GF-4b §3.1)
@@ -1096,10 +977,13 @@ mod tests {
             reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
             terminal: None,
         };
-        let bound = PBoundBytes::from_pending(&post);
+        let bound = PBoundBytes::from_pending(&post, Covered::for_test());
         assert_eq!(bound.persona(), &persona);
         assert_eq!(bound.bytes(), bytes.as_slice());
-        assert_eq!(bound, PBoundBytes::bind_for_test(persona, bytes));
+        assert_eq!(
+            bound.as_bound(),
+            &PBoundBytes::bind_for_test(persona, bytes)
+        );
     }
 
     /// The pairing's `Debug` is redacted wholesale — the persona↔tx link is

@@ -26,8 +26,8 @@ use crate::fault::{Fault, FormAttempt, Stale};
 use crate::header_facts::{prove_header, FormedHeader, HeaderFacts, HeaderProof, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
-use crate::rules::attestation::B4;
 use crate::rules::body::G2;
+use crate::rules::bundle_admission::bind_section;
 use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2};
 use crate::rules::HeaderContext;
@@ -174,7 +174,7 @@ pub struct HeaderProspect {
 ///
 /// The substrate's fault, from the clock or the longhash. A refusal is
 /// `Ok(Err(_))`.
-pub fn form_header<S: Substrate>(
+pub fn form_header<S: Substrate + ?Sized>(
     pow: &PowBlob,
     rule_set: &RuleSet,
     substrate: &S,
@@ -304,17 +304,14 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
     trust: &Trust,
 ) -> Result<Verdict<(Derived, RuleCoverage)>, Fault<H::Fault>> {
     let mut coverage = RuleCoverage::EMPTY;
-    let derived = match header_ladder::derive(
+    let derived = header_ladder::derive(
         facts.seed(),
         facts.target(),
         facts.attempt(),
         view,
         rule_set,
         &mut coverage,
-    )? {
-        Ok(derived) => derived,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    )?;
     // The context borrows `derived`'s window. It ends before `derived` moves.
     {
         let cx = HeaderContext::from_derived(facts, &derived, trust);
@@ -333,8 +330,9 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 
 /// A body matches its header: the block's identity, every carried
 /// transaction's txid (CEN-G2, a skeleton through
-/// [`Transaction::hash_with_supplied_components`]), and the witness's root
-/// (CEN-B4's stateless half). The countersignatures stay `validate`'s.
+/// [`Transaction::hash_with_supplied_components`]), and the header's root
+/// against the bundle references beside it (CEN-J29 and J31's stateless
+/// half, `bind_section`).
 ///
 /// A mismatch is the row `validate` would name. What a session does with
 /// it is the caller's.
@@ -353,11 +351,11 @@ pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
         carried.push(hash);
     }
     G2::listed_match(&block.transaction_hashes, &carried)?;
-    let root = *block.header.attestation_root.as_bytes();
-    B4::bind_root(
-        &block.miner_transaction.prefix.extra,
-        &body.attestation_witness,
-        &root,
+    bind_section(
+        &body.bundle_references,
+        block.header.section_root.as_bytes(),
+        header.connecting(),
+        &header.rule_set(),
     )?;
     Ok(())
 }
@@ -384,7 +382,7 @@ mod tests {
     use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work, root};
     use crate::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
     use crate::trust::Trust;
-    use crate::{form, form_judged, validate};
+    use crate::{form, form_judged, validate, FormClaims};
 
     /// `judge_header` faults a rule set other than the one `form_header`
     /// kept, and the retry is the attempt that was formed, not a fresh one.
@@ -407,7 +405,7 @@ mod tests {
         .expect("the mock answers")
         .expect("major 2 passes B1 under a set that admits 2");
         chain.with_view(|view| {
-            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
                 .expect_err("a different rule set is a fault");
             let Fault::Stale(Stale::RuleSet {
                 formed_under,
@@ -442,7 +440,7 @@ mod tests {
         .expect("the mock answers")
         .expect("the header forms");
         chain.with_view(|view| {
-            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
                 .expect_err("a different rule set is a fault");
             match fault {
                 Fault::Stale(Stale::RuleSet { retry, .. }) => {
@@ -476,19 +474,27 @@ mod tests {
         .expect("forms");
         chain.with_view(|view| {
             let judged =
-                match judge_header(&formed, &view, &rule_set, &Trust::UNANCHORED).expect("view") {
+                match judge_header(&formed, &view, &rule_set, &Trust::UNPINNED).expect("view") {
                     Ok(judged) => judged,
                     Err(refused) => panic!("honest header refused: {refused:?}"),
                 };
-            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY)
-                .expect("the body forms");
+            let from_header = form_judged(
+                input.clone(),
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            )
+            .expect("the body forms");
             let from_bytes = form(
                 input.clone(),
-                &rule_set,
+                &FormClaims {
+                    rule_set: &rule_set,
+                    seed: BlockHash::NULL,
+                    target,
+                    references: &ReferenceClaims::EMPTY,
+                    network: crate::HARNESS_NETWORK_ID,
+                },
                 &substrate,
-                BlockHash::NULL,
-                target,
-                &ReferenceClaims::EMPTY,
                 FormAttempt::FIRST,
             )
             .expect("mock")
@@ -503,7 +509,12 @@ mod tests {
             assert_eq!(from_header.pow(), from_bytes.pow());
             let mut moved = input;
             moved.block.header.nonce = moved.block.header.nonce.wrapping_add(1);
-            match form_judged(moved, &judged, &ReferenceClaims::EMPTY) {
+            match form_judged(
+                moved,
+                &judged,
+                &ReferenceClaims::EMPTY,
+                &crate::HARNESS_NETWORK_ID,
+            ) {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B6),
                 Ok(_) => panic!("a different preimage formed"),
             }
@@ -511,7 +522,7 @@ mod tests {
                 from_header,
                 &view,
                 &RuleSet::admitting_for_tests(2),
-                &Trust::UNANCHORED,
+                &Trust::UNPINNED,
             )
             .expect_err("a different rule set is a fault");
             assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
@@ -556,16 +567,20 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = deep.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
-            {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view") {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            deep_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         MockChain::default().with_view(|view| {
-            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
                     assert_eq!(claimed, deep_seed);
                 }
@@ -598,16 +613,20 @@ mod tests {
         .expect("mock")
         .expect("the header forms");
         let judged = claimed_on.with_view(|view| {
-            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
-            {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED).expect("view") {
                 Ok(judged) => judged,
                 Err(refused) => panic!("honest header refused: {refused:?}"),
             }
         });
-        let from_header =
-            form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        let from_header = form_judged(
+            long_candidate,
+            &judged,
+            &ReferenceClaims::EMPTY,
+            &crate::HARNESS_NETWORK_ID,
+        )
+        .expect("the body forms");
         judged_on.with_view(|view| {
-            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNPINNED) {
                 Err(Fault::Stale(Stale::Target {
                     claimed, expected, ..
                 })) => {

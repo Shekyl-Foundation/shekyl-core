@@ -5,7 +5,7 @@
 
 //! Read-only fee/weight query surface (WI-RPC-1).
 //!
-//! Projects the existing Phase-2a fee substrate — [`predict_weight`]'s
+//! Projects the existing Phase-2a fee substrate — [`predict_weight`](crate::engine::tx_fee_model::predict_weight)'s
 //! wire-exact byte model and the daemon's multi-tier
 //! [`FeeEstimates`](super::traits::FeeEstimates) snapshot — as `&self` Engine
 //! queries for the wallet-RPC layer, **without** re-deriving any byte model
@@ -16,6 +16,7 @@ use shekyl_tx_builder::MAX_TREE_DEPTH;
 use shekyl_units::AtomicUnits;
 
 use super::error::FeeEstimatorError;
+use super::fee_estimator::FeePriority;
 use super::fee_policy::ValidatedFeeEstimates;
 use super::fee_snapshot::map_daemon_engine_fee_error;
 use super::traits::{
@@ -42,20 +43,20 @@ pub struct TxShapeEstimate {
     pub tree_depth: u8,
 }
 
-/// Per-tier converged fees for one tx shape, plus the default tier.
+/// Per-tier converged fees for one tx shape.
 ///
 /// Projected from one atomic daemon [`FeeEstimates`](super::traits::FeeEstimates)
-/// snapshot through the same [`converge_fee`](super::tx_fee_model::converge_fee)
+/// snapshot through the same [`converge_fee`]
 /// fixpoint the build path uses, so a quote here equals what a build at the
 /// same snapshot/shape/depth would charge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeTierQuote {
-    /// Converged fee at the daemon's economy rate.
-    pub economy_fee: AtomicUnits,
-    /// Converged fee at the daemon's standard rate (the default tier).
-    pub standard_fee: AtomicUnits,
-    /// Converged fee at the daemon's priority rate.
-    pub priority_fee: AtomicUnits,
+    /// Converged fee at the economy rung.
+    pub economy: AtomicUnits,
+    /// Converged fee at the standard rung (the default tier).
+    pub standard: AtomicUnits,
+    /// Converged fee at the high rung.
+    pub high: AtomicUnits,
     /// The curve-tree depth the quotes were evaluated at.
     pub tree_depth: u8,
 }
@@ -118,9 +119,9 @@ impl<
     /// [`FeeEstimates`](super::traits::FeeEstimates) snapshot.
     ///
     /// Read-only: one daemon `get_fee_estimates` RPC plus the same
-    /// [`converge_fee`](super::tx_fee_model::converge_fee) fixpoint the build
+    /// [`converge_fee`] fixpoint the build
     /// path runs. The default tier is **standard**
-    /// ([`FeePriority::Standard`](super::fee_estimator::FeePriority)).
+    /// ([`FeePriority::default`]).
     ///
     /// # Errors
     ///
@@ -144,12 +145,18 @@ impl<
         let snapshot = ValidatedFeeEstimates::try_new(raw)?;
         let tree_depth = self.estimate_tree_depth().await;
 
-        let quote_at =
-            |rate| AtomicUnits::from_raw(converge_fee(&rate, n_in, n_out, tree_depth, 0));
+        let quote_at = |rate| {
+            let fee = converge_fee(&rate, n_in, n_out, tree_depth, 0).ok_or(
+                FeeEstimatorError::DaemonResponseInvalid {
+                    reason: "the fee does not fit in u64",
+                },
+            )?;
+            Ok(AtomicUnits::from_raw(fee))
+        };
         Ok(FeeTierQuote {
-            economy_fee: quote_at(snapshot.economy()),
-            standard_fee: quote_at(snapshot.standard()),
-            priority_fee: quote_at(snapshot.priority()),
+            economy: quote_at(snapshot.rate(FeePriority::Economy))?,
+            standard: quote_at(snapshot.rate(FeePriority::Standard))?,
+            high: quote_at(snapshot.rate(FeePriority::High))?,
             tree_depth,
         })
     }

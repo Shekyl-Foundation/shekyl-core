@@ -53,7 +53,7 @@ use crate::pipeline::{run, PipelineConfig, RunReport};
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::source::IngestEvent;
 use crate::test_support::{
-    cleanup, h, open_store, tmp, trace_with, Family, Scripted, TraceEconomics, EPOCH,
+    h, open_store, tmp, trace_with, Family, Scripted, TestPath, TraceEconomics, EPOCH,
     FIRST_SPEND_HEIGHT,
 };
 use crate::trace::Trace;
@@ -71,6 +71,8 @@ const AT: u64 = FIRST_SPEND_HEIGHT + 2;
 /// one in the header's order — real spends of block 0's and block 1's
 /// coinbases.
 struct Driven {
+    /// The chain's network id: its spends sign under it.
+    network: shekyl_network::NetworkId,
     mined: Vec<Mined>,
     a: Transaction,
     b: Transaction,
@@ -81,7 +83,10 @@ impl Driven {
     /// admissible on its own — proven against the wallet-side tree over
     /// the blocks below — and a body the header never listed.
     fn third(&self) -> Transaction {
-        let spender = Spender::over(&self.mined[..usize::try_from(AT).expect("small")]);
+        let spender = Spender::on(
+            self.network,
+            &self.mined[..usize::try_from(AT).expect("small")],
+        );
         spender.spend_coinbase(MinerWallet::harness(), h(2), h(AT), Family::Main.fee())
     }
 
@@ -147,7 +152,7 @@ async fn two_body_chain(name: &str) -> Driven {
     let mut mined = scenario.mine(AT).await;
     let at = AT;
     let (a, b) = {
-        let spender = Spender::over(&mined);
+        let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
         (
             spender.spend_coinbase(wallet, h(0), h(at), Family::Main.fee()),
@@ -165,13 +170,18 @@ async fn two_body_chain(name: &str) -> Driven {
     );
     assert_eq!(two.height, h(at));
     mined.push(two);
-    Driven { mined, a, b }
+    Driven {
+        network: scenario.network_id(),
+        mined,
+        a,
+        b,
+    }
 }
 
 /// Replay `chain` through the production pipeline into a fresh store at
 /// `name` under `trace`. Returns the report and the store's path; the
 /// caller cleans up after reading it.
-async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, std::path::PathBuf) {
+async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, TestPath) {
     let path = tmp(&format!("g2-{name}"));
     let mut source = Scripted::new(
         chain
@@ -198,6 +208,7 @@ async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, std::pat
         PipelineConfig {
             window: NonZeroUsize::new(4).expect("non-zero"),
             hashers: NonZeroUsize::new(2).expect("non-zero"),
+            digest_each_commit: false,
         },
     )
     .await
@@ -207,7 +218,8 @@ async fn replay(name: &str, chain: &Chain, trace: Trace) -> (RunReport, std::pat
 
 /// Every recorded output's originating transaction, in global-index order —
 /// the order the curve tree will drain them in.
-fn output_origins(path: &std::path::Path) -> Vec<TxHash> {
+fn output_origins(path: impl AsRef<std::path::Path>) -> Vec<TxHash> {
+    let path: &std::path::Path = path.as_ref();
     let store = ChainStore::open_read_only(path, Horizons::production(EPOCH).expect("SEB > D_MAX"))
         .expect("reopen read-only");
     let snapshot = store.begin_read().expect("read");
@@ -311,8 +323,6 @@ async fn a_reordered_two_body_block_is_refused_on_g2_and_records_no_output() {
     // holding different output tables for one block) is closed at `form`.
     let listed_order = output_origins(&listed_path);
     let swapped_order = output_origins(&swapped_path);
-    cleanup(&listed_path);
-    cleanup(&swapped_path);
     let position = |order: &[TxHash], tx: &Transaction| {
         order
             .iter()
@@ -359,7 +369,6 @@ async fn a_substituted_body_the_header_never_listed_is_refused_on_g2() {
     );
 
     let order = output_origins(&path);
-    cleanup(&path);
     assert!(
         !order.contains(&c.hash()) && !order.contains(&a.hash()) && !order.contains(&b.hash()),
         "no body of the refused block is recorded — not the unlisted one, not the listed ones"

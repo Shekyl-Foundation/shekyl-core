@@ -10,7 +10,7 @@ globs:
 # Rust lint checks
 
 Every Rust workspace in the Shekyl ecosystem (`shekyl-core/rust/`,
-`shekyl-gui-wallet/src-tauri/`, vendored `rust/monero-oxide/`, and any
+`shekyl-gui-wallet/src-tauri/`, vendored `rust/shekyl-oxide/`, and any
 future Rust tree) enforces formatting and clippy gates. CI rejects
 violations; agents must run them locally before claiming a Rust change is
 done.
@@ -56,9 +56,23 @@ Agents do not "fix CI later" — local runs must match.
    explaining *which* invariant makes the lint inappropriate.
 
 Crate-level `#![allow(...)]` requires explicit review and a `FOLLOWUPS.md`
-entry to revisit. The `unsafe_code` lint is a hard rule: per
-`25-rust-architecture.mdc`, only `shekyl-ffi` may relax it, and only at
-crate level.
+entry to revisit.
+
+## `unsafe`
+
+Per `25-rust-architecture.mdc`: every crate root carries
+`#![deny(unsafe_code)]`. Logic does not need `unsafe`. An exception is a
+reviewed, scoped block with a `SAFETY` comment: code that must call the
+operating system or a C library allows `unsafe_code` on the item or module
+that makes the call, never on the crate, with a `// SAFETY:` comment on each
+`unsafe` block and a `# Safety` section on each `unsafe fn`.
+
+**The two crate-level exceptions** are the crates that exist to bind and
+drive the vendored RandomX C reference for the differential harness, outside
+every shipped binary: `randomx-v2-sys` and `shekyl-randomx-differential`.
+Each carries `#![allow(unsafe_code)]` at its root with the reason stated
+beside it, and still a `// SAFETY:` comment on each `unsafe` block. No other
+crate joins them.
 
 ## Patterns clippy will catch that matter
 
@@ -66,14 +80,16 @@ These show up often in CryptoNote-derived code and are real bugs, not
 style:
 
 - `clippy::indexing_slicing` on untrusted input → use `.get()` and propagate
-  `Option`/`Result`. See `20-rust-vs-cpp-policy.mdc` rule 3.
+  `Option`/`Result` (`25-rust-architecture.mdc`, §"Decoding untrusted
+  bytes").
 - `clippy::arithmetic_side_effects` on amount math → use
-  `checked_add`/`checked_mul`. See `20-rust-vs-cpp-policy.mdc` rule 4.
+  `checked_add`/`checked_mul`: an overflow on an amount is a financial bug.
 - `clippy::needless_collect`, `clippy::redundant_clone` → often a sign that
   a secret is being copied unnecessarily; check whether the type should be
   `Zeroizing<T>` first.
-- `clippy::missing_safety_doc` on `unsafe fn` in `shekyl-ffi` → the safety
-  contract must be documented; this is an FFI audit obligation.
+- `clippy::missing_safety_doc` on an `unsafe fn` → the safety contract must
+  be documented in a `# Safety` section; the caller's obligations are the
+  audit surface.
 
 If clippy flags one of these, the fix is the actual change, not an
 `#[allow]`.

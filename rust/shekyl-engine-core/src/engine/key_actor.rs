@@ -9,7 +9,7 @@
 //!
 //! Per [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`], this module migrates the
 //! wallet's key material + signing operations out of the in-process
-//! [`LocalKeys`](super::local_keys::LocalKeys) composition and into a true
+//! [`LocalKeys`] composition and into a true
 //! actor with its own `tokio` task and message protocol. The actor owns
 //! [`AllKeysBlob`] privately; no `&AllKeysBlob` escapes its task. The trait
 //! surface ([`KeyEngine`]) is unchanged — Stage 2 swaps the dispatcher, not the
@@ -83,7 +83,7 @@ use super::traits::key::{
 /// the actor-dispatched [`KeyEngine`] operations ([`ClaimOutput`],
 /// [`SignTransaction`]).
 ///
-/// Mirrors [`LocalKeys`](super::local_keys::LocalKeys)'s owned key material.
+/// Mirrors [`LocalKeys`]'s owned key material.
 /// The actor's single-threaded message loop serializes access to `keys`.
 pub(crate) struct KeyActor {
     /// Wallet key material and derived scalars for signing.
@@ -240,15 +240,21 @@ impl Message<SignTransaction> for KeyActor {
 }
 
 /// Actor message for the classical half of a wallet message signature
-/// (PR-SM-1). `outer` is `preimage ‖ σ_pq` — **public bytes**, length
-/// fixed by type ([`OUTER_MSG_LEN`](shekyl_crypto_pq::message_signing::OUTER_MSG_LEN))
-/// — so nothing secret crosses into or out of the mailbox: the master
-/// seed stays at the engine (its transient borrow never reaches the
-/// actor, the same posture the stake personas pin), and the spend
-/// scalar never leaves the actor. Wrong-shape payloads cannot be
-/// constructed; the type is the signing-oracle gate.
+/// (PR-SM-1). `preimage` is the envelope's frame output and `sig_pq` is
+/// the PQ half over it. Both are public, so nothing secret crosses the
+/// mailbox: the master seed stays at the engine (its transient borrow
+/// never reaches the actor, the same posture the stake personas pin),
+/// and the spend scalar never leaves the actor. The actor signs
+/// `preimage ‖ σ_pq`. A preimage that is not a frame output, or a PQ
+/// half of another length, cannot be constructed.
+///
+/// `sig_pq` is a heap copy. Assembly still holds the original, so the
+/// caller clones the box. `Box::clone` copies on the heap;
+/// `Box::new(*sig_pq)` would place the ~16 KB array on the caller's
+/// async frame.
 pub(crate) struct SignMessageOuter {
-    pub outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+    pub(crate) preimage: shekyl_network::envelope::Framed64,
+    pub(crate) sig_pq: Box<[u8; shekyl_crypto_pq::message_signing::SLH_192S_SIG_LEN]>,
 }
 
 impl Message<SignMessageOuter> for KeyActor {
@@ -261,7 +267,8 @@ impl Message<SignMessageOuter> for KeyActor {
     ) -> Self::Reply {
         shekyl_crypto_pq::message_signing::sign_outer_with_spend_scalar(
             self.local.keys.spend_sk.as_canonical_bytes(),
-            msg.outer.as_ref(),
+            &msg.preimage,
+            &msg.sig_pq,
         )
         .map_err(|_| KeyEngineError::Primitive {
             detail: "spend-scalar Schnorr signing failed",
@@ -377,7 +384,7 @@ impl ZeroizeOnDrop for HandleDerivationViewSecret {}
 /// `Clone` handle the orchestrator holds in place of an inline `K: KeyEngine`
 /// field. Wraps the actor's [`ActorRef`] plus the construction-time public
 /// projection (§3.1). Implements the same `pub(crate) trait` [`KeyEngine`]
-/// that [`LocalKeys`](super::local_keys::LocalKeys) implements, so the swap is
+/// that [`LocalKeys`] implements, so the swap is
 /// transparent to the trait's callers.
 ///
 /// **Capability object.** Holding a `KeyEngineHandle` *is* the authority to
@@ -502,15 +509,13 @@ impl KeyEngineHandle {
     /// Sign the classical half of a wallet message signature (PR-SM-1).
     /// Same inherent-method disposition as the proof methods above: one
     /// production caller, no `LocalKeys` equivalence oracle to abstract.
-    /// Outer length is compile-time fixed — see [`SignMessageOuter`].
+    /// The preimage is a frame output and the PQ half is fixed-width —
+    /// see [`SignMessageOuter`].
     pub(crate) async fn sign_message_outer(
         &self,
-        outer: Box<[u8; shekyl_crypto_pq::message_signing::OUTER_MSG_LEN]>,
+        outer: SignMessageOuter,
     ) -> Result<[u8; shekyl_crypto_pq::message_signing::CLASSICAL_SIG_LEN], KeyEngineError> {
-        self.actor
-            .ask(SignMessageOuter { outer })
-            .await
-            .map_err(collapse_send_error)
+        self.actor.ask(outer).await.map_err(collapse_send_error)
     }
 }
 
@@ -567,7 +572,7 @@ impl KeyEngine for KeyEngineHandle {
 mod tests {
     //! Stage-2 Step-1 contract tests for [`KeyActor`] / [`KeyEngineHandle`],
     //! per `STAGE_2_KEY_ENGINE_ACTOR.md` §5.2. No mocks: every test runs a real
-    //! [`KeyActor`] over a real [`AllKeysBlob`] (`generate_account_from_raw_seed`
+    //! [`KeyActor`] over a real [`AllKeysBlob`] (`account_from_seed`
     //! against a deterministic testnet seed — the same fixture shape
     //! `LocalKeys` tests use) and exercises it through real messages.
     //!
@@ -600,7 +605,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+    use shekyl_crypto_pq::account::{account_from_seed, Network};
     use shekyl_crypto_pq::kem::HybridCiphertext;
     use shekyl_crypto_pq::output::construct_output;
 
@@ -616,11 +621,10 @@ mod tests {
     /// affect receiver-side recovery (the recipient only sees the ciphertext).
     const TEST_TX_KEY_SECRET: [u8; 32] = [11u8; 32];
 
-    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet, raw32).
+    /// Rederive a fresh [`AllKeysBlob`] from `seed` (testnet).
     fn make_blob(seed: [u8; 32]) -> AllKeysBlob {
-        let (_master_seed, blob) =
-            generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
-                .expect("test rederivation succeeds for raw32 testnet seeds");
+        let (_master_seed, blob) = account_from_seed(&seed, Network::Testnet)
+            .expect("test derivation succeeds for a testnet seed");
         blob
     }
 
@@ -633,7 +637,7 @@ mod tests {
         tx_hash: [u8; 32],
     ) -> OutputDetectionInput {
         let constructed = construct_output(
-            &TEST_TX_KEY_SECRET,
+            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
             &recipient.x25519_pk,
             &recipient.ml_kem_ek,
             recipient.spend_pk.as_canonical_bytes(),
@@ -655,7 +659,7 @@ mod tests {
             enc_label: constructed.enc_label_bytes(),
             label_tag_on_chain: constructed.label_tag(),
             output_index,
-            tx_hash,
+            tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
         }
     }
 
@@ -814,8 +818,7 @@ mod tests {
             },
             fee: FeeDirective {
                 fee_no_change: 0,
-                fee_with_change: 0,
-                dust_threshold: 0,
+                fee_with_change: Some(0),
             },
         }
     }
@@ -1001,6 +1004,7 @@ mod tests {
         let handle = KeyEngineHandle::spawn(blob);
         let proof = handle
             .generate_inbound_proof(InboundProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 txid: tx_hash,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
@@ -1013,6 +1017,7 @@ mod tests {
             .expect("actor generates the inbound proof");
 
         let verified = verify_inbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             &tx_hash,
             TEST_ADDRESS_BYTES,
@@ -1052,6 +1057,7 @@ mod tests {
 
         let proof = handle
             .generate_reserve_proof(ReserveProofRequest {
+                network_id: shekyl_network::HARNESS_NETWORK_ID,
                 address_bytes: TEST_ADDRESS_BYTES.to_vec(),
                 message: TEST_MESSAGE.to_vec(),
                 outputs: vec![ReserveProofOutput {
@@ -1065,6 +1071,7 @@ mod tests {
             .expect("actor generates the reserve proof");
 
         let verified = verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             TEST_MESSAGE,
@@ -1081,6 +1088,7 @@ mod tests {
 
         // Message binding: a different challenge message must not verify.
         verify_reserve_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &proof,
             TEST_ADDRESS_BYTES,
             b"a different challenge",

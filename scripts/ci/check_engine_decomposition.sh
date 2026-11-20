@@ -13,8 +13,7 @@
 # it adds one field, one generic, one 200-line method. Review does not catch
 # accretion; the seven traits accreted DESPITE the Stage 1-2 modularization
 # intent. This is the tripwire that makes the doc's criteria mechanical,
-# in the same structural-enforcement family as check_zeroize.sh and
-# check_segment_freeze_sites.sh.
+# in the same structural-enforcement family as check_zeroize.sh.
 #
 # Ratchet semantics live in scripts/ci/engine_decomposition_ratchet.conf and
 # are bidirectional: regression fails (a value grew past its ceiling) AND

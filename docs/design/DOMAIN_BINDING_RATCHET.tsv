@@ -1,0 +1,36 @@
+# The domain-binding ratchet (the signing envelope §2.5; NETWORK_IDENTITY.md §2.4.1).
+#
+# Rows of docs/design/CRYPTO_DOMAIN_REGISTRY.tsv the binding gate
+# (rust/shekyl-crypto-pq/tests/domain_binding.rs) cannot yet hold to their
+# binding. Each section's count is pinned in that test, so the list can only
+# shrink: a row leaves when its site is fixed (the gate refuses a listed row it
+# can already prove), and nothing joins without editing the pin. The release
+# gate (scripts/release/check_binding_ratchet.py) refuses a cut at or past
+# v3.1.0, the genesis release, while any row remains (Rick, 2026-11-05).
+#
+# Sections:
+#   input-raw  an input:<type> row whose applying function does not take the
+#              named type. The site is the function that applies the domain.
+#              No type exists yet for a key derived under salt_for, or the
+#              function takes raw bytes. Owner: SO-D12, unless a row's note
+#              names another; a note that says the input is not what the
+#              binding names waits on a ruling, not on a type.
+#   unframed   an id or name cSHAKE row not declared as an IdDomain or
+#              NameDomain constant: the binding is in its input, but not
+#              through frame.
+#   pending    a production row with no binding the closed lists give
+#              without a ruling; its registry binding is "-".
+#
+# section	literal	note
+input-raw	shekyl/ek-bind-v1	input:SaltForKey: the site hashes the address's ML-KEM encapsulation key, a public key decoded from address bytes, not a key derived under salt_for; the binding needs a ruling (2026-11-07)
+input-raw	shekyl/archival-p-id-v1	input:SaltForKey: the site hashes the persona's public hybrid key, which every verifier reads off the wire; the key is derived under salt_for, its public half is not; the binding needs a ruling (2026-11-07)
+input-raw	shekyl/multisig-blob-key-v1	input:SaltForKey: the site (multisig_blob.rs blob_key) takes the group transport secret, a key derived under salt_for (R-4), as raw bytes; no SaltForKey type exists yet. Owner SO-D12, which mints the type
+input-raw	shekyl-subaddr-v1\0	input:SaltForKey: the input is the reduced view scalar, not an HKDF output, and the function's only callers are tests and KATs; its type needs a ruling (2026-11-07)
+input-raw	shekyl-mlkem-chacha-seed	input:SaltForKey: a wallet's and a persona's d_z derive under salt_for, but the harness miner's derives under its own fixture salt and its keys are pinned in every fixture chain; typing waits on a ruling for the harness (2026-11-07)
+unframed	shekyl/p2p-wire-prefix-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the P2P wire prefix
+unframed	shekyl/rpc-rendezvous-name-v1	id: the id at position 0 of a raw cSHAKE input, not frame(id); the RPC rendezvous name
+pending	shekyl/pqc-leaf-record-v1	ruled derived:, but no census rule recomputes the leaf record
+pending	shekyl/archival-bundle-prunable-v1	ruled derived:, but no census rule states the body-to-reference match (it is the verifier's non-verdict BodyNotReferenced)
+pending	shekyl/archival-pass-delivery-digest-v1	ruled derived:, but CEN-B4 says the digest is verified through the signature, not recomputed
+pending	shekyl/rpc-static-fingerprint-v1	no binding ruled: a key-bundle fingerprint the daemon matches against its enrollment list
+pending	shekyl/noise-record-header-v1	no binding ruled: a record-layer key from a handshake whose prologue carries the id

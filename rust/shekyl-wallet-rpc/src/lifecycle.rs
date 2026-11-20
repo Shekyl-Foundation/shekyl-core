@@ -15,27 +15,22 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use shekyl_crypto_pq::account::{
-    generate_account_from_bip39, generate_account_from_raw_seed, DerivationNetwork, SeedFormat,
-    MASTER_SEED_BYTES, RAW_SEED_BYTES,
-};
-use shekyl_crypto_pq::bip39::{mnemonic_from_entropy, SHEKYL_BIP39_ENTROPY_BYTES};
+use shekyl_crypto_pq::account::SEED_BYTES;
+use shekyl_crypto_pq::bip39::{entropy_from_mnemonic, mnemonic_from_entropy};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, DaemonExpectation, Engine, EngineCreateParams,
-    FakechainPolicy, Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade,
-    StakePosture,
+    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_engine_prefs::WalletPrefs;
-use shekyl_rpc_transport::HttpRpc;
 use tokio::sync::RwLock;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::error::WalletRpcError;
 use crate::params::{parse_required_object, require_empty_object};
-use crate::tenant::{require_open_engine, DaemonEndpoint, OpenTasks, SharedEngine, TenantState};
+use crate::tenant::{require_open_engine, DaemonTarget, OpenTasks, SharedEngine, TenantState};
 use crate::types::{capability_mode_str, WalletHandle};
 
 /// Params for `create_wallet`.
@@ -123,7 +118,7 @@ pub(crate) async fn create_wallet(
     // A freshly created wallet is a non-staker (no bond record), so
     // `start_pscan_if_staker` parks `None` here; the call is unconditional so
     // the embedder never branches on staking state (`81-no-protocol-knowledge`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -133,17 +128,11 @@ pub(crate) async fn create_wallet(
     tenants.lock().await.tenant.set_open(p.name, shared, tasks);
 
     let mut result = json!({ "wallet": handle });
-    match backup {
-        // Move the String out (leave empty behind for Zeroizing to wipe):
-        // no intermediate twin of the seed-backup material in memory.
-        // zeroize 1.x has no into_inner; mem::take is the house pattern.
-        SeedBackup::Mnemonic(mut m) => {
-            result["mnemonic"] = Value::String(std::mem::take(&mut *m));
-        }
-        SeedBackup::RawHex(mut h) => {
-            result["raw_seed_hex"] = Value::String(std::mem::take(&mut *h));
-        }
-    }
+    // Move the String out (leave empty behind for Zeroizing to wipe): no
+    // intermediate twin of the seed-backup material in memory. zeroize 1.x
+    // has no into_inner; mem::take is the house pattern.
+    let SeedBackup(mut words) = backup;
+    result["mnemonic"] = Value::String(std::mem::take(&mut *words));
     Ok(result)
 }
 
@@ -152,14 +141,14 @@ pub(crate) async fn create_wallet(
 async fn create_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
     kdf: KdfParams,
 ) -> Result<(Engine<SoloSigner>, SeedBackup), WalletRpcError> {
     let daemon = make_daemon(daemon, network).await?;
     let creds = Credentials::password_only(password.as_slice());
 
-    let (master_seed, seed_format, backup) = generate_seed_material(network)?;
+    let (seed, backup) = generate_seed_material()?;
 
     let creation_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -170,10 +159,7 @@ async fn create_wallet_engine(
         base_path: base,
         credentials: &creds,
         network,
-        capability: CapabilityInput::Full {
-            master_seed_64: &master_seed,
-            seed_format,
-        },
+        capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp,
         restore_height_hint: 0,
         kdf,
@@ -187,8 +173,8 @@ async fn create_wallet_engine(
         tokio::task::block_in_place(|| Engine::<SoloSigner>::create(create_params, daemon))
             .map_err(WalletRpcError::from)?;
 
-    // Drop master seed as soon as create returns (Zeroizing on drop).
-    drop(master_seed);
+    // Drop the seed as soon as create returns (Zeroizing on drop).
+    drop(seed);
     Ok((engine, backup))
 }
 
@@ -198,10 +184,9 @@ async fn create_wallet_engine(
 /// Same tenant choreography as `create_wallet`: refuse-if-busy, reserve the
 /// opening slot, slow work off the mutex, install or clear. The seed is key
 /// material — it moves into a `Zeroizing` wrapper before any slow work and is
-/// never echoed in errors or logs (rule 30). The seed format is
-/// network-governed, matching create: mainnet/stagenet take a BIP-39 mnemonic,
-/// testnet a 32-byte raw seed as hex. A seed that does not match the network's
-/// format refuses as invalid params.
+/// never echoed in errors or logs (rule 30). Every network takes the wallet's
+/// 24 BIP-39 words, the spelling create returned (`NETWORK_IDENTITY.md`
+/// NI-R7); anything else refuses as invalid params.
 pub(crate) async fn restore_wallet(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -259,7 +244,7 @@ pub(crate) async fn restore_wallet(
 
     let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -277,7 +262,7 @@ pub(crate) async fn restore_wallet(
 async fn restore_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
     mnemonic: &str,
     restore_height: u32,
@@ -286,45 +271,12 @@ async fn restore_wallet_engine(
     let daemon = make_daemon(daemon, network).await?;
     let creds = Credentials::password_only(password.as_slice());
 
-    // Seed format is network-governed, mirroring generate_seed_material on the
-    // create path: mainnet/stagenet derive from a BIP-39 mnemonic; testnet
-    // from a raw 32-byte seed (hex-encoded, as create returns it in
-    // raw_seed_hex). Restoring a testnet wallet through the BIP-39 path would
-    // wrongly reject it. Validation lives in the derivation; messages are
-    // stable and detail-free — the seed is key material, never reflected
-    // (rule 30).
-    let (master_seed, seed_format) = match network {
-        Network::Mainnet | Network::Stagenet => {
-            let (master_seed, _blob) =
-                generate_account_from_bip39(mnemonic, "", network_to_derivation(network)).map_err(
-                    |_| {
-                        WalletRpcError::InvalidParams(
-                            "invalid mnemonic (or the network does not use BIP-39 seeds)".into(),
-                        )
-                    },
-                )?;
-            (master_seed, SeedFormat::Bip39)
-        }
-        Network::Testnet => {
-            let decoded = Zeroizing::new(hex::decode(mnemonic.trim()).map_err(|_| {
-                WalletRpcError::InvalidParams(
-                    "invalid testnet seed (expected a 32-byte raw seed as hex)".into(),
-                )
-            })?);
-            if decoded.len() != RAW_SEED_BYTES {
-                return Err(WalletRpcError::InvalidParams(
-                    "invalid testnet seed (expected a 32-byte raw seed as hex)".into(),
-                ));
-            }
-            let mut raw = [0u8; RAW_SEED_BYTES];
-            raw.copy_from_slice(&decoded);
-            let derived = generate_account_from_raw_seed(&raw, network_to_derivation(network))
-                .map_err(|_| WalletRpcError::InvalidParams("invalid testnet raw seed".into()));
-            raw.zeroize();
-            let (master_seed, _blob) = derived?;
-            (master_seed, SeedFormat::Raw32)
-        }
-    };
+    // The words are the seed's spelling on every network. Validation lives
+    // in the decoder; the message is stable and detail-free — the seed is
+    // key material, never reflected (rule 30).
+    let seed = entropy_from_mnemonic(mnemonic).map_err(|_| {
+        WalletRpcError::InvalidParams("invalid mnemonic (expected 24 BIP-39 words)".into())
+    })?;
 
     // A restored wallet's creation time is unknown; 0 keeps the scan floor
     // governed solely by restore_height.
@@ -332,10 +284,7 @@ async fn restore_wallet_engine(
         base_path: base,
         credentials: &creds,
         network,
-        capability: CapabilityInput::Full {
-            master_seed_64: &master_seed,
-            seed_format,
-        },
+        capability: CapabilityInput::Full { seed: &seed },
         creation_timestamp: 0,
         restore_height_hint: restore_height,
         kdf,
@@ -346,7 +295,7 @@ async fn restore_wallet_engine(
     let engine =
         tokio::task::block_in_place(|| Engine::<SoloSigner>::create(create_params, daemon))
             .map_err(WalletRpcError::from)?;
-    drop(master_seed);
+    drop(seed);
     Ok(engine)
 }
 
@@ -386,7 +335,7 @@ pub(crate) async fn open_wallet(
     // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
     // A corrupt sealed P-scan state fails the open closed (see
     // `wrap_and_start_pscan`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon.address).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -401,7 +350,7 @@ pub(crate) async fn open_wallet(
 async fn open_wallet_engine(
     base: &Path,
     network: Network,
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     password: Zeroizing<Vec<u8>>,
 ) -> Result<(Engine<SoloSigner>, Option<i64>), WalletRpcError> {
     let daemon = make_daemon(daemon, network).await?;
@@ -446,9 +395,9 @@ async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
     expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
-    let (name, shared, tasks, daemon_address) = {
+    let (name, shared, tasks, daemon) = {
         let mut state = tenants.lock().await;
-        let daemon_address = state.daemon.address.clone();
+        let daemon = state.daemon.clone();
         if let Some(expected) = expected_name {
             // Same mutex hold as `take_open`: check-then-take is atomic.
             if state.tenant.open_name() != Some(expected) {
@@ -463,13 +412,13 @@ async fn take_and_close_tenant(
             .tenant
             .take_open()
             .ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, shared, tasks, daemon_address)
+        (name, shared, tasks, daemon)
     };
     tasks.shutdown().await;
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            let tasks = restart_tasks(&shared, &daemon_address).await;
+            let tasks = restart_tasks(&shared, &daemon).await;
             tenants
                 .lock()
                 .await
@@ -488,12 +437,65 @@ async fn take_and_close_tenant(
         // spawn a second driver. The open-wallet ⇒ driver-running property
         // still holds — `restart_tasks` is unconditional on this path.
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let tasks = restart_tasks(&shared, &daemon_address).await;
+        let tasks = restart_tasks(&shared, &daemon).await;
         tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
-    drop(engine);
+    // Awaited, not dropped: when this returns the wallet's stores are
+    // closed, so the reopen that `stake` and a client's next
+    // `open_wallet` make can open them at once (`CURVE_TREE_CLIENT.md`
+    // §11). A drop would stop the actors with nobody waiting.
+    engine.release().await;
     Ok(name)
+}
+
+/// Close the open wallet because the server is stopping (a stop signal, a
+/// window closing, the in-process host shutting down): the `close_wallet`
+/// choreography — background tasks first, then the save, then the stores
+/// released — with the shutdown save, which does not refuse over
+/// outstanding reservations (`Engine::persist_for_shutdown`). Called after
+/// the listener has stopped and every in-flight request has finished, so
+/// no handler holds the engine; if something still does, the save runs
+/// through a read guard anyway, since the process is ending either way.
+/// A wallet that is not open, or is mid-open or mid-close, is left alone.
+pub(crate) async fn close_for_shutdown(tenants: &tokio::sync::Mutex<TenantState>) {
+    let taken = tenants.lock().await.tenant.take_open();
+    let Some((name, shared, tasks)) = taken else {
+        return;
+    };
+    tasks.shutdown().await;
+    match Arc::try_unwrap(shared) {
+        Ok(lock) => {
+            let engine = lock.into_inner();
+            match tokio::task::block_in_place(|| engine.persist_for_shutdown()) {
+                Ok(()) => {
+                    tracing::info!(wallet = %name, "stopping: the wallet is saved and closed")
+                }
+                Err(error) => tracing::error!(
+                    wallet = %name,
+                    %error,
+                    "stopping: saving the wallet failed; what was saved before stands"
+                ),
+            }
+            engine.release().await;
+        }
+        Err(shared) => {
+            let engine = shared.read().await;
+            match tokio::task::block_in_place(|| engine.persist_for_shutdown()) {
+                Ok(()) => tracing::warn!(
+                    wallet = %name,
+                    "stopping: the wallet is saved; a task still held it, so its stores \
+                     close with the process"
+                ),
+                Err(error) => tracing::error!(
+                    wallet = %name,
+                    %error,
+                    "stopping: saving the wallet failed; what was saved before stands"
+                ),
+            }
+        }
+    }
+    tenants.lock().await.tenant.clear_closing();
 }
 
 pub(crate) async fn close_wallet(
@@ -525,52 +527,22 @@ pub(crate) async fn change_password(
     Ok(json!({}))
 }
 
-// `Zeroizing` so seed-backup material is wiped on drop if create fails or
-// is abandoned before the RPC response is built. The value is held across
-// `wrap_and_start_pscan` (an await) until export — not a long-lived wallet
-// field; matching `shekyl-genesis-tool`'s wrap-at-birth of the same values.
-// The export path moves the String into the JSON response (caller's to protect).
-enum SeedBackup {
-    Mnemonic(Zeroizing<String>),
-    RawHex(Zeroizing<String>),
-}
+/// The wallet's 24 BIP-39 words, captured at creation (the only time they
+/// are returned).
+struct SeedBackup(Zeroizing<String>);
 
-fn generate_seed_material(
-    network: Network,
-) -> Result<(Zeroizing<[u8; MASTER_SEED_BYTES]>, SeedFormat, SeedBackup), WalletRpcError> {
-    let derivation = network_to_derivation(network);
-    match network {
-        Network::Mainnet | Network::Stagenet => {
-            let mut entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
-            OsRng.fill_bytes(&mut entropy);
-            // Wrap at birth (genesis-tool order) so the mnemonic is never a
-            // bare String through account generation.
-            let mnemonic = Zeroizing::new(mnemonic_from_entropy(&entropy).map_err(|e| {
-                WalletRpcError::InternalError(format!("mnemonic_from_entropy: {e}"))
-            })?);
-            entropy.zeroize();
-            let (master, _blob) = generate_account_from_bip39(&mnemonic, "", derivation)
-                .map_err(|e| WalletRpcError::InternalError(format!("bip39 account: {e}")))?;
-            Ok((master, SeedFormat::Bip39, SeedBackup::Mnemonic(mnemonic)))
-        }
-        Network::Testnet => {
-            let mut raw = [0u8; RAW_SEED_BYTES];
-            OsRng.fill_bytes(&mut raw);
-            let seed_hex = Zeroizing::new(hex::encode(raw));
-            let (master, _blob) = generate_account_from_raw_seed(&raw, derivation)
-                .map_err(|e| WalletRpcError::InternalError(format!("raw account: {e}")))?;
-            raw.zeroize();
-            Ok((master, SeedFormat::Raw32, SeedBackup::RawHex(seed_hex)))
-        }
-    }
-}
-
-fn network_to_derivation(network: Network) -> DerivationNetwork {
-    match network {
-        Network::Mainnet => DerivationNetwork::Mainnet,
-        Network::Testnet => DerivationNetwork::Testnet,
-        Network::Stagenet => DerivationNetwork::Stagenet,
-    }
+/// Fresh seed material: 32 bytes of `OsRng` entropy and the 24 words that
+/// spell them. The same on every network (`NETWORK_IDENTITY.md` NI-R7).
+fn generate_seed_material() -> Result<(Zeroizing<[u8; SEED_BYTES]>, SeedBackup), WalletRpcError> {
+    let mut seed = Zeroizing::new([0u8; SEED_BYTES]);
+    OsRng.fill_bytes(seed.as_mut());
+    // Wrap at birth (genesis-tool order) so the words are never a bare
+    // String through account creation.
+    let words = Zeroizing::new(
+        mnemonic_from_entropy(&seed)
+            .map_err(|e| WalletRpcError::InternalError(format!("mnemonic_from_entropy: {e}")))?,
+    );
+    Ok((seed, SeedBackup(words)))
 }
 
 fn wallet_handle(
@@ -581,16 +553,8 @@ fn wallet_handle(
     WalletHandle {
         name: name.to_owned(),
         capability: capability_mode_str(engine.capability()).to_owned(),
-        network: network_str(engine.network()).to_owned(),
+        network: crate::types::network_wire(engine.network()).to_owned(),
         restore_height_hint,
-    }
-}
-
-fn network_str(network: Network) -> &'static str {
-    match network {
-        Network::Mainnet => "MAINNET",
-        Network::Testnet => "TESTNET",
-        Network::Stagenet => "STAGENET",
     }
 }
 
@@ -622,33 +586,26 @@ fn validate_wallet_name(name: &str) -> Result<(), WalletRpcError> {
 /// verifier's daemon without any open wallet — through the same endpoint
 /// (address + proxy), so a proof check never bypasses the proxy posture.
 pub(crate) async fn make_daemon(
-    daemon: &DaemonEndpoint,
+    daemon: &DaemonTarget,
     network: Network,
 ) -> Result<DaemonClient, WalletRpcError> {
-    // SOCKS5h when a proxy is set: the daemon's block scan then resolves the
-    // node hostname *at the proxy*, never leaking it to the local resolver.
-    let rpc = HttpRpc::with_proxy(daemon.address.clone(), daemon.proxy.clone())
-        .await
-        .map_err(|e| {
-            // Startup already refused a malformed address/proxy
-            // (`validate_endpoint` in `server`), so what remains here is
-            // connectivity-shaped; the client-facing error stays stable, but
-            // the cause is never discarded (rule 82) — it lands in the
-            // server log.
-            tracing::warn!(error = %e, "daemon transport construction failed");
-            WalletRpcError::DaemonUnreachable
-        })?;
-    // Identity-verifying (VC-4): the daemon must prove it is this network's,
+    // "This computer" is the owner's leg (RT-W10 step 5). A named address
+    // goes through its SOCKS5h proxy when one is set: the daemon's block scan
+    // then resolves the node hostname *at the proxy*, never leaking it to
+    // the local resolver.
+    let rpc = daemon.connect(None).await.map_err(|e| {
+        // Startup already refused a malformed address/proxy
+        // (`validate_endpoint` in `server`), so what remains here is
+        // connectivity-shaped; the client-facing error stays stable, but
+        // the cause is never discarded (rule 82) — it lands in the
+        // server log.
+        tracing::warn!(error = %e, "daemon transport construction failed");
+        WalletRpcError::DaemonUnreachable
+    })?;
+    // Identity-verifying (VC-4): the daemon must prove it is this network,
     // running this build's rules and RPC contract, before the first request.
-    // `Refuse` on fakechain is the shipped value and there is no flag to
-    // change it (VC-R3).
-    Ok(DaemonClient::verifying(
-        rpc,
-        DaemonExpectation {
-            network,
-            fakechain: FakechainPolicy::Refuse,
-        },
-    ))
+    // The match is exact on every network, regtest included (VC-R3).
+    Ok(DaemonClient::verifying(rpc, DaemonExpectation { network }))
 }
 
 /// Wrap a freshly opened / created engine in its shared arc — via
@@ -671,9 +628,9 @@ pub(crate) async fn make_daemon(
 /// legitimately win the start race, and one live host is the goal either way.
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
-    daemon_address: &str,
+    daemon: &DaemonTarget,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let (shared, cadence) = engine.into_shared(daemon_address);
+    let (shared, cadence) = engine.into_shared(daemon);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -703,7 +660,7 @@ async fn wrap_and_start_tasks(
     // open. The task itself does not publish immediately; it waits the gate-6
     // §10.9 launch standoff first, precisely so the onion does not reanimate
     // in lockstep with this open.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `Ok(None)`: not a serving persona. `AlreadyRunning`: the driver's
         // first tick fired before this call and won the start race; the
@@ -763,7 +720,7 @@ struct StakeParams {
     /// [`StakePostureParam::SupportCompleteTree`], ignored for market.
     ///
     /// Not a validation nicety — the refusal it guards *is* the warning
-    /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
+    /// (see [`FOUNDATION_POSTURE_WARNING`](crate::FOUNDATION_POSTURE_WARNING)), so a client either shows the
     /// operator those terms or deliberately echoes an acknowledgment it
     /// was handed. The GUI never sends this field, which is what keeps the
     /// foundation posture off that surface by construction rather than by
@@ -959,6 +916,13 @@ pub(crate) async fn stake(
                 E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
                 // W2: durable slot may exist without a post — a `stake` re-invoke
                 // resumes. Say so in the operator-facing text (rule 82).
+                // The post's seal was not confirmed on disk: nothing was
+                // sent, the seal was removed, and the save's cause answers
+                // (Rick, 2026-11-19).
+                E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
+                    &error,
+                    shekyl_wallet_contract::error::SaveOf::Staking,
+                ),
                 E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
                     "stake failed mid-flow ({d}); call stake again to resume"
                 )),
@@ -1089,7 +1053,7 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) = open_wallet_engine(&base, network, &endpoint, pw).await?;
-                wrap_and_start_tasks(engine, &endpoint.address).await
+                wrap_and_start_tasks(engine, &endpoint).await
             }
             .await;
             let mut state = tenants.lock().await;
@@ -1128,7 +1092,7 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let (shared, cadence) = engine.into_shared(&endpoint.address);
+    let (shared, cadence) = engine.into_shared(&endpoint);
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
@@ -1136,7 +1100,7 @@ async fn reopen_with_first_stake_intent(
             // stake the operator is in the middle of. The driver's
             // serving-liveness leg re-attempts it on the next chain advance
             // (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
-            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint.address).await {
+            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint).await {
                 Ok(Some(h)) => cadence.adopt_serving(h),
                 // `None`: not a serving persona. `AlreadyRunning`: the
                 // driver's leg won the start race and parked the handle.
@@ -1196,8 +1160,8 @@ async fn reopen_with_first_stake_intent(
 /// already-shared form of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and
 /// that one is infallible: the driver polls its way to health rather than
 /// failing to start.
-async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks {
-    let cadence = Engine::start_cadence(shared, daemon_address);
+async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTasks {
+    let cadence = Engine::start_cadence(shared, daemon);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1217,7 +1181,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
     // re-attempts on the next chain advance. A fresh standoff is drawn either
     // way, so the re-armed host does not republish in lockstep with the
     // failed close.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon_address).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `None`: not a serving persona. `AlreadyRunning`: the freshly
         // re-armed driver's first tick won the start race and parked the
@@ -1241,7 +1205,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon_address: &str) -> OpenTasks
 #[cfg(test)]
 mod tests {
     use super::{close_wallet, create_wallet, open_wallet, restore_wallet, stake};
-    use crate::tenant::{DaemonEndpoint, TenantState};
+    use crate::tenant::{DaemonTarget, TenantState};
 
     use serde_json::json;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
@@ -1268,8 +1232,8 @@ mod tests {
             // engine tolerates an unreachable daemon; the P-scan task's first
             // tip fetch fails-and-retries inside the spawned loop), so the
             // lifecycle wiring is exercised without a live node.
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".to_string(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
         ))
@@ -1611,8 +1575,8 @@ mod tests {
         Mutex::new(TenantState::new(
             dir.to_path_buf(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".to_string(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
         ))
@@ -1655,7 +1619,7 @@ mod tests {
         .await
         .expect("restore");
         assert!(
-            restored.get("mnemonic").is_none() && restored.get("raw_seed_hex").is_none(),
+            restored.get("mnemonic").is_none(),
             "restore must not echo backup material"
         );
         assert_eq!(restored["wallet"]["name"], "rest");
@@ -1729,35 +1693,32 @@ mod tests {
         .expect_err("file exists");
         assert!(matches!(collision, WalletRpcError::WalletFileExists));
 
-        // Raw-seed network: a testnet tenant restores from a 32-byte raw seed
-        // (hex), so garbage that is neither valid hex nor 32 bytes refuses as
-        // typed InvalidParams (the positive round-trip is covered separately).
+        // Every network takes the same 24 words: a testnet tenant refuses
+        // garbage as typed InvalidParams, and does not echo it (the positive
+        // round-trip is covered separately).
         let tdir = tempfile::tempdir().expect("tempdir");
         let testnet = tenants_in(tdir.path());
+        let garbage = "zebra-quokka-not-a-seed";
         let refused = restore_wallet(
             &testnet,
-            &json!({ "name": "t", "password": "pw", "mnemonic": "x" }),
+            &json!({ "name": "t", "password": "pw", "mnemonic": garbage }),
             fast_kdf(),
         )
         .await
-        .expect_err("not a 32-byte raw seed");
+        .expect_err("not 24 words");
         match refused {
             WalletRpcError::InvalidParams(msg) => {
-                assert!(
-                    !msg.contains('x') || msg.contains("hex"),
-                    "must not echo the input"
-                )
+                assert!(!msg.contains(garbage), "must not echo the input: {msg}")
             }
             other => panic!("expected InvalidParams, got {other:?}"),
         }
     }
 
-    /// #5 regression: a testnet wallet is raw-seed, so `restore_wallet` must
-    /// accept the `raw_seed_hex` that `create_wallet` returns and reproduce the
-    /// same primary address — the BIP-39-only path made testnet wallets
-    /// unrecoverable.
+    /// #5 regression, on the one pathway (NI-R7): a testnet wallet's
+    /// `create_wallet` returns its 24 words, and `restore_wallet` with them
+    /// reproduces the same primary address.
     #[tokio::test(flavor = "multi_thread")]
-    async fn testnet_restore_round_trips_the_raw_seed() {
+    async fn testnet_restore_round_trips_the_words() {
         let dir = tempfile::tempdir().expect("tempdir");
         let tenants = tenants_in(dir.path());
 
@@ -1768,13 +1729,14 @@ mod tests {
         )
         .await
         .expect("create");
-        let raw_seed_hex = created["raw_seed_hex"]
+        let mnemonic = created["mnemonic"]
             .as_str()
-            .expect("testnet create returns raw_seed_hex")
+            .expect("testnet create returns its words")
             .to_owned();
+        assert_eq!(mnemonic.split_whitespace().count(), 24);
         assert!(
-            created.get("mnemonic").is_none(),
-            "testnet create must not return a BIP-39 mnemonic"
+            created.get("raw_seed_hex").is_none(),
+            "no network returns a raw seed"
         );
         let orig_addr = crate::queries::get_primary_address(&tenants, &json!({}))
             .await
@@ -1789,13 +1751,13 @@ mod tests {
             &json!({
                 "name": "rest",
                 "password": "other-pw",
-                "mnemonic": raw_seed_hex,
+                "mnemonic": mnemonic,
                 "restore_height": 0,
             }),
             fast_kdf(),
         )
         .await
-        .expect("testnet raw-seed restore");
+        .expect("testnet restore from the words");
         assert_eq!(restored["wallet"]["name"], "rest");
 
         let rest_addr = crate::queries::get_primary_address(&tenants, &json!({}))
@@ -1806,7 +1768,7 @@ mod tests {
             .to_owned();
         assert_eq!(
             orig_addr, rest_addr,
-            "raw-seed restore must reproduce the account"
+            "restore from the words must reproduce the account"
         );
         close_wallet(&tenants, &json!({})).await.expect("close");
     }

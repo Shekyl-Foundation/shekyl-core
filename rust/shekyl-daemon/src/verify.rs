@@ -11,71 +11,109 @@
 //! for the check, performs the effects the walk withheld. The questions
 //! stay beside those effects; this module is the order and the printing.
 
-use std::path::Path;
+use std::num::NonZeroUsize;
 
 use shekyl_daemon_config::sections::{log_location_creatable, DaemonConfig, Tor};
-use shekyl_daemon_config::{account, announce, marker, resolve, Lock, TABLE};
+use shekyl_daemon_config::{
+    account, announce, marker, owner_socket, resolve, Lock, Platform, TABLE,
+};
 use shekyl_options::{Code, Diagnostic, Source, Value};
 
-use crate::run::{tell, Host};
+use crate::levers;
+use crate::run::tell;
 
 /// What the walk found: the network id a start needs, and the warnings
 /// that change no verdict (the Tor pin's, IG-Q59).
 pub(crate) struct Walked {
     pub(crate) network_id: [u8; 16],
     pub(crate) warnings: Vec<String>,
+    /// Where the owner's socket goes, checked; `None` for a service
+    /// (`RPC_CHANNEL.md` §7.1, IG-Q105).
+    pub(crate) owner_socket: Option<shekyl_daemon_config::OwnerSocketPlan>,
+    /// A service's rendezvous directory, checked; `None` for a daemon run
+    /// as its user (`RPC_CHANNEL.md` §7.1).
+    pub(crate) service_rendezvous: Option<std::path::PathBuf>,
 }
 
-/// Why the walk stopped: a refusal (`refuse`, exit 2) or the host failure
-/// a start returns as 1 (IG-Q62).
-#[derive(Debug)]
-pub(crate) enum Stopped {
-    Refused(Vec<Diagnostic>),
-    Failed(String),
-}
-
-impl From<Diagnostic> for Stopped {
-    fn from(d: Diagnostic) -> Self {
-        Self::Refused(vec![d])
-    }
-}
-
-/// The walk (IG-Q59), in a start's order, stopping at the first refusal.
+/// The walk (IG-Q59), in a start's order, stopping at the first refusal
+/// (`refuse`, exit 2).
 ///
 /// Whether the account could create the data directory and open the lock
-/// file; whether the host has a network id; the marker, read and not
-/// written; whether the account could create the log directory and open
-/// the log file; the owner values the table accepted, judged and not
-/// latched; and the managed Tor's pin, read and not started. Nothing is
-/// created, opened for writing, locked or latched, so the check can run
-/// while a daemon is up and leaves the machine as it found it.
+/// file; the marker, read and not written, against the network's id
+/// (`Network::network_id`, derived from the table's genesis hash: every
+/// network has one, so the host failure IG-Q62 once named is gone);
+/// whether the account could create the log directory and open the log
+/// file; the owner values the table accepted, judged and not latched; a
+/// `mine-threads` count above the host's parallelism, refused here so the
+/// start-time miner never asks for it (Rick, 2026-11-02); and the managed
+/// Tor's pin, read and not started; and where the owner's socket goes,
+/// its directory asserted and nothing bound (`RPC_CHANNEL.md` §7.1).
+/// Nothing is created, opened for writing, locked or latched, so the check
+/// can run while a daemon is up and leaves the machine as it found it.
 pub(crate) fn walk(
     config: &DaemonConfig,
     resolved: &resolve::Resolved,
-    host: &Host,
-) -> Result<Walked, Stopped> {
+    platform: &Platform,
+) -> Result<Walked, Vec<Diagnostic>> {
     let network = config.network;
-    Lock::creatable(&config.data_dir)?;
-    let Some(network_id) = (host.network_id_of)(network.cryptonote_code()) else {
-        return Err(Stopped::Failed(format!(
-            "no network id for {}",
-            network.name()
-        )));
+    // First: a service's rendezvous directory is the account's mark that
+    // it is the machine's service, and a non-service account that gives
+    // `service` is refused for that, not for a data directory it could
+    // not open (`RPC_CHANNEL.md` §7.1).
+    // A console-key reset is not a start: the service is stopped, and on
+    // Linux its `RuntimeDirectory` (`/run/shekyl`) is already gone. The
+    // reset still checks the data home and takes its lock. The rendezvous
+    // directory is the running service's.
+    let service_rendezvous = if config.session.console_key_reset {
+        None
+    } else {
+        owner_socket::service_rendezvous(config, platform).map_err(one)?
     };
-    marker::read(&config.data_dir, network, network_id)?;
-    log_location_creatable(&config.logging.file)?;
+    // A service's data home is the service manager's or the installer's,
+    // checked and never created (Rick, 2026-11-14): the given data
+    // directory, or the service's root the default one sits in.
+    let explicit = matches!(
+        resolved.source("data-dir"),
+        Some(Source::Cli | Source::File { .. })
+    )
+    .then_some(config.data_dir.as_path());
+    shekyl_daemon_config::paths::check_service_data_home(platform, config.run_mode, explicit)
+        .map_err(one)?;
+    Lock::creatable(&config.data_dir).map_err(one)?;
+    let network_id = network.network_id();
+    marker::read(&config.data_dir, network, network_id).map_err(one)?;
+    log_location_creatable(&config.logging.file).map_err(one)?;
+    let owner_socket = owner_socket::plan(
+        config,
+        platform,
+        &network_id,
+        resolved
+            .source("rpc-socket-dir")
+            .cloned()
+            .unwrap_or(Source::Cli),
+    )
+    .map_err(one)?;
     let dev = &config.dev;
-    if let Err(refusal) = shekyl_ffi::pow_randomx_ffi::check_seed_epoch(
-        dev.pow_seed_epoch_blocks,
-        dev.pow_seed_epoch_lag,
-    ) {
-        return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    if let Err(refusal) =
+        levers::check_seed_epoch(dev.pow_seed_epoch_blocks, dev.pow_seed_epoch_lag)
+    {
+        return Err(vec![owner_refusal(resolved, refusal.row(), refusal.rule())]);
     }
-    if let Err(refusal) = shekyl_ffi::archival_ffi::check_settlement_schedule(
-        dev.settlement_epoch_blocks,
-        dev.archival_reorg_depth,
-    ) {
-        return Err(owner_refusal(resolved, refusal.row(), refusal.rule()).into());
+    if let Err(refusal) =
+        levers::check_settlement_schedule(dev.settlement_epoch_blocks, dev.archival_reorg_depth)
+    {
+        return Err(vec![owner_refusal(resolved, refusal.row(), refusal.rule())]);
+    }
+    if let Some(threads) = config.mine.threads {
+        let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let asked = usize::try_from(threads.get()).unwrap_or(usize::MAX);
+        if asked > host {
+            return Err(vec![owner_refusal(
+                resolved,
+                Some("mine-threads"),
+                &format!("at most the host's parallelism, {host}"),
+            )]);
+        }
     }
     let mut warnings = Vec::new();
     if let Tor::Managed { binary } = &config.tor {
@@ -87,7 +125,13 @@ pub(crate) fn walk(
     Ok(Walked {
         network_id,
         warnings,
+        owner_socket,
+        service_rendezvous,
     })
+}
+
+fn one(d: Diagnostic) -> Vec<Diagnostic> {
+    vec![d]
 }
 
 /// The check's acceptance (IG-Q61).
@@ -98,12 +142,11 @@ pub(crate) fn walk(
 /// that root's account was certified (IG-Q60). Exit 0.
 pub(crate) fn accept(
     resolved: &resolve::Resolved,
-    read_path: Option<&Path>,
-    config_path: &Path,
+    config_file: &shekyl_daemon_config::ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> i32 {
-    let (out, err) = accepted_lines(resolved, read_path, config_path, config, warnings);
+    let (out, err) = accepted_lines(resolved, config_file, config, warnings);
     for line in &out {
         tell(&mut std::io::stdout(), line);
     }
@@ -120,13 +163,12 @@ pub(crate) fn accept(
 /// output, and the rest on standard error, and adds the root warning there.
 fn accepted_lines(
     resolved: &resolve::Resolved,
-    read_path: Option<&Path>,
-    config_path: &Path,
+    config_file: &shekyl_daemon_config::ConfigFileFate,
     config: &DaemonConfig,
     warnings: &[String],
 ) -> (Vec<String>, Vec<String>) {
-    let announced =
-        announce::announcements(&TABLE, resolved, read_path, config_path, config, warnings);
+    let mut announced = announce::announcements(&TABLE, resolved, config_file, config, warnings);
+    announced.rest.extend(crate::run::mining_notice(config));
     let out = vec![
         format!("shekyld: configuration verified for {}", account::current()),
         format!("shekyld: {}", announced.effective),
@@ -174,50 +216,40 @@ pub(crate) fn owner_refusal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::{CStr, OsString};
+    use std::ffi::OsString;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use shekyl_daemon_config::{load, Platform};
+    use shekyl_daemon_config::{after_file, Platform};
     use shekyl_options::read_cli;
 
-    use crate::entry::ShekylDaemonEntry;
-    use crate::{EXIT_FAILED, EXIT_REFUSED};
+    use crate::EXIT_REFUSED;
 
-    /// Runs the check tests give the entry: a start that reaches the
-    /// remnant is the failure. The count is this module's; the start
-    /// tests' run counter is a different one.
-    static FORBIDDEN_RUNS: AtomicUsize = AtomicUsize::new(0);
-
-    extern "C" fn forbidden_run(
-        _snapshot: *const shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot,
-    ) -> std::ffi::c_int {
-        FORBIDDEN_RUNS.fetch_add(1, Ordering::SeqCst);
-        99
+    /// The network id every check in this module compares the marker
+    /// against: regtest's, which is the genesis derivation's.
+    fn regtest_id() -> [u8; 16] {
+        shekyl_daemon_config::Network::Regtest.network_id()
     }
 
-    const RELEASE: &CStr = c"Test";
-    const VERSION: &CStr = c"3.1.0-test";
-
-    /// An entry whose `run` must never be reached.
-    fn checking_entry() -> ShekylDaemonEntry {
-        ShekylDaemonEntry {
-            release_name: RELEASE.as_ptr(),
-            version_full: VERSION.as_ptr(),
-            protocol_version: 3,
-            run: Some(forbidden_run),
-            stop: None,
+    /// A logged-in account: its home, and a private session directory
+    /// for the owner's socket (`RPC_CHANNEL.md` §7.1), one per test.
+    fn platform(home: &Path) -> Platform {
+        Platform {
+            home: Some(home.to_path_buf()),
+            service_parent: None,
+            session_dir: crate::test_session_dir(home),
+            service_rendezvous: None,
         }
     }
 
-    fn host(home: &Path) -> Host {
-        Host {
-            platform: Platform {
-                home: Some(home.to_path_buf()),
-                program_data: None,
-            },
-            network_id_of: |code| Some([code; 16]),
-        }
+    /// The entry point as these tests start it: every step of
+    /// [`crate::run::main`], with the host's default configuration file
+    /// left unread.
+    fn start(args: &[OsString], platform: &Platform) -> i32 {
+        crate::run::main_loading(
+            args,
+            platform,
+            shekyl_daemon_config::load_default_file_unread,
+        )
     }
 
     fn args(list: &[&str]) -> Vec<OsString> {
@@ -254,7 +286,7 @@ mod tests {
         let data = d.path().join("deep").join("data");
         let log = d.path().join("logs").join("shekyld.log");
         let a = offline_regtest(&data, &log);
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(
             !d.path().join("deep").exists(),
             "no data directory was created"
@@ -263,16 +295,12 @@ mod tests {
             !d.path().join("logs").exists(),
             "no log directory was created"
         );
-        assert_eq!(
-            FORBIDDEN_RUNS.load(Ordering::SeqCst),
-            0,
-            "the remnant did not run"
-        );
         // A daemon is up: its lock is held, its marker is written.
         let held = Lock::take(&data).unwrap();
-        marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, [3u8; 16]).unwrap();
+        marker::check_or_write(&held, shekyl_daemon_config::Network::Regtest, regtest_id())
+            .unwrap();
         let before = std::fs::read(data.join("shekyld.network")).unwrap();
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert_eq!(std::fs::read(data.join("shekyld.network")).unwrap(), before);
         assert!(!log.exists());
         drop(held);
@@ -289,10 +317,7 @@ mod tests {
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);
-        assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
-            EXIT_REFUSED
-        );
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert_eq!(
             std::fs::read_to_string(data.join("shekyld.network")).unwrap(),
             other
@@ -302,42 +327,6 @@ mod tests {
             "no lock file was created"
         );
         assert!(!log.exists());
-    }
-
-    /// IG-Q62: the one host failure a start returns as 1 is the check's 1,
-    /// and it comes after the data directory's question, with nothing made.
-    #[test]
-    fn config_verify_returns_one_when_the_host_has_no_network_id() {
-        let d = tempfile::tempdir().unwrap();
-        let data = d.path().join("data");
-        let log = d.path().join("shekyld.log");
-        let a = offline_regtest(&data, &log);
-        let no_id = Host {
-            platform: host(d.path()).platform,
-            network_id_of: |_| None,
-        };
-        assert_eq!(crate::run::main(&checking_entry(), &a, &no_id), EXIT_FAILED);
-        assert!(!data.exists());
-    }
-
-    /// A client invocation stops after the load, as a start does: the
-    /// check accepts without calling the remnant.
-    #[test]
-    fn config_verify_in_client_mode_stops_after_the_load() {
-        let d = tempfile::tempdir().unwrap();
-        let status = crate::run::main(
-            &checking_entry(),
-            &args(&[
-                "--config-verify",
-                "--rpc-admin-listen",
-                "127.0.0.1:4444",
-                "status",
-            ]),
-            &host(d.path()),
-        );
-        assert_eq!(status, 0);
-        assert_eq!(FORBIDDEN_RUNS.load(Ordering::SeqCst), 0, "no client ran");
-        assert!(!d.path().join(".shekyl").exists());
     }
 
     /// The owner values the table accepted are judged in the row's terms,
@@ -351,21 +340,16 @@ mod tests {
         let mut a = offline_regtest(&data, &log);
         a.extend(["--dev-pow-seed-epoch-blocks", "3"].map(OsString::from));
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &host(d.path()).platform).unwrap();
-        let Err(Stopped::Refused(ds)) = walk(&loaded.config, &loaded.resolved, &host(d.path()))
-        else {
-            panic!("a seed-epoch length of 3 is refused");
-        };
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+        let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
+            .err()
+            .expect("a seed-epoch length of 3 is refused");
         assert_eq!(ds.len(), 1);
         assert_eq!(ds[0].code, Code::ValueRange);
         assert_eq!(ds[0].option.as_deref(), Some("dev-pow-seed-epoch-blocks"));
         assert_eq!(ds[0].get("value"), Some("3"));
-        assert_eq!(
-            crate::run::main(&checking_entry(), &a, &host(d.path())),
-            EXIT_REFUSED
-        );
+        assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert!(!data.exists());
-        assert_eq!(FORBIDDEN_RUNS.load(Ordering::SeqCst), 0);
     }
 
     /// The managed Tor's pin is read and not started. A named binary that
@@ -394,20 +378,24 @@ mod tests {
             log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let loaded = load(cli, &host(d.path()).platform).unwrap();
-        let walked = walk(&loaded.config, &loaded.resolved, &host(d.path())).unwrap();
-        assert_eq!(walked.network_id, [3u8; 16]);
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+        let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
+        assert_eq!(walked.network_id, regtest_id());
         assert_eq!(walked.warnings.len(), 1);
         let warning = &walked.warnings[0];
         assert!(warning.starts_with("warning: managed Tor: "));
         assert!(warning.contains("was not started"));
         assert!(warning.contains(missing.to_str().unwrap()));
-        assert!(warning.contains("waiting for Tor"));
-        assert!(warning.contains("It is not syncing."));
+        assert!(warning.contains("this node will wait for Tor"));
+        assert!(
+            warning.contains("It will not sync until Tor is up."),
+            "clearnet is off, and a check holds no session: {warning}"
+        );
+        // No file step ran, so the path the lines name is the test's own:
+        // an absent file, as a host with no default file has.
         let (out, err) = accepted_lines(
             &loaded.resolved,
-            loaded.file_read.as_deref(),
-            &loaded.config_path,
+            &shekyl_daemon_config::ConfigFileFate::DefaultAbsent(d.path().join("shekyld.toml")),
             &loaded.config,
             &walked.warnings,
         );
@@ -421,7 +409,195 @@ mod tests {
         );
         assert!(err.iter().any(|line| line.starts_with("shekyld: posture:")));
         assert!(err.iter().any(|line| line.contains("warning: managed Tor")));
-        assert_eq!(crate::run::main(&checking_entry(), &a, &host(d.path())), 0);
+        assert_eq!(start(&a, &platform(d.path())), 0);
         assert!(!data.exists());
+    }
+
+    /// `mine = on` on a node declared `Open` announces, in the check as at
+    /// a start, that the miner waits for a view of the network (DC-F41);
+    /// the same configuration with both connectors off, or with a closed
+    /// peer list, announces nothing of the kind, and nor does `mine = off`.
+    /// Red edit: drop `mining_notice` from either `accepted_lines` or the
+    /// start, or make it ignore the declaration.
+    #[test]
+    fn mine_on_with_an_open_declaration_announces_that_the_miner_waits_for_a_view() {
+        let address = shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Regtest,
+            [0xaa; 32],
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+        )
+        .encode()
+        .unwrap();
+        let notice_lines = |cli: &[&str]| -> Vec<String> {
+            let d = tempfile::tempdir().unwrap();
+            let data = d.path().join("data");
+            let log = d.path().join("shekyld.log");
+            let mut full = vec![
+                "--config-verify",
+                "--network",
+                "regtest",
+                "--data-dir",
+                data.to_str().unwrap(),
+                "--log-file",
+                log.to_str().unwrap(),
+            ];
+            full.extend_from_slice(cli);
+            let a = args(&full);
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+            let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
+            let (_, err) = accepted_lines(
+                &loaded.resolved,
+                &shekyl_daemon_config::ConfigFileFate::DefaultAbsent(d.path().join("shekyld.toml")),
+                &loaded.config,
+                &walked.warnings,
+            );
+            err.into_iter()
+                .filter(|line| line.starts_with("shekyld: mining: "))
+                .collect()
+        };
+        // Open: clearnet on, no closed peer list.
+        let open = notice_lines(&["--tor", "off", "--mine", "on", "--mine-address", &address]);
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert!(
+            open[0].contains("waits for a view of the network"),
+            "{}",
+            open[0]
+        );
+        assert!(
+            open[0].contains("`clearnet = off` and `tor = off`"),
+            "{}",
+            open[0]
+        );
+        assert!(open[0].contains("`p2p-closed-peer`"), "{}", open[0]);
+        // Offline: synced at open, mines at once.
+        let offline = notice_lines(&[
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(offline.is_empty(), "{offline:?}");
+        // Closed: the operator named the whole network.
+        let closed = notice_lines(&[
+            "--tor",
+            "off",
+            "--p2p-closed-peer",
+            "192.0.2.1:12020",
+            "--mine",
+            "on",
+            "--mine-address",
+            &address,
+        ]);
+        assert!(closed.is_empty(), "{closed:?}");
+        // Open, but the miner is not asked to start.
+        let idle = notice_lines(&["--tor", "off", "--mine-address", &address]);
+        assert!(idle.is_empty(), "{idle:?}");
+    }
+
+    /// A start that gives `service` from an account that is not the
+    /// service's is refused before it touches anything, with this machine's
+    /// own rendezvous directory (`/run/shekyl` on Linux, `/var/run/shekyl` on
+    /// FreeBSD). An ordinary account is refused because the directory is not
+    /// its own; a root runner, as CI is, because a service never runs as
+    /// root. Either way the refusal is the rendezvous directory's (Rick,
+    /// 2026-11-12). Red edit: drop the walk's rendezvous check and the
+    /// refusal is the data directory's, or none.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_service_account_giving_service_is_refused_on_this_machine() {
+        use std::os::unix::fs::MetadataExt;
+        let platform = shekyl_process::platform::current();
+        let dir = platform
+            .service_rendezvous
+            .clone()
+            .expect("this platform names a service rendezvous directory");
+        let d = tempfile::tempdir().unwrap();
+        // This account: the owner of a directory it just made.
+        let me = std::fs::metadata(d.path()).unwrap().uid();
+        if me != 0 {
+            if let Ok(meta) = std::fs::metadata(&dir) {
+                assert_ne!(
+                    meta.uid(),
+                    me,
+                    "{} is this account's: this host runs its service as the test account",
+                    dir.display()
+                );
+            }
+        }
+        let mut a = offline_regtest(&d.path().join("data"), &d.path().join("shekyld.log"));
+        a.push(OsString::from("--service"));
+        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+        let loaded = after_file(cli, &platform, None).unwrap();
+        let ds = walk(&loaded.config, &loaded.resolved, &platform)
+            .err()
+            .expect("the service start is refused");
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
+        assert!(!d.path().join("data").exists(), "nothing was created");
+    }
+
+    /// A console-key reset does not need the service's rendezvous
+    /// directory. On Linux that directory is `RuntimeDirectory` and is
+    /// removed when the service stops, which is when the reset runs. The
+    /// same start without the reset is refused on the missing directory.
+    /// Red edit: check the directory on a reset, and the missing one
+    /// refuses before the lock. A root runner is the data home's refusal
+    /// either way, so the reset's path is this test only for an ordinary
+    /// account.
+    #[cfg(unix)]
+    #[test]
+    fn a_console_key_reset_does_not_need_the_rendezvous_directory() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let d = tempfile::tempdir().unwrap();
+        let me = std::fs::metadata(d.path()).unwrap().uid();
+        if me == 0 {
+            return;
+        }
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let platform = Platform {
+            home: Some(d.path().to_path_buf()),
+            service_parent: Some(d.path().to_path_buf()),
+            session_dir: None,
+            service_rendezvous: Some(d.path().join("no-such-run")),
+        };
+        let log = d.path().join("shekyld.log");
+        let list = [
+            "--service",
+            "--network",
+            "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--data-dir",
+            data.to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
+        ];
+        let load_at = |reset: bool| {
+            let mut a = args(&list);
+            if reset {
+                a.insert(1, OsString::from("--rpc-console-key-reset"));
+            }
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            after_file(cli, &platform, None).unwrap()
+        };
+        let reset = load_at(true);
+        walk(&reset.config, &reset.resolved, &platform).expect("the reset walks");
+        let start = load_at(false);
+        let ds = walk(&start.config, &start.resolved, &platform)
+            .err()
+            .expect("a start still needs the directory");
+        assert_eq!(ds[0].code, Code::ServiceRendezvous, "{}", ds[0].render());
+        assert!(!log.exists(), "the walk created nothing");
     }
 }

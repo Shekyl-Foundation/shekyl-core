@@ -12,48 +12,46 @@
 //! list is the structural "no transport" ban (MS-1(a)); engine-core wires the
 //! returned bytes to the wallet ledger.
 //!
-//! # Lineage (two deletions, one surviving design)
+//! # Why every output carries per-member keys
 //!
-//! - **Option A** — the FROST wrapper that fused threshold keys with a fixed
-//!   group `pqc_public_key` — was rejected 2026-04-04: a fixed group PQC key in
-//!   plaintext `pqc_auth` is a ~1996-byte on-chain fingerprint that collapses
-//!   FCMP++ anonymity. Its FROST-SAL / DKG primitives live on in `shekyl-fcmp`.
-//! - **Option D** — rotating prover assignment, liveness heartbeats,
-//!   counter-proof evidence — was superseded by Option E′ (§15.4a,
-//!   coordinator-less per-participant spend-auth) on 2026-07-15. Under MS-5 the
-//!   Option-D FSM (`state.rs`) is **deleted, not inherited**, and its residue
-//!   (the `ProverReady` edge, the prover/heartbeat/counter-proof `MessageType`
-//!   discriminants, the `relays` descriptor field,
-//!   `input_assigned_prover_indices`) is excised. The modules below are the
-//!   E′-shared **format** substrate.
+//! A fixed group PQC key in plaintext `pqc_auth` would be a ~1996-byte
+//! on-chain fingerprint that collapses FCMP++ anonymity. So every output
+//! to a group carries a fresh key per member, committed by hash in its
+//! leaf (`PQC_MULTISIG.md` §7), and a spend reveals only its `m` signers'
+//! keys; the threshold spend secret is a FROST split
+//! (`shekyl_fcmp::frost_sal`).
 //!
-//! The E′ spend ceremony itself — the FROST `SigningCeremony` FSM and its nonce
-//! typestates — lands in this crate under MS-5; the format modules below are its
-//! substrate.
+//! The E′ signing ceremony is [`ceremony`]: the roles, the ceremony files, the
+//! nonce and proof types that make each honest-signer check a type, over the
+//! format modules below.
+#![deny(unsafe_code)]
 
 pub mod ceremony;
-pub mod encryption;
+pub mod envelope;
 pub mod group_descriptor;
 pub mod intent;
 pub mod invariants;
+pub mod member_file;
 pub mod messages;
 
 pub use ceremony::{
-    CeremonyError, ConsumedNonce, FrostCeremony, NonceCounterError, NonceCounterSink, SpendRequest,
-    SpendResponse,
+    import, AlreadyHeld, Authenticated, CeremonyError, ConsumedNonce, Cosigner, DeriveError,
+    DerivedSpend, GroupOutputRecord, GroupOutputs, HeldNonce, HeldNonceStore, Holder, ImportError,
+    Incoming, InputContext, LiveCeremonies, NotHeld, Proposer, Responder, ResponderInput, Role,
+    SigningContext, SpendPaths, SpendPathsError, UnsignedSpend,
 };
-pub use encryption::{decrypt_payload, encrypt_payload, EncryptionError};
+pub use envelope::{
+    open_envelope, seal_envelope, ImportRefusal, OpenedEnvelope, SealError, MAX_BODY_LEN,
+    SENDER_SIG_LEN,
+};
 pub use group_descriptor::{GroupDescriptor, GroupDescriptorError};
 pub use intent::{
     ChainStateFingerprint, SpendIntent, SpendIntentError, MAX_ADDRESS_LEN, MAX_INPUTS,
     MAX_RECIPIENTS,
 };
-pub use invariants::{
-    check_pre_signing_invariants, InvariantCheckInput, InvariantCheckResult, InvariantId,
-};
-pub use messages::{
-    DecryptedPayload, EnvelopeError, MessageType, MultisigEnvelope, MAX_PAYLOAD_LEN, MAX_SIG_LEN,
-};
+pub use invariants::{IntentRefusal, LedgerView, ValidatedIntent};
+pub use member_file::{MemberFile, MemberFileError, MemberSecrets};
+pub use messages::MessageType;
 
 #[cfg(test)]
 mod tests;

@@ -35,15 +35,17 @@ pub mod address;
 pub mod multisig_address;
 pub mod network;
 pub mod payment_uri;
+#[cfg(test)]
+mod respell;
 
 pub use address::{
-    classical_segment_bytes, AddressError, BoundClassicalSegment, ClassicalFields, ShekylAddress,
-    ADDRESS_VERSION_V1, CLASSICAL_BOUND_SEGMENT_LEN, CLASSICAL_PAYLOAD_LEN, CLASSICAL_SEGMENT_LEN,
-    MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN, SEGMENT_SEPARATOR,
+    classical_segment_bytes, AddressError, BoundClassicalSegment, ClassicalFields, PaymentAddress,
+    ShekylAddress, ADDRESS_VERSION_V1, CLASSICAL_BOUND_SEGMENT_LEN, CLASSICAL_PAYLOAD_LEN,
+    CLASSICAL_SEGMENT_LEN, MSG_SIGN_PK_LEN, PQC_PAYLOAD_LEN, SEGMENT_SEPARATOR,
 };
 pub use multisig_address::{
     address_fingerprint, fingerprint_badge, fingerprint_hex, AddressProvenance,
-    MultisigAddressError, MultisigAddressPayload, MULTISIG_ADDRESS_VERSION,
+    MultisigAddressError, MultisigAddressPayload, FINGERPRINT_LEN, MULTISIG_ADDRESS_VERSION,
 };
 pub use network::{AddressKind, Network};
 pub use payment_uri::{format_payment_uri, parse_payment_uri, PaymentUri, PaymentUriError};

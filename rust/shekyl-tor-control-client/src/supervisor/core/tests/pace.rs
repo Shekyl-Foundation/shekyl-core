@@ -8,9 +8,10 @@
 
 use std::time::Duration;
 
-use super::super::super::posture::{render, BootstrapLine, BootstrapPace, Cause};
+use super::super::super::posture::{BootstrapLine, BootstrapPace, Cause};
 use super::super::{duration_ns, Core, Input};
 use super::{managed, policy, socks};
+use super::{said, said_of};
 
 fn secs(n: u64) -> u64 {
     duration_ns(Duration::from_secs(n))
@@ -27,7 +28,7 @@ fn sample(progress: u8, read: Option<u64>) -> Input {
 /// A core bootstrapping since 0, with a first count at 0.
 fn bootstrapping() -> Core {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(sample(10, Some(0)), 0);
     core
@@ -78,7 +79,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
         advancing.pace,
         advancing.bootstrap.and_then(BootstrapLine::pace)
     );
-    let text = render(&advancing);
+    let text = said_of(&advancing);
     assert!(
         text.contains(
             "Tor is fetching the network directory (20%). 100 bytes arrived in the last 4 s."
@@ -89,7 +90,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
 
     core.on(sample(20, Some(5_000)), secs(8));
     assert_eq!(core.status().pace, Some(BootstrapPace::SlowButNormal));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("unchanged for 5 s"), "{text}");
     assert!(
         text.contains(
@@ -106,12 +107,12 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     );
     core.on(sample(20, Some(5_000)), secs(12));
     assert_eq!(core.status().pace, Some(BootstrapPace::Stalled));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("Nothing arrived in the last 4 s"), "{text}");
 
     core.on(sample(21, Some(5_000)), secs(13));
     assert_eq!(core.status().pace, Some(BootstrapPace::Advancing));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(
         text.contains("Tor is fetching the network directory (21%)."),
         "{text}"
@@ -124,7 +125,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     );
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(sample(30, None), 1);
     core.on_deadline(secs(4));
@@ -132,7 +133,7 @@ fn the_pace_reads_advancing_slow_and_stalled() {
     assert_eq!(core.status().pace, None, "no count: unknown, never stalled");
 
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     // The percent stays at the incarnation's 0, so only the window decides.
     core.on(sample(0, Some(0)), secs(2));
@@ -163,11 +164,13 @@ fn a_cause_and_the_pace_are_said_together() {
     let status = core.status();
     assert_eq!(status.cause, Cause::ExternalBlocked);
     assert_eq!(status.pace, Some(BootstrapPace::Stalled));
-    let text = render(&status);
+    let text = said_of(&status);
     let cause = text
         .find("cannot reach the Tor network")
         .expect("the cause");
-    let fix = text.find("Check the firewall").expect("the fix");
+    let fix = text
+        .find("Check this computer's date and time")
+        .expect("the fix, the clock first");
     let stall = text.find("Nothing arrived").expect("the stall");
     assert!(
         cause < fix && fix < stall,

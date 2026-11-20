@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Shard lookup behind the serving loop: the [`ShardProvider`] seam and its
-//! production [`BodyStoreReader`] implementation.
+//! production implementation over a [`HeldShardSource`].
 //!
 //! The seam exists so the loop's wire behaviour is testable without a
 //! store, and so the store read (synchronous redb) is confined behind one
@@ -12,19 +12,22 @@
 //! abstraction over storage backends — the store is `shekyl-p-store`,
 //! and the trait's second implementor is the test fixture.
 //!
-//! # Read-only, structurally
+//! # Read-only, structurally, and keyless
 //!
-//! [`StoreShardProvider`] is built from a [`BodyStoreReader`], not from
-//! the writer: fill and erase live on `BodyStore` under `StakeEngine`,
-//! and the serving loop runs beside it. What is left in this module
-//! cannot write to the store at all, which is the property that keeps
-//! "the serving side is a reader" from being a convention.
+//! [`StoreShardProvider`] is built from a [`HeldShardSource`], which can
+//! only open a held shard and hand back its chunks. Fill and erase live on
+//! the store's owner, and so does the store key: the source returns
+//! plaintext copies, so nothing in this module can write to the store or
+//! decrypt it (`WALLET_SIDE_STORE.md` `WSS-Q13`). In the wallet the source
+//! is a message to the body-store actor (`CURVE_TREE_CLIENT.md` §11.1).
+//! *Records-was (until 2026-11-02):* the provider held a `BodyStoreReader`,
+//! a shared handle on the store that carried the key.
 //!
 //! This module stays free of Tor and key material.
 
 use std::sync::Arc;
 
-use shekyl_p_store::{BodyStoreReader, ShardFrameBody, StoreError};
+use shekyl_p_store::{BodyStore, HeldShard, StoreError};
 use shekyl_types::ShardId;
 
 /// A shard lookup failed for an infrastructure reason (store I/O)
@@ -112,8 +115,8 @@ pub struct ShardBody {
 /// able to tell them apart.
 #[derive(Debug)]
 enum Source {
-    /// `shard_frame` streamed from `P`'s body store (production).
-    Held(Box<ShardFrameBody>),
+    /// `shard_frame` read chunk by chunk from `P`'s body store (production).
+    Held(Box<HeldBody>),
     /// Opaque in-memory payload (tests, measurement harnesses).
     Flat { bytes: Arc<[u8]>, read: usize },
     /// An in-memory payload that counts the chunks it yields into a counter
@@ -127,6 +130,63 @@ enum Source {
         read: usize,
         reads: Arc<std::sync::atomic::AtomicUsize>,
     },
+}
+
+/// A held shard being read: its storage chunks, one at a time, re-sliced to
+/// what the loop asks for.
+///
+/// Peak cost is one decrypted storage chunk: the next one is asked for only
+/// once the last is spent.
+struct HeldBody {
+    source: Arc<dyn HeldShardSource>,
+    held: HeldShard,
+    /// Next storage chunk to ask for.
+    next_index: u32,
+    /// Unread tail of the last chunk.
+    leftover: Vec<u8>,
+    leftover_off: usize,
+    /// Bytes already handed to the loop.
+    yielded: u64,
+}
+
+impl std::fmt::Debug for HeldBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldBody")
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeldBody {
+    fn remaining_bytes(&self) -> usize {
+        usize::try_from(self.held.len().saturating_sub(self.yielded))
+            .expect("a body length on this host fits usize")
+    }
+
+    fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, ProviderError> {
+        if self.yielded >= self.held.len() {
+            return Ok(None);
+        }
+        if self.leftover_off >= self.leftover.len() {
+            if self.next_index >= self.held.chunk_count() {
+                return Ok(None);
+            }
+            self.leftover = self.source.read_chunk(&self.held, self.next_index)?;
+            self.leftover_off = 0;
+            self.next_index = self.next_index.saturating_add(1);
+        }
+        let take = (self.leftover.len() - self.leftover_off).min(max_bytes.max(1));
+        let chunk = self.leftover[self.leftover_off..self.leftover_off + take].to_vec();
+        self.leftover_off += take;
+        self.yielded = self.yielded.saturating_add(wire_len(take));
+        // Drop the spent chunk so peak memory stays one chunk, not one
+        // chunk plus its leftover copy.
+        if self.leftover_off >= self.leftover.len() {
+            self.leftover = Vec::new();
+            self.leftover_off = 0;
+        }
+        Ok(Some(chunk))
+    }
 }
 
 /// The next chunk of at most `max_bytes` out of `bytes` from `*read`,
@@ -172,12 +232,19 @@ impl ShardBody {
         }
     }
 
-    /// A store-backed `shard_frame` body.
+    /// A store-backed `shard_frame` body, read through `source`.
     #[must_use]
-    pub fn held(body: ShardFrameBody) -> Self {
-        let len = body.len();
+    pub fn held(source: Arc<dyn HeldShardSource>, held: HeldShard) -> Self {
+        let len = held.len();
         Self {
-            source: Source::Held(Box::new(body)),
+            source: Source::Held(Box::new(HeldBody {
+                source,
+                held,
+                next_index: 0,
+                leftover: Vec::new(),
+                leftover_off: 0,
+                yielded: 0,
+            })),
             len,
         }
     }
@@ -226,9 +293,7 @@ impl ShardBody {
     /// close; the counter is the signal.
     pub fn next_chunk(&mut self, max_bytes: usize) -> Result<Option<Vec<u8>>, ProviderError> {
         match &mut self.source {
-            Source::Held(body) => body
-                .next_chunk(max_bytes)
-                .map_err(|e| ProviderError::from_store(&e)),
+            Source::Held(body) => body.next_chunk(max_bytes),
             Source::Flat { bytes, read } => Ok(slice_chunk(bytes, read, max_bytes)),
             #[cfg(test)]
             Source::Counted { bytes, read, reads } => {
@@ -266,29 +331,61 @@ pub trait ShardProvider: Send + Sync + 'static {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError>;
 }
 
-/// The production provider: shard reads out of `P`'s body store, through
-/// a read-only [`BodyStoreReader`], serving a held `shard_frame`.
+/// The reads a serving loop may make of `P`'s body store: open a held shard,
+/// and fetch its chunks. Nothing else — no write, no key.
 ///
-/// Fill and erase live on [`shekyl_p_store::BodyStore`] under
-/// `StakeEngine`. This type cannot write.
+/// Called on the blocking pool (the endpoint's `spawn_blocking` hops), so an
+/// implementor may block. The wallet's implementor asks the body-store actor,
+/// the store's one owner; a [`BodyStore`] held in-process implements it for
+/// tests and harnesses.
+pub trait HeldShardSource: Send + Sync + 'static {
+    /// Open `shard_id` if the store holds it.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError`] on store failure, or when the store's owner cannot
+    /// be reached. A shard that is not held is `Ok(None)`.
+    fn open_shard(&self, shard_id: ShardId) -> Result<Option<HeldShard>, ProviderError>;
+
+    /// Storage chunk `index` of `held`, as an owned plaintext copy.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError`] on store failure, a chunk that fails
+    /// authentication, or an owner that cannot be reached.
+    fn read_chunk(&self, held: &HeldShard, index: u32) -> Result<Vec<u8>, ProviderError>;
+}
+
+impl HeldShardSource for BodyStore {
+    fn open_shard(&self, shard_id: ShardId) -> Result<Option<HeldShard>, ProviderError> {
+        BodyStore::open_shard(self, shard_id).map_err(|e| ProviderError::from_store(&e))
+    }
+
+    fn read_chunk(&self, held: &HeldShard, index: u32) -> Result<Vec<u8>, ProviderError> {
+        BodyStore::read_chunk(self, held, index).map_err(|e| ProviderError::from_store(&e))
+    }
+}
+
+/// The production provider: shard reads out of `P`'s body store through a
+/// [`HeldShardSource`], serving a held `shard_frame`. This type cannot
+/// write, and holds no key.
 pub struct StoreShardProvider {
-    reader: BodyStoreReader,
+    source: Arc<dyn HeldShardSource>,
 }
 
 impl StoreShardProvider {
-    /// Wrap a read-only body-store handle.
+    /// Serve from `source`.
     #[must_use]
-    pub fn new(reader: BodyStoreReader) -> Self {
-        Self { reader }
+    pub fn new(source: Arc<dyn HeldShardSource>) -> Self {
+        Self { source }
     }
 }
 
 impl ShardProvider for StoreShardProvider {
     fn shard_bytes(&self, shard_id: u64) -> Result<Option<ShardBody>, ProviderError> {
-        match self.reader.open_shard(ShardId::from_raw(shard_id)) {
-            Ok(Some(body)) => Ok(Some(ShardBody::held(body))),
-            Ok(None) => Ok(None),
-            Err(e) => Err(ProviderError::from_store(&e)),
-        }
+        Ok(self
+            .source
+            .open_shard(ShardId::from_raw(shard_id))?
+            .map(|held| ShardBody::held(Arc::clone(&self.source), held)))
     }
 }

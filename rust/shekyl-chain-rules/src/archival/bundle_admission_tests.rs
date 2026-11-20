@@ -8,17 +8,17 @@
 //! One refusal, the row the verifier already names. Red edit: map a
 //! refusal onto the neighbouring row.
 
-use shekyl_archival_retention::{bundle_root, BundleBody, BundleRef, PassBitmap};
+use shekyl_archival_retention::{section_root, BundleBody, BundleRef, PassBitmap};
 
 use super::*;
 use crate::census::CenRow;
 use crate::harness::bundle::{with_hash, BundleWorld};
 use crate::rule_set::RuleSet;
 
-/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// [`section_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
 fn root_of(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// Each admission row, through [`super::judge_bundles`]: one refusal, the
@@ -33,6 +33,7 @@ fn judge_bundles_names_each_admission_row() {
             BlockHeight::from_raw(h_incl),
             &world.view,
             &RuleSet::GENESIS,
+            &crate::HARNESS_NETWORK_ID,
         )
         .expect_err("a refusal")
         .row()
@@ -50,6 +51,7 @@ fn judge_bundles_names_each_admission_row() {
             BlockHeight::from_raw(h + 1),
             &world.view,
             &RuleSet::GENESIS,
+            &crate::HARNESS_NETWORK_ID,
         )
         .expect_err("a wrong root")
         .row(),

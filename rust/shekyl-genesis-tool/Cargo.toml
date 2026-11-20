@@ -16,18 +16,18 @@ path = "src/main.rs"
 # Wire format: the genesis tx/block serializer, tx_extra grammar, varint.
 shekyl-wire = { path = "../shekyl-wire" }
 # The genesis block header and coinbase txid leave `shekyl-wire` typed
-# (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`, `TxHash`; RTN-7).
+# (`BlockHash`, `CurveTreeRoot`, `SectionRoot`, `TxHash`; RTN-7).
 shekyl-types = { path = "../shekyl-types" }
 # Output construction (deterministic KEM), account derivation (gen-wallets),
 # BIP-39 helpers, Edwards→Montgomery map for the recipient X25519 key.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# cSHAKE256 domain-separated hashing for the deterministic genesis tx key.
-shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The genesis mint timestamp the table pins (`GenesisTimestamp`).
+shekyl-network = { path = "../shekyl-network" }
 # Post-#327 address encode/decode (three bech32m segments, ek_bind tag).
 shekyl-address = { path = "../shekyl-address" }
 # Empty curve-tree root for the genesis header (`selene_hash_init`).
 shekyl-fcmp = { path = "../shekyl-fcmp" }
-# Empty attestation root for the v9 genesis header (`attestation_root(&[])`).
+# Empty section root for the genesis header (`empty_section_root`).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Single source for the coinbase maturity window (`COINBASE_LOCK_WINDOW`),
 # the genesis tx unlock_time.
@@ -39,14 +39,17 @@ zeroize = { workspace = true }
 thiserror = { workspace = true }
 hex = "0.4"
 rand = "0.8"
-# Tx public key from the derived scalar (R = r·G). Version/features mirror
-# `shekyl-crypto-pq`'s pin.
-curve25519-dalek = { version = "4", features = ["zeroize"] }
 
 [dev-dependencies]
 # Golden-KAT blob digest (tests/golden_kat.rs) — a compact pin over the full
 # serialized genesis tx, so any wire-level drift fails on one line.
 sha2 = { workspace = true }
+# The timestamp pin's read-back tests (`table.rs`) write a pin into a scratch
+# repository root.
+tempfile = { workspace = true }
+# `seeded-rng` (TEST_ONLY): the golden KAT holds the pinned secret as the key
+# `TxKey::seeded` makes from it (R-21: the key hands out no bytes).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 
 [lints]
 workspace = true

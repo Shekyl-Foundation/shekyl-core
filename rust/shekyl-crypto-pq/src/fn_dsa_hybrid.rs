@@ -95,7 +95,6 @@
 //! stack, and the decode is paid once per key.
 //! Its measurements are on `a_held_key_signs_on_a_small_stack`.
 
-use crate::heap_secret::HeapSecret;
 use crate::hybrid_combiner::{self, decode_canonical, encode_canonical, CANONICAL_OVERHEAD};
 use crate::rng::{key_material32, HedgedOsRng};
 use crate::seeded_rng::SeededRng;
@@ -114,6 +113,7 @@ use fn_dsa::{
     FN_DSA_LOGN_1024, HASH_ID_RAW,
 };
 use rand::{CryptoRng, RngCore};
+use shekyl_heap_secret::HeapSecret;
 use shekyl_types::archival::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
 
 /// FN-DSA-1024 verifying-key length, from the crate.
@@ -391,8 +391,8 @@ impl HybridEd25519FnDsa {
     }
 }
 
-// Test-support surface, behind `test-utils` like its ML-DSA counterpart.
-#[cfg(any(test, feature = "test-utils"))]
+// Deterministic signing, behind `seeded-rng` like its ML-DSA counterpart.
+#[cfg(any(test, feature = "seeded-rng"))]
 impl HybridEd25519FnDsa {
     /// Deterministic nested sign for vectors and benches: FN-DSA's signer
     /// draws from a ChaCha20 stream over `rng_seed` instead of the OS.
@@ -577,10 +577,7 @@ mod tests {
         );
     }
     use crate::error::PqcVerifyError;
-    use crate::signature::{
-        verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
-        SCHEME_DOMAIN_WITNESS_CARRIER,
-    };
+    use crate::signature::{verify_pqc_auth, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE};
 
     const D: &[u8] = SCHEME_DOMAIN_RECEIPT;
 
@@ -653,12 +650,11 @@ mod tests {
     }
 
     /// The witness's bundle signature is its own surface: one key, one
-    /// message, and the signature is dead under the carrier's domain and
-    /// under the receipt's. Red edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE`
-    /// the carrier's bytes (or the receipt's) and the matching `is_err`
-    /// fails.
+    /// message, and the signature is dead under the receipt's domain. Red
+    /// edit: give `SCHEME_DOMAIN_WITNESS_BUNDLE` the receipt's bytes and the
+    /// `is_err` fails.
     #[test]
-    fn the_bundle_domain_is_neither_the_carriers_nor_the_receipts() {
+    fn the_bundle_domain_is_not_the_receipts() {
         let (pk, sk) = keypair();
         let scheme = HybridEd25519FnDsa;
         let commitment = [0xB7u8; 32];
@@ -668,9 +664,6 @@ mod tests {
         scheme
             .verify(&pk, SCHEME_DOMAIN_WITNESS_BUNDLE, &commitment, &sig)
             .expect("verifies under its own domain");
-        assert!(scheme
-            .verify(&pk, SCHEME_DOMAIN_WITNESS_CARRIER, &commitment, &sig)
-            .is_err());
         assert!(scheme
             .verify(&pk, SCHEME_DOMAIN_RECEIPT, &commitment, &sig)
             .is_err());
@@ -798,7 +791,8 @@ mod tests {
                 HYBRID_SCHEME_ID_ED25519_FN_DSA_1024,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
+                &[0u8; 16],
             ),
             Err(PqcVerifyError::SchemeMismatch)
         );
@@ -808,7 +802,8 @@ mod tests {
                 crate::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
                 &pk.to_canonical_bytes(),
                 &sig.to_canonical_bytes(),
-                b"tx hash",
+                &shekyl_types::SigningPayloadHash::from_bytes([0x7a; 64]),
+                &[0u8; 16],
             ),
             Err(PqcVerifyError::DeserializationFailed)
         );

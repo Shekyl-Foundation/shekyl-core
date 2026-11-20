@@ -10,8 +10,9 @@
 //! output count). A synthetic case exercises the other field kinds.
 
 use shekyl_wire::tx_extra::{
-    self, TxExtraField, HYBRID_KEM_CT_BYTES, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN,
-    TX_EXTRA_TAG_NONCE,
+    self, KemCiphertext, MultisigEntry, MultisigEntryError, TxExtraField, HYBRID_KEM_CT_BYTES,
+    ML_KEM_768_CT_BYTES, MULTISIG_HASHES_TAG_BYTES, MULTISIG_KEY_HASH_BYTES, MULTISIG_MAX_MEMBERS,
+    MULTISIG_MEMBER_WIRE_STRIDE, PQC_LEAF_ENTRY_LEN, TX_EXTRA_TAG_NONCE, TX_EXTRA_TAG_PQC_MULTISIG,
 };
 use shekyl_wire::Block;
 
@@ -92,13 +93,14 @@ fn unknown_tag_is_rejected() {
 }
 
 /// The retired bytes stay retired: the inherited merge-mining (`0x03`) and
-/// minergate (`0xDE`) tags, the rejected PQC-ownership entry (`0x05`) and the
-/// reserved multisig-migration slot (`0x08`) all parse as unknown. There is
+/// minergate (`0xDE`) tags, the rejected PQC-ownership entry (`0x05`), the
+/// reserved multisig-migration slot (`0x08`) and Option D's multisig hints
+/// and spend-auth pubkeys (`0x09`, `0x0A`) all parse as unknown. There is
 /// no generic skip, so a blob carrying one is unparseable — a later tag
 /// cannot reuse a byte old software gave a meaning to (`tx_extra.h`).
 #[test]
 fn retired_and_reserved_tags_parse_as_unknown() {
-    for tag in [0x03u8, 0x05, 0x08, 0xDE] {
+    for tag in [0x03u8, 0x05, 0x08, 0x09, 0x0A, 0xDE] {
         // A plausible length-prefixed payload after the tag, so the refusal
         // is the tag's and not a truncation's.
         let Err(err) = tx_extra::parse(&[tag, 0x02, 0xAA, 0xBB]) else {
@@ -153,101 +155,6 @@ fn oversized_nonce_rejected_before_allocation_on_parse() {
     shekyl_wire::varint::write_varint(1_000_000usize, &mut blob).unwrap();
     let err = tx_extra::parse(&blob).expect_err("oversized nonce length must be rejected");
     assert!(err.to_string().contains("nonce"), "{err}");
-}
-
-/// `0x0B` archival attestation. The C++ daemon reads this tag on a live
-/// consensus path (`blockchain.cpp`, `parse_archival_attestation_from_extra`
-/// deciding `headers_readable`), so the port must model it or the two parsers
-/// disagree about which coinbases exist.
-#[test]
-fn archival_attestation_field_round_trips() {
-    let blob = vec![0xA7u8; 96];
-    let fields = vec![
-        TxExtraField::PubKey([0x11; 32]),
-        TxExtraField::ArchivalAttestation(blob.clone()),
-    ];
-
-    let bytes = tx_extra::serialize(&fields).expect("serialize attestation extra");
-    assert_eq!(
-        bytes[33], 0x0B,
-        "the attestation tag byte follows the pubkey"
-    );
-
-    let parsed = tx_extra::parse(&bytes).expect("parse attestation extra");
-    assert_eq!(parsed, fields, "attestation extra must round-trip");
-    match &parsed[1] {
-        TxExtraField::ArchivalAttestation(b) => assert_eq!(*b, blob),
-        other => panic!("expected an attestation field, got {other:?}"),
-    }
-}
-
-/// A present-but-empty `0x0B` encodes as two bytes, not as the empty extra.
-/// That is a codec pin. The consensus reader's committed empty set is a
-/// successful parse with the tag *absent* (`attestation_reader_splits_absent_from_unreadable`);
-/// present-empty and absent both yield an empty blob at that API.
-#[test]
-fn empty_archival_attestation_is_distinct_from_an_absent_one() {
-    let with_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])
-        .expect("serialize empty attestation");
-    let absent = tx_extra::serialize(&[]).expect("serialize empty extra");
-
-    assert_ne!(
-        with_empty, absent,
-        "a present-but-empty attestation must not encode as an absent one"
-    );
-    assert_eq!(
-        tx_extra::parse(&with_empty).expect("parse empty attestation"),
-        vec![TxExtraField::ArchivalAttestation(Vec::new())]
-    );
-}
-
-/// An attestation field must not disturb the per-output PQC shape rule, which
-/// counts only 0x06 and 0x07.
-#[test]
-fn attestation_does_not_disturb_the_pqc_shape_check() {
-    let n_out = 2usize;
-    let fields = vec![
-        TxExtraField::PubKey([0x11; 32]),
-        TxExtraField::PqcKemCiphertext(vec![0u8; HYBRID_KEM_CT_BYTES * n_out]),
-        TxExtraField::PqcLeafEntries(tx_extra::conforming_pqc_leaf_blob(n_out)),
-        TxExtraField::ArchivalAttestation(vec![0x5A; 8]),
-    ];
-    tx_extra::check_pqc_field_shape_of(&fields, n_out)
-        .expect("an attestation field is invisible to the 0x06/0x07 shape rule");
-}
-
-/// Cross-language grammar parity for `0x0B`: the same two literals the C++ leg
-/// asserts in `tests/unit_tests/archival_credit_wire.cpp`
-/// (`attestation_field_bytes_match_the_port`). The round-trip tests on each side
-/// prove each encoder is self-consistent, which two mutually wrong encoders
-/// would also satisfy; only a shared literal tests that they agree.
-#[test]
-fn attestation_field_bytes_match_the_daemon() {
-    let non_empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(vec![1, 2, 3])])
-        .expect("serialize attestation");
-    assert_eq!(
-        non_empty,
-        vec![0x0B, 0x03, 0x01, 0x02, 0x03],
-        "the 0x0B encoding must match the daemon byte for byte"
-    );
-
-    let empty = tx_extra::serialize(&[TxExtraField::ArchivalAttestation(Vec::new())])
-        .expect("serialize empty attestation");
-    assert_eq!(
-        empty,
-        vec![0x0B, 0x00],
-        "a present-but-empty attestation is two bytes, not zero"
-    );
-
-    // Both literals must parse back to what the daemon wrote.
-    assert_eq!(
-        tx_extra::parse(&non_empty).expect("parse"),
-        vec![TxExtraField::ArchivalAttestation(vec![1, 2, 3])]
-    );
-    assert_eq!(
-        tx_extra::parse(&empty).expect("parse empty"),
-        vec![TxExtraField::ArchivalAttestation(Vec::new())]
-    );
 }
 
 // ── Twins of the retired C++ parser tests (TX_EXTRA_RUST_CUTOVER.md §9.2) ──
@@ -475,4 +382,108 @@ fn tx_extra_pqc_round_trip_vector_cases_hold_without_a_sorter() {
     // No sorter reorders it; the grammar refuses the order (and, with no
     // nonce, the missing field first).
     assert!(tx_extra::check_coinbase_extra_shape(&parsed, 1).is_err());
+}
+
+// ── 0x0D: the multisig entries ───────────────────────────────────────────────
+
+fn ms_entry(out_idx: u8, n: u8, fill: u8) -> MultisigEntry {
+    let cts = (0..n)
+        .map(|i| KemCiphertext::from_bytes(&[fill.wrapping_add(i); HYBRID_KEM_CT_BYTES]))
+        .collect();
+    MultisigEntry::new(
+        out_idx,
+        cts,
+        vec![fill; MultisigEntry::enc_key_hashes_len(n)],
+    )
+    .expect("lengths match n")
+}
+
+#[test]
+fn multisig_entries_round_trip_at_their_exact_length() {
+    let entries = vec![
+        ms_entry(0, 3, 0x31),
+        ms_entry(2, MULTISIG_MAX_MEMBERS, 0x52),
+    ];
+    let fields = vec![TxExtraField::PqcMultisig(entries.clone())];
+    let bytes = tx_extra::serialize(&fields).expect("serialize 0x0d");
+    assert_eq!(bytes[0], TX_EXTRA_TAG_PQC_MULTISIG);
+    let payload = MultisigEntry::wire_len(3) + MultisigEntry::wire_len(MULTISIG_MAX_MEMBERS);
+    // tag ‖ varint(len) ‖ payload; the payload is over 127 bytes, so a
+    // two-byte varint.
+    assert_eq!(bytes.len(), 1 + 2 + payload);
+    assert_eq!(tx_extra::parse(&bytes).unwrap(), fields);
+    assert_eq!(
+        MultisigEntry::wire_len(3),
+        2 + 3 * MULTISIG_MEMBER_WIRE_STRIDE + MULTISIG_HASHES_TAG_BYTES
+    );
+    let TxExtraField::PqcMultisig(parsed) = &tx_extra::parse(&bytes).unwrap()[0] else {
+        panic!("0x0d parses to PqcMultisig");
+    };
+    assert_eq!(parsed[1].out_idx(), 2);
+    assert_eq!(parsed[1].n(), MULTISIG_MAX_MEMBERS);
+    assert_eq!(
+        parsed[1].member_cts().len(),
+        usize::from(MULTISIG_MAX_MEMBERS)
+    );
+}
+
+#[test]
+fn multisig_entry_refuses_a_bad_member_count_or_hash_length() {
+    let ct = KemCiphertext::from_bytes(&[0x11; HYBRID_KEM_CT_BYTES]);
+    assert_eq!(
+        MultisigEntry::new(0, Vec::new(), vec![0; 16]),
+        Err(MultisigEntryError::MemberCount { n: 0 })
+    );
+    let six = vec![ct.clone(); usize::from(MULTISIG_MAX_MEMBERS) + 1];
+    assert_eq!(
+        MultisigEntry::new(0, six, vec![0; MultisigEntry::enc_key_hashes_len(6)]),
+        Err(MultisigEntryError::MemberCount { n: 6 })
+    );
+    assert_eq!(
+        MultisigEntry::new(0, vec![ct], vec![0; MULTISIG_KEY_HASH_BYTES]),
+        Err(MultisigEntryError::EncryptedHashesLength {
+            got: MULTISIG_KEY_HASH_BYTES,
+            expected: MultisigEntry::enc_key_hashes_len(1)
+        })
+    );
+}
+
+/// A `0x0D` payload the parser must refuse: each is one defect away from a
+/// conforming one-member entry.
+#[test]
+fn malformed_multisig_payloads_do_not_parse() {
+    let good = {
+        let mut p = vec![0u8, 1];
+        p.extend_from_slice(&[0x11; HYBRID_KEM_CT_BYTES]);
+        p.extend_from_slice(&[0x22; 48]);
+        p
+    };
+    let frame = |payload: &[u8]| {
+        let mut out = vec![TX_EXTRA_TAG_PQC_MULTISIG];
+        let mut len = Vec::new();
+        shekyl_wire::varint::write_varint(payload.len(), &mut len).unwrap();
+        out.extend_from_slice(&len);
+        out.extend_from_slice(payload);
+        out
+    };
+    assert!(tx_extra::parse(&frame(&good)).is_ok(), "the control parses");
+
+    let mut zero = good.clone();
+    zero[1] = 0;
+    let mut six = good.clone();
+    six[1] = MULTISIG_MAX_MEMBERS + 1;
+    let short = &good[..good.len() - 1];
+    let mut long = good.clone();
+    long.push(0);
+    for (name, payload) in [
+        ("n = 0", zero.as_slice()),
+        ("n = 6", six.as_slice()),
+        ("one byte short", short),
+        ("one stray byte", long.as_slice()),
+    ] {
+        assert!(
+            tx_extra::parse(&frame(payload)).is_err(),
+            "{name} must not parse"
+        );
+    }
 }

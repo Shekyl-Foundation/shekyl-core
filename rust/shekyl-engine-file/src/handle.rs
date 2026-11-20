@@ -40,9 +40,9 @@
 //!
 //! Do not copy the wallet directory while the lock on the keys file
 //! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
-//! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
-//! close flush) and copy from the filesystem, or [`Self::save_as`] to a
-//! quiescent destination path.
+//! during an open wallet-RPC session). Use `Engine::close` (or process
+//! shutdown that runs the close flush) and copy from the filesystem, or
+//! [`WalletFile::save_as`] to a quiescent destination path.
 //!
 //! # This commit's scope
 //!
@@ -73,7 +73,7 @@ use shekyl_engine_state::{
 };
 use shekyl_types::{BlockCount, BlockHeight};
 
-use crate::atomic::{atomic_write_file, atomic_write_file_with};
+use crate::atomic::{atomic_write_file, atomic_write_file_with, Durability};
 use crate::capability::Capability;
 use crate::error::WalletFileError;
 use crate::lock::KeysFileLock;
@@ -171,9 +171,6 @@ pub struct CreateParams<'a> {
     /// caller-supplied `expected_network`, so a wallet bound to one
     /// chain can never be silently opened as another.
     pub network: Network,
-    /// `0x00 = BIP-39 mnemonic`, `0x01 = raw 32-byte hex`. Stored for
-    /// UX ("offer the same restore UI we used at creation").
-    pub seed_format: u8,
     /// FULL / VIEW_ONLY / HARDWARE_OFFLOAD. Envelope discriminates
     /// `cap_content` layout from this value.
     pub capability: &'a CapabilityContent<'a>,
@@ -185,7 +182,7 @@ pub struct CreateParams<'a> {
     /// Canonical 65-byte classical address — `version(1) || spend_pk(32)
     /// || view_pk(32)`. The envelope cross-checks this at open time
     /// against the address it would derive from `cap_content` under
-    /// the declared `(network, seed_format)`.
+    /// the declared network.
     pub expected_classical_address: &'a [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     /// Argon2id cost parameters. `KdfParams::default()` gives the
     /// V3.0 OWASP-memory-constrained profile.
@@ -397,8 +394,7 @@ impl WalletFile {
 
         let keys_bytes = seal_keys_file(
             params.password,
-            params.network.as_u8(),
-            params.seed_format,
+            params.network.code(),
             params.capability,
             params.creation_timestamp,
             params.restore_height_hint,
@@ -628,11 +624,18 @@ impl WalletFile {
     /// Seals with HKDF-derived `wrap_key_region_2` (session-cached on
     /// the handle via [`Self::session_wrap_key_region_2`]; no Argon2id
     /// on the save path — amended `docs/WALLET_FILE_FORMAT_V1.md` §4.3).
+    /// Returns the write's durability once the rename has landed.
+    /// [`Durability::Unconfirmed`] is still an applied write: the bytes are
+    /// the new file, and only the rename's durability is unconfirmed (the
+    /// post-rename parent-directory fsync missed, or on Windows the volume
+    /// is not NTFS; the reason says which).
+    /// A caller that would broadcast on this save must require
+    /// [`Durability::Confirmed`] and must not undo the applied record.
     pub fn save_state(
         &self,
         wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         ledger: &WalletLedger,
-    ) -> Result<(), WalletFileError> {
+    ) -> Result<Durability, WalletFileError> {
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
@@ -644,8 +647,7 @@ impl WalletFile {
             .clone();
         let state_bytes =
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
-        atomic_write_file(&self.state_path, &state_bytes)?;
-        Ok(())
+        atomic_write_file(&self.state_path, &state_bytes)
     }
 
     /// Seal and atomically write `P`'s scan state to the `P`-isolated
@@ -733,7 +735,7 @@ impl WalletFile {
         &self,
         wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         body: &[u8],
-    ) -> Result<(), WalletFileError> {
+    ) -> Result<Durability, WalletFileError> {
         let framed = encode_payload(PayloadKind::PendingPostBlockPostcard, body)?;
         let keys_file_bytes = self
             .state
@@ -743,8 +745,7 @@ impl WalletFile {
             .clone();
         let sealed =
             seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
-        atomic_write_file(&self.pending_path, &sealed)?;
-        Ok(())
+        atomic_write_file(&self.pending_path, &sealed)
     }
 
     /// Load the pending-bond-post block from `.wallet.pending` using the
@@ -927,7 +928,13 @@ impl WalletFile {
         // advisory lock survives the rename (per-OFD on POSIX, per-
         // handle on Windows). `EXDEV` translation is the belt-and-
         // suspenders for layered filesystems whose `st_dev` lies.
-        match std::fs::rename(&self.keys_path, &new_keys_path) {
+        // CLIPPY: disallowed_methods — save_as moves the keys file, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "save_as moves the locked keys file to a new name that must not exist, keeping its inode and lock; not a file replace"
+        )]
+        let moved = std::fs::rename(&self.keys_path, &new_keys_path);
+        match moved {
             Ok(()) => {}
             Err(e) if is_cross_device_error(&e) => {
                 return Err(WalletFileError::SaveAsCrossFilesystem {
@@ -936,10 +943,11 @@ impl WalletFile {
                 });
             }
             Err(e) => {
-                return Err(WalletFileError::AtomicWriteRename {
-                    target: new_keys_path,
-                    source: e,
-                });
+                return Err(WalletFileError::save_step(
+                    shekyl_os_account::private_file::Step::Rename,
+                    new_keys_path,
+                    e,
+                ));
             }
         }
 
@@ -1007,7 +1015,7 @@ impl WalletFile {
     /// * [`WalletFileError::Prefs`] — serialization failure (shouldn't
     ///   happen for `WalletPrefs`'s built-in schema), HMAC-length bug,
     ///   or Bucket-3 field slipped through an earlier parser.
-    /// * [`WalletFileError::Io`] / [`WalletFileError::AtomicWriteRename`]
+    /// * [`WalletFileError::Io`] / [`WalletFileError::SaveStep`]
     ///   — filesystem failures are currently surfaced via the
     ///   prefs crate's own `PrefsError::Io`; callers should treat
     ///   both variants as "try again later / check disk".
@@ -1101,20 +1109,19 @@ impl WalletFile {
     /// Raw CLI-ephemeral overrides captured at `open` time. Callers
     /// typically do not need this — prefer the `effective_*`
     /// accessors below, which already overlay the overrides on the
-    /// per-network defaults. Exposed for diagnostics, dry-run tools,
+    /// defaults. Exposed for diagnostics, dry-run tools,
     /// and for the FFI layer to surface "any override active?" to C++.
     pub fn overrides(&self) -> SafetyOverrides {
         self.overrides
     }
 
     /// Minimum confirmations before a transfer is treated as final.
-    /// Equals [`NetworkSafetyConstants::max_reorg_depth`] for the
-    /// handle's network unless a CLI override replaced it for this
-    /// session.
+    /// Equals [`WalletSafetyConstants::max_reorg_depth`] unless a CLI
+    /// override raised it for this session.
     ///
-    /// [`NetworkSafetyConstants::max_reorg_depth`]: shekyl_engine_state::NetworkSafetyConstants::max_reorg_depth
+    /// [`WalletSafetyConstants::max_reorg_depth`]: shekyl_engine_state::WalletSafetyConstants::max_reorg_depth
     pub fn effective_max_reorg_depth(&self) -> BlockCount {
-        self.overrides.effective_max_reorg_depth(self.network)
+        self.overrides.effective_max_reorg_depth()
     }
 
     /// Starting height for a from-scratch scan. Applies only on paths
@@ -1122,15 +1129,14 @@ impl WalletFile {
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
     /// See `docs/WALLET_PREFS.md` §3.3.
     pub fn effective_skip_to_height(&self) -> BlockHeight {
-        self.overrides.effective_skip_to_height(self.network)
+        self.overrides.effective_skip_to_height()
     }
 
     /// Refresh cursor used when the wallet opens without a
     /// `SyncStateBlock`. Mirrors `effective_skip_to_height` but
     /// scoped to the recovery path per the audit doc §3.3.
     pub fn effective_refresh_from_block_height(&self) -> BlockHeight {
-        self.overrides
-            .effective_refresh_from_block_height(self.network)
+        self.overrides.effective_refresh_from_block_height()
     }
 }
 
@@ -1141,7 +1147,7 @@ impl WalletFile {
 /// vets a byte read from disk) share one implementation, keeping the
 /// defensive-decode path auditable in a single place.
 fn decode_network(v: u8) -> Result<Network, WalletFileError> {
-    Network::from_u8(v).ok_or(WalletFileError::UnknownNetwork(v))
+    Network::from_code(v).ok_or(WalletFileError::UnknownNetwork(v))
 }
 
 /// Best-effort pre-flight detection of a cross-filesystem `save_as`
@@ -1241,14 +1247,14 @@ mod tests {
     /// orchestrator-level tests. End-to-end cryptographic correctness
     /// is covered by the envelope's own tests.
     struct Fixture {
-        master_seed: [u8; 64],
+        master_seed: [u8; 32],
         address: [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
     }
 
     impl Fixture {
         fn new() -> Self {
             Self {
-                master_seed: [0x11; 64],
+                master_seed: [0x11; 32],
                 address: {
                     let mut a = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
                     a[0] = 0x01; // version byte
@@ -1259,7 +1265,7 @@ mod tests {
 
         fn capability(&self) -> CapabilityContent<'_> {
             CapabilityContent::Full {
-                master_seed_64: &self.master_seed,
+                seed: &self.master_seed,
             }
         }
 
@@ -1291,7 +1297,6 @@ mod tests {
             base_path: base,
             password,
             network: TEST_NETWORK,
-            seed_format: 0x00,
             capability: cap,
             creation_timestamp: 0x6000_0000,
             restore_height_hint: 0,
@@ -2091,7 +2096,7 @@ mod tests {
     /// hardcoded defaults — i.e. the no-override path is transparent.
     #[test]
     fn open_without_overrides_exposes_network_defaults() {
-        use shekyl_engine_state::NetworkSafetyConstants;
+        use shekyl_engine_state::WalletSafetyConstants;
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -2105,7 +2110,7 @@ mod tests {
             WalletFile::open(&base, b"pw", TEST_NETWORK, SafetyOverrides::none()).expect("open");
 
         assert_eq!(handle.overrides(), SafetyOverrides::none());
-        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        let k = WalletSafetyConstants::DEFAULTS;
         assert_eq!(handle.effective_max_reorg_depth(), k.max_reorg_depth);
         assert_eq!(handle.effective_skip_to_height(), k.default_skip_to_height);
         assert_eq!(
@@ -2122,7 +2127,7 @@ mod tests {
     /// header.
     #[test]
     fn open_with_overrides_propagates_to_effective_accessors() {
-        use shekyl_engine_state::NetworkSafetyConstants;
+        use shekyl_engine_state::{ReorgDepthOverride, WalletSafetyConstants};
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("x.wallet");
         let fx = Fixture::new();
@@ -2134,7 +2139,9 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(BlockCount::from_raw(2)),
+            max_reorg_depth: Some(
+                ReorgDepthOverride::new(BlockCount::from_raw(25)).expect("above the lock window"),
+            ),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };
@@ -2144,13 +2151,13 @@ mod tests {
         // Overrides survive on the handle.
         assert_eq!(handle.overrides(), overrides);
         // Overridden fields take the override's value.
-        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(2));
+        assert_eq!(handle.effective_max_reorg_depth(), BlockCount::from_raw(25));
         assert_eq!(
             handle.effective_skip_to_height(),
             BlockHeight::from_raw(12_345)
         );
         // Non-overridden field still reads the network default.
-        let k = NetworkSafetyConstants::for_network(TEST_NETWORK);
+        let k = WalletSafetyConstants::DEFAULTS;
         assert_eq!(
             handle.effective_refresh_from_block_height(),
             k.default_refresh_from_block_height,

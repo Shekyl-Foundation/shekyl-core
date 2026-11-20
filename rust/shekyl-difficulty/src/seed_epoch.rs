@@ -13,22 +13,18 @@
 //! part of the hashing engine: `shekyl-chain-rules` derives the seed height
 //! from the connecting height and reads the seed block's identity through
 //! its `ChainView` (DRS-E6 slice 2, CEN-D3), and the engine crate
-//! `shekyl-pow-randomx` never called it (it hosted the schedule for the FFI
-//! until 2026-09-19). One implementation, in the crate whose job is
-//! consensus arithmetic; this crate's zero-dependency posture holds.
+//! `shekyl-pow-randomx` never calls it. One implementation, in the crate
+//! whose job is consensus arithmetic; this crate's zero-dependency posture
+//! holds.
 //!
-//! The `SEEDHASH_EPOCH_*` environment lever (the regtest/FAKECHAIN
-//! fast-epoch override, with its C-`atoi` clamps) lives at the FFI
-//! boundary in `shekyl-ffi::pow_randomx_ffi`, which reads the environment
-//! once and passes the clamped parameters in. **The validator reads no
-//! environment** (`CHAIN_RULES_SLICE_2.md` F5; the CEN-D3 pass condition in
-//! `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1): it calls [`seedheight`]
-//! with the two constants below at every nettype.
+//! **The validator reads no environment** (`CHAIN_RULES_SLICE_2.md` F5;
+//! the CEN-D3 pass condition in `CONSENSUS_STORE_RECONCILIATION.md`
+//! §5.4.1): it calls [`seedheight`] with the two constants below at every
+//! nettype.
 //!
 //! Overflow: `height + lag` in [`next_seedheight`] uses wrapping
 //! arithmetic, matching C `uint64_t` wraparound (unreachable for real
-//! chain heights; matters only for hostile values fed straight to the C
-//! ABI).
+//! chain heights).
 
 /// Mainnet epoch length in blocks. Must equal
 /// `BLOCKS_SYNCHRONIZING_MAX_COUNT` in `cryptonote_config.h` (a unit

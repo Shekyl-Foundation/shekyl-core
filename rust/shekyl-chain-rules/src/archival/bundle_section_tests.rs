@@ -8,15 +8,15 @@
 //! steps 1 and 2, `SCS-P39`, `SCS-P40`, `SCS-P41`).
 //!
 //! Admission in this file is [`check_section`] or
-//! [`check_section_until_switch`]. [`SectionCharge`] is the arithmetic
-//! and is not a section result. Sibling of `bundle_tests`, which judges
-//! one bundle. Every test names the edit that turns it red.
+//! [`check_section_stateless`]. [`SectionCharge`] is the arithmetic
+//! and is not a section result. The template's pack is `bundle_fill_tests`.
+//! Sibling of `bundle_tests`, which judges one bundle. Every test names
+//! the edit that turns it red.
 
 use std::sync::OnceLock;
 
 use shekyl_archival_retention::{
-    bundle_root, section_budget, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
-    BUNDLE_SECTION_BUDGET_MULTIPLE,
+    section_budget, section_root, BundleRef, DrawableEpoch, DrawablePair, PassBitmap, SectionBudget,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
 use shekyl_types::archival::ReceiptSignPk;
@@ -24,11 +24,11 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
-use crate::rule_set::{FakechainSchedule, SettlementEpochBlocks};
+use crate::rule_set::{CappedEpoch, SettlementEpochBlocks};
 use shekyl_types::BlockCount;
 
 /// A reference at `h` to a bundle of `count` draws, none passed.
-fn reference_at(h: u64, count: u32) -> BundleRef {
+pub(in crate::archival::bundle) fn reference_at(h: u64, count: u32) -> BundleRef {
     BundleRef::new(
         shekyl_archival_retention::BundleKept {
             h: BlockHeight::from_raw(h),
@@ -41,7 +41,7 @@ fn reference_at(h: u64, count: u32) -> BundleRef {
 }
 
 /// A section of bundles with these counts, at ascending heights.
-fn section_of(counts: &[u32]) -> Vec<BundleRef> {
+pub(in crate::archival::bundle) fn section_of(counts: &[u32]) -> Vec<BundleRef> {
     counts
         .iter()
         .zip(100u64..)
@@ -49,10 +49,10 @@ fn section_of(counts: &[u32]) -> Vec<BundleRef> {
         .collect()
 }
 
-/// [`bundle_root`] over a section a test holds: far fewer than 2³²
+/// [`section_root`] over a section a test holds: far fewer than 2³²
 /// references, so its one refusal is not this helper's.
-fn root_of(refs: &[BundleRef]) -> [u8; 32] {
-    bundle_root(refs).expect("a test section's count fits 32 bits")
+pub(in crate::archival::bundle) fn root_of(refs: &[BundleRef]) -> [u8; 32] {
+    section_root(refs).expect("a test section's count fits 32 bits")
 }
 
 /// The including block for `refs`: one above the last. The oldest
@@ -63,12 +63,12 @@ fn h_incl_of(refs: &[BundleRef]) -> BlockHeight {
     BlockHeight::from_raw(refs.last().map_or(101, |r| r.h().to_raw() + 1))
 }
 
-/// A Fakechain rule set whose epoch is `blocks` long, so `W₂` is
+/// A levered rule set whose epoch is `blocks` long, so `W₂` is
 /// `blocks / 20`, with a reorg cap of 10.
 pub(in crate::archival::bundle) fn rules_of(blocks: u64) -> RuleSet {
-    RuleSet::fakechain(
+    RuleSet::GENESIS.with_levers(
         None,
-        FakechainSchedule::new(
+        CappedEpoch::new(
             SettlementEpochBlocks::new(blocks).expect("non-zero"),
             BlockCount::from_raw(10),
         )
@@ -88,7 +88,7 @@ fn judged(
 
 /// Arrival, before any `D` is known. A non-empty section waits.
 fn awaiting(refs: &[BundleRef]) -> Result<SectionStanding, SectionRefused> {
-    check_section_until_switch(refs, &root_of(refs), h_incl_of(refs), &RuleSet::GENESIS)
+    check_section_stateless(refs, &root_of(refs), h_incl_of(refs), &RuleSet::GENESIS)
 }
 
 /// References are in strictly ascending `h`, so none repeats. Red edit:
@@ -187,19 +187,19 @@ fn a_section_whose_root_does_not_recompute_refuses() {
     let refs = [a.clone(), b.clone()];
     let root = root_of(&refs);
     assert_eq!(
-        check_section_until_switch(&refs, &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(&refs, &root, incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Awaiting(SectionCharge::of(&refs)))
     );
 
     let mut wrong = root;
     wrong[5] ^= 1;
     assert_eq!(
-        check_section_until_switch(&refs, &wrong, incl, &RuleSet::GENESIS),
+        check_section_stateless(&refs, &wrong, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // The root of a section that omits a reference, or adds one.
     assert_eq!(
-        check_section_until_switch(
+        check_section_stateless(
             &refs,
             &root_of(std::slice::from_ref(&a)),
             incl,
@@ -208,13 +208,13 @@ fn a_section_whose_root_does_not_recompute_refuses() {
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(std::slice::from_ref(&a), &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(std::slice::from_ref(&a), &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
     // One field of one reference: a different prunable hash, and a
     // different stated count over the same bitmap bytes.
     assert_eq!(
-        check_section_until_switch(
+        check_section_stateless(
             &[a.clone(), with_hash(&b, [0xAC; 32])],
             &root,
             incl,
@@ -223,18 +223,18 @@ fn a_section_whose_root_does_not_recompute_refuses() {
         Err(SectionRefused::Root)
     );
     assert_eq!(
-        check_section_until_switch(&[a, reference_at(101, 4)], &root, incl, &RuleSet::GENESIS),
+        check_section_stateless(&[a, reference_at(101, 4)], &root, incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root),
         "three draws and four are one byte of bitmap and two roots"
     );
     // An empty section commits the empty root, and no other. It names no
     // epoch, so arrival admits it.
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), incl, &RuleSet::GENESIS),
+        check_section_stateless(&[], &root_of(&[]), incl, &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
     assert_eq!(
-        check_section_until_switch(&[], &[0; 32], incl, &RuleSet::GENESIS),
+        check_section_stateless(&[], &[0; 32], incl, &RuleSet::GENESIS),
         Err(SectionRefused::Root)
     );
 }
@@ -251,7 +251,6 @@ fn a_section_whose_root_does_not_recompute_refuses() {
 #[test]
 fn a_section_at_its_budget_admits_and_one_over_refuses() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let over = |counts: &[u32], budget: SectionBudget| {
         let refs = section_of(counts);
@@ -269,7 +268,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     };
 
     // `D` = 8: `⌊72 / 10,000⌋` is zero, the count cap is 1, the budget 2.
-    let small = section_budget(c, 8, seb);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
     assert_eq!(small, SectionBudget::from_draws(2));
     let small_view = view_holding(&[(0, 8)]);
     admit(&[1, 1], &small_view);
@@ -287,7 +286,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
     // `D` = 324,000 is the large network's cap of 292 and budget of 584;
     // that figure is [`section_budget`]'s, and a section of 584 references
     // does not fit the window (the zero-draw test).
-    let wide = section_budget(c, 10_000, seb);
+    let wide = section_budget(shekyl_archival_retention::archival_params(), 10_000, seb);
     assert_eq!(wide, SectionBudget::from_draws(20));
     let wide_view = view_holding(&[(0, 10_000)]);
     admit(&[10, 10], &wide_view);
@@ -296,7 +295,7 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
         judged(&section_of(&[10, 11]), &wide_view, &rules),
         over(&[10, 11], wide)
     );
-    let large = section_budget(c, 324_000, seb);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
     assert_eq!(large, SectionBudget::from_draws(584));
     assert!(SectionCharge::of(&section_of(&[292, 292])).within(large));
     assert!(!SectionCharge::of(&section_of(&[292, 293])).within(large));
@@ -321,7 +320,6 @@ fn a_section_at_its_budget_admits_and_one_over_refuses() {
 #[test]
 fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
     let seb = SettlementEpochBlocks::new(10_000).expect("non-zero");
-    let c = BUNDLE_SECTION_BUDGET_MULTIPLE;
     let rules = rules_of(seb.get());
     let zeros = |n: usize| section_of(&vec![0u32; n]);
     let over = |refs: &[BundleRef], budget: SectionBudget| {
@@ -339,7 +337,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // The small network: budget 2. Five hundred zero-draw bundles are
     // inside `W₂` and over that budget.
-    let small = section_budget(c, 8, seb);
+    let small = section_budget(shekyl_archival_retention::archival_params(), 8, seb);
     assert_eq!(small, SectionBudget::from_draws(2));
     let view = view_holding(&[(0, 8)]);
     admit(&zeros(1), &view);
@@ -351,7 +349,7 @@ fn a_zero_draw_bundle_costs_one_and_a_section_of_them_is_bounded() {
 
     // 584 is the large network's budget, and it is not an admission: 501
     // and 584 references put the oldest outside `W₂`.
-    let large = section_budget(c, 324_000, seb);
+    let large = section_budget(shekyl_archival_retention::archival_params(), 324_000, seb);
     assert_eq!(large, SectionBudget::from_draws(584));
     let priced = SectionCharge::of(&zeros(584));
     assert_eq!(priced.get(), 584);
@@ -405,7 +403,7 @@ fn a_section_awaiting_its_budget_keeps_its_charge() {
     assert!(charge.within(SectionBudget::from_draws(u64::MAX)));
 
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
+        check_section_stateless(&[], &root_of(&[]), h_incl_of(&[]), &RuleSet::GENESIS),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }
@@ -494,6 +492,7 @@ fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     let keys = (pairs > 0).then(|| (PERSONA, receipt_key()));
     DrawableEpoch::new(
         epoch,
+        std::num::NonZeroU64::new(pairs).map(shekyl_archival_retention::SupportRoster::empty),
         keys,
         (0..pairs).map(|shard| DrawablePair {
             persona: PERSONA,
@@ -533,8 +532,8 @@ fn the_cap_is_the_largest_d_among_the_sections_epochs() {
         reference_at(boundary, 1),
     ];
     assert_eq!(SectionCharge::of(&spanning).get(), 4);
-    let small_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, 0, seb);
-    let large_cap = section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, boundary, seb);
+    let small_cap = section_budget(shekyl_archival_retention::archival_params(), 0, seb);
+    let large_cap = section_budget(shekyl_archival_retention::archival_params(), boundary, seb);
     assert_eq!(
         (small_cap, large_cap),
         (SectionBudget::from_draws(2), SectionBudget::from_draws(20))
@@ -680,7 +679,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
     );
     assert!(view.take_reads().is_empty(), "refused before any D is read");
     assert_eq!(
-        check_section_until_switch(&future, &root_of(&future), h_incl, &rules),
+        check_section_stateless(&future, &root_of(&future), h_incl, &rules),
         refused
     );
 
@@ -707,7 +706,7 @@ fn a_reference_outside_the_window_is_refused_before_the_budget() {
     // The including block itself is not inside its own window.
     let itself = [reference_at(boundary, 1)];
     assert_eq!(
-        check_section_until_switch(&itself, &root_of(&itself), at_edge, &rules),
+        check_section_stateless(&itself, &root_of(&itself), at_edge, &rules),
         Err(SectionRefused::OutsideWindow { position: 0 })
     );
 }
@@ -726,11 +725,11 @@ fn no_window_admits_no_reference() {
     let one = [reference_at(100, 1)];
     let h_incl = BlockHeight::from_raw(101);
     assert_eq!(
-        check_section_until_switch(&one, &root_of(&one), h_incl, &rules),
+        check_section_stateless(&one, &root_of(&one), h_incl, &rules),
         Err(SectionRefused::OutsideWindow { position: 0 })
     );
     assert_eq!(
-        check_section_until_switch(&[], &root_of(&[]), h_incl, &rules),
+        check_section_stateless(&[], &root_of(&[]), h_incl, &rules),
         Ok(SectionStanding::Admitted(SectionCharge::of(&[])))
     );
 }

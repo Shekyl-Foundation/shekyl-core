@@ -56,12 +56,12 @@
 //! # The chains the store holds
 //!
 //! [`ReadSnapshot::alternate_chains`] lists every stored chain: the tips of
-//! [`AltLinks`](super::alt_reads::AltLinks), each walked by
+//! [`AltLinks`], each walked by
 //! [`AltChain::build`]. The listing and admission are one walk, so a cycle,
 //! a height that disagrees with the links, and a chain that reaches no
 //! recorded block are the same answers a candidate gets.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use shekyl_chain_rules::{AltChainView, AtHeight, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_store_codec::{Canonical, CodecError};
@@ -140,7 +140,9 @@ impl AltChain {
             return Err(AltCannot::Unlinked { at: *prev_id }.into());
         };
         let mut parent_first = Vec::new();
-        let mut seen = HashSet::new();
+        // Ordered, like `AltLinks`' index: a membership test only, and no
+        // hash seed can reach what the walk returns.
+        let mut seen = BTreeSet::new();
         let mut cursor = *prev_id;
         let root = loop {
             if !seen.insert(cursor) {

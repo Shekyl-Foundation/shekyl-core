@@ -5,7 +5,7 @@
 
 //! The paid-reward composition: one function, two callers.
 //!
-//! [`paid_block_reward`], [`compute_emission_split`], [`compute_fee_burn`]
+//! [`paid_block_reward`], [`split_block_emission`], [`compute_fee_burn`]
 //! and [`advance_already_generated`] each own one step. [`price_emission`]
 //! owns the order they run in, so the block template and the validator's
 //! derived arm cannot price two figures. The inputs are already derived —
@@ -16,8 +16,10 @@
 //!
 //! Height [`GENESIS_HEIGHT`] on [`price_emission`] is the **producer's**
 //! arm (CEN-G13): [`paid_block_reward`] runs, and the whole paid reward
-//! goes to the miner. That is [`compute_emission_split`]'s own answer
-//! below `EMISSION_SPLIT_EPOCH`, so this module adds no arm of its own.
+//! goes to the miner. Below `EMISSION_SPLIT_EPOCH` the set's schedule
+//! pays no staker share, which is [`crate::compute_emission_split`]'s answer on
+//! the shipped set. This module adds no arm of its own. A set whose
+//! schedule differs from the shipped one splits on its own schedule.
 //!
 //! The **validator** at genesis does not call [`price_emission`]. The
 //! coinbase sum stands (CEN-F11, `validate_miner_transaction` returns
@@ -27,7 +29,7 @@
 
 use crate::burn::{compute_fee_burn, BurnSplit};
 use crate::emission::{advance_already_generated, paid_block_reward, EmissionError};
-use crate::emission_share::{compute_emission_split, EmissionSplit};
+use crate::emission_share::{split_block_emission, EmissionSplit};
 use crate::escalation::ClosedShardCount;
 use crate::params::EconomicParams;
 use crate::supply::CirculatingSupply;
@@ -149,7 +151,8 @@ impl RewardArithmetic {
 /// Price the block's emission from derived operands.
 ///
 /// At [`GENESIS_HEIGHT`] the paid reward goes whole to the miner; from
-/// block 1 it is split ([`compute_emission_split`]). The fee burn runs at every
+/// block 1 it is split on `inputs.params`'s emission schedule (the
+/// shipped schedule is [`crate::compute_emission_split`]). The fee burn runs at every
 /// height, including genesis: a producer listing nothing passes a zero fee
 /// sum and the three burn legs are zero.
 ///
@@ -169,7 +172,12 @@ pub fn price_emission(inputs: &EmissionInputs<'_>) -> Result<PaidEmission, Rewar
         EmissionError::BlockTooBig => RewardArithmetic::BlockTooBig,
         EmissionError::Overflow => RewardArithmetic::RewardOverflow,
     })?;
-    let split = compute_emission_split(paid, inputs.height);
+    let share = inputs.params.emission_schedule().share_at(inputs.height);
+    let (miner_emission, staker_emission) = split_block_emission(paid, share);
+    let split = EmissionSplit {
+        miner_emission,
+        staker_emission,
+    };
     let fee_burn = compute_fee_burn(
         inputs.total_fees,
         inputs.tx_volume,
@@ -262,6 +270,64 @@ mod tests {
         assert_eq!(later.paid, whole.paid);
         assert!(later.split.staker_emission > 0);
         assert!(later.split.miner_emission < later.paid.to_raw());
+    }
+
+    /// The genesis reward and block 1's miner share, as values. The test
+    /// above holds their shape (whole at genesis, split from block 1);
+    /// this holds the numbers, so a reward-math change fails here even when
+    /// the shape still agrees with itself.
+    ///
+    /// The literals are derived from the frozen parameters, not read back
+    /// from the code under test: at genesis `curve(0) = asymptote >> esf` =
+    /// 1 024 000 000 000 at ESF 22 per block; an empty volume window holds
+    /// the release multiplier at its 0.8 rail and the tail floor does not
+    /// bind, so the paid reward is 819 200 000 000; the emission share at
+    /// block 1 is 15%, leaving the miner 696 320 000 000.
+    #[test]
+    fn the_genesis_reward_and_block_ones_miner_share_are_pinned() {
+        let params = EconomicParams::default();
+        let genesis =
+            price_emission(&inputs(&params, GENESIS_HEIGHT, 0)).expect("under the median");
+        assert_eq!(genesis.paid, AtomicUnits::from_raw(819_200_000_000));
+        assert_eq!(genesis.split.miner_emission, 819_200_000_000);
+        assert_eq!(genesis.split.staker_emission, 0);
+
+        let block_one = price_emission(&inputs(&params, 1, 0)).expect("under the median");
+        assert_eq!(block_one.paid, genesis.paid, "nothing generated yet");
+        assert_eq!(block_one.split.miner_emission, 696_320_000_000);
+        assert_eq!(block_one.split.staker_emission, 122_880_000_000);
+    }
+
+    #[test]
+    fn a_replaced_schedule_splits_the_paid_reward() {
+        let params = EconomicParams {
+            staker_emission_share: 0,
+            ..EconomicParams::default()
+        };
+        let replaced =
+            price_emission(&inputs(&params, EMISSION_SPLIT_EPOCH, 0)).expect("under the median");
+        assert_eq!(replaced.split.staker_emission, 0);
+        assert_eq!(replaced.split.miner_emission, replaced.paid.to_raw());
+
+        let shipped = price_emission(&inputs(&EconomicParams::default(), EMISSION_SPLIT_EPOCH, 0))
+            .expect("under the median");
+        assert!(shipped.split.staker_emission > 0);
+
+        // A one-block year: the DAA target is the whole year.
+        let fast_year = EconomicParams {
+            daa_target_seconds: crate::params::SECONDS_PER_YEAR,
+            ..EconomicParams::default()
+        };
+        let decayed = fast_year
+            .emission_schedule()
+            .share_at(EMISSION_SPLIT_EPOCH + 1);
+        let barely = EconomicParams::default()
+            .emission_schedule()
+            .share_at(EMISSION_SPLIT_EPOCH + 1);
+        assert!(
+            decayed < barely,
+            "one block is a whole year on the replaced schedule and a fraction on the shipped one"
+        );
     }
 
     #[test]

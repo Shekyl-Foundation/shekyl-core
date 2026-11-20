@@ -51,6 +51,8 @@ isProject: false
 **Status:** LIVING CONTRACT (as of 2026-09-16). Phases 0–5 landed; the release-time algorithm-review gate remains. YAML `trackb-gate-check` deleted (moot: Phase 3 landed; no discharge recorded).
 ## Sequencing rationale
 
+> **Superseded for the daemon's caches (2026-11-14).** Wherever this plan names `CacheStore`, in the phase list above, the diagram below and the decisions after it, that type is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The plan stands as the record of what was ruled and built.
+
 Three independent gates govern when phases land.
 
 **Wallet-migration gate (Track B).** Historical: the wallet rewrite churned `shekyl-ffi` while Phase 3 was scoped. Phase 3 landed (PR #235). The YAML `trackb-gate-check` quiet-window row is deleted (moot: Phase 3 landed; no discharge recorded). Not gated on a V3.2 wallet cutover (that train does not exist).
@@ -153,6 +155,8 @@ pub fn compute_hash(cache: &Cache, seedhash: &Seedhash, data: &[u8]) -> Hash {
 ### 5. Memoization is transparent inside `shekyl-ffi`, not exposed to C++
 
 The daemon's hash-call shape is identical to today: `hash(seedhash, data) -> hash`. Caching of derived `Cache` values across calls is a function-level memo internal to `shekyl-ffi`. The load-bearing argument: `shekyl-ffi` *is* the C-ABI boundary, and module-level state at the C-ABI boundary is structurally unavoidable — C has no other way to hold cross-call state than process-globals, and FFI tracks C's reality. Other Rust crates (`shekyl-pow-randomx` included) are not at this boundary and do not get the same allowance.
+
+> **Superseded for the daemon (2026-11-14).** The `CacheStore` this section plans and describes is deleted. One crate, `shekyl-hasher`, owns every RandomX cache the daemon holds, and every hash is a job on it ([`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md)). The text below is the plan as it was ruled and built.
 
 The verifier crate `shekyl-pow-randomx` exports `CacheStore` as a generic utility type (`LruCache<Seedhash, Arc<Cache>>` wrapper). It **instantiates no module-level instance** — `shekyl-ffi` constructs one as part of its FFI bridge's lifecycle, hidden from C++ callers.
 
@@ -257,7 +261,7 @@ Two design documents, **both** required before Phase 1.
 
 9. **Grover-bound argument for the lattice transition.** Grover gives a square-root speedup against unstructured preimage search — for 256-bit output the idealized work drops from ~2²⁵⁶ to ~2¹²⁸, i.e., the search-effort exponent halves. For 256-bit output and difficulty target T ≪ 2²⁵⁶, the classical bound on finding a hash below T is still ahead of Grover. Cite the specific calculation; audit reviewers will ask. (Mirrors `RANDOMX_V2_RUST.md` §10's framing; the canonical statement lives there.)
 
-10. **`cncrypto` PUBLIC link survey.** [src/crypto/CMakeLists.txt](../../src/crypto/CMakeLists.txt) links `randomx` PUBLIC into `cncrypto`. Phase 0 surveys cncrypto's transitive consumers and documents which subsystems silently depend on `randomx` through the PUBLIC link. Phase 3 cannot drop the link until those consumers are resolved.
+10. **`cncrypto` PUBLIC link survey.** `src/crypto/CMakeLists.txt` at `ac3836de90` links `randomx` PUBLIC into `cncrypto`. Phase 0 surveys cncrypto's transitive consumers and documents which subsystems silently depend on `randomx` through the PUBLIC link. Phase 3 cannot drop the link until those consumers are resolved.
 
 11. **What stays state, named explicitly.** Per Decision #8: `shekyl-ffi`'s internal `CacheStore` entries, chain's current `Seedhash`, protocol constants. Auditors can grep this section against the crate's public surface to confirm no hidden state in `shekyl-pow-randomx`.
 
@@ -350,7 +354,7 @@ Net: Phase 3 rewires six daemon files; the remaining four `rx_*`-touching files 
 
 This exceeds `06-branching.mdc`'s 5-day / 10-commit limit; **the plan acknowledges the split with proposed phasing, finalized in Phase 3 planning:**
 
-- **Phase 3a — FFI export + flagged swap.** Export `shekyl_pow_randomx_v2_hash` from `shekyl-ffi` (with internal `CacheStore`). Add header declaration. In [src/crypto/pow_randomx.cpp](../../src/crypto/pow_randomx.cpp), swap `crypto::rx_slow_hash` → `shekyl_pow_randomx_v2_hash` behind a build flag (default ON; legacy path still buildable for the duration of 3a review so reviewers can A/B the implementations and rollback is mechanical if Phase 3a's PR is bisected against a problem). **The flag does not survive Phase 3b.** Pre-genesis there are no shipped users to maintain a rollback story for; the flag is purely a developer-side knob between 3a-merge and 3b-merge — a span of days, not releases.
+- **Phase 3a — FFI export + flagged swap.** Export `shekyl_pow_randomx_v2_hash` from `shekyl-ffi` (with internal `CacheStore`). Add header declaration. In `src/crypto/pow_randomx.cpp` (deleted with the C++ chain, DRS-X #1212), swap `crypto::rx_slow_hash` → `shekyl_pow_randomx_v2_hash` behind a build flag (default ON; legacy path still buildable for the duration of 3a review so reviewers can A/B the implementations and rollback is mechanical if Phase 3a's PR is bisected against a problem). **The flag does not survive Phase 3b.** Pre-genesis there are no shipped users to maintain a rollback story for; the flag is purely a developer-side knob between 3a-merge and 3b-merge — a span of days, not releases.
 
 - **Phase 3b — Rewire remaining callers + delete lifecycle calls.** Rewire `blockchain.cpp`, `core_rpc_server.cpp`, `hash-ops.h`, `cryptonote_tx_utils.cpp`. Delete every call site for `rx_set_main_seedhash`, `rx_set_miner_thread`, `rx_get_miner_thread`, `rx_slow_hash_allocate_state`, `rx_slow_hash_free_state`. **A new versioned markdown file ships with the PR: docs/design/RANDOMX_V2_PHASE_3B_DELETED_CALL_AUDIT.md.** It is a permanent record, not a PR-description summary. The PR description summarizes and links to it. Required shape:
 
@@ -396,7 +400,7 @@ Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-conse
 **Misc cleanup:**
 
 - `src/wallet/wallet_rpc_payments.cpp` is gone (wallet2 cutover). Not a remaining Phase 4 site.
-- Update PoW unit tests under [tests/unit_tests/](../../tests/unit_tests/) to v2-only.
+- Update PoW unit tests under `tests/unit_tests/` at `ac3836de90` to v2-only.
 
 ### Phase 5: Docs — LANDED 2026-09-16
 

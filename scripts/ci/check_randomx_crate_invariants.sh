@@ -44,8 +44,8 @@
 # mitigation is to re-anchor Pattern B against rustfmt's invariants
 # at the time of that change.
 #
-# Pattern C bans FFI exports from this crate. All C-ABI exports
-# live in `shekyl-ffi` (Phase 2F Decision #5). The pattern matches
+# Pattern C bans FFI exports from this crate: nothing calls the
+# verifier through a C ABI, and no workspace crate exports one. The pattern matches
 # *exporters* (`#[no_mangle]` / `#[unsafe(no_mangle)]` /
 # `#[export_name(...)]` / `#[unsafe(export_name(...))]` /
 # `extern "C" fn ...` definition form). An `extern "C" { fn foo(); }`
@@ -83,8 +83,7 @@ set -euo pipefail
 # additional crates: `randomx-v2-sys` and
 # `shekyl-randomx-differential`. The split into PATTERN_AB_SRC vs
 # PATTERN_C_SRC encodes the §5.5.4 carve-out: Pattern C is enforced
-# against the verifier crate (Phase 2F Decision #5: FFI exports
-# live in `shekyl-ffi`, not this crate) and the differential crate
+# against the verifier crate (it exports no C ABI) and the differential crate
 # (the harness consumes `randomx-v2-sys`'s FFI declarations; it
 # does not export its own); Pattern C is *exempted* against
 # `randomx-v2-sys` because that crate's legitimate purpose is to
@@ -202,8 +201,8 @@ SCAN_USE_BLOCKS_AWK='
 # matched).
 PATTERN_MODULE_STATIC='^(pub(\([^)]+\))?[[:space:]]+)?(unsafe[[:space:]]+)?static[[:space:]]+'
 
-# Pattern C: ban FFI exports from this crate. All C-ABI exports
-# live in `shekyl-ffi` (Phase 2F Decision #5).
+# Pattern C: ban FFI exports from this crate; nothing calls the
+# verifier through a C ABI.
 # Permitted exception: NONE. An `extern "C" { fn foo(); }` *import*
 # block consuming an FFI surface is not matched (this pattern
 # requires `extern "C" fn` definition form, with `fn` after `"C"`).

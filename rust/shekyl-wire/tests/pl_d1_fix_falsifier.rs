@@ -50,6 +50,7 @@ use rand_core::SeedableRng;
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
@@ -68,7 +69,7 @@ const RNG_SEED: u64 = 0x504c_2d44_3120_6631; // "PL-D1 f1"
 /// its own per-output hybrid key, its own `0x07` entry.
 fn real_output(rng: &mut ChaCha20Rng, amount: u64) -> OutputData {
     let recipient = random_wallet(rng);
-    let tx_secret = Scalar::random(rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     construct_output(
         &tx_secret,
         &recipient.x25519_pk,
@@ -88,7 +89,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let spent_index: u64 = 0;
 
     // ── Our output, at genesis vout 0 ─────────────────────────────────────
-    let tx_secret = Scalar::random(&mut rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -210,11 +211,12 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let (_, path) = paths.paths().next().expect("one input, one path");
     let leaf_chunk: Vec<LeafEntry> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .map(|cl| LeafEntry {
             output_key: cl.output_key.to_bytes(),
@@ -233,14 +235,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers().to_vec(),
+        c2_layers: path.c2_layers().to_vec(),
     };
     // A payment to a random recipient; the prefix hash is what the PQC auth
     // signs, and the auth is what reveals the key.
     let recipient = random_wallet(&mut rng);
     let payment = construct_output(
-        &Scalar::random(&mut rng).to_bytes(),
+        &TxKey::seeded(Scalar::random(&mut rng).to_bytes()),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
@@ -257,10 +259,15 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let pqc_auths = sign_pqc_auths(
         // A stand-in message: the prefix hash's bytes, not the §1.1 per-input
         // payload (`phase1_payload_hashes`). These auths are never verified
-        // here; `.to_bytes()` then `SigningPayloadHash::from_bytes` is the
-        // deliberate, visible un-typing and re-typing — both newtypes refuse
-        // the silent form (RTN-7 Q3), which is why a stand-in has to say so.
-        &[SigningPayloadHash::from_bytes(tx_prefix_hash.to_bytes())],
+        // here. The prefix hash's 32 bytes, zero-extended to the 64 a signed
+        // hash carries (the signing envelope §2.7), re-typed visibly: both
+        // newtypes refuse the silent form (RTN-7 Q3), which is why a stand-in
+        // has to say so.
+        &[SigningPayloadHash::from_bytes({
+            let mut wide = [0u8; 64];
+            wide[..32].copy_from_slice(tx_prefix_hash.as_bytes());
+            wide
+        })],
         std::slice::from_ref(&spend_input),
     )
     .expect("PQC auth signing");
@@ -285,7 +292,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // Surface 2: every leaf 4th scalar the chain serves in the assembled
     // chunk (the served-leaf surface) against K.x.
     let chunk_matches: Vec<usize> = path
-        .leaf_chunk
+        .leaf_chunk()
         .iter()
         .enumerate()
         .filter(|(_, cl)| cl.cm_x == observed_x)

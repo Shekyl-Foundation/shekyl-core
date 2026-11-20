@@ -14,12 +14,10 @@
 //! # Crate posture
 //!
 //! - `#![no_std]` — pure-arithmetic crate; no allocations, no clock
-//!   reads, no system state. Phase 4's C++ daemon and any future
+//!   reads, no system state. The daemon's validator and any future
 //!   embedded validator consume the same code.
 //! - `#![deny(unsafe_code)]` — the algorithm operates exclusively on
-//!   safe Rust primitives; the FFI shim (Phase 3, in
-//!   `rust/shekyl-ffi`) is the only `unsafe` boundary in the LWMA-1
-//!   landing.
+//!   safe Rust primitives.
 //! - Leaf crate: no external runtime crates. First-party `shekyl-types`
 //!   supplies [`shekyl_types::BlockHeight`] / [`shekyl_types::Timestamp`]
 //!   so this crate does not redefine them as `u64` (the DAA §2.1 cycle
@@ -32,7 +30,7 @@
 //! - [`lwma1_next`] — the difficulty-adjustment algorithm. Inputs are
 //!   `(chain_height, timestamps, cumulative_difficulties)`; the
 //!   output is the difficulty target for the next block.
-//! - [`check_hash`] — the PoW-target predicate: does a 256-bit hash
+//! - [`fn@check_hash`] — the PoW-target predicate: does a 256-bit hash
 //!   satisfy a 128-bit difficulty? (`hash * difficulty < 2^256`.)
 //!   Ported from the inherited C++ `check_hash`/`_64`/`_128` family
 //!   into a single unified path.
@@ -41,9 +39,8 @@
 //!   (`docs/completed/CONSENSUS_C2_R3_TIMESTAMPS.md` §4.3, ratified
 //!   2026-09-01): saturating FTL + strict MTP over the 11 preceding
 //!   timestamps, short windows genesis-padded, wider windows refused
-//!   ([`TimestampRuleVerdict`] is the verdict, its discriminants the
-//!   wire codes). The C++ validator's `check_block_timestamp` is a
-//!   marshaling shim over this function's FFI export.
+//!   ([`TimestampRuleVerdict`] is the verdict, its discriminants stable
+//!   codes).
 //! - [`is_timestamp_below_ftl`], [`is_above_mtp`] and [`mtp_median`] —
 //!   the coupled timestamp predicates per §5.5, each the single site
 //!   of its comparison; [`check_timestamp_rule`] composes them and is
@@ -52,16 +49,12 @@
 //! - Public consensus constants `N`, `T_SECONDS`, `FTL_SECONDS`,
 //!   `MTP_WINDOW`, `GENESIS_DIFFICULTY` — see [`consts`].
 //!
-//! # FFI
+//! # Consumers
 //!
-//! Two consensus entry points live in
-//! `rust/shekyl-ffi/src/difficulty_ffi.rs`, both consumed per-block by
-//! the C++ validator: `shekyl_difficulty_lwma1_next` (the `ShekylU128`
-//! ABI and `i32` error codes documented in
-//! `docs/completed/DAA_LWMA1.md` §6.1) and
-//! `shekyl_difficulty_check_timestamp_rule` (the C2-R3 rule; verdict
-//! codes mirror [`TimestampRuleVerdict`]). This crate exposes only the
-//! safe-Rust API; the FFI shims wrap it with the `#[repr(C)]` ABI.
+//! The block validator (`shekyl-chain-rules`) calls [`lwma1_next`] and
+//! [`check_timestamp_rule`] (the C2-R3 rule; verdicts are
+//! [`TimestampRuleVerdict`]) per block, through this crate's safe-Rust
+//! API.
 
 #![no_std]
 #![deny(unsafe_code)]

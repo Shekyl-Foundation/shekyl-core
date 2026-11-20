@@ -8,6 +8,7 @@ use libfuzzer_sys::fuzz_target;
 use shekyl_crypto_pq::{
     kem::{HybridX25519MlKem, KeyEncapsulation},
     output::{construct_output, scan_output},
+    TxKey,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -18,8 +19,7 @@ fuzz_target!(|data: &[u8]| {
     let amount = u64::from_le_bytes(data[..8].try_into().unwrap());
     let output_index = u64::from_le_bytes(data[8..16].try_into().unwrap()) % 256;
 
-    let mut tx_key = [0u8; 32];
-    tx_key.copy_from_slice(&data[16..48]);
+    let tx_key = TxKey::seeded(data[16..48].try_into().unwrap());
 
     let mut spend_key = [0u8; 32];
     spend_key.copy_from_slice(&data[48..80]);

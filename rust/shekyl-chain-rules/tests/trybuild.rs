@@ -28,8 +28,21 @@
 //!   with `TRYBUILD=overwrite`.
 //! - **A different error, or none** — the brand property itself moved.
 //!   That is a finding against `validate`, not a snapshot to refresh.
+//!
+//! # Cadence
+//!
+//! `trybuild` builds the programs in a cargo project of its own, where this
+//! crate's whole dependency tree compiles again (about 19 minutes on the CI
+//! runner, and the workspace's profile does not reach it). Since 2026-11-09
+//! the test is `#[ignore]`d and run every night by the `trybuild-ignored`
+//! lane (`scripts/ci/ignored_set_trybuild.sh`); a pull request's Rust job
+//! only checks that it is still here. `cargo test --features harness
+//! --test trybuild -- --ignored` runs it locally: the programs judge with
+//! `Trust::UNPINNED`, a `harness` item, so the target requires the feature
+//! (`Cargo.toml`).
 
 #[test]
+#[ignore = "builds its programs over the crate's whole dependency tree, ~19 min cold; run nightly by trybuild-ignored"]
 fn a_verdict_connects_under_the_view_it_was_judged_against_and_no_other() {
     let t = trybuild::TestCases::new();
     t.pass("tests/trybuild/verdict_connects_under_its_own_view.rs");

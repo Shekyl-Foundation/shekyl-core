@@ -18,7 +18,7 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::runtime;
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
-use shekyl_transport_layer::{CloseCause, CloseKind, Sockets};
+use shekyl_transport_layer::{CloseCause, CloseKind, DialEnd, Sockets};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -69,9 +69,12 @@ where
         handshake_within: Tick::new(2_000_000_000),
         gap_within: Some(gap),
         tally: Arc::new(super::super::zero_tally()),
-        on_cause: Arc::clone(&recorded.sink),
+        on_end: {
+            let sink = Arc::clone(&recorded.sink);
+            Arc::new(move |end: DialEnd| sink(end.cause()))
+        },
         send_queue_bytes: 65_536,
-        admitted: admitted_tx,
+        admitted: super::super::publish_on(admitted_tx),
     };
     let handle = engine.handle();
     pool.spawn(super::super::dial_one(dial, handle));
@@ -158,8 +161,8 @@ fn timed_sync_frame() -> Vec<u8> {
     )
 }
 
-/// One plain inbound connection under a `gap`: the accept loop, as the
-/// zone host runs it, and a client socket that has written `opening`.
+/// One plain inbound connection under a `gap`: the accept loop, and a
+/// client socket that has written `opening`.
 struct AcceptedPeer {
     engine: EngineService<MonotonicClock>,
     pool: shekyl_runtime::Pool,
@@ -175,26 +178,37 @@ fn accept_peer_that_writes(gap: Tick, opening: &[u8]) -> AcceptedPeer {
     let pool = runtime(harness_budget(), &name("sk-clearnet-in")).expect("runtime");
     let recorded = causes();
     let (admitted_tx, mut admitted_rx) = mpsc::unbounded_channel();
-    let inbound = super::super::Inbound {
-        sockets: Sockets::new(),
-        ceiling: || InboundCeiling::Bounded(4),
-        kind: ChannelChoice::Plain,
-        network_id: ID,
-        handshake_within: Tick::new(2_000_000_000),
-        gap_within: Some(gap),
-        tally: Arc::new(super::super::zero_tally()),
-        on_cause: Arc::clone(&recorded.sink),
-        send_queue_bytes: 65_536,
-        admitted: admitted_tx,
-        backoff: Duration::from_millis(1),
-    };
-    let handle = engine.handle();
-    let addr = pool.block_on(async {
+    let handshake_within = Tick::new(2_000_000_000);
+    let sockets = Sockets::new();
+    let linger_engine = engine.handle();
+    let linger_cap = sockets.clearnet_linger_cap(handshake_within);
+    let on_cause = Arc::clone(&recorded.sink);
+    let addr = pool.block_on(async move {
+        let linger =
+            super::super::Linger::spawn(linger_engine.clone(), linger_cap, handshake_within);
+        let inbound = super::super::Inbound {
+            sockets,
+            ceiling: || InboundCeiling::Bounded(4),
+            kind: ChannelChoice::Plain,
+            network_id: ID,
+            handshake_within,
+            gap_within: Some(gap),
+            tally: Arc::new(super::super::zero_tally()),
+            on_cause,
+            send_queue_bytes: 65_536,
+            admitted: super::super::publish_on(admitted_tx),
+            linger,
+            backoff: Duration::from_millis(1),
+        };
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
             .await
             .expect("bind");
         let addr = listener.local_addr().expect("addr");
-        tokio::spawn(super::super::accept_inbound(listener, inbound, handle));
+        tokio::spawn(super::super::accept_inbound(
+            listener,
+            inbound,
+            linger_engine,
+        ));
         addr
     });
     let mut client = connect(addr);

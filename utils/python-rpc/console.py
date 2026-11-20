@@ -49,25 +49,29 @@ for n in range(1, len(sys.argv)):
     raise Exception('No wallet or daemon RPC on port ' + str(port))
   s.close()
 
-  # both wallet and daemon have a get_version JSON RPC
+  # The daemon answers `version` with its network and genesis; a wallet
+  # names no such method and answers its own `get_version`.
   rpc = framework.rpc.JSONRPC('{protocol}://{host}:{port}'.format(protocol=scheme, host=host, port=port))
-  get_version = {
-      'method': 'get_version',
-      'jsonrpc': '2.0', 
-      'id': '0'
-  }
   try:
-    res = rpc.send_json_rpc_request(get_version)
-  except Exception as e:
-    raise Exception('Failed to call version RPC: ' + str(e))
+    res = rpc.call('version')
+  except Exception:
+    res = None
 
-  if 'version' not in res:
-    raise Exception('Server is not a Monero process')
-
-  if 'status' in res:
+  if res is not None and 'genesis' in res:
     daemons.append(framework.daemon.Daemon(port=port))
     rpcs.append(daemons[-1])
   else:
+    get_version = {
+        'method': 'get_version',
+        'jsonrpc': '2.0',
+        'id': '0'
+    }
+    try:
+      res = rpc.send_json_rpc_request(get_version)
+    except Exception as e:
+      raise Exception('Failed to call version RPC: ' + str(e))
+    if 'version' not in res:
+      raise Exception('Server is not a Shekyl process')
     wallets.append(framework.wallet.Wallet(port=port))
     rpcs.append(wallets[-1])
 

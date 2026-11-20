@@ -9,7 +9,7 @@ on Shekyl NG.
 
 ## Activation
 
-From genesis. There is no fork gate (`design/CXX_VERSION_GATES.md` §5).
+From genesis. There is no fork gate (`completed/CXX_VERSION_GATES.md` §5).
 
 - The admitted transaction version is `CURRENT_TRANSACTION_VERSION` (3).
 - `pqc_auth` verification is required for non-coinbase v3 txs.

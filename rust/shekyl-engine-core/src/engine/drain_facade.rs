@@ -24,10 +24,10 @@
 //! - **No `fee` parameter (P-lane fee-uniformity CONTRACT PIN).** The fee is
 //!   the canonical `P`-lane floor, quoted internally from the **same**
 //!   function the bond post uses
-//!   ([`p_lane_floor_fee`](super::bond_orchestrator::p_lane_floor_fee)) — a
+//!   ([`p_lane_floor_fee`]) — a
 //!   user fee control would be a wallet fingerprint in a cleartext field.
-//! - **No `destination` parameter.** The dispatch seam pins vout 0 to the
-//!   wallet's own principal address (T-DS-3); the façade adds nothing a
+//! - **No `destination` parameter.** The dispatch seam pins the principal
+//!   output to the wallet's own principal address (T-DS-3); the façade adds nothing a
 //!   caller could redirect.
 //! - **Production prune witness.** The façade mints
 //!   [`SpentRecordsDurablyPruned::arm1_watch_pruning_live`] the same way the
@@ -195,6 +195,11 @@ pub enum DrainToPrincipalError {
         /// The transport failure's rendering.
         detail: String,
     },
+    /// The drain's seal was saved, but the save was not confirmed on disk,
+    /// so nothing was sent; the seal was removed and the lane is open again
+    /// (Rick, 2026-11-19). The cause is the save's, and names its fix.
+    #[error("the drain was not sent: {0}")]
+    SealNotSaved(#[source] super::error::PersistenceError),
 }
 
 impl From<DrainRequestError> for DrainToPrincipalError {
@@ -237,10 +242,6 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                     context: "curve tree",
                     detail: format!("{e:?}"),
                 },
-                DrainOrchestrationError::PathAssembly { detail } => Self::State {
-                    context: "path assembly",
-                    detail,
-                },
                 DrainOrchestrationError::Stake(e) => Self::State {
                     context: "drain assembly",
                     detail: e.to_string(),
@@ -253,6 +254,9 @@ impl From<DrainRequestError> for DrainToPrincipalError {
                     detail: e.to_string(),
                 },
             },
+            DrainRequestError::Submit(
+                super::transaction_submitter::BroadcastSubmitError::SealNotSaved(error),
+            ) => Self::SealNotSaved(error),
             DrainRequestError::Submit(e) => Self::Submit {
                 detail: e.to_string(),
             },
@@ -550,7 +554,7 @@ mod tests {
     /// the fee quote (no daemon round trip; the dummy daemon would fail one).
     #[tokio::test(flavor = "multi_thread")]
     async fn drain_on_an_idle_staker_has_no_active_persona() {
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         let engine = Arc::new(RwLock::new(engine));
 
         let err = Engine::drain_to_principal(engine, AtomicUnits::from_raw(50_000))
@@ -580,7 +584,7 @@ mod tests {
         };
         use shekyl_types::PSlot;
 
-        let (_tmp, engine) = staker_engine(3, SEED_MULT);
+        let (_tmp, engine) = staker_engine(3, SEED_MULT).await;
         activate_persona(&engine, 3).await;
         let engine = Arc::new(RwLock::new(engine));
 

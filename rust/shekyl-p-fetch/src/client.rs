@@ -26,7 +26,8 @@ use crate::body::{read_frame, BodyReader, Checker};
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
 use crate::target::{
-    ExpectedShard, FetchTarget, PassVerifyingKey, ServingEndpoint, TxSink, VerifiedShard,
+    parse_envelope, verifies, ExpectedShard, FetchTarget, ServingEndpoint, TxSink, VerifiedShard,
+    RECEIPT_ENVELOPE_LEN,
 };
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
@@ -118,7 +119,7 @@ impl Timeouts {
     ///   envelope, close probe) and around a bare answer's close probe
     ///   alike. `body_stall` bounds a gap inside it and adds nothing.
     ///
-    /// Not counted: the wait for the slot (`MAX_INFLIGHT`), which is the
+    /// Not counted: the wait for the slot ([`PFetchClient::with_slots`]), which is the
     /// caller's to bound; the countersignature check after the body, CPU
     /// work on bytes already in memory; and anything the caller does
     /// between fetches.
@@ -137,11 +138,34 @@ impl Default for Timeouts {
     }
 }
 
+/// Where a fetch's SOCKS dial goes.
+enum Proxy {
+    /// One address for the client's life: an operator's Tor (`tor-socks`).
+    Fixed(SocketAddr),
+    /// Read at each fetch: the managed Tor's route, which a respawn can move
+    /// and which is absent while that Tor is not running (`TSR-F10`).
+    ReadAtUse(ProxyRoute),
+}
+
+/// The managed Tor's SOCKS address now, or `None` while there is none.
+pub type ProxyRoute = Arc<dyn Fn() -> Option<SocketAddr> + Send + Sync>;
+
+impl Proxy {
+    fn now(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Fixed(at) => Some(*at),
+            Self::ReadAtUse(route) => route(),
+        }
+    }
+}
+
 /// The shard-fetch client. One per daemon; `Clone`-free by design — the
 /// in-flight cap is a property of the process's Tor instance, so a second
-/// client would be a second cap.
+/// client would be a second cap. A daemon whose callers keep lanes over
+/// it (the bundle producer's reads, the shard view's flights) sizes it to
+/// their sum with [`Self::with_slots`].
 pub struct PFetchClient {
-    proxy: SocketAddr,
+    proxy: Proxy,
     /// `Arc` so a permit can be *owned* and travel into the blocking
     /// check tasks — see [`Self::fetch`] on cancellation.
     slots: Arc<Semaphore>,
@@ -151,7 +175,7 @@ pub struct PFetchClient {
 impl std::fmt::Debug for PFetchClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PFetchClient")
-            .field("proxy", &self.proxy)
+            .field("proxy", &self.proxy.now())
             .field("available_slots", &self.slots.available_permits())
             .field("timeouts", &self.timeouts)
             .finish()
@@ -177,11 +201,39 @@ impl PFetchClient {
     /// [`Self::new`] with explicit per-step bounds.
     #[must_use]
     pub fn with_timeouts(proxy: SocketAddr, timeouts: Timeouts) -> Self {
+        Self::with_proxy(Proxy::Fixed(proxy), timeouts)
+    }
+
+    /// A client that reads its proxy at each fetch from `route`: the
+    /// managed Tor's SOCKS address, which a respawn can move and which is
+    /// absent while that Tor is not running (`TSR-F10`: never cached). A
+    /// fetch with no route is [`Stall::NoRoute`]: nothing was sent.
+    ///
+    /// The route is an address only. Each read still presents its own
+    /// credentials from its nonce (`SF-D3`), so reads share no circuit with
+    /// each other, with the node's peer dials (which offer no
+    /// authentication), or with any other purpose's pair.
+    #[must_use]
+    pub fn with_route(route: ProxyRoute, timeouts: Timeouts) -> Self {
+        Self::with_proxy(Proxy::ReadAtUse(route), timeouts)
+    }
+
+    fn with_proxy(proxy: Proxy, timeouts: Timeouts) -> Self {
         Self {
             proxy,
             slots: Arc::new(Semaphore::new(MAX_INFLIGHT)),
             timeouts,
         }
+    }
+
+    /// This client with `slots` in-flight slots in place of
+    /// [`MAX_INFLIGHT`]. The caller that composes lanes over one client
+    /// sizes it to their sum, so a caller that starts no more fetches than
+    /// its own lane never waits for a slot.
+    #[must_use]
+    pub fn with_slots(mut self, slots: std::num::NonZeroUsize) -> Self {
+        self.slots = Arc::new(Semaphore::new(slots.get()));
+        self
     }
 
     /// In-flight slots not currently held. Observability for the
@@ -236,13 +288,13 @@ impl PFetchClient {
     ///
     /// The [`FetchError`] taxonomy. [`FetchError::retries_same_p`] is the
     /// one-bit summary a scheduler needs.
-    pub async fn fetch<K: PassVerifyingKey>(
+    pub async fn fetch(
         &self,
-        target: &FetchTarget<K>,
+        target: &FetchTarget,
         header: &RequestHeader,
         expected: &ExpectedShard,
         sink: Arc<dyn TxSink>,
-    ) -> Result<VerifiedShard<K>, FetchError> {
+    ) -> Result<VerifiedShard, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
             .await
@@ -261,7 +313,7 @@ impl PFetchClient {
         let (head, carried) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
         // The one scheme this exchange can be: the target's key's.
-        let envelope_len = u64::try_from(K::ENVELOPE_LEN).expect("envelope fits u64");
+        let envelope_len = u64::try_from(RECEIPT_ENVELOPE_LEN).expect("envelope fits u64");
         // A bare answer's verdict, or `None` for a 200.
         let bare = match head.status {
             400 | 404 | 503 => {
@@ -279,7 +331,7 @@ impl PFetchClient {
                 if declared < envelope_len {
                     return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
                 }
-                let max = expected.max_response_len::<K>();
+                let max = expected.max_response_len();
                 if declared > max {
                     return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
                 }
@@ -298,7 +350,6 @@ impl PFetchClient {
             &mut stream,
             carried,
             head.content_length,
-            K::ENVELOPE_LEN,
             header,
             self.timeouts.body_stall,
         )?;
@@ -341,12 +392,18 @@ impl PFetchClient {
             // This scheme's canonical signature, or nothing: there is no
             // second parse under another scheme.
             let signature =
-                K::parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
+                parse_envelope(&envelope).ok_or(FetchError::Malformed(Malformed::Envelope))?;
             // The digest was recomputed from the bytes as they arrived
             // under this request's own nonce, never taken from `P`: a
             // signature over any other bytes, or over these bytes for
             // another request, fails this check.
-            if !verifying_key.verifies(&header, shard_id.to_raw(), &delivery_digest, &signature) {
+            if !verifies(
+                &verifying_key,
+                &header,
+                shard_id.to_raw(),
+                &delivery_digest,
+                &signature,
+            ) {
                 return Err(FetchError::BadCountersignature);
             }
             if let Some(mismatch) = mismatch {
@@ -383,8 +440,11 @@ impl PFetchClient {
     ) -> Result<TcpStream, FetchError> {
         let host = endpoint.onion_address();
         let credentials = header.socks_credentials();
+        let Some(proxy) = self.proxy.now() else {
+            return Err(FetchError::Stall(Stall::NoRoute));
+        };
         let connect = async {
-            let mut stream = TcpStream::connect(self.proxy)
+            let mut stream = TcpStream::connect(proxy)
                 .await
                 .map_err(|err| FetchError::Stall(Stall::Dial(err.to_string())))?;
             socks_connect(
@@ -651,8 +711,16 @@ mod tests {
     #[test]
     fn a_request_differs_from_another_only_in_its_nonce() {
         let anchor = BlockHeight::from_raw(1_000);
-        let organic = RequestHeader::with_nonce([0xa5; 32], anchor, [3; 32]);
-        let challenge = RequestHeader::with_nonce([0x5a; 32], anchor, [3; 32]);
+        let organic = RequestHeader::with_nonce(
+            [0xa5; 32],
+            anchor,
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
+        let challenge = RequestHeader::with_nonce(
+            [0x5a; 32],
+            anchor,
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
         let a = request_bytes(7, &organic);
         let b = request_bytes(7, &challenge);
         assert_eq!(a.len(), b.len());
@@ -678,7 +746,11 @@ mod tests {
 
     #[test]
     fn the_request_is_the_route_and_the_one_header() {
-        let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(2), [3; 32]);
+        let h = RequestHeader::with_nonce(
+            [1; 32],
+            BlockHeight::from_raw(2),
+            shekyl_types::BlockHash::from_bytes([3; 32]),
+        );
         let req = String::from_utf8(request_bytes(7, &h)).unwrap();
         assert_eq!(
             req,

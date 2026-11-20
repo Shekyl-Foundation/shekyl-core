@@ -34,6 +34,7 @@ after only the two-extra-rounds finalisation (no absorb iterations).
 Generator
 ---------
 source      = ./_generator/gen.cpp
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/Makefile (`make gen`)
 command     = ./gen hash_1r_empty
 output_size = 64 bytes

@@ -8,6 +8,8 @@
 //! wherever a row has landed. Nothing here transcribes
 //! `create_block_template`; byte-parity with it is a different witness.
 
+use std::sync::LazyLock;
+
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_chain_rules::harness::expected_references;
@@ -18,22 +20,22 @@ use shekyl_chain_rules::harness::{
     assert_refused, expected_seed, expected_target, judged, MockChain, MockSubstrate,
 };
 use shekyl_chain_rules::{
-    form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
+    form, validate, Candidate, CenRow, ChainView, FormAttempt, FormClaims, Locus, RuleSet, Trust,
 };
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+use shekyl_crypto_pq::TxKey;
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
 use shekyl_economics::{
     price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionError,
     EmissionInputs, TxVolume, FULL_REWARD_ZONE,
 };
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, Timestamp};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot, Timestamp};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input, Transaction};
 use shekyl_wire::tx_extra::{self, check_tx_extra_shape, ExtraSubject, TxExtraField};
-use zeroize::Zeroizing;
 
 use crate::{
-    build, template_timestamp, tx_pubkey, EmissionOperands, MinerKeys, Template, TemplateContext,
+    build, template_timestamp, EmissionOperands, MinerKeys, Template, TemplateContext,
     TemplateError,
 };
 
@@ -122,6 +124,9 @@ fn genesis_era_emission() -> EmissionOperands {
     }
 }
 
+/// The coinbase's transaction key every context borrows.
+static TX_KEY: LazyLock<TxKey> = LazyLock::new(|| TxKey::random().expect("the OS draws a key"));
+
 /// The context a driver composes for `chain`'s next block, listing
 /// `listed`. `params` and `miner` outlive it.
 fn context<'a>(
@@ -135,11 +140,9 @@ fn context<'a>(
         height,
         previous,
         curve_tree_root,
-        // The template carries no witness, so the validator judges it
-        // against the empty set's root (CEN-B4, slice 8 row 10).
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        // The template carries no references, so the validator judges it
+        // against the empty section's root (CEN-J29).
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         major_version: RuleSet::GENESIS.header_major_version(),
         now: NOW,
         median_timestamp: median_of(chain),
@@ -147,7 +150,7 @@ fn context<'a>(
         emission: genesis_era_emission(),
         params,
         miner,
-        tx_key_secret: Zeroizing::new([0x77; 32]),
+        tx_key: &TX_KEY,
         extra_nonce: [0; tx_extra::COINBASE_NONCE_BYTES],
         draw_commitment: tx_extra::CONFORMING_DRAW_COMMITMENT,
         listed,
@@ -161,23 +164,21 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
     let references = expected_references(chain, &candidate);
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     )
     .expect("the default substrate never faults")
     .unwrap_or_else(|refused| panic!("the template was refused by a stateless rule: {refused}"));
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .unwrap_or_else(|refused| panic!("the template was refused by a view rule: {refused}"));
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .unwrap_or_else(|refused| panic!("the template was refused by a view rule: {refused}"));
         CenRow::ALL
             .iter()
             .copied()
@@ -419,7 +420,7 @@ fn the_extra_is_the_coinbase_grammar_and_names_the_tx_public_key() {
     )
     .expect("CEN-I20: the coinbase grammar");
     assert!(
-        fields.contains(&TxExtraField::PubKey(tx_pubkey(&cx.tx_key_secret))),
+        fields.contains(&TxExtraField::PubKey(cx.tx_key.public_bytes())),
         "the 0x01 field is r·G for the context's r"
     );
     assert!(
@@ -462,10 +463,10 @@ fn the_template_is_a_pure_function_of_its_context() {
     );
     assert_eq!(a.block.hash(), b.block.hash());
 
-    // A second context, not a clone: the context is not `Clone` because it
-    // carries the secret.
+    // A second context under another key.
+    let other = TxKey::random().expect("the OS draws a key");
     let mut other_key = context(&chain, &params, &miner, &listed);
-    other_key.tx_key_secret = Zeroizing::new([0x78; 32]);
+    other_key.tx_key = &other;
     let c = build(&other_key).expect("builds");
     assert_ne!(
         c.block.miner_transaction.prefix.outputs[0].key,
@@ -581,23 +582,21 @@ fn the_builders_c1_refusal_is_the_validators() {
     let references = expected_references(&chain, &candidate);
     let formed = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(&chain),
+            target: expected_target(&chain, &RuleSet::GENESIS),
+            references: &references,
+            network: shekyl_chain_rules::HARNESS_NETWORK_ID,
+        },
         &substrate,
-        expected_seed(&chain),
-        expected_target(&chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     )
     .expect("no fault")
     .expect("the stateless stage does not judge C1");
     chain.with_view(|view| {
         assert_refused(
-            judged(validate(
-                formed,
-                &view,
-                &RuleSet::GENESIS,
-                &Trust::UNANCHORED,
-            )),
+            judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)),
             CenRow::C1,
             Locus::Block,
         );

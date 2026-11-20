@@ -19,10 +19,22 @@ from pathlib import Path
 
 import check_measurement_ledger as gate
 
+# Git exports GIT_DIR and its kin into hooks. A throwaway repository built
+# here must not inherit them, or `git init --bare` and `git config` act on the
+# caller's real repository (a pre-push hook's run once made it bare and gave
+# it a test author, 2026-11-15). Git finds a repository from the working
+# directory without them.
+for _name in [_k for _k in os.environ if _k.startswith("GIT_")]:
+    del os.environ[_name]
+
 LEDGER = gate.LEDGER
 HEADER = gate.REV_SOURCE_HEADER
 TRACKED = "| Id | Benchmark |\n| --- | --- |\n| **BA-T1** | a |\n| **BA-T2** | b |\n"
-CARRIER = 'carrier = "BA-T1 floor re-run, owed"\n'
+# Every constant that is not current names its disposition. The fixtures
+# retire theirs: `replaced_by` reads no other file, so a scenario about
+# something else does not have to build a run sheet or a forge plan.
+DISPOSED = 'disposition = "retire"\nreplaced_by = "the selftest names its replacement"\n'
+CARRIER = 'carrier = "BA-T1 floor re-run, owed"\n' + DISPOSED
 SENTENCE = "selftest: cost effect noted"
 
 
@@ -32,11 +44,17 @@ class Results:
         self.passed = 0
 
     def expect(
-        self, root: Path, text: str, want: int, why: str, says: str = ""
+        self, root: Path, text: str, want: int, why: str, says: str = "",
+        *, absent: tuple[str, ...] = (),
     ) -> None:
         code, out = verdict(root, text)
-        if code != want or (says and says not in out):
-            wanted = f"exit {want}" + (f" naming {says!r}" if says else "")
+        leaked = [item for item in absent if item in out]
+        if code != want or (says and says not in out) or leaked:
+            wanted = f"exit {want}"
+            if says:
+                wanted += f" naming {says!r}"
+            if leaked:
+                wanted += f" without {leaked!r}"
             self.failures.append(f"{why}: wanted {wanted}, got {code}\n{out}")
         else:
             self.passed += 1
@@ -340,7 +358,7 @@ def scenario_stale_and_comments(results: Results) -> None:
             "disagrees with the revision",
         )
         unmeasured = constant(
-            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n'
+            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n' + DISPOSED
         )
         results.expect(
             root, document(path_set() + path_set("other", '["src/cold"]'), fresh + unmeasured.replace(
@@ -700,7 +718,7 @@ def scenario_subject_and_shallow(results: Results) -> None:
         # After init_tree the hot path has not moved (c2 touched cold). c1 is current.
         results.expect(root, document("", ""), 2, "an empty ledger is a missing subject")
         only = constant(
-            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n'
+            "placeholder", "unmeasured", body='carrier = "BA-T2 derives it on the floor"\n' + DISPOSED
         )
         results.expect(
             root, document(path_set(), only), 2,
@@ -1017,8 +1035,320 @@ def scenario_retired(results: Results) -> None:
         )
 
 
+CAPTURE = (
+    "BENCHES=(\n"
+    '  # a comment between rows\n'
+    '  "crate-a:wall:wall_iai"\n'
+    ")\n"
+    "NIGHTLY_BENCHES=(\n"
+    '  "crate-b::count_iai:bench-internals,harness"\n'
+    ")\n"
+)
+
+
+def gated(bench: str, set_id: str = "hot", measured: str = '["BA-T1"]') -> str:
+    return (
+        f'[[gated_row]]\nbench = "{bench}"\nmeasured_by = {measured}\n'
+        f'path_set = "{set_id}"\n\n'
+    )
+
+
+def scenario_gated_rows(results: Results) -> None:
+    """A gated row names a row the capture script runs and a path set that exists."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        oids = init_tree(root)
+        control = constant("control", "current", oids["c1"])
+        base = document(path_set(), control)
+        results.expect(
+            root, base + gated("crate-a::wall_iai"), 2,
+            "a gated row with no capture script cannot be judged",
+            says="missing subject",
+        )
+        write(root, gate.CAPTURE_SCRIPT, CAPTURE)
+        commit(root, "the capture script")
+        results.expect(
+            root, base + gated("crate-a::wall_iai") + gated("crate-b::count_iai"), 0,
+            "two gated rows the script runs, one with a criterion arm and one "
+            "count-only with features",
+            says="2 gated rows name their path sets",
+        )
+        results.expect(
+            root, base + gated("crate-c::absent_iai"), 1,
+            "a gated row the script does not run", says="no such row in BENCHES",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai"), 1,
+            "a row the script captures with no gated row", says="crate-b::count_iai, which has no [[gated_row]]",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai", set_id="nowhere") + gated("crate-b::count_iai"), 1,
+            "a gated row on an undefined path set", says="is not defined",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai", measured='["BA-T99"]') + gated("crate-b::count_iai"), 1,
+            "a gated row measured by an id the tracked set lacks",
+            says="not defined in the tracked-set document",
+        )
+        results.expect(
+            root, base + gated("crate-a::wall_iai") + gated("crate-a::wall_iai"), 1,
+            "the same bench twice", says="duplicate bench",
+        )
+        results.expect(
+            root, base + gated("crate-a:wall_iai"), 1,
+            "a bench not spelled <crate>::<target>", says="is not <crate>::<gungraun-target>",
+        )
+        # A path set only a gated row reads is referenced; with neither a
+        # constant nor a gated row it is refused, as before.
+        own = path_set("rows", '["src/cold"]')
+        results.expect(
+            root, document(path_set() + own, control) + gated("crate-a::wall_iai", set_id="rows") + gated("crate-b::count_iai"),
+            0, "a path set whose only reader is a gated row",
+        )
+        results.expect(
+            root, document(path_set() + own, control), 1,
+            "a path set nothing reads", says="no constant or gated row references it",
+        )
+        write(root, gate.CAPTURE_SCRIPT, "BENCHES=(\n)\n")
+        results.expect(
+            root, base + gated("crate-a::wall_iai"), 2,
+            "an empty BENCHES array is a missing subject", says="holds no row",
+        )
+
+
+SHEET = "docs/benchmarks/RUN_SHEET.md"
+PLAN = "docs/design/FORGE.md"
+FORGE_CATALOGUE = (
+    "| ID | Name |\n| --- | --- |\n| CF-E10 | `shard-<k>-closed` |\n"
+    "| CF-E11 | `first-compact-join` |\n"
+)
+
+
+def disposed(name: str, body: str, carrier: str = "BA-T1 floor re-run, owed") -> str:
+    """An unmeasured constant with `body` as its disposition."""
+    return constant(name, "unmeasured", body=f'carrier = "{carrier}"\n' + body)
+
+
+def scenario_dispositions(results: Results) -> None:
+    """Every constant that is not current names where its measurement comes from."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        oids = init_tree(root)
+        control = constant("control", "current", oids["c1"])
+        heads = f'floor_run_sheet = "{SHEET}"\nforge_plan = "{PLAN}"\n'
+
+        def ledger(rows: str, extra: str = "") -> str:
+            return heads + document(path_set(), control + rows) + extra
+
+        floor = disposed("on_floor", 'disposition = "floor"\n')
+        results.expect(
+            root, ledger(floor), 2,
+            "a floor row with no run sheet in the tree", says="missing subject",
+        )
+        write(root, SHEET, "| Constant | Reads |\n| --- | --- |\n| `on_floor` | its time |\n")
+        write(root, PLAN, FORGE_CATALOGUE)
+        results.expect(
+            root, ledger(floor), 0,
+            "a floor row the run sheet lists", says="1 floor",
+        )
+        results.expect(
+            root, ledger(disposed("elsewhere", 'disposition = "floor"\n') + floor), 1,
+            "a floor row the run sheet does not list", says="elsewhere: a floor row the run sheet",
+        )
+        results.expect(
+            root, ledger(disposed("on_floor", DISPOSED)), 1,
+            "the run sheet lists a row that is not a floor row",
+            says="lists on_floor, which is not a floor row",
+        )
+        write(root, SHEET, "| `on_floor` | a |\n| `on_floor` | b |\n")
+        results.expect(
+            root, ledger(floor), 1, "a row listed twice", says="more than once",
+        )
+        write(root, SHEET, "no table here\n")
+        results.expect(
+            root, ledger(floor), 2, "a run sheet that lists nothing", says="lists no constant",
+        )
+        write(root, SHEET, "| `on_floor` | its time |\n")
+        results.expect(
+            root, ledger(disposed("no_word", "")), 1,
+            "an unmeasured row with no disposition", says="names its disposition",
+        )
+        results.expect(
+            root, ledger(disposed("bad_word", 'disposition = "someday"\n')), 1,
+            "a disposition outside the four", says="one of ci, floor, forge, retire",
+        )
+        results.expect(
+            root, ledger(constant(
+                "current_too", "current", oids["c1"], body='disposition = "floor"\n'
+            )), 1,
+            "a current constant with a disposition", says="not valid for a current constant",
+        )
+        results.expect(
+            root, ledger(disposed("mixed", 'disposition = "floor"\nreplaced_by = "something else now"\n')), 1,
+            "a key of another disposition", says="does not belong to a floor disposition",
+        )
+        results.expect(
+            root, ledger(disposed("bare_retire", 'disposition = "retire"\n')), 1,
+            "a retire row that names nothing in its place", says="names its 'replaced_by'",
+        )
+        forge = 'disposition = "forge"\nforge_event = "first-compact-join"\n'
+        results.expect(
+            root, ledger(floor + disposed("waits", forge, carrier="chain forge F4, then BA-T7")), 0,
+            "a forge row on an event of the plan",
+        )
+        results.expect(
+            root, ledger(disposed("waits", forge)), 1,
+            "a forge row whose carrier does not say so", says="carrier says 'chain forge'",
+        )
+        results.expect(
+            root, ledger(disposed(
+                "waits", 'disposition = "forge"\nforge_event = "first-slash"\n',
+                carrier="chain forge F4, then BA-T7",
+            )), 1,
+            "a forge event the plan does not catalogue", says="is not an event of",
+        )
+        results.expect(
+            root, ledger(floor + disposed(
+                "waits", 'disposition = "forge"\nforge_event = "shard-<k>-closed"\n',
+                carrier="chain forge F4, then BA-T7",
+            )), 0,
+            "an event name read exactly as the catalogue spells it",
+        )
+        write(root, gate.CAPTURE_SCRIPT, CAPTURE)
+        commit(root, "the capture script and the plan")
+        rows = gated("crate-a::wall_iai") + gated("crate-b::count_iai")
+        results.expect(
+            root, ledger(floor + disposed("counted", 'disposition = "ci"\nci_row = "crate-a::wall_iai"\n'), rows), 0,
+            "a ci row on a gated bench",
+        )
+        results.expect(
+            root, ledger(disposed("counted", 'disposition = "ci"\nci_row = "crate-z::none_iai"\n'), rows), 1,
+            "a ci row on a bench no capture runs", says="is not a [[gated_row]] bench",
+        )
+
+
+def scenario_full_ids(results: Results) -> None:
+    """Every commit id the ledger writes is the full 40 hex and names a
+    commit (Rick, 2026-11-15). A short or upper-case spelling that still
+    names a commit stays on its row. A parent ledger written before the
+    rule is read from HEAD^1."""
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        write(root, "src/hot/a.rs", "fn a() { /* slower */ }\n")
+        c3 = commit(root, "c3: changes the hot path")
+        stale = constant("control", "stale", c1, body=stale_body(c3))
+        results.expect(
+            root, document(path_set(body=heard(c3)), stale), 0,
+            "full ids everywhere pass",
+        )
+        short = c3[:10]
+        results.expect(
+            root, document(path_set(body=heard(short)), stale), 1,
+            "a short through is refused, though it resolves", "written in full",
+            absent=("needs stale_through", "have not been heard"),
+        )
+        results.expect(
+            root, document(
+                path_set(body=cleared(short)), constant("control", "current", c1),
+            ), 1,
+            "a short cleared id is refused, and the review point still moves",
+            "written in full", absent=("says current",),
+        )
+        results.expect(
+            root, document(
+                path_set(body=heard(c3)),
+                constant("control", "stale", c1, body=stale_body(short)),
+            ), 1, "a short stale_since is refused",
+            "stale_since is not a commit id written in full",
+            absent=("is not a commit in this repository",),
+        )
+        results.expect(
+            root, document(
+                path_set(body=heard(c3)),
+                constant("control", "stale", c1[:9], body=stale_body(c3)),
+            ), 1, "a short capture_rev is refused",
+            "capture_rev is not a commit id written in full",
+            absent=("is not a commit in this repository",),
+        )
+        results.expect(
+            root, document(path_set(body=heard(c3.upper())), stale), 1,
+            "upper-case hex is not the id, and the commit is still heard",
+            "written in full", absent=("needs stale_through",),
+        )
+        unknown = "0123456789abcdef0123456789abcdef01234567"
+        results.expect(
+            root, document(path_set(body=heard(unknown)), stale), 1,
+            "a full id that names no commit is refused", "not a commit",
+        )
+        # The abbreviated ledger has to be HEAD^1. A commit that only adds
+        # it leaves HEAD^1 as the commit before the ledger existed, and the
+        # parent read returns quietly.
+        write(root, LEDGER, document(
+            path_set(body=heard(short)),
+            constant("control", "stale", c1[:10], body=stale_body(short)),
+        ))
+        commit(root, "the parent ledger, short ids", ledger=True)
+        commit(root, "the pull request's commit")
+        results.expect(
+            root, document(path_set(body=heard(c3)), stale), 0,
+            "a full-id ledger over a short-id parent passes",
+        )
+        results.expect(
+            root, document(
+                path_set("cold", '["src/cold"]'),
+                constant("other", "current", c1, set_id="cold"),
+            ), 1,
+            "a short-id parent is read: dropping its stale constant is refused",
+            "is gone",
+        )
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        sh(root, "init", "-q", "-b", "main")
+        write(root, "src/consts.txt", "LIMIT = 4\n")
+        write(root, "src/hot/a.rs", "fn a() {}\n")
+        write(root, "toolchain.toml", 'channel = "1.0"\n')
+        write(root, "docs/design/TRACKED.md", TRACKED)
+        c1 = commit(root, "c1: the measured tree")
+        write(root, "docs/benchmarks/cap.txt", f"# git_rev={c1}\nvalue=1\n")
+        commit(root, "capture lands")
+        fresh = constant("control", "current", c1)
+        write(root, "toolchain.toml", 'channel = "2.0"\n')
+        bump = commit(root, "bump: the pinned toolchain moves")
+        ack = (
+            f'[[toolchain]]\ncommit = "{bump[:10]}"\n'
+            'note = "codegen may differ; allocation path re-read"\n\n'
+        )
+        results.expect(
+            root, document(path_set(), fresh, toolchain=ack), 1,
+            "a short toolchain commit is refused, and the bump stays acknowledged",
+            "written in full", absent=("Add a [[toolchain]] entry",),
+        )
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        rev = init_tree(root)
+        c1 = rev["c1"]
+        control = constant("control", "current", c1)
+        write(root, LEDGER, document(path_set(), control + estimated("guess")))
+        commit(root, "the ledger as the base branch holds it", ledger=True)
+        commit(root, "the pull request's commit")
+        write(root, "docs/benchmarks/new_cap.txt", f"# git_rev={c1}\nvalue=51\n")
+        commit(root, "the measurement lands")
+        results.expect(
+            root, document(path_set(), control + retired(
+                "guess", c1[:10], capture="docs/benchmarks/new_cap.txt",
+            )), 1,
+            "a short retired capture_rev is refused, and the estimate stays retired",
+            "written in full", absent=("is gone",),
+        )
+
+
 def selftest() -> int:
     results = Results()
+    scenario_full_ids(results)
+    scenario_dispositions(results)
+    scenario_gated_rows(results)
     scenario_estimated(results)
     scenario_retired(results)
     scenario_current(results)

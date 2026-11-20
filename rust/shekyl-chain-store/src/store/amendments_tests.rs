@@ -12,8 +12,8 @@
 //!   and a re-connect; `long_term_effective_median` is the verdict's median
 //!   in force **for** the height (SCR-19; derived since E6 slice 7), written
 //!   at that height and reversed by the journal.
-//! - **A2** — every table with a writer exists from the seal, none of the
-//!   `Unshaped` ones do, and a sealed file missing one is refused (SI-7).
+//! - **A2** — every catalogued table exists from the seal, and a sealed
+//!   file missing one is refused (SI-7).
 //! - **A3** — `txs_pqc_auth_hash` has a row for a 4-part txid and none for
 //!   the coinbase or a 3-part serve credit, the row is the identity's value, and a
 //!   pop removes it with the rest of the block.
@@ -23,16 +23,16 @@ use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{
-    at, body, candidate, connect_chain, connect_chain_anchored, credited, height_maturing, judge,
-    prefix_to, spend, spendable_prefix, FIRST_SPEND_HEIGHT,
+    at, candidate, connect_chain, connect_chain_anchored, height_maturing, judge, prefix_to, spend,
+    spendable_prefix, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
-use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
+use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::{BlockInfo, Canonical, CurveTreeState};
 use crate::schema::{
     self, ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_SETTLEMENT, BLOCKS, BLOCK_BURN,
-    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS, TXS_PQC_AUTH_HASH, UNDO_LOG,
+    BLOCK_INFO, CURVE_TREE_LEAVES, CURVE_TREE_META, TXS_PQC_AUTH_HASH, UNDO_LOG,
 };
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
@@ -101,7 +101,6 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     out.expect("reconnect");
     assert_eq!(cum(second) - cum(first), 3);
     assert_eq!(cum(second), 5);
-    cleanup(&path);
 }
 
 #[test]
@@ -155,13 +154,12 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
         zone,
         "the parent's row is not what a connect at 2 writes"
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ A2
 
 #[test]
-fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
+fn the_seal_creates_every_catalogued_table() {
     let path = tmp("a2-seal-set");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let snap = store.begin_read().expect("read");
@@ -183,13 +181,6 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
         .expect("t")
         .is_empty()
         .expect("len"));
-    // `Unshaped` tables are not: they have no writer to have a file
-    // presence for, and creating them would make "no writer yet" a fact the
-    // file could not tell from "empty".
-    assert!(
-        snap.open_table(TXS).is_err(),
-        "txs is Unshaped and not sealed"
-    );
     // Settlement's three tables are sealed and empty: a chain on which no
     // epoch has settled and no draw was issued is told from a file that
     // lacks them (`SO-D10`).
@@ -225,36 +216,25 @@ fn the_seal_creates_every_table_with_a_writer_and_no_unshaped_one() {
             .decode(),
         Ok(CurveTreeState::EMPTY)
     );
-    // The set is the catalogue's own: exactly the non-`Unshaped` targets.
-    let sealed = schema::UNDO_TARGETS.iter().filter(|t| t.sealed()).count();
-    let unshaped = schema::catalogue()
-        .iter()
-        .filter(|spec| spec.value == <crate::codec::Unshaped as redb::Value>::type_name())
-        .count();
-    assert_eq!(sealed + unshaped, schema::catalogue().len());
-    // 28 → 22 at layout 11: S-ARCH shaped six archival tables
-    // (`DRS_E1_SARCH.md` §4 — the plan's "seven" counted the `properties`
-    // cell, which is not a table). 22 → 20 at layout 12: S-POOL **evicted**
-    // `txpool_meta` and `txpool_blob` to the pool file (`DRS_E1_SPOOL.md`
-    // §4; not shaped here — gone from here). 20 → 18 at layout 13: S-ALT
-    // shaped `alt_blocks` and **folded** `archival_alt_attestation_witness`
-    // into it (`DRS_E1_SALT.md` §4; `FOLDED_INTO`). The journals,
-    // settlement, slash-applied, accrual and segment rows stay `Unshaped`
-    // for their increments. 18 → 12 at layout 15: DRS-E3 commit 1 **did not
-    // port** four (`NOT_PORTED`: the pending set is a view of the block
-    // index, two were the C++'s pop journals, the checkpoint is a view of
-    // the meta row — `DRS_E3_CURVE_WRITER.md` §3.7) and **shaped** the two
-    // position maps (`Coded<TreePosition>` / `Coded<GlobalOutputIndex>`).
-    // 12 → 3 at layout 18: DRS-E4 commit 1 **did not port** seven archival
-    // tables (`NOT_PORTED`: five pop journals and the close log are views of
-    // the undo log, the per-height accrual rows a view of the emission
-    // split, the freeze registry retired — `DRS_E4_ARCHIVAL_WRITER.md`
-    // §3.3, §3.4) and **shaped** `archival_slash_log` and
-    // `archival_slash_applied`. 3 → 2 at layout 22: `SO-D10` **shaped**
-    // `archival_settlement`. What remains `Unshaped` is the two dead tables
-    // (`txs`, `hf_starting_heights`).
-    assert_eq!(unshaped, 2, "the §11.1(f) count at this layout");
-    cleanup(&path);
+    // The set is the catalogue's own: every catalogued table exists in the
+    // file, empty or not, from the first transaction. Read through the
+    // engine with the store closed, so the check is the file's, not the
+    // store's open path.
+    assert_eq!(schema::UNDO_TARGETS.len(), schema::catalogue().len());
+    drop(meta);
+    drop(snap);
+    drop(store);
+    let db = redb::Database::open(&path).expect("the file opens");
+    let txn = db.begin_read().expect("read");
+    for table in schema::UNDO_TARGETS {
+        assert!(
+            table.exists(&txn).expect("exists"),
+            "{} is catalogued and not sealed",
+            table.name()
+        );
+    }
+    drop(txn);
+    drop(db);
 }
 
 #[test]
@@ -286,7 +266,6 @@ fn a_sealed_file_missing_a_sealed_table_is_refused_as_si7() {
             StoreCannot::SchemaVersionAbsent | StoreCannot::SchemaVersionMismatch { .. }
         )
     ));
-    cleanup(&path);
 }
 
 /// The version check comes **before** the seal-set check: a file at another
@@ -322,7 +301,6 @@ fn a_file_at_another_version_is_a_version_mismatch_not_a_missing_table() {
         ),
         "{refused}"
     );
-    cleanup(&path);
 }
 
 /// A file whose `properties` table was written under another value shape
@@ -352,7 +330,6 @@ fn a_file_with_a_foreign_header_table_type_is_layout_foreign() {
         })
         .to_string()
     );
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------------ A3
@@ -362,23 +339,18 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     let path = tmp("a3-row-iff-4-part");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     // Every spend carries per-input auths (the wire reads `nvin` of them),
-    // so a spend is 4-part — here the join-market post, a real spend that
-    // opens the record the 3-part body needs; the 3-part non-coinbase
-    // transaction is the serve-credit-only shape, whose `pqc_auths` are
-    // empty by rule (CEN-H20) — its countersignature is over the pass
-    // record (CEN-J10) — and which connects only behind its join (CEN-L7 /
-    // CEN-J4), one block above it.
-    let (four_part, three_part) = credited(9);
-    assert!(three_part.txid_parts().pqc_auth_hash.is_none());
-    // The first spend block lists the 4-part join; the block above it the
-    // 3-part credit: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one
-    // per block through the join's), then four_part, then the credit
-    // block's coinbase, then three_part. The expectation is read off the
-    // join **as connected**: a join is a spend the chain builds at its
-    // height, and the third component is over its auths.
+    // so a spend is 4-part — here the join-market post, a real spend. Every
+    // non-coinbase transaction is a spend, so the 3-part transactions are
+    // the coinbases: `Ct::Null` carries no `pqc_auths`.
+    // The first spend block lists the 4-part join; the block above it lists
+    // nothing: tx_ids 0..=FIRST_SPEND_HEIGHT are the coinbases (one per block
+    // through the join's), then the join, then the next block's coinbase.
+    // The expectation is read off the join **as connected**: a join is a
+    // spend the chain builds at its height, and the third component is
+    // over its auths.
     let (_, connected) = connect_chain_anchored(
         &store,
-        &spendable_prefix(vec![vec![four_part], vec![body(three_part)]]),
+        &spendable_prefix(vec![vec![Listed::Join { slot: 9 }], vec![]]),
     );
     let expected = connected
         .get(at(BlockHeight::from_raw(FIRST_SPEND_HEIGHT)))
@@ -388,7 +360,6 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         .pqc_auth_hash
         .expect("a pqc_auth per input makes the txid 4-part");
     let four_part_id = FIRST_SPEND_HEIGHT + 1;
-    let three_part_id = four_part_id + 2;
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(TXS_PQC_AUTH_HASH).expect("sealed");
     assert_eq!(table.len().expect("len"), 1, "one 4-part txid, one row");
@@ -403,8 +374,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     for (tx_id, why) in [
         (0, "genesis coinbase"),
         (FIRST_SPEND_HEIGHT, "the join block's coinbase"),
-        (four_part_id + 1, "the credit block's coinbase"),
-        (three_part_id, "3-part serve credit"),
+        (four_part_id + 1, "the next block's coinbase"),
     ] {
         assert!(
             table.get(tx_id).expect("g").is_none(),
@@ -414,7 +384,7 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
     drop(table);
     drop(snap);
 
-    // The row is journaled: popping the credit's block and then the join's
+    // The row is journaled: popping the next block and then the join's
     // removes it with the join's block.
     for _ in 0..2 {
         let popped: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
@@ -426,7 +396,6 @@ fn txs_pqc_auth_hash_has_a_row_iff_the_txid_is_4_part_and_it_is_the_identitys() 
         .expect("sealed")
         .is_empty()
         .expect("len"));
-    cleanup(&path);
 }
 
 #[test]
@@ -440,8 +409,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
     let alt_bodies = schema::ordinal_of("alt_block_bodies").expect("catalogued");
     let release_journal = schema::ordinal_of("archival_release_journal").expect("catalogued");
-    let complete = schema::ordinal_of("archival_complete_trees").expect("catalogued");
-    let support_unissued = schema::ordinal_of("archival_support_unissued").expect("catalogued");
     let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
     let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
     let support_settlement = schema::ordinal_of("archival_support_settlement").expect("catalogued");
@@ -456,8 +423,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // (`SHT-Q2`) was appended after it, `SO-D10`'s two index tables after
     // that, `SO-D12`'s two draw-state tables after those, then the switch
     // PR's recorded proof-of-work, DRS-E5 PR-b's alternative bodies,
-    // `SO-D12`'s Release journal, `SO-D12h`'s frozen complete trees, the
-    // support stream's four tables, and `SO-D12` increment 4c's bundle
+    // `SO-D12`'s Release journal, the support stream's three tables, and `SO-D12` increment 4c's bundle
     // queue and body store last, so they hold the final slots in that
     // order.
     assert_eq!(ordinal.index() + 1, archival_len.index());
@@ -468,9 +434,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     assert_eq!(drawable_digest.index() + 1, block_pow.index());
     assert_eq!(block_pow.index() + 1, alt_bodies.index());
     assert_eq!(alt_bodies.index() + 1, release_journal.index());
-    assert_eq!(release_journal.index() + 1, complete.index());
-    assert_eq!(complete.index() + 1, support_unissued.index());
-    assert_eq!(support_unissued.index() + 1, support_block.index());
+    assert_eq!(release_journal.index() + 1, support_block.index());
     assert_eq!(support_block.index() + 1, support_issued.index());
     assert_eq!(support_issued.index() + 1, support_settlement.index());
     assert_eq!(support_settlement.index() + 1, bundle_queue.index());
@@ -480,12 +444,15 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         catalogue_len,
         "archival_bundle_body is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the nineteen Rust-only tables named below.
+    // 30 tables the LMDB store also held (`rule_set_in_force` under its
+    // old name, `hf_versions`; `archival_serve_credit` left with the
+    // carrier class, the switch's C7) plus the seventeen Rust-only tables
+    // named below.
     // The pool file holds `txpool_meta` / `txpool_blob`
     // (`schema::MIRRORED_ELSEWHERE`), `alt_blocks` holds the alternative
-    // block's attestation witness (`schema::FOLDED_INTO`), and the tables
+    // block's bundle references (`schema::FOLDED_INTO`), and the tables
     // `schema::NOT_PORTED` names are not here.
-    assert_eq!(catalogue_len, 52);
+    assert_eq!(catalogue_len, 47);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -502,8 +469,6 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "block_pow",
             "alt_block_bodies",
             "archival_release_journal",
-            "archival_complete_trees",
-            "archival_support_unissued",
             "archival_support_block",
             "archival_support_issued",
             "archival_support_settlement",

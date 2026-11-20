@@ -66,7 +66,7 @@ The sentence Phase 1 wrote for Phase 2 — *"replace epee portable-storage in
 cannot be built: a Rust codec cannot serialize a C++ struct it does not know
 the layout of, and giving it that layout means a `#[repr(C)]` twin of every
 wire struct, marshaled into a C++ handler — a permanent façade that
-[`40-ffi-discipline`](../../.cursor/rules/40-ffi-discipline.mdc) forbids
+[`40-ffi-discipline`](RULE_40_FFI_DISCIPLINE.md) forbids
 and that would double every one of the 872 fields.
 
 **The only honest exit:** the wire type and the handler move to Rust

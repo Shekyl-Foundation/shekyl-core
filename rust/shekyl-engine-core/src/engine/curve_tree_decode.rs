@@ -8,7 +8,7 @@
 //! The curve tree contains **every** on-chain output, not just the
 //! wallet-owned ones the scanner recovers. This module decodes a parsed
 //! [`ScannableBlock`] into the full per-block leaf set
-//! ([`OwnedTxLeaves`](crate::scan::OwnedTxLeaves)) that the producer carries
+//! ([`OwnedTxLeaves`]) that the producer carries
 //! on [`ScanResult`](crate::scan::ScanResult) and the merge feeds to the
 //! [`CurveTreeActor`](super::curve_tree_actor) for ingest.
 //!
@@ -30,8 +30,8 @@
 //!   diverge from the daemon (`CT2_DRAIN_ORDER.md` §3.2).
 //! - **`commitment`** is `base.commitments[o]`. The committed base
 //!   ([`CtBase`](shekyl_wire::CtBase)) is present for **both** the coinbase
-//!   ([`Ct::Null`](shekyl_wire::Ct::Null)) and spends
-//!   ([`Ct::Fcmp`](shekyl_wire::Ct::Fcmp)) — the coinbase `Null` ct carries a
+//!   ([`Ct::Null`]) and spends
+//!   ([`Ct::Fcmp`]) — the coinbase `Null` ct carries a
 //!   real committed base (`enc_amounts`/`enc_labels`/`outPk`, GENESIS §9.6/§9.9),
 //!   which the legacy parse dropped — so commitment access is uniform. `None`
 //!   per output (slot absent) makes that output leaf-ineligible (the C++ skip
@@ -122,7 +122,7 @@ pub(crate) fn decode_block_leaves(
         .iter()
         .zip(&scannable.block.transaction_hashes)
     {
-        txs.push(decode_tx(tx, *tx_hash, false)?);
+        txs.push(decode_tx(tx.tx(), *tx_hash, false)?);
     }
     Ok(txs)
 }
@@ -185,7 +185,7 @@ fn decode_tx(
 /// Classify an output's curve-tree target.
 ///
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.5: `txout_to_tagged_key`
-/// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::TAG_OUTPUT_TAGGED_KEY)) is the
+/// ([`TAG_OUTPUT_TAGGED_KEY`](shekyl_wire::transaction::TAG_OUTPUT_TAGGED_KEY)) is the
 /// **sole** genesis output type, so every parsed [`Output`] classifies as a
 /// tagged key. [`TargetKind::Key`] and [`TargetKind::Other`] remain in
 /// [`shekyl_curve_tree`] only for daemon leaf-set parity.
@@ -251,7 +251,7 @@ mod tests {
             .unwrap_or_default();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs,
                 extra,
@@ -417,8 +417,8 @@ mod tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            section_root: shekyl_types::SectionRoot::from_bytes(
+                shekyl_archival_retention::empty_section_root(),
             ),
         };
         let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);
@@ -430,7 +430,7 @@ mod tests {
         };
         let scannable = ScannableBlock {
             block,
-            transactions: vec![non_miner],
+            transactions: vec![shekyl_wire::BoundTx::whole(non_miner)],
             first_output_index: None,
         };
 

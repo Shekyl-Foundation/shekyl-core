@@ -21,11 +21,19 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [dev-dependencies]
+# The awaiting tests build a block's bundle section and its root
+# (`runs/awaiting_tests.rs`); the production crate opens references
+# through `shekyl-chain-rules` and names no retention type.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 proptest = "1"
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# The proofs module's own hasher (`proof.rs`): real RandomX for the model's
+# tests goes through the one owner of caches, as the daemon's does.
+shekyl-hasher = { path = "../shekyl-hasher" }
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [features]

@@ -17,7 +17,7 @@ fn program(store: &ChainStore, formed: StructurallyValid) -> Result<(), StoreErr
         let view = batch.chain_view();
         let pool = KeyImages::default();
         let judged = PoolView::new(&view, &pool);
-        let valid = validate(formed, &judged, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let valid = validate(formed, &judged, &RuleSet::GENESIS, &Trust::UNPINNED)
             .unwrap()
             .unwrap();
         batch.connect(valid, RuleSet::GENESIS).map(|_| ())

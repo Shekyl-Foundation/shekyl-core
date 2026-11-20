@@ -13,8 +13,7 @@
 //! forecloses non-canonical-encoding txid divergence before it can exist),
 //! `Transaction::validate()`, the explicit coinbase-submit rejection (the
 //! one live `tx_sanity_check` residue, §8.8), the pool-policy statics
-//! (`unlock_time == 0` row P1; the serve-credit zero-fee consensus pin,
-//! row N6's static leg), the bond-post structural statics
+//! (`unlock_time == 0` row P1), the bond-post structural statics
 //! (`ver_non_input_consensus` rows N7's context-free legs), and the
 //! key-image domain check (row M8 thin-port). Any failure is
 //! `Rejected{Malformed}` — deterministically permanent for these bytes —
@@ -34,14 +33,12 @@ use shekyl_wire::transaction::{BondPost, BondPostKind, Ct, Input, Transaction, M
 
 use crate::submit::facts::BondProbe;
 
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 
 /// Shape class of an admissible submission, decided by the input-arm mix
 /// (which `shekyl-wire::validate` has already constrained to the §2.5
-/// matrix). Phase C keys its check set off this: the ref-age window and
-/// membership proof apply to the spending shapes only — the C++ oracle
-/// never consults `referenceBlock` for a serve-credit-only tx
-/// (`blockchain.cpp:3565-3609` runs no ref checks on that arm).
+/// matrix). Phase C keys its check set off this; every shape is spending
+/// and runs the ref-age window and the membership proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitTxKind {
     /// Regular FCMP++ spend: every input is `txin_to_key`.
@@ -49,9 +46,6 @@ pub enum SubmitTxKind {
     /// Bond-post: one `bond_post` input plus ≥ 1 `txin_to_key` funding
     /// inputs (spending shape; runs the K battery over the funding inputs).
     BondPost,
-    /// Fee-only serve-credit: every input is `serve_credit` — non-spending,
-    /// no outputs, zero fee by consensus.
-    ServeCreditOnly,
     /// Emission claim: one `reward_emission` input plus ≥ 0 `txin_to_key`
     /// fee inputs (Q11 — with none, the fee is paid out of the mint).
     /// Spending-shaped for the reference checks: the membership-only
@@ -64,7 +58,7 @@ pub enum SubmitTxKind {
 /// with the facts later phases need already extracted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSubmission {
-    /// The exact bytes (post hex-decode) — the blob the commit shim stores,
+    /// The exact bytes submitted — the blob the commit shim stores,
     /// byte-identical to what the engine verified (checked below).
     pub blob: Vec<u8>,
     /// The parsed transaction.
@@ -73,12 +67,11 @@ pub struct ParsedSubmission {
     /// verdict path per §3.4, release-checked against C++ at commit).
     pub txid: TxHash,
     /// Key images of the `txin_to_key` inputs, in vin order (strictly
-    /// descending, enforced by `validate()`). Empty for serve-credit-only.
+    /// descending, enforced by `validate()`).
     pub key_images: Vec<[u8; 32]>,
-    /// The wire `referenceBlock` hash. Meaningful for the spending shapes;
-    /// present-but-unconsulted for serve-credit-only (oracle parity).
+    /// The wire `referenceBlock` hash.
     pub reference_block: BlockHash,
-    /// Transaction fee (the `Ct::Fcmp` fee field; 0 for serve-credit-only).
+    /// Transaction fee (the `Ct::Fcmp` fee field).
     pub fee: u64,
     /// Consensus transaction weight (serialized size + Bp+ clawback) — the
     /// value the fee floor and weight rule charge against (row I3).
@@ -210,14 +203,14 @@ impl PhaseAReject {
 
     /// The wire verdict this refusal maps to — always `Malformed` (§3.1:
     /// every Phase-A failure is deterministically permanent for the bytes).
-    pub fn verdict(&self) -> SubmitVerdict {
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed,
+    pub fn verdict(&self) -> Verdict {
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         }
     }
 }
 
-/// Run Phase A over the submitted hex string.
+/// Run Phase A over the submitted bytes.
 ///
 /// On success the transaction is structurally and statically admissible:
 /// canonical bytes, canonical shape, known arm mix, valid key-image
@@ -225,20 +218,17 @@ impl PhaseAReject {
 /// submission is `Rejected{Malformed}` with a logged reason; nothing
 /// beyond this function has run, so a failure here provably cost no lock
 /// and no FFI call.
-pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> {
-    // Bound the decode before allocating: a hex string longer than
-    // 2 × MAX_TX_SIZE cannot decode to an admissible blob (row I1's
-    // DoS-bounded-decode property, enforced ahead of the allocation
-    // rather than after it).
-    if tx_hex.len() > MAX_TX_SIZE * 2 {
+pub fn parse_submission(blob: &[u8]) -> Result<ParsedSubmission, PhaseAReject> {
+    // Bound before any copy (row I1's DoS-bounded-decode property). The
+    // request body's own limit already bounds the base64 it came in.
+    if blob.len() > MAX_TX_SIZE {
         return Err(PhaseAReject::new(format!(
-            "tx_blob hex length {} exceeds the {} cap",
-            tx_hex.len(),
-            MAX_TX_SIZE * 2
+            "the transaction is {} bytes, past the {} cap",
+            blob.len(),
+            MAX_TX_SIZE
         )));
     }
-    let blob = hex::decode(tx_hex)
-        .map_err(|e| PhaseAReject::new(format!("tx_blob is not valid hex: {e}")))?;
+    let blob = blob.to_vec();
 
     // Parse: size cap + exact consumption (trailing bytes rejected) —
     // rows I1/I2/N1/N2 and the dense-tag arm gate (row M2).
@@ -285,10 +275,9 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
     }
 
     // Arm-mix classification. validate() has already enforced the §2.5
-    // matrix (serve-credit all-or-none, ≤ 1 bond-post, gen sole ⇒ rejected
-    // above), so this is a total match over the remaining shapes.
+    // matrix (≤ 1 bond-post, gen sole ⇒ rejected above), so this is a
+    // total match over the remaining shapes.
     let mut n_to_key = 0usize;
-    let mut n_serve_credit = 0usize;
     let mut n_bond_post = 0usize;
     let mut n_emission = 0usize;
     let mut key_images: Vec<[u8; 32]> = Vec::new();
@@ -298,7 +287,6 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
                 n_to_key += 1;
                 key_images.push(*key_image);
             }
-            Input::ServeCredit { .. } => n_serve_credit += 1,
             Input::BondPost(_) => n_bond_post += 1,
             Input::Gen(_) => {
                 // Unreachable: gen-mixed rejected by validate(), gen-sole
@@ -311,10 +299,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
             Input::ArchivalRewardEmission { .. } => n_emission += 1,
         }
     }
-    let kind = if n_serve_credit > 0 {
-        // validate(): serve-credit never mixes; all inputs are serve-credit.
-        SubmitTxKind::ServeCreditOnly
-    } else if n_emission == 1 {
+    let kind = if n_emission == 1 {
         // validate(): ≤ 1 emission, never mixed with a bond_post (§2.5) —
         // only ToKey fee inputs can co-reside.
         SubmitTxKind::Emission
@@ -337,17 +322,6 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         }
     };
 
-    // Serve-credit consensus statics (row N6's static legs, pinned at
-    // `tx_verification_utils.cpp:120-139` / `blockchain.cpp:3565-3597`):
-    // zero fee is a consensus rule for the non-spending arm. The
-    // no-outputs / no-pqc-auths / no-prunable shape is already validate()'s
-    // fee-only coupling; the fee pin is the engine's to add.
-    if kind == SubmitTxKind::ServeCreditOnly && fee != 0 {
-        return Err(PhaseAReject::new(format!(
-            "serve-credit tx must carry zero fee, found {fee}"
-        )));
-    }
-
     // Bond-post structural static (row N7's context-free leg, pinned at
     // `tx_verification_utils.cpp:151-152` / `blockchain.cpp:3635-3649`):
     // ≥ 1 txin_to_key funding input. The companion pseudoOuts arity
@@ -364,7 +338,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
 
     // Emission statics (§8.7.2). E1: the opaque vin must decode and
     // validate under the canonical `emission_wire` codec — the same reader
-    // the C++ oracle reaches through `shekyl_archival_emission_vin_extract`
+    // the deleted C++ oracle reached through `shekyl_archival_retention`'s emission-vin parse (`DEL-008`)
     // — parsed once here and carried on the submission. EV3: the loud
     // reward vout sum must be non-zero (wire validate() already pinned it
     // overflow-free).
@@ -379,11 +353,11 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
         let mut cursor = bytes.as_slice();
         let vin = ArchivalRewardEmissionVin::read(&mut cursor)
             .map_err(|e| PhaseAReject::new(format!("emission vin decode failed: {e:?}")))?;
-        // Length-exact, mirroring the C++ oracle's `parse_emission_vin`
-        // (shekyl-ffi): trailing bytes inside the opaque blob are invisible
-        // to the outer tx's byte-canonicality check, and the commit-path
-        // re-extract rejects them — enforce the same bound here so the
-        // divergence class is unrepresentable past Phase A.
+        // Length-exact, as the block validator's parse is
+        // (`shekyl-chain-rules`, `tx_emission`): trailing bytes inside the
+        // opaque blob are invisible to the outer tx's byte-canonicality
+        // check, and the block path rejects them — enforce the same bound
+        // here so the divergence class is unrepresentable past Phase A.
         if !cursor.is_empty() {
             return Err(PhaseAReject::new(format!(
                 "emission vin carries {} trailing byte(s)",
@@ -441,7 +415,6 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
                 ));
             }
         }
-        SubmitTxKind::ServeCreditOnly => {}
     }
 
     // Key-image domain (row M8 thin-port of

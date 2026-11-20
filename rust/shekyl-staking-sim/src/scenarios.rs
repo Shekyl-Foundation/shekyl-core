@@ -7,20 +7,23 @@
 //! one-axis sweeps off a baseline plus the whale×bond cross — not the full Cartesian
 //! product — to keep runtime bounded while exercising each axis.
 
-use crate::agent::{run_epoch, AgentParams};
+use crate::agent::{run_epoch, AgentParams, BondScope, CarryShape};
 use crate::audit::{challenge_needed, deterrence_threshold, read_prob};
 use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFAULT};
 use crate::metrics::{
-    churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
+    churn_rate, coverage, coverage_with_r, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, CompositionParams, EraShape, Rng, Shard, World};
+use crate::model::{
+    r_target, Actor, Shard, World, AGE_WEIGHT, BOND_FLOOR, RELEASE_COOLDOWN_EPOCHS,
+};
 use crate::participation::{
-    admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
+    admit_entrants, bonded_active_count, process_exits, slash_exit, ParticipationParams,
 };
 use crate::retrieval::{
     r_target_for_availability, r_target_for_durability, serving_availability, serving_durability,
 };
-use crate::reward::{evaluate, CurveImpl, RewardParams};
+use crate::reward::{evaluate, CurveImpl, RewardArm, RewardParams};
+use crate::rng::SplitMix64;
 use crate::transport::{effective_uptime, regime_latency_epochs};
 use serde::Serialize;
 
@@ -56,32 +59,25 @@ pub struct SimConfig {
     pub pseudonym_cost: f64,
     pub age_weight: f64,
     pub curve_impl: CurveImpl,
+    /// Which mechanism pays (`reward::RewardArm`). Production by default.
+    pub reward_arm: RewardArm,
+    /// A7: which held shards post a bond. `None` takes the arm's scope
+    /// ([`SimConfig::arm_defaults`]); a named arm sets it.
+    pub bond_scope: Option<BondScope>,
     pub storage_unit_cost: f64,
     pub bond_rate: f64,
     /// Age-scaling of the bond (L4): 0 = flat, >0 = older shards bond higher.
     pub bond_age_scale: f64,
-    pub bond_carry: f64,
+    /// A6: the carry beyond storage. `None` takes the arm's shape
+    /// ([`SimConfig::arm_defaults`]).
+    pub carry: Option<CarryShape>,
+    /// R10: epochs a voluntary exit's bond waits in the release escrow. `None`
+    /// takes the arm's ([`SimConfig::arm_defaults`]).
+    pub exit_cooldown_epochs: Option<u32>,
     pub deep_threshold: f64,
     /// Storage units a deep shard occupies (L8 storage leg / gate-5 granularity lever).
     /// `1.0` = iteration-1 behavior; the (bond × shard-size) pair sweep varies it.
     pub deep_shard_size: f64,
-    /// **Composition axis** (`PDM-Q-F34`): heavy/light per-shard size ratio `S` at constant
-    /// total storage demand. `1.0` = flat (every pre-composition scenario, byte-identical).
-    pub size_spread: f64,
-    /// Key per-shard size on an independent draw instead of age — the confound control
-    /// that separates a cost-band effect from an age-band one.
-    pub size_decorrelated: bool,
-    /// **Era-mean shape** — how the era term moves with the birth era
-    /// (`PDM-Q-F34`). `Monotone` is L19's; `Plateau` and `Burst` are what let a heavy
-    /// era age into the deep band rather than always sitting at the frontier.
-    pub era_shape: EraShape,
-    /// **Per-transaction shape dispersion** — the CV of per-transaction good, which
-    /// the shard sum suppresses by `√T`. `0.0` = off, and no RNG is drawn.
-    pub cv_tx: f64,
-    /// **Demand matching** (§L19a item 1): rescale the live population's sizes to mean
-    /// 1 every epoch, so total bytes are fixed across every leg. `false` for every
-    /// pre-L19a scenario, byte-identical.
-    pub demand_match: bool,
 
     // L9 duration axis + dynamic world (iteration 2; inert when `!dynamic`).
     /// Dynamic frontier-window: shards age each epoch and recycle at age 1.
@@ -156,15 +152,6 @@ pub struct SimConfig {
     /// Shards appended per epoch (the block-production / chain-growth rate) until the
     /// window reaches `n_shard`, after which the steady-state recycle holds it.
     pub shard_growth_per_epoch: usize,
-    /// **Foundation floor** (L12): deep-shard replicas the foundation runs at genesis as
-    /// the bootstrap coverage guarantee, decaying linearly to zero as the bonded-archiver
-    /// population reaches `floor_decay_pop`. `0` ⇒ no floor (the pure-market read showing
-    /// the unbacked transient gap). Counts toward retrieval coverage only, never the
-    /// reward servo (see `participation::foundation_floor`).
-    pub floor_replicas: usize,
-    /// Bonded-archiver population at which the foundation floor reaches zero (it withdraws
-    /// once the market is this thick). Set near the emergent steady-state archiver count.
-    pub floor_decay_pop: f64,
 
     // L13 fee-era / sustainability axis (mission timeframe 2; inert when `!fee_era`).
     /// As block subsidy → 0 the archival purse comes from fees / a bounded terminal
@@ -202,10 +189,11 @@ pub struct SimConfig {
     /// damps this loop (bounded) or it runs away (priority-1 durability failure).
     pub price_coupling: f64,
     /// **Fiat flow cost (P2 / second death-spiral leg).** When on, the per-actor flow
-    /// cost is fiat-denominated and divided by `token_price` in the exit APR
-    /// (`apr = R/B − F/(B·p)`), so a low/falling price raises the real flow-cost drag and
-    /// can force exit with **no** trust-loss trigger. Off ⇒ token-denominated flow cost
-    /// (the price cancels; every pre-P2 scenario), byte-identical.
+    /// expenses are fiat-denominated and divided by `token_price` in the exit APR
+    /// (`apr = R/B − K/B − F/(B·p)`; the capital carry `K` stays in tokens, P11), so a
+    /// low/falling price raises the real flow-cost drag and can force exit with **no**
+    /// trust-loss trigger. Off ⇒ token-denominated flow cost (the price cancels; every
+    /// pre-P2 scenario), byte-identical.
     pub flow_cost_fiat: bool,
     /// Initial token price (fiat per token) used when `flow_cost_fiat`. `1.0` ⇒ the fiat
     /// flow cost equals the token-denominated one (the cancellation case).
@@ -316,13 +304,6 @@ pub struct SimConfig {
     /// Free-rider penalty if caught (slashed bond), in the same unit as `freeride_benefit`.
     /// Deterrence threshold `a* = freeride_benefit / freeride_penalty`.
     pub freeride_penalty: f64,
-
-    /// **Age-stratified floor tilt (P3).** Mean-preserving oldest-ward tilt of the
-    /// foundation floor (and, in the fee-era, the terminal-subsidy backstop): the oldest
-    /// deep shards get `floor·(1+tilt)`, the just-deep shoulder `floor·(1−tilt)`, same total
-    /// cost. `0.0` ⇒ uniform floor (byte-identical). Protects the irreplaceable tail that
-    /// fails first at both temporal ends (L12 hand-off, L13 thinning).
-    pub floor_age_tilt: f64,
 
     /// **Transport / latency-regime coupling (L16).** When on, `fetch_latency_per_unit`
     /// is the onion-rendezvous operating point (L10 seating lag) and depresses the
@@ -456,25 +437,19 @@ pub struct ScenarioResult {
     /// archiver set. The attractor check requires this converge to the same value from
     /// fill-up (`init_active_frac=0`) and trim-down (`init_active_frac=1`) starts.
     pub bonded_active: f64,
-    /// **Bootstrap worst deep gap, unfloored** (L12): peak serving deep under-target over
+    /// **Bootstrap worst deep gap** (L12): peak serving deep under-target over
     /// the whole run — the bare-market cold-start transient (deep history accrues before
     /// the archiver population that covers it does). `0` outside bootstrap.
     pub boot_deep_under_peak: f64,
-    /// **Bootstrap worst deep gap, floored** (L12): the same peak with the
-    /// population-decaying foundation floor added. The floor is load-bearing iff this is
-    /// ≈0 while `boot_deep_under_peak` is large — the floor covering the transient the
-    /// market cannot yet. `0` outside bootstrap.
-    pub boot_deep_under_floored_peak: f64,
     /// **Peak bonded-archiver count** (L12): max over the run. `bonded_active_peak −
     /// bonded_active` (steady) is the overshoot the APR-inversion warning predicts;
     /// ≈0 means entry tracked demand monotonically (no overshoot-and-shed). Equals
     /// `bonded_active` outside endogenous runs.
     pub bonded_active_peak: f64,
-    /// **Oldest-band floored gap peak** (P3): the worst floored deep gap restricted to the
-    /// oldest band. `> boot_deep_under_floored_peak` ⇒ the residual concentrates in the
-    /// irreplaceable tail (uniform floor); an age-stratified floor pulls it down at equal
-    /// total foundation cost. `0` outside bootstrap/fee-era.
-    pub boot_oldest_floored_peak: f64,
+    /// **Oldest-band gap peak** (P3): the worst serving deep gap restricted to the
+    /// oldest band. `> boot_deep_under_peak` ⇒ the residual concentrates in the
+    /// irreplaceable tail. `0` outside bootstrap/fee-era.
+    pub boot_oldest_under_peak: f64,
     /// **Fee-era realized purse at end** (L13): the budget in the final epoch. Below the
     /// initial `budget` it shows the subsidy decay; at `budget_ceiling` it shows the
     /// adaptive servo saturated (fee market maxed). Equals `budget` outside fee-era.
@@ -482,7 +457,7 @@ pub struct ScenarioResult {
     /// **Fee-era worst serving deep gap** (L13): peak serving deep under-target over the
     /// run's second half — the thinned-tail / death-spiral read. A sustained high value
     /// is a priority-1 durability failure (the deep tail is unfunded and going dark);
-    /// ≈0 means the decayed purse, adaptive servo, or foundation floor held the tail.
+    /// ≈0 means the decayed purse or the adaptive servo held the tail.
     pub fee_deep_under_peak: f64,
     /// **Post-shock worst serving deep gap** (L17): peak serving deep under-target from
     /// the shock epoch on — the acute damage. `0` outside the shock axis.
@@ -505,6 +480,14 @@ pub struct ScenarioResult {
     /// re-seed path (bandwidth-bound when `reseed_rate > 0`; see `sole_source_*`).
     /// On shock-free dynamic scenarios this is the frontier-noise baseline.
     pub deep_extinct_total: f64,
+    /// Bond capital burned by slash exits over the run (A18): the posted bond of
+    /// every L17 shock-exited actor. Zero wherever no shock fires.
+    pub slashed_capital: f64,
+    /// Slash exits over the run (A18).
+    pub slash_exits: usize,
+    /// The most atomic units `reward_share_floor` left unminted in one epoch
+    /// (production arm; `0` on the registered arm).
+    pub reward_dust_atomic_max: u64,
     /// **Post-shock market wipe-out events** (swan-2 / W1, re-read swan-4): the subset
     /// of `deep_extinct_total` at/after the shock epoch — the shock-attributable
     /// availability exposure. The number that distinguishes *metric recovery* (`shkRec`)
@@ -518,22 +501,6 @@ pub struct ScenarioResult {
     /// means an oldest-only floor under-scopes (absence of the claim is a claim of
     /// absence). Empty bands outside the deep range stay 0 by construction.
     pub shock_extinct_bands: Vec<f64>,
-    /// **Wipe-out events net of the serving floor** (swan-3 / W13), run-wide: a
-    /// deep-seated shard is counted fully *unserved* only when its market holder set
-    /// **and** the serving floor (`foundation_floor_aged` at its age) are
-    /// *simultaneously* zero — the floor is the non-market serving source, so a market
-    /// wipe-out with the floor engaged is under-replication with a live server.
-    /// Conditional on **floor completeness** over the band (the foundation actually
-    /// serving a copy of every shard the formula says it floors) — which is exactly
-    /// the gate-5 serving requirement the W13 arm sizes. Equals `deep_extinct_total`
-    /// when `floor_replicas = 0`. Retention is unaffected either way (swan-4).
-    pub deep_extinct_floored_total: f64,
-    /// **Post-shock floored wipe-outs** (swan-3 / W13): the shock-attributable
-    /// subset of `deep_extinct_floored_total`. ≈0 on a floor-on arm of a wiping-out
-    /// scenario is the closure evidence that a complete re-engagement serving floor
-    /// converts the swan-1 sole-source windows into covered under-replication. `0`
-    /// outside the shock axis.
-    pub shock_deep_extinct_floored: f64,
     /// **Foundation-as-sole-source shard-epochs, run-wide** (swan-4): total epochs
     /// summed over deep shards spent with zero serving market holders after having
     /// been seated at depth. Under the foundation retention guarantee
@@ -627,19 +594,6 @@ pub struct ScenarioResult {
     /// **Oldest-band audit cadence** (L14): the challenge rate the single oldest (coldest,
     /// most-irreplaceable) shard needs — the worst oversight point (P3 tail).
     pub audit_oldest_cadence: f64,
-    /// **Composition axis** (`PDM-Q-F34`): realized mean shard size (`1.0` when flat).
-    pub size_mean: f64,
-    /// Final-epoch `frac_under_target` within the light / mid / heavy size terciles. The
-    /// heavy entry is the one the row is about; the light entry is what over-subscription
-    /// looks like.
-    pub size_band_under_target: [f64; 3],
-    /// **The graded verdict** (`PDM-Q-F34`): worst `frac_under_target` over the
-    /// pre-registered age × cost grid, and the worst margin to target over it. The
-    /// aggregate `final_metrics.frac_under_target` is reported beside it and **not**
-    /// graded — it certifies a state with a failing band.
-    pub banded: crate::metrics::BandedVerdict,
-    /// Whether the arm's subject is in frame at the graded snapshot (§L19a item 4).
-    pub in_frame: crate::metrics::InFrame,
     /// Actor Gini, windowed mean over the churn window (steady-state spread read).
     pub gini_actor_window: f64,
     /// Max single-actor share, peak over the churn window (conservative spread read).
@@ -655,84 +609,84 @@ pub struct ScenarioResult {
     pub ta1: Option<Ta1Metrics>,
 }
 
+/// What an arm sets when a scenario leaves it unset ([`SimConfig::arm_defaults`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArmDefaults {
+    pub bond_scope: BondScope,
+    pub carry: CarryShape,
+    pub exit_cooldown_epochs: u32,
+}
+
 impl SimConfig {
-    /// The composition axis this scenario runs under.
-    pub fn composition(&self) -> CompositionParams {
-        CompositionParams {
-            spread: self.size_spread,
-            era_shape: self.era_shape,
-            cv_tx: self.cv_tx,
-            decorrelated: self.size_decorrelated,
+    /// The bond scope, carry and exit cooldown a scenario takes when it names
+    /// none of them.
+    ///
+    /// The production arm takes production's: every held shard bonds, the
+    /// split carry, and the exit waits `RELEASE_COOLDOWN_EPOCHS`. The
+    /// registered arm takes the configuration L11 and L13 were published on:
+    /// deep shards only, a flat carry per bonded shard, and a refund at once.
+    /// So `RewardArm::RegisteredPlateau` selects that whole configuration, and
+    /// the falsifier's pins hold on it.
+    #[must_use]
+    pub fn arm_defaults(&self) -> ArmDefaults {
+        match self.reward_arm {
+            RewardArm::Production => ArmDefaults {
+                bond_scope: BondScope::EveryHeld,
+                carry: CarryShape::Split {
+                    capital_rate: BASELINE_CAPITAL_CARRY_RATE,
+                    operating_per_shard: BASELINE_OPERATING_COST,
+                },
+                exit_cooldown_epochs: RELEASE_COOLDOWN_EPOCHS,
+            },
+            RewardArm::RegisteredPlateau => ArmDefaults {
+                bond_scope: BondScope::DeepOnly,
+                carry: CarryShape::FlatPerBond(BASELINE_BOND_CARRY),
+                exit_cooldown_epochs: 0,
+            },
+        }
+    }
+
+    /// The agent's parameters for this scenario.
+    pub(crate) fn agent_params(&self) -> AgentParams {
+        let arm = self.arm_defaults();
+        AgentParams {
+            storage_unit_cost: self.storage_unit_cost,
+            bond_rate: self.bond_rate,
+            bond_age_scale: self.bond_age_scale,
+            carry: self.carry.unwrap_or(arm.carry),
+            deep_threshold: self.deep_threshold,
+            deep_shard_size: self.deep_shard_size,
+            bond_dur_base: self.bond_dur_base,
+            bond_dur_age_scale: self.bond_dur_age_scale,
+            lock_anticipation: self.lock_anticipation,
+            fetch_latency_per_unit: self.fetch_latency_per_unit,
+            acq_rate: self.acq_rate,
+            reseed_rate: self.reseed_rate,
+            release_cooldown_epochs: self.release_cooldown_epochs,
+            dodge_pref: self.dodge_pref,
+            reward_arm: self.reward_arm,
+            bond_scope: self.bond_scope.unwrap_or(arm.bond_scope),
+            exit_cooldown_epochs: self
+                .exit_cooldown_epochs
+                .unwrap_or(arm.exit_cooldown_epochs),
         }
     }
 }
 
-/// The age a shard born (or last recycled) at epoch `ep` with age `age_now` will have at
-/// the graded snapshot, the final epoch — the key that makes era and age coincide
-/// exactly where the verdict reads. `advance_epoch` runs at epochs `1..epochs`, so a
-/// shard present after epoch `ep`'s advance is aged `epochs − 1 − ep` more times; an
-/// initial shard (`ep = 0`, before any advance) is aged `epochs − 1` times.
-fn eventual_age(cfg: &SimConfig, ep: usize, age_now: f64) -> f64 {
-    let steps = cfg.epochs.saturating_sub(1).saturating_sub(ep) as f64;
-    (age_now + steps * cfg.epoch_aging).min(1.0)
-}
-
-fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
+fn build_world(cfg: &SimConfig, rng: &mut SplitMix64) -> World {
     // L12 bootstrap: the chain starts as a small genesis core of *hot* (age 0) shards —
     // there is no deep history at t=0; it accrues as these age and `run_sim` appends new
     // shards. The full-window draw below is the steady-state (every prior scenario).
     let shards: Vec<Shard> = if cfg.bootstrap {
         (0..cfg.n_shard_genesis)
-            .map(|_| Shard {
-                age: 0.0,
-                size_seed: 0.0,
-                size: cfg.composition().size_at_birth(0.0, 0.0),
-            })
+            .map(|_| Shard { age: 0.0 })
             .collect()
     } else {
         (0..cfg.n_shard)
             .map(|_| {
-                let u = rng.next_f64();
+                let u = rng.unit();
                 let age = u.powf(cfg.age_skew);
-                // Composition control key: drawn only for the decorrelated arm, so every
-                // other scenario consumes zero extra RNG and stays byte-identical.
-                let size_seed = if cfg.size_spread > 1.0 && cfg.size_decorrelated {
-                    rng.next_f64()
-                } else {
-                    0.0
-                };
-                // Size is fixed at birth. In this static snapshot a shard's age IS its
-                // birth era (ages never advance), so this reproduces the age-keyed read
-                // exactly; under a dynamic window it is what keeps a shard's bytes from
-                // changing as it ages.
-                let comp = cfg.composition();
-                // Under a dynamic window, key the era on the age this shard will have at
-                // the graded snapshot, not the age it starts at. `epochs` × `epoch_aging`
-                // is 39 × 0.02 = 0.78 by default, so every initial shard younger than
-                // 0.22 NEVER recycles: it ends the run in the deep band, and keyed on its
-                // starting age it would carry a YOUNG era's size there. The static
-                // snapshot is the case where the two coincide.
-                let key_age = if cfg.dynamic {
-                    eventual_age(cfg, 0, age)
-                } else {
-                    age
-                };
-                // The per-transaction shape draw. Consumed ONLY when `cv_tx > 0`, so a
-                // scenario that does not use this axis keeps its RNG stream and stays
-                // byte-identical — the same discipline `size_seed` follows.
-                let z = if comp.draws_shape() {
-                    // Two uniforms folded to a mean-zero, unit-ish spread draw: the
-                    // model needs a symmetric shape term, not a normal specifically.
-                    rng.next_f64() + rng.next_f64() - 1.0
-                } else {
-                    0.0
-                };
-                let size = comp.size_at_birth(comp.birth_key(key_age, size_seed), z);
-                Shard {
-                    age,
-                    size_seed,
-                    size,
-                }
+                Shard { age }
             })
             .collect()
     };
@@ -741,9 +695,9 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 
     // Reservation yield (L11): drawn only when endogenous, so non-endogenous scenarios
     // consume zero extra RNG and stay byte-identical.
-    let draw_reservation = |rng: &mut Rng| -> f64 {
+    let draw_reservation = |rng: &mut SplitMix64| -> f64 {
         if cfg.endogenous {
-            cfg.reservation_lo + rng.next_f64() * (cfg.reservation_hi - cfg.reservation_lo)
+            cfg.reservation_lo + rng.unit() * (cfg.reservation_hi - cfg.reservation_lo)
         } else {
             0.0
         }
@@ -751,7 +705,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 
     let mut actors: Vec<Actor> = Vec::with_capacity(cfg.n_actors);
     for _ in 0..cfg.n_actors {
-        let storage_rich = rng.next_f64() < cfg.frac_storage_rich;
+        let storage_rich = rng.unit() < cfg.frac_storage_rich;
         let (storage_capacity, capital) = if storage_rich {
             (scale(cfg.storage_rich_storage), cfg.storage_rich_capital)
         } else {
@@ -798,11 +752,10 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
 /// `reseed_rate > 0`). `deep_seated[s]` = the slot has had ≥1 serving holder while deep
 /// since its last recycle; `extinct[s]` = the slot's *market* wipe-out has been counted
 /// (one event per deep lifetime; both reset when the slot leaves the deep band, i.e. on
-/// recycle); `extinct_floored[s]` = counted with the serving floor also at zero.
+/// recycle).
 struct ExtinctionScan {
     deep_seated: Vec<bool>,
     extinct: Vec<bool>,
-    extinct_floored: Vec<bool>,
     /// swan-4: current **foundation-as-sole-source window** length per slot (epochs
     /// the deep-seated slot has had zero serving market holders; 0 = market-sourced).
     /// Under the retention guarantee a market wipe-out is an availability state, not
@@ -815,7 +768,6 @@ struct ExtinctionScan {
 /// that actually extinguishes).
 struct ExtinctionEvents {
     market: usize,
-    floored: usize,
     bands: [usize; N_BANDS],
 }
 
@@ -824,7 +776,6 @@ impl ExtinctionScan {
         ExtinctionScan {
             deep_seated: vec![false; n],
             extinct: vec![false; n],
-            extinct_floored: vec![false; n],
             ss_open: vec![0; n],
         }
     }
@@ -866,30 +817,15 @@ impl ExtinctionScan {
     /// Scan for newly-orphaned deep shards. The *market* read counts a deep-seated slot
     /// the first time its serving market holder set empties — the start of a
     /// foundation-as-sole-source window (swan-4: an availability event, not data loss,
-    /// even though the coverage metric re-greens). The *floored* read (W13)
-    /// additionally requires `foundation_floor_aged` = 0 at the shard's age — a market
-    /// wipe-out with the serving floor engaged is under-replication with a live
-    /// non-market server. The floored flag can fire *later* than the market flag:
-    /// if the floor holds through the trough but withdraws (population recovery decays
-    /// it) before the market re-seats the slot, the hand-off race is lost and the slot
-    /// is counted then. Conditional on floor *completeness* over the floored band — the
-    /// gate-5 serving requirement this read sizes.
-    fn scan(
-        &mut self,
-        world: &World,
-        serving_r: &[usize],
-        cfg: &SimConfig,
-        pop_now: usize,
-    ) -> ExtinctionEvents {
+    /// even though the coverage metric re-greens).
+    fn scan(&mut self, world: &World, serving_r: &[usize], cfg: &SimConfig) -> ExtinctionEvents {
         // Bootstrap worlds grow the window; extend state for appended slots.
         if self.deep_seated.len() < world.shards.len() {
             self.deep_seated.resize(world.shards.len(), false);
             self.extinct.resize(world.shards.len(), false);
-            self.extinct_floored.resize(world.shards.len(), false);
         }
         let mut ev = ExtinctionEvents {
             market: 0,
-            floored: 0,
             bands: [0; N_BANDS],
         };
         #[allow(clippy::needless_range_loop)]
@@ -898,32 +834,15 @@ impl ExtinctionScan {
             if age >= cfg.deep_threshold {
                 if serving_r[s] > 0 {
                     self.deep_seated[s] = true;
-                } else if self.deep_seated[s] {
-                    if !self.extinct[s] {
-                        self.extinct[s] = true;
-                        ev.market += 1;
-                        let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
-                        ev.bands[band] += 1;
-                    }
-                    if !self.extinct_floored[s] {
-                        let floor_eff = foundation_floor_aged(
-                            pop_now,
-                            cfg.floor_replicas,
-                            cfg.floor_decay_pop,
-                            cfg.floor_age_tilt,
-                            age,
-                            cfg.deep_threshold,
-                        );
-                        if floor_eff == 0 {
-                            self.extinct_floored[s] = true;
-                            ev.floored += 1;
-                        }
-                    }
+                } else if self.deep_seated[s] && !self.extinct[s] {
+                    self.extinct[s] = true;
+                    ev.market += 1;
+                    let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
+                    ev.bands[band] += 1;
                 }
             } else {
                 self.deep_seated[s] = false;
                 self.extinct[s] = false;
-                self.extinct_floored[s] = false;
             }
         }
         ev
@@ -950,11 +869,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             && (0.0..=1.0).contains(&cfg.shock_exit_top_deep),
         "shock exit fractions must be in [0, 1]"
     );
-    let mut rng = Rng::new(cfg.seed);
+    let mut rng = SplitMix64::new(cfg.seed);
     let mut world = build_world(cfg, &mut rng);
-    if cfg.demand_match {
-        world.renormalize_sizes();
-    }
 
     let mut rp = RewardParams {
         budget: cfg.budget,
@@ -962,24 +878,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         pseudonym_cost: cfg.pseudonym_cost,
         age_weight: cfg.age_weight,
         curve_impl: cfg.curve_impl,
+        arm: cfg.reward_arm,
     };
-    let ap = AgentParams {
-        storage_unit_cost: cfg.storage_unit_cost,
-        bond_rate: cfg.bond_rate,
-        bond_age_scale: cfg.bond_age_scale,
-        bond_carry: cfg.bond_carry,
-        deep_threshold: cfg.deep_threshold,
-        deep_shard_size: cfg.deep_shard_size,
-        comp: cfg.composition(),
-        bond_dur_base: cfg.bond_dur_base,
-        bond_dur_age_scale: cfg.bond_dur_age_scale,
-        lock_anticipation: cfg.lock_anticipation,
-        fetch_latency_per_unit: cfg.fetch_latency_per_unit,
-        acq_rate: cfg.acq_rate,
-        reseed_rate: cfg.reseed_rate,
-        release_cooldown_epochs: cfg.release_cooldown_epochs,
-        dodge_pref: cfg.dodge_pref,
-    };
+    let ap = cfg.agent_params();
     let pp = ParticipationParams {
         entry_per_epoch: cfg.entry_per_epoch,
         patience: cfg.participation_patience,
@@ -992,7 +893,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         bond_rate: cfg.bond_rate,
         bond_age_scale: cfg.bond_age_scale,
         deep_shard_size: cfg.deep_shard_size,
-        comp: cfg.composition(),
     };
 
     // Seed price so the first epoch's marginal-value calc is non-degenerate.
@@ -1055,15 +955,12 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     let mut series_active = Vec::with_capacity(cfg.epochs);
     let mut series_bonded_active = Vec::with_capacity(cfg.epochs);
     // L12 bootstrap: the deep retrieval-coverage transient. `boot_deep_under` is the
-    // *unfloored* serving deep under-target per epoch (the bare-market cold-start gap);
-    // `boot_deep_under_floored` adds the population-decaying foundation floor (the backed
-    // transient). Peaks are taken over the WHOLE run (the transient is early, not in the
-    // steady-state window). Both equal the serving deep under-target outside bootstrap.
+    // serving deep under-target per epoch (the market's cold-start gap). Peaks are taken
+    // over the WHOLE run (the transient is early, not in the steady-state window).
     let mut series_boot_deep_under = Vec::with_capacity(cfg.epochs);
-    let mut series_boot_deep_floored = Vec::with_capacity(cfg.epochs);
-    // P3 band-resolve: the floored deep gap restricted to the OLDEST band (the most
-    // irreplaceable tail), to test whether the aggregate floored residual concentrates there.
-    let mut series_boot_oldest_floored = Vec::with_capacity(cfg.epochs);
+    // P3 band-resolve: the deep gap restricted to the OLDEST band (the most irreplaceable
+    // tail), to test whether the aggregate residual concentrates there.
+    let mut series_boot_oldest_under = Vec::with_capacity(cfg.epochs);
     // L13 fee-era: the base subsidy decays toward `budget_floor`; the adaptive servo may
     // top it up toward `budget_ceiling`; the realized purse per epoch is tracked here.
     // `signal` is the previous epoch's *serving* deep retrieval shortfall (the trust
@@ -1086,10 +983,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // sourceless. Flags reset when the slot leaves the deep band (recycle path).
     let mut ext_scan = ExtinctionScan::new(world.shards.len());
     let mut deep_extinct_total = 0usize;
+    // A18: bond capital burned by slash exits, and how many there were.
+    let mut slashed_capital = 0.0_f64;
+    let mut slash_exits = 0usize;
+    // The most of the purse `reward_share_floor` left unminted in one epoch.
+    let mut reward_dust_atomic_max = 0u64;
     let mut shock_deep_extinct = 0usize;
     let mut shock_extinct_bands = [0usize; N_BANDS];
-    let mut deep_extinct_floored_total = 0usize;
-    let mut shock_deep_extinct_floored = 0usize;
     // swan-4: foundation-as-sole-source accounting — total shard-epochs spent with the
     // foundation as a deep shard's only source, and the longest single-shard window.
     let mut sole_source_shard_epochs = 0usize;
@@ -1114,26 +1014,13 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     };
 
     for ep in 0..cfg.epochs {
-        // Dynamic frontier-window: time passes (age + retire + lock-decrement) before
-        // agents react. Skip on the first epoch so the initial distribution settles.
+        // R10: release escrows tick before this epoch's best-responses, so an
+        // exit at the end of epoch `e` has its bond back at `e + cooldown`.
+        world.tick_releases();
+        // Age the window (age, retire, lock-decrement) before this epoch's
+        // best-response. The first epoch keeps the initial distribution.
         if cfg.dynamic && ep > 0 {
-            // The era a recycled slot is born into, chosen so the arm tests what it
-            // claims. A shard born at epoch `ep` will, at the final epoch `E`, have
-            // age `(E − ep) · epoch_aging`. Keying its era on that value makes era
-            // and age COINCIDE in the final snapshot — which is the only snapshot the
-            // verdict reads — so a heavy era genuinely sits at a chosen DEPTH there.
-            //
-            // Two wrong keys were measured before this one, and both produced
-            // confident nonsense. Keying on the shard's age at birth: every recycled
-            // slot is born at age 0, so the window fills with one era and the realized
-            // mean size ran to 2.22 (`S = 4`, Plateau). Keying on run-normalized time:
-            // a shard lives `1 / epoch_aging` = 50 epochs, so the final window spans
-            // only the last third of the run's eras — Plateau's window filled with
-            // newest-era heavies (mean 1.18–1.29, ADDING demand rather than
-            // redistributing it) while Burst's heavy era had aged out of frame
-            // entirely (mean 0.82–0.89), which is why it read "clear".
-            let era_now = eventual_age(cfg, ep, 0.0);
-            world.advance_epoch(cfg.epoch_aging, &cfg.composition(), era_now);
+            world.advance_epoch(cfg.epoch_aging);
         }
 
         // L12 chain growth: append fresh hot shards until the window reaches its
@@ -1142,15 +1029,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         if cfg.bootstrap && ep > 0 && world.shards.len() < cfg.n_shard {
             let room = cfg.n_shard - world.shards.len();
             for _ in 0..cfg.shard_growth_per_epoch.min(room) {
-                let era_now = eventual_age(cfg, ep, 0.0);
-                world.append_shard(0.0, &cfg.composition(), era_now);
+                world.append_shard(0.0);
             }
-        }
-
-        // §L19a demand matching: the window has moved, so rescale to mean 1 before any
-        // agent reads a size this epoch.
-        if cfg.demand_match {
-            world.renormalize_sizes();
         }
 
         // L13 fee-era: shrink the base subsidy toward the terminal floor, then (if the
@@ -1203,7 +1083,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                     let mut x = 0.0_f64;
                     for _ in 0..k {
                         let i = (x as usize).min(active_idx.len() - 1);
-                        world.deactivate(active_idx[i]);
+                        slashed_capital += slash_exit(&mut world, active_idx[i], &ap);
+                        slash_exits += 1;
                         x += stride;
                     }
                 }
@@ -1217,7 +1098,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             if cfg.shock_exit_domains > 0 {
                 for a in 0..world.actors.len() {
                     if world.active[a] && a % cfg.shock_exit_domains == 0 {
-                        world.deactivate(a);
+                        slashed_capital += slash_exit(&mut world, a, &ap);
+                        slash_exits += 1;
                     }
                 }
             }
@@ -1241,7 +1123,8 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 let k = (ranked.len() as f64 * cfg.shock_exit_top_deep).round() as usize;
                 ranked.sort_by(|x, y| y.0.cmp(&x.0).then(x.1.cmp(&y.1)));
                 for &(_, a) in ranked.iter().take(k) {
-                    world.deactivate(a);
+                    slashed_capital += slash_exit(&mut world, a, &ap);
+                    slash_exits += 1;
                 }
             }
             // swan-2 / W1: scan for orphaned deep shards *at the shock instant*,
@@ -1254,12 +1137,9 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
                 || cfg.shock_exit_top_deep > 0.0
             {
                 let sr = world.serving_replication();
-                let pop = bonded_active_count(&world, &ap);
-                let ev = ext_scan.scan(&world, &sr, cfg, pop);
+                let ev = ext_scan.scan(&world, &sr, cfg);
                 deep_extinct_total += ev.market;
-                deep_extinct_floored_total += ev.floored;
                 shock_deep_extinct += ev.market;
-                shock_deep_extinct_floored += ev.floored;
                 for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
                     *acc += n;
                 }
@@ -1324,6 +1204,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         series_old_held.push(old_held);
 
         last_eval = evaluate(&world, &rp, price);
+        reward_dust_atomic_max = reward_dust_atomic_max.max(last_eval.dust_atomic);
         price = if last_eval.price > 0.0 {
             last_eval.price
         } else {
@@ -1437,12 +1318,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         // foundation-as-sole-source (swan-4; sticky per slot until recycle). Counted
         // run-wide as the frontier-noise baseline and post-shock as the
         // shock-attributable read.
-        let ext_ev = ext_scan.scan(&world, &serving_r, cfg, bonded_active_count(&world, &ap));
+        let ext_ev = ext_scan.scan(&world, &serving_r, cfg);
         deep_extinct_total += ext_ev.market;
-        deep_extinct_floored_total += ext_ev.floored;
         if cfg.shock_at > 0 && ep >= cfg.shock_at {
             shock_deep_extinct += ext_ev.market;
-            shock_deep_extinct_floored += ext_ev.floored;
             for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ext_ev.bands) {
                 *acc += n;
             }
@@ -1508,64 +1387,40 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             series_dur_avail_deep.push(1.0);
         }
 
-        // L12 bootstrap deep coverage: serving deep under-target with and without the
-        // foundation floor. The floor decays with the current bonded-archiver population
-        // and adds replicas to *deep* shards only (retrieval coverage, not the reward
-        // servo — see `participation::foundation_floor`). Computed inline over deep shards
-        // to avoid a third full coverage pass. Outside bootstrap (`floor_replicas == 0`)
-        // both equal the serving deep under-target.
-        let pop_now = bonded_active_count(&world, &ap);
-        // P3: the floor is age-stratified (oldest-ward, mean-preserving) when `floor_age_tilt
-        // > 0`; `foundation_floor_aged` reduces to the uniform `foundation_floor` at tilt 0.
-        // The oldest band (top 1/N_BANDS of the age range) is resolved separately to test
-        // whether the floored residual concentrates in the irreplaceable tail (P3 / L13#2).
+        // L12 bootstrap deep coverage: serving deep under-target, computed inline over
+        // deep shards to avoid a third full coverage pass. The oldest band (top
+        // 1/N_BANDS of the age range) is resolved separately to test whether the
+        // residual concentrates in the irreplaceable tail (P3 / L13#2).
         let oldest_lo = (N_BANDS - 1) as f64 / N_BANDS as f64;
         let mut deep_n = 0usize;
-        let mut deep_under_bare = 0usize;
-        let mut deep_under_floored = 0usize;
+        let mut deep_under = 0usize;
         let mut old_n = 0usize;
-        let mut old_under_floored = 0usize;
+        let mut old_under = 0usize;
         #[allow(clippy::needless_range_loop)]
         for s in 0..world.shards.len() {
             let age = world.shards[s].age;
             if age >= cfg.deep_threshold {
                 deep_n += 1;
                 let tgt = r_target(age, cfg.r_target_hot, cfg.r_target_deep);
-                let floor_eff = foundation_floor_aged(
-                    pop_now,
-                    cfg.floor_replicas,
-                    cfg.floor_decay_pop,
-                    cfg.floor_age_tilt,
-                    age,
-                    cfg.deep_threshold,
-                );
-                if serving_r[s] < tgt {
-                    deep_under_bare += 1;
-                }
-                let floored_under = serving_r[s] + floor_eff < tgt;
-                if floored_under {
-                    deep_under_floored += 1;
+                let under = serving_r[s] < tgt;
+                if under {
+                    deep_under += 1;
                 }
                 if age >= oldest_lo {
                     old_n += 1;
-                    if floored_under {
-                        old_under_floored += 1;
+                    if under {
+                        old_under += 1;
                     }
                 }
             }
         }
         series_boot_deep_under.push(if deep_n > 0 {
-            deep_under_bare as f64 / deep_n as f64
+            deep_under as f64 / deep_n as f64
         } else {
             0.0
         });
-        series_boot_deep_floored.push(if deep_n > 0 {
-            deep_under_floored as f64 / deep_n as f64
-        } else {
-            0.0
-        });
-        series_boot_oldest_floored.push(if old_n > 0 {
-            old_under_floored as f64 / old_n as f64
+        series_boot_oldest_under.push(if old_n > 0 {
+            old_under as f64 / old_n as f64
         } else {
             0.0
         });
@@ -1597,12 +1452,10 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             // death-spiral channel's wipe-outs are systematically invisible.
             // Sticky flags make the double scan idempotent per deep lifetime.
             let sr = world.serving_replication();
-            let ev = ext_scan.scan(&world, &sr, cfg, bonded_active_count(&world, &ap));
+            let ev = ext_scan.scan(&world, &sr, cfg);
             deep_extinct_total += ev.market;
-            deep_extinct_floored_total += ev.floored;
             if cfg.shock_at > 0 && ep >= cfg.shock_at {
                 shock_deep_extinct += ev.market;
-                shock_deep_extinct_floored += ev.floored;
                 for (acc, &n) in shock_extinct_bands.iter_mut().zip(&ev.bands) {
                     *acc += n;
                 }
@@ -1833,23 +1686,17 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
             (0.0, 0.0, 0.0, 0.0)
         };
     // L12 bootstrap aggregates, taken over the WHOLE run (the cold-start transient is at
-    // the *start*, not in the steady-state window): the worst deep retrieval gap with and
-    // without the foundation floor, and the peak bonded-archiver count. `bonded_active_peak`
+    // the *start*, not in the steady-state window): the worst deep retrieval gap on the
+    // bare market, and the peak bonded-archiver count. `bonded_active_peak`
     // above the steady `bonded_active` is the **overshoot** — entrants the high early APR
     // pulled in beyond the steady-state set, which then shed (the early-churn risk).
     let boot_deep_under_peak = series_boot_deep_under
         .iter()
         .copied()
         .fold(0.0_f64, f64::max);
-    let boot_deep_under_floored_peak = series_boot_deep_floored
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max);
-    // P3: peak floored gap on the OLDEST band over the run. `boot_oldest_floored_peak >
-    // boot_deep_under_floored_peak` confirms the residual concentrates in the irreplaceable
-    // tail (uniform floor); an age-stratified floor (`floor_age_tilt > 0`) should pull this
-    // down toward the aggregate at equal total foundation cost.
-    let boot_oldest_floored_peak = series_boot_oldest_floored
+    // P3: peak gap on the OLDEST band over the run. `boot_oldest_under_peak >
+    // boot_deep_under_peak` confirms the residual concentrates in the irreplaceable tail.
+    let boot_oldest_under_peak = series_boot_oldest_under
         .iter()
         .copied()
         .fold(0.0_f64, f64::max);
@@ -1949,12 +1796,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
     // cooldown=2 (oUmx 0, margin 0), so no freeze-driven `r_target_deep` increase is needed.
     let deep_margin = oldest_margin >= 0.0;
 
-    // Composition read (PDM-Q-F34): the aggregate and age-banded metrics above cannot see
-    // a cost redistribution; this one can.
-    let (size_band_under_target, size_mean) = size_band_under(&world, &last_eval.r, &tp);
-    let banded = crate::metrics::banded_verdict(&world, &last_eval.r, &tp);
-    let in_frame = crate::metrics::in_frame(&world, &tp);
-
     ScenarioResult {
         name: cfg.name.clone(),
         axis: cfg.axis.clone(),
@@ -1974,17 +1815,17 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         active_frac,
         bonded_active,
         boot_deep_under_peak,
-        boot_deep_under_floored_peak,
         bonded_active_peak,
-        boot_oldest_floored_peak,
+        boot_oldest_under_peak,
         fee_budget_end,
         fee_deep_under_peak,
         shock_deep_under_peak,
         deep_extinct_total: deep_extinct_total as f64,
+        slashed_capital,
+        slash_exits,
+        reward_dust_atomic_max,
         shock_deep_extinct: shock_deep_extinct as f64,
         shock_extinct_bands: shock_extinct_bands.iter().map(|&x| x as f64).collect(),
-        deep_extinct_floored_total: deep_extinct_floored_total as f64,
-        shock_deep_extinct_floored: shock_deep_extinct_floored as f64,
         sole_source_shard_epochs: sole_source_shard_epochs as f64,
         sole_source_max_window: sole_source_max_window as f64,
         sole_source_open_end: ext_scan.sole_source_open() as f64,
@@ -2008,10 +1849,6 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         audit_oversight_credited,
         audit_deep_share,
         audit_oldest_cadence,
-        size_mean,
-        size_band_under_target,
-        banded,
-        in_frame,
         gini_actor_window,
         max_actor_share_window,
         claims: SubClaims {
@@ -2048,6 +1885,35 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
 /// The high-bond sweep is where capital binds and the empty-window threat (bond high
 /// enough to deter the whale but high enough to price out storage-rich archivers)
 /// surfaces.
+/// The baseline world's values that other harnesses share. Named once here
+/// so `clustering.rs` and the L16 constants read the baseline rather than
+/// retyping it (Appendix B, R19).
+pub(crate) const BASELINE_STORAGE_RICH: (usize, f64) = (22, 20.0);
+pub(crate) const BASELINE_CAPITAL_RICH: (usize, f64) = (10, 100.0);
+pub(crate) const BASELINE_STORAGE_UNIT_COST: f64 = 0.03;
+/// Above the production floor ([`crate::model::BOND_FLOOR`], 0.75): a
+/// declared arm, calibrated against the abstract purse (Appendix B, R8). Its
+/// derivation is repeated at the coupling half.
+pub(crate) const BASELINE_BOND_RATE: f64 = 2.0;
+const _: () = assert!(
+    BASELINE_BOND_RATE > BOND_FLOOR,
+    "the baseline bond is declared above the floor"
+);
+/// A6 as registered: a flat carry per bonded shard. It is the registered
+/// arm's carry, and `clustering.rs` reads it.
+pub(crate) const BASELINE_BOND_CARRY: f64 = 0.03;
+/// Capital carry per unit of posted bond per epoch. The registered 0.03 at
+/// the baseline's 2.0, so that calibration point is kept; its derivation is
+/// repeated at the coupling half.
+pub(crate) const BASELINE_CAPITAL_CARRY_RATE: f64 = BASELINE_BOND_CARRY / BASELINE_BOND_RATE;
+/// Operating cost per held shard per epoch. The coupling half calibrates it;
+/// until then it is 0, and the registered 0.03 is read as capital carry, as
+/// its own definition said.
+pub(crate) const BASELINE_OPERATING_COST: f64 = 0.0;
+pub(crate) const BASELINE_DEEP_THRESHOLD: f64 = 0.5;
+pub(crate) const BASELINE_TRANSPORT_U_BASE: f64 = 0.9;
+pub(crate) const BASELINE_TRANSPORT_U_K: f64 = 0.07;
+
 pub(crate) fn baseline() -> SimConfig {
     SimConfig {
         name: "baseline".into(),
@@ -2057,31 +1923,31 @@ pub(crate) fn baseline() -> SimConfig {
         age_skew: 1.0, // uniform age distribution
         storage_scale: 1.0,
         frac_storage_rich: 0.5,
-        storage_rich_storage: 22,
-        storage_rich_capital: 20.0,
-        capital_rich_storage: 10,
-        capital_rich_capital: 100.0,
+        storage_rich_storage: BASELINE_STORAGE_RICH.0,
+        storage_rich_capital: BASELINE_STORAGE_RICH.1,
+        capital_rich_storage: BASELINE_CAPITAL_RICH.0,
+        capital_rich_capital: BASELINE_CAPITAL_RICH.1,
         whale: false,
         whale_storage: 150,
         whale_capital: 600.0,
         budget: 100.0,
         cap: 8.0,
         pseudonym_cost: 0.05,
-        age_weight: 2.0,
+        age_weight: AGE_WEIGHT,
         // Authoritative backend by default (the canonical minting arithmetic);
         // main overrides per `--curve-impl`. Float is opt-in exploration only.
         curve_impl: CurveImpl::Integer,
-        storage_unit_cost: 0.03,
-        bond_rate: 2.0,      // mid
-        bond_age_scale: 0.0, // flat bond is the iteration-1 baseline (L4 sweep varies it)
-        bond_carry: 0.03,
-        deep_threshold: 0.5,
+        // Production pays: linear credited work on its integer operands. The
+        // registered plateau arm is the L11/L13 pins' control.
+        reward_arm: RewardArm::Production,
+        bond_scope: None,
+        storage_unit_cost: BASELINE_STORAGE_UNIT_COST,
+        bond_rate: BASELINE_BOND_RATE, // mid
+        bond_age_scale: 0.0,           // flat bond is the iteration-1 baseline (L4 sweep varies it)
+        carry: None,
+        exit_cooldown_epochs: None,
+        deep_threshold: BASELINE_DEEP_THRESHOLD,
         deep_shard_size: 1.0, // one unit per shard = iteration-1 behavior
-        size_spread: 1.0,     // flat composition = every pre-F34 scenario, byte-identical
-        size_decorrelated: false,
-        era_shape: EraShape::Monotone,
-        cv_tx: 0.0, // off: no shape draw, so the RNG stream is untouched
-        demand_match: false,
         // Static iteration-1 world by default; the L9 dynamic/duration scenarios opt in.
         dynamic: false,
         epoch_aging: 0.0,
@@ -2114,8 +1980,6 @@ pub(crate) fn baseline() -> SimConfig {
         bootstrap: false,
         n_shard_genesis: 0,
         shard_growth_per_epoch: 0,
-        floor_replicas: 0,
-        floor_decay_pop: 0.0,
         // L13: constant budget by default (every pre-L13 scenario). The fee-era
         // scenarios opt in.
         fee_era: false,
@@ -2166,13 +2030,12 @@ pub(crate) fn baseline() -> SimConfig {
         freeride_penalty: 1.0,
         // P3 age-stratified floor: uniform by default (tilt 0 ⇒ byte-identical to the
         // L12/L13 floor). The P3 scenarios opt in.
-        floor_age_tilt: 0.0,
         // L16 transport coupling: off by default (inert, byte-identical). The L16
         // scenarios opt in. Defaults: 90% baseline uptime, depression k=0.07 per epoch
         // of deep fetch latency (the onion-rendezvous operating band L2–L6).
         transport_model: false,
-        transport_u_base: 0.9,
-        transport_u_k: 0.07,
+        transport_u_base: BASELINE_TRANSPORT_U_BASE,
+        transport_u_k: BASELINE_TRANSPORT_U_K,
         ta1_model: false,
         settlement_epoch_blocks: SEB_DEFAULT,
         blocks_per_sim_epoch: 2000,
@@ -2754,8 +2617,8 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // new growing-window (the chain produces blocks from a small genesis core). The
     // questions: (a) does endogenous entry track the growing deep demand or OVERSHOOT
     // (high early APR pulls in entrants who shed at normalization, churning the youngest/
-    // thinnest deep history)? (b) does the population-decaying foundation floor cover the
-    // transient the market cannot yet? Reuses the L11 interior-feasible economics
+    // thinnest deep history)? (b) the arms are the bare market, so a transient the
+    // market cannot yet cover stays uncovered. Reuses the L11 interior-feasible economics
     // (ρ=0.02, budget=100, pool 240, entry 6/epoch). ---
     let l12_base = || {
         let mut c = l11_base();
@@ -2772,7 +2635,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c
     };
 
-    // (1) COLD-START, no floor: the bare-market transient. `boot_deep_under_peak` is the
+    // (1) COLD-START, bare market. `boot_deep_under_peak` is the
     // worst deep retrieval gap (deep history accrues before archivers do); the steady
     // `deep_und`/`bondA` show whether the market recovers to the L11 attractor; and
     // `bonded_active_peak` vs steady `bondA` is the OVERSHOOT read (the APR-inversion
@@ -2781,51 +2644,19 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = l12_base();
         c.name = "l12_boot_nofloor".into();
         c.axis = "bootstrap".into();
-        c.floor_replicas = 0;
-        out.push(c);
-    }
-
-    // (2) COLD-START + foundation floor: the same run with the foundation running
-    // r_target_deep replicas at genesis, decaying to zero as the bonded-archiver
-    // population reaches the emergent steady-state count (~80). `boot_deep_under_floored_peak`
-    // ≈0 while the unfloored peak is large is the floor doing its bootstrap job —
-    // covering the transient without crowding out entry (it is invisible to the reward
-    // servo) and withdrawing once the market is thick.
-    {
-        let mut c = l12_base();
-        c.name = "l12_boot_floor".into();
-        c.axis = "bootstrap".into();
-        c.floor_replicas = 6; // = r_target_deep: full deep coverage at genesis
-        c.floor_decay_pop = 80.0; // withdraw as the archiver set reaches ~steady size
-        out.push(c);
-    }
-
-    // (3) FLOOR-DECAY schedule: how fast the foundation withdraws. Aggressive (decay_pop
-    // small ⇒ floor gone while the market is still half-built) should leave a residual
-    // transient gap; gentle (decay_pop large ⇒ floor lingers) fully covers but keeps the
-    // foundation working longer. The schedule is the lever trading bootstrap-risk against
-    // foundation-burden; the floored peak as a function of decay_pop locates the safe
-    // withdrawal speed.
-    for (label, decay) in [("fast", 40.0_f64), ("mid", 80.0), ("slow", 160.0)] {
-        let mut c = l12_base();
-        c.name = format!("l12_decay_{label}");
-        c.axis = "bootstrap_floor_decay".into();
-        c.floor_replicas = 6;
-        c.floor_decay_pop = decay;
         out.push(c);
     }
 
     // (4) GROWTH-RATE: the chain-growth vs. entry-rate race. Faster block production
     // (more shards/epoch) accrues deep demand faster while entry stays bandwidth-limited
     // (6/epoch), so the bare transient gap should widen with growth — the bootstrap
-    // stress is the growth/entry mismatch, not the economics. No floor, so the bare gap
-    // is visible. (Steady state is the same L11 attractor regardless of growth rate.)
+    // stress is the growth/entry mismatch, not the economics. The gap is the bare
+    // market's. (Steady state is the same L11 attractor regardless of growth rate.)
     for (label, growth) in [("slow", 3usize), ("mid", 6), ("fast", 12)] {
         let mut c = l12_base();
         c.name = format!("l12_growth_{label}");
         c.axis = "bootstrap_growth".into();
         c.shard_growth_per_epoch = growth;
-        c.floor_replicas = 0;
         out.push(c);
     }
 
@@ -2838,8 +2669,8 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // the OLDEST tail go under first (the irreplaceable band)? (b) with price coupling on,
     // does coverage collapse run away (death spiral) or stay bounded? (c) does the
     // adaptive reward-share servo (burn.rs template) damp it, and where does the fee-market
-    // ceiling turn damping into a graceful loud failure? (d) does the L12 foundation floor
-    // RE-ENGAGE as the market thins (its decay schedule run in reverse)? Reuses the L11
+    // ceiling turn damping into a graceful loud failure? (d) the arms are the bare
+    // market: nothing re-enters to cover the tail as the purse thins. Reuses the L11
     // interior economics (ρ=0.02, pool 240, entry 6/epoch), starting full and well-funded
     // (budget 200 ⇒ bondA well above the ~80 knee) so the decay sweeps DOWN through the
     // L11 transfer curve. ---
@@ -2858,7 +2689,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c
     };
 
-    // (1) DECAY / terminal-subsidy sweep: no servo, no coupling, no floor — the bare
+    // (1) DECAY / terminal-subsidy sweep: no servo, no coupling — the bare
     // shrinking-purse read. Vary the terminal `budget_floor` the subsidy decays to. As the
     // floor drops below the sustainable purse (~100 from the L11 transfer), the emergent
     // `bondA` thins and the deep tail goes under — `serving_oldest_under_max` should light
@@ -2909,6 +2740,45 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(c);
     }
 
+    // A7: which shards post a bond. Every held shard is the default
+    // (production's `bond_floor_of`, ruled 2026-11-08); deep only is a named
+    // arm. Four arms beside each base, the lean point (`l11_fill`) and the L13
+    // knee (`l13_decay_knee`): every held shard at 2.0 (the base's own
+    // scope, named), deep only at 2.0, and each at the floor. Each names its
+    // scope, so the registered arm runs it as named.
+    for (base_label, every, rate, rate_label) in [
+        ("l11", true, BASELINE_BOND_RATE, "b200"),
+        ("l11", false, BASELINE_BOND_RATE, "b200"),
+        ("l11", true, BOND_FLOOR, "floor"),
+        ("l11", false, BOND_FLOOR, "floor"),
+        ("l13", true, BASELINE_BOND_RATE, "b200"),
+        ("l13", false, BASELINE_BOND_RATE, "b200"),
+        ("l13", true, BOND_FLOOR, "floor"),
+        ("l13", false, BOND_FLOOR, "floor"),
+    ] {
+        let mut c = if base_label == "l11" {
+            let mut c = l11_base();
+            c.init_active_frac = 0.0;
+            c.reservation_lo = 0.02;
+            c.reservation_hi = 0.02;
+            c
+        } else {
+            let mut c = l13_base();
+            c.budget_floor = 80.0;
+            c
+        };
+        let scope = if every { "all" } else { "deep" };
+        c.name = format!("a7_{base_label}_{scope}_{rate_label}");
+        c.axis = "a7_bond_scope".into();
+        c.bond_scope = Some(if every {
+            BondScope::EveryHeld
+        } else {
+            BondScope::DeepOnly
+        });
+        c.bond_rate = rate;
+        out.push(c);
+    }
+
     // (4) CEILING sweep: the servo can only draw what the fee market provides. Sweep the
     // ceiling across the sustainable purse (~100). Below it the servo pins at the ceiling
     // and coverage stays short — a GRACEFUL LOUD FAILURE (fees cannot fund the deep
@@ -2924,24 +2794,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.adaptive_share = true;
         c.share_gain = 8.0;
         c.budget_ceiling = ceil;
-        out.push(c);
-    }
-
-    // (5) FOUNDATION FLOOR re-engagement: the L12 floor decay schedule, run in REVERSE. The
-    // floor is `floor0 · max(0, 1 − pop/decay_pop)` — in bootstrap `pop` rises and the floor
-    // withdraws; in the fee-era `pop` THINS as the purse shrinks, so the floor automatically
-    // re-engages. Decay (unsustainable floor) + foundation floor, no servo: the bare deep
-    // gap (`boot_deep_under_peak`) is large as the market thins, but the FLOORED gap
-    // (`boot_deep_under_floored_peak`) stays ≈0 — retrieval coverage held by the foundation
-    // backstop without paying the staker servo. The one non-market capacity source is
-    // load-bearing at BOTH ends (genesis and fee-era), as the unifying note predicts.
-    {
-        let mut c = l13_base();
-        c.name = "l13_floor".into();
-        c.axis = "fee_floor".into();
-        c.budget_floor = 40.0;
-        c.floor_replicas = 6; // = r_target_deep
-        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
         out.push(c);
     }
 
@@ -3005,7 +2857,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // complete? The price-coupling insight (token-denominated reward and bond cancel in
     // the APR ratio, so only *expected depreciation* bites) holds only if EVERY term is
     // token-denominated. The operational flow cost (bandwidth, storage hardware) is paid
-    // in fiat. With `flow_cost_fiat`, the exit APR is `R/B − F/(B·p)`: a low/falling price
+    // in fiat. With `flow_cost_fiat`, the exit APR is `R/B − K/B − F/(B·p)`: a low/falling price
     // raises the real flow-cost drag — a LEVEL channel that can ignite exit with NO
     // trust-loss trigger (`price_coupling = 0`). These scenarios fund the token side
     // ADEQUATELY (`budget_floor = 100`, the L11 knee) and set `price_coupling = 0`, so any
@@ -3169,52 +3021,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         out.push(c);
     }
 
-    // --- P3 (age-stratified floor / irreplaceable-tail protection): L13#2 found the OLDEST
-    // band oscillates under (oUmx 0.163) while mid-deep holds (cDeepU 0.057), and the L12
-    // hand-off residual (0.019) is an *aggregate* deep figure that may hide an oldest-band
-    // concentration. The new `boOld` column band-resolves the floored gap: `boOld > bDUf`
-    // on the uniform-floor scenarios (l12_*, l13_floor) is the band-resolve test — it
-    // confirms the residual sits in the irreplaceable tail. P3's lever is an age-stratified
-    // floor: `foundation_floor_aged` applies a MEAN-PRESERVING oldest-ward tilt (same total
-    // foundation cost, redistributed toward the deepest band — the same way `R_target(age)`
-    // already tilts). These scenarios run the REALISTIC re-engagement floor
-    // (`floor_replicas = 6 = r_target_deep`, matching `l13_floor`), at which the fee-era
-    // residual concentrates in the oldest band (`l13_floor`: boOld 0.612 > bDUf 0.425),
-    // then sweep the tilt: `boOld` should fall toward 0 as the tilt steers replicas to the
-    // oldest band, at the cost of a modest rise in the aggregate gap (younger, re-derivable
-    // deep history under-floored). That trade — protect the irreplaceable, let the
-    // replaceable ride the market — is the P3 disposition.
-    //
-    // (P3a) FEE-ERA re-engagement (= `l13_floor` at tilt 0). The market thins, the floor
-    // re-engages, but the oldest band is abandoned by the market FIRST (age-weight churn),
-    // so the floored residual lands on the irreplaceable tail. The tilt over-floors the
-    // oldest band (round(6·(1+tilt))) at the expense of the freshly-deepened band
-    // (round(6·(1−tilt))). `boOld` ↓ while `bDUf` holds/rises slightly is the trade.
-    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
-        let mut c = l13_base();
-        c.name = format!("p3_fee_tilt_{label}");
-        c.axis = "p3_fee_tilt".into();
-        c.budget_floor = 40.0;
-        c.floor_replicas = 6; // = r_target_deep, the realistic re-engagement floor
-        c.floor_decay_pop = 80.0; // re-engages as bonded archivers thin below ~80
-        c.floor_age_tilt = tilt;
-        out.push(c);
-    }
-    // (P3b) BOOTSTRAP (= `l12_boot_floor` at tilt 0). The asymmetry check: at genesis the
-    // oldest shards are the genesis core (covered earliest/longest), so the bootstrap
-    // residual is the freshly-deepened band, NOT the oldest (`boOld` ≈ 0). The tilt should
-    // therefore leave `boOld` at ~0 — confirming the irreplaceable tail is exposed at the
-    // FEE-ERA end, not the bootstrap end, so the age-stratification is a fee-era lever.
-    for (label, tilt) in [("t00", 0.0_f64), ("t03", 0.3), ("t06", 0.6), ("t09", 0.9)] {
-        let mut c = l12_base();
-        c.name = format!("p3_boot_tilt_{label}");
-        c.axis = "p3_boot_tilt".into();
-        c.floor_replicas = 6; // = r_target_deep, matching l12_boot_floor
-        c.floor_decay_pop = 80.0;
-        c.floor_age_tilt = tilt;
-        out.push(c);
-    }
-
     // --- L16: transport / latency-regime coupling. The firewalled-pseudonym requirement
     // forces heavy fetch onto onion rendezvous, so `fetch_latency_per_unit` is the
     // transport operating point on the L2–L6 band (L10 seating lag) AND depresses the
@@ -3275,18 +3081,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.axis = "l16_transport_diversity".into();
         c.fetch_latency_per_unit = 4.0;
         c.retr_n_domains = 3;
-        out.push(c);
-    }
-    // (L16d) L6 + foundation floor: the floor adds R replicas (retrieval coverage) but
-    // does NOT raise u — so at saturation the SLA can still fail even with the floor on.
-    // Separates capacity backstop from uptime depression (feeds P4 / soundness pass).
-    {
-        let mut c = l16_base();
-        c.name = "l16_L6_floor".into();
-        c.axis = "l16_floor_backstop".into();
-        c.fetch_latency_per_unit = 6.0;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 200.0; // persist through the run (~80 archivers)
         out.push(c);
     }
 
@@ -3377,8 +3171,9 @@ pub fn build_scenarios() -> Vec<SimConfig> {
 
     // --- Gate 4 iteration-2: fine bond-rate window at the L11 lean equilibrium.
     // Coarse iteration-1 bracketed (0.5, 2.0, 8.0); this sharpens the live band inside
-    // (0.5, 8) under flat magnitude (L4), g=2 (L1), endogenous fill at ρ=0.02. Pass
-    // criteria for the pin: min-form `dS/dN ≥ 1`, deep_history, and (whale cross) spread.
+    // (0.5, 8) under flat magnitude (L4), the production age-weight slope (L1),
+    // and endogenous fill at ρ=0.02. Pass criteria for the pin: min-form
+    // `dS/dN ≥ 1`, deep_history, and (whale cross) spread.
     // A co-location-binding duplicate (P1 polarized endowment, ρ=0.015) verifies the pin
     // is not a loose-pool artifact. ---
     let gate4_fine_base = || {
@@ -3386,7 +3181,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.init_active_frac = 0.0;
         c.reservation_lo = 0.02;
         c.reservation_hi = 0.02;
-        c.age_weight = 2.0;
+        c.age_weight = AGE_WEIGHT;
         c.bond_age_scale = 0.0;
         c
     };
@@ -3432,7 +3227,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // SEB=10_000; 500 sim epochs × 2000 blocks/epoch = 1M blocks ⇒ 100 settlement epochs.
     let ta1_hygiene_base = || {
         let mut c = gate4_fine_base();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c.dynamic = true;
         c.epoch_aging = 0.05;
         c.epochs = 800;
@@ -3529,7 +3324,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // (same fixed seed ⇒ numerically identical) as the in-table cross-check. ---
     let layer2_base = || {
         let mut c = gate4_fine_base();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c
     };
     for g in [1.5_f64, 2.0, 2.5, 3.0, 3.5, 4.0] {
@@ -3550,7 +3345,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut cc = gate4_fine_coloc_base();
         cc.name = format!("layer2_coloc_g{label}");
         cc.axis = "layer2_band_coloc".into();
-        cc.bond_rate = 0.75;
+        cc.bond_rate = BOND_FLOOR;
         cc.age_weight = g;
         out.push(cc);
     }
@@ -3580,7 +3375,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = gate4_fine_coloc_base();
         c.name = format!("layer2_colocbud_g{g:.1}_b130");
         c.axis = "layer2_colocbud".into();
-        c.bond_rate = 0.75;
+        c.bond_rate = BOND_FLOOR;
         c.age_weight = g;
         c.budget = 130.0;
         out.push(c);
@@ -3609,7 +3404,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
     // give the L13 adaptive purse a 130 ceiling (the Layer-2 +30 % static image).
     let swan_base = || {
         let mut c = l11_base();
-        c.bond_rate = 0.75; // the gate-4 pin (genesis economics, not baseline 2.0)
+        c.bond_rate = BOND_FLOOR; // the gate-4 pin (genesis economics, not baseline 2.0)
         c.dynamic = true;
         c.epoch_aging = 0.05;
         c.init_active_frac = 1.0; // mature healthy network when the shock lands
@@ -3757,7 +3552,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         let mut c = l13_base();
         c.name = "swan2_knee_cascade".into();
         c.axis = "swan2_knee".into();
-        c.bond_rate = 0.75; // pinned genesis economics, as the swan worlds
+        c.bond_rate = BOND_FLOOR; // pinned genesis economics, as the swan worlds
         c.budget_floor = 80.0;
         c.epochs = 240;
         c.shock_at = 150;
@@ -3792,60 +3587,11 @@ pub fn build_scenarios() -> Vec<SimConfig> {
 
     // --- swan-3 (W12–W15 wargame response, STAKER_ARCHIVAL_SIM.md §L17 swan-3). The
     // swan-2 price-row extinctions (vshape 37, servo400 99) were measured BARE-LEAN
-    // (`floor_replicas = 0` everywhere in the swan worlds), so the gate-5
+    // (no foundation floor in the swan worlds), so the gate-5
     // floor-completeness export was sized by inference; and the benign domain results
     // ran with NO placement-side diversity floor in the model (the L15 machinery is
     // scoring-only), so they are luck of the bucketing, not a floor working.
     //
-    // (1) W13 closure arms: the two extinguishing price rows re-run with the
-    // foundation floor on as a re-engagement backstop (6 = r_target_deep;
-    // decay_pop 100 ≈ the healthy attractor population, so the floor is ≈0 pre-shock
-    // and re-engages exactly as the trough thins the market — the L12 backstop
-    // property). Tilt 0 = completeness over the WHOLE deep set. `shkExtF` ≈ 0 with
-    // `shkExt` unchanged is the closure evidence: a complete floor converts the
-    // swan-1 data losses into covered under-replication; nonzero `shkExtF` is the
-    // hand-off race lost (floor withdrew before the market re-seated).
-    {
-        let mut c = swan_base();
-        c.name = "swan3_vshape_floor".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        c.shock_price_relax = 0.05;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        out.push(c);
-    }
-    {
-        let mut c = swan_base();
-        c.name = "swan3_servo400_floor".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        swan_servo(&mut c);
-        c.budget_ceiling = 400.0;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        out.push(c);
-    }
-    // (2) W12 stratification scoping: the V-crash floor arm with the P3 oldest-ward
-    // tilt at its swept maximum (0.9). The `extB` band read says WHERE trough
-    // extinction lands; this arm measures what an oldest-tilted floor misses — if
-    // extinction is not oldest-concentrated, the under-floored shoulder leaks
-    // extinctions the uniform floor catches (`shkExtF` > the tilt-0 arm), which is
-    // exactly the under-scoping W12 warns the gate-5 export against.
-    {
-        let mut c = swan_base();
-        c.name = "swan3_vshape_floor_t9".into();
-        c.axis = "swan3_floor".into();
-        c.flow_cost_fiat = true;
-        c.shock_price_mult = 0.25;
-        c.shock_price_relax = 0.05;
-        c.floor_replicas = 6;
-        c.floor_decay_pop = 100.0;
-        c.floor_age_tilt = 0.9;
-        out.push(c);
-    }
     // (3) W15 holder-class-correlated exit: the actors holding the most deep shards
     // exit at once — the honest worst case for the FTX pattern (custody membership
     // correlated with holder class). Compare `swan_cascade30/50` (stride, benign) and
@@ -4062,117 +3808,6 @@ pub fn build_scenarios() -> Vec<SimConfig> {
                 }
             }
         }
-    }
-
-    // --- Composition axis (`PDM-Q-F34`): per-shard byte heterogeneity at CONSTANT total
-    //     storage demand. `S` is the heavy/light size ratio; sizes track age (era density),
-    //     so the heavy band is the young end and the light band the old end that `g(age)`
-    //     pays a premium for. The base is the COVERED provisioning point (`storage_scale`
-    //     1.3 = `prov_p13`, frac_under 0 / deep_under 0), so any breach is this axis's doing
-    //     and not a pre-existing shortfall; `S = 1` reproduces `prov_p13` exactly.
-    //     `S = 4` is the realized per-tx spread, `S = 60` is `MAX_TX_SIZE / mean` (the
-    //     adversarial ceiling, on the wrong axis but the figure the charter carries). There
-    //     is no chain to measure pre-genesis, so this is §7.7's BOUNDING sweep, not a
-    //     measurement: the question it answers is *at what `S` does the heavy band breach
-    //     the ratified `frac_under_target < 0.05` bar*.
-    for s in [1.0, 2.0, 4.0, 10.0, 60.0] {
-        let mut c = baseline();
-        c.name = format!("comp_s{s:.0}");
-        c.axis = "composition".into();
-        c.storage_scale = 1.3;
-        c.size_spread = s;
-        out.push(c.clone());
-
-        // Confound control: same size marginal keyed on an independent draw, so a band
-        // effect here is SIZE, not age. Only where the spread is large enough to matter.
-        if s >= 4.0 {
-            let mut d = c;
-            d.name = format!("comp_s{s:.0}_decorr");
-            d.axis = "composition_control".into();
-            d.size_decorrelated = true;
-            out.push(d);
-        }
-    }
-
-    // --- The heavy-era-ages-into-deep arm (`PDM-Q-F34`, FOLLOWUPS item 6). ---
-    //
-    // THE QUESTION, and the one arm that could still force a byte operand into
-    // channel 1 (`PDM-Q6` item 5's `(g)` falsifier): does a heavy era, aged into the
-    // DEEP band with its bytes intact, breach coverage at `r_target_deep` on a
-    // COVERED base?
-    //
-    // Why it needs a dynamic window: with `dynamic: false` age is a fixed snapshot
-    // position, so a size keyed on the birth era always puts the heavy band at the
-    // frontier — the hot end, whose target is `r_target_hot = 3`. That is the
-    // confound L19 could not escape. Here shards age (`epoch_aging > 0`) and size is
-    // fixed at birth, so a heavy era MOVES into the deep band and is graded at
-    // `r_target_deep = 6` with the `g(age)` premium on it.
-    //
-    // PRE-REGISTERED, before any of these ran (the thresholds are the ratified ones,
-    // not new bars):
-    //   * base: `storage_scale` 1.3 — the COVERED point, so a breach is this axis's
-    //     doing and not a pre-existing shortfall;
-    //   * BREACH ⇔ the arm's `banded.worst_frac_under` exceeds the CONTROL's
-    //     (`f34_aged_control`: same config, composition off) — a delta, because the
-    //     ratified 0.05 bar was set for an aggregate and means something else applied
-    //     to a max over nine cells (the flat baseline reads 0.214 against its own
-    //     aggregate of 0.050). CORRECTED after the control was read; the absolute bar
-    //     is reported, not graded;
-    //   * WATCH ⇔ `banded.worst_margin` below the control's while the count matches —
-    //     a shard under target that no threshold count can see;
-    //   * shapes: `Plateau` (usage rises then levels — the realistic steady state) and
-    //     `Burst` (one heavy era mid-depth — a heavy band at a chosen depth);
-    //   * `S` in {4, 10}: the realized per-tx spread and a deliberately harsher one.
-    //     `S = 60` is NOT run here — it is `MAX_TX_SIZE / mean`, a per-transaction
-    //     ceiling, and at the era level it would assert a whole era of maximal
-    //     transactions, which no fee market produces.
-    // THE CONTROL, and it is load-bearing twice over. The dynamic window costs
-    // coverage on its own — shards age, the frontier recycles, and backfill lags — so
-    // an arm compared against a STATIC baseline would credit the era axis with the
-    // window's cost. This is the same config with composition OFF.
-    //
-    // It also re-calibrates the verdict. The pre-registered rule first read "BREACH iff
-    // worst_frac_under >= 0.05", reusing the ratified `covered` bar. That bar was
-    // ratified for an AGGREGATE; applied to a MAX OVER NINE CELLS it is a different
-    // test, and the flat `baseline` scenario trips it (aggregate 0.050, worst band
-    // 0.214) while being the control. A threshold whose job changes when the statistic
-    // changes is not the same threshold. So the verdict is a DELTA against this
-    // control, and the absolute bar is reported, not graded.
-    {
-        let mut c = baseline();
-        c.name = "f34_aged_control".into();
-        c.axis = "f34_heavy_era_aged".into();
-        c.storage_scale = 1.3;
-        c.dynamic = true;
-        c.epoch_aging = 0.02;
-        out.push(c);
-    }
-
-    for (label, shape) in [("plateau", EraShape::Plateau), ("burst", EraShape::Burst)] {
-        for s in [4.0, 10.0] {
-            let mut c = baseline();
-            c.name = format!("f34_aged_{label}_s{s:.0}");
-            c.axis = "f34_heavy_era_aged".into();
-            c.storage_scale = 1.3;
-            c.size_spread = s;
-            c.era_shape = shape;
-            // The dynamic window: shards age and the frontier recycles, which is what
-            // carries a heavy era into the deep band.
-            c.dynamic = true;
-            c.epoch_aging = 0.02;
-            out.push(c);
-        }
-    }
-
-    // Marginal base (`storage_scale` 1.0 = `baseline`, frac_under 0.050 — sitting ON the
-    // bar): the sensitivity read. A covered base answers "does composition break coverage";
-    // this answers "how much slack does composition consume".
-    for s in [4.0, 60.0] {
-        let mut c = baseline();
-        c.name = format!("comp_marg_s{s:.0}");
-        c.axis = "composition_marginal".into();
-        c.size_spread = s;
-        out.push(c);
     }
 
     out

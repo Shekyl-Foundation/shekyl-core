@@ -14,6 +14,7 @@
 //! honestly carries its float-cast allow at the crate boundary rather than
 //! claiming a pure-integer contract it does not need.
 #![allow(clippy::cast_precision_loss)]
+#![deny(unsafe_code)]
 // ^ sample counts (`u64`/`usize`) widen to `f64` in the GoF sums; the counts
 //   are far below 2^53, so the widening is exact in practice and the precision
 //   note is immaterial. This is the only float-cast class the crate uses.

@@ -19,7 +19,7 @@ use shekyl_curve_tree::BlockHeight;
 /// there is no argument through which to nominate them.
 ///
 /// That is the same move made twice elsewhere on this path — the store comes
-/// from the pin ([`PinReport::reader`](super::PinReport::reader)), and now
+/// from the pin ([`PinReport::store`](super::PinReport::store)), and now
 /// the set does too — and it is one rule rather than three fixes: **the host
 /// does not choose anything about its own duty.** Every such value is
 /// reported by the side that holds the bond record and the store, because
@@ -71,8 +71,8 @@ enum SetDerivation {
     /// ACTIVATION.md` D-1): frozen segments are exactly `[0, frozen_count)`,
     /// so the obligation is one number, never a stored list. `frozen_count`
     /// is the store's burial-gated freeze cursor (`LeafStore::
-    /// next_freeze_seg`), **not** `shekyl_archival_retention::
-    /// frozen_segment_count` — that helper is first-crossing completeness
+    /// next_freeze_seg`), **not** `the frozen-segment count the archival C++ path read
+    /// (deleted, `DEL-008`)` — that helper is first-crossing completeness
     /// and would admit unburied segments as owed.
     CompleteTreePrefix { frozen_count: u64 },
 }

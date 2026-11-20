@@ -3,11 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The redb file and the two handles on it: a writer and a read-only
-//! clone the serving loop is allowed to hold.
+//! The redb file and its one handle. The handle is held by the store's
+//! owning actor; a serving loop gets opened shards and chunk copies from
+//! that owner, never the handle (`CURVE_TREE_CLIENT.md` §11.1).
 
 use std::path::Path;
-use std::sync::Arc;
 
 use rand_core::{OsRng, RngCore};
 use redb::backends::InMemoryBackend;
@@ -17,7 +17,7 @@ use shekyl_crypto_hash::cshake256_32;
 use shekyl_types::ShardId;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::body::ShardFrameBody;
+use crate::body::HeldShard;
 use crate::error::{StoreError, SCHEMA_VERSION};
 
 const SHARDS: TableDefinition<&[u8; 32], [u8; META_LEN]> = TableDefinition::new("p_shards");
@@ -83,22 +83,17 @@ pub fn derive_store_key(file_kek: &[u8; KEY_SIZE]) -> StoreKey {
     StoreKey(cshake256_32(STORE_AEAD_CUSTOMIZATION, file_kek))
 }
 
-pub(crate) struct Inner {
+/// The store: fill, refill, erase, and the serving reads.
+///
+/// Not `Clone` and not shared: one owner holds it, and the file is closed
+/// when that owner drops it. In the wallet the owner is the body-store
+/// actor; everything else, the stake engine's erase and the serving loop's
+/// reads included, asks it. *Records-was (until 2026-11-02):* the database
+/// sat behind an `Arc` shared with a `BodyStoreReader` that the serving
+/// host held and decrypted with.
+pub struct BodyStore {
     db: Database,
     key: StoreKey,
-}
-
-/// The writer: fill, refill, erase. The serving loop never holds this.
-/// The pin-release erase asks the stake actor, which is the only owner.
-pub struct BodyStore {
-    inner: Arc<Inner>,
-}
-
-/// Read-only handle the provider is allowed to hold. Cannot write, so
-/// "the serving side is a reader" is a type, not a convention.
-#[derive(Clone)]
-pub struct BodyStoreReader {
-    inner: Arc<Inner>,
 }
 
 impl BodyStore {
@@ -117,9 +112,7 @@ impl BodyStore {
     pub fn open(path: impl AsRef<Path>, key: StoreKey) -> Result<Self, StoreError> {
         let existed = path.as_ref().exists();
         let db = Database::create(path)?;
-        let store = Self {
-            inner: Arc::new(Inner { db, key }),
-        };
+        let store = Self { db, key };
         if existed {
             store.check_schema()?;
             store.check_key()?;
@@ -136,19 +129,74 @@ impl BodyStore {
     /// [`StoreError::Backend`] if redb cannot build the in-memory backend.
     pub fn open_ephemeral(key: StoreKey) -> Result<Self, StoreError> {
         let db = Database::builder().create_with_backend(InMemoryBackend::new())?;
-        let store = Self {
-            inner: Arc::new(Inner { db, key }),
-        };
+        let store = Self { db, key };
         store.init_tables()?;
         Ok(store)
     }
 
-    /// A read-only clone. The provider takes this, never [`Self`].
-    #[must_use]
-    pub fn reader(&self) -> BodyStoreReader {
-        BodyStoreReader {
-            inner: Arc::clone(&self.inner),
+    /// Open the body if the shard is held. Servability is settled here.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Backend`] on I/O.
+    pub fn open_shard(&self, shard_id: ShardId) -> Result<Option<HeldShard>, StoreError> {
+        let slot = slot_key(self.key.as_bytes(), shard_id);
+        let txn = self.db.begin_read()?;
+        let shards = match txn.open_table(SHARDS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let Some(row) = shards.get(&slot)? else {
+            return Ok(None);
+        };
+        Ok(Some(HeldShard {
+            shard_id,
+            meta: decode_meta(row.value()),
+        }))
+    }
+
+    /// Storage chunk `index` of an opened body, decrypted: an owned copy of
+    /// at most one storage chunk, so a reader's resident cost is one chunk.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if `index` is past the body, or the sealed
+    /// chunk is missing or fails authentication (a refill since `held` was
+    /// opened); [`StoreError::Backend`] on I/O.
+    pub fn read_chunk(&self, held: &HeldShard, index: u32) -> Result<Vec<u8>, StoreError> {
+        if index >= held.meta.chunk_count {
+            return Err(StoreError::Corrupt {
+                detail: "chunk index past the opened body".to_owned(),
+            });
         }
+        let slot = slot_key(self.key.as_bytes(), held.shard_id);
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(CHUNKS)?;
+        let ck = chunk_key(&slot, u64::from(index));
+        let Some(row) = table.get(&ck)? else {
+            return Err(StoreError::Corrupt {
+                detail: "sealed chunk missing after open".to_owned(),
+            });
+        };
+        shekyl_chacha::open(
+            self.key.as_bytes(),
+            &nonce(&held.meta.salt, u64::from(index)),
+            &aad(held.shard_id, u64::from(index)),
+            row.value(),
+        )
+        .map_err(|_| StoreError::Corrupt {
+            detail: "sealed chunk failed authentication".to_owned(),
+        })
+    }
+
+    /// Whether the slot is occupied.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Backend`] on I/O.
+    pub fn holds(&self, shard_id: ShardId) -> Result<bool, StoreError> {
+        Ok(self.open_shard(shard_id)?.is_some())
     }
 
     /// Write (or replace) the shard's `shard_frame` bytes. Mints a
@@ -158,14 +206,14 @@ impl BodyStore {
     ///
     /// [`StoreError::Backend`] on I/O.
     pub fn put_shard(&self, shard_id: ShardId, frame: &[u8]) -> Result<(), StoreError> {
-        let slot = slot_key(self.inner.key.as_bytes(), shard_id);
+        let slot = slot_key(self.key.as_bytes(), shard_id);
         let mut salt = [0u8; SALT_LEN];
         OsRng.fill_bytes(&mut salt);
         let chunks = frame.chunks(CHUNK_BYTES).collect::<Vec<_>>();
         let chunk_count = u32::try_from(chunks.len()).expect("a shard's chunk count fits u32");
         let body_len = u64::try_from(frame.len()).expect("a body length fits u64");
 
-        let txn = self.inner.db.begin_write()?;
+        let txn = self.db.begin_write()?;
         {
             let mut shards = txn.open_table(SHARDS)?;
             let mut bodies = txn.open_table(CHUNKS)?;
@@ -174,7 +222,7 @@ impl BodyStore {
             }
             for (i, chunk) in chunks.iter().enumerate() {
                 let index = u64::try_from(i).expect("chunk index fits u64");
-                let sealed = seal_chunk(self.inner.key.as_bytes(), &salt, shard_id, index, chunk);
+                let sealed = seal_chunk(self.key.as_bytes(), &salt, shard_id, index, chunk);
                 let ck = chunk_key(&slot, index);
                 bodies.insert(&ck, sealed.as_slice())?;
             }
@@ -190,8 +238,8 @@ impl BodyStore {
     ///
     /// [`StoreError::Backend`] on I/O.
     pub fn erase_shard(&self, shard_id: ShardId) -> Result<(), StoreError> {
-        let slot = slot_key(self.inner.key.as_bytes(), shard_id);
-        let txn = self.inner.db.begin_write()?;
+        let slot = slot_key(self.key.as_bytes(), shard_id);
+        let txn = self.db.begin_write()?;
         {
             let mut shards = txn.open_table(SHARDS)?;
             let mut bodies = txn.open_table(CHUNKS)?;
@@ -205,7 +253,7 @@ impl BodyStore {
     }
 
     fn check_schema(&self) -> Result<(), StoreError> {
-        let txn = self.inner.db.begin_read()?;
+        let txn = self.db.begin_read()?;
         let found = match txn.open_table(META) {
             Ok(meta) => meta.get(SCHEMA_CELL)?.map(|v| v.value()),
             Err(redb::TableError::TableDoesNotExist(_)) => None,
@@ -221,7 +269,7 @@ impl BodyStore {
     /// The verifier is sealed under the store key. A plaintext tag would
     /// be forgeable by rewriting the cell; AEAD is not.
     fn check_key(&self) -> Result<(), StoreError> {
-        let txn = self.inner.db.begin_read()?;
+        let txn = self.db.begin_read()?;
         let sealed = match txn.open_table(KEY_CHECK) {
             Ok(table) => table.get(KEY_CHECK_CELL)?.map(|row| row.value().to_vec()),
             Err(redb::TableError::TableDoesNotExist(_)) => None,
@@ -231,7 +279,7 @@ impl BodyStore {
             return Err(StoreError::KeyRejected);
         };
         match shekyl_chacha::open(
-            self.inner.key.as_bytes(),
+            self.key.as_bytes(),
             &KEY_CHECK_NONCE,
             KEY_CHECK_AAD,
             &sealed,
@@ -244,7 +292,7 @@ impl BodyStore {
     /// Create the tables and the verifier. Called only for a new file:
     /// a reopen must not rewrite the cell under the same nonce.
     fn init_tables(&self) -> Result<(), StoreError> {
-        let txn = self.inner.db.begin_write()?;
+        let txn = self.db.begin_write()?;
         let _ = txn.open_table(SHARDS)?;
         let _ = txn.open_table(CHUNKS)?;
         {
@@ -254,7 +302,7 @@ impl BodyStore {
         {
             let mut check = txn.open_table(KEY_CHECK)?;
             let sealed = seal(
-                self.inner.key.as_bytes(),
+                self.key.as_bytes(),
                 &KEY_CHECK_NONCE,
                 KEY_CHECK_AAD,
                 KEY_CHECK_PLAINTEXT,
@@ -288,45 +336,7 @@ mod key_check_tests {
     }
 }
 
-impl BodyStoreReader {
-    /// Open the body if the shard is held. Servability is settled here.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::Backend`] on I/O; [`StoreError::Corrupt`] if the
-    /// meta row is the wrong width.
-    pub fn open_shard(&self, shard_id: ShardId) -> Result<Option<ShardFrameBody>, StoreError> {
-        let slot = slot_key(self.inner.key.as_bytes(), shard_id);
-        let txn = self.inner.db.begin_read()?;
-        let shards = match txn.open_table(SHARDS) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let Some(row) = shards.get(&slot)? else {
-            return Ok(None);
-        };
-        let meta = decode_meta(row.value());
-        Ok(Some(ShardFrameBody::new(
-            Arc::clone(&self.inner),
-            slot,
-            shard_id,
-            meta,
-        )))
-    }
-
-    /// Whether the slot is occupied. Used by reconcile, not by the
-    /// provider (the provider stays blind to the serve set).
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::Backend`] on I/O.
-    pub fn holds(&self, shard_id: ShardId) -> Result<bool, StoreError> {
-        Ok(self.open_shard(shard_id)?.is_some())
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ShardMeta {
     pub salt: [u8; SALT_LEN],
     pub body_len: u64,
@@ -401,30 +411,4 @@ pub(crate) fn aad(shard_id: ShardId, index: u64) -> [u8; 16] {
     out[..8].copy_from_slice(&shard_id.to_raw().to_le_bytes());
     out[8..].copy_from_slice(&index.to_le_bytes());
     out
-}
-
-pub(crate) fn open_chunk(
-    inner: &Inner,
-    slot: &[u8; 32],
-    shard_id: ShardId,
-    salt: &[u8; SALT_LEN],
-    index: u64,
-) -> Result<Vec<u8>, StoreError> {
-    let txn = inner.db.begin_read()?;
-    let table = txn.open_table(CHUNKS)?;
-    let ck = chunk_key(slot, index);
-    let Some(row) = table.get(&ck)? else {
-        return Err(StoreError::Corrupt {
-            detail: "sealed chunk missing after open".to_owned(),
-        });
-    };
-    shekyl_chacha::open(
-        inner.key.as_bytes(),
-        &nonce(salt, index),
-        &aad(shard_id, index),
-        row.value(),
-    )
-    .map_err(|_| StoreError::Corrupt {
-        detail: "sealed chunk failed authentication".to_owned(),
-    })
 }

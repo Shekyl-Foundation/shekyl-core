@@ -1,0 +1,35 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-network"
+description = "The one network table: every Shekyl network's name, code, prefixes, ports, genesis and permitted levers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+serde = { workspace = true, optional = true }
+# The frame's working buffer holds every field's bytes, and some fields are
+# secret-bearing (a multisig ceremony file's body); it is wiped on drop
+# (rule 35).
+zeroize = { workspace = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+serde = ["dep:serde"]
+# `HARNESS_NETWORK_ID`, the id a harness chain that mines its own genesis is
+# judged under (`Trust::UNPINNED`). TEST_ONLY
+# (`scripts/ci/check_test_only_features.py`; CHAIN_FORGE.md CF-R15): no build
+# that ships has the constant, so no release path can sign or judge under it.
+# Deleted with the id in the chain forge's CF-5.
+harness = []
+
+[lints]
+workspace = true

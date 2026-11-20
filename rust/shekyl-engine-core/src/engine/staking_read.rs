@@ -26,7 +26,7 @@
 //!
 //! Three fields, never conflated:
 //!
-//! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`] over
+//! - **`bonded_principal_confirmed`** — Σ [`ARCHIVAL_BOND_FLOOR_ATOMIC`](crate::ARCHIVAL_BOND_FLOOR_ATOMIC) over
 //!   distinct personas with a confirmed JoinMarket bond post
 //!   ([`PScanState::bond_post_matches`], `is_join_market_post_kind`) that are neither
 //!   pending-release nor retired. The bond principal is the consensus bond
@@ -53,8 +53,6 @@ use shekyl_engine_state::{PendingPostBlock, WalletLedger, WalletLedgerError};
 use shekyl_types::ChainCount;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
-
-use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
@@ -294,13 +292,14 @@ pub(crate) fn staked_balance_from_records(
     })
 }
 
-/// `count × ARCHIVAL_BOND_FLOOR_ATOMIC`, checked. The bond principal per
+/// `count × bond floor` (the shipped archival set's), checked. The bond principal per
 /// post is the consensus bond floor by construction (the WI-2 assemble path
 /// bonds exactly the floor); a count large enough to overflow is corrupt
 /// state and fails closed.
 fn principal_for_bond_count(count: usize) -> Result<AtomicUnits, StakingReadError> {
     let count = u64::try_from(count).map_err(|_| StakingReadError::Overflow)?;
-    ARCHIVAL_BOND_FLOOR_ATOMIC
+    shekyl_archival_retention::archival_params()
+        .bond_floor_atomic
         .checked_mul(count)
         .map(AtomicUnits::from_raw)
         .ok_or(StakingReadError::Overflow)
@@ -430,7 +429,7 @@ impl<
     /// `staking_read_with_ledger`.
     ///
     /// Small synchronous file I/O (the same class as
-    /// [`WalletFile::open_pscan_state`]'s other callers); async callers on a
+    /// [`WalletFile::open_pscan_state`](shekyl_engine_file::WalletFile::open_pscan_state)'s other callers); async callers on a
     /// multi-threaded runtime should treat it like the other sealed-file
     /// opens.
     ///
@@ -484,16 +483,17 @@ impl<
             .map(staked_outputs_from_state)
             .unwrap_or_default();
         let pscan_synced_height = pscan.as_ref().map(PScanState::synced_height);
-        let (in_flight, outcomes) = pending.as_ref().map_or_else(
-            || (Vec::new(), Vec::new()),
-            |block| {
+        let (in_flight, outcomes) = match pending.as_ref() {
+            None => (Vec::new(), Vec::new()),
+            Some(block) => {
                 let scan = staking_outcomes::FundingScan::from_seal(pscan.as_ref());
                 (
-                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence()),
+                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence())
+                        .map_err(|_| StakingReadError::Overflow)?,
                     staking_outcomes::outcomes(block),
                 )
-            },
-        );
+            }
+        };
 
         Ok(StakingReadView {
             staking_enabled,
@@ -510,6 +510,7 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
     use std::collections::BTreeMap;
 
@@ -858,6 +859,7 @@ mod tests {
                 kind: shekyl_engine_state::pending_post_block::RecordKind::Post,
                 state: super::super::staking_outcomes::InFlightState::Pending,
                 sends: None,
+                reserved: Some(AtomicUnits::from_raw(4_242)),
             }],
             outcomes: vec![ReportedOutcome {
                 kind: shekyl_engine_state::pending_post_block::RecordKind::Drain,
@@ -874,7 +876,8 @@ mod tests {
         assert!(
             !rendered.contains("InFlightRecord")
                 && !rendered.contains("ReportedOutcome")
-                && !rendered.contains("5001"),
+                && !rendered.contains("5001")
+                && !rendered.contains("4242"),
             "the view must redact in-flight records and outcomes, counts included: {rendered}"
         );
     }

@@ -5,6 +5,8 @@
 
 //! Submit verdict + `PendingTxEngine` collaborator error vocabulary (PR 5).
 
+use shekyl_tx_builder::{InternalSignFault, SignFault};
+
 use crate::engine::pending::{ReservationId, SnapshotId};
 
 use super::KeyEngineError;
@@ -29,6 +31,8 @@ use super::KeyEngineError;
 /// `#[non_exhaustive]` per the segment-2h binding form so V3.x daemon-
 /// rejection refinements (e.g., a future `DaemonOutOfMemory` triage
 /// hint) land additively.
+pub use shekyl_engine_state::pending_post_block::CenRowName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TerminalErrorKind {
@@ -54,40 +58,39 @@ pub enum TerminalErrorKind {
     /// the spend-conflict and economic-policy classes.
     Malformed,
 
+    /// A consensus row refused the transaction against the chain at the
+    /// pool's commit (`Rejection::ConsensusRule`): the bytes are sound and
+    /// the chain decides. Terminal; the record is held to its end date
+    /// (BD-Q3 Rule 2) and the user is told the row.
+    ConsensusRule {
+        /// The row, as the daemon named it.
+        row: CenRowName,
+    },
     /// The daemon rejected with a cause this wallet build does not
-    /// know ([`RejectCause::Unrecognized`] per the §2.3 version-skew
+    /// know ([`Rejection::Unrecognized`] per the §2.3 version-skew
     /// rules — an additive daemon-side cause landed before this wallet
     /// updated). Fail-safe disposition per `DAEMON_SUBMIT_VERDICT.md`
     /// §2.5: release + one-shot rebuild, same shape as [`Self::Malformed`]
     /// but named distinctly so audit and telemetry can see skew events.
     ///
-    /// [`RejectCause::Unrecognized`]: shekyl_rpc_client::RejectCause::Unrecognized
+    /// [`Rejection::Unrecognized`]: shekyl_rpc_client::Rejection::Unrecognized
     Unrecognized,
-
-    /// The daemon cannot admit a JoinMarket bond post. Phases A–C passed.
-    /// Phase D's mutable re-checks do not run: the C++ commit step decodes
-    /// no JoinMarket form that carries a receipt key (`FN_DSA_HYBRID.md`
-    /// `FND-20`) and returns before `shekyl_submit_commit_tx`. The
-    /// capability refusal is the verdict, so a key-image or fee race is
-    /// reported as this kind. Resubmitting the same bytes to the same
-    /// daemon gets the same answer. Nothing was built wrong, so nothing is
-    /// rebuilt: the reservation is released and the stake waits for a
-    /// daemon that can take it (`DEL-008`).
-    JoinMarketUnsupported,
 }
 
 impl From<TerminalErrorKind> for shekyl_engine_state::pending_post_block::TerminalCause {
     /// The persisted cause a pending record keeps (BD-Q3 Rule 2). Exhaustive
     /// on purpose: a new terminal kind fails this match in review, where the
     /// persisted twin gains its variant (or the kind maps to `Unrecognized`).
+    /// The twin's `JoinMarketUnsupported` has no kind here: a pre-flip
+    /// daemon recorded it, and nothing produces it now.
     fn from(kind: TerminalErrorKind) -> Self {
         use shekyl_engine_state::pending_post_block::TerminalCause as C;
         match kind {
             TerminalErrorKind::DoubleSpend => C::DoubleSpend,
             TerminalErrorKind::FeeTooLow => C::FeeTooLow,
             TerminalErrorKind::Malformed => C::Malformed,
+            TerminalErrorKind::ConsensusRule { row } => C::ConsensusRule { row },
             TerminalErrorKind::Unrecognized => C::Unrecognized,
-            TerminalErrorKind::JoinMarketUnsupported => C::JoinMarketUnsupported,
         }
     }
 }
@@ -244,6 +247,24 @@ pub enum SubmitError {
         reservation_id: ReservationId,
     },
 
+    /// A19: the dispatch record (journal row with the signed bytes, the
+    /// retained tx secret, the inputs the F14 lock holds) is not
+    /// confirmed on disk, so **nothing was sent**. A save that failed
+    /// before the rename undoes the record under the same guard. A rename
+    /// whose durability was not confirmed leaves the applied
+    /// record (undoing it would diverge from disk) and still sends
+    /// nothing. Either way the reservation is back in `consumer_held`
+    /// with its output locks; the consumer may retry the submit once the
+    /// cause is fixed, or discard.
+    #[error("send not saved durably, so not sent (reservation {reservation_id:?} kept): {source}")]
+    DispatchNotSaved {
+        /// The reservation, kept for a retry.
+        reservation_id: ReservationId,
+        /// Why the save failed.
+        #[source]
+        source: super::PersistenceError,
+    },
+
     /// P2: rid was found in `in_flight` at submit entry — a second
     /// `submit` is being attempted while the first is still
     /// daemon-pending.
@@ -300,6 +321,154 @@ pub enum SubmitError {
         /// The reservation that must be discarded and rebuilt.
         reservation_id: ReservationId,
     },
+}
+
+/// Where a reservation stands after a failed submit, as the engine holds
+/// it. Three states, because a consumer acts differently on each: what it
+/// still holds it may submit again or discard; what is in flight it must
+/// leave to the engine; what is gone it forgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReservationAfterSubmit {
+    /// `consumer_held`, with its `output_locks`: nothing was sent. The
+    /// caller still holds it, to submit again once the cause is fixed, or
+    /// to discard. A consumer that forgets it leaves its inputs locked
+    /// with no handle to release them.
+    Held,
+    /// `in_flight`: the daemon may have it. The engine holds it until the
+    /// daemon's verdict or the R8 TTL; the caller's discard is refused
+    /// meanwhile (F2), and a second submit is refused as pending.
+    InFlight,
+    /// Dropped, its locks released, or never issued.
+    Gone,
+}
+
+impl SubmitError {
+    /// Where the reservation stands after this failure, answered once,
+    /// here, from each arm's documented lifecycle. No consumer re-derives
+    /// it over this `#[non_exhaustive]` enum: a match outside the crate
+    /// cannot be exhaustive, and its wildcard would read every variant
+    /// added later as one answer for all. This match is exhaustive, so a
+    /// new variant does not compile until its answer is written.
+    #[must_use]
+    pub const fn reservation_after(&self) -> ReservationAfterSubmit {
+        match self {
+            // Lazy R5: never sent; the locks stay until an explicit discard.
+            Self::SnapshotInvalidated { .. }
+            // A definite rejection whose remedy returns it to `consumer_held`.
+            | Self::DaemonRejectedRetryable { .. }
+            // Nothing sent; `consumer_held`, kept for a retry (A19).
+            | Self::DispatchNotSaved { .. }
+            // Withheld for re-confirmation; `consumer_held`.
+            | Self::ContentChanged { .. }
+            // Preserved for a retry.
+            | Self::ReanchorUnavailable { .. }
+            // Preserved for review before the consumer discards it.
+            | Self::ReselectionRequired { .. } => ReservationAfterSubmit::Held,
+            // Ambiguous: `in_flight` until the daemon resolves or the TTL.
+            Self::DaemonAmbiguous { .. }
+            // The first submit is still `in_flight`.
+            | Self::SubmitAlreadyPending { .. } => ReservationAfterSubmit::InFlight,
+            // Dropped from `in_flight`, its locks released.
+            Self::DaemonRejectedTerminal { .. }
+            // Never issued, or already resolved.
+            | Self::ReservationNotFound { .. } => ReservationAfterSubmit::Gone,
+        }
+    }
+}
+
+#[cfg(test)]
+mod reservation_after_tests {
+    use super::*;
+    use crate::engine::error::PersistenceError;
+
+    /// **Every arm says where its reservation stands, as its own
+    /// documentation says.** One row per variant; the match in
+    /// `reservation_after` is exhaustive, so a variant added later fails to
+    /// compile there, and this table names its answer. Red edits: move
+    /// `DispatchNotSaved` to `InFlight` (a consumer would drop the handle
+    /// of a send it still holds, its inputs locked with no way to release
+    /// them); move `DaemonAmbiguous` to `Held` (a consumer would try to
+    /// discard, or resubmit, a send that may be on the network).
+    #[test]
+    fn every_arm_says_where_its_reservation_stands() {
+        use ReservationAfterSubmit::{Gone, Held, InFlight};
+        let rid = ReservationId::from_raw(7);
+        let cases: [(SubmitError, ReservationAfterSubmit); 10] = [
+            (
+                SubmitError::SnapshotInvalidated {
+                    reservation_snapshot: SnapshotId([1; 16]),
+                    current_snapshot: SnapshotId([2; 16]),
+                },
+                Held,
+            ),
+            (
+                SubmitError::DaemonRejectedTerminal {
+                    kind: TerminalErrorKind::DoubleSpend,
+                },
+                Gone,
+            ),
+            (
+                SubmitError::DaemonAmbiguous {
+                    kind: AmbiguousErrorKind::DaemonTimeout,
+                    reservation_id: rid,
+                },
+                InFlight,
+            ),
+            (
+                SubmitError::DaemonRejectedRetryable {
+                    cause: RetryableRejectCause::StaleRoot,
+                    reservation_id: rid,
+                },
+                Held,
+            ),
+            (
+                SubmitError::ReservationNotFound {
+                    reservation_id: rid,
+                },
+                Gone,
+            ),
+            (
+                SubmitError::DispatchNotSaved {
+                    reservation_id: rid,
+                    source: PersistenceError::Prefs(
+                        shekyl_engine_prefs::PrefsError::UnsupportedSchemaVersion {
+                            file: 9,
+                            binary: 1,
+                        },
+                    ),
+                },
+                Held,
+            ),
+            (
+                SubmitError::SubmitAlreadyPending {
+                    reservation_id: rid,
+                },
+                InFlight,
+            ),
+            (
+                SubmitError::ContentChanged {
+                    reservation_id: rid,
+                    content_gen: 3,
+                },
+                Held,
+            ),
+            (
+                SubmitError::ReanchorUnavailable {
+                    reservation_id: rid,
+                },
+                Held,
+            ),
+            (
+                SubmitError::ReselectionRequired {
+                    reservation_id: rid,
+                },
+                Held,
+            ),
+        ];
+        for (error, after) in cases {
+            assert_eq!(error.reservation_after(), after, "{error:?}");
+        }
+    }
 }
 
 // --- PendingTxEngine collaborator-error vocabulary (PR 5) -----------------
@@ -363,68 +532,132 @@ pub enum OutputSelectorError {
     },
 }
 
+/// A wallet-side signing fault outside the transaction builder.
+///
+/// Closed: a new fault is a variant, and the wire carries [`Self::keyword`].
+/// The builder's own faults travel as [`shekyl_tx_builder::SignFault`], not
+/// as one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignerFault {
+    /// A structural failure during signing whose detail stays in the log.
+    Primitive,
+    /// An input's handle does not match its derivation.
+    HandleMismatch,
+    /// A spendable input has no canonical key image.
+    MissingKeyImage,
+    /// An input's source ciphertext does not decapsulate.
+    SourceDecapsulation,
+    /// A recipient id the label cannot echo reached the sign pass.
+    RidNotEncodable,
+    /// A proof message reached the signer, which does not serve proofs.
+    Proof,
+    /// The signed bulletproof bytes do not parse.
+    BulletproofParse,
+    /// Encoding the signed transaction failed.
+    WireEncode,
+    /// The OS random source failed while drawing the transaction key.
+    Randomness,
+}
+
+impl SignerFault {
+    /// Every wallet-side fault, in declaration order.
+    pub const ALL: [Self; 9] = [
+        Self::Primitive,
+        Self::HandleMismatch,
+        Self::MissingKeyImage,
+        Self::SourceDecapsulation,
+        Self::RidNotEncodable,
+        Self::Proof,
+        Self::BulletproofParse,
+        Self::WireEncode,
+        Self::Randomness,
+    ];
+
+    /// The fault's wire keyword (`data.fault` on `-29119`).
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Primitive => "primitive",
+            Self::HandleMismatch => "handle-mismatch",
+            Self::MissingKeyImage => "missing-key-image",
+            Self::SourceDecapsulation => "source-decapsulation",
+            Self::RidNotEncodable => "rid-not-encodable",
+            Self::Proof => "proof",
+            Self::BulletproofParse => "bulletproof-parse",
+            Self::WireEncode => "wire-encode",
+            Self::Randomness => "randomness",
+        }
+    }
+}
+
+impl core::fmt::Display for SignerFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.keyword())
+    }
+}
+
 /// Failures from `Signer::sign_transfer`. Phase 0h binding form
 /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R11 (b) segment-2b
 /// closure as separate `LocalSigner` / `SigningActor`).
 ///
-/// The trait isolates spend-key access from the build pipeline so the
-/// PR 5 design can survive the eventual V3.x `SigningActor` topology
-/// without re-opening the trait surface. The default V3.0 impl is
-/// `LocalSigner` (synchronous, in-process); the V3.x actor variant
-/// lives behind the same trait.
-///
-/// `#[non_exhaustive]` so V3.x signers can extend the variant set
-/// (e.g., a `HardwareApprovalDeclined` variant when offline-approval
-/// flows land).
+/// Every failure here is local: the wallet signs in process. A remote
+/// signer (a device, a cooperative peer) would add its own variant with
+/// its own remedy, not borrow one of these.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SignerError {
-    /// The signer has no spend-key material in scope (view-only
-    /// wallet; hardware wallet not connected; signing actor not yet
-    /// started). Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant) because it
-    /// is the trait-method's outcome, not the engine's pre-build
-    /// capability check.
+    /// The signer has no spend-key material in scope: its signing actor
+    /// has stopped. Distinct from [`SendError::BuildInvariant`](super::SendError::BuildInvariant)
+    /// because it is the trait method's outcome, not the engine's
+    /// pre-build capability check.
     #[error("signer unavailable")]
     Unavailable,
 
-    /// The signer attempted to sign but a downstream failure
-    /// prevented completion (hardware-device error, remote-actor
-    /// disconnect, etc.). Carries a `&'static str` named at the call
-    /// site.
-    #[error("signer remote failure ({reason})")]
-    RemoteFailure {
-        /// Compile-time-fixed description of the downstream failure.
-        reason: &'static str,
+    /// The transaction builder refused or failed the signing pass, by
+    /// identity ([`shekyl_tx_builder::SignFault`]).
+    #[error("signing failed: {0}")]
+    Sign(shekyl_tx_builder::SignFault),
+
+    /// The wallet's own state did not hold what signing needs, or encoding
+    /// the signed transaction failed: a bug, named by [`SignerFault`].
+    #[error("signer internal fault ({fault})")]
+    Internal {
+        /// The fault.
+        fault: SignerFault,
     },
 }
 
 impl From<KeyEngineError> for SignerError {
     fn from(err: KeyEngineError) -> Self {
-        match err {
-            KeyEngineError::KeyActorUnavailable => Self::Unavailable,
-            KeyEngineError::Primitive { detail } => Self::RemoteFailure { reason: detail },
-            KeyEngineError::InsufficientFunds { .. } => Self::RemoteFailure {
-                reason: "insufficient funds for fee variant",
-            },
-            KeyEngineError::HandleMismatch { .. } => Self::RemoteFailure {
-                reason: "output handle mismatch",
-            },
-            KeyEngineError::MissingKeyImage { .. } => Self::RemoteFailure {
-                reason: "missing key image on spend input",
-            },
-            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => Self::RemoteFailure {
-                reason: "source ciphertext re-decapsulation failed",
-            },
+        let fault = match err {
+            KeyEngineError::KeyActorUnavailable => return Self::Unavailable,
+            KeyEngineError::Sign(fault) => return Self::Sign(fault),
+            KeyEngineError::Primitive { detail } => {
+                tracing::debug!(detail, "signer primitive failure");
+                SignerFault::Primitive
+            }
+            // Amounts that do not balance, including a fee variant the
+            // build's selection should have made unreachable. The shortfall
+            // stays in the log; the fault is the builder's closed one.
+            KeyEngineError::InsufficientFunds { shortfall } => {
+                tracing::debug!(shortfall, "signing amounts do not balance");
+                return Self::Sign(SignFault::Internal(InternalSignFault::InsufficientFunds));
+            }
+            KeyEngineError::HandleMismatch { .. } => SignerFault::HandleMismatch,
+            KeyEngineError::MissingKeyImage { .. } => SignerFault::MissingKeyImage,
+            KeyEngineError::SourceCiphertextDecapsulationFailed(_) => {
+                SignerFault::SourceDecapsulation
+            }
             // Unreachable for a request `build_pending_tx` admitted (it
             // refuses a rid the label cannot carry), kept total.
-            KeyEngineError::RidNotEncodable(_) => Self::RemoteFailure {
-                reason: "recipient payment request id cannot be echoed on the wire",
-            },
+            KeyEngineError::RidNotEncodable(_) => SignerFault::RidNotEncodable,
             // Unreachable on the signing path (proofs never route through
             // `Signer`), but the conversion must stay total.
-            KeyEngineError::Proof(_) => Self::RemoteFailure {
-                reason: "proof generation failure",
-            },
-        }
+            KeyEngineError::Proof(_) => SignerFault::Proof,
+            // The OS random source failed drawing the transaction key;
+            // nothing was built.
+            KeyEngineError::Randomness(_) => SignerFault::Randomness,
+        };
+        Self::Internal { fault }
     }
 }

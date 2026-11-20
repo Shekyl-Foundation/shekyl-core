@@ -114,6 +114,22 @@ pub enum Effect {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
+    /// Stem these blobs to `peer` on the ordinary wire: an embargo's reshape
+    /// to the alternate (§12.2), or a held origin's first send (RX-2). The
+    /// bytes are the transaction's own; no relay or retry state rides them
+    /// (§12.2 item 5).
+    Stem {
+        /// The successor.
+        peer: ConnectionId,
+        /// The transaction blobs.
+        blobs: Vec<TxBlob>,
+    },
+    /// The zone fluffed these transactions as the last resort, or saw them
+    /// circulate: the pool's shown bit is set for each (criterion 2, Q9).
+    Published {
+        /// The transactions, by hash.
+        txs: Vec<crate::TxId>,
+    },
 }
 
 /// Owns a zone and runs its scheduled steps.
@@ -145,8 +161,8 @@ impl Driver {
     }
 
     /// When the driver next has work — the earliest of the epoch boundary,
-    /// any pending fluff batch, any noise channel, and any in-flight stem
-    /// observation.
+    /// any pending fluff batch, any noise channel, any in-flight stem
+    /// observation (each one an embargo), and any held origin's next plan.
     ///
     /// **Derived on every call, never cached.** A stored copy would be a second
     /// owner of a fact the schedulers already hold, and it would go stale the
@@ -176,6 +192,9 @@ impl Driver {
         if let Some(stem) = self.zone.stem_observation_deadline() {
             wake = wake.min(stem);
         }
+        if let Some(unsent) = self.zone.unsent_deadline() {
+            wake = wake.min(unsent);
+        }
         wake
     }
 
@@ -202,12 +221,23 @@ impl Driver {
         // to. The earliest pending deadline is folded into `next_wake`, so the
         // asio timer actually fires for these — not only when fluff/epoch
         // happen to wake first.
-        // The count is discarded **intentionally, pending a consumer** — the
-        // selection tier that reads these tallies is §12.11 and is not built.
-        // Said here because a production call with a dropped return is
-        // otherwise indistinguishable from rot at the next census, which is
-        // the same note the noise machinery carries.
-        let _resolved = self.zone.expire_stem_observations(now);
+        // A silence is an embargo that fired: the zone re-stems to the
+        // alternate or fluffs (§12.2, §14.7). Then every held origin that is
+        // due is planned again (RX-2). The tallies the silences also feed are
+        // §12.11's, whose selection consumer is not built.
+        let fired = self.zone.fire_embargoes(now, rng);
+        let unsent = self.zone.due_unsent(now, rng);
+        let mut published = fired.published;
+        published.extend(unsent.published);
+        for (peer, blob) in fired.stems.into_iter().chain(unsent.stems) {
+            effects.push(Effect::Stem {
+                peer,
+                blobs: vec![blob],
+            });
+        }
+        if !published.is_empty() {
+            effects.push(Effect::Published { txs: published });
+        }
 
         for (peer, blobs) in self.zone.flush_fluff(now, false) {
             effects.push(Effect::Fluff { peer, blobs });

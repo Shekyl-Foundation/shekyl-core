@@ -20,7 +20,7 @@ use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, FormContext, FormRule};
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use crate::verdict::{ChainValid, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, Tip};
 use shekyl_types::{BlockHash, CurveTreeRoot};
@@ -46,11 +46,14 @@ fn with_versions(major: u8, minor: u8) -> Candidate {
 fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
     let formed = match form(
         candidate,
-        rule_set,
+        &FormClaims {
+            rule_set,
+            seed: BlockHash::NULL,
+            target: expected_target(&MockChain::default(), rule_set),
+            references: &crate::block::ReferenceClaims::EMPTY,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        BlockHash::NULL,
-        expected_target(&MockChain::default(), rule_set),
-        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -58,8 +61,7 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     MockChain::default().with_view(|view| {
-        judged(validate(formed, &view, rule_set, &Trust::UNANCHORED))
-            .map(|_valid: ChainValid<_>| ())
+        judged(validate(formed, &view, rule_set, &Trust::UNPINNED)).map(|_valid: ChainValid<_>| ())
     })
 }
 
@@ -210,6 +212,20 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         }
     }
     impl<'id> ChainView<'id> for NoRoots {
+        type Bundles<'m>
+            = crate::harness::NoBundleRows<core::convert::Infallible>
+        where
+            Self: 'm;
+
+        fn bundles<'m>(
+            &'m self,
+            _: &'m crate::DrawableMemo,
+            _: shekyl_types::BlockHeight,
+            _: shekyl_archival_retention::SettlementSchedule,
+        ) -> Self::Bundles<'m> {
+            crate::harness::NoBundleRows::new()
+        }
+
         fn has_key_image(&self, _: &shekyl_types::KeyImage) -> Result<bool, Self::Fault> {
             Ok(false)
         }

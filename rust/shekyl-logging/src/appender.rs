@@ -7,7 +7,7 @@
 //!
 //! Exists as a thin module rather than being inlined into `lib.rs` so the
 //! POSIX-mode `0600` enforcement path and the custom [`SizeRollingWriter`]
-//! (the C++ daemon's size-based rotation replacement) have a clear home.
+//! (size-based rotation) have a clear home.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -150,6 +150,10 @@ fn set_dir_mode_0700(dir: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn set_dir_mode_0700(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
@@ -204,6 +208,10 @@ fn chmod_matching_files_0600(dir: &Path, prefix: &str) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 fn chmod_matching_files_0600(_dir: &Path, _prefix: &str) -> std::io::Result<()> {
     Ok(())
 }
@@ -219,14 +227,16 @@ pub fn __test_only_reapply_file_modes(dir: &Path, prefix: &str) -> std::io::Resu
 /// No-op on non-Unix.
 #[doc(hidden)]
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the Unix arm's signature: callers handle both platforms the same way"
+)]
 pub fn __test_only_reapply_file_modes(_dir: &Path, _prefix: &str) -> std::io::Result<()> {
     Ok(())
 }
 
 /// Size-based rolling writer.
 ///
-/// Replaces the legacy easylogging++ `MaxLogFileSize` +
-/// `installPreRollOutCallback` pair from `contrib/epee/src/mlog.cpp`.
 /// Unlike `tracing_appender`'s upstream `RollingFileAppender` — which
 /// only supports time-based policies (hourly/daily/never) — this writer
 /// owns the rename path itself, so the `0600` POSIX discipline holds
@@ -245,15 +255,13 @@ pub fn __test_only_reapply_file_modes(_dir: &Path, _prefix: &str) -> std::io::Re
 ///    attempted best-effort:
 ///    a. `flush()` on the live file.
 ///    b. `rename` live → `{prefix}-{UTC %Y-%m-%d-%H-%M-%S}` in the
-///    same directory. This format matches `generate_log_filename`
-///    in `contrib/epee/src/mlog.cpp`.
-///    c. Re-enforce `0600` on the rotated file (the legacy C++ only
-///    relied on the live file's mode carrying across rename, which
-///    is implementation-defined across kernels).
+///    same directory.
+///    c. Re-enforce `0600` on the rotated file rather than relying on
+///    the live file's mode carrying across rename, which is
+///    implementation-defined across kernels.
 ///    d. Reopen a fresh live file at the original path, also `0600`.
 ///    e. If `max_files > 0`, run `prune_oldest` so the total count
-///    (live + rotated) never exceeds `max_files` — matching the
-///    steady-state disk footprint the C++ daemon targets today.
+///    (live + rotated) never exceeds `max_files`.
 /// 3. If any rollover step fails *after* the rename, subsequent writes
 ///    continue landing on the renamed inode (Unix semantics). The
 ///    byte counter is not reset until the new live file is open, so
@@ -264,8 +272,8 @@ pub fn __test_only_reapply_file_modes(_dir: &Path, _prefix: &str) -> std::io::Re
 /// ## Collision handling
 ///
 /// When two rotations land in the same UTC second (a small
-/// `max_bytes` + high-throughput log can do this), the naive legacy
-/// rename would silently clobber the earlier rotation. We disambiguate
+/// `max_bytes` + high-throughput log can do this), a plain rename
+/// would silently clobber the earlier rotation. We disambiguate
 /// with a `.N` counter suffix — the rotated name stays
 /// `{prefix}-{UTC}` as long as it's unique, falling back to
 /// `{prefix}-{UTC}.1`, `.2`, … as needed.
@@ -319,6 +327,11 @@ impl SizeRollingWriter {
         let suffix = utc_rotation_suffix();
         let rotated = pick_nonexistent_rotated_path(&self.dir, &self.prefix, &suffix)?;
 
+        // CLIPPY: disallowed_methods — log rotation, not a replace.
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "log rotation: moves the live log to a rotated name chosen not to exist; not a file replace"
+        )]
         fs::rename(&live, &rotated)?;
 
         // From here, `self.file` still points at the renamed inode on
@@ -338,8 +351,7 @@ impl SizeRollingWriter {
 
         if self.max_files > 0 {
             // Prune is best-effort; a filesystem error during the
-            // walk shouldn't brick subsequent writes. The legacy C++
-            // swallows per-file errors (see `mlog.cpp` lines 215-223).
+            // walk shouldn't brick subsequent writes.
             // `drop(...)` instead of `let _ = ...;` so the
             // `clippy::let_underscore_must_use` lint (secondary
             // defense for `LoggerGuard` drop hygiene) keeps firing
@@ -403,18 +415,15 @@ impl SizeRollingWriter {
         // Target: total on-disk count (live + rotated) <= max_files.
         // The live file is always retained, so the rotated slice must
         // fit within `max_files - 1`. `saturating_sub(1)` pins
-        // `max_files == 1` to "0 rotated allowed" (keep live only),
-        // which matches the legacy C++ behavior where
-        // `found_files.size() >= max_log_files` with `max_log_files ==
-        // 1` deletes every rotated sibling.
+        // `max_files == 1` to "0 rotated allowed" (keep live only):
+        // every rotated sibling is deleted.
         let cap = self.max_files.saturating_sub(1) as usize;
         if rotated.len() > cap {
             rotated.sort_by_key(|file| file.modified);
             let to_delete = rotated.len() - cap;
             for file in rotated.iter().take(to_delete) {
-                // Per-file remove errors are swallowed to match
-                // `mlog.cpp`'s loop, which logs-then-continues on
-                // `boost::filesystem::remove` failure. `drop(...)`
+                // Per-file remove errors are swallowed: one file that
+                // will not go must not stop the prune. `drop(...)`
                 // instead of `let _ = ...;` keeps the
                 // `clippy::let_underscore_must_use` lint's signal
                 // intact crate-wide.
@@ -460,9 +469,8 @@ impl Write for SizeRollingWriter {
         let n = self.file.write(buf)?;
         self.bytes_written += n as u64;
         if self.max_bytes > 0 && self.bytes_written >= self.max_bytes {
-            // Rollover errors are swallowed — matching `mlog.cpp`'s
-            // `installPreRollOutCallback` (which returns void and
-            // explicitly comments "can't log a failure"). If the
+            // Rollover errors are swallowed: the writer is the log
+            // sink, so it has nowhere to log a failure. If the
             // rollover actually failed, `bytes_written` is still at
             // or above the threshold, so the next write triggers
             // another attempt; the writer recovers on its own.
@@ -480,6 +488,51 @@ impl Write for SizeRollingWriter {
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
     }
+}
+
+/// Append `lines` to the log file at `path` before the logger runs: the
+/// lines of a daemon start that ends before logging starts (Rick,
+/// 2026-11-18). The file is the logger's own live file, opened as the
+/// logger opens it (created at mode `0600`, appended to); its directory is
+/// never created, so a log that cannot be opened is left unwritten.
+///
+/// The open never blocks and the handle is checked, not the path: on Unix
+/// it is non-blocking, so a FIFO with no reader refuses it at once rather
+/// than hanging the refused start, and whatever the handle opened must be
+/// a regular file before a byte is written (a path that changes between a
+/// check and the open cannot slip a FIFO or a device in). Its mode is set
+/// through the handle.
+///
+/// # Errors
+///
+/// The file could not be opened or written, or it is not a regular file.
+pub fn append_before_start(path: &Path, lines: &[String]) -> io::Result<()> {
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NONBLOCK);
+    }
+    let mut file = opts.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the log file is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    let mut text = String::new();
+    for line in lines {
+        text.push_str(line);
+        text.push('\n');
+    }
+    file.write_all(text.as_bytes())?;
+    file.sync_data()
 }
 
 /// Open `path` for appending, creating it at mode `0600` and
@@ -501,8 +554,7 @@ fn open_with_0600_append(path: &Path) -> io::Result<File> {
     Ok(file)
 }
 
-/// Produce a UTC `%Y-%m-%d-%H-%M-%S` suffix matching the legacy C++
-/// `generate_log_filename` format.
+/// Produce a UTC `%Y-%m-%d-%H-%M-%S` rotation suffix.
 fn utc_rotation_suffix() -> String {
     use time::format_description::FormatItem;
     use time::macros::format_description;
@@ -520,9 +572,9 @@ fn utc_rotation_suffix() -> String {
 
 /// Return a rotated path that doesn't already exist in `dir`.
 ///
-/// The legacy C++ rename would silently clobber an earlier rotation
-/// when two rollovers landed in the same UTC second. We append a `.N`
-/// disambiguator instead. Bounded to 1024 attempts so a pathological
+/// A plain rename would silently clobber an earlier rotation when two
+/// rollovers landed in the same UTC second, so we append a `.N`
+/// disambiguator. Bounded to 1024 attempts so a pathological
 /// state can't spin forever.
 fn pick_nonexistent_rotated_path(dir: &Path, prefix: &str, suffix: &str) -> io::Result<PathBuf> {
     let base = dir.join(format!("{prefix}-{suffix}"));

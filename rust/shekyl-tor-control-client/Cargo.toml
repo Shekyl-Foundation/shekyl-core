@@ -26,9 +26,24 @@ publish = false
 unpinned-tor-for-tests = []
 
 [dependencies]
+# The managed tor's launch: the process's one spawn lock, the child's
+# descriptor hygiene, and the pair with its spawn window (`TSR-Q7`), shared
+# with the GUI's launch of the daemon.
+shekyl-spawn = { path = "../shekyl-spawn" }
+# The status's wire shape and its one renderer: the supervisor's snapshot
+# is in that shape, and its words are that crate's (TOR_STATUS_CRATE.md).
+shekyl-tor-status = { path = "../shekyl-tor-status" }
+# The process clock. The handshake read, the readiness wait, and `awake`
+# end on it, so a machine's sleep is not time Tor was given. The supervisor
+# core's tests use the same crate's hand clock.
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
+# The onion keypair. Its RFC 8032 expansion and public key are secret-byte
+# operations and live in `shekyl-onion-key` (rule 36). This crate encodes
+# the address and hands Tor the key blob, and it does not re-export the
+# keypair: a caller that mints one names that crate.
+shekyl-onion-key = { path = "../shekyl-onion-key" }
 # The v3 hostname transform. Shared with the daemon fetch client so the
 # address a persona publishes and the address a daemon dials cannot
 # drift. Encoding only — this crate still does not own a Tor instance.
@@ -59,6 +74,10 @@ libc = "0.2"
 # handle's inheritance flag (`SetHandleInformation`) is set here, beside the
 # socket the launch hands tor.
 shekyl-win-sec = { path = "../shekyl-win-sec" }
+# The one replace's wait (`REPLACE_WAIT`) and its held-file refusal
+# (`HeldOpen`), which the cache's save on Windows shares; the rename itself is
+# shekyl-win-sec's creating handle.
+shekyl-os-account = { path = "../shekyl-os-account" }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -66,10 +85,12 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 hex-literal = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+# `test-util`: the reply bound's resume tests pause time and jump it, as
+# Windows' clock jumps across a sleep (`control/ready.rs`). A feature of the
+# tokio already in Cargo.lock, so no new crate.
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "test-util"] }
 
 [lints]
 workspace = true

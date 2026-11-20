@@ -11,12 +11,15 @@
 # list written there would judge `dev` by `main`'s.
 #
 # The crate's docs call this set "the live lane": this job is it, and each
-# ignore string names the job. The set: the scenarios that fill shards with
-# real proofs (the archival pop round trips, the emission claims, the
-# levered slash chain, the join, the two pool-shim posts), the miner over
-# real RandomX, the captured-chain replay under the production substrate,
-# and the measurements (the switch at the genesis cap, the miner's rate, the
-# H19 batch cost). An `#[ignore]`d test no scheduled lane runs is a deleted
+# ignore string names the job. The set: the scenarios that fill shards
+# with real proofs (the archival pop round trips, the emission claims, the
+# levered slash chain, the join, the two pool-shim posts, a produced
+# bundle and a produced support bundle, each admitted), the miner
+# over real RandomX, two service runs past the first seed epoch, a spend
+# read by the wallet and the RPC after its shard was discarded, the
+# captured-chain replay under the production proof-of-work boundary, and the
+# measurements (the switch at the genesis cap, the miner's rate, the H19
+# batch cost). An `#[ignore]`d test no scheduled lane runs is a deleted
 # test with a comment on it. Before this job none of these ran, and its
 # first run found five red on `dev`: the four switch-timing tests asserted
 # an alt table the death rule (0999f8726) had since emptied, and the
@@ -27,14 +30,27 @@
 # under heavy load (the two RandomX switch measurements dominate); the job
 # allows 240 minutes for a 4-vCPU runner.
 #
-# Rule 47, both ways: the set is exact. Every subject below must be in the
-# crate's `--list --ignored`, so a renamed, deleted or un-ignored member
-# fails here by name; and every ignored test in the listing must be below,
-# so a new `#[ignore]` stops the lane by name until it is added here (or
-# made a non-ignored test). Either refusal comes before anything runs.
-# Rule 46: the listing is captured once and judged; no verdict travels
-# through a pipe that can end early; the run's own exit is the verdict.
+# Helpers, never run here: the block-path bench fixtures' writer
+# (`bench_fixture_tests::regenerate_block_path_fixtures`). It WRITES
+# committed files; a lane that rewrote a fixture and then replayed it
+# would pass every night (ignored_set_wire.sh gives the same reason).
+#
+# Rule 47, both ways: the set is exact. Every subject and helper below must
+# be in the crate's `--list --ignored`, so a renamed, deleted or un-ignored
+# member fails here by name; and every ignored test in the listing must be
+# below, so a new `#[ignore]` stops the lane by name until someone decides
+# here whether it is run or is a helper (or stops ignoring it). Either
+# refusal comes before anything runs. The subjects run by exact name, so a
+# helper cannot be reached by a filter, and the run must report as many
+# passes as subjects.
+# `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
+# Rust job uses it; the run below is the nightly lane.
+# Rule 46: the listing is captured once and judged; the run's log is
+# written and its exit kept, then the log shown; no verdict travels
+# through a pipe.
 set -euo pipefail
+. "$(dirname "$0")/ignored_set_mode.sh"
+ignored_set_mode "$@"
 cd "$(dirname "$0")/../../rust"
 branch="${BRANCH:-the checked-out ref}"
 
@@ -42,12 +58,22 @@ subjects=(
   'archival_pop_roundtrip_tests::a_claim_chain_pops_and_reconnects_at_every_block_from_the_joins_on'
   'archival_pop_roundtrip_tests::a_slash_and_reinstate_chain_pops_and_reconnects_at_every_block_from_the_join_on'
   'archival_pop_roundtrip_tests::a_popped_claim_restores_the_epoch_its_prune_dropped_and_a_second_claim_is_refused'
-  'archival_slash_tests::the_levered_slash_chain_judges_each_row_on_one_record'
+  'archival_slash_tests::a_slash_waits_out_an_epoch_with_no_observation'
+  'archival_slash_tests::the_slash_chain_judges_each_row_on_one_record'
+  'bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects'
+  'bundle_producer_gate_tests::a_produced_support_bundle_is_admitted_and_connects'
+  'forged_fill::tests::the_forged_fill_connects_under_every_readers_schedule'
+  'forged_fill::tests::the_manifest_closes_each_shard_where_the_capture_rule_does'
+  'miner_tests::a_chain_at_the_difficulty_floor_mines_its_way_back'
   'miner_tests::the_miner_extends_the_chain_block_after_block'
   'miner_tests::the_miners_rate_per_worker'
   'pool_submit_tests::join_posts_are_accepted_through_the_rust_pool_shim'
   'pool_submit_tests::two_posts_by_one_persona_are_held_and_the_template_selects_one'
-  'scenario::scenario_tests::a_chain_mines_under_the_production_substrate'
+  'rpc_store_facts_tests::below_horizon::the_wallet_and_the_rpc_read_a_spend_whose_shard_the_store_discarded'
+  'resident_tests::a_connect_past_the_windows_end_frees_the_previous_epochs_cache'
+  'resident_tests::a_held_fork_past_its_seed_point_is_warm_until_it_leaves_the_cap'
+  'scenario::scenario_tests::a_chain_mines_under_the_production_pow'
+  'service::service_tests::a_run_across_a_seed_boundary_lands_in_one_commit'
   'scenario_emission_tests::a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed'
   'scenario_emission_tests::the_drivers_emission_claim_connects_and_pays_the_persona'
   'scenario_join_tests::a_join_is_written_and_the_blocks_after_it_read_the_record'
@@ -56,14 +82,18 @@ subjects=(
   'switch_timing_tests::production_cap_switch_timing_randomx_coinbase_only'
   'switch_timing_tests::production_cap_switch_timing_randomx_with_spends'
   'vectors_tests::h19_cost::h19_batch_cost_at_the_captured_densities'
-  'vectors_tests::replays_every_captured_chain_under_the_production_substrate'
+  'vectors_tests::replays_every_captured_chain_under_the_production_pow'
 )
 
-list=$(cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- --list --ignored)
+helpers=(
+  'bench_fixture_tests::regenerate_block_path_fixtures'
+)
+listed_here=("${subjects[@]}" "${helpers[@]}")
+list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-ingest --features pipeline --lib -- --list --ignored)
 listed=$(sed -n 's/: test$//p' <<< "$list")
 
 missing=0
-for subject in "${subjects[@]}"; do
+for subject in "${listed_here[@]}"; do
   if ! grep -qxF -- "$subject" <<< "$listed"; then
     echo "::error::${subject} is not in shekyl-chain-ingest's ignored set"
     missing=1
@@ -74,11 +104,11 @@ extra=0
 while IFS= read -r name; do
   [ -n "$name" ] || continue
   known=0
-  for subject in "${subjects[@]}"; do
+  for subject in "${listed_here[@]}"; do
     if [ "$name" = "$subject" ]; then known=1; break; fi
   done
   if [ "$known" -eq 0 ]; then
-    echo "::error::${name} is an ignored test this lane does not list: add it to scripts/ci/ignored_set_chain_ingest.sh, or stop ignoring it"
+    echo "::error::${name} is an ignored test this lane does not list: decide in scripts/ci/ignored_set_chain_ingest.sh whether it is run or is a helper, or stop ignoring it"
     extra=1
   fi
 done <<< "$listed"
@@ -86,9 +116,27 @@ done <<< "$listed"
 if [ "$missing" -ne 0 ] || [ "$extra" -ne 0 ]; then
   exit 1
 fi
-echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s), exactly the listed set"
+echo "shekyl-chain-ingest ignored set: ${#subjects[@]} test(s) run and ${#helpers[@]} helper(s) not, exactly the listed set"
+ignored_set_stop_after_judgement
+
+# The forged shard-fill chain the long scenarios build on (CHAIN_FORGE.md
+# CF-4a), pulled by its pin and checked layer by layer before anything
+# reads it. A missing or damaged copy stops the lane here, by name.
+python3 ../scripts/ci/fetch_test_chain.py shard-fill
 
 START=$(date +%s)
-cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- --ignored --nocapture
+status=0
+cargo test --locked --release -p shekyl-chain-ingest --features pipeline --lib -- \
+  --ignored --exact --nocapture "${subjects[@]}" > chain-ingest-ignored.log 2>&1 || status=$?
+cat chain-ingest-ignored.log
+if [ "$status" -ne 0 ]; then
+  echo "::error::chain-ingest-ignored: a listed test failed."
+  exit "$status"
+fi
+ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' chain-ingest-ignored.log | tail -1)
+if [ "$ran" != "${#subjects[@]}" ]; then
+  echo "::error::${ran:-0} of ${#subjects[@]} listed tests ran: a name above no longer matches a test exactly."
+  exit 1
+fi
 END=$(date +%s)
 echo "::notice::Chain-ingest ignored set completed on ${branch} in $((END - START))s (budget 240m)"

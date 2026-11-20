@@ -160,8 +160,8 @@ Both parties' static identities are hybrid: an X25519 key **and** an
 ML-KEM-768 key, each authenticated in the handshake (§4.1). Not
 classical-static authentication with hybrid forward secrecy only. Reason:
 rule 30 (`30-cryptography.mdc:14-20`: hybrid is non-negotiable on the
-wallet path), and enrolment is the expensive step — moving to hybrid
-statics later would re-enrol every device.
+wallet path), and enrollment is the expensive step — moving to hybrid
+statics later would re-enroll every device.
 
 ### RT-12 — Interoperability is a Shekyl-shipped client adapter, not a second protocol
 
@@ -248,6 +248,26 @@ and **fails the peer check** is a hard stop: reported as a security
 failure, never retried, never routed around (R0 RT-6: a fallback after a
 failed check is a downgrade oracle).
 
+**A wallet that starts its own daemon (GS-C3, ruled 2026-11-12).** The
+GUI's child holds an **owning connection** for its life
+([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-Q106): one end of a connected
+stream socket pair the GUI made and the daemon inherited
+(`owning-connection`). It carries the daemon's readiness (`shekyld-ready 1`,
+written once the owner's leg is bound, served and published) and its life
+(the GUI's close, its half-close, or its death stops the daemon cleanly),
+and nothing else. The daemon holds its own end until its process exits:
+the GUI reads end of stream when the daemon is gone, its rendezvous
+removed and its data directory unlocked, and starts the next daemon on
+that read (Rick, 2026-11-17). The GUI's calls go over the owner's leg, resolved as "this computer"
+through the rendezvous (`shekyl-rpc-transport`'s `local::LocalTarget`, which
+keeps this section's two failures apart). The wallet engine's own calls move
+onto it with RT-W10 step 5: with no daemon address a wallet's daemon is
+"this computer", and the failed peer check is a failure of its own in the
+engine's `Rpc`. A wallet beside a service reads the service's record only
+to say so, naming its view listener as the address to set, and dials
+nothing (Rick, 2026-11-17). §7.1 is unchanged: the rendezvous
+watch stays, and either one stops the daemon.
+
 *Plaintext loopback TCP stays as an operator option, at view* (RT-O5,
 ruled 2026-10-08, kept for UX). **Off by default** (RT-O5′, ruled
 2026-10-08): a fresh install has no unauthenticated listener, and the
@@ -256,7 +276,7 @@ it is the admin surface, reachable by every local user of the host; under
 RT-15 it carries **only the `view` preset** (§6.1) — a fixed row of the same grant
 table the channel uses (§6.1), not a revived `restricted` flag. Reason: a
 co-located website or monitoring tool reads network status with no
-enrolment and no real exposure in a breach. It stays loopback-only (R0
+enrollment and no real exposure in a breach. It stays loopback-only (R0
 RT-1/RT-2, RT-14) and keeps R0's `browser_boundary` — JSON-only, and a
 `Host` restricted to an IP literal or `localhost` — because it is the
 listener a page in a local browser can reach. Anything beyond the least
@@ -313,15 +333,17 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   self-registration: install and uninstall are the installer's and
   `shekyl-cli`'s, through one shared Rust library, and restart-on-failure
   is the SCM's failure actions, set at install. On POSIX the service
-  manager runs the foreground process and the switch is refused. *Why it
+  manager runs the foreground process, and the switch only marks the
+  machine's service instance: it serves no owner's socket and is given no
+  socket directory (`INPUT_GRAMMAR.md` IG-Q105, ruled 2026-11-12). *Why it
   recurred:* the April daemonizer deletion assumed every OS service
   manager runs a foreground process; the SCM kills a registered process
   that never connects to its dispatcher (error 1053). Record:
   [`WINDOWS_SERVICE_RULING_2026-10-13.md`](../completed/WINDOWS_SERVICE_RULING_2026-10-13.md).
-- **The process entry moves to Rust** in the daemon-configuration
-  cutover (`DAEMON_CONFIG_CUTOVER.md`, PR #1066): the SCM dispatcher must
-  run at process entry, and `main()` is C++ until then. RT-W14 depends on
-  it.
+- **The process entry is Rust's** (`DAEMON_CONFIG_CUTOVER.md` DC-Q19,
+  PR #1254, 2026-11-01): `shekyld` is a rustc-linked binary whose `main`
+  runs through `std::rt::lang_start`, so the SCM dispatcher RT-W14 needs
+  has its process entry.
 - **Service mode is new Rust work, not a revival.** The inherited daemonizer
   was deleted in V3.1 and its five flags retired
   (lines 74 to 78 of `src/common/removed_flags.cpp` at `d26148535e`); none of
@@ -333,9 +355,12 @@ type and the minimal required-privilege list (RT-P8 confirms both).
   home exists only in service mode and only when the installer created it
   ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) IG-13).
 - **The data directory moves** for the service: a machine-wide home
-  (`%ProgramData%` on Windows) with an ACL admitting the service account
-  and Administrators, holding chain data, the daemon's channel bundle, the
-  console key (§5), the machine-wide rendezvous (§7.1), and the bundled
+  (`%ProgramData%\shekyl` on Windows) with an ACL admitting the service
+  account and Administrators only, holding chain data, the daemon's channel
+  bundle, the console key (§5), on Windows the machine-wide rendezvous in
+  its own `rendezvous` directory, which users can read (§7.1; Rick,
+  2026-11-14; on Linux, FreeBSD and macOS the service's rendezvous
+  directory is separate), and the bundled
   Tor's data and key directories — Tor
   runs as the service's child under the same account, with the
   `TOR_BUNDLE_DISTRIBUTION.md` launch rules unchanged.
@@ -471,7 +496,7 @@ The prologue (§4.4) is unchanged.
   2026-10-12).** Someone who breaks X25519 can produce a message 3 that
   claims any enrolled client; they cannot read message 4 or produce a
   first transport message. Between message 3 and message 4 the daemon
-  holds `DaemonReadyForMessage4`, whose `fingerprint` is the enrolment
+  holds `DaemonReadyForMessage4`, whose `fingerprint` is the enrollment
   lookup and a claim, not an authenticated client. A caller can copy that
   fingerprint; the copy is still only a claim. After message 4 the daemon
   holds `PendingSession`. The session is released only through one check,
@@ -606,7 +631,7 @@ implementation of ML-KEM, and the cross-check needs only the Rust one.
 ### 4.3 What a stranger can reach
 
 **The daemon's public bundle is not a secret** — every enrolled client
-holds it, and enrolment moves it in the clear (§5). So there are two kinds
+holds it, and enrollment moves it in the clear (§5). So there are two kinds
 of stranger:
 
 - **Without the bundle.** Message 1 carries a mac1 keyed by a hash of
@@ -980,15 +1005,15 @@ drives it):
     The mark is taken once, at that moment. An arm after it covers the
     next message, and finishing the flush does not clear a mark set for
     that next message. A flush that seals nothing leaves the mark armed.
-    The message goes out as exactly `SUBMISSION_RECORDS` = 5 records of
+    The message goes out as exactly `SUBMISSION_RECORDS` = 4 records of
     the largest class. The padding records, occupancy 0, are sealed
     first and the HTTP bytes are a suffix, so the body is not complete,
     and a response cannot start, until the last record.
-    - **Why five:** the largest admissible request body is
-      `2 × TX_WEIGHT_LIMIT` plus the JSON envelope (`{"tx_blob":""}`,
-      14 bytes), and it must fit `SUBMISSION_CAP` with room for the request
-      head. A test computes it from `shekyl-wire`'s `TX_WEIGHT_LIMIT`, so
-      the count follows the constant.
+    - **Why four** (Rick, 2026-11-12, at 4.0's base64): the largest body is
+      `TX_WEIGHT_LIMIT` base64-encoded plus `tx_submit`'s JSON-RPC envelope;
+      it fits `SUBMISSION_CAP` with at least 16 KiB left for the head, and
+      not one record fewer. A test computes both bounds from `shekyl-wire`'s
+      `TX_WEIGHT_LIMIT`, so the count follows the constant.
     - **Past the cap:** a submission that would pass `SUBMISSION_CAP` is
       discarded without a record sealed, and the stream is poisoned.
       Nothing of a submission is on the wire before its flush.
@@ -1008,11 +1033,15 @@ drives it):
     daemon refuses it. Only a pipelining client sends that way. An empty
     padding record opens a frame. It does not end the message before it, so
     a later ordinary record cannot borrow that padding and look like a
-    shorter frame. RT-W10's `submit_transaction` route refuses any body for
-    which the verdict is false when the body has been read.
-  - **Tested through hyper:** every `submit_transaction` upload, for a
+    shorter frame. The channel reads one HTTP message at a time and the
+    verdict `tx_submit` reads is that message's bytes: they are a
+    submission only when they are exactly the frame's payload. A second
+    request in the same frame is not one, and the claim is spent by the
+    first note. RT-W10's `tx_submit` method refuses any body for which
+    that verdict is false when the body has been read.
+  - **Tested through hyper:** every `tx_submit` upload, for a
     transaction of 0, 1, 26,599, 97,585 and `TX_WEIGHT_LIMIT` bytes, is
-    exactly five records, and the handler has those five records open
+    exactly `SUBMISSION_RECORDS` records, and the handler has them all open
     before it has the body. hyper flushes once per message in both
     directions, which is RT-P5's registered flush policy, observed. Both
     ends exchange the close record at shutdown.
@@ -1049,7 +1078,15 @@ drives it):
      cover, and a second run's responses a few bytes larger stepped over
      them. These classes stand until the mainnet re-derivation (the
      rule-21 reopen below). *Not covered by this ruling:* requests other
-     than a submission. Every one in RT-P5's trace is 431 bytes or smaller.
+     than a submission. Every one in RT-P5's trace is 431 bytes or smaller,
+     and 197 or smaller on the 4.x wire.
+     **The middle class stays 16,384 on the 4.x wire (Rick, 2026-11-16).**
+     The 4.x re-measurement's rule rounds to 4,096
+     ([`rt_p5_rpc_message_sizes_20261115.md`](../benchmarks/rt_p5_rpc_message_sizes_20261115.md),
+     F1), but its block reads come from a 117-block chain of near-empty
+     blocks and do not represent mainnet's block sizes; moving to 4,096
+     would push every larger mainnet block read into the 65,535 class. The
+     registered mainnet reopen settles it.
   2. **A submission is padded to one fixed size: the largest possible
      transaction,** so its size identifies no transaction.
      - The fixed size is derived from the consensus bounds when the framer
@@ -1060,9 +1097,12 @@ drives it):
        and 16 outputs at tree depth 24, from the weight crate's size
        predictor. A valid transaction may carry more `tx_extra` than the
        wallet's own do.
-     - Today the submission's body is the transaction hex-encoded in JSON,
-       twice its bytes. It becomes binary in the RPC wire-grammar round
-       (RW).
+     - The submission's body is the transaction base64-encoded in the
+       JSON-RPC envelope, `66 + 4 × ⌈n / 3⌉` bytes for a transaction of
+       `n` (the `bytes` kind's one encoding, IG-6; measured on the 4.x wire,
+       [`rt_p5_rpc_message_sizes_20261115.md`](../benchmarks/rt_p5_rpc_message_sizes_20261115.md),
+       F2). The padded submission's size, `SUBMISSION_CAP`, already counts
+       base64 and is unchanged (Rick, 2026-11-16).
   3. **The time of a submission stays visible to a path observer.**
      Padding hides what was sent, not that or when.
      - *Mitigations:* a wallet on the same host as its daemon (no path to
@@ -1179,18 +1219,19 @@ internals); the log may be specific.
 | Failure | Client can distinguish? | Client says | Daemon log says |
 |---|---|---|---|
 | Client holds a stale or wrong daemon bundle; client is on another network; version mismatch | No — all close after message 1, no reply | "The node at ADDRESS closed the connection without answering. It does not recognise this client's copy of its key, is on a different network, or runs a different version. The node's log records which." | Rate-limited, aggregated per source: "unauthenticated channel handshake from IP: the sender does not hold this node's current key, is on another network, or speaks another channel version" |
-| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enrol it on the node with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enrol it |
-| Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enrol." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
+| Client fingerprint not enrolled | Yes — daemon answered, then closed after message 3 | "The node answered but has not enrolled this client. Enroll it on the node with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" — the fingerprint is printed so the operator can enroll it |
+| Client fails the post-quantum confirmation (first record does not decrypt) | Yes — closed after message 4 | "The node rejected this client's identity. Its key files may be damaged; regenerate and re-enroll." | **Warning:** "client FINGERPRINT from IP passed classical authentication and failed post-quantum confirmation" — security-significant |
 | Message 2 does not decrypt at the client | Yes | "Something answered at ADDRESS that is not the node you enrolled with. Do not connect; check the address." No retry | Nothing — a daemon with a different key never sends message 2 |
 | Requested grant exceeds the ceiling | Yes — message 4 carries the ceiling, and the client clamps its request to it | "Connected with GRANT; this client is enrolled for at most CEILING." | "client FINGERPRINT requested REQUEST, granted GRANT" |
 | A call for host-only data or an armed test lever from an enrolled key, whatever its ceiling | Yes | "METHOD is served only on the node's own computer, to its administrator." | — |
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
+| A session past its key's cap, `SESSIONS_PER_CLIENT` (§6.3, RT-O37) | Yes — the session's first request is answered `bound.sessions`, then the connection closes | "This client already holds N connections to the node, the most one client may hold." | "refused client FINGERPRINT from IP: it already holds N sessions" |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
 | Handshake deadline expired | Yes, after one retry with a fresh ephemeral that also ran out (§4.3) | "The node did not complete the handshake in time." | Timeout, with the stage reached |
 | The node's handshake budget is spent (§4.3) | Yes — a busy reply, verified, in place of message 2. The client backs off and retries, and says so only when its handshake deadline expires | "The node is busy and did not accept the connection in time. Try again shortly." | Aggregated: "answered N handshakes busy in the last minute (budget: B a second)" |
 | Both a service and a run-as-me default daemon answer for one network (the overlap before the run-as-me daemon stands down) | Yes — both rendezvous answer | Nothing: "this computer" resolves to the service (RT-16). A client enrolled only with the run-as-me node is told "The node answered but has not enrolled this client", as that row | Run-as-me daemon: "a service node for NETWORK is now running on this computer; shutting down" then a clean shutdown |
 | Starting a run-as-me default daemon while a service default instance answers for its network | (Daemon, at start) "A Shekyl node is already running on this computer as a service for NETWORK." Refuses to start | Same line |
-| Session closed by revocation (§5) | Yes | "The node revoked this client's enrolment." | "revoked FINGERPRINT; closed N open sessions" |
+| Session closed by revocation (§5) | Yes | "The node revoked this client's enrollment." | "revoked FINGERPRINT; closed N open sessions" |
 
 **The local leg and target resolution (RT-15).**
 
@@ -1207,11 +1248,11 @@ internals); the log may be specific.
 | Service mode: the console key file is missing, unreadable by this user, or damaged | "This command needs the node's console key, which is missing or cannot be read. Run it as an administrator; if the key is lost, stop the node and reset it (§5)." Never falls back to another leg | — (the daemon is not contacted) |
 | A listener answers at the rendezvous and **fails the peer check** (wrong owner, wrong integrity level) | "Something other than your Shekyl node is answering at its local address. Not connecting." Hard stop; no retry, no other leg | — (the daemon is not the party answering) |
 | Windows: the daemon runs for this user in **another logon session** (the pipe admits its own session only) | "Your Shekyl node is running in another sign-in session and can only be reached from there." Known from the rendezvous before dialling | — |
-| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enrol it with: `shekyld rpc-enrol FINGERPRINT`." | "refused unenrolled client FINGERPRINT from IP" |
+| Target "this computer" is a service, and this client is not enrolled | As the channel's not-enrolled row: "The node answered but has not enrolled this client. Enroll it with: `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`." | "refused unenrolled client FINGERPRINT from IP" |
 
 ---
 
-## 5. Keys and enrolment (ruled 2026-10-09)
+## 5. Keys and enrollment (ruled 2026-10-09)
 
 R0 RT-7 stands: generated material only, never typed from memory.
 
@@ -1230,61 +1271,73 @@ R0 RT-7 stands: generated material only, never typed from memory.
   `s` sends them; the output is **32 bytes**. How a fingerprint is shown
   to an operator is presentation, not part of the wire. The daemon needs only the
   fingerprint, because the client's statics arrive in message 3.
-- **Enrolment and revocation are operator actions over the channel**:
-  `shekyld rpc-enrol FINGERPRINT --ceiling GRANTS` and
-  `shekyld rpc-revoke FINGERPRINT`. No CA, no issuance key (R0 RT-4's
-  argument carries over).
-- **Who may enrol, and how far (RULED, RT-O9.1).** Enrolment is the `enrol`
+- **Enrollment and revocation are operator actions over the channel**:
+  the methods `rpc_client_add`, `rpc_client_set`, `rpc_client_remove` and `rpc_client_list`, with `shekyl-cli`'s words `rpc client add <fingerprint> --ceiling <grants>` and the rest (`INPUT_GRAMMAR.md` IG-Q87; a ceiling is stored as its expanded grants, never as a preset's name).
+  `rpc_bundle_show` gives the daemon's public bundle. No CA, no issuance key (R0 RT-4's
+  argument carries over). The plaintext listeners do not serve these
+  methods. The admin listener is reachable by any local account until
+  RT-W12 retires it (RT-O33), and an enrollment made there would outlive
+  that listener. A run-as-me daemon's owner enrolls on the owner's socket;
+  a service's administrator enrolls with the console key, over the channel
+  on the service's console leg (§7, RT-O37).
+- **Who may enroll, and how far (RULED, RT-O9.1).** Enrollment is the `enroll`
   grant, carried by the `admin` preset only. **An enrolled ceiling can
   never exceed the enroller's own effective grant** — otherwise every
-  boundary in §6.1 is one enrol call from `admin`. The same bound applies
+  boundary in §6.1 is one enroll call from `admin`. The same bound applies
   to raising an existing ceiling.
-- **Who may revoke.** A key may revoke only enrolments whose
-  ceiling lies within its own effective grant. Otherwise a narrow `enrol`
+- **Who may revoke.** A key may revoke only enrollments whose
+  ceiling lies within its own effective grant. Otherwise a narrow `enroll`
   holder could revoke the operator's admin keys — a denial of service
   through the boundary RT-O9.1 just drew.
 - **Who needs a key.** Same-user callers need none (RT-15). Keys exist for
   callers of a service-mode daemon, other users, other machines, and the
   tunnel.
-- **Bootstrap — the console key** (service mode). Enrolment runs
+- **Bootstrap — the console key** (service mode). Enrollment runs
   over the channel, so for a service-mode daemon something must be enrolled
-  before anything can enrol. On first start the service generates its own
+  before anything can enroll. On first start the service generates its own
   bundle and a **console key**, records it as the **host administrator's
-  credential** — not an enrolment with a ceiling: it carries every grant
+  credential** — not an enrollment with a ceiling: it carries every grant
   and the two host-only classes of §6.1, which no enrolled key can — and
   writes the console key's private half to a file readable only
   by the service account and administrators. `shekyld <command>` run by an
   administrator uses it. Placing that file uses an OS ACL once, at creation;
   it is not a per-call authentication path. A run-as-me daemon needs no
   console key: its owner reaches it over the socket or pipe.
-- **Enrol at install.** The step that installs the service
-  enrols the installing user's client identity, so the person who opted into
+- **Enroll at install.** The step that installs the service
+  enrolls the installing user's client identity, so the person who opted into
   service mode is not left with a GUI that cannot reach the node it just
-  installed. Further users and devices are enrolled with `rpc-enrol`.
+  installed. Further users and devices are enrolled with `rpc client add`.
 - **Revocation takes effect immediately on live sessions.** The daemon
-  indexes open channel sessions by client fingerprint; `rpc-revoke` removes
-  the enrolment and closes every session that fingerprint holds, and so
+  indexes open channel sessions by client fingerprint; `rpc client remove` removes
+  the enrollment and closes every session that fingerprint holds, and so
   does lowering a ceiling (re-connect to receive the new grant; no
   mid-session downgrade). The enrolled set is daemon state changed only
   through these commands — there is no file to edit behind the daemon's
   back and no reload signal to forget.
-- **Recovering a lost console key** (service mode). Enrolment
+- **Recovering a lost console key** (service mode). Enrollment
   runs only over the channel, so an operator who loses the console key and
   holds no other admin-ceiling key has no way back in through it. The way
-  back is offline and local: an administrator runs a reset command that
-  generates a new console key, replaces the old console enrolment with it,
+  back is offline and local: an administrator runs `shekyld --rpc-console-key-reset` (a command-line-only switch that does this and exits, `INPUT_GRAMMAR.md` IG-Q88), which
+  generates a new console key, replaces the old console enrollment with it,
   and writes the new private half under the same ACL. **It takes the data
   home's exclusive lock — the same lock the daemon takes at start and
   holds for its life (§7) — and holds it through the whole replacement.**
   So it cannot run beside a daemon, and a service that starts while it is
   running waits or fails on the lock rather than reading a half-replaced
-  enrolment. Checking that the service is stopped and then writing would
-  leave exactly that gap. It touches no other enrolment and is logged at
-  the next start. This is a command that changes daemon
+  enrollment. Checking that the service is stopped and then writing would
+  leave exactly that gap. The replacement is one change: the new private
+  half is written to the key file's journal, the console fingerprint and
+  the reset note are committed in one store transaction, and the journal
+  is then renamed over the key file. The key file's staged file is a
+  *journal* (`StagedWrite<Journal>`): a failure never discards it. A later
+  start renames a journal whose fingerprint is already the record, sets
+  aside a journal that was never committed when the live file already
+  matches, and refuses a key file that matches neither. It does not adopt a file the record does not name.
+  It touches no other enrollment and is logged at the next start. This is a command that changes daemon
   state, not a file edited by hand, so the rule above stands. Who may run
   it is who may write the service's data home — an OS permission the
   operator already manages.
-- **Daemon key rotation** re-enrols every client, by construction.
+- **Daemon key rotation** re-enrolls every client, by construction.
 
 ---
 
@@ -1296,7 +1349,7 @@ R0 RT-7 stands: generated material only, never typed from memory.
 status split out of every view.** Four rulings of the same date shape the
 table and are marked **RULED** where they apply. They are numbered as
 parts of the open item they answer, `RT-O9.1`…`RT-O9.4`, because a bare
-`R1` already means "round 1" in this document: enrolment is its own grant
+`R1` already means "round 1" in this document: enrollment is its own grant
 (RT-O9.1), test levers belong to no grant (RT-O9.2), anonymity data is host-only and
 not a grant (RT-O9.3), and cost is a resource policy separate from grants (RT-O9.4,
 §6.3). Granular grants are the rule: presets bundle grants to make
@@ -1304,7 +1357,7 @@ administration easy, but permissions coupled in one grant are hard to
 separate later. The whole assignment was ratified 2026-10-09 (RT-O9).
 
 A grant is a **set of facts or actions**, not a list of methods. Most
-methods fall whole into one grant. `get_info` does not: it mixes facts
+methods fall whole into one grant. `daemon_status` does not: it mixes facts
 about the network with facts about this node, so it is served to any
 connection holding `health` and each field is present only when the
 connection holds that field's grant. **A field outside the grant is
@@ -1318,57 +1371,57 @@ value: the three wire states of RK-D23, ruled in the RK-5c round
 ruled there too (RK-Q8, 2026-10-09):
 in RK-5c itself, after `has_peers` lands — so the wire change is that
 slice's, and RT-W10 inherits absence rather than introducing it. A target
-height the core does not have is `null` on `get_info`, `get_version` and
-`sync_info` alike (RK-Q7, same date), so an absent field in a `health`
+height the node does not have is `null` on `daemon_status`, `version` and
+`sync_status` alike (RK-Q7, same date), so an absent field in a `health`
 reply is never "no target".
 
 One question draws the line between `health` and `status`: *does a client
 need this fact to decide whether it can use this node right now, and is it
 transient — saying nothing lasting about this node?* Sync state passes: it
 differs between nodes, but it describes a moment, not a host. Everything
-`get_version` returns passes for a stronger reason, being the same on every
-node of the build ([`methods.rs:112-145`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+`version` returns passes for a stronger reason, being the same on every
+node of the build ([`wire/chain.rs`](../../rust/shekyl-rpc-types/src/wire/chain.rs):
 RPC contract version, release flag, heights, fork schedule,
-consensus-constants digest, nettype, genesis) — it identifies a build and a
+consensus-constants digest, network, genesis) — it identifies a build and a
 network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
-| `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
-| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
-| `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
-| `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes; `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
-| `submit` | `/submit_transaction` |
-| `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
-| `mining-control` | This node's own miner: `/start_mining`, `/stop_mining`, `/mining_status`, `/set_log_hash_rate` |
-| `bans` | `set_bans`, `get_bans`, `banned` |
-| `node` | Control of the node, and nothing else: `/stop_daemon`, `/save_bc`, `flush_txpool`, `flush_cache`, `relay_tx`, `request_archival_shard`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
+| `chain` | Chain reads: `chain_height`, `block_header_show` and `block_header_list` (including their `pow` switch, RT-O9.4), `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum` (a public chain fact; moved from the admin set, RT-O9.4), `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch` (public, closed history; moved from `node`, `INPUT_GRAMMAR.md` IG-Q91, and bounded by §6.3's shard-fetch permit); and `daemon_status`'s chain fields (`difficulty`, `difficulty_cumulative`, `block_weight_max` and `block_weight_median`, `tx_count`, the difficulty target in seconds (`block_spacing`), `time_adjusted`, emission and economics fields) |
+| `pool` | The **relayed** pool: `txpool_list`, `txpool_stats`; `daemon_status`'s `txpool_count`, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
+| `health` | Whether this node is usable now (`version` is under no grant: every authenticated caller may call it, [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q6): from `daemon_status`, the chain tip (`height`, `hash`), `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, **`peered`** (a boolean, RK-D14 — never a count), `writer` (IG-Q92), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the protocol contract version (the network comes from `version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
+| `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build revision (`revision`); start time (`started`); free space and database size; the hasher's RandomX cache places (`randomx_cache_places`, a count: an upper bound on the RandomX cache memory at 256 MiB a place, never a reading of it, [`RANDOMX_CACHE_ACTOR.md`](RANDOMX_CACHE_ACTOR.md) §5.6); aggregate inbound and outbound peer counts; RPC connection count; `txpool_retired` (IG-Q74); alt-blocks count (`alt_count`), `chain_alt`; `p2p_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
+| `peers` | The graph: `peer_connections`, `sync_status`, `peer_list`; `daemon_status`'s `connector` map of socket counts and peerlist sizes (IG-Q82); `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
+| `submit` | `tx_submit` |
+| `mining-work` | An external miner's loop: `block_template`, `block_submit`, `pow` (a computation service; moved from the admin set, RT-O9.4) |
+| `mining-control` | This node's own miner: `mine_start`, `mine_stop`, `mine_status` |
+| `bans` | `ban_add`, `ban_remove`, `ban_list`, `ban_show` |
+| `node` | Control of the node, and nothing else: `daemon_stop`, `txpool_flush`, `tx_relay`; **`option_set`, which is setting every row the option table marks runtime**, so marking a row runtime widens this grant (§6.4, RT-O24) |
 | `config` | The node's configuration: `option_show`'s default rows, every row that names no other grant, including everything that describes the host or links the operator (the onion, SOCKS endpoints, paths, notify commands, `mine-address`). A secret's value is in no grant (§6.4, RT-O24). Carried by the `admin` preset only |
-| `enrol` | `rpc-enrol`, `rpc-revoke` (RT-O9.1). Carried by the `admin` preset only |
+| `enroll` | `rpc_client_add`, `rpc_client_set`, `rpc_client_remove`, `rpc_client_list`, `rpc_bundle_show` (RT-O9.1; `INPUT_GRAMMAR.md` IG-Q87). Carried by the `admin` preset only |
 
 *Two notes on `health`, both owned by the RK-5c round.*
 `has_peers` is true when the node holds at least one **handshaken** session
 on any connector (RK-Q4, ruled there 2026-10-09). It exists because a
 caller without `status` no longer sees the peer counts, and without it
 could not tell a peerless daemon from a following one. `nettype` and the
-three network booleans are **retired from `get_info`** (RK-Q6, ruled there
-the same day): the identity source is `get_version` alone, which `health`
-carries whole, so the grant is unchanged and only the method that answers
-moves.
+three network booleans are **retired from `daemon_status`** (RK-Q6, ruled there
+the same day): the identity source is `version` alone, which every
+authenticated caller may read (RW-Q6), so no grant changes and only the
+method that answers moves.
 
 **Two classes that are not grants.** Every route and method is in exactly
 one grant above or in exactly one of these; no ceiling, `admin` included,
 can contain either.
 
-- **Host-only data (RULED, RT-O9.3).** `/get_stem_tallies` — per-successor relay
+- **Host-only data (RULED, RT-O9.3).** `relay_stats` — per-successor relay
   outcome counts, whose consumer is a human tuning `n_min`, `cut` and
-  `cooldown` (`handlers/json.rs:489-506`) — and **unrelayed pool
+  `cooldown` (`shekyl-node/src/p2p_facts.rs`) — and **unrelayed pool
   entries**: stem-phase and not-yet-broadcast transactions, including ones
   this node originated. The pool's sensitivity flag is what reaches them
-  today: the pool listing, its hashes and its statistics
-  (`core_rpc_server.cpp:499-543`), `/get_transactions` by hash
-  (`handlers/json.rs:191-194`), and `get_info`'s pool size when it counts
+  today: the pool listing and its statistics
+  (`pool_methods.rs`), `tx_show` and `tx_list` by id
+  (`reads.rs`), and `daemon_status`'s `txpool_private_count`, which counts
   them. These are served **only to the host's administrator**: the owner
   leg (the same-user socket or pipe, RT-15) and the console key (service
   mode, §5). **Never to an enrolled key, whatever its ceiling** — `admin`
@@ -1380,9 +1433,9 @@ can contain either.
   describes the node's own sends, names no transaction, and sits in
   `status` (ruled 2026-10-24, `INPUT_GRAMMAR.md` Part E).
 - **Armed test levers (RT-O9.2; the arming ruled 2026-10-09).**
-  `generateblocks`, `inject_archival_serve_credit` and `/pop_blocks`
+  `dev_block_generate` and `dev_chain_pop`
   (ruled 2026-10-14, §6.4) are not production capabilities. The regtest
-  harnesses depend on `generateblocks`
+  harnesses depend on `dev_block_generate`
   (`engine/gf7_sealing_run.rs:94`, `engine/daemon_observability.rs`), so
   RT-W10 carries an **armed-and-pinned override** (rule 71): an explicit
   start switch, `dev-rpc`, logged at every start; when armed, the levers
@@ -1390,24 +1443,19 @@ can contain either.
   that enables them; the network type never does. The switch is refused on
   mainnet with its own error (`INPUT_GRAMMAR.md` IG-Q49): the network type
   can only restrict the switch, never select the behaviour, so rule 71 and
-  IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `/pop_blocks`
+  IG-Q49 both stand as written (RT-O36, ruled 2026-10-25). `dev_chain_pop`
   has three users, all served there: the regtest roll-back helper, the
   Python framework and the CT-2 fixture generator (§6.4).
-  `inject_archival_serve_credit`'s row in the method table is armed
-  (`shekyl-rpc-types` `methods.rs`), so the RPC admits it through
-  `admit_armed` like the other two (RT-W10 step 1). **Its setter keeps one
-  narrower restriction, on purpose:**
-  `Blockchain::regtest_inject_archival_serve_credit`
-  ([`blockchain.cpp`](../../src/cryptonote_core/blockchain.cpp)) refuses
-  unless the network is regtest. With the switch armed on testnet or
-  stagenet, `generateblocks` and `/pop_blocks` are served and the inject
-  lever is refused ("Serve-credit injection failed", the daemon log naming
-  the network). The regtest e2e test
-  `the_armed_switch_on_testnet_serves_two_levers_and_the_setter_refuses_inject`
-  holds this on testnet; stagenet takes the same branch. Under RT-O36 that is a restriction, the network narrowing
-  what the switch enables, never the network enabling anything, so it is
-  neither a defect nor a leftover gate to delete. It goes with the C++
-  method at the DRS-X flip.
+  The method table pins two armed levers (`DRS_X_STORE_FLIP.md` DX-Q3),
+  and the daemon answers any other name as a method it does not know,
+  armed or not.
+  The switch is regtest's alone (`NETWORK_IDENTITY.md` NI-R8): a
+  testnet or stagenet daemon given `dev-rpc` is refused at load
+  (`dev_rpc_is_refused_on_every_network_but_regtest`), and on regtest
+  `dev_block_generate` and `dev_chain_pop` are served, which the e2e test
+  `the_armed_switch_serves_two_levers_and_knows_no_third` holds. Under
+  RT-O36 the network narrows what the switch enables and never enables
+  anything.
 
 *Why each `status` field is out of view.*
 
@@ -1419,7 +1467,7 @@ can contain either.
 | Aggregate peer counts, RPC connection count | Connectivity posture over time. The counts are sums over **every** connector (RK-Q3, ruled in the RK-5c round 2026-10-09), where today they count clearnet sessions only, so `status` discloses the node's whole session count |
 | Alt-blocks count and hashes | Which forks this node saw |
 
-**Presets** (what an operator names at enrolment; a ceiling is a preset or
+**Presets** (what an operator names at enrollment; a ceiling is a preset or
 an explicit list of grants):
 
 | Preset | Grants |
@@ -1427,7 +1475,7 @@ an explicit list of grants):
 | `view` | `chain` + `pool` + `health` |
 | `wallet` | `view` + `submit` + `status` |
 | `miner` | `view` + `mining-work` |
-| `admin` | every grant, `enrol` included — and **neither** non-grant class |
+| `admin` | every grant, `enroll` included — and **neither** non-grant class |
 
 **`peers` and `config` are in no preset but `admin`; `status` is in `wallet` and
 `admin`** (ruled 2026-10-24, amending RT-O9). A wallet needs Status for full
@@ -1497,7 +1545,7 @@ difficulty and hash rate from `chain`, sync state from `health`, and pool
 size from `pool`. Two things it does today need more. Its **seed-node
 count** and its **peer-reported network height** both come from
 `get_connections`, which is `peers` — peer addresses — and would be an
-explicit enrolment; sync state from `health` replaces the second. The
+explicit enrollment; sync state from `health` replaces the second. The
 **build version** and **database size** it displays are `status`. Uptime is
 `status` too and should stay off a public page for the correlation reason
 above.
@@ -1546,32 +1594,88 @@ A connection's authority — its grant set, whether it is the host's
 administrator, and the armed switch — is stamped on every request and read
 by every gate (`shekyl-daemon-rpc` `authority.rs`, RT-W10 step 1). The method
 table's policy column says which grant, or which non-grant class, each row
-needs (`shekyl-rpc-types` `methods.rs`), and C++ is told only the host flag.
+needs (`shekyl-rpc-types` `wire/mod.rs`, `wire::TABLE`).
 
 ### 6.3 Resource policy (RULED, RT-O9.4 — independent of §6.1)
 
 What a caller **may** ask for is its grant. How **much** work one request
 may cost is this policy. They are separate: today's restriction encodes
 both as authority, which is why an expensive public fact
-(`get_coinbase_tx_sum`) and a computation service (`calc_pow`) sat behind
+(`chain_coinbase_sum`) and a computation service (`pow`) sat behind
 the admin listener.
 
 - **What is bounded:** the four batch caps
-  ([`methods.rs:512-527`](../../rust/shekyl-daemon-rpc/src/methods.rs):
+  ([`methods.rs:249-255`](../../rust/shekyl-daemon-rpc/src/methods.rs):
   `RESTRICTED_BLOCK_COUNT`, `RESTRICTED_BLOCK_HEADER_RANGE`,
   `RESTRICTED_TRANSACTIONS_COUNT`, `RESTRICTED_SPENT_KEY_IMAGES_COUNT`) and
-  the expensive computations — the number of headers a request may ask
-  `fill_pow_hash` for, `calc_pow`, and the span of `get_coinbase_tx_sum`.
+  the expensive computation `pow`, a bounded `chain_coinbase_sum`, the
+  headers' `pow` switch, which is a header read of the hash recorded at
+  validation, and a shard fetch that opens a flight.
 - **Who is bounded:** every connection except the host's administrator
   (the owner leg and the console key), **whatever its grant**. An
   `admin`-ceiling key over the channel is bounded like any other.
-- **The values are inherited** from the Monero lineage and are not
-  re-derived in this round (rule 16: inherited code is not inherited
-  architecture, and an inherited constant is not a derived one). *Named
-  reopen:* the floor-device measurement in RT-W10, beside RT-P6 — the caps
-  are then set from measured cost on the Pi 4, not guessed.
-- **A request over a bound is refused with the bound named**, never
-  silently truncated.
+- **The four batch caps stay inherited** from the Monero lineage (rule
+  16: an inherited constant is not a derived one). The three computations
+  are set from the floor-device run of 2026-11-03
+  ([`rt_w10_request_cost_20261102.md`](../benchmarks/rt_w10_request_cost_20261102.md)),
+  not from that run's frozen formula. A header hash is one RandomX
+  execution: the 33,000,128-byte series cost 1.089 times the 136-byte
+  series at the thread-CPU 99th percentile, so one hashing blob costs one
+  hash whatever its length inside the format.
+  - `pow` accepts hashing bytes no longer than `MAX_POW_BLOB_SIZE`, the
+    longest hashing blob `PowBlob::read` accepts (the header, the
+    transaction-tree hash and the count varint; not `MAX_BLOCK_BLOB_SIZE`,
+    which is the body; `bound.pow-size`). One such blob is one hash.
+  - Bounded callers share one hash budget, the handshake budget's shape
+    (`charges ≤ share × elapsed + capacity`). The share is a quarter of
+    one core. One charge is `HASH_CPU_NANOS`, the header series' thread-CPU
+    99th percentile, 1,290,885,199 ns. A one-second burst of the share
+    cannot pay that charge, so the bucket holds one hash. A `pow`
+    spends that hash after the seed's cache is held and before RandomX.
+    A `pow` while the bucket is empty is `OverResourceBound`,
+    `bound.hash`, and spends nothing. A request that will not hash — a bad blob, a bad
+    seed, a seed this node does not hold, or a seed above the tip —
+    spends nothing. The host's administrator does not pay.
+    The headers' `pow` switch does not pay: it is the hash recorded at validation,
+    and a bounded caller is held to the header cap.
+  - A bounded `chain_coinbase_sum` takes the one coinbase-read permit
+    and then runs on the blocking pool. The permit is one because a cold
+    read waits on disk. It does not pay the hash budget. The host's
+    administrator does not take the permit.
+- **Header-read, idle, and a stalled response write.** The header-read
+  bound is the message-1 deadline, 4 seconds, on every listener. A
+  plaintext listener speaks HTTP/1 only and uses hyper's one timer for that bound and for idle,
+  so idle is 4 seconds there too. A channel connection does not set that
+  timer: idle is the record stream's, one hour, and a record already started still fails after 4 seconds
+  without progress. A response write that makes no progress for 4 seconds
+  closes the connection, on every listener.
+- **Sessions per client key** (RT-O37, ruled 2026-11-15). One key holds at
+  most `SESSIONS_PER_CLIENT` (4, `shekyl-rpc-channel`) live channel
+  sessions; the console key too. The count is read where a session joins
+  the index, under the index's lock. The next session's first request is
+  answered `OverResourceBound`, `bound.sessions`, and the connection
+  closes. A client's pool opens no more than the cap. The cap is an
+  Assumption: five clients fit in `rpc-connections-max`'s default of 25
+  with five to spare, and the console's four are its own. Without it, one
+  compromised enrolled key on the operator's network, the internet-facing
+  tunnel the likeliest, could hold every connection and lock the
+  administrator out of revoking it.
+- **Reserved slots (RT-O37, ruled 2026-11-15).** The owner's leg and a
+  service's console leg (§7) each hold `SESSIONS_PER_CLIENT` connections
+  beyond `rpc-connections-max`, drawn only by their own listener once the
+  shared pool is full, so the process's total is the operator's number
+  plus eight. The reason: under the ruled posture the RPC port is reachable
+  only from the operator's controlled network, and the case this defends
+  is a compromised enrolled host on that network, the internet-facing
+  website tunnel the likeliest, filling the connection limit with silent
+  connections to lock the administrator out of revoking it. The owner's
+  reserve also covers local accounts reaching the plaintext view listener
+  until RT-W12. A channel connection is identified only at message 3, so
+  the console's reserve is reached through a leg only an administrator can
+  open, not through a peer address: an onion service or a tunnel ending on
+  the daemon's host delivers a remote client from loopback too.
+- **A shard fetch** (`INPUT_GRAMMAR.md` IG-Q90). Bounded callers share one shard-fetch permit, taken at the view desk's cache miss (`rust/shekyl-archival-fetch-sched/src/view.rs`). A cached view takes none, and neither does a call that joins a flight already in the air. A bounded call that would open a flight while the permit is out is `OverResourceBound`, `bound.shard`, and the flight is not queued. The host takes no permit. The bundle producer's challenge reads come first by reservation, not priority: the node's one fetch client has exactly the slots its lanes use, `READS_AT_ONCE` for the producer when the node mines and `VIEW_SLOTS` (two: the bounded permit's flight and one host flight beside it) for every view flight, the host's included (`rust/shekyl-node/src/producer.rs`). Views never hold more than their lane, so a started producer read never waits for a slot and its read ceiling holds; a missed read is a missed witness duty. Every node with a Tor builds the scheduler and serves the view; a node with Tor off has no client to read through and refuses with `RefusedByMethod`, `shard.tor-off`.
+- **A request over a bound is refused with the bound named**, never silently truncated. Each bound has its own dotted code (`INPUT_GRAMMAR.md` IG-Q79).
 
 ### 6.4 Runtime options: `option_set` and `option_show` (RT-O23…RT-O27)
 
@@ -1595,8 +1699,8 @@ cites this section.
 **RT-O23 — names.** `option_set` and `option_show`: the grammar's
 own words (`option set`, `option show`, IG-3), so what an operator types
 and what a script calls are the same terms. One spelling each, no alias,
-as `request_archival_shard` was born
-([`json_rpc.rs:225-227`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs)).
+as every method in the table
+([`wire/mod.rs`](../../rust/shekyl-rpc-types/src/wire/mod.rs)).
 **JSON-RPC methods only, with no REST path:** one way to call each, not
 two. Every route they replace is a REST path today.
 
@@ -1637,18 +1741,18 @@ two. Every route they replace is a REST path today.
   grant to `node`. *From the tree:* `log-category` is placed beside
   `log-level` here, since today one filter holds both
   ([`filter.rs:107-131`](../../rust/shekyl-logging/src/filter.rs)).
-- **Who may call `option_show`:** like `get_info`, any connection holding
+- **Who may call `option_show`:** like `daemon_status`, any connection holding
   `health`; each row is present only when the connection holds the row's
   grant. A row the caller may not see is **absent** from the reply, never
   zeroed or emptied (§6.1, rule 43). A secret's value is never shown, at
   any grant. No row is host-only (RT-O9.3).
 - ***From the tree:* the interim mapping, before RT-W10.** The methods
   land on today's two listeners, before the channel exists. `option_set`'s
-  row in the method table is the host's
-  ([`methods.rs:124`](../../rust/shekyl-rpc-types/src/methods.rs)), and it
-  is in the specified list the gate test compares against
-  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:751`),
-  so the restricted listener refuses it. `option_show` is served on both
+  row in the method table holds `node`
+  ([`wire/mod.rs`](../../rust/shekyl-rpc-types/src/wire/mod.rs)), which
+  the view listener does not hold
+  (`the_view_listener_serves_exactly_its_specified_set`, `authority.rs`),
+  so the view listener refuses it. `option_show` is served on both
   listeners, and its rows are chosen through `Disclosure`
   ([`info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs)), which already
   carries `status` and `peers` axes; it gains a `config` axis, set by
@@ -1691,15 +1795,16 @@ two. Every route they replace is a REST path today.
   used: it would make the live value the snapshot's rather than the
   owner's (DC-Q16), and couple every subsystem to one shared object.
   The startup parse runs the same constructors: one rule on both
-  surfaces (IG-12). *From the tree:* the logging owner does not meet
-  step 2 yet. Its runtime path swaps the filter through a reload handle whose
-  `reload` returns a `Result`
-  ([`ffi.rs:639`](../../rust/shekyl-logging/src/ffi.rs)), and the handle
-  is reached only through the FFI module. The implementing PR gives the
-  owner a Rust interface that holds the handle for the life of the process.
-  PR #1069 (every log sink queued, so a log call never blocks) changed
-  the sinks and left the filter and the reload path as they are, so this
-  finding stands and the interface is built on its result.
+  surfaces (IG-12). *From the tree:* the logging owner meets step 2.
+  `init` registers the filter's reload handle once, for the life of the
+  process ([`lib.rs:245`](../../rust/shekyl-logging/src/lib.rs)), and the
+  apply, `subsystem::apply_directive`, returns nothing
+  ([`subsystem.rs:281-290`](../../rust/shekyl-logging/src/subsystem.rs)).
+  The swap's two `Err`s are a process with no subscriber and a reload layer
+  that is gone
+  ([`reload.rs:41-51`](../../rust/shekyl-logging/src/reload.rs)), and a
+  daemon reaches neither after start; the apply reports either one on
+  standard error and leaves the filter as it was.
 - **What a change does to traffic already running** (same ruling). A
   rate limit takes effect on the next transfer and never aborts one in
   flight.
@@ -1747,7 +1852,7 @@ two. Every route they replace is a REST path today.
   The implementing PR therefore adds JSON-RPC 2.0's optional `data` member,
   carrying the list of diagnostics, and one new numeric code for a
   configuration refusal, the next free after `-25`
-  ([`archival.rs:84`](../../rust/shekyl-rpc-types/src/archival.rs)). It
+  (`archival.rs:84` at `cb4d950141`). It
   bumps `CORE_RPC_VERSION` for both. A call outside the caller's grant is
   refused as §6.2 says; that code is RT-W10's, not minted here.
 
@@ -1778,8 +1883,14 @@ composition root wires each runtime row to its owner. No new FFI.
   so the audit line's values can never carry a secret.
 - **Raising the log level at runtime never makes the log record the
   host-only class** (stem data and unrelayed pool entries, RT-O9.3). An
-  enrolled key cannot read the log, but the data would sit on disk. This
-  is a check owned by `shekyl-logging`, not a block on this work.
+  enrolled key cannot read the log, but the data would sit on disk. No
+  event at any level names a stem's transactions or its successor, nor an
+  evicted pool entry's hash (RT-W10 step 5, 2026-11-17). The check is
+  `shekyl-relay/tests/stem_logs.rs`: every event at TRACE, captured while
+  stems go to a successor, fail, are discarded by the carrier and are
+  re-stemmed by an embargo, names neither. A measurement build names the
+  ids by design, and no release build can turn that feature on
+  (`scripts/ci/check_measurement_spans.py`).
 
 **What replaces what.** The implementing PR deletes each route below with
 its handler, and fixes its callers in the same PR.
@@ -1795,19 +1906,20 @@ its handler, and fixes its callers in the same PR.
 Census at `1b7803f69a`: the routes
 ([`server.rs:267-354`](../../rust/shekyl-daemon-rpc/src/server.rs)), the
 router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
-([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
+(`json.rs:293`,
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
-`print_net_stats`, which reads `/get_limit`
-([`console/mod.rs:1126-1169`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
-with its tests (`console/tests.rs:1130-1170`); the Python framework
+`print_net_stats`, which reads `/get_limit` (`console/mod.rs:1126-1169` at
+that census) with its tests (`console/tests.rs:1130-1170`); the Python
+framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
-C++ client test
-([`daemon_rpc_client.cpp:107-155`](../../tests/unit_tests/daemon_rpc_client.cpp));
-the regtest check of `print_net_stats`
+C++ client test (`daemon_rpc_client.cpp:107-155` at that census); the
+regtest check of `print_net_stats`
 ([`regtest_e2e.rs:5817-5876`](../../rust/shekyl-engine-core/src/engine/regtest_e2e.rs));
-and the C++ console
-([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
-which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
+and the C++ console (`rpc_command_executor.cpp` at that census). R8
+(`INPUT_GRAMMAR.md` IG-Q25; `7938c51f16`, #1259) deleted the C++ console,
+the client test and the daemon's in-process Rust console; `print_net_stats`
+lives in `shekyl-cli` (`rust/shekyl-cli/src/console/mod.rs`) and no longer
+reads `/get_limit`. **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
 comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
 migrates it are corrected by the implementing PR.
@@ -1829,11 +1941,10 @@ The HTTP request's authority admits it there, on the admin listener with
 the start switch set
 ([`authority.rs`](../../rust/shekyl-daemon-rpc/src/authority.rs)); the
 router test `pop_blocks_needs_the_armed_switch` holds that gate. The
-in-process `pop_blocks` console command admits through the same function
-before the C++ handler runs
-([`console/pop_blocks.rs`](../../rust/shekyl-daemon-rpc/src/console/pop_blocks.rs)):
-the live arm reads the switch `configure` stored, and the remote arm posts
-`/pop_blocks` so that daemon's stamp admits it. The
+in-process `pop_blocks` console command admitted through the same function
+before the C++ handler ran (`console/pop_blocks.rs`, deleted with the
+daemon's console in R8 at `7938c51f16`); the remote arm, a posted
+`/pop_blocks` the daemon's stamp admits, is the one that remains. The
 daemon-configuration cutover recorded the gap as DC-F14 (PR #1066). **Reopen (rule 21):**
 a demonstrated operator recovery need returns it as a ruled capability.
 
@@ -1857,8 +1968,67 @@ a demonstrated operator recovery need returns it as a ruled capability.
   the single answer to three questions: two daemons on one data home, a
   named instance pointed at the default's state (§7.1), and an offline
   command racing a start.
+- **The channel's files (RT-O34; RT-W10 step 4).** The key
+  (`rpc-channel.key`, versioned and pinned by a known answer), the public
+  bundle (`rpc-channel.bundle`), a service's console key
+  (`rpc-console.key`) and the enrolled set (`rpc-enrollments.redb`, a redb
+  store of the channel's own) live in the network's data directory, the
+  one the exclusive lock covers. The key is made on the first start. Each
+  file is created readable by the daemon's account alone, in the creating
+  call (`0600` with `O_EXCL`; on Windows an owner-only descriptor with the
+  no-read-up label at `CreateFileW`), the mode set exactly so no umask
+  narrows or widens it, and the file and its directory entry synced before
+  the start goes on. A key file or an enrolled set anyone else can read
+  refuses the start; it is never repaired. The rule is
+  `shekyl-os-account`'s `private_file`, which the tunnel's and a remote
+  CLI's keys follow too.
+- **A service's console leg (RT-O37, ruled 2026-11-15).** A service
+  listens on the channel at a leg only its account and an administrator
+  can open, as the owner reaches a run-as-me daemon on one only it can
+  open: on Unix the socket `rpc-console.sock` in the network's data
+  directory (inside the `0700` data home; the socket `0600`), replaced at
+  start under the exclusive lock and removed at a clean stop; on Windows a
+  pipe under a fresh random name with the data home's ACL (the service
+  account and Administrators), named in `rpc-console.pipe` beside the
+  key, because a fixed pipe name could be taken by another account first.
+  The handshake runs over it unchanged; a connection there that claims any
+  key but the console's is closed at message 3. It draws on the console's
+  reserved slots, beyond `rpc-connections-max`, as the owner's leg draws on
+  the owner's (§6.3), so a compromised enrolled host that fills the shared
+  pool cannot lock the administrator out of revoking it. The CLI finds the
+  leg at its fixed name in the data directory. The service record's TCP
+  address is not the console's way in; it serves every other local client.
+- **A service's data home (Rick, 2026-11-14, amending IG-Q36 and §7.1).**
+  A fixed root per platform: `/var/lib/shekyl` on Linux (the unit's
+  `StateDirectory=shekyl` with `StateDirectoryMode=0700`; the unit passes
+  no `data-dir`), `/var/db/shekyl` on FreeBSD (the rc.d script's prestart
+  makes it at mode 0700; the script passes no `data-dir`) and on macOS
+  (the installer's), `%ProgramData%\shekyl` on Windows (the service
+  account and Administrators only). The launch-recipe
+  gate reads the daemon's constants and holds the unit and the script to
+  them. The daemon
+  checks it and never creates it: it exists, is not a link, is owned by
+  the daemon's account, has mode 0700 (on Windows that ACL), and the
+  daemon is not root; otherwise `config.service.root` names the
+  condition. An explicit `data-dir` with `service` gets the same checks.
+- **The channel listener is off by default (Rick, 2026-11-14).**
+  `rpc-listen` is `none` unless the operator gives it: no channel port is
+  ruled. A service always publishes its machine-wide rendezvous (§7.1;
+  Rick, 2026-11-17, amending 2026-11-14's "only when it listens on the
+  channel"): when it listens on the channel the record names the address
+  loopback reaches (a wildcard by its family's loopback address) and its
+  public bundle, and when its view listener is on it names that listener.
+  A start replaces a record a previous run left at its path, so a crash's
+  leftover never names the previous endpoint, and announces what the
+  record names.
+  Until RT-W12, a same-user tool reaches a run-as-me daemon on the owner's
+  socket or the plaintext admin listener. A service's shell words use its
+  console leg; a wallet reads the service record and names the view
+  listener, and dials nothing the record names (RT-W10 step 5). **RT-W12
+  rules the channel port and gives a service a loopback channel listener
+  by default before it retires the plaintext admin listener.**
 - **Every new surface is Rust-owned** (rule 20). The channel listener's
-  flags, the key paths, the enrolled set, and `rpc-enrol` / `rpc-revoke`
+  flags, the key paths, the enrolled set, and `rpc client add` / `rpc client remove`
   are parsed, stored and served in `shekyl-daemon-rpc`. Nothing is added
   to C++ `rpc_args` or `core_rpc_server`; the C++ RPC bind and restricted
   flags are deleted, not extended.
@@ -1868,6 +2038,35 @@ a demonstrated operator recovery need returns it as a ruled capability.
 A rendezvous is how a client finds "this computer"'s daemon without
 guessing. It is published **after** the listener is bound, **atomically**
 (write and rename), removed on clean exit, and replaced on the next start.
+Every rendezvous file, the service's console leg name and the bundle are
+written through `shekyl-os-account`'s `StagedWrite`, the one place a file
+is replaced (Rick, 2026-11-18). Each is a *replace*: its staged `.new` is
+named by nothing, so the next start's write removes one a crash left and a
+failed commit removes its own. On Windows the staged file is created
+write-through, with its descriptor, and the one handle that created it
+writes it, renames it (`FileRenameInfoEx`, replace-if-exists, POSIX
+semantics; on FAT32 and exFAT the classic `FileRenameInfo`), flushes it
+and closes it (Rick, 2026-11-18), so a reader of the old record that
+shares delete keeps reading it. A program that opens the staged file
+without delete sharing (an antivirus scanner, a search indexer) fails its
+own open while that handle is held, so the staged file is never waited
+for; a program that holds the record without delete sharing is: the
+removal of a leftover staged file and the rename share one deadline,
+`REPLACE_WAIT`, 2 s in all (Rick, 2026-11-18; the 2 s is an Assumption,
+basis at the constant). Past it the start refuses with
+`config.replace.held-open`, naming the file held and the directory to
+exclude from scanning. A record whose read-only attribute is set refuses
+the rename at once, `config.replace.read-only`, which no wait changes
+(Rick, 2026-11-19). The rename is durable on a local NTFS volume, where
+the write-through handle's rename is flushed with it (`CreateFileW`'s
+"Caching Behavior"); on a network drive, whatever file system it reports,
+and on any other file system a publish lands, unconfirmed, and the start
+goes on, logging a warning that names the file, why its save is not
+confirmed, and the supported storage (Rick, 2026-11-19). The daemon's supported storage is a local
+NTFS volume on Windows and a local disk on Unix; network shares are not a
+supported configuration (Rick, 2026-11-19; `INSTALLATION_GUIDE.md`,
+"Supported storage"). A stale record, which a crashed daemon
+left, is replaced by the publish the same way, never removed beside it.
 Every rendezvous path is keyed by the genesis-derived network id, not a
 nettype name (rule 71), so daemons of different networks coexist and a
 client never reaches the wrong network's node.
@@ -1909,10 +2108,15 @@ client never reaches the wrong network's node.
   a hash of network and instance, on every platform.** `<name>` is derived
   from the network id and the instance name (`default`, or the operator's
   name). The Unix socket is `<base>/shekyl-<name>.sock`; the Windows
-  rendezvous file is `%LOCALAPPDATA%\Shekyl\shekyl-<name>` (below).
+  rendezvous file is `%LOCALAPPDATA%\Shekyl\rendezvous\shekyl-<name>` (below).
   **One naming function and one known-answer test serve both platforms**,
   under the registered customization `shekyl/rpc-rendezvous-name-v1`
-  (`CRYPTO_DOMAIN_REGISTRY.tsv`). **An instance name therefore reaches no
+  (`CRYPTO_DOMAIN_REGISTRY.tsv`). They live in `shekyl-rpc-rendezvous`
+  (`rendezvous_name`, `Instance`, `InstanceName`, the rendezvous file and
+  the Windows record), whose one dependency is `shekyl-crypto-hash`: the
+  daemon, its configuration and every client read the names there, and a
+  client that only finds a daemon carries none of the channel's handshake
+  (Rick, 2026-11-14). **An instance name therefore reaches no
   path anywhere.** `<name>` is the first 12 bytes of
   cSHAKE256 under that customization over the 16-byte network id followed
   by the instance name's ASCII bytes (RT-O14, ruled 2026-10-09: the
@@ -1948,8 +2152,15 @@ client never reaches the wrong network's node.
   Path safety is no longer a reason, on any platform.
 - **Windows, run-as-me:** a named pipe whose name the daemon **draws at
   random on each start** and records — with the logon-session id — in a
-  rendezvous file, `%LOCALAPPDATA%\Shekyl\shekyl-<name>`, that only the
-  user can read. `<name>` is the same derivation as the Unix socket's
+  rendezvous file, `%LOCALAPPDATA%\Shekyl\rendezvous\shekyl-<name>`, that only the
+  user can read. The record is three lines: `shekyl-rendezvous 1`,
+  `pipe \\.\pipe\shekyl-owner-<32 hex>` and `session <logon SID>`. It is
+  published after the pipe exists, by writing a fresh labelled file
+  beside it and renaming it over the path, so a reader sees the old record
+  or the new one. On a test host, `rpc-socket-dir` names the rendezvous
+  directory in place of `%LOCALAPPDATA%\Shekyl\rendezvous`, under the
+  same rule: created with its owner, protections and label, or checked
+  (`INPUT_GRAMMAR.md` IG-Q104). `<name>` is the same derivation as the Unix socket's
   (RT-O10, above): one function, one known-answer test, and no
   per-network or per-instance directory. A pipe has no containing
   directory, so containment is rebuilt here: with no predictable name there
@@ -1979,19 +2190,23 @@ client never reaches the wrong network's node.
     ([`file.rs:86`](../../rust/shekyl-win-sec/src/file.rs)), which WP-D8
     left unlabelled because the read-up question for files was not that
     slice's (`file.rs:20-21`); it is answered now.
-  - **The directory `%LOCALAPPDATA%\Shekyl` carries its own no-read-up
-    label** as well: a low-integrity process cannot open it, so it cannot
-    enumerate the rendezvous (measured). The directory's label is not
-    relied on to protect the file. **That directory is reserved for
-    rendezvous files and holds nothing else**. The label denies
-    a low-integrity reader everything inside, so a file with a different
-    audience must not be put there by accident; nothing in the tree uses
-    this directory today (`shekyl-cli` keeps its history under
-    `%LOCALAPPDATA%\shekyl-cli`, the GUI under the roaming profile), and
-    anything that later wants a per-user Shekyl directory takes a
-    different one. The daemon creates the directory with its descriptor
-    and label in the creating call, and where it already exists asserts
-    both — owner and the label's policy bits — rather than adopting it.
+  - **The rendezvous directory `%LOCALAPPDATA%\Shekyl\rendezvous` carries
+    its own no-read-up label** as well: a low-integrity process cannot open
+    it, so it cannot enumerate the rendezvous (measured on the directory
+    form, RT-P8; re-run on this subdirectory under RT-P8's Windows check).
+    The directory's label is not relied on to protect the file. **That
+    directory holds rendezvous files and nothing else**: the label denies a
+    low-integrity reader everything inside, so a file with a different
+    audience must not be put there by accident. The daemon creates it with
+    its owner, its protections and its label in the creating call, and
+    where it already exists checks all three (the owner, the protected
+    DACL, and the label's policy bits) rather than adopting it (Rick,
+    2026-11-12).
+  - **The daemon's data home `%LOCALAPPDATA%\Shekyl`**, the run-as-user
+    root (`INPUT_GRAMMAR.md` IG-13), is the rendezvous directory's parent.
+    When the daemon creates it, it carries owner-only access and an
+    inheritable no-read-up label, set in the creating call (Rick,
+    2026-11-12).
   - **Clean exit deletes the rendezvous before closing the pipe**, so the
     name is never free while a rendezvous still points at it.
   - **Start-up dials an existing rendezvous through the peer check** before
@@ -2010,14 +2225,38 @@ client never reaches the wrong network's node.
   both hide the logon-session SID the DACL relies on; only a raw token read
   (`GetTokenInformation`, `TokenGroups`, `SE_GROUP_LOGON_ID`) shows it. A
   check written against either tool will report the design unworkable.
-- **Service mode, both platforms:** a machine-wide rendezvous file,
-  `<service data home>/shekyl-<name>`, readable by users, naming the
-  loopback channel address and the daemon's public bundle. `<name>` is the
-  RT-O10 derivation — the same function and the same known-answer test as
-  the Unix socket and the Windows rendezvous file. **The service data home
-  is its containment** (RT-16: an ACL admitting the service account and
-  Administrators to write; nobody else can place a file there). A same-user
-  socket or pipe is never served by a service.
+- **Service mode, every platform:** a machine-wide rendezvous file,
+  `<the service's rendezvous directory>/shekyl-<name>`, readable by users,
+  always published (Rick, 2026-11-17). It names the loopback channel
+  address and the daemon's public bundle only when the channel is on, and
+  the view listener's endpoint only when that listener is on
+  (`shekyl-rpc-rendezvous`'s `ServiceRecord`, format 2). A wallet on the
+  machine reads it only to tell a service from no node: it dials nothing it
+  names, and says what to set (RT-W10 step 5).
+  `<name>` is the RT-O10 derivation — the same function and the same
+  known-answer test as the Unix socket and the Windows rendezvous file.
+  **The service's rendezvous directory is fixed per platform and separate
+  from `data-dir`** (Rick, 2026-11-12): `/run/shekyl` on Linux, which the
+  unit's `RuntimeDirectory=shekyl` with `RuntimeDirectoryMode=0755`
+  creates; `/var/run/shekyl` on FreeBSD (Rick, 2026-11-14), which the
+  rc.d script's `start_precmd` creates before every start with
+  `install -d -o shekyl -g shekyl -m 0755`
+  (`contrib/packaging/freebsd/shekyld`), checked exactly as on Linux;
+  `/Library/Application Support/Shekyl` on macOS, which the
+  installer creates. On Windows the record is not a file (below).
+  **That directory is its containment**: only the service's account can
+  place a file there. On Linux, FreeBSD and macOS a service daemon checks
+  it rather than adopting it: it exists, it is not a link, it is owned by
+  the daemon's account, it is not writable by its group or by others, and
+  the daemon is not root. On any failure the start refuses, naming the
+  condition (`config.service.rendezvous`), so a non-service account that
+  gives `service` is refused. **On Windows the record is a registry
+  value** (amended 2026-11-18, withdrawing the 2026-11-14
+  `%ProgramData%\shekyl\rendezvous` directory). On Windows the service's rendezvous record is a registry value under `HKLM\SOFTWARE\Shekyl\Rendezvous`, always in the 64-bit view, named for the network and instance as the file is elsewhere (Rick, 2026-11-18). **The threat that decided it:** a local account can hold a world-readable file open without delete sharing, and then nothing can replace or remove it, so any local account could block the service's publish; a registry value is written whole and removed whatever readers hold the key. The value is written at each publish and removed at a clean stop only while it still holds this daemon's record. The Windows installer creates the key, once, together with the service account (RT-W14), with its final DACL: owner Administrators or SYSTEM, every account may read, only the service account, Administrators and SYSTEM may write; no installer amends an existing key's DACL. The daemon checks the key before it publishes and never creates it: a missing key, or one whose owner, readers or writers differ, refuses the start (`config.service.rendezvous-key`), naming the key and what its DACL must be, as `config.service.root` names the data home. `shekyl-rpc-rendezvous` keeps one reader API over the value and the file. Nothing publishes or reads it until RT-W14 builds the Windows service. RT-P8 measures
+  it when RT-W14 builds the service (item 8). **A client that cannot open a service's record for lack of access
+  reports an access failure, never "not running"**: a denied read is not
+  an absent node. A same-user socket or pipe is never served by a
+  service.
 - **Named instances.** The rendezvous above is the **default
   instance**: one per user and network, or one per machine and network for
   a service, and the only thing "this computer" resolves to. A daemon
@@ -2083,9 +2322,10 @@ client never reaches the wrong network's node.
 A small Shekyl binary on the consumer's host:
 
 - generates and holds that host's static bundle; prints its fingerprint
-  for enrolment;
-- is configured with the daemon's address and public bundle, and the grant
-  it requests; reports the grant it received (§6.2);
+  for enrollment;
+- is configured with the daemon's address and public bundle, and the
+  grants its sessions ask for (`rpc-grant`, `INPUT_GRAMMAR.md` IG-Q108);
+  reports the grant it received (§6.2);
 - listens on the host's **loopback only** — it is plaintext on that side,
   so RT-14 applies: specific address, never a wildcard — through the same
   listen classifier
@@ -2094,14 +2334,49 @@ A small Shekyl binary on the consumer's host:
   connections alive would otherwise pay §4.1's two round trips and three
   KEM pairs per request. The tunnel keeps a bounded pool of live sessions
   to the daemon (one grant per pool) and carries local connections over
-  them, replacing a session only when it closes. Pool size is measured
-  (RT-P6), not guessed. RT-P6's input to it (ruled 2026-10-20): a session
-  costs the tunnel about 2.16 ms of CPU on the floor device to open, and
-  the daemon the same.
+  them, replacing a session only when it closes. RT-P6's input to it
+  (ruled 2026-10-20): a session costs the tunnel about 2.16 ms of CPU on
+  the floor device to open, and the daemon the same. **The pool (ruled
+  2026-11-15, RT-O37):** at most `SESSIONS_PER_CLIENT` (4) sessions, the
+  daemon's per-key cap; opened on demand, one kept open and opened again
+  when the daemon closes it; a request beyond the cap waits for a session,
+  bounded by the handshake deadline; extra sessions close after
+  `EXTRA_SESSION_IDLE` (30 s, an Assumption: 2.16 ms per 30 s is 0.0072 %
+  of a core per extra); RT-P10 measures it under load.
 
 Any local user on the consumer's host can use its loopback port. Where the
 consumer can speak to a socket, the tunnel offers one (R0 §1.1's
 construction) instead of loopback TCP.
+
+**Built in RT-W11** (`shekyl-rpc-tunnel`; its names are `INPUT_GRAMMAR.md`
+Part K). The pool and the channel's client are `shekyl-rpc-transport`'s
+(`channel`): `ChannelTarget`, `Session`, `Pool`, and `ChannelDaemon` for a
+synchronous caller, which `shekyl-cli`'s enrollment words use. The tunnel
+reads a consumer's request whole, at most a submission's cap, and sends a
+`tx_submit` padded on a session that carries nothing else until the
+response. A revocation stops the pool, which does not dial again; the
+tunnel answers the request that met it, drains the requests in flight
+within the handshake deadline, and exits naming the revocation. A socket
+another tunnel answers on is not taken over.
+
+**Packaged (Rick, 2026-11-16).** The binary ships in every release
+archive, beside `shekyl-cli` (`cmake/BuildRust.cmake`; Windows included).
+Linux gets a systemd unit and FreeBSD an rc.d script
+(`contrib/packaging/linux/shekyl-rpc-tunnel.service`,
+`contrib/packaging/freebsd/shekyl-rpc-tunnel`): the tunnel runs as its own
+account `shekyl-tunnel`, never `shekyl` and never root, with its key in its
+own 0700 state directory, its configuration in a named file, and its
+listener on loopback only. The `.deb` and `.rpm` install the unit without
+enabling it: a tunnel needs a configuration and a key before its first
+start. A stop (SIGTERM) is a clean exit. The unit carries a hardening set
+(Rick, 2026-11-16): no capabilities, IP and local sockets only, W^X kept
+(`MemoryDenyWriteExecute`; the tunnel runs no JIT), the `@system-service`
+system calls, native architecture only, and `UMask=0077`, besides the
+kernel, clock, hostname, namespace, real-time and SUID protections.
+shekyld's unit does not carry it: RandomX's JIT needs W^X off. The
+launch-recipe gate holds both launchers to the tunnel's table, and the unit
+to the hardening set at each directive's value (check 6). Windows and macOS run it as a
+user process; their service support is RT-W14's.
 
 ---
 
@@ -2110,11 +2385,12 @@ construction) instead of loopback TCP.
 | # | Question | How | Revisits on failure |
 |---|---|---|---|
 | RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions. **Met 2026-10-11** under a re-registered method, on the floor device and on a Tiger Lake laptop core; the first registration's floor-device run failed and was traced to its harness (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`, `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`). **Standing check, gated from RT-W9 step 6** (`scripts/ci/check_rt_p4_standing.py`, in the bundled grep gates): it reads the toolchain, the lock-file closure of `fips203` (the crates in the decapsulation image), the recognised keys of `[profile.release]`, `cmake/BuildRust.cmake`, the gitian descriptors and `rust/.cargo/config.toml`. Anything it does not recognise fails on its own and is not also a re-run. It compares each attested run (`docs/benchmarks/rt_p4_attestation.toml`) with the recognised snapshot for its target, and every target that carries rustflags is either one of those runs or an explicit unmeasured row. The laptop's run predates `+crt-static` on the MSVC targets (2026-10-19). The re-run with the shipped flags failed its lines on 2026-10-25 ([`rt_p4_mlkem_decaps_timing_20261023.md`](../benchmarks/rt_p4_mlkem_decaps_timing_20261023.md): `valid-vs-invalid` `|t|` 25.43, `fixed-vs-invalid` 21.72, about 16 to 18 ns at the fastest decapsulations), with the decapsulation code identical by disassembly to the passing build's. **Ruled 2026-10-25:** the difference is an observed platform property, accepted under §4.3's bounds, and **RT-P4 stays met** on the identical code and the floor device's run. The standing check accepts a build whose decapsulation code is disassembly-identical to an attested run, with the comparison committed; a change to that code needs a timing run. At its next required run, the pass line is invalid-vs-invalid differing only in the decrypted message, with valid-vs-invalid reported as information | §4.3; the crate choice for the channel's static key |
-| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Two registered parts (RT-O21, sequencing re-ruled 2026-10-12). The size distribution is HTTP message sizes per method on the generated traffic, and the classes are derived from it. The adapter is `shekyl-rpc-stream` over `ClassedRecord`, not the interim framer: a block-batch response larger than one record, backpressure under a slow reader, half-close, a request split across records, observed failing with splitting removed. The flush policy is named in the registration; the record boundaries it produces are observed with the adapter. **Sizes part measured 2026-10-17** ([`rt_p5_rpc_message_sizes_20261017.md`](../benchmarks/rt_p5_rpc_message_sizes_20261017.md)): candidate tables for K = 1 to 8, with K = 3 ruled 2026-10-18 (RT-O6); the record also finds that, in the request direction, every K ≥ 2 puts at least one record of every submission in a class no other request uses (at K = 2 the class-union with every other request is one tail in the smaller class), and for K ≥ 3 a submission's classes are shared with at most two other requests and with none for K ≥ 6, against RT-O6's stated mechanism. **Record-boundaries part observed 2026-10-20 in RT-W9 step 5b** with `shekyl-rpc-stream` through hyper (§4.4): hyper flushes once per message in both directions, the registered flush policy (`hyper_flushes_once_per_message`), and the named edit, splitting removed, fails the block-batch test | RT-W9's adapter design |
+| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Two registered parts (RT-O21, sequencing re-ruled 2026-10-12). The size distribution is HTTP message sizes per method on the generated traffic, and the classes are derived from it. The adapter is `shekyl-rpc-stream` over `ClassedRecord`, not the interim framer: a block-batch response larger than one record, backpressure under a slow reader, half-close, a request split across records, observed failing with splitting removed. The flush policy is named in the registration; the record boundaries it produces are observed with the adapter. **Sizes part measured 2026-10-17** ([`rt_p5_rpc_message_sizes_20261017.md`](../benchmarks/rt_p5_rpc_message_sizes_20261017.md)): candidate tables for K = 1 to 8, with K = 3 ruled 2026-10-18 (RT-O6); the record also finds that, in the request direction, every K ≥ 2 puts at least one record of every submission in a class no other request uses (at K = 2 the class-union with every other request is one tail in the smaller class), and for K ≥ 3 a submission's classes are shared with at most two other requests and with none for K ≥ 6, against RT-O6's stated mechanism. **Record-boundaries part observed 2026-10-20 in RT-W9 step 5b** with `shekyl-rpc-stream` through hyper (§4.4): hyper flushes once per message in both directions, the registered flush policy (`hyper_flushes_once_per_message`), and the named edit, splitting removed, fails the block-batch test. The 3.x runs are closed, unedited (Rick, 2026-11-12). **The sizes part is measured again on the 4.x wire** ([`rt_p5_rpc_message_sizes_20261115.md`](../benchmarks/rt_p5_rpc_message_sizes_20261115.md), registered 2026-11-15, run 2026-11-16): both registered runs passed and the determinism check passes. Every request other than a submission is at most 197 bytes. Its two findings are ruled (Rick, 2026-11-16): the `K` = 3 rule rounds to 512, 4,096 and 65,535, and the middle class stays 16,384 until the mainnet reopen, because the trace's block reads come from near-empty testnet blocks (F1, RT-O6 part 1); a submission's body is base64, which RT-O6 part 2 now says, and the padded size is unchanged (F2). This measurement is the one RT-W12's gate names | RT-W9's adapter design |
 | RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of sealing and opening one record at each response class RT-O6 ruled on 2026-10-18: 512, 16,384 and 65,535 bytes. A submission padded to its fixed size is whole 65,535-byte records and a tail, so its cost follows from the largest class's. **Measured 2026-10-19 on the floor device** ([`rt_p6_handshake_cost_20261018.md`](../benchmarks/rt_p6_handshake_cost_20261018.md)): both sides about 2.16 ms of CPU per handshake, 4.3 ms together at the 99th percentile; a stranger's message 1 costs the daemon 818.5 µs at the 99th percentile; the handshake deadlines come from measured onion and clearnet round trips (RT-P9), not from this run (ruled 2026-10-20); the amplification is answered by mac1 and a handshake budget sized from it (§4.3); the client's 2.16 ms is an input to RT-W11's pool. **The stranger re-measured with mac1 on 2026-10-20** ([`rt_p6_mac1_stranger_20261020.md`](../benchmarks/rt_p6_mac1_stranger_20261020.md)): a message 1 without the bundle costs the daemon 34.1 µs at the 99th percentile, refused at mac1; the daemon's whole handshake with mac1 is 2,163.8 µs, the cost the budget now charges | §4.3's amplification bound and the handshake budget's charge; the tunnel pool size (RT-W11). The handshake deadlines come from RT-P9, not from this probe |
 | RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
-| RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` data home is created with its owner and protected DACL in one `CreateDirectoryW` call, reads back as admitting the service account and Administrators only, and an unelevated process racing the creation cannot place an entry inside; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
+| RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` data home is created with its owner and protected DACL in one `CreateDirectoryW` call, reads back as admitting the service account and Administrators only, and an unelevated process racing the creation cannot place an entry inside; (7) the side-by-side refusal between the two modes; (8) the service's rendezvous record, a value under `HKLM\SOFTWARE\Shekyl\Rendezvous` (Rick, 2026-11-18, replacing the 2026-11-14 directory): the installer creates the key once, with the service account, owned by Administrators or SYSTEM, readable by every account, writable by the service account, Administrators and SYSTEM only; the daemon refuses a missing or exposed key; an unelevated user reads the record and cannot write it; a reader holding the key does not stop a publish or a removal; a client denied the record reports an access failure, not "not running" | RT-15, RT-16; RT-W10; RT-W14 |
 | RT-P9 | How long does the handshake take on a real network leg to the floor device, over Tor and over a LAN? | The real handshake, mac1 and the budget in place, one TCP connection per sample from the development workstation to a daemon role on the floor device: through Tor to a temporary onion service, each connection on its own circuit, and directly over the LAN, 300 each. Each side stamps each message; the daemon's clock starts at `accept`. **Registered and run 2026-10-20** ([`rt_p9_handshake_round_trips_20261020.md`](../benchmarks/rt_p9_handshake_round_trips_20261020.md)), with the derivation fixed before the run: each deadline is twice the onion leg's 99th percentile from `accept`, rounded up to a whole second, the LAN figure beside it. **Attempt 2 met its gates:** message 1 within 4 s (onion p99 1,803.4 ms; LAN 0.7 ms), the whole handshake within 11 s (onion p99 5,231.9 ms; LAN 8.6 ms). Attempt 1 was void: the client looped without pause on the LAN and the handshake budget dropped part of it, as designed | The message-1 deadline and the whole-handshake deadline (derived from this, not chosen) |
+| RT-P10 | Is the tunnel's pool, `SESSIONS_PER_CLIENT` sessions with extras closing after `EXTRA_SESSION_IDLE`, the right size under load? | The tunnel on the development workstation against a daemon on the floor device, through a loopback consumer that does not keep HTTP connections alive, at stepped request rates: requests per second served, the wait for a session at each percentile, handshakes per minute on the daemon, and the daemon's CPU. The registration fixes the rates and the pass lines before the run. Registered by RT-W11's pre-flight (Rick, 2026-11-15); it does not block RT-W11 | `SESSIONS_PER_CLIENT`, `EXTRA_SESSION_IDLE` |
 
 ---
 
@@ -2151,8 +2427,8 @@ construction) instead of loopback TCP.
 - **Rendezvous label (§7.1):** a label set at `CreateFileW` refuses a
   low-integrity read; an inherited label and an `icacls`-applied label both
   carry `NW` only and admit it, while appearing as a Medium label.
-- **Item 4 — Windows callers today:** the Windows build produces only
-  `shekyld.exe` and `shekyl-mdb-copy.exe`; the wallet stack is linked into
+- **Item 4 — Windows callers today:** the Windows build produces
+  `shekyld.exe`; the wallet stack is linked into
   the GUI (`src-tauri` path-depends on `shekyl-engine-core`,
   `shekyl-rpc-client`, `shekyl-scanner`; its embedded engine builds its
   daemon client from the same address). Three consumers, one leg: the GUI's
@@ -2186,6 +2462,29 @@ construction) instead of loopback TCP.
   in the tree, and the lane declined to substitute a model and report it as
   item 1; item 7 is unimplemented.
 
+**The label re-run on the rendezvous subdirectory (2026-11-12, at
+`acd3114d4`; Rick's ruling of that day).** Run by the Windows agent on the
+maintainer's Windows 11 laptop (23H2, 22631), not an estate host, through
+`shekyl-win-sec`'s probe `rendezvous_probe_leaves_its_objects`:
+
+- The data home `Shekyl`, its `rendezvous` subdirectory and a rendezvous
+  file each read back label policy 3 (no-write-up and no-read-up). `icacls`
+  shows the owner's full-control ACE alone on each, none inherited, and the
+  labels `(OI)(CI)(NW,NR)` on the data home and `(NW,NR)` on the
+  subdirectory and the file.
+- From a Medium prompt, listing both directories, reading the file,
+  appending to it and creating a file in the subdirectory all succeed.
+- From a Low prompt (`whoami` showing Low Mandatory Level), reading,
+  appending and creating are each refused with "Access is denied". Listing
+  either directory is refused too: cmd prints "File Not Found", and a Low
+  PowerShell's `Directory.GetFileSystemEntries` on each gets
+  `UnauthorizedAccessException` (0x80070005). A Low process can still
+  `cd` into the data home (the label does not stop traversal), and cannot
+  `cd` into the subdirectory. Nothing written at Low reached the
+  subdirectory.
+- The check refuses a directory made with the default descriptor, and
+  stops refusing it when the check is removed (the red edit, run).
+
 ## 10. Open items
 
 Every item is ruled. What message 4 carries is RT-O30 (§6.2), ruled
@@ -2197,7 +2496,7 @@ Every item is ruled. What message 4 carries is RT-O30 (§6.2), ruled
   connection's grant is stamped on each request, from one route-to-grant
   table checked exactly once by a test; plaintext loopback keeps its
   method set until RT-W12, the console moving to the socket in RT-W10; the
-  key and the enrolments live in the data home; the service-mode pieces go
+  key and the enrollments live in the data home; the service-mode pieces go
   with RT-W14; the armed switch is network-restricted, not
   network-selected (§6.1).
 
@@ -2256,7 +2555,7 @@ Every item is ruled. What message 4 carries is RT-O30 (§6.2), ruled
   in §7.1.
 
 - **RT-O9 — the grant table. RULED** in four parts on 2026-10-08
-  (`RT-O9.1`…`RT-O9.4`: `enrol` its own grant; test levers in no grant;
+  (`RT-O9.1`…`RT-O9.4`: `enroll` its own grant; test levers in no grant;
   anonymity data host-only; cost a separate resource policy) and whole on
   2026-10-09: the assignment of §6.1, its presets, the changes from today's
   gate, the revocation bound (§5) and the arming switch for the test
@@ -2268,7 +2567,7 @@ Every item is ruled. What message 4 carries is RT-O30 (§6.2), ruled
     on the channel will.
   - **The incident's consumer** is enrolled for `peers` to keep its
     seed-node count, or drops the count. That is its operator's choice at
-    enrolment, which is what the grant model is for.
+    enrollment, which is what the grant model is for.
 
 - **RT-O11…RT-O15 — the RT-W8 pre-flight's questions. RULED 2026-10-09**
   ([`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) §4).
@@ -2364,14 +2663,8 @@ RK-5c commit 7, 2026-10-10). RT-W13 confirms the read is gone.
 
 | What describes today's code | Removed by |
 |---|---|
-| `DAEMON_RPC_RUST.md`: "Restricted RPC stays", "Restricted Mode", and the local and remote rows of the auth table | RT-W10 |
-| The `removed_flags.cpp:189-190` message; `--restricted-rpc`, `--rpc-restricted-bind-port`, `--rpc-restricted-bind-ip`, `--rpc-restricted-bind-ipv6-address` (`rpc_args.{h,cpp}`, `core_rpc_server.cpp`, `daemon.cpp`). The plaintext bind flags are re-scoped to the `view` loopback listener and their parsing moves out of C++ `rpc_args` into `shekyl-daemon-rpc` (§7) | RT-W10 |
-| The callers that **pass** those flags: `shekyl-gui-wallet` starts its daemon with `--restricted-rpc` (`src-tauri/src/daemon_manager.rs:115`), and the regtest end-to-end harness starts a second listener with `--rpc-restricted-bind-port` (`engine/regtest_e2e.rs`, `start_with_restricted_listener`). Each gets its replacement in the commit that deletes the flag, or the GUI's daemon and those tests stop starting | RT-W10 |
-| `bind.rs`'s refusal text and its two tests that assert the onion remedy | RT-W10 |
-| `ctl_client.rs`'s plaintext loopback-TCP path: `shekyld <command>` moves to the owner-only socket or pipe for a run-as-me daemon, and to the channel with the console key for a service (RT-15, §5) | RT-W10 |
-| `shekyl-cli/src/commands/mine.rs:68`: the "restricted listener" refusal becomes a check for `mining-control` in the effective grant, the request clamped to the ceiling the handshake returned (§6.2) | RT-W10 |
-| The daemon client's `https://` arm (`rust/shekyl-rpc-transport/src/http_client.rs:240-266`), and with it `hyper-rustls` and native-roots loading in the wallet's graph — not before the channel client exists (RT-O8) | RT-W12 |
-| Shipped Windows guidance that points operators at Task Scheduler (`removed_flags.cpp:159-161`, `INSTALLATION_GUIDE.md:229-235`): replaced by RT-16's two run modes (the scheduled task is rejected, §12) | RT-W14 |
+| The daemon client's `https://` arm (`rust/shekyl-rpc-transport/src/http_client.rs`, its `HttpsConnector`), and with it `hyper-rustls` and native-roots loading in the wallet's graph — not before the channel client exists (RT-O8) | RT-W12 |
+| Shipped Windows guidance that points operators at Task Scheduler (`INSTALLATION_GUIDE.md`'s service-manager paragraph): replaced by RT-16's two run modes (the scheduled task is rejected, §12) | RT-W14 |
 
 RT-W13 is the check that this table is empty: every row above gone, and
 no reader of a deleted flag or field left in the tree.
@@ -2467,7 +2760,7 @@ no reader of a deleted flag or field left in the tree.
   entries, for measurement tooling. A grant can be put in a ceiling and
   used from another machine; no remote job needs this data, and it is what
   Dandelion++ hides. It is host-only, not a grant (RT-O9.3, §6.1).
-- **Enrolment inside `node`.** A `node` holder could enrol itself an
+- **Enrollment inside `node`.** A `node` holder could enroll itself an
   `admin` key and step around every other boundary (RT-O9.1).
 - **Encoding cost as authority** — keeping `get_coinbase_tx_sum` and
   `calc_pow` admin-only because they are expensive (RT-O9.4, §6.3).
@@ -2495,9 +2788,9 @@ not only the daemon's owner.
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
 | RT-W9 | `shekyl-noise` holds `SymmetricState` and the typed `SendDirection` and `RecvDirection` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedSealer` and `ClassedOpener` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; the handshake's deadlines from RT-P9 (4 s for message 1, 11 s for the whole handshake, `shekyl_rpc_channel::deadline`). From RT-P6's follow-through (§4.3, ruled 2026-10-20): mac1 on message 1 (`shekyl/rpc-mac1-v1`), the handshake budget (a quarter of one core, 115 handshakes a second), the busy reply (`shekyl/rpc-busy-v1`) and the replay window. The client's retry policy (`shekyl_rpc_channel::retry`): one silent retry after a timeout, and a jittered back-off after busy (§4.3). The replay residual on a leg that can read the handshake is the operator's (§4.3, §12). **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the decapsulation closure of the ML-KEM crate or the Rust toolchain changes, and a gate attests the release build's codegen settings from every flag source (RT-O22; §10, 2026-10-22) | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](../completed/RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a; mac1, the budget and busy are built in PR #1137 and the deadlines and retry policy in PR #1139 (2026-10-20); the close-out of 2026-10-22 is built in PRs #1156 (the stream), #1159 (the noise crate and handshake), #1163 (these docs) and #1173 (step 6: the two exclusion rows, the mechanism-7 call-site pin and the standing-check gate, which passes with the laptop's shipped build attested by its committed disassembly comparison, RT-P4 staying met, §4.3, §9 RT-P4); the time-bound message 1 is out of scope (ruled 2026-10-25, §12). **LANDED 2026-10-25** |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); the `restricted` flag deleted from the Rust handlers and the FFI (the restricted listener's C++ flags went on 2026-10-15, in the daemon-configuration cutover); plaintext loopback keeps its method set (RT-O33, ruled 2026-10-25), the console alone moving to the same-user socket: its re-scope to `view` is RT-W12's, with the clients that use it. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2). **The `submit_transaction` route fails closed on the record shape (close-out F2, 2026-10-22):** it refuses any body for which the connection's `InboundShape::ends_in_submission` is false when the body has been read, so a client that did not pad, or armed another connection, is refused rather than answered. **For its pre-flight (close-out, 2026-10-22):** message 3 has no upper length bound (`handshake.rs:716` checks only the minimum); §6.2 rules the message-3 and message-4 payloads fixed-length, so once the grant encoding is fixed the handshake takes the exact lengths as constants, refuses any other length, and the listener knows how many bytes to read; the listener's read bounds; the 4 s and 11 s deadlines in the accept loop; mac1, the budget and busy, wired through | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1; met 2026-10-13) | **authorized 2026-10-25**; pre-flight [`RPC_CHANNEL_RT_W10_PREFLIGHT.md`](RPC_CHANNEL_RT_W10_PREFLIGHT.md), RT-O30…RT-O36 ruled 2026-10-25; five steps, one pull request each; step 1 (grants as types, the armed switch) built in PR #1197 (2026-10-26) |
-| RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20). **Client contracts for a submission (close-out F2, 2026-10-22):** the tunnel holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
-| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Once these clients have moved, plaintext loopback is re-scoped to `view` and the plaintext admin listener (`rpc-admin-listen`) is retired (RT-O33, ruled 2026-10-25):** until then the admin listener is reachable by any local user, not only the daemon's owner, which is why this slice follows RT-W11 directly. **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrollment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); the `restricted` flag deleted from the Rust handlers and the FFI (the restricted listener's C++ flags went on 2026-10-15, in the daemon-configuration cutover); plaintext loopback keeps its method set (RT-O33, ruled 2026-10-25), the console alone moving to the same-user socket: its re-scope to `view` is RT-W12's, with the clients that use it. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrollment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2). **The `submit_transaction` route fails closed on the record shape (close-out F2, 2026-10-22):** it refuses any body for which the connection's `InboundShape::ends_in_submission` is false when the body has been read, so a client that did not pad, or armed another connection, is refused rather than answered. **For its pre-flight (close-out, 2026-10-22):** message 3 has no upper length bound (`handshake.rs:716` checks only the minimum); §6.2 rules the message-3 and message-4 payloads fixed-length, so once the grant encoding is fixed the handshake takes the exact lengths as constants, refuses any other length, and the listener knows how many bytes to read; the listener's read bounds; the 4 s and 11 s deadlines in the accept loop; mac1, the budget and busy, wired through | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1; met 2026-10-13) | **authorized 2026-10-25**; pre-flight [`RPC_CHANNEL_RT_W10_PREFLIGHT.md`](RPC_CHANNEL_RT_W10_PREFLIGHT.md), RT-O30…RT-O36 ruled 2026-10-25; five steps, one pull request each; step 1 (grants as types, the armed switch) built in PR #1197 (2026-10-26); step 2 (the resource policy, `CORE_RPC_VERSION` 3.67) built from the floor run of 2026-11-03; step 3 (the owner's socket, its start-up dial and watch, `instance` and `rpc-socket-dir`, and `service` accepted outside Windows; `INPUT_GRAMMAR.md` IG-Q103…IG-Q105) in PR #1358, beside the wire's 4.1; **step 5** (Rick, 2026-11-13; amended 2026-11-17; built in PR #1426): the wallet engine's `Rpc` over "this computer" (`shekyl-rpc-transport`'s `local::LocalTarget`, built in GS-C3), with `shekyl-cli` and `shekyl-daemon-ctl` moving onto it; it adds the failed peer check to `RpcError`, `DaemonFault` and the wallet-wire codes, with the wire's version bump. Not in GS-C3: it changes the wallet contract the wallet lane is changing. RT-W12 cannot land before it; the rendezvous names live in `shekyl-rpc-rendezvous`, not `shekyl-rpc-channel` (Rick, 2026-11-14), so the client and the daemon's configuration read them without the handshake |
+| RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20). **Client contracts for a submission (close-out F2, 2026-10-22):** the tunnel holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one. **Authorized 2026-11-15** (Rick), one pull request carrying the channel initiator in `shekyl-rpc-transport`, `shekyl-cli`'s enrollment words (IG-Q87) and the tunnel; the daemon gains `SESSIONS_PER_CLIENT`, a per-client cap, and reserved slots for the owner's leg and the console (RT-O37). Pre-flight [`RPC_CHANNEL_RT_W11_PREFLIGHT.md`](RPC_CHANNEL_RT_W11_PREFLIGHT.md). **Built in PR #1403:** the per-key cap and `bound.sessions` (`CORE_RPC_VERSION` 4.7); the reserves and a service's console leg; the initiator, its pool and the synchronous target; the CLI's enrollment words and `rpc key` words; the tunnel; end to end against a real daemon: enroll, dial, call, revoke, and a refused call after the revocation | RT-W9 | **LANDED 2026-11-17** (PR #1403; authorized 2026-11-15) |
+| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, which serves the console on `SyncDaemon` (RT-W15, landed 2026-11-03); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Before the plaintext admin listener goes, a service listens on the channel by default:** this slice rules a channel port and gives a service a loopback channel listener without `rpc-listen` (Rick, 2026-11-14; until then `rpc-listen` is `none` by default, §7). **Once these clients have moved, plaintext loopback is re-scoped to `view` and the plaintext admin listener (`rpc-admin-listen`) is retired (RT-O33, ruled 2026-10-25):** until then the admin listener is reachable by any local user, not only the daemon's owner, which is why this slice follows RT-W11 directly. **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one. **Gated on RT-P5's 4.x re-measurement** (Rick, 2026-11-12), which is made ([`rt_p5_rpc_message_sizes_20261115.md`](../benchmarks/rt_p5_rpc_message_sizes_20261115.md)); its findings F1 and F2 are ruled (Rick, 2026-11-16). **Cannot land before RT-W10 step 5** (Rick, 2026-11-13): this slice takes `submit` from the view listener, and until step 5 a GUI's engine sends over that listener, because the owner's leg has no engine `Rpc` yet; landing first breaks the GUI's sending | RT-W9, RT-W10 step 5 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |
-| RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
-| RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | authorized 2026-10-17 |
+| RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enroll at install; machine-wide rendezvous (on Windows a value under `HKLM\SOFTWARE\Shekyl\Rendezvous`: the installer creates the key once, together with the service account, with its final DACL, owner Administrators or SYSTEM, every account may read, only the service account, Administrators and SYSTEM may write, and no installer amends an existing key's DACL; the daemon checks it and never creates it; §7.1, Rick 2026-11-18); Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
+| RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | **LANDED 2026-11-03** (PR #1259). The daemon client posts through `SyncDaemon`. A refusal is the error class and the diagnostic code. The wallet session's HTTP agent is still ureq. |

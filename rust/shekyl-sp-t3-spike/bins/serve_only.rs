@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "VERIFYING_KEY_HEX={}",
-        hex(&persona.verifying_key().to_canonical_bytes()?)
+        hex(&persona.verifying_key().to_canonical_bytes())
     );
     println!("OWN_HEIGHT={APPARATUS_OWN_HEIGHT}");
     println!("ANCHOR_HEIGHT={APPARATUS_ANCHOR_HEIGHT}");

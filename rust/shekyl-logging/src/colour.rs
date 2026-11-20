@@ -6,15 +6,14 @@
 //! Whether a sink's lines carry colour.
 //!
 //! Stderr is [`LineColour::Ansi`] only when it is a terminal and
-//! [`NoColor`] is inactive. Every other sink is [`LineColour::Plain`].
-//! That is the same rule as `epee::set_console_color`: colour when the
-//! stream is a terminal and `NO_COLOR` is unset or empty.
+//! [`NoColor`] is inactive. Every other sink is [`LineColour::Plain`]:
+//! colour when the stream is a terminal and `NO_COLOR` is unset or empty.
 
 /// no-color.org's variable. IG-13 permits this read: it changes rendering,
 /// never a value.
 const NO_COLOR_ENV: &str = "NO_COLOR";
 
-/// `NO_COLOR` as no-color.org and `epee::is_nocolor` read it.
+/// `NO_COLOR` as no-color.org reads it.
 ///
 /// Unset and empty leave colour available. Any other value suppresses it,
 /// including `"0"` and a value that is not Unicode. `getenv` still sees
@@ -142,8 +141,8 @@ mod tests {
         assert_eq!(NoColor::from_var(&Ok("0".to_owned())), NoColor::Suppress);
 
         // Unix can store a non-Unicode value. `getenv` still sees the
-        // bytes, and `epee::is_nocolor` suppresses on any non-empty
-        // string, so this read does too.
+        // bytes, and any non-empty value suppresses, so this one does
+        // too.
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;

@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! Generate CEN-I11's reference-window ages from
-//! `config/consensus_constants.json`. The same JSON drives the C++ header
-//! (`cmake/generate_consensus_constants.py`) and `shekyl-curve-tree`'s
-//! build script, so a hand-copied `5` / `100` cannot drift the way
+//! `config/consensus_constants.json`. The same JSON drives
+//! `shekyl-curve-tree`'s build script, so a hand-copied `5` / `100` cannot
+//! drift the way
 //! `FCMP_REFERENCE_BLOCK_MIN_AGE = 10` did
 //! (`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, Bug 3).
 //!

@@ -74,7 +74,7 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{AttestationRoot, BlockHash, ChainCount};
+use shekyl_types::{BlockHash, ChainCount, SectionRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -296,7 +296,7 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
-    /// When set, `get_info` answers as an UNSYNCHRONIZED daemon
+    /// When set, `daemon_status` answers as an UNSYNCHRONIZED daemon
     /// (`WSS-Q14`). Drives the refusal bites on every consumer of
     /// `daemon_claimed_tip`.
     daemon_syncing: bool,
@@ -398,7 +398,7 @@ fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {
         economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
         standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
-        priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
+        high: FeeRate::new(40).expect("high fee rate is non-zero"),
     }
 }
 
@@ -410,15 +410,15 @@ fn default_fee_estimates() -> FeeEstimates {
 /// which controls both health facts and submit outcomes.
 /// The hash of the block at `height` on every test fixture's chain.
 ///
-/// One derivation, deliberately: `get_info`'s `top_block_hash` and
+/// One derivation, deliberately: `daemon_status`'s `hash` and
 /// `get_block_hash(height)` must agree on an unbroken chain, and the ledger's
 /// continuity check is exactly the comparison between them. Four fixtures
 /// with four derivations would make that agreement a coincidence to
 /// maintain. A fork fixture answers something else on purpose.
-pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+pub fn test_block_hash_at(height: u64) -> BlockHash {
     let mut h = [0xB1u8; 32];
     h[..8].copy_from_slice(&height.to_le_bytes());
-    h
+    BlockHash::from_bytes(h)
 }
 
 /// How far above its chain count a syncing test daemon places
@@ -427,27 +427,55 @@ pub fn test_block_hash_at(height: u64) -> [u8; 32] {
 /// not a protocol constant.
 const SYNCING_TARGET_LEAD: u64 = 10_000;
 
-/// `get_info` for [`TestDaemon`] and any other double that should answer
-/// as this daemon does.
+/// `daemon_status` for [`TestDaemon`] and any other double that should
+/// answer as this daemon does.
 ///
 /// `syncing` clears the flag, which is the whole predicate, and places the
 /// target [`SYNCING_TARGET_LEAD`] above the count. A synchronized double
 /// reports no target.
-pub(crate) fn daemon_get_info(chain_count: u64, syncing: bool) -> serde_json::Value {
+pub(crate) fn daemon_status(chain_count: u64, syncing: bool) -> serde_json::Value {
     let target_height = syncing.then(|| chain_count.saturating_add(SYNCING_TARGET_LEAD));
-    super::daemon::synced_chain_facts::GetInfoDocument {
+    super::daemon::synced_chain_facts::DaemonStatusDocument {
         chain_count: ChainCount::from_raw(chain_count),
         target_height,
         synchronized: !syncing,
-        top_hash: BlockHash::from_bytes(test_block_hash_at(chain_count.saturating_sub(1))),
-        has_peers: true,
+        top_hash: test_block_hash_at(chain_count.saturating_sub(1)),
+        peered: true,
     }
     .to_value()
 }
 
+/// The method a JSON-RPC request body names, for a double's `post`.
+pub(crate) fn requested_method(body: &[u8]) -> String {
+    let request: serde_json::Value =
+        serde_json::from_slice(body).expect("a double reads the request it was sent");
+    request["method"]
+        .as_str()
+        .expect("every request names its method")
+        .to_owned()
+}
+
+/// The parameters a JSON-RPC request body carries, for a double's `post`.
+pub(crate) fn requested_params(body: &[u8]) -> serde_json::Value {
+    let mut request: serde_json::Value =
+        serde_json::from_slice(body).expect("a double reads the request it was sent");
+    request["params"].take()
+}
+
+/// A JSON-RPC 2.0 reply carrying `result`, as a double answers.
+pub(crate) fn result_envelope(result: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 0, "result": result}))
+        .expect("an envelope serializes")
+}
+
+/// The name a method's type gives it on the wire.
+pub(crate) fn method_name<M: shekyl_rpc_client::RpcMethod>() -> &'static str {
+    M::NAME
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
-        p2p: shekyl_rpc_types::HealthP2p::Running { has_peers: true },
+        p2p: crate::engine::traits::daemon::DaemonP2p::Running { has_peers: true },
         height: 0,
         synchronized: true,
     }
@@ -564,7 +592,7 @@ impl TestDaemon {
             .daemon_height_cap = Some(cap);
     }
 
-    /// Answer `get_info` as a daemon that is still synchronizing.
+    /// Answer `daemon_status` as a daemon that is still synchronizing.
     ///
     /// The lever every `WSS-Q14` refusal bite pulls: with this set, the
     /// daemon has no tip to claim, so `daemon_claimed_tip` and every
@@ -679,31 +707,18 @@ impl TestDaemon {
 }
 
 impl Rpc for TestDaemon {
-    fn post(
-        &self,
-        _route: &str,
-        _body: Vec<u8>,
-    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-        async move {
-            panic!(
-                "TestDaemon::post is unreachable: tests override the high-level Rpc methods directly. \
-                 If you reached here, you called a default-impl Rpc method that TestDaemon does not yet override; \
-                 add the override rather than implementing post()."
-            )
-        }
-    }
-
-    /// `get_info`, answered as a **synchronized** daemon at this double's
-    /// height — the override `post`'s panic message asks for rather than a
-    /// `post` implementation.
+    /// `daemon_status`, answered as a **synchronized** daemon at this
+    /// double's height; every other method is overridden at the trait's
+    /// high-level methods, and reaching `post` for one of them is a double
+    /// that lacks its override.
     ///
-    /// `daemon_claimed_tip` reads sync state and height from one `get_info`
-    /// (`WSS-Q14`), so the double has to answer it or every dispatch path
-    /// panics. Synchronized is the right default: every existing scenario was
-    /// written against a daemon whose tip is authoritative, and answering
-    /// otherwise would silently disable the release/post paths under test.
-    /// The unsynchronized timeline has its own fixtures
-    /// (`serve_set_source.rs`'s `ResyncingDaemon`).
+    /// `daemon_claimed_tip` reads sync state and height from one
+    /// `daemon_status` (`WSS-Q14`), so the double has to answer it or every
+    /// dispatch path panics. Synchronized is the right default: every
+    /// existing scenario was written against a daemon whose tip is
+    /// authoritative, and answering otherwise would silently disable the
+    /// release/post paths under test. The unsynchronized timeline has its
+    /// own fixtures (`serve_set_source.rs`'s `ResyncingDaemon`).
     ///
     /// `height` honours [`Self::set_daemon_height_cap`] so both clocks agree.
     /// It deliberately does **not** drain `height_errors`: that queue's
@@ -711,20 +726,20 @@ impl Rpc for TestDaemon {
     /// `height_errors_drain_in_fifo_then_recover`, and draining it from two
     /// methods would make the order depend on which clock a test happened to
     /// read first.
-    fn json_rpc_call<Response: serde::de::DeserializeOwned + std::fmt::Debug>(
+    fn post(
         &self,
-        method: &str,
-        _params: Option<serde_json::Value>,
-    ) -> impl Send + std::future::Future<Output = Result<Response, RpcError>> {
+        _route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
         let state = self.state.clone();
-        let method = method.to_string();
         async move {
-            if method != "get_info" {
-                return Err(RpcError::InternalError(format!(
-                    "TestDaemon has no json_rpc_call override for '{method}': add one rather \
-                     than implementing post()"
-                )));
-            }
+            let method = requested_method(&body);
+            assert_eq!(
+                method,
+                method_name::<shekyl_rpc_client::wire::DaemonStatus>(),
+                "TestDaemon answers only daemon_status by post: override the Rpc method \
+                 instead"
+            );
             let (height, syncing) = {
                 let state = state.lock().expect("TestDaemon state poisoned");
                 let chain_len = state.chain.len() as u64;
@@ -734,18 +749,17 @@ impl Rpc for TestDaemon {
                     .unwrap_or(chain_len);
                 (h, state.daemon_syncing)
             };
-            serde_json::from_value(daemon_get_info(height, syncing))
-                .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
+            Ok(result_envelope(&daemon_status(height, syncing)))
         }
     }
 
-    /// The block at `number`, on the same chain `get_info` describes — so a
+    /// The block at `number`, on the same chain `daemon_status` describes — so a
     /// ledger that re-reads its anchor finds it unchanged unless a test says
     /// otherwise.
     fn get_block_hash(
         &self,
         number: usize,
-    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+    ) -> impl Send + std::future::Future<Output = Result<shekyl_types::BlockHash, RpcError>> {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
@@ -772,13 +786,11 @@ impl DaemonEngine for TestDaemon {
     /// Serve the in-memory chain directly, overriding the single fetch
     /// override point (the [`block_fetch`](super::block_fetch) default
     /// would drive the real RPC transport `TestDaemon::post` panics on).
-    /// The synthetic chain stores full bodies (nothing is ever pruned), so
-    /// the body `form` is irrelevant here — the same lookup serves both,
-    /// and the scripted error/reorg queues fire identically on either.
-    fn fetch_scannable_block_in_form(
+    /// The synthetic chain's bodies are whole and already bound
+    /// (`BoundTx::whole`); the scripted error/reorg queues fire here.
+    fn fetch_scannable_block(
         &self,
         number: usize,
-        _form: super::block_fetch::TxBodyForm,
     ) -> impl Send + std::future::Future<Output = Result<ScannableBlock, RpcError>> {
         let state = self.state.clone();
         async move {
@@ -873,7 +885,10 @@ impl DaemonEngine for TestDaemon {
             if state.submitted_hashes.insert(hash) {
                 Ok(TxSubmitOutcome::Submitted { hash })
             } else {
-                Ok(TxSubmitOutcome::AlreadyInPool { hash })
+                Ok(TxSubmitOutcome::AlreadyInPool {
+                    hash,
+                    relay: shekyl_rpc_client::Publication::Public,
+                })
             }
         }
     }
@@ -921,9 +936,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
         ),
         // Same lesson as curve_tree_root: the valid empty is the empty-set
         // root (ARCHIVAL_CREDIT_WIRE.md §3), never `[0u8; 32]` (null_hash).
-        attestation_root: AttestationRoot::from_bytes(
-            shekyl_archival_retention::empty_attestation_root(),
-        ),
+        section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
@@ -931,7 +944,7 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> Scann
     // `Scanner::scan` recovers nothing; `Block::hash` is well-defined.
     let miner_transaction = Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: vec![Input::Gen(height)],
             outputs: vec![],
             extra: vec![],
@@ -1072,7 +1085,7 @@ pub(crate) fn seeded_tx_leaves(
 use crate::engine::{
     Credentials, DaemonClient, Engine, EngineCreateParams, OpenedEngine, SoloSigner,
 };
-use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_engine_file::SafetyOverrides;
 use shekyl_types::PSlot;
 use tempfile::TempDir;
@@ -1089,10 +1102,10 @@ pub(crate) fn dummy_daemon() -> DaemonClient {
     DaemonClient::new(rpc)
 }
 
-/// Deterministic master seed; `multiplier` keeps distinct suites on
+/// Deterministic wallet seed; `multiplier` keeps distinct suites on
 /// distinct wallets (each former private copy had its own).
-pub(crate) fn fixed_seed(multiplier: u8) -> [u8; MASTER_SEED_BYTES] {
-    let mut s = [0u8; MASTER_SEED_BYTES];
+pub(crate) fn fixed_seed(multiplier: u8) -> [u8; SEED_BYTES] {
+    let mut s = [0u8; SEED_BYTES];
     for (i, b) in s.iter_mut().enumerate() {
         *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(multiplier);
     }
@@ -1119,7 +1132,7 @@ pub(crate) fn non_staker_engine(seed_multiplier: u8) -> (TempDir, Engine<SoloSig
 /// `staking_enabled`, then reopens so the `StakeEngine` spawns). Idle — the
 /// caller activates a persona if it needs one
 /// ([`activate_persona`]).
-pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
+pub(crate) async fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<SoloSigner>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let base = tmp.path().join("wallet");
     let (creds, seed) = (test_creds(), fixed_seed(seed_multiplier));
@@ -1129,7 +1142,7 @@ pub(crate) fn staker_engine(slot: u32, seed_multiplier: u8) -> (TempDir, Engine<
     engine
         .persist_bond_record(PSlot::from_raw(slot))
         .expect("persist bond record → staking_enabled");
-    engine.close(&creds).expect("close created wallet");
+    engine.close(&creds).await.expect("close created wallet");
     let opened = Engine::<SoloSigner>::open_full(
         &base,
         &creds,
@@ -1376,7 +1389,7 @@ mod tests {
         // documented default constants.
         assert_eq!(fees.economy, FeeRate::new(5).unwrap());
         assert_eq!(fees.standard, FeeRate::new(10).unwrap());
-        assert_eq!(fees.priority, FeeRate::new(40).unwrap());
+        assert_eq!(fees.high, FeeRate::new(40).unwrap());
     }
 
     #[tokio::test]
@@ -1385,7 +1398,7 @@ mod tests {
         let custom = FeeEstimates {
             economy: FeeRate::new(7).unwrap(),
             standard: FeeRate::new(70).unwrap(),
-            priority: FeeRate::new(700).unwrap(),
+            high: FeeRate::new(700).unwrap(),
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {
@@ -1433,8 +1446,8 @@ mod tests {
 
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
-        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
-        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected));
+        assert!(matches!(second, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
+        assert!(matches!(third, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected));
         assert_eq!(daemon.submitted_count(), 1, "dedup keeps the set size at 1");
     }
 
@@ -1489,7 +1502,7 @@ mod tests {
         let expected = TxHash::from_bytes(shekyl_crypto_hash::keccak256(&bytes));
         assert!(matches!(first, TxSubmitOutcome::Submitted { hash } if hash == expected));
         assert!(
-            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash } if hash == expected)
+            matches!(second_via_clone, TxSubmitOutcome::AlreadyInPool { hash, .. } if hash == expected)
         );
     }
 
@@ -1560,5 +1573,59 @@ mod tests {
             seed, expected,
             "derive_seed(TEST_MASTER_SEED, ROLE_DAEMON) drifted from pinned fixture"
         );
+    }
+}
+
+/// Makes every save of the wallet whose state file is `state` fail, for any
+/// user, root included, until dropped.
+///
+/// A non-empty directory stands where the state file was, so the save's
+/// last step — `rename(2)` of the staged file onto the state path — is
+/// refused (`EISDIR`). A mode on the wallet directory would stop an
+/// ordinary user and not root, and CI runs these tests as root; the rename
+/// fails for both. [`Self::block`] proves the refusal before returning
+/// (rule 47: a probe file renamed onto the state path must fail), so a test
+/// built on it cannot pass on a save that never failed. Dropping it puts
+/// the state file back, also on a panic.
+pub(crate) struct BlockedStateSave {
+    state: std::path::PathBuf,
+    aside: std::path::PathBuf,
+}
+
+impl BlockedStateSave {
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: moves the state file aside and proves a rename onto the blocked path fails"
+    )]
+    pub(crate) fn block(state: &std::path::Path) -> Self {
+        let aside = state.with_extension("blocked-aside");
+        std::fs::rename(state, &aside).expect("move the state file aside");
+        std::fs::create_dir(state).expect("a directory where the state file was");
+        std::fs::write(state.join("occupied"), b"").expect("make the directory non-empty");
+        let probe = state.with_extension("blocked-probe");
+        std::fs::write(&probe, b"").expect("write the probe");
+        let renamed = std::fs::rename(&probe, state);
+        std::fs::remove_file(&probe).expect("remove the probe");
+        assert!(
+            renamed.is_err(),
+            "a rename onto the blocked state path must fail, or the save would not"
+        );
+        Self {
+            state: state.to_path_buf(),
+            aside,
+        }
+    }
+}
+
+impl Drop for BlockedStateSave {
+    // CLIPPY: disallowed_methods — test support.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test support: puts the state file moved aside back"
+    )]
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.state).expect("remove the blocking directory");
+        std::fs::rename(&self.aside, &self.state).expect("put the state file back");
     }
 }

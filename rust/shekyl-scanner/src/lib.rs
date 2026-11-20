@@ -57,6 +57,7 @@ pub mod balance;
 pub mod coin_select;
 pub mod extra;
 pub mod ledger_ext;
+pub mod multisig_scan;
 pub mod output;
 pub mod scan;
 pub mod transfer;
@@ -75,6 +76,8 @@ pub mod bench_fixtures;
 pub(crate) mod tests;
 
 #[cfg(test)]
+mod multisig_receive_tests;
+#[cfg(test)]
 mod pqc_leaf_verdict_tests;
 
 pub use balance::BalanceSummary;
@@ -82,8 +85,8 @@ pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
 pub use output::WalletOutput;
 pub use scan::{
-    GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, ScannableBlock, Scanner,
-    Timelocked, MAX_OUTPUTS,
+    GuaranteedScanner, MultisigMemberScan, RecoveredWalletOutput, ScanError, ScanOutcome,
+    ScannableBlock, Scanner, Timelocked, MAX_OUTPUTS,
 };
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 

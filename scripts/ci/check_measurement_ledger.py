@@ -31,6 +31,21 @@
 # that hardened. An estimate may be withdrawn to unmeasured; it may not
 # vanish.
 #
+# Every constant that is not current carries a `disposition`: what will
+# make it current, or why nothing will (ruled 2026-11-13, Brief D's sweep).
+#   ci      a gated row re-captures it on the CI runner (`ci_row`, a
+#           `[[gated_row]]` bench);
+#   floor   a floor-device session measures it: the constant is listed on
+#           the floor run sheet (`floor_run_sheet`), and the sheet lists no
+#           constant that is not a floor row;
+#   forge   its instrument needs chain state only the chain forge builds (a
+#           closed shard, a settled epoch, a claim, a slash, a discard, the
+#           design-load chain): `forge_event` names the event in the forge's
+#           catalogue (`forge_plan`), and the carrier says "chain forge";
+#   retire  it will not be measured: `replaced_by` names what took its
+#           place.
+# A current constant carries none of these.
+#
 # Exit 0: the ledger tells the truth. Exit 1: it disagrees with the tree.
 # Exit 2: the question could not be asked (rule 47). `--selftest` builds
 # throwaway repositories and bites each failure class.
@@ -66,7 +81,16 @@ COMMITS_NAMED = 3
 # How much of an object id a finding shows.
 OID_SHOWN = 10
 
+# What `resolve` accepts, including a short lowercase id from a parent ledger.
 COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MIN_COMMIT_ID_HEX},{MAX_COMMIT_ID_HEX}}}")
+# Either case, same length. The ledger under review stores the lowercase spelling.
+HEX_COMMIT_ID_RE = re.compile(
+    rf"[0-9a-fA-F]{{{MIN_COMMIT_ID_HEX},{MAX_COMMIT_ID_HEX}}}"
+)
+FULL_COMMIT_ID_RE = re.compile(rf"[0-9a-f]{{{MAX_COMMIT_ID_HEX}}}")
+FULL_ID_SAYS = (
+    f"is not a commit id written in full ({MAX_COMMIT_ID_HEX} lowercase hex)"
+)
 PATH_SET_ID_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 T_ROW_RE = re.compile(r"^BA-T\d+$")
 CAPTURE_REV_RE = re.compile(r"git[_ ]rev(?:ision)?[\"'\s:=]+([0-9a-f]{7,40})", re.I)
@@ -82,14 +106,27 @@ HASH_COMMENT_SUFFIXES = {".py", ".sh", ".toml", ".yml", ".yaml"}
 
 HEADER_KEYS = {
     "tracked_set", "toolchain_file", "path_set", "constant", "toolchain",
-    "retired_estimate",
+    "retired_estimate", "gated_row", "floor_run_sheet", "forge_plan",
 }
+GATED_ROW_KEYS = {"bench", "measured_by", "path_set"}
+# The capture script whose `BENCHES` array is the per-PR gate's row list.
+CAPTURE_SCRIPT = "scripts/bench/capture_rust_baseline.sh"
 PATH_SET_KEYS = {"id", "spec", "cleared", "stale_through"}
 CONSTANT_KEYS = {"name", "defined_in", "needle", "measured_by", "status", "path_set"}
 MEASURED_KEYS = {"capture", "capture_rev", "rev_source"}
 STALE_KEYS = {"stale_since", "carrier"}
 UNMEASURED_KEYS = {"carrier"}
 ESTIMATED_KEYS = {"estimate", "basis", "basis_captures", "carrier"}
+# Every constant that is not current: the disposition, and the one key its
+# value names.
+DISPOSITION_KEYS = {"disposition", "ci_row", "forge_event", "replaced_by"}
+# A floor run sheet names a constant as the first cell of a table row.
+SHEET_ROW_RE = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|", re.M)
+# The forge's event catalogue: `| CF-E<n> | `<name>` |`.
+FORGE_EVENT_RE = re.compile(r"^\| CF-E\d+ \| `([^`]+)` \|", re.M)
+# The words a forge row's carrier says, so a reader finds every row the
+# forge owes by one search.
+FORGE_CARRIER_WORDS = "chain forge"
 TOOLCHAIN_ACK_KEYS = {"commit", "note"}
 BAND_KEYS = {"low", "high", "unit"}
 RETIRED_KEYS = {"name", "estimate", "measured", "capture", "capture_rev", "verdict", "note"}
@@ -104,6 +141,30 @@ SHALLOW_MSG = (
 
 class GateError(Exception):
     """The gate could not ask its question (exit 2)."""
+
+
+class Disposition(enum.Enum):
+    CI = "ci"
+    FLOOR = "floor"
+    FORGE = "forge"
+    RETIRE = "retire"
+
+    @classmethod
+    def parse(cls, raw: object) -> Disposition | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            return cls(raw)
+        except ValueError:
+            return None
+
+    def key(self) -> str | None:
+        """The key this disposition names, if any."""
+        return {
+            Disposition.CI: "ci_row",
+            Disposition.FORGE: "forge_event",
+            Disposition.RETIRE: "replaced_by",
+        }.get(self)
 
 
 class Status(enum.Enum):
@@ -128,6 +189,53 @@ class NeedleSite(enum.Enum):
     DEFINITION = "definition"
     COMMENT = "comment"
     ABSENT = "absent"
+
+
+@dataclass(frozen=True)
+class WrittenCommitId:
+    """A commit id the ledger under review wrote (Rick, 2026-11-15).
+
+    `stored` is lowercase hex, from the abbreviation floor through a full
+    object id, so a short or upper-case spelling still names its commit.
+    `full` is true only when the field was already 40 lowercase hex. A
+    prefix unique today can become ambiguous as the repository grows, and
+    the gate would then fail on a row nobody touched.
+
+    `parse` returns None when the field is not hex of that length. A parent
+    ledger does not use this type: `resolve` still accepts the shorter
+    lowercase form, which is what `HEAD^1` may hold.
+    """
+
+    stored: str
+    full: bool
+
+    @classmethod
+    def parse(cls, raw: object) -> WrittenCommitId | None:
+        if not isinstance(raw, str) or not HEX_COMMIT_ID_RE.fullmatch(raw):
+            return None
+        return cls(raw.lower(), FULL_COMMIT_ID_RE.fullmatch(raw) is not None)
+
+    def finding(self, where: str) -> str | None:
+        """Why `where` is not 40 lowercase hex, or None when it already is."""
+        if self.full:
+            return None
+        return f"{where} {FULL_ID_SAYS}"
+
+
+def take_written_id(raw: object, where: str, fails: list[str]) -> str | None:
+    """The lowercase id to store for `where`, recording any writing finding.
+
+    A short or upper-case id is returned, so the caller keeps the row. None
+    means the field is not a commit id, and that finding is recorded too.
+    """
+    written = WrittenCommitId.parse(raw)
+    if written is None:
+        fails.append(f"{where} is not a commit id")
+        return None
+    form = written.finding(where)
+    if form:
+        fails.append(form)
+    return written.stored
 
 
 @dataclass(frozen=True)
@@ -198,6 +306,23 @@ class Constant:
     estimate: Band | None = None
     basis: str | None = None
     basis_captures: tuple[str, ...] = ()
+    disposition: Disposition | None = None
+    # The value of the key the disposition names (`ci_row`, `forge_event`,
+    # `replaced_by`); None for a floor row.
+    disposed_to: str | None = None
+
+
+@dataclass(frozen=True)
+class GatedRow:
+    """A bench the per-PR gate captures, and the code it counts.
+
+    It has no capture to go stale: the gate re-measures it on every run. The
+    row is here for its path set, which says which changes can move it.
+    """
+
+    bench: str
+    measured_by: tuple[str, ...]
+    path_set: str
 
 
 @dataclass(frozen=True)
@@ -409,14 +534,14 @@ def parse_acks(
         if unknown:
             fails.append(f"{where} has unknown key {unknown[0]!r}")
         raw_id = item.get(id_key, "")
-        if not isinstance(raw_id, str) or not COMMIT_ID_RE.fullmatch(raw_id):
-            fails.append(f"{where}.{id_key} is not a commit id")
+        stored = take_written_id(raw_id, f"{where}.{id_key}", fails)
+        if stored is None:
             continue
         text = _sentence(item.get(text_key, ""))
         if text is None:
             fails.append(f"{where} says nothing about the cost")
             text = ""
-        acks.append(Ack(raw_id, text))
+        acks.append(Ack(stored, text))
     return tuple(acks), fails
 
 
@@ -499,6 +624,8 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
         )
         return None, fails
     allowed = set(CONSTANT_KEYS)
+    if status is not Status.CURRENT:
+        allowed |= DISPOSITION_KEYS
     if status is Status.UNMEASURED:
         allowed |= UNMEASURED_KEYS
     elif status is Status.ESTIMATED:
@@ -540,7 +667,10 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
     basis_captures: tuple[str, ...] = ()
     if status in (Status.CURRENT, Status.STALE):
         capture = _require_str(table, "capture", fails, name) or None
-        capture_rev = _require_str(table, "capture_rev", fails, name) or None
+        raw_rev = _require_str(table, "capture_rev", fails, name) or None
+        capture_rev = (
+            take_written_id(raw_rev, f"{name}: capture_rev", fails) if raw_rev else None
+        )
         rev_source = _require_str(table, "rev_source", fails, name) or None
     if status is not Status.CURRENT:
         carrier = _sentence(table.get("carrier", ""))
@@ -566,31 +696,99 @@ def parse_constant(table: object, index: int) -> tuple[Constant | None, list[str
             )
         else:
             basis_captures = tuple(item.strip() for item in raw_captures)
-    if status is Status.STALE:
-        raw_since = table.get("stale_since", "")
-        if not isinstance(raw_since, str) or not COMMIT_ID_RE.fullmatch(raw_since):
-            fails.append(f"{name}: stale_since is not a commit id")
+    disposition: Disposition | None = None
+    disposed_to: str | None = None
+    if status is not Status.CURRENT:
+        disposition = Disposition.parse(table.get("disposition"))
+        if disposition is None:
+            fails.append(
+                f"{name}: {_article(status.value)} {status.value} constant names its "
+                "disposition, one of " + ", ".join(item.value for item in Disposition)
+                + f" (got {table.get('disposition')!r})"
+            )
         else:
-            stale_since = raw_since
+            wanted = disposition.key()
+            for key in sorted((DISPOSITION_KEYS - {"disposition", wanted}) & set(table)):
+                fails.append(
+                    f"{name}: key {key!r} does not belong to a {disposition.value} disposition"
+                )
+            if wanted is not None:
+                raw = table.get(wanted, "")
+                if wanted == "replaced_by":
+                    # What took its place, said so a reader can find it.
+                    disposed_to = _sentence(raw)
+                else:
+                    # A bench or an event name, matched exactly below.
+                    disposed_to = raw.strip() if isinstance(raw, str) and raw.strip() else None
+                if disposed_to is None:
+                    fails.append(
+                        f"{name}: a {disposition.value} disposition names its {wanted!r}"
+                    )
+            if (
+                disposition is Disposition.FORGE
+                and carrier is not None
+                and FORGE_CARRIER_WORDS not in carrier
+            ):
+                fails.append(
+                    f"{name}: a forge row's carrier says {FORGE_CARRIER_WORDS!r}, so one "
+                    "search finds every row the forge owes"
+                )
+    if status is Status.STALE:
+        stale_since = take_written_id(
+            table.get("stale_since", ""), f"{name}: stale_since", fails
+        )
     if fails and (not path_set or not needle or not defined_in):
         return None, fails
     return Constant(
         name, defined_in, needle, measured_t, status, path_set,
         capture, capture_rev, rev_source, stale_since, carrier,
-        estimate, basis, basis_captures,
+        estimate, basis, basis_captures, disposition, disposed_to,
     ), fails
 
 
-def link(path_sets: dict[str, PathSet], constants: list[Constant]) -> list[str]:
+def parse_gated_row(table: object, index: int) -> tuple[GatedRow | None, list[str]]:
+    label = f"gated_row #{index + 1}"
+    if not isinstance(table, dict):
+        return None, [f"{label}: must be a table"]
+    fails = [f"{label}: unknown key {key!r}" for key in sorted(set(table) - GATED_ROW_KEYS)]
+    bench = _require_str(table, "bench", fails, label)
+    path_set = _require_str(table, "path_set", fails, label)
+    measured = table.get("measured_by")
+    if (
+        not isinstance(measured, list)
+        or not measured
+        or not all(isinstance(item, str) and item for item in measured)
+    ):
+        fails.append(f"{label}: measured_by must be a non-empty list of BA-T ids")
+        measured = []
+    if bench and not re.fullmatch(r"[a-z0-9-]+::[a-z0-9_]+", bench):
+        fails.append(
+            f"{label}: bench {bench!r} is not <crate>::<gungraun-target>, "
+            "the two names of its row in the capture script"
+        )
+    if not bench or not path_set:
+        return None, fails
+    return GatedRow(bench, tuple(measured), path_set), fails
+
+
+def link(
+    path_sets: dict[str, PathSet],
+    constants: list[Constant],
+    gated: tuple[GatedRow, ...] = (),
+) -> list[str]:
     """Referential integrity. Acknowledgments are properties of the path set."""
     consumers: dict[str, list[Constant]] = {}
     for constant in constants:
         consumers.setdefault(constant.path_set, []).append(constant)
+    counted = {row.path_set for row in gated}
     fails: list[str] = []
+    for row in gated:
+        if row.path_set not in path_sets:
+            fails.append(f"gated row {row.bench}: path_set {row.path_set!r} is not defined")
     for path_set in path_sets.values():
         group = consumers.get(path_set.id, [])
-        if not group:
-            fails.append(f"path set {path_set.id}: no constant references it")
+        if not group and path_set.id not in counted:
+            fails.append(f"path set {path_set.id}: no constant or gated row references it")
             continue
         current = any(item.status is Status.CURRENT for item in group)
         stale = any(item.status is Status.STALE for item in group)
@@ -612,7 +810,7 @@ def link(path_sets: dict[str, PathSet], constants: list[Constant]) -> list[str]:
 
 def interpret(
     data: dict, t_rows: set[str]
-) -> tuple[dict[str, PathSet], list[Constant], list[str]]:
+) -> tuple[dict[str, PathSet], list[Constant], tuple[GatedRow, ...], list[str]]:
     """TOML tables to a typed ledger. Findings here are shape, not history."""
     fails: list[str] = []
     for key in sorted(set(data) - HEADER_KEYS):
@@ -653,8 +851,135 @@ def interpret(
                     "in the tracked-set document"
                 )
         constants.append(parsed)
-    fails.extend(link(path_sets, constants))
-    return path_sets, constants, fails
+    gated: list[GatedRow] = []
+    named: set[str] = set()
+    raw_gated = data.get("gated_row", [])
+    if not isinstance(raw_gated, list):
+        fails.append("gated_row must be a list of tables")
+        raw_gated = []
+    for index, table in enumerate(raw_gated):
+        row, row_fails = parse_gated_row(table, index)
+        fails.extend(row_fails)
+        if row is None:
+            continue
+        if row.bench in named:
+            fails.append(f"gated row {row.bench}: duplicate bench")
+            continue
+        named.add(row.bench)
+        for row_id in row.measured_by:
+            if row_id not in t_rows:
+                fails.append(
+                    f"gated row {row.bench}: measured_by {row_id} is not defined "
+                    "in the tracked-set document"
+                )
+        gated.append(row)
+    fails.extend(link(path_sets, constants, tuple(gated)))
+    return path_sets, constants, tuple(gated), fails
+
+
+def capture_rows(root: Path) -> set[str]:
+    """The rows of the capture script's `BENCHES` and `NIGHTLY_BENCHES`
+    arrays, as <crate>::<gungraun-target>.
+
+    A row is `"<crate>:<criterion-target>:<gungraun-target>[:<features>]"`,
+    the criterion field empty for a count-only row. GateError when the
+    script or its array is absent: the question is then unaskable.
+    """
+    path = root / CAPTURE_SCRIPT
+    if not path.is_file():
+        raise GateError(
+            f"{CAPTURE_SCRIPT} is missing, so no gated row can be held to it "
+            "— missing subject (rule 47)"
+        )
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = re.findall(r"^(?:NIGHTLY_)?BENCHES=\(\n(.*?)^\)", text, re.M | re.S)
+    if not blocks:
+        raise GateError(f"{CAPTURE_SCRIPT} has no BENCHES array — missing subject (rule 47)")
+    rows: set[str] = set()
+    for block in blocks:
+        for line in block.splitlines():
+            entry = re.fullmatch(r'\s*"([a-z0-9-]+):[a-z0-9_]*:([a-z0-9_]+)(?::[^"]*)?"\s*', line)
+            if entry:
+                rows.add(f"{entry.group(1)}::{entry.group(2)}")
+    if not rows:
+        raise GateError(f"{CAPTURE_SCRIPT}'s BENCHES array holds no row — missing subject (rule 47)")
+    return rows
+
+
+def _header_file(root: Path, data: dict, key: str, why: str) -> str:
+    """The text of the file a header key names. GateError when it is absent."""
+    rel = data.get(key, "")
+    path = root / rel if isinstance(rel, str) and rel else None
+    if path is None or not path.is_file():
+        raise GateError(f"{key} {rel!r} does not exist; {why} — missing subject (rule 47)")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def audit_dispositions(
+    root: Path, data: dict, constants: list[Constant], gated: tuple[GatedRow, ...]
+) -> list[str]:
+    """Each disposition points at something that exists, both ways for the floor."""
+    fails: list[str] = []
+    by = {item: [c for c in constants if c.disposition is item] for item in Disposition}
+    benches = {row.bench for row in gated}
+    for constant in by[Disposition.CI]:
+        if constant.disposed_to not in benches:
+            fails.append(
+                f"{constant.name}: ci_row {constant.disposed_to!r} is not a [[gated_row]] "
+                "bench. A row no capture runs re-captures nothing"
+            )
+    if by[Disposition.FORGE]:
+        text = _header_file(root, data, "forge_plan", "forge rows name its events")
+        events = set(FORGE_EVENT_RE.findall(text))
+        if not events:
+            raise GateError(f"{data.get('forge_plan')} has no CF-E event rows")
+        for constant in by[Disposition.FORGE]:
+            if constant.disposed_to not in events:
+                fails.append(
+                    f"{constant.name}: forge_event {constant.disposed_to!r} is not an "
+                    f"event of {data.get('forge_plan')}"
+                )
+    floor = {c.name for c in by[Disposition.FLOOR]}
+    if floor or "floor_run_sheet" in data:
+        text = _header_file(root, data, "floor_run_sheet", "floor rows are listed there")
+        listed = SHEET_ROW_RE.findall(text)
+        if not listed:
+            raise GateError(f"{data.get('floor_run_sheet')} lists no constant")
+        sheet = data.get("floor_run_sheet")
+        fails.extend(
+            f"{name}: a floor row the run sheet ({sheet}) does not list"
+            for name in sorted(floor - set(listed))
+        )
+        fails.extend(
+            f"{sheet} lists {name}, which is not a floor row of the ledger"
+            for name in sorted(set(listed) - floor)
+        )
+        fails.extend(
+            f"{sheet} lists {name} more than once"
+            for name in sorted({n for n in listed if listed.count(n) > 1})
+        )
+    return fails
+
+
+def audit_gated(root: Path, gated: tuple[GatedRow, ...]) -> list[str]:
+    """The gated rows are the rows the capture script runs, both ways."""
+    if not gated:
+        return []
+    rows = capture_rows(root)
+    named = {row.bench for row in gated}
+    fails = [
+        f"gated row {row.bench}: {CAPTURE_SCRIPT} has no such row in BENCHES. "
+        "A row that is not captured is not gated"
+        for row in gated
+        if row.bench not in rows
+    ]
+    fails.extend(
+        f"{CAPTURE_SCRIPT} captures {bench}, which has no [[gated_row]]. A pull "
+        "request's capture is scoped by the rows' path sets, so a row without "
+        "one never runs there"
+        for bench in sorted(rows - named)
+    )
+    return fails
 
 
 def load(root: Path) -> tuple[dict, set[str]]:
@@ -987,10 +1312,26 @@ def parse_retired(
         if not isinstance(capture, str) or not _is_tracked_file(root, capture):
             found.append(f"{label}: capture {capture!r} is not a tracked file")
         raw_rev = table.get("capture_rev")
-        if not isinstance(raw_rev, str) or resolve(root, raw_rev) is None:
-            if isinstance(raw_rev, str) and COMMIT_ID_RE.fullmatch(raw_rev) and shallow_boundary(root):
-                raise GateError(SHALLOW_MSG)
-            found.append(f"{label}: capture_rev {raw_rev!r} is not a commit in this repository")
+        written = WrittenCommitId.parse(raw_rev)
+        form: str | None = None
+        rev_stored: str | None = None
+        if written is None:
+            found.append(
+                f"{label}: capture_rev {raw_rev!r} is not a commit in this repository"
+            )
+        else:
+            form = written.finding(f"{label}: capture_rev")
+            if form:
+                found.append(form)
+            if resolve(root, written.stored) is None:
+                if COMMIT_ID_RE.fullmatch(written.stored) and shallow_boundary(root):
+                    raise GateError(SHALLOW_MSG)
+                found.append(
+                    f"{label}: capture_rev {written.stored!r} is not a commit "
+                    "in this repository"
+                )
+            else:
+                rev_stored = written.stored
         if _sentence(table.get("note", "")) is None:
             found.append(f"{label}: note says what the difference is put down to")
         verdict = table.get("verdict")
@@ -1002,10 +1343,16 @@ def parse_retired(
                     f"{band.shown()} is {expected}"
                 )
         fails.extend(found)
-        if found or band is None or measured is None:
+        # The writing-form finding still names a commit, so the row stands.
+        # `form` is None when the id was already full, and every other
+        # finding means this row is not a retirement.
+        others = [item for item in found if item != form]
+        if rev_stored is None or band is None or measured is None or others:
             continue
         seen.add(name)
-        retired.append(RetiredEstimate(name, band, measured, capture, raw_rev, verdict))
+        retired.append(
+            RetiredEstimate(name, band, measured, capture, rev_stored, verdict)
+        )
     return retired, fails
 
 
@@ -1184,7 +1531,9 @@ def run(root: Path) -> int:
     try:
         require_stripper()
         data, t_rows = load(root)
-        path_sets, constants, fails = interpret(data, t_rows)
+        path_sets, constants, gated, fails = interpret(data, t_rows)
+        fails.extend(audit_gated(root, gated))
+        fails.extend(audit_dispositions(root, data, constants, gated))
         notes: list[str] = []
         bases: dict[str, str] = {}
         spec_ok: dict[str, bool] = {}
@@ -1259,7 +1608,17 @@ def run(root: Path) -> int:
         f"measurement ledger: {len(constants)} constants tell the truth — "
         f"{counts[Status.CURRENT]} current, {counts[Status.STALE]} stale, "
         f"{counts[Status.UNMEASURED]} unmeasured, {counts[Status.ESTIMATED]} estimated"
+        + (f"; {len(gated)} gated rows name their path sets" if gated else "")
     )
+    disposed = {item: 0 for item in Disposition}
+    for constant in constants:
+        if constant.disposition is not None:
+            disposed[constant.disposition] += 1
+    if any(disposed.values()):
+        print(
+            "dispositions: "
+            + ", ".join(f"{disposed[item]} {item.value}" for item in Disposition)
+        )
     return 0
 
 

@@ -15,6 +15,7 @@
 //! list's limit cannot drift apart.
 
 #![no_std]
+#![deny(unsafe_code)]
 
 /// How many addresses a disclosure sample carries, and the most a
 /// received message may carry (D3, Rick, 2026-10-09;

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Sync and async [`Engine`](crate::engine::Engine) refresh entry points.
+//! Sync and async [`Engine`] refresh entry points.
 //!
 //! One `impl` — `start_refresh` / `spawn_refresh_producer` and
 //! `refresh` / `refresh_with` share the `LocalLedger` specialization
@@ -222,14 +222,13 @@ impl<
     /// without a corresponding design win for the sync entry point.
     ///
     /// Instead, the synchronous entry point takes a
-    /// [`tokio::runtime::Handle`] and runs the producer's async work
-    /// via [`Handle::block_on`]. This means **`refresh` must not be
-    /// called from inside an async context on the same runtime** —
-    /// `block_on` panics in that case. Async callers
-    /// (`tokio::spawn_blocking`, dedicated worker thread,
-    /// branch-2's `RefreshHandle`) drive `refresh` from a sync
-    /// context; the JSON-RPC server's RPC handler is the typical
-    /// example via `spawn_blocking`.
+    /// [`tokio::runtime::Handle`] and runs the producer's async work via
+    /// [`Handle::block_on`](tokio::runtime::Handle::block_on). This means
+    /// **`refresh` must not be called from inside an async context on the
+    /// same runtime** — `block_on` panics in that case. Async callers
+    /// (`tokio::spawn_blocking`, dedicated worker thread, branch-2's
+    /// `RefreshHandle`) drive `refresh` from a sync context; the JSON-RPC
+    /// server's RPC handler is the typical example via `spawn_blocking`.
     ///
     /// Branch 2 lands `RefreshHandle`, which spawns a producer-driven
     /// loop on the caller's runtime and exposes cancellation +
@@ -344,8 +343,8 @@ impl<
             // before `refresh_with` merges it (ack-before-commit, O2).
             // Cursor-driven + idempotent, so re-running it on a retried
             // attempt is safe. Mirrors the async `run_refresh_task` path,
-            // including the R1-Q4 respawn-and-retry on a fail-stop / poison.
-            runtime.block_on(self.ingest_scan_result_with_respawn(&mut result))?;
+            // including the in-place rebuild and retry on a poisoned client.
+            runtime.block_on(self.ingest_scan_result_with_recovery(&mut result))?;
             Ok(result)
         })
     }

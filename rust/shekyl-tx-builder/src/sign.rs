@@ -17,17 +17,20 @@
 //! This two-phase design avoids a circular dependency: the PQC payload hash
 //! includes the serialized proofs, so the proofs must exist before signing.
 
-use curve25519_dalek::scalar::Scalar;
-use rand_core::OsRng;
+use std::num::NonZeroUsize;
+
+use rand_core::{CryptoRng, OsRng, RngCore};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
+use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm, PseudoOutBlinds};
 use shekyl_curve_primitives::Commitment;
-use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
+use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
 use shekyl_fcmp::PqcLeafScalar;
-use shekyl_types::{PrefixHash, SigningPayloadHash};
+use shekyl_network::NetworkId;
+use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash, TxSignableHash};
+use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION};
@@ -59,6 +62,7 @@ use crate::validate::validate_inputs;
 ///   header field). The proof crate takes those bytes at this call; a
 ///   [`shekyl_types::BlockHash`] cannot be passed in its place.
 pub fn sign_transaction(
+    network_id: &NetworkId,
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
@@ -66,7 +70,16 @@ pub fn sign_transaction(
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
     // The common transfer path carries no extra cleartext balance terms.
-    sign_transaction_with_terms(tx_prefix_hash, inputs, outputs, fee, &[], &[], tree)
+    sign_transaction_with_terms(
+        network_id,
+        tx_prefix_hash,
+        inputs,
+        outputs,
+        fee,
+        &[],
+        &[],
+        tree,
+    )
 }
 
 /// Construct the proof portion of an FCMP++ transaction that carries extra
@@ -86,7 +99,12 @@ pub fn sign_transaction(
 ///
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the signing boundary: each argument is a distinct typed part of the message or the balance"
+)]
 pub fn sign_transaction_with_terms(
+    network_id: &NetworkId,
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
@@ -95,26 +113,144 @@ pub fn sign_transaction_with_terms(
     extra_outputs: &[OutputTerm],
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
-    // ── 1. Validate ──────────────────────────────────────────────────
-    validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
+    sign_with(
+        &mut OsRng,
+        PseudoOutBlinds::random,
+        proof::prove,
+        &SignRequest {
+            network_id,
+            tx_prefix_hash,
+            inputs,
+            outputs,
+            fee,
+            extra_inputs,
+            extra_outputs,
+            tree,
+        },
+    )
+}
 
-    let n_in = inputs.len();
-    let n_out = outputs.len();
+/// The seeds of one spend's proofs, one per source of randomness
+/// (`CHAIN_FORGE.md` §5.2): the Bulletproofs+ range proof (S1), the
+/// pseudo-out blinds of every input but the last (S2), and the FCMP++
+/// membership proof (S3). Apart, so a chain can draw each from its own
+/// stream, and the forge's determinism check can swap one of them for the
+/// OS's randomness and leave the other two as they were. Only under the
+/// TEST_ONLY `seeded-rng` feature (`CF-R9`).
+#[cfg(feature = "seeded-rng")]
+pub struct ProofSeeds {
+    /// The range proof's stream.
+    pub range: Zeroizing<[u8; 32]>,
+    /// The pseudo-out blinds' stream.
+    pub blinds: Zeroizing<[u8; 32]>,
+    /// The membership proof's stream.
+    pub membership: Zeroizing<[u8; 32]>,
+}
+
+/// [`sign_transaction_with_terms`] with every random value drawn from
+/// `seeds`: the range proof from `seeds.range`, the pseudo-out blinds from
+/// `seeds.blinds`, the membership proof from `seeds.membership`. The same
+/// seeds give the same proofs byte for byte. For the chain forge's
+/// reproducible chains (`CHAIN_FORGE.md` §5.3, seam T2); only under the
+/// TEST_ONLY `seeded-rng` feature, which no build that ships enables
+/// (`CF-R9`).
+///
+/// # Errors
+///
+/// As [`sign_transaction_with_terms`].
+#[cfg(feature = "seeded-rng")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "sign_transaction_with_terms's signing boundary, plus the seeds"
+)]
+pub fn sign_transaction_with_terms_seeded(
+    seeds: &ProofSeeds,
+    network_id: &NetworkId,
+    tx_prefix_hash: PrefixHash,
+    inputs: &[SpendInput],
+    outputs: &[OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &[InputTerm],
+    extra_outputs: &[OutputTerm],
+    tree: &TreeContext,
+) -> Result<SignedProofs, TxBuilderError> {
+    let mut prover_rng = seeded::stream(&seeds.membership);
+    sign_with(
+        &mut seeded::stream(&seeds.range),
+        |inputs, outputs| PseudoOutBlinds::seeded(&seeds.blinds, inputs, outputs),
+        |inputs, root, depth, hash| {
+            proof::prove_with_rng(&mut prover_rng, inputs, root, depth, hash)
+        },
+        &SignRequest {
+            network_id,
+            tx_prefix_hash,
+            inputs,
+            outputs,
+            fee,
+            extra_inputs,
+            extra_outputs,
+            tree,
+        },
+    )
+}
+
+/// The parts of a spend [`sign_transaction_with_terms`] signs, as one value
+/// for the signing body its production and seeded entry points share.
+struct SignRequest<'a> {
+    network_id: &'a NetworkId,
+    tx_prefix_hash: PrefixHash,
+    inputs: &'a [SpendInput],
+    outputs: &'a [OutputInfo],
+    fee: shekyl_units::AtomicUnits,
+    extra_inputs: &'a [InputTerm],
+    extra_outputs: &'a [OutputTerm],
+    tree: &'a TreeContext,
+}
+
+/// [`sign_transaction_with_terms`]'s body. `range_rng` draws the range
+/// proof's randomness; `blinds` makes the pseudo-out blinds for the input
+/// count and the outputs' openings, balanced by construction
+/// ([`PseudoOutBlinds::random`] in production, the seeded form for the
+/// forge); `prove` makes the membership proof (production's
+/// [`proof::prove`], over the OS, or the seeded prover). Private: no build
+/// that ships has a signer that takes its caller's randomness
+/// (`CHAIN_FORGE.md` `CF-R9`).
+fn sign_with<R: RngCore + CryptoRng>(
+    range_rng: &mut R,
+    blinds: impl FnOnce(NonZeroUsize, &[Commitment]) -> PseudoOutBlinds,
+    prove: impl FnOnce(
+        &[ProveInput],
+        &CurveTreeRoot,
+        u8,
+        TxSignableHash,
+    ) -> Result<ProveResult, ProveError>,
+    req: &SignRequest<'_>,
+) -> Result<SignedProofs, TxBuilderError> {
+    let SignRequest {
+        network_id,
+        tx_prefix_hash,
+        inputs,
+        outputs,
+        fee,
+        extra_inputs,
+        extra_outputs,
+        tree,
+    } = *req;
+    // ── 1. Validate ──────────────────────────────────────────────────
+    let input_count = validate_inputs(inputs, outputs, fee, extra_inputs, extra_outputs, tree)?;
 
     // ── 2. Bulletproofs+ range proof ─────────────────────────────────
-    // Use HKDF-derived commitment masks from OutputInfo (pre-derived by construct_output).
-    let mut masks = Zeroizing::new(Vec::with_capacity(n_out));
+    // Each output's opening is its derived mask at its amount. The mask is
+    // already a scalar; nothing here reads its bytes.
     let commitments_for_bp: Vec<Commitment> = outputs
         .iter()
-        .map(|out| {
-            let mask = Scalar::from_canonical_bytes(out.commitment_mask)
-                .expect("commitment_mask is not a valid scalar");
-            masks.push(mask);
-            Commitment::new(mask, out.amount.to_raw())
-        })
+        .map(|out| out.commitment_mask.opening(out.amount.to_raw()))
         .collect();
+    // The pseudo-out blinds balance these openings (step 5); the range
+    // proof consumes them.
+    let pseudo_out_blinds = blinds(input_count, &commitments_for_bp).into_bytes();
 
-    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut OsRng, commitments_for_bp)
+    let bp = shekyl_bulletproofs::Bulletproof::prove_plus(&mut *range_rng, commitments_for_bp)
         .map_err(|e| TxBuilderError::BulletproofError(e.to_string()))?;
 
     let mut bp_bytes = Vec::new();
@@ -130,14 +266,7 @@ pub fn sign_transaction_with_terms(
     // these points directly, so both sides must be the real ×1 commitment;
     // `pseudo_outs` below are `C_tilde = a*G + amount_in*H` (real ×1), so the
     // output side must not be cofactor-scaled.
-    let out_commitments: Vec<[u8; 32]> = outputs
-        .iter()
-        .zip(masks.iter())
-        .map(|(out, mask)| {
-            let c = Commitment::new(*mask, out.amount.to_raw());
-            c.calculate().compress().to_bytes()
-        })
-        .collect();
+    let out_commitments: Vec<[u8; 32]> = outputs.iter().map(output_commitment).collect();
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
     // Carried as `EncryptedOutputField`, not unwrapped to `[u8; 9]`. This was
@@ -148,41 +277,31 @@ pub fn sign_transaction_with_terms(
     let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_amount).collect();
     let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
-    // ── 5. Pseudo-output balancing ───────────────────────────────────
-    // Generate random blindings for all-but-last input; the last mask is
-    // constrained so that: sum(pseudo_masks) == sum(output_masks) + 0 (fee
-    // is committed with mask 0: fee*H).
-    let mut pseudo_masks = Zeroizing::new(Vec::with_capacity(n_in));
-    let sum_out_masks: Scalar = masks.iter().copied().sum();
-
-    for i in 0..n_in {
-        if i < n_in - 1 {
-            pseudo_masks.push(Scalar::random(&mut OsRng));
-        } else {
-            let sum_pseudo: Scalar = pseudo_masks.iter().copied().sum();
-            pseudo_masks.push(sum_out_masks - sum_pseudo);
-        }
-    }
-
-    // ── 6. Build ProveInput for FCMP++ ───────────────────────────────
+    // ── 5. Build ProveInput for FCMP++ ───────────────────────────────
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
+        .zip(&pseudo_out_blinds)
         .enumerate()
-        .map(|(i, inp)| prove_input_from_spend(i, inp, pseudo_masks[i].to_bytes()))
+        .map(|(i, (inp, blind))| prove_input_from_spend(i, inp, **blind))
         .collect::<Result<_, _>>()?;
 
-    // ── 7. FCMP++ prove ──────────────────────────────────────────────
-    let prove_result = proof::prove(
-        &prove_inputs,
-        // Proof-crate boundary: both the root and the signable hash are
-        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
-        tree.tree_root.as_bytes(),
-        tree.tree_depth,
-        tx_prefix_hash.to_bytes(),
-    )
-    .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
+    // ── 6. FCMP++ prove ──────────────────────────────────────────────
+    // Over `tx_signable`: the prefix and the base just built (the outputs'
+    // commitments, encrypted amounts and labels, the fee and the reference
+    // block), framed under the network's id (the signing envelope §2.2).
+    let tx_signable = signable_of(
+        network_id,
+        tx_prefix_hash,
+        fee,
+        &tree.reference_block,
+        &out_commitments,
+        &enc_amounts,
+        &enc_labels,
+    );
+    let prove_result = prove(&prove_inputs, &tree.tree_root, tree.tree_depth, tx_signable)
+        .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
-    // ── 8. Construct-side balance self-verify ────────────────────────
+    // ── 7. Construct-side balance self-verify ────────────────────────
     // Run the *same* commitment-sum balance equation the daemon runs, over the
     // commitments we just built, under the identical single-home code
     // (`shekyl_ct_balance::verify_ct_balance`) with the identical terms construct
@@ -205,7 +324,7 @@ pub fn sign_transaction_with_terms(
         extra_outputs,
     )?;
 
-    // ── 9. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
@@ -216,7 +335,71 @@ pub fn sign_transaction_with_terms(
         pqc_auths: Vec::new(),
         reference_block: tree.reference_block,
         tree_depth: tree.tree_depth,
+        tx_signable,
     })
+}
+
+/// An output's real commitment, `C = mask*G + amount*H` (compressed, no
+/// cofactor scaling): the form [`sign_transaction_with_terms`] writes into
+/// the base and [`tx_signable_for`] frames.
+fn output_commitment(out: &OutputInfo) -> [u8; 32] {
+    out.commitment_mask
+        .opening(out.amount.to_raw())
+        .calculate()
+        .compress()
+        .to_bytes()
+}
+
+/// `tx_signable` from its parts: the base assembled as the wire will carry
+/// it and hashed by `shekyl-wire`'s own base serializer
+/// ([`shekyl_wire::fcmp_base_hash`]), then framed with the prefix hash.
+fn signable_of(
+    network_id: &NetworkId,
+    prefix_hash: PrefixHash,
+    fee: shekyl_units::AtomicUnits,
+    reference_block: &BlockHash,
+    commitments: &[[u8; 32]],
+    enc_amounts: &[EncryptedOutputField],
+    enc_labels: &[EncryptedOutputField],
+) -> TxSignableHash {
+    let base = CtBase {
+        enc_amounts: enc_amounts.iter().map(|f| f.to_bytes()).collect(),
+        enc_labels: enc_labels.iter().map(|f| f.to_bytes()).collect(),
+        commitments: commitments.to_vec(),
+    };
+    shekyl_wire::tx_signable(
+        network_id,
+        prefix_hash,
+        shekyl_wire::fcmp_base_hash(fee.to_raw(), reference_block, &base),
+    )
+}
+
+/// The transaction's `tx_signable` (the signing envelope §2.2) before it
+/// is proved: what [`sign_transaction_with_terms`] proves the spend inputs
+/// over, for a caller that proves something else over the same message
+/// first (an emission's backing proof). `prefix_hash` is the prefix the
+/// message covers; the base is `outputs`' commitments and encrypted
+/// fields with `fee` and `reference_block`.
+#[must_use]
+pub fn tx_signable_for(
+    network_id: &NetworkId,
+    prefix_hash: PrefixHash,
+    fee: shekyl_units::AtomicUnits,
+    reference_block: &BlockHash,
+    outputs: &[OutputInfo],
+) -> TxSignableHash {
+    let commitments: Vec<[u8; 32]> = outputs.iter().map(output_commitment).collect();
+    let enc_amounts: Vec<EncryptedOutputField> = outputs.iter().map(|o| o.enc_amount).collect();
+    let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|o| o.enc_label).collect();
+    signable_of(
+        network_id,
+        prefix_hash,
+        fee,
+        reference_block,
+        &commitments,
+        &enc_amounts,
+        &enc_labels,
+    )
 }
 
 /// Produce PQC authentication signatures for each input.
@@ -236,8 +419,59 @@ pub fn sign_pqc_auths(
     payload_hashes: &[SigningPayloadHash],
     inputs: &[SpendInput],
 ) -> Result<Vec<PqcAuth>, TxBuilderError> {
-    use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
+    sign_pqc_auths_with(payload_hashes, inputs, |ss, output_index, message| {
+        shekyl_crypto_pq::output::sign_pqc_auth_for_output(
+            ss,
+            output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            message,
+        )
+    })
+}
 
+/// [`sign_pqc_auths`] with each signature's ML-DSA randomness drawn from
+/// `seed`, one 32-byte nonce seed per input in input order, so one seed gives
+/// the same signatures byte for byte (`CHAIN_FORGE.md` §5.3, seams T2 and T3).
+/// Only under the TEST_ONLY `seeded-rng` feature.
+///
+/// # Errors
+///
+/// As [`sign_pqc_auths`].
+#[cfg(feature = "seeded-rng")]
+pub fn sign_pqc_auths_seeded(
+    seed: &[u8; 32],
+    payload_hashes: &[SigningPayloadHash],
+    inputs: &[SpendInput],
+) -> Result<Vec<PqcAuth>, TxBuilderError> {
+    let mut nonces = seeded::stream(seed);
+    sign_pqc_auths_with(payload_hashes, inputs, |ss, output_index, message| {
+        let mut ml_dsa_seed =
+            Zeroizing::new([0u8; shekyl_crypto_pq::signature::ML_DSA_SIGNING_SEED_LEN]);
+        nonces.fill_bytes(&mut *ml_dsa_seed);
+        shekyl_crypto_pq::output::sign_pqc_auth_for_output_with_ml_dsa_seed(
+            ss,
+            output_index,
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
+            message,
+            &ml_dsa_seed,
+        )
+    })
+}
+
+/// [`sign_pqc_auths`]'s body, over `sign` (production's OS-drawn signer, or
+/// the seeded one).
+fn sign_pqc_auths_with(
+    payload_hashes: &[SigningPayloadHash],
+    inputs: &[SpendInput],
+    mut sign: impl FnMut(
+        &[u8; 64],
+        u64,
+        &[u8],
+    ) -> Result<
+        shekyl_crypto_pq::output::PqcAuthSignature,
+        shekyl_crypto_pq::CryptoError,
+    >,
+) -> Result<Vec<PqcAuth>, TxBuilderError> {
     if payload_hashes.len() != inputs.len() {
         return Err(TxBuilderError::PqcSignError {
             index: 0,
@@ -262,22 +496,21 @@ pub fn sign_pqc_auths(
                 ),
             });
         }
-        let mut ss = [0u8; 64];
+        // The combined shared secret, copied once into memory that wipes on
+        // drop (rule 35).
+        let mut ss = Zeroizing::new([0u8; 64]);
         ss.copy_from_slice(&inp.combined_ss);
 
-        let auth_sig = sign_pqc_auth_for_output(
-            &ss,
-            inp.output_index,
-            shekyl_crypto_pq::signature::SCHEME_DOMAIN_PQC_AUTH_TX,
-            hash.as_bytes(),
-        )
-        .map_err(|e| TxBuilderError::PqcSignError {
-            index: i,
-            reason: format!("sign_pqc_auth_for_output failed: {e}"),
+        let auth_sig = sign(&ss, inp.output_index, hash.as_bytes()).map_err(|e| {
+            TxBuilderError::PqcSignError {
+                index: i,
+                reason: format!("sign_pqc_auth_for_output failed: {e}"),
+            }
         })?;
 
         auths.push(PqcAuth {
             auth_version: PQC_AUTH_VERSION,
+            scheme: crate::types::PqcScheme::Single,
             signature: auth_sig.signature,
             public_key: auth_sig.hybrid_public_key,
         });
@@ -325,18 +558,61 @@ pub struct MembershipOnlyProof {
 pub fn prove_backing_membership(
     input: &SpendInput,
     tree: &TreeContext,
-    signable_tx_hash: PrefixHash,
+    tx_signable: TxSignableHash,
+) -> Result<MembershipOnlyProof, TxBuilderError> {
+    prove_backing_membership_with(input, tree, tx_signable, proof::prove_membership_only)
+}
+
+/// [`prove_backing_membership`] with the prover's randomness drawn from
+/// `seed`, so one seed gives the same backing proof byte for byte
+/// (`CHAIN_FORGE.md` §5.3, seam T2). Only under the TEST_ONLY `seeded-rng`
+/// feature.
+///
+/// # Errors
+///
+/// As [`prove_backing_membership`].
+#[cfg(feature = "seeded-rng")]
+pub fn prove_backing_membership_seeded(
+    seed: &[u8; 32],
+    input: &SpendInput,
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+) -> Result<MembershipOnlyProof, TxBuilderError> {
+    let mut rng = seeded::stream(seed);
+    prove_backing_membership_with(
+        input,
+        tree,
+        tx_signable,
+        |inputs, root, depth, hash, context| {
+            proof::prove_membership_only_with_rng(&mut rng, inputs, root, depth, hash, context)
+        },
+    )
+}
+
+/// [`prove_backing_membership`]'s body, over `prove` (production's prover
+/// over the OS, or the seeded one).
+fn prove_backing_membership_with(
+    input: &SpendInput,
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+    prove: impl FnOnce(
+        &[ProveInput],
+        &CurveTreeRoot,
+        u8,
+        TxSignableHash,
+        &[u8],
+    ) -> Result<ProveResult, ProveError>,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
     // comes from the context-bound rerandomization inside the prover.
     let prove_input = prove_input_from_spend(0, input, [0u8; 32])?;
 
-    let result = proof::prove_membership_only(
+    let result = prove(
         &[prove_input],
-        tree.tree_root.as_bytes(),
+        &tree.tree_root,
         tree.tree_depth,
-        signable_tx_hash.to_bytes(),
+        tx_signable,
         tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
@@ -467,4 +743,16 @@ fn compute_key_image_gen(output_key: &[u8; 32]) -> [u8; 32] {
     shekyl_curve_generators::biased_hash_to_point(*output_key)
         .compress()
         .to_bytes()
+}
+
+/// The generators the seeded entry points draw from (`seeded-rng` only).
+#[cfg(feature = "seeded-rng")]
+pub(crate) mod seeded {
+    use rand_chacha::rand_core::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
+    /// One ChaCha20 stream over `seed`.
+    pub(crate) fn stream(seed: &[u8; 32]) -> ChaCha20Rng {
+        ChaCha20Rng::from_seed(*seed)
+    }
 }

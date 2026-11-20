@@ -7,13 +7,15 @@
 //! message sizes, per method, of a generated wallet's traffic with a
 //! regtest daemon. The record channel's size classes are derived from them.
 //!
-//! The registration is
-//! `docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`. It fixes, before
-//! any registered run, the traffic generated here, what is counted, the
-//! gates a run must pass, and how the classes are derived from the output
-//! (`scripts/bench/rt_p5_classes.py`). Read it before changing anything in
-//! this file: a change to the generated traffic is a change to the
-//! registered method.
+//! The method — the traffic, what is counted, the gates and the derivation
+//! — is the registration of 2026-10-17
+//! (`docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`). The run this
+//! file performs is the 4.x registration of 2026-11-15
+//! (`docs/benchmarks/rt_p5_rpc_message_sizes_20261115.md`): its subjects,
+//! its seeds and the key `run.json` is written under. Read that record
+//! before changing the traffic or the gates. A change to the generated
+//! traffic is a change to the registered method. The classes are derived
+//! by `scripts/bench/rt_p5_classes.py`.
 //!
 //! # What is counted
 //!
@@ -48,7 +50,6 @@ use std::time::Duration;
 
 use trace::{pair_messages, CountingProxy, Message};
 
-use shekyl_rpc_client::Rpc;
 use shekyl_scanner::WalletLedgerExt;
 use shekyl_tx_weight::{predict_size_and_weight, InputCount, OutputCount, MAX_TREE_DEPTH};
 use shekyl_units::AtomicUnits;
@@ -59,11 +60,32 @@ use super::super::refresh::RefreshOptions;
 use super::super::{Engine, SoloSigner};
 use super::{assert_tx_confirmed, create_wallet, require_fresh_accept, RegtestDaemon};
 
-/// The largest record payload a message is split at: `MAX_RECORD_PLAINTEXT`
-/// (65,535) less `OCCUPANCY_LEN` (2), both `RPC_CHANNEL.md` §4.4. Neither
-/// constant exists in code before RT-W9 step 5, so the value is restated
-/// here and in the derivation script, and the registration cites both.
-const RECORD_PAYLOAD_MAX: usize = 65_535 - 2;
+/// The largest record payload a message is split at: the channel's
+/// largest record less its occupancy field (`RPC_CHANNEL.md` §4.4).
+const RECORD_PAYLOAD_MAX: usize = shekyl_noise::MAX_RECORD_PLAINTEXT - shekyl_noise::OCCUPANCY_LEN;
+
+/// Wire labels of the 4.x registration's subjects. A label is `json_rpc:`
+/// and the method (RW-Q1). The derivation script spells the same strings
+/// `LABEL_TX_SUBMIT`, `LABEL_BLOCK_SHOW` and `LABEL_FEE`; its tests hold
+/// each pair equal. `LABEL_CHAIN_HEIGHT` is a subject and, in the script,
+/// wallet sync, which is every label those three do not name.
+const LABEL_TX_SUBMIT: &str = "json_rpc:tx_submit";
+const LABEL_BLOCK_SHOW: &str = "json_rpc:block_show";
+const LABEL_CHAIN_HEIGHT: &str = "json_rpc:chain_height";
+const LABEL_FEE: &str = "json_rpc:fee";
+
+/// The subjects the trace must carry.
+const SUBJECTS: &[&str] = &[
+    LABEL_TX_SUBMIT,
+    LABEL_BLOCK_SHOW,
+    LABEL_CHAIN_HEIGHT,
+    LABEL_FEE,
+];
+
+/// `run.json`'s key for the daemon's curve tree reply. The derivation
+/// script reads the file under the same key (`RUN_CURVE_KEY` in
+/// `scripts/bench/rt_p5_classes.py`), and its tests hold the two equal.
+const RUN_CURVE_KEY: &str = "curve";
 
 /// Outputs per fan-out transaction: fifteen recipients and the change.
 const FANOUT_RECIPIENTS: usize = 15;
@@ -105,11 +127,13 @@ const SHAPES: &[(usize, usize)] = &[
     (8, 16),
 ];
 
-/// The registered run's cell. Its seeds are used by no other run.
+/// The registered run's cell (the 4.x registration of 2026-11-15). Its
+/// seeds are used by no other run, the 2026-10-17 registration's
+/// `0x51` and `0x52` included.
 const REGISTERED: Cell = Cell {
     name: "registered",
-    funder_seed: 0x51,
-    wallet_seed: 0x52,
+    funder_seed: 0x53,
+    wallet_seed: 0x54,
     fanout_txs: 4,
     shapes: SHAPES,
 };
@@ -119,8 +143,8 @@ const REGISTERED: Cell = Cell {
 /// writes can be mistaken for the registered data.
 const DRY: Cell = Cell {
     name: "dry",
-    funder_seed: 0xD1,
-    wallet_seed: 0xD2,
+    funder_seed: 0xD3,
+    wallet_seed: 0xD4,
     fanout_txs: 4,
     shapes: SHAPES,
 };
@@ -161,8 +185,8 @@ async fn refresh(wallet: &Arc<RwLock<Engine<SoloSigner>>>) {
         .expect("refresh joins");
 }
 
-async fn unlocked(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> AtomicUnits {
-    wallet.read().await.ledger().balance().unlocked
+async fn spendable(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> AtomicUnits {
+    wallet.read().await.ledger().balance().spendable
 }
 
 async fn address_of(wallet: &Arc<RwLock<Engine<SoloSigner>>>) -> String {
@@ -197,10 +221,9 @@ async fn build(
     wallet: &Arc<RwLock<Engine<SoloSigner>>>,
     who: &'static str,
     request: &TxRequest,
-    mine_to: &str,
 ) -> Built {
     for _ in 0..48 {
-        let attempt = wallet.read().await.build_pending_tx_async(request).await;
+        let attempt = wallet.read().await.build_pending_tx(request).await;
         match attempt {
             Ok(pending) => {
                 let tx = shekyl_wire::Transaction::from_bytes(&pending.tx_bytes)
@@ -217,7 +240,7 @@ async fn build(
                 };
             }
             Err(super::super::error::SendError::OutputNotYetSpendable { .. }) => {
-                daemon.generate_blocks(1, mine_to).await;
+                daemon.generate_blocks(1).await;
                 refresh(wallet).await;
             }
             Err(e) => panic!(
@@ -233,7 +256,7 @@ async fn submit(wallet: &Arc<RwLock<Engine<SoloSigner>>>, built: &mut Built) {
     let outcome = wallet
         .read()
         .await
-        .submit_pending_tx_async(built.pending_id, built.content_gen)
+        .submit_pending_tx(built.pending_id, built.content_gen)
         .await
         .expect("the daemon answers the submission");
     built.hash = Some(require_fresh_accept(outcome, built.wallet));
@@ -242,15 +265,14 @@ async fn submit(wallet: &Arc<RwLock<Engine<SoloSigner>>>, built: &mut Built) {
 /// The traffic, in the order the registration states it.
 async fn run_cell(cell: &Cell) {
     let out = output_dir(cell);
-    let daemon = RegtestDaemon::start().await;
+    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::SEED_BYTES];
+    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::SEED_BYTES];
+    let daemon = RegtestDaemon::start_for_seed(&funder_seed).await;
     let upstream = daemon.rpc_port();
 
     let funder_proxy = CountingProxy::start(upstream);
     let wallet_proxy = CountingProxy::start(upstream);
     let restore_proxy = CountingProxy::start(upstream);
-
-    let funder_seed = [cell.funder_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
-    let wallet_seed = [cell.wallet_seed; shekyl_crypto_pq::account::MASTER_SEED_BYTES];
 
     let (funder, _funder_dir) = create_wallet(funder_proxy.port, &funder_seed, b"rt-p5-f").await;
     let funder = Arc::new(RwLock::new(funder));
@@ -262,23 +284,21 @@ async fn run_cell(cell: &Cell) {
     // 1. Mature the funder: mine to it in batches of ten until it can
     //    spend.
     for _ in 0..30 {
-        daemon.generate_blocks(10, &funder_address).await;
+        daemon.generate_blocks(10).await;
         refresh(&funder).await;
-        if unlocked(&funder).await > AtomicUnits::ZERO {
+        if spendable(&funder).await > AtomicUnits::ZERO {
             break;
         }
     }
     assert!(
-        unlocked(&funder).await > AtomicUnits::ZERO,
+        spendable(&funder).await > AtomicUnits::ZERO,
         "the funder never matured"
     );
-    daemon
-        .generate_blocks(FANOUT_MARGIN_BLOCKS, &funder_address)
-        .await;
+    daemon.generate_blocks(FANOUT_MARGIN_BLOCKS).await;
     refresh(&funder).await;
-    let funded = unlocked(&funder).await;
+    let funded = spendable(&funder).await;
     eprintln!(
-        "rt-p5: funder unlocked {funded:?} at height {}",
+        "rt-p5: funder spendable {funded:?} at height {}",
         daemon.height().await
     );
     assert!(funded > AtomicUnits::ZERO, "the funder never matured");
@@ -304,7 +324,7 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &funder, "funder", &request, &funder_address).await;
+        let mut tx = build(&daemon, &funder, "funder", &request).await;
         eprintln!(
             "rt-p5: fan-out {}: {} in, {} out, {} bytes, at height {}",
             built.len(),
@@ -316,7 +336,7 @@ async fn run_cell(cell: &Cell) {
         submit(&funder, &mut tx).await;
         built.push(tx);
     }
-    let block = daemon.generate_blocks(1, &funder_address).await;
+    let block = daemon.generate_blocks(1).await;
     let fanout_block = block.blocks.first().expect("one block mined");
     let carried = daemon.block_tx_hashes(fanout_block).await.len();
     assert_eq!(
@@ -335,15 +355,15 @@ async fn run_cell(cell: &Cell) {
     let received = unit * u64::try_from(cell.fanout_txs * FANOUT_RECIPIENTS).expect("small count");
     refresh(&wallet).await;
     for _ in 0..40 {
-        if unlocked(&wallet).await.to_raw() >= received {
+        if spendable(&wallet).await.to_raw() >= received {
             break;
         }
-        daemon.generate_blocks(1, &funder_address).await;
+        daemon.generate_blocks(1).await;
         refresh(&wallet).await;
     }
     assert!(
-        unlocked(&wallet).await.to_raw() >= received,
-        "the fan-out's outputs never unlocked"
+        spendable(&wallet).await.to_raw() >= received,
+        "the fan-out's outputs never became spendable"
     );
     for &(inputs, outputs) in cell.shapes {
         let k = u64::try_from(inputs).expect("small count");
@@ -360,14 +380,14 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &wallet, "wallet", &request, &funder_address).await;
+        let mut tx = build(&daemon, &wallet, "wallet", &request).await;
         assert_eq!(
             (tx.inputs, tx.outputs),
             (inputs, outputs),
             "the spend must have the registered shape"
         );
         submit(&wallet, &mut tx).await;
-        assert_tx_confirmed(&daemon, &funder_address, tx.hash.expect("submitted")).await;
+        assert_tx_confirmed(&daemon, tx.hash.expect("submitted")).await;
         built.push(tx);
         refresh(&wallet).await;
     }
@@ -379,11 +399,7 @@ async fn run_cell(cell: &Cell) {
     let restored = Arc::new(RwLock::new(restored));
     refresh(&restored).await;
 
-    let depth: serde_json::Value = daemon
-        .rpc()
-        .json_rpc_call("get_curve_tree_info", None)
-        .await
-        .expect("get_curve_tree_info");
+    let depth = serde_json::to_value(daemon.curve().await).expect("a curve reply serializes");
     let chain_height = daemon.height().await;
 
     // Every connection closes once its wallet is gone; only then is the
@@ -423,22 +439,23 @@ async fn run_cell(cell: &Cell) {
         }
     }
 
-    check_subjects(&messages, &built);
+    // The outputs are written before the gates are read: a gate that fails
+    // voids the run, and the files say why (registration, first amendment).
     write_outputs(&out, cell, &messages, &built, &depth, chain_height);
+    check_subjects(&messages, &built);
 }
 
 /// The gates of the registration that read the messages (rule 47: the
 /// subject must be present, not merely unrefuted).
 fn check_subjects(messages: &[Row], built: &[Built]) {
-    for needle in [
-        "/submit_transaction",
-        "json_rpc:get_block",
-        "/get_transactions",
-        "/get_o_indexes.bin",
-    ] {
+    for &needle in SUBJECTS {
         assert!(
             messages.iter().any(|m| m.label == needle),
-            "the trace must carry `{needle}`"
+            "the trace must carry `{needle}`; it carries {:?}",
+            messages
+                .iter()
+                .map(|m| m.label.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
         );
     }
     assert!(
@@ -456,7 +473,7 @@ fn check_subjects(messages: &[Row], built: &[Built]) {
     );
     let submissions = messages
         .iter()
-        .filter(|m| m.label == "/submit_transaction" && m.direction == "request")
+        .filter(|m| m.label == LABEL_TX_SUBMIT && m.direction == "request")
         .count();
     assert_eq!(
         submissions,
@@ -546,7 +563,7 @@ fn write_outputs(
             "fanout_txs": cell.fanout_txs,
             "shapes": cell.shapes,
             "chain_height": chain_height,
-            "curve_tree_info": depth,
+            RUN_CURVE_KEY: depth,
         }))
         .expect("encode run.json"),
     )

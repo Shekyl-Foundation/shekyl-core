@@ -5,14 +5,14 @@
 
 //! Why a rejection happened, in the only terms a drop decision may consult.
 //!
-//! C++ **assigns** these bytes and never interprets them. The rule is
+//! Nothing outside this crate reads or writes these bytes. The rule is
 //! [`DropVerdict::severs`].
 
 /// Why a rejection happened, in the only terms a drop decision may consult.
 ///
-/// The discriminants are the C ABI (`SHEKYL_DROP_VERDICT_*` in
-/// `src/shekyl/shekyl_ffi.h`). C++ **assigns** these and never interprets
-/// them; the rule is [`DropVerdict::severs`], which lives here.
+/// The discriminants are pinned byte values ([`DropVerdict::to_byte`],
+/// [`DropVerdict::from_byte`]); the rule is [`DropVerdict::severs`], which
+/// lives here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum DropVerdict {
@@ -74,7 +74,7 @@ impl DropVerdict {
         }
     }
 
-    /// The verdict as its ABI byte.
+    /// The verdict as its byte.
     #[must_use]
     pub const fn to_byte(self) -> u8 {
         self as u8
@@ -110,9 +110,9 @@ impl DropVerdict {
     /// the first is kept; they agree on the drop decision and differ only
     /// in how loudly they log, and the earlier one is the more specific.
     ///
-    /// This is the algebra behind [`Self::classify_in_place`]. C++ never
-    /// assigns the ABI byte; it writes through that method so a second
-    /// classification on the same slot cannot resurrect a drop.
+    /// This is the algebra behind [`Self::classify_in_place`], the write
+    /// path that keeps a second classification on the same slot from
+    /// resurrecting a drop.
     #[must_use]
     pub const fn combine(self, incoming: Self) -> Self {
         match (self, incoming) {
@@ -122,8 +122,7 @@ impl DropVerdict {
         }
     }
 
-    /// Folds `incoming` into an ABI slot. This is the only write path the
-    /// C++ side is supposed to use.
+    /// Folds `incoming` into a byte slot.
     pub const fn classify_in_place(slot: &mut u8, incoming: Self) {
         *slot = Self::from_byte(*slot).combine(incoming).to_byte();
     }

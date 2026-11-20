@@ -74,32 +74,27 @@ pub enum OpenError {
     #[error("persistence failure during close: {0}")]
     Persistence(#[from] PersistenceError),
 
-    /// **Conformance build only (S6).** The StakeEngine's session RNG self-cert
-    /// failed at spawn: the OS CSPRNG graded non-conformant for the entry-gap
-    /// timing draws (or the entropy source failed mid-draw). A degenerate timing
-    /// RNG defeats the gate-6 decorrelation firewall, so the staker actor refuses
-    /// to start and wallet-open fails loudly rather than staking on a CSPRNG that
-    /// cannot produce unlinkable timing. This variant does not exist in the
-    /// default (non-`conformance`) build — production carries no float/stats
-    /// grader (`ARCHIVAL_BOND_S6_CERTIFY_DRAW_PLAN.md` §0).
+    /// This computer's random-number source failed the check the stake engine
+    /// runs before it starts (S6), so the wallet did not open. Staking on a
+    /// source that fails the check could link the wallet's stakes.
     ///
-    /// Carries the **structured** [`StakeSelfCertFailure`] (not a pre-rendered
-    /// string), keeping the grade detail — the `CertifyReport` — available for
-    /// logging / programmatic handling, per the module's no-stringly-typed-error
-    /// rule. The `#[source]` chains it; `Display` still renders the human message.
-    #[cfg(feature = "conformance")]
-    #[error("wallet open refused: StakeEngine session RNG self-cert failed at startup: {0}")]
-    StakeRngSelfCertFailed(#[source] StakeSelfCertFailure),
+    /// A unit variant in every build, so an exhaustive match names it whether
+    /// or not `conformance` is on. Only that build runs the check and returns
+    /// this variant. The grade is logged at the check and is not carried
+    /// here, so the default build has no float grader.
+    #[error("wallet open refused: this computer's random-number source failed the stake check")]
+    StakeRngSelfCertFailed,
 }
 
-/// **Conformance build only (S6).** Why the StakeEngine startup session RNG
-/// self-cert failed — structured so the grade detail survives to logging /
-/// handling instead of being stringified at the actor boundary (the wallet-core
-/// API does not return stringly-typed errors; see the module doc). Surfaced
-/// through [`OpenError::StakeRngSelfCertFailed`].
+/// Why the stake engine's startup random-number check failed (S6).
+///
+/// Conformance build only. Structured so the grade reaches the log instead
+/// of being stringified at the actor boundary. The open path logs this value
+/// and returns the unit [`OpenError::StakeRngSelfCertFailed`], which does
+/// not carry it.
 #[cfg(feature = "conformance")]
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum StakeSelfCertFailure {
+pub(crate) enum StakeSelfCertFailure {
     /// The OS CSPRNG graded **non-conformant** for the entry-gap timing draws.
     /// Carries the full [`CertifyReport`](shekyl_standoff::conformance::CertifyReport)
     /// (chi-square, the three property verdicts) — the data worth keeping.
@@ -124,9 +119,19 @@ pub enum StakeSelfCertFailure {
 /// [`ChangePasswordError`] on [`crate::engine::Engine::change_password`](crate::engine::Engine::change_password).
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
-    /// On-disk wallet envelope / atomic-write failure.
+    /// On-disk wallet envelope / atomic-write failure. The target was not
+    /// replaced.
     #[error("wallet file error: {0}")]
     WalletFile(#[from] shekyl_engine_file::WalletFileError),
+
+    /// The rename landed and its durability was not confirmed, for this
+    /// reason (on Unix the parent-directory fsync failed; on Windows the
+    /// volume is not NTFS, or the confirmation failed otherwise). The write
+    /// is applied, so the in-memory record stays; a broadcast must not. The
+    /// reason's sentence names the fix: on a FAT, exFAT or ReFS volume, the
+    /// file system and a move to an NTFS volume (Rick, 2026-11-18).
+    #[error("the wallet save was applied but not confirmed on disk: {0}")]
+    DurabilityUnconfirmed(shekyl_engine_file::Unconfirmed),
 
     /// Prefs sidecar load/save/HMAC failure.
     #[error("prefs error: {0}")]

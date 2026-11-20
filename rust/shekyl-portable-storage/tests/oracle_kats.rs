@@ -109,7 +109,7 @@ fn uint64_array_roundtrip() {
 }
 
 /// An array of sections, each holding a blob — the shape
-/// `/get_blocks_by_height.bin` puts on the wire. Read by walking into the
+/// `block_list` puts on the wire. Read by walking into the
 /// section, which is what the typed command map does; the tree-scanning
 /// `collect_bytes_named` that used to be asserted here went with its only
 /// caller (RK-4b), since "any field named X, anywhere" is the untyped

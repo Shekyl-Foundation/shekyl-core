@@ -65,9 +65,9 @@ Branch: `design/fee-ladder-derivation`, off `dev` 6d2f49a5c, merged with
   and `:35`'s formula are faithful; the instrument of refutation is the
   code (FL-V8), not a doc-vs-doc reading; 2²¹ labeled an identity.
 - **F-1 → FL-V8** (opposite-policy clamps, both live; verified at
-  `blockchain.cpp:6410-6420` / `cryptonote_basic_impl.cpp:168`).
+  `blockchain.cpp:6410-6420` / `cryptonote_basic_impl.cpp` at `ac3836de90` (line 168)).
 - **F-2 → FL-V9** (cap gated on `SHEKYL_TX_VOLUME_BASELINE > 0`,
-  `cryptonote_basic_impl.cpp:153`). No behavior edit on an unsigned
+  `cryptonote_basic_impl.cpp` at `ac3836de90` (line 153)). No behavior edit on an unsigned
   branch — deliberate; ships with FL-R12′'s implementation.
 - **F-3 → FL-V10** (canonical-crate blindness; 286× test pinned green;
   red companion `terminal_reward_legs_agree` added `#[ignore]`d, observed

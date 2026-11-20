@@ -6,7 +6,7 @@
 """RTN-7 gate: `shekyl-wire`'s public surface carries no unnamed `[u8; 32]`.
 
 Every 32-byte chain identity leaving the wire crate is a `shekyl-types`
-newtype — `TxHash`, `TxTreeHash`, `BlockHash`, `CurveTreeRoot`, `AttestationRoot`,
+newtype — `TxHash`, `TxTreeHash`, `BlockHash`, `CurveTreeRoot`, `SectionRoot`,
 `PrefixHash`, `PqcAuthHash`, `PrunableHash`, `SigningPayloadHash`,
 `PCanonicalId`. What remains raw
 is raw for a reason, and this gate is where the reason lives.
@@ -87,6 +87,11 @@ ALLOWED: dict[str, Allow] = {
         "one-time public key (curve point); #771's OneTimePubkey is minted for "
         "engine-state persistence, and adopting it at the codec is the "
         "derivation/match sites' call",
+        "shekyl-tx-builder / shekyl-scanner",
+    ),
+    "transaction.rs::confidential()": Allow(
+        "the constructor of an Output takes its key as Output.key holds it "
+        "(the curve point above); it is typed when that field is",
         "shekyl-tx-builder / shekyl-scanner",
     ),
     "transaction.rs::CtBase.commitments": Allow(

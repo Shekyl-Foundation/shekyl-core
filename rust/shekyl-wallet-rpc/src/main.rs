@@ -10,6 +10,7 @@
 //! `shekyl-engine-rpc` wallet2-FFI bridge before it. The flag reference is
 //! `docs/EXECUTABLES.md` §3; the listen posture is
 //! `docs/design/RPC_TRANSPORT_POSTURE.md`.
+#![deny(unsafe_code)]
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -27,7 +28,8 @@ use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(
     name = "shekyl-wallet-rpc",
-    about = "Shekyl-native wallet JSON-RPC server (Phase 4)"
+    version = shekyl_wallet_rpc::VERSION,
+    about = "Shekyl wallet JSON-RPC server"
 )]
 struct Cli {
     /// Directory for wallet files.
@@ -68,15 +70,16 @@ struct Cli {
     disable_rpc_login: bool,
 
     /// Daemon JSON-RPC base URL (used by refresh / send; lifecycle holds it).
-    /// Default: this machine's daemon at the RPC port for --network. A daemon
-    /// that is not loopback is disclosed in the log at startup: its operator
-    /// sees what this wallet asks for.
+    /// Default: "this computer", the node this account runs for --network,
+    /// over its owner's socket or pipe; a node run as a service is named by
+    /// its view listener here. A daemon that is not loopback is disclosed in
+    /// the log at startup: its operator sees what this wallet asks for.
     #[arg(long = "daemon-address")]
     daemon_address: Option<String>,
 
     /// SOCKS5h proxy for the daemon connection (e.g. socks5h://127.0.0.1:9050).
     /// The proxy resolves the daemon hostname, so it never reaches the local
-    /// resolver. Omit for a direct connection.
+    /// resolver. Omit for a direct connection. Needs --daemon-address.
     #[arg(long = "proxy")]
     proxy: Option<String>,
 
@@ -89,10 +92,21 @@ struct Cli {
     log_file: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cli = Cli::parse();
+/// The first statement is the process hardening (rule 35, DC-Q21), as in
+/// `shekyld`: no core and no same-account tracer, before an argument is
+/// read, the runtime started, or a wallet opened. A process that cannot
+/// apply it reports the step and exits 1 without starting.
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Err(e) = shekyl_process::harden::harden_process() {
+        return Err(format!("process hardening {e}; not starting").into());
+    }
+    serve(Cli::parse())
+}
 
+/// Everything after the hardening: the log, the listen and auth posture,
+/// and the server, on the runtime this function starts.
+#[tokio::main]
+async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = if let Some(ref path) = cli.log_file {
         if path.exists() && path.is_dir() {
             return Err(format!(
@@ -131,24 +145,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let network = Network::from_str(&cli.network)
         .map_err(|e| format!("invalid --network '{}': {e}", cli.network))?;
-    // The wallet knows the daemon's ports so the operator need not: absent
-    // the flag, the loopback daemon at this network's RPC port.
-    let daemon_address = cli
-        .daemon_address
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}", network.daemon_rpc_port()));
+    let daemon = shekyl_wallet_rpc::server::daemon_target(network, cli.daemon_address, cli.proxy)?;
 
     let server = ServerConfig {
         listen,
         wallet_dir: cli.wallet_dir,
         network,
-        daemon_address,
-        proxy: cli.proxy,
+        daemon,
         auth,
         kdf: KdfParams::default(),
     };
 
-    // `run_server` blocks until its listener fails or the process is
-    // killed. Ctrl-C cancels the future (Phase 4a); a later sub-PR can
-    // wire `AppState::shutdown` to signal handlers for drain.
+    // `run_server` serves until a stop signal (SIGTERM, SIGINT, SIGHUP; on
+    // Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
+    // events), then closes the open wallet and returns. A second signal
+    // exits at once.
     run_server(server).await
 }

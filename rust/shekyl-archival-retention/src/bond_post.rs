@@ -204,7 +204,12 @@ pub fn verify_reinstate_bond_post(
     // belt: a floor-drifted record would otherwise let this tx verify and then
     // FATAL-abort every node at block connect. Verify rejects the tx; the fold's
     // belt stays for verify-bypassing callers.
-    if bond_floor_of(record_holdings_kind, record_held_shard_ids.len()) != current_bonded {
+    if bond_floor_of(
+        record_holdings_kind,
+        record_held_shard_ids.len(),
+        crate::archival_params(),
+    ) != current_bonded
+    {
         return Err(BondPostError::ReinstateRecordFloorBroken);
     }
     // Zero-money: no debit, no credit, bonded_total unchanged (equals the
@@ -256,7 +261,7 @@ pub fn verify_join_market_bond_post(
         return Err(BondPostError::BondDebitNonzero);
     }
 
-    let floor = bond_floor(&vin.holdings);
+    let floor = bond_floor(&vin.holdings, crate::archival_params());
     if floor == 0 {
         return Err(BondPostError::BondFloorZero);
     }
@@ -286,10 +291,10 @@ pub fn verify_join_market_bond_post(
 /// It holds the original sequence **including** [`release_vin_statics`], and
 /// that is not tidiness: an earlier revision extracted only the record-keyed
 /// guards, which moved `DebitNotFullBalance` ahead of `NotFullRelease` for a vin
-/// invalid in both ways. `shekyl-ffi` pins that mapping and went red. A
-/// refactor that changes which error a caller sees is not a refactor, so the
-/// whole pre-cooldown block moves together and the order is preserved by
-/// construction.
+/// invalid in both ways. A refactor that changes which error a caller sees is
+/// not a refactor, so the whole pre-cooldown block moves together and the order
+/// is preserved by construction. No test pins that precedence for a vin invalid
+/// in both ways; the construction is what holds it.
 ///
 /// The caller supplies `current_bonded` already unwrapped, because record
 /// ABSENCE is a different verdict on the submit path (a competing exit,
@@ -339,7 +344,7 @@ pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostErro
     }
 
     // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    let floor = bond_floor(&vin.holdings);
+    let floor = bond_floor(&vin.holdings, crate::archival_params());
     // A full Release ends at the canonical empty holdings, whose floor is 0. But
     // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
     // so a floor-0 descriptor that still carries shards is not an exit — reject it
@@ -402,7 +407,11 @@ pub fn verify_release_bond_post(
 
     // Release cooldown: the grace window past the last served epoch must have
     // elapsed (gate-4 §4.3; the Gate-6 F-D3/F-D4 gate).
-    if !release_cooldown_elapsed(last_served_epoch, current_settlement_epoch) {
+    if !release_cooldown_elapsed(
+        last_served_epoch,
+        current_settlement_epoch,
+        crate::archival_params(),
+    ) {
         return Err(BondPostError::CooldownNotElapsed);
     }
 

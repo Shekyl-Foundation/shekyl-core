@@ -15,7 +15,7 @@ use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint,
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
@@ -31,6 +31,13 @@ pub const ML_KEM_768_CT_LEN: usize = 1088;
 
 /// ML-KEM-768 shared secret size (FIPS 203).
 pub const ML_KEM_768_SS_LEN: usize = 32;
+
+/// X25519 secret scalar size.
+pub const X25519_SECRET_LEN: usize = 32;
+
+/// Canonical size of a [`HybridKemSecretKey`]: the X25519 secret, then the
+/// ML-KEM-768 decapsulation key.
+pub const HYBRID_KEM_SECRET_LEN: usize = X25519_SECRET_LEN + ML_KEM_768_DK_LEN;
 
 /// X25519 component size of a per-output hybrid KEM ciphertext: the
 /// ephemeral public key that plays the "ciphertext" role of the
@@ -114,6 +121,44 @@ pub struct HybridKemSecretKey {
     pub ml_kem: Vec<u8>,
 }
 
+impl HybridKemSecretKey {
+    /// Parse the canonical bytes: the X25519 secret, then the ML-KEM-768
+    /// decapsulation key ([`HYBRID_KEM_SECRET_LEN`] bytes). This is the one
+    /// place the layout is read; a caller holding the bytes never splits
+    /// them (rule 36).
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] for any other length.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        if bytes.len() != HYBRID_KEM_SECRET_LEN {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+        let (x25519, ml_kem) = bytes.split_at(X25519_SECRET_LEN);
+        Ok(Self {
+            x25519: x25519.try_into().expect("split at X25519_SECRET_LEN"),
+            ml_kem: ml_kem.to_vec(),
+        })
+    }
+
+    /// The canonical bytes, wiped on drop: the inverse of
+    /// [`Self::from_canonical_bytes`].
+    ///
+    /// # Errors
+    ///
+    /// [`CryptoError::InvalidKeyMaterial`] when the ML-KEM-768 key is not
+    /// [`ML_KEM_768_DK_LEN`] bytes.
+    pub fn to_canonical_bytes(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        if self.ml_kem.len() != ML_KEM_768_DK_LEN {
+            return Err(CryptoError::InvalidKeyMaterial);
+        }
+        let mut bytes = Zeroizing::new(Vec::with_capacity(HYBRID_KEM_SECRET_LEN));
+        bytes.extend_from_slice(&self.x25519);
+        bytes.extend_from_slice(&self.ml_kem);
+        Ok(bytes)
+    }
+}
+
 impl std::fmt::Debug for HybridKemSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HybridKemSecretKey")
@@ -138,11 +183,17 @@ pub struct HybridCiphertext {
     pub ml_kem: Vec<u8>,
 }
 
+/// Width of [`SharedSecret`]: the HKDF OKM of the combined X25519 and
+/// ML-KEM shared secrets. Every per-output derivation reads a value of
+/// this width.
+pub const SHARED_SECRET_LEN: usize = 64;
+
 /// Combined shared secret after HKDF combination of X25519 and ML-KEM.
-/// 64 bytes: sufficient for HKDF-Expand derivation of per-output keys.
+/// [`SHARED_SECRET_LEN`] bytes: sufficient for HKDF-Expand derivation of
+/// per-output keys.
 // Rule-35 canonical wipe-on-drop idiom (replaces deprecated `#[zeroize(drop)]`).
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SharedSecret(pub [u8; 64]);
+pub struct SharedSecret(pub [u8; SHARED_SECRET_LEN]);
 
 impl std::fmt::Debug for SharedSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -302,7 +353,7 @@ pub(crate) fn combine_shared_secrets(
     ikm.extend_from_slice(ml_kem_ss);
 
     let hk = Hkdf::<Sha512>::new(Some(KEM_DOMAIN_SALT), &ikm);
-    let mut okm = [0u8; 64];
+    let mut okm = [0u8; SHARED_SECRET_LEN];
     hk.expand(b"", &mut okm)
         .map_err(|_| CryptoError::EncapsulationFailed("HKDF expand failed".into()))?;
 
@@ -310,55 +361,27 @@ pub(crate) fn combine_shared_secrets(
     Ok(SharedSecret(okm))
 }
 
-/// Derive all key material from a master seed (genesis wallet format).
-///
-/// ```text
-/// master_seed
-///   ├── HKDF-Expand("shekyl-ed25519-spend", seed) → Ed25519 spend keypair
-///   ├── HKDF-Expand("shekyl-ed25519-view", seed)  → Ed25519 view keypair
-///   └── HKDF-Expand("shekyl-ml-kem-768", seed)    → ML-KEM-768 decap/encap keypair
-/// ```
-pub struct SeedDerivation;
-
-impl SeedDerivation {
-    /// Derive an Ed25519 spend secret key from the master seed.
-    pub fn derive_ed25519_spend(seed: &[u8; 32]) -> [u8; 32] {
-        Self::hkdf_expand_32(seed, b"shekyl-ed25519-spend")
-    }
-
-    /// Derive an Ed25519 view secret key from the master seed.
-    pub fn derive_ed25519_view(seed: &[u8; 32]) -> [u8; 32] {
-        Self::hkdf_expand_32(seed, b"shekyl-ed25519-view")
-    }
-
-    /// Derive ML-KEM-768 keypair seed material from the master seed.
-    /// The 64-byte output is used as the `d || z` input to ML-KEM keygen.
-    pub fn derive_ml_kem_seed(seed: &[u8; 32]) -> [u8; 64] {
-        Self::hkdf_expand_64(seed, b"shekyl-ml-kem-768")
-    }
-
-    /// Fixed HKDF salt for master-seed child-key derivation.
-    const HKDF_SALT_MASTER_DERIVE: &'static [u8] = b"shekyl-master-derive-v1";
-
-    fn hkdf_expand_32(seed: &[u8; 32], info: &[u8]) -> [u8; 32] {
-        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
-        let mut okm = [0u8; 32];
-        hk.expand(info, &mut okm)
-            .expect("32 bytes < max HKDF output");
-        okm
-    }
-
-    fn hkdf_expand_64(seed: &[u8; 32], info: &[u8]) -> [u8; 64] {
-        let hk = Hkdf::<Sha512>::new(Some(Self::HKDF_SALT_MASTER_DERIVE), seed);
-        let mut okm = [0u8; 64];
-        hk.expand(info, &mut okm)
-            .expect("64 bytes < max HKDF output");
-        okm
-    }
-}
-
 #[cfg(test)]
 mod tests {
+
+    /// A hybrid KEM secret's canonical bytes round-trip, and only its exact
+    /// length parses.
+    #[test]
+    fn a_hybrid_kem_secret_round_trips_through_its_canonical_bytes() {
+        let (_, secret) = HybridX25519MlKem.keypair_generate().unwrap();
+        let bytes = secret.to_canonical_bytes().unwrap();
+        assert_eq!(bytes.len(), HYBRID_KEM_SECRET_LEN);
+        let parsed = HybridKemSecretKey::from_canonical_bytes(&bytes).unwrap();
+        assert_eq!(parsed.x25519, secret.x25519);
+        assert_eq!(parsed.ml_kem, secret.ml_kem);
+        assert!(HybridKemSecretKey::from_canonical_bytes(&bytes[1..]).is_err());
+        let short = HybridKemSecretKey {
+            x25519: secret.x25519,
+            ml_kem: secret.ml_kem[1..].to_vec(),
+        };
+        assert!(short.to_canonical_bytes().is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -463,27 +486,5 @@ mod tests {
         assert_eq!(pk.ml_kem.len(), ML_KEM_768_EK_LEN);
         assert_eq!(sk.x25519.len(), 32);
         assert_eq!(sk.ml_kem.len(), ML_KEM_768_DK_LEN);
-    }
-
-    #[test]
-    fn seed_derivation_deterministic() {
-        let seed = [0xab; 32];
-        let spend1 = SeedDerivation::derive_ed25519_spend(&seed);
-        let spend2 = SeedDerivation::derive_ed25519_spend(&seed);
-        assert_eq!(spend1, spend2);
-
-        let view1 = SeedDerivation::derive_ed25519_view(&seed);
-        let view2 = SeedDerivation::derive_ed25519_view(&seed);
-        assert_eq!(view1, view2);
-    }
-
-    #[test]
-    fn seed_derivation_different_domains() {
-        let seed = [0xab; 32];
-        let spend = SeedDerivation::derive_ed25519_spend(&seed);
-        let view = SeedDerivation::derive_ed25519_view(&seed);
-        let kem_seed = SeedDerivation::derive_ml_kem_seed(&seed);
-        assert_ne!(spend, view);
-        assert_ne!(spend.as_slice(), &kem_seed[..32]);
     }
 }

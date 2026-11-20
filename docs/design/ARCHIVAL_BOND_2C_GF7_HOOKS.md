@@ -171,6 +171,10 @@ single-source-of-truth shape as `draw_entry_gap` itself.
 
 ## 5. The correlator contract (the measurement round's input, sketched here)
 
+*(The sim's correlator built to this contract was withdrawn with the order
+coin, and deleted 2026-11-08; it was last at `76677fcfa`. The recorder of the
+joint timeline, `--gf7-timeline`, stays.)*
+
 The sim side extends the existing standoff harness
 (`shekyl-staking-sim --standoff`) rather than duplicating it. The correlator:
 

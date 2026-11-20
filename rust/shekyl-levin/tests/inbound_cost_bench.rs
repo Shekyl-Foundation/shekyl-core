@@ -68,14 +68,20 @@
 //!
 //! Each simulated peer completes a real `COMMAND_HANDSHAKE` and then services
 //! its socket, because a connection the daemon has dropped costs nothing and
-//! would measure as a free peer.
+//! would measure as a free peer. It also binds its own loopback address and
+//! the launcher waits one clearnet connector refill between connects: one
+//! shared `127.0.0.1` is one host bucket, and a faster launch is a refusal
+//! rather than a connection to cost.
+
+// Linux only: macOS loopback holds only 127.0.0.1 unless aliased.
+#![cfg(target_os = "linux")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 mod live_daemon;
-use live_daemon::{spawn_peer, Daemon};
+use live_daemon::{connector_refill, spawn_peer, Daemon, LoopbackHost};
 
 /// Inbound counts to sample. The first is the baseline; every later row's
 /// marginal cost is taken against its predecessor, so a non-linear term shows
@@ -157,12 +163,16 @@ fn inbound_connection_cost_table() {
 
     for &n in STEPS {
         while handles.len() < n {
+            let ordinal = u32::try_from(handles.len()).expect("peer count");
+            if ordinal > 0 {
+                std::thread::sleep(connector_refill());
+            }
             handles.push(spawn_peer(
                 daemon.p2p_port,
+                LoopbackHost::peer(ordinal),
                 Arc::clone(&stop),
                 Arc::new(AtomicBool::new(false)),
             ));
-            std::thread::sleep(Duration::from_millis(25));
         }
         // Settle: buffers allocate on use, not on accept.
         std::thread::sleep(Duration::from_secs(10));

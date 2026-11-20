@@ -18,7 +18,7 @@ use crate::harness::{
 };
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
-use crate::validate::{form, validate};
+use crate::validate::{form, validate, FormClaims};
 use shekyl_economics::{BLOCK_WEIGHT_SURGE_FACTOR, FULL_REWARD_ZONE};
 use shekyl_types::CurveTreeRoot;
 
@@ -141,7 +141,7 @@ fn an_empty_window_yields_the_zone_twice() {
     let m = over(&[]);
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
-    assert_eq!(m.limit().to_raw(), 2 * ZONE);
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * ZONE);
 }
 
 /// The long-term floor: a median exactly at the zone and one under both
@@ -237,12 +237,12 @@ fn the_limit_is_twice_the_effective_median_and_saturates() {
         long_term_effective_median: LongTermWeight::from_raw(ZONE),
         effective_median: BlockWeight::from_raw(ZONE + 7),
     };
-    assert_eq!(m.limit().to_raw(), 2 * (ZONE + 7));
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * (ZONE + 7));
     let huge = EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(u64::MAX),
         effective_median: BlockWeight::from_raw(u64::MAX - 1),
     };
-    assert_eq!(huge.limit().to_raw(), u64::MAX);
+    assert_eq!(huge.limit(&EconomicParams::default()).to_raw(), u64::MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +301,44 @@ fn the_long_window_is_the_chain_below_its_length() {
     const { assert!(7 < BLOCK_WEIGHT_LONG_TERM_WINDOW) };
 }
 
+/// Past `W_long` a block ages out, held at a window short enough to pass:
+/// [`effective_median_at_windows`] at a five-block long and a three-block
+/// short window over a seven-block chain reads the last five rows, so
+/// blocks 0 and 1 are out of both medians, and the result is
+/// [`medians_over_window`] over those five. The shipped instance is the
+/// same function at the shipped lengths ([`effective_median_at`]); the
+/// young-chain test above pins the arm below `W_long`, this one the arm
+/// past it, which no shipped-length fixture can reach.
+#[test]
+fn a_block_past_the_long_window_ages_out() {
+    let heavy = ZONE + 10_000;
+    let light = ZONE + 100;
+    let chain_with = |old: u64| {
+        (0..7u64).fold(MockChain::default(), |chain, h| {
+            let lt = if h < 2 { old } else { heavy - h };
+            chain.push_weighing(recorded(1_000 + h * 120), CurveTreeRoot::EMPTY, rw(lt, lt))
+        })
+    };
+    let at = BlockHeight::from_raw(7);
+    let read = |chain: &MockChain| {
+        chain.with_view(|view| defined(effective_median_at_windows::<5, 3, _>(&view, at)))
+    };
+    let last_five: Vec<_> = (2..7u64).map(|h| rw(heavy - h, heavy - h)).collect();
+    let expected = medians_over_window::<3>(&last_five, &EconomicParams::default());
+    assert_eq!(read(&chain_with(light)), expected);
+    // Blocks 0 and 1 moved from light to far heavier: nothing moves, because
+    // neither is in a window any more.
+    assert_eq!(read(&chain_with(heavy * 10)), expected);
+    // And the same seven blocks under the shipped windows do see them.
+    let shipped = chain_with(light).with_view(|view| defined(effective_median_at(&view, at)));
+    let shipped_heavy =
+        chain_with(heavy * 10).with_view(|view| defined(effective_median_at(&view, at)));
+    assert_ne!(
+        shipped, shipped_heavy,
+        "the shipped long window holds blocks 0 and 1"
+    );
+}
+
 /// The regime every fixture chain sits in, stated as a pin rather than
 /// left implicit: a young, light chain's long-term median is **the zone**
 /// — the floor arm, not a computed median — and its effective median is
@@ -313,7 +351,7 @@ fn a_young_light_chain_reads_the_zone_on_both_medians() {
     let m = chain.with_view(|view| defined(effective_median_at(&view, BlockHeight::from_raw(12))));
     assert_eq!(ltem(&m), ZONE);
     assert_eq!(eff(&m), ZONE);
-    assert_eq!(m.limit().to_raw(), 2 * ZONE);
+    assert_eq!(m.limit(&EconomicParams::default()).to_raw(), 2 * ZONE);
 }
 
 #[test]
@@ -332,11 +370,14 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
     let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed: expected_seed(chain),
+            target: expected_target(chain, &RuleSet::GENESIS),
+            references: &references,
+            network: crate::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        expected_seed(chain),
-        expected_target(chain, &RuleSet::GENESIS),
-        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -344,13 +385,8 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
     chain.with_view(|view| {
-        let valid = judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .expect("the fixture must validate");
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED))
+            .expect("the fixture must validate");
         assert!(valid.coverage().contains(CenRow::G6), "G6 recorded");
         assert!(valid.coverage().contains(CenRow::G6b), "G6b recorded");
         *valid.block().weights()
@@ -430,12 +466,13 @@ fn a_withheld_weights_window_below_the_tip_is_corrupt_not_a_verdict() {
 // The trajectory: G6/G6b over the generator's three schedules
 // ---------------------------------------------------------------------------
 
-/// The long-term weight follows `tests/block_weight/block_weight.py`'s
-/// trajectory, block by block, over its three schedules: 10 000 maximal
-/// blocks (twice the effective median), 45 000 pseudorandom ones and 5 000
-/// of 90 bytes. The generator's output is frozen in
-/// `tests/vectors/block_weight_trajectory/` (its manifest names the
-/// invocation); the generator stays the generator.
+/// The long-term weight follows the generator's trajectory
+/// (`tests/vectors/block_weight_trajectory/block_weight.py`, which reads `S`
+/// from `config/consensus_constants.json`), block by block, over its three
+/// schedules: 10 000 maximal blocks (twice the effective median), 45 000
+/// pseudorandom ones and 5 000 of 90 bytes. The generator's output is frozen
+/// beside it in `trajectory.txt` (the manifest names the invocation and the
+/// `S` it was generated at); the generator stays the generator.
 ///
 /// Each block is priced as the validator prices it: [`medians_over`] the
 /// window below it (CEN-G6, and G6b's clamp), then [`long_term_weight`],
@@ -513,7 +550,7 @@ fn the_long_term_weight_follows_the_generators_trajectory() {
                 2 => assert_eq!(bw, 90, "{at}: the minimal schedule"),
                 _ => {}
             }
-            let long_term = long_term_weight(ltem, bw);
+            let long_term = long_term_weight(ltem, bw, &EconomicParams::default());
             assert_eq!(long_term, ltbw, "{at}: the long-term weight");
             window.pop_front();
             window.push_back(rw(bw, long_term));

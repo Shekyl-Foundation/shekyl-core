@@ -15,7 +15,7 @@ follows unchanged.
 (i.i.d. direction) and PD-2 (marginal-map rule) folded, PD-3 ruled (predicate
 parameterization inverted to production-side). Second pass: PD-F-1 folded
 (band grounding = named measurable anchors), PD-3-1 folded (the delegate is
-load-bearing — the `shekyl_archival_failure_window_slashable` FFI export
+load-bearing — the `shekyl_archival_failure_window_slashable` (deleted, `DEL-008`) FFI export
 binds its signature). Third pass: PD-F-2 folded, **ratification-blocking**
 (the anchors compare TOTAL challenge→response latency — both populations pay
 two Tor legs; the separation is one fetch RTT and the load-bearing parameter
@@ -183,7 +183,7 @@ plausible `ρ` — even at the 0.098 end — is the PoRep-promotion finding.
   correction from the second-pass review, PD-3-1**: the predicate is a plain
   function whose only `(m, n)` dependence is two const reads — but it is
   *not* FFI-free: `shekyl-ffi/src/archival_ffi.rs` imports it and wraps it as
-  the `shekyl_archival_failure_window_slashable` C export. Zero caller ripple
+  the `shekyl_archival_failure_window_slashable` (deleted, `DEL-008`) C export. Zero caller ripple
   holds *because the delegate preserves the signature that export binds* —
   which makes the delegate **load-bearing, not a convenience shim**. Its
   defeat condition, named so it cannot be met by accident: a later

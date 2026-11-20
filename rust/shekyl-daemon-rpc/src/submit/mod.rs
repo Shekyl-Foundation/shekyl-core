@@ -7,13 +7,9 @@
 //! authority (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
 //!
 //! Rust owns parse, structural and semantic validation, fee arithmetic,
-//! verification dispatch, and **verdict classification**; C++ owns byte
-//! storage and index membership behind the narrow [`SubmitStateShim`] seam
-//! (§3.2 / §4). The engine is generic over that seam: production implements
-//! it over the three FFI shims, tests implement it as a deterministic mock,
-//! and when the mempool itself migrates to Rust the Rust mempool implements
-//! the trait — engine, wire contract, and wallet untouched (the *planned*
-//! reversion per §11).
+//! verification dispatch, and **verdict classification**. Production state
+//! is [`RustPoolShim`] over the node's pool. The engine is generic over
+//! [`SubmitStateShim`]: tests implement it as a deterministic mock.
 //!
 //! ## Phase structure (§3.1)
 //!
@@ -40,7 +36,6 @@ pub mod certificate;
 pub mod engine;
 pub mod facts;
 pub mod fee;
-pub mod ffi_shim;
 pub mod gate;
 pub mod phase_a;
 pub mod rust_pool_shim;
@@ -51,17 +46,77 @@ pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
     EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
-    KeyImageConflict, LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
-    ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
+    KeyImageConflict, LastServedScanMismatch, OriginPublication, ReferenceFacts, ReleaseFacts,
+    ReleaseRecordFacts, ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
-pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
-pub use rust_pool_shim::{ChainSource, RustPoolShim};
+pub use rust_pool_shim::{
+    clear_production, install_production, production, ChainSource, OriginHold, RelayNudge,
+    RustPoolShim, StoreChain,
+};
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure, VerifyReject};
 
-/// The production engine: FFI state shim (§4) + native verifier (§3.3's
-/// Phase-C battery). One instance per daemon, shared across transport
-/// workers via `Arc` in the server's `AppState`.
-pub type DaemonSubmitEngine = SubmitEngine<FfiSubmitShim, DaemonTxVerifier>;
+/// The production engine: the node's pool and the native verifier. One
+/// instance per daemon, installed by the node's open and shared across
+/// transport workers via `Arc` in the server's `AppState`.
+pub type DaemonSubmitEngine = SubmitEngine<RustPoolShim<StoreChain>, DaemonTxVerifier>;
+
+/// `tx_submit { body }`: the daemon's atomic verdict on one transaction
+/// (`DAEMON_SUBMIT_VERDICT.md` §2). A verdict is an answer, `rejected`
+/// included; a refusal of the call is the absence of one (Two Generals),
+/// which a client holds and resubmits.
+///
+/// The caller's tier is the Dandelion++ embargo boundary (§3.1): anyone but
+/// the host's administrator sees only what is public, so the call cannot
+/// probe a stem entry (RT-O9.3). The host keeps the F31 resubmit-as-status
+/// read.
+///
+/// F39's verification cap is the one Phase-C semaphore, taken before the
+/// blocking pool, so a queued submission parks as a cheap task and does not
+/// pin a blocking worker; one semaphore for every listener makes the cap
+/// the daemon's. The permit is held by the blocking work itself
+/// ([`gate::verify_under`]), so a cancelled call cannot free the cap while
+/// its verification runs.
+///
+/// # Errors
+///
+/// `daemon.internal` (stage `submit`) for an engine fault or a lost task;
+/// the specifics are in the daemon's log.
+pub async fn tx_submit(
+    state: &std::sync::Arc<crate::server::AppState>,
+    host: bool,
+    tx: Vec<u8>,
+) -> Result<shekyl_rpc_types::wire::tx::Verdict, shekyl_rpc_types::errors::RpcError> {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let fault = |what: &str| {
+        RpcError::new(
+            ErrorClass::Internal,
+            Diagnostic::new(crate::methods::codes::DAEMON_INTERNAL, what).param("stage", "submit"),
+        )
+    };
+    let caller = if host {
+        SubmitCaller::Owner
+    } else {
+        SubmitCaller::Foreign
+    };
+    tracing::debug!(bytes = tx.len(), "submit received");
+    let Ok(permit) = phase_c_semaphore().acquire_owned().await else {
+        tracing::error!("phase-C semaphore closed");
+        return Err(fault("the submission gate is closed"));
+    };
+    let engine = std::sync::Arc::clone(&state.submit_engine);
+    let joined = gate::verify_under(permit, move || engine.submit(&tx, caller)).await;
+    match joined {
+        Ok(Ok(verdict)) => Ok(verdict),
+        Ok(Err(engine_fault)) => {
+            tracing::error!(%engine_fault, "submit engine internal fault");
+            Err(fault("the submission engine faulted"))
+        }
+        Err(join_error) => {
+            tracing::error!(%join_error, "submit task join failure");
+            Err(fault("the submission task did not finish"))
+        }
+    }
+}

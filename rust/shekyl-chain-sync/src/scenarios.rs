@@ -19,11 +19,10 @@ use std::num::NonZeroU128;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use shekyl_chain_ingest::{CorpusReader, IngestEvent, Source};
+use shekyl_chain_ingest::{CorpusSource, IngestEvent, Source};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
 use shekyl_chain_rules::{
-    AtHeight, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip,
-    Trust,
+    AtHeight, CappedEpoch, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
@@ -33,7 +32,7 @@ use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::harness::UnitWork;
 use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
-use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
+use crate::proof::{drive, fixed, headers_of, headers_stating, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
 pub(crate) struct NoDraw;
@@ -52,7 +51,8 @@ fn coinbase(raw: Vec<u8>) -> BlockBody {
     BlockBody {
         block: raw,
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -91,7 +91,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../shekyl-chain-ingest/tests/vectors/spend-1in-2out/corpus.e2");
     let file = std::fs::File::open(&path).expect("the spend corpus");
-    let mut reader = CorpusReader::open(BufReader::new(file)).expect("the corpus opens");
+    let mut reader = CorpusSource::open(BufReader::new(file)).expect("the corpus opens");
     let mut candidates = Vec::new();
     while let Some(sequenced) = Source::next(&mut reader).expect("the corpus reads") {
         if let IngestEvent::Extend(candidate) = sequenced.event {
@@ -114,10 +114,9 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
         })
         .collect();
     let epoch = SettlementEpochBlocks::new(10_000).expect("the corpus epoch");
-    let schedule =
-        FakechainSchedule::new(epoch, BlockCount::from_raw(720)).expect("the corpus cap");
-    let rules = RuleSet::fakechain(NonZeroU128::new(1), schedule);
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let schedule = CappedEpoch::new(epoch, BlockCount::from_raw(720)).expect("the corpus cap");
+    let rules = RuleSet::GENESIS.with_levers(NonZeroU128::new(1), schedule);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     let genesis = Prefix(&records[..1]);
     let tip = genesis.tip().expect("genesis").expect("a tip");
     drive(&mut sync, &genesis, Event::Tip { tip });
@@ -184,12 +183,14 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
             },
         );
     }
+    assert_eq!(sync.selected().hash, spend_hash);
+    let star_work = sync.selected().work.to_raw();
     drive(
         &mut sync,
         &parent,
         Event::Headers {
             session: 2,
-            bytes: headers_of(candidates[spend].block.pow_blob()),
+            bytes: headers_stating(candidates[spend].block.pow_blob(), star_work),
         },
     );
     let out = drive(&mut sync, &parent, Event::Room { seats: 1 });
@@ -208,11 +209,12 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
             pqc_auth_hash: tx.pqc_auth_hash(),
             archival_len,
         })],
-        attestation_witness: candidate
-            .attestation_witness
+        bundle_references: candidate
+            .bundle_references
             .as_ref()
-            .map(|witness| witness.as_bytes().to_vec())
+            .map(|references| references.as_slice().to_vec())
             .unwrap_or_default(),
+        bundle_bodies: Vec::new(),
     };
     let out = drive(
         &mut sync,
@@ -236,7 +238,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
     );
 }
 
-struct Prefix<'a>(&'a [HeaderRecord]);
+pub(crate) struct Prefix<'a>(pub(crate) &'a [HeaderRecord]);
 
 impl HeaderView<'static> for Prefix<'_> {
     type Fault = core::convert::Infallible;
@@ -303,7 +305,7 @@ fn an_unavailable_body_is_asked_of_the_other_session_first() {
 fn parted(defer: bool) {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -365,12 +367,14 @@ fn parted(defer: bool) {
                 },
             );
         }
+        assert_eq!(sync.selected().hash, second_hash);
+        let star_work = sync.selected().work.to_raw();
         drive(
             &mut sync,
             &view,
             Event::Headers {
                 session: 2,
-                bytes: headers_of(second_pow),
+                bytes: headers_stating(second_pow, star_work),
             },
         );
         let out = drive(&mut sync, &view, Event::Room { seats: 2 });
@@ -409,7 +413,7 @@ fn parted(defer: bool) {
 fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -654,7 +658,7 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
 fn a_body_for_a_header_no_longer_in_the_tree_is_not_a_fault() {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
@@ -742,7 +746,7 @@ fn the_slot_holder_is_hashed_on_each_response() {
     let rules = fixed(1, 2);
     let main = chain_of(40);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    let mut sync = Sync::new(Trust::UNPINNED, move |_| rules);
     main.with_view(|view| {
         let view = UnitWork(view);
         let tip = view.tip().expect("main answers").expect("a tip");
@@ -787,7 +791,7 @@ fn the_slot_holder_is_hashed_on_each_response() {
         .expect("main answers");
         hash_proves(&mut sync, &view, &mut out);
         assert_eq!(
-            sync.slot_session(),
+            sync.slot_holder(),
             Some(1),
             "the budget did not take the slot: {out:?}"
         );
@@ -859,7 +863,7 @@ where
 {
     let main = chain_of(8);
     let mut block = candidate_on(&main, Vec::new()).block;
-    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    let mut sync = Sync::new(Trust::UNPINNED, target_one as fn(BlockHeight) -> RuleSet);
     main.with_view(|view| {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });

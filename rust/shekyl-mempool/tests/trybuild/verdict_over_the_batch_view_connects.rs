@@ -13,7 +13,7 @@ use shekyl_chain_store::store::{ChainStore, StoreError};
 fn program(store: &ChainStore, formed: StructurallyValid) -> Result<(), StoreError> {
     store.write(|batch| {
         let view = batch.chain_view();
-        let valid = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+        let valid = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNPINNED)
             .unwrap()
             .unwrap();
         batch.connect(valid, RuleSet::GENESIS).map(|_| ())

@@ -34,7 +34,7 @@ use sha3::{CShake256, CShake256Core};
 use shekyl_types::archival::{
     IssuedDraw, SettlementRow, SettlementRowError, COUNTED_DRAWS, ISSUED_DIGEST_LEN,
 };
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 /// cSHAKE256 customization for [`select_counted`] (rule 30: one label, one
 /// function, versioned).
@@ -42,9 +42,6 @@ pub const SETTLEMENT_SELECT_CUSTOMIZATION: &[u8] = b"shekyl/archival-settlement-
 
 /// cSHAKE256 customization for [`issued_draw_term`].
 pub const ISSUED_INDEX_CUSTOMIZATION: &[u8] = b"shekyl/archival-issued-index-v1";
-
-/// The settlement beacon's width: one block hash.
-pub const SETTLEMENT_BEACON_LEN: usize = 32;
 
 /// Attempts at one position before the candidate in hand is accepted. The
 /// same cap as the draw's own selection, so the loop is total. A rejection
@@ -73,7 +70,7 @@ const SELECT_ATTEMPTS: u32 = 256;
 /// and the counted draws are `L[0]`, `L[1]`, `L[2]`.
 #[must_use]
 pub fn select_counted(
-    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    beacon: &BlockHash,
     persona: &PCanonicalId,
     shard: ShardId,
     epoch: SettlementEpoch,
@@ -99,7 +96,7 @@ pub fn select_counted(
 
 /// A value in `0..remaining`, uniform up to the cap, for position `k`.
 fn candidate(
-    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    beacon: &BlockHash,
     persona: &PCanonicalId,
     shard: ShardId,
     epoch: SettlementEpoch,
@@ -112,7 +109,7 @@ fn candidate(
     for attempt in 0..SELECT_ATTEMPTS {
         let mut hasher: CShake256 =
             CoreWrapper::from_core(CShake256Core::new(SETTLEMENT_SELECT_CUSTOMIZATION));
-        hasher.update(beacon);
+        hasher.update(beacon.as_bytes());
         hasher.update(persona.as_bytes());
         hasher.update(&shard.to_raw().to_le_bytes());
         hasher.update(&epoch.to_raw().to_le_bytes());
@@ -148,7 +145,7 @@ fn candidate(
 /// pass halts on it as a store-invariant fault (spec §9.5, check 3), never
 /// clamps and never skips the row.
 pub fn settle_pair(
-    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    beacon: &BlockHash,
     persona: &PCanonicalId,
     shard: ShardId,
     epoch: SettlementEpoch,
@@ -199,7 +196,7 @@ mod tests {
 
     fn select(beacon: u8, p: u8, shard: u64, n: usize) -> Option<[usize; COUNTED_DRAWS]> {
         select_counted(
-            &[beacon; 32],
+            &BlockHash::from_bytes([beacon; 32]),
             &persona(p),
             ShardId::from_raw(shard),
             SettlementEpoch::from_raw(5),
@@ -253,7 +250,7 @@ mod tests {
 
     fn settle(passed: &[bool]) -> Option<SettlementRow> {
         settle_pair(
-            &[0x33; 32],
+            &BlockHash::from_bytes([0x33; 32]),
             &PCanonicalId::from_bytes([0x44; 32]),
             ShardId::from_raw(7),
             SettlementEpoch::from_raw(5),

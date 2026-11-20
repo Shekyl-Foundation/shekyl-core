@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Live Rust Levin client ↔ C++ `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
+//! Live Rust Levin client ↔ a running `shekyld` (`LV2_PORTABLE_STORAGE.md` §12 step 4).
 //!
 //! Proves the LV-2b maps round-trip on the real wire. Does **not** rewire
 //! daemon emit/recv (that is LV-3). `#[ignore]`d: requires `SHEKYLD_BIN`.
@@ -14,9 +14,12 @@
 //!   cargo test -p shekyl-levin --test dual_stack -- --ignored --nocapture
 //! ```
 //!
-//! `--offline` skips the p2p bind (`net_node.inl`); this harness uses
-//! `--p2p-bind-ip 127.0.0.1` plus `--out-peers 0`. `--regtest` (FAKECHAIN)
-//! speaks the id derived from fakechain's genesis pin.
+//! The daemon is started on the regtest network with a loopback
+//! `clearnet-listen` and Tor off; the handshake speaks the id derived from
+//! regtest's own genesis pin (NI-Q8). Since 2026-11-05 the daemon's p2p side
+//! is the Rust session layer (`shekyl-p2p-session`), so this is a
+//! Rust-to-Rust walk over the same wire the C++ host once answered; the wire
+//! is unchanged.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -30,17 +33,21 @@ use shekyl_levin::{
     COMMAND_TIMED_SYNC, DEFAULT_MAX_PACKET_SIZE,
 };
 
-/// FAKECHAIN (`--regtest`) derives its id from fakechain's genesis pin,
-/// which is mainnet's genesis today.
+#[path = "support/owner_socket_dir.rs"]
+mod owner_socket_dir;
+
+/// Regtest (`--network regtest`) derives its id from its own genesis pin.
 fn regtest_network_id() -> shekyl_p2p_transport::NetworkId {
     shekyl_p2p_transport::network_id_from_genesis(&shekyl_rpc_types::genesis_hash_for(
-        shekyl_rpc_types::DaemonNetwork::Fakechain,
+        shekyl_rpc_types::Network::Regtest,
     ))
 }
 
 struct Daemon {
     child: Child,
     data_dir: PathBuf,
+    /// Not under `data_dir`: that path is too long for `sun_path` on macOS.
+    socket_dir: PathBuf,
     p2p_port: u16,
     rpc_port: u16,
 }
@@ -55,12 +62,12 @@ impl Daemon {
                  --test dual_stack -- --ignored"
             ),
         };
-        let rpc_port = free_port();
-        let p2p_port = free_port();
+        let [rpc_port, p2p_port] = distinct_ports();
         let data_dir = std::env::temp_dir().join(format!("shekyl-lv2b-dual-{p2p_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
         std::fs::create_dir_all(&data_dir).expect("create data dir");
 
+        let socket_dir = owner_socket_dir::owner_socket_dir(p2p_port);
         let log = std::fs::File::create(data_dir.join("daemon.log")).expect("daemon log");
         let child = Command::new(&bin)
             .args([
@@ -80,6 +87,8 @@ impl Daemon {
                 &data_dir.join("shekyld.log").display().to_string(),
                 "--log-level",
                 "warn",
+                "--rpc-socket-dir",
+                socket_dir.to_str().expect("utf8 socket dir"),
             ])
             .stdout(Stdio::from(log.try_clone().expect("clone log")))
             .stderr(Stdio::from(log))
@@ -90,6 +99,7 @@ impl Daemon {
         let mut daemon = Self {
             child,
             data_dir,
+            socket_dir,
             p2p_port,
             rpc_port,
         };
@@ -111,7 +121,7 @@ impl Daemon {
                     log_tail(&self.log_path())
                 );
             }
-            match get_info(self.rpc_port) {
+            match daemon_status(self.rpc_port) {
                 Ok(_) => {
                     wait_tcp(self.p2p_port, deadline);
                     return;
@@ -134,12 +144,38 @@ impl Drop for Daemon {
         drop(self.child.kill());
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
+        drop(std::fs::remove_dir_all(&self.socket_dir));
     }
 }
+
+/// Probes of port 0 before the test gives up. Same bound as `live_daemon`.
+const PORT_PROBES: usize = 64;
 
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
     l.local_addr().expect("local_addr").port()
+}
+
+/// A free port that is none of `taken`. Two probes of port 0 can be one
+/// port, and the daemon then cannot bind both listeners.
+fn free_port_excluding(taken: &[u16]) -> u16 {
+    for _ in 0..PORT_PROBES {
+        let port = free_port();
+        if !taken.contains(&port) {
+            return port;
+        }
+    }
+    panic!("could not obtain a port distinct from {taken:?}");
+}
+
+/// `N` ports, each different.
+fn distinct_ports<const N: usize>() -> [u16; N] {
+    let mut ports = [0u16; N];
+    for i in 0..N {
+        let port = free_port_excluding(&ports[..i]);
+        ports[i] = port;
+    }
+    ports
 }
 
 fn wait_tcp(p2p_port: u16, deadline: Instant) {
@@ -163,17 +199,20 @@ fn log_tail(log_path: &Path) -> String {
         .unwrap_or_else(|e| format!("(daemon log unreadable: {e})"))
 }
 
+/// The daemon's chain as its handshake carries it: the block count (the
+/// tip's height plus one) and the tip's hash.
 struct ChainTip {
     height: u64,
     top_id: [u8; 32],
 }
 
-fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
+/// The chain from `daemon_status`, whose `height` is the tip's ordinal.
+fn daemon_status(rpc_port: u16) -> Result<ChainTip, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", rpc_port)).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
-    let body = r#"{"jsonrpc":"2.0","id":"0","method":"get_info"}"#;
+    let body = r#"{"jsonrpc":"2.0","id":0,"method":"daemon_status"}"#;
     let req = format!(
         "POST /json_rpc HTTP/1.1\r\nHost: 127.0.0.1:{rpc_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -185,10 +224,12 @@ fn get_info(rpc_port: u16) -> Result<ChainTip, String> {
     stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&buf);
     let json = text.split("\r\n\r\n").nth(1).unwrap_or(&text);
-    let height = json_u64(json, "height").ok_or_else(|| format!("no height in {json}"))?;
-    let top_id =
-        json_hex32(json, "top_block_hash").ok_or_else(|| format!("no top_block_hash in {json}"))?;
-    Ok(ChainTip { height, top_id })
+    let tip = json_u64(json, "height").ok_or_else(|| format!("no height in {json}"))?;
+    let top_id = json_hex32(json, "hash").ok_or_else(|| format!("no hash in {json}"))?;
+    Ok(ChainTip {
+        height: tip + 1,
+        top_id,
+    })
 }
 
 fn json_u64(body: &str, key: &str) -> Option<u64> {
@@ -324,7 +365,7 @@ const CLIENT_NONCE: [u8; 32] = [0x42; 32];
 #[test]
 fn rust_client_handshakes_with_shekyld() {
     let daemon = Daemon::start();
-    let tip = get_info(daemon.rpc_port).expect("get_info after ready");
+    let tip = daemon_status(daemon.rpc_port).expect("daemon_status after ready");
 
     let mut session = Session::connect(daemon.p2p_port, daemon.log_path());
     // The handshake carries no address on any connector (ruled 2026-10-09):
@@ -333,9 +374,13 @@ fn rust_client_handshakes_with_shekyld() {
         node_data: BasicNodeData {
             network_id: regtest_network_id(),
         },
+        // The daemon's own chain as a claim: under `dev-difficulty=1` every
+        // block's work is 1, so the work is the block count. Chain sync's
+        // owner closes a session whose claim has less work than blocks
+        // (`PayloadRefused::Work`).
         payload_data: CoreSyncData {
             current_height: tip.height,
-            cumulative_difficulty: 0,
+            cumulative_difficulty: tip.height,
             cumulative_difficulty_top64: 0,
             top_id: tip.top_id,
         },

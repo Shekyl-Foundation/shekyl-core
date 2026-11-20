@@ -44,24 +44,30 @@
 //!   directory, or onion key is the forbidden crossover). Every
 //!   instance-identifying input here is a parameter.
 //! - **The supervisor respawns.** `shekyl-daemon`'s `tor` module drives
-//!   `shekyl-tor-control-client::supervisor`. The onion seed is held for the
-//!   boot and passed into [`ephemeral::DaemonTorControl::publish`]. Death is
+//!   `shekyl-tor-control-client::supervisor`. The onion identity is held for
+//!   the boot and passed into [`ephemeral::DaemonTorControl::publish`]. Death is
 //!   still observable ([`ephemeral::DaemonTorControl::is_alive`] /
 //!   [`ephemeral::DaemonTorControl::wait_death`]).
+#![deny(unsafe_code)]
 
 mod data_dir;
 pub mod ephemeral;
+pub mod probe;
 
-pub use data_dir::{space_needed, sweep_stale_data_dirs, TOR_WRITE_HEADROOM};
+pub use data_dir::{space_needed, sweep_stale_data_dirs, KeptLog, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
-    CacheSave, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
-    KeptDataDir, LaunchFailure, OnionSeed, SpawnError, Teardown, TorDeath,
+    CacheSave, ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError,
+    DaemonTorStartError, KeptDataDir, LaunchFailure, Retirement, SpawnError, Teardown,
+    TombstoneEnd, TorDeath, TOMBSTONE_DELETE_BOUND,
 };
+pub use probe::{probe_own_onion, IsolationPair, ProbeDial};
 pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the daemon's start seam (`shekyl-daemon`'s `tor.rs`) names
 // one crate (this one) rather than reaching around it to the client for the
 // error type alone.
 pub use shekyl_tor_control_client::binary::TorBinaryError;
 
+#[cfg(test)]
+mod probe_live_tests;
 #[cfg(test)]
 mod test_support;

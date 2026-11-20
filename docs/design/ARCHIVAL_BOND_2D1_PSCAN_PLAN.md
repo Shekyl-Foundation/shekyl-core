@@ -174,17 +174,18 @@ window**, so — unlike the ledger scan, which carries an explicit `RollbackToFo
 State it deliberately, so nobody later "improves" the `P`-scan by reading closer to tip
 and silently reintroduces a rollback surface.
 
-**Consequence 2 (cost) — a network-parameterized funding-visibility lag feeds cold-start.**
-That finality horizon is **`max_reorg_depth`, which is *network-parameterized*, not a
-constant** (the cover work already moved off the hardcoded `720`: archival ≈ 720, testnet
-6 — `NetworkSafetyConstants`). `P` discovers its funding by **scanning** (the firewall-clean
+**Consequence 2 (cost) — the archival reorg depth is the funding-visibility lag, on every network.**
+The scan's finality horizon is **`ARCHIVAL_REORG_DEPTH_BLOCKS`** (720), the depth
+`PScanConfig::production` seals behind and the same depth §6 SP-2 names
+(`tip − archival_reorg_depth_blocks`). Ordinary wallet finality is a different depth:
+`WalletSafetyConstants` is the consensus lock window, which a session may raise and may
+not lower, and it does not move the P-scan. `P` discovers its funding by **scanning** (the firewall-clean
 path — being *handed* the funding tx out-of-band would relink principal→`P`). So
-**cold-start "stake from the cover" inherits a `max_reorg_depth`-deep discovery latency**:
-`P` cannot see the cover output to spend it until it is finality-deep — most of a day on
-archival, trivial on testnet, so the cold-start sequence **behaves differently per
-network**, and the cover/standoff timing was pinned *without this lag in view*. **Two pins
-for Round 1:** (a) confirm `P` truly *scan-discovers* its funding (vs is handed it), and
-(b) if so, name the `max_reorg_depth` funding-visibility lag as an **explicit input to the
+**cold-start "stake from the cover" inherits a 720-block discovery latency on every
+network**: `P` cannot see the cover output to spend it until that horizon, about a day
+at the 120-second target, and the cover/standoff timing was pinned *without this lag in
+view*. **Two pins for Round 1:** (a) confirm `P` truly *scan-discovers* its funding (vs is handed it), and
+(b) if so, name the archival-reorg-depth funding-visibility lag as an **explicit input to the
 cold-start sequence** — it composes with the already-pinned entry-gap standoff.
 
 ### DQ3 — the earnings-ramp signal is a *deliverable*, not an emergent hope (`C_min`)
@@ -696,7 +697,7 @@ batch and offload together; neither alone is enough.
 
 **Block-granularity is adequate — no mid-block-resumable cursor needed.** A single block's
 work is **consensus-bounded**: outputs-per-tx are capped at `BULLETPROOF_PLUS_MAX_OUTPUTS = 16`
-(`src/cryptonote_config.h:241`), the decode path independently gates on
+(`src/cryptonote_config.h` at `ac3836de90` (line 241)), the decode path independently gates on
 `shekyl_scanner::MAX_OUTPUTS` (`engine-core/.../curve_tree_decode.rs:109`), and txs-per-block
 is bounded by the cumulative block-weight limit. So a small `BlockRange` carries bounded work
 and `synced_height` (block-granular) is a sufficient resume point. **Tuning note (not

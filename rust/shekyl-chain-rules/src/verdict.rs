@@ -110,7 +110,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The rule set the block was judged under — the set, not only its
-    /// id. A Fakechain `Fixed` target reuses [`RuleSetId::GENESIS`], so
+    /// id. A levered `Fixed` target reuses [`RuleSetId::GENESIS`], so
     /// `connect` compares this with the issued set `in_force` names.
     #[must_use]
     pub const fn rule_set(&self) -> RuleSet {
@@ -118,7 +118,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     }
 
     /// The id of the set the block was judged under. What the store
-    /// persists as `hf_versions`; not a proxy for set equality.
+    /// persists as `rule_set_in_force`; not a proxy for set equality.
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
         self.rule_set.id()
@@ -129,6 +129,23 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     #[must_use]
     pub const fn coverage(&self) -> &RuleCoverage {
         &self.coverage
+    }
+
+    /// The same verdict with `admitted` in place of what `validate` derived.
+    ///
+    /// **A test instrument, behind the `harness` feature** (never on the
+    /// production surface). The store's admission writer refuses states no
+    /// verifier output reaches — a reveal whose draw row is absent, a
+    /// reduction past `u32` — and its tests hand it such an output on a
+    /// block the rules accepted, so the refusal is the writer's and not a
+    /// rule's. A verdict this produces connects under the same brand: the
+    /// instrument changes what the writer is given, not which view it is
+    /// given to.
+    #[cfg(any(test, feature = "harness"))]
+    #[must_use]
+    pub fn with_admitted(mut self, admitted: Vec<crate::archival::Admitted>) -> Self {
+        self.block.set_admitted(admitted);
+        self
     }
 }
 
@@ -166,6 +183,13 @@ pub enum Locus {
         /// The input's position in that transaction.
         input: usize,
     },
+    /// One reference of the block's bundle section (CEN-J29 through
+    /// J37), by its position in the section. A refusal of the section as a
+    /// whole — its root, its budget — is [`Self::Block`].
+    Bundle {
+        /// The reference's position in the section.
+        position: usize,
+    },
 }
 
 impl fmt::Display for TxSlot {
@@ -184,6 +208,7 @@ impl fmt::Display for Locus {
             Self::Block => f.write_str("block"),
             Self::Tx { slot } => write!(f, "{slot}"),
             Self::Input { slot, input } => write!(f, "{slot} input #{input}"),
+            Self::Bundle { position } => write!(f, "bundle reference #{position}"),
         }
     }
 }

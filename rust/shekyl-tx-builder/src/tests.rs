@@ -14,6 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
 
@@ -43,45 +44,45 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
     }
 }
 
-/// Build an [`EncryptedOutputField`] fixture through its `Deserialize` impl —
-/// the same path the FFI JSON boundary uses.
-///
-/// There is deliberately no test-only byte constructor to call instead: a
-/// `test-utils` gate would not have gated one (`shekyl-ffi` enables that
-/// feature in its normal graph and cargo unifies features), so it would have
-/// shipped in the production archive. Going through serde keeps tests unable
-/// to do anything a C++ caller could not.
-pub(crate) fn enc_field_fixture(bytes: [u8; 9]) -> EncryptedOutputField {
-    serde_json::from_str(&format!("\"{}\"", hex::encode(bytes))).expect("fixture hex is valid")
+/// A real output's encrypted amount and label, built in process by
+/// `construct_output`: the one way to obtain an [`EncryptedOutputField`]
+/// (it has no byte constructor, test-only or otherwise, because a
+/// `test-utils` gate would not keep one out of the production archive).
+pub(crate) fn enc_fields() -> (EncryptedOutputField, EncryptedOutputField) {
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+    let (pk, _sk) = HybridX25519MlKem
+        .keypair_generate()
+        .expect("a KEM keypair generates");
+    let spend = curve25519_dalek::constants::ED25519_BASEPOINT_POINT
+        .compress()
+        .to_bytes();
+    let out = shekyl_crypto_pq::output::construct_output(
+        &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
+        &pk.x25519,
+        &pk.ml_kem,
+        &spend,
+        1,
+        0,
+    )
+    .expect("an output constructs");
+    (out.enc_amount_wire(), out.enc_label_wire())
 }
 
-#[test]
-fn signed_proofs_enc_arrays_keep_the_json_shape_the_ffi_already_read() {
-    // `SignedProofs::enc_amounts` / `enc_labels` carried `Vec<[u8; 9]>` through a
-    // bespoke `hex_vec9` serde helper until this PR typed them as
-    // `Vec<EncryptedOutputField>` and deleted the helper. That is a change to a
-    // struct C++ deserializes, so "the JSON is unchanged" is a claim about bytes
-    // and is pinned here rather than asserted. The old helper emitted
-    // `Vec<String>` with each entry `hex::encode(item)`: 18 lowercase characters,
-    // no separators, one entry per output.
-    let fields = vec![
-        enc_field_fixture([0x00, 0x01, 0x0f, 0x10, 0x7f, 0x80, 0xab, 0xfe, 0xff]),
-        enc_field_fixture([0u8; 9]),
-    ];
-    assert_eq!(
-        serde_json::to_string(&fields).expect("serializing the wire fields succeeds"),
-        r#"["00010f107f80abfeff","000000000000000000"]"#,
-        "the FFI reads this array; the encoding must not move with the Rust type"
-    );
+/// A canonical derived mask whose low byte is `low`. Validation tests never
+/// open it; a non-canonical byte pattern is not a mask.
+fn fixture_mask(low: u8) -> OutputMask {
+    let mut bytes = [0u8; 32];
+    bytes[0] = low;
+    OutputMask::from_derived(&bytes)
 }
 
 fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: [21u8; 32],
-        enc_amount: enc_field_fixture([0u8; 9]),
-        enc_label: enc_field_fixture([0u8; 9]),
+        commitment_mask: fixture_mask(21),
+        enc_amount: enc_fields().0,
+        enc_label: enc_fields().1,
     }
 }
 
@@ -98,6 +99,7 @@ fn dummy_tree() -> TreeContext {
 #[test]
 fn test_no_inputs() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[],
         &[dummy_output(100)],
@@ -111,6 +113,7 @@ fn test_no_inputs() {
 fn test_too_many_inputs() {
     let inputs: Vec<SpendInput> = (0..=MAX_INPUTS).map(|_| dummy_spend_input(100)).collect();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
@@ -123,6 +126,7 @@ fn test_too_many_inputs() {
 #[test]
 fn test_no_outputs() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[],
@@ -136,6 +140,7 @@ fn test_no_outputs() {
 fn test_too_many_outputs() {
     let outputs: Vec<OutputInfo> = (0..=MAX_OUTPUTS).map(|_| dummy_output(100)).collect();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100 * (MAX_OUTPUTS as u64 + 1))],
         &outputs,
@@ -148,6 +153,7 @@ fn test_too_many_outputs() {
 #[test]
 fn test_zero_input_amount() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(0)],
         &[dummy_output(100)],
@@ -163,6 +169,7 @@ fn test_zero_input_amount() {
 #[test]
 fn test_zero_output_amount() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(0)],
@@ -179,6 +186,7 @@ fn test_zero_output_amount() {
 fn test_input_amount_overflow() {
     let inputs = vec![dummy_spend_input(u64::MAX), dummy_spend_input(1)];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
         &[dummy_output(100)],
@@ -192,6 +200,7 @@ fn test_input_amount_overflow() {
 fn test_output_amount_overflow() {
     let outputs = vec![dummy_output(u64::MAX), dummy_output(1)];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &outputs,
@@ -204,6 +213,7 @@ fn test_output_amount_overflow() {
 #[test]
 fn test_output_plus_fee_overflow() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
         &[dummy_output(u64::MAX)],
@@ -216,6 +226,7 @@ fn test_output_plus_fee_overflow() {
 #[test]
 fn test_insufficient_funds() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(50)],
         &[dummy_output(100)],
@@ -231,6 +242,7 @@ fn test_insufficient_funds() {
 #[test]
 fn test_insufficient_funds_with_fee() {
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
@@ -248,6 +260,7 @@ fn test_empty_leaf_chunk() {
     let mut input = dummy_spend_input(100);
     input.leaf_chunk.clear();
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -266,6 +279,7 @@ fn test_leaf_chunk_too_large() {
     let width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
     input.leaf_chunk = vec![dummy_leaf_entry(); width + 1];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -283,6 +297,7 @@ fn test_zero_tree_depth() {
     let mut tree = dummy_tree();
     tree.tree_depth = 0;
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
@@ -299,6 +314,7 @@ fn test_branch_layer_mismatch() {
     input.c1_layers = vec![vec![[10u8; 32]], vec![[11u8; 32]]];
     input.c2_layers = vec![];
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -316,6 +332,7 @@ fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
     input.combined_ss = vec![0u8; 10]; // wrong length
     let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
         &[dummy_output(100)],
@@ -331,13 +348,61 @@ fn test_invalid_combined_ss_length() {
 #[test]
 fn test_sign_pqc_length_mismatch() {
     let result = sign_pqc_auths(
-        &[SigningPayloadHash::from_bytes([0u8; 32]); 2],
+        &[SigningPayloadHash::from_bytes([0u8; 64]); 2],
         &[dummy_spend_input(100)],
     );
     assert!(matches!(
         result,
         Err(TxBuilderError::PqcSignError { index: 0, .. })
     ));
+}
+
+/// Seams T2 and T3 (`CHAIN_FORGE.md` §5.3): one seed signs every input the
+/// same, byte for byte; another seed signs differently; each signature
+/// verifies under the key the production signer derives too; and production
+/// draws ML-DSA's randomness from the OS, so it matches no seed.
+#[test]
+fn seeded_pqc_auths_are_byte_identical_per_seed_and_verify() {
+    use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
+    let mut second = dummy_spend_input(50);
+    second.output_index = 1;
+    let inputs = [dummy_spend_input(100), second];
+    let hashes = [
+        SigningPayloadHash::from_bytes([1u8; 64]),
+        SigningPayloadHash::from_bytes([2u8; 64]),
+    ];
+    let sigs =
+        |auths: &[PqcAuth]| -> Vec<Vec<u8>> { auths.iter().map(|a| a.signature.clone()).collect() };
+    let one = crate::sign_pqc_auths_seeded(&[7u8; 32], &hashes, &inputs).expect("signs");
+    let again = crate::sign_pqc_auths_seeded(&[7u8; 32], &hashes, &inputs).expect("signs");
+    assert_eq!(sigs(&one), sigs(&again), "one seed, one set of signatures");
+    assert_ne!(
+        one[0].signature, one[1].signature,
+        "each input draws its own nonce"
+    );
+    let other = crate::sign_pqc_auths_seeded(&[8u8; 32], &hashes, &inputs).expect("signs");
+    assert_ne!(sigs(&one), sigs(&other), "another seed, other signatures");
+    let production = sign_pqc_auths(&hashes, &inputs).expect("signs");
+    assert_ne!(
+        sigs(&one),
+        sigs(&production),
+        "production draws from the OS"
+    );
+    let network = shekyl_network::Network::Regtest.network_id();
+    for ((auth, made), hash) in one.iter().zip(&production).zip(&hashes) {
+        assert_eq!(
+            auth.public_key, made.public_key,
+            "one key per output, seeded or not"
+        );
+        verify_pqc_auth(
+            HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+            &auth.public_key,
+            &auth.signature,
+            hash,
+            &network,
+        )
+        .expect("a seeded signature verifies");
+    }
 }
 
 // ── Parametric depth tests ────────────────────────────────────────────
@@ -348,7 +413,7 @@ fn test_sign_pqc_length_mismatch() {
 // So C2 (Helios) gets the even branch indices and C1 (Selene) the odd ones:
 // c2 = ceil(B/2), c1 = floor(B/2). This matches the prover's
 // "curve_2_layers is populated before curve_1_layers" and
-// `shekyl_curve_tree::assemble_path`.
+// `shekyl_curve_tree`'s assembler.
 
 /// Build a `SpendInput` with the spec-correct c1/c2 split for a given depth.
 fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {

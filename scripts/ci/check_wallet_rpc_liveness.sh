@@ -52,6 +52,10 @@ HANDLERS="rust/shekyl-wallet-rpc/src/handlers.rs"
 # visible. (The GUI and mobile wallets are separate repositories; a method
 # they alone consume belongs here, named.)
 declare -A ALLOW=()
+# tx show reads every row of a transaction id through get_transfers
+# (Rick, 2026-11-03). This method is the point read of one transfer id.
+# The GUI wallet looks that id up in-process; nothing in this repo posts it.
+ALLOW[get_transfer_by_id]="point read of one transfer id; CLI tx show reads every row through get_transfers, and the GUI looks the id up in-process"
 
 # ── Extract the registry (status of record) ────────────────────────────────
 declare -A STATUS=()

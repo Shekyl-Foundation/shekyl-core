@@ -19,7 +19,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::Commitment;
 use shekyl_types::{BlockHeight, Timelock, TxHash};
-use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
+use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, BoundTx, Ct, Transaction};
 
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, HYBRID_KEM_CT_LEN, ML_KEM_768_CT_LEN, X25519_KEM_CT_LEN},
@@ -31,6 +31,7 @@ use shekyl_engine_state::UnspendableReason;
 use shekyl_units::AtomicUnits;
 use subtle::ConstantTimeEq;
 
+pub use crate::multisig_scan::MultisigMemberScan;
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
 
 /// Maximum number of outputs a single transaction may carry under
@@ -125,9 +126,12 @@ pub struct ScannableBlock {
     /// The block: header, inline miner (coinbase) transaction, and the
     /// non-miner transaction hashes.
     pub block: Block,
-    /// The block's non-miner transactions, in block order. Paired positionally
-    /// with `block.transaction_hashes`; the scanner enforces the length match.
-    pub transactions: Vec<Transaction>,
+    /// The block's non-miner transactions, in block order, each bound to
+    /// its txid ([`BoundTx`]: the body was fetched as a skeleton and its
+    /// identity recomputed from the bytes and the served operands, `SB-Q2`).
+    /// Paired positionally with `block.transaction_hashes`; the scanner
+    /// enforces the length match.
+    pub transactions: Vec<BoundTx>,
     /// Global index of the block's first output, or `None` if unindexed.
     pub first_output_index: Option<u64>,
 }
@@ -462,11 +466,31 @@ impl std::fmt::Debug for ScanOutcome {
     }
 }
 
+/// How a scanner judges an output its view pair matched.
+///
+/// Solo and multisig really do differ: a solo leaf commits to that output's
+/// own key, and a group leaf commits to the committed form. The mode is
+/// chosen when the scanner is built.
+#[derive(Clone)]
+enum ReceivePolicy {
+    Solo,
+    Multisig(MultisigMemberScan),
+}
+
+impl Zeroize for ReceivePolicy {
+    fn zeroize(&mut self) {
+        if let Self::Multisig(member) = self {
+            member.zeroize();
+        }
+    }
+}
+
 #[derive(Clone)]
 struct InternalScanner {
     pair: ViewPair,
     spend_secret: Zeroizing<[u8; 32]>,
     primary_spend_compressed: CompressedPoint,
+    receive: ReceivePolicy,
 }
 
 impl Zeroize for InternalScanner {
@@ -474,6 +498,7 @@ impl Zeroize for InternalScanner {
         self.pair.zeroize();
         self.spend_secret.zeroize();
         self.primary_spend_compressed.zeroize();
+        self.receive.zeroize();
     }
 }
 impl Drop for InternalScanner {
@@ -484,11 +509,12 @@ impl Drop for InternalScanner {
 impl ZeroizeOnDrop for InternalScanner {}
 
 impl InternalScanner {
-    fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
+    fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>, receive: ReceivePolicy) -> Self {
         Self {
             primary_spend_compressed: pair.spend().compress().into(),
             pair,
             spend_secret,
+            receive,
         }
     }
 
@@ -711,14 +737,19 @@ impl InternalScanner {
             // by its transaction, never selectable (rule 82). Constant-time
             // compare for the same reason as the ownership check above: the
             // derived entry is a function of secret scan material.
-            let derived_entry = recovered.pqc_leaf.entry_bytes();
-            let unspendable = match extra.pqc_leaf_entry(o) {
-                None => Some(UnspendableReason::PqcLeafEntryAbsent),
-                Some(published) => {
-                    if bool::from(published.ct_eq(&derived_entry)) {
-                        None
-                    } else {
-                        Some(UnspendableReason::PqcLeafMismatch)
+            let unspendable = match &self.receive {
+                ReceivePolicy::Multisig(member) => member.verdict(&recovered, &extra, o),
+                ReceivePolicy::Solo => {
+                    let derived_entry = recovered.pqc_leaf.entry_bytes();
+                    match extra.pqc_leaf_entry(o) {
+                        None => Some(UnspendableReason::PqcLeafEntryAbsent),
+                        Some(published) => {
+                            if bool::from(published.ct_eq(&derived_entry)) {
+                                None
+                            } else {
+                                Some(UnspendableReason::PqcLeafMismatch)
+                            }
+                        }
                     }
                 }
             };
@@ -868,7 +899,7 @@ impl InternalScanner {
             block.miner_transaction.clone(),
         )];
         for (hash, tx) in block.transaction_hashes.iter().zip(transactions) {
-            txs_with_hashes.push((*hash, tx));
+            txs_with_hashes.push((*hash, tx.into_tx()));
         }
 
         // §5.4.9 F11-S per-tx safe-point check at the
@@ -967,7 +998,29 @@ impl Scanner {
     /// The spend secret is needed to compute key images at scan time
     /// (KI = (ho + b) * Hp(O)).
     pub fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        Self(InternalScanner::new(pair, spend_secret))
+        Self(InternalScanner::new(
+            pair,
+            spend_secret,
+            ReceivePolicy::Solo,
+        ))
+    }
+
+    /// A scanner for one member of a multisig group: `pair` is the group's
+    /// (the group KEM secret, spend point `B_group + Y_group`), `b` the
+    /// group-plaintext spend secret, and `member` this member's context.
+    /// Outputs paid to the group are found as a solo wallet finds its own;
+    /// each is then checked as a multisig output
+    /// ([`MultisigMemberScan`]).
+    pub fn new_multisig_member(
+        pair: ViewPair,
+        b: Zeroizing<[u8; 32]>,
+        member: MultisigMemberScan,
+    ) -> Self {
+        Self(InternalScanner::new(
+            pair,
+            b,
+            ReceivePolicy::Multisig(member),
+        ))
     }
 
     /// Scan a block for outputs belonging to this wallet.
@@ -1034,7 +1087,11 @@ pub struct GuaranteedScanner(InternalScanner);
 impl GuaranteedScanner {
     /// Create a GuaranteedScanner from a GuaranteedViewPair and spend secret.
     pub fn new(pair: GuaranteedViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        Self(InternalScanner::new(pair.0, spend_secret))
+        Self(InternalScanner::new(
+            pair.0,
+            spend_secret,
+            ReceivePolicy::Solo,
+        ))
     }
 
     /// Scan a block for outputs belonging to this wallet.
@@ -1140,7 +1197,7 @@ mod gate_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo)
     }
 
     /// Build a non-miner `shekyl-wire` [`Transaction`] with the requested
@@ -1160,7 +1217,7 @@ mod gate_tests {
             .collect();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 // Non-miner classification — [`Input::ToKey`] (rather than
                 // [`Input::Gen`]) so the tx is treated as a normal user
                 // transaction subject to the per-tx output cap documented on
@@ -1429,7 +1486,7 @@ mod cancel_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo)
     }
 
     /// Mirror of `gate_tests::synthesize_tx`: a non-miner `shekyl-wire`
@@ -1447,7 +1504,7 @@ mod cancel_tests {
             .collect();
         Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::ToKey {
                     amount: 0,
                     key_offsets: vec![1],
@@ -1618,7 +1675,8 @@ mod cancel_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        let mut scanner = InternalScanner::new(pair, Zeroizing::new([0u8; 32]));
+        let mut scanner =
+            InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo);
 
         let header = BlockHeader {
             major_version: 1,
@@ -1627,8 +1685,8 @@ mod cancel_tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            section_root: shekyl_types::SectionRoot::from_bytes(
+                shekyl_archival_retention::empty_section_root(),
             ),
         };
         // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
@@ -1636,7 +1694,7 @@ mod cancel_tests {
         // only the outer per-tx-loop check can deliver cancellation.
         let miner_tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs: vec![],
                 extra: vec![],
@@ -1697,13 +1755,13 @@ mod cancel_tests {
             previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
-            attestation_root: shekyl_types::AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
+            section_root: shekyl_types::SectionRoot::from_bytes(
+                shekyl_archival_retention::empty_section_root(),
             ),
         };
         let miner_tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
                 inputs: vec![Input::Gen(0)],
                 outputs: vec![Output {
                     amount: 0,

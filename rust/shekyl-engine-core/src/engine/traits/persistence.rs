@@ -30,10 +30,14 @@
 //!
 //! # Durability and nonces
 //!
-//! On `Ok`, `.wallet` bytes are durable across power loss (`atomic_write_file`:
-//! tmp → fsync → rename → fsync parent). Region-2 AEAD uses a fresh 24-byte
-//! nonce from the OS CSPRNG on every save — never counter-derived
-//! (`seal_state_file` in `shekyl-crypto-pq`).
+//! `save_state` returns [`shekyl_engine_file::Durability`] once the rename has
+//! landed. [`shekyl_engine_file::Durability::Confirmed`] means the rename was
+//! confirmed durable too: the parent directory fsynced on Unix; on Windows an
+//! NTFS volume and the write-through handle's rename.
+//! [`shekyl_engine_file::Durability::Unconfirmed`] carries why it was not: the
+//! write is applied, and a caller must not undo it. Only a confirmed save authorizes a broadcast. Region-2 AEAD uses a
+//! fresh 24-byte nonce from the OS CSPRNG on every save — never
+//! counter-derived (`seal_state_file` in `shekyl-crypto-pq`).
 //!
 //! # Stage-4 swap-in (§7)
 //!
@@ -79,7 +83,7 @@ use crate::engine::sealing_keys::StateWrapKey;
 /// - `Send + Sync + 'static` — `PersistenceEngine` instances are
 ///   shared across the orchestration future and the sync lifecycle
 ///   path that drives a flush from a Tokio worker via
-///   [`drive_persistence`](super::lifecycle::drive_persistence)
+///   [`drive_persistence`](crate::engine::lifecycle::drive_persistence)
 ///   (`block_in_place` + `block_on`), typically as `Arc<P>`.
 ///   [`WalletFile`](shekyl_engine_file::WalletFile) (Stage 1) and
 ///   `ActorRef<PersistenceActor>` (Stage 4) both satisfy these bounds.
@@ -119,7 +123,8 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// with a stale key seals state that fails authentication on the next open
     /// (Poly1305 MAC failure).
     /// Returns a [`Send`] future so sync lifecycle code can drive persistence
-    /// from a Tokio worker via [`drive_persistence`](super::lifecycle::drive_persistence)
+    /// from a Tokio worker via
+    /// [`drive_persistence`](crate::engine::lifecycle::drive_persistence)
     /// (`block_in_place` + `block_on`). Matches [`RefreshEngine`](super::refresh::RefreshEngine)
     /// precedent (`impl Future + Send`, not `async fn` on the trait).
     ///
@@ -157,7 +162,7 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<shekyl_engine_file::Durability, Self::Error>> + Send;
 
     /// Seal and atomically write the wallet's preferences file
     /// (`<base>.prefs.toml`), HMAC'd with `prefs_key`.

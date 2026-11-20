@@ -5,8 +5,8 @@
 
 //! The two surfaces' readers.
 //!
-//! [`read_cli`] turns `argv` into values for live rows and the positional
-//! words; [`read_file`] turns a TOML file's text into values for live rows,
+//! [`read_cli`] turns `argv` into values for live rows; [`read_file`] turns
+//! a TOML file's text into values for live rows,
 //! each with the line it is on. Both report every refusal they find, not
 //! only the first, so an operator fixes a file in one pass. Precedence
 //! between the two belongs to the binary (`shekyl-daemon-config` for the
@@ -36,15 +36,13 @@ pub struct Given {
 pub struct Cli {
     /// One entry per row given, in the order first seen.
     pub given: Vec<Given>,
-    /// The words that are not options (a client-mode command).
-    pub positional: Vec<String>,
 }
 
 /// Reads `argv` (without the program name) against `table`.
 ///
 /// An option is `--name value`, or `--name` for a switch. A list or a map
 /// is the option repeated. Nothing else starts with `-`. A word that is not
-/// an option's value is positional.
+/// an option is refused.
 ///
 /// # Errors
 /// Every refusal found: a malformed token, a non-UTF-8 argument, an unknown,
@@ -57,7 +55,6 @@ where
 {
     let mut faults = Vec::new();
     let mut raw: Vec<(&'static Row, Vec<String>)> = Vec::new();
-    let mut positional = Vec::new();
     let mut tokens = Vec::new();
     for (i, arg) in args.into_iter().enumerate() {
         match arg.into_string() {
@@ -70,11 +67,7 @@ where
     let mut it = tokens.into_iter();
     while let Some(token) = it.next() {
         let Some(name) = token.strip_prefix("--") else {
-            if token.starts_with('-') {
-                faults.push(Diagnostic::new(Code::CliSyntax, Source::Cli).param("token", token));
-            } else {
-                positional.push(token);
-            }
+            faults.push(Diagnostic::new(Code::CliSyntax, Source::Cli).param("token", token));
             continue;
         };
         if name.is_empty() || name.contains('=') || name.starts_with('-') {
@@ -96,7 +89,8 @@ where
                     .param("given", "the command line")
                     .param("allowed", "in the configuration file"),
             );
-            // A file-only row's value, if one follows, is not a positional word.
+            // A file-only row's value, if one follows, is that row's, so it
+            // is not read as a word of its own.
             let _ = it.next();
             continue;
         }
@@ -137,7 +131,7 @@ where
         }
     }
     if faults.is_empty() {
-        Ok(Cli { given, positional })
+        Ok(Cli { given })
     } else {
         Err(faults)
     }
@@ -289,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn options_values_and_positional_words_are_told_apart() {
+    fn options_and_a_repeated_list_parse() {
         let cli = read_cli(
             &TABLE,
             args(&[
@@ -300,13 +294,26 @@ mod tests {
                 "127.0.0.1:1",
                 "--rpc-admin-listen",
                 "[::1]:2",
-                "status",
             ]),
         )
         .unwrap();
-        assert_eq!(cli.positional, vec!["status".to_owned()]);
         assert_eq!(cli.given.len(), 3);
         assert!(matches!(cli.given[2].value, Value::List(ref v) if v.len() == 2));
+    }
+
+    /// A bare word is `config.cli.syntax` and the message names the token.
+    /// Red edit: accept the token instead of refusing it. The assertion on
+    /// the token then fails, and `shekyld` would go on to load.
+    #[test]
+    fn a_bare_word_is_refused_as_cli_syntax_naming_the_token() {
+        let err = read_cli(&TABLE, args(&["status"])).expect_err("a bare word is refused");
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].code, Code::CliSyntax);
+        assert_eq!(err[0].get("token"), Some("status"));
+        assert!(
+            err[0].render().contains("status"),
+            "the refusal names the token"
+        );
     }
 
     #[test]

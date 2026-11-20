@@ -50,8 +50,8 @@ each of those paths on synthetic manifests, so the negative limb here is
 never a grep that happened to find nothing.
 
 The shipped roots are **read from `cmake/BuildRust.cmake`** — the `-p`
-packages of its cargo invocations and the `_shekyl_rust_bins` list — not a
-second copy held here; a new shipped package added there is inspected here
+packages of its cargo invocations and the `_shekyl_rust_bins` list (the
+daemon and the wallet binaries) — not a second copy held here; a new shipped package added there is inspected here
 without a paired edit, and the gate refuses if the parse finds nothing or
 finds a name the workspace does not have. A workspace member outside every
 shipped closure (the `SP-T3` measurement rig enables `test-signer` on a
@@ -136,9 +136,9 @@ NO_SOCKS = (
 RPC_SENTINELS = ("shekyl-daemon-rpc", "shekyl-rpc-transport")
 
 # The one shipped root that cannot leave `BuildRust.cmake` without the file
-# being rewritten: the wallet-side image. Its presence in the parsed set is
-# how the gate knows the parse read the file it thinks it read.
-ROOT_SENTINEL = "shekyl-ffi"
+# being rewritten: the daemon. Its presence in the parsed set is how the
+# gate knows the parse read the file it thinks it read.
+ROOT_SENTINEL = "shekyld"
 
 # (crate, feature) pairs that must not be in any shipped root's resolved
 # feature set. `shekyl-p-host/test-signer` forwards to
@@ -343,13 +343,13 @@ def resolve_features(root: str, members: dict[str, dict], workspace_deps: dict) 
 
 
 def shipped_roots(text: str) -> list[str]:
-    """The packages `BuildRust.cmake` builds: literal `-p <pkg>` arguments and
-    the `_shekyl_rust_bins` list. `-p "${var}"` forms are not roots themselves;
-    the list they expand from is."""
+    """The packages `BuildRust.cmake` builds: literal `-p <pkg>` arguments
+    and the `_shekyl_rust_bins` list. `-p "${var}"` forms are not roots
+    themselves; the list they expand from is."""
     roots: list[str] = []
-    roots += re.findall(r"(?<![\w-])-p\s+(shekyl-[a-z0-9-]+)", text)
+    roots += re.findall(r"(?<![\w-])-p\s+(shekyl[a-z0-9-]*)", text)
     for group in re.findall(r"set\(\s*_shekyl_rust_bins\s+([^)]*)\)", text):
-        roots += re.findall(r"shekyl-[a-z0-9-]+", group)
+        roots += re.findall(r"shekyl[a-z0-9-]*", group)
     return sorted(set(roots))
 
 
@@ -432,8 +432,10 @@ def selftest() -> int:
             if got != expect:
                 bad = 1
                 print(f"FAIL selftest [{label}]: expected detected={expect}, got {got}")
-    cmake = 'cargo build -p shekyl-ffi\n  -p shekyl-daemon-image\nset(_shekyl_rust_bins shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
-    if shipped_roots(cmake) != ["shekyl-cli", "shekyl-daemon-image", "shekyl-ffi", "shekyl-wallet-rpc"]:
+    cmake = (
+        'cargo build -p shekyl-tool\nset(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
+    )
+    if shipped_roots(cmake) != ["shekyl-cli", "shekyl-tool", "shekyl-wallet-rpc", "shekyld"]:
         bad = 1
         print(f"FAIL selftest [cmake parse]: {shipped_roots(cmake)}")
     if not bad:

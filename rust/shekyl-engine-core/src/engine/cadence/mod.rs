@@ -76,7 +76,7 @@ pub(crate) use self::claim::{
 
 /// Wall-clock interval between tip polls (rule 75: rationale + bounds).
 ///
-/// **Rationale.** The poll is one `get_info`-class read per tick; legs fire
+/// **Rationale.** The poll is one `daemon_status`-class read per tick; legs fire
 /// only on an observed height advance, so the poll rate bounds *detection
 /// latency*, not work rate. 60 s keeps worst-case leg latency within half a
 /// block target (120 s) for one cheap RPC per minute — the same figure the
@@ -363,7 +363,7 @@ where
 /// leg 2's, and `alarms` is leg 3's (the driver-shared board).
 pub(crate) fn production_legs<S, D, L, E, R, P>(
     engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
-    daemon_address: &str,
+    daemon: &shekyl_rpc_transport::DaemonTarget,
     serving: &ServingSlot,
     alarms: &Arc<OperatorAlarms>,
 ) -> Vec<Box<dyn CadenceLeg>>
@@ -382,7 +382,7 @@ where
         }),
         Box::new(ServingLivenessLeg {
             engine: Weak::clone(&engine),
-            daemon_address: daemon_address.to_owned(),
+            daemon: daemon.clone(),
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
@@ -393,7 +393,7 @@ where
         }),
         Box::new(EpochClaimLeg {
             engine,
-            daemon_address: daemon_address.to_owned(),
+            daemon: daemon.clone(),
             alarms: Arc::clone(alarms),
             state: Arc::default(),
         }),
@@ -445,13 +445,16 @@ where
     /// spawns the key-engine actor — but it is asserted here **by name** so
     /// a non-runtime embedder fails with the named requirement instead of a
     /// bare `tokio::spawn` panic (§1 "Runtime context").
-    pub fn into_shared(self, daemon_address: &str) -> (Arc<RwLock<Self>>, CadenceHandle) {
+    pub fn into_shared(
+        self,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
+    ) -> (Arc<RwLock<Self>>, CadenceHandle) {
         drop(tokio::runtime::Handle::try_current().expect(
             "Engine::into_shared spawns the cadence driver task and must be \
              called from within a tokio runtime (ENGINE_CADENCE_DRIVER.md §1)",
         ));
         let shared = Arc::new(RwLock::new(self));
-        let handle = Self::start_cadence(&shared, daemon_address);
+        let handle = Self::start_cadence(&shared, daemon);
         (shared, handle)
     }
 
@@ -466,10 +469,13 @@ where
     /// # Panics
     ///
     /// Same runtime requirement as [`into_shared`](Self::into_shared).
-    pub fn start_cadence(self_arc: &Arc<RwLock<Self>>, daemon_address: &str) -> CadenceHandle {
+    pub fn start_cadence(
+        self_arc: &Arc<RwLock<Self>>,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
+    ) -> CadenceHandle {
         let serving = ServingSlot::default();
         let alarms = Arc::new(OperatorAlarms::new());
-        let legs = production_legs(Arc::downgrade(self_arc), daemon_address, &serving, &alarms);
+        let legs = production_legs(Arc::downgrade(self_arc), daemon, &serving, &alarms);
         let weak = Arc::downgrade(self_arc);
         let poll = move || {
             let weak = weak.clone();

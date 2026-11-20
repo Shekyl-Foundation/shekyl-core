@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The wallet's Windows platform calls, sited here because the crates that need them deny unsafe: owner-only security descriptors, current-user and logon SID, peer owner/integrity checks, and the disk-headroom probe (WP-D2)"
+description = "Windows platform calls, sited here because the crates that need them deny unsafe: owner-only security descriptors, current-user and logon SID, peer owner/integrity checks, the disk-headroom probe (WP-D2), and the clearnet dial socket's SYN retry cap"
 publish = false
 
 # Everything here is `cfg(windows)`. On every other target the crate compiles to
@@ -37,6 +37,19 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     # The standard-error handle for the panic hook's lock-free write.
     "Win32_System_Console",
+    # `SIO_TCP_INITIAL_RTO` on the clearnet dial socket (`cap_syn_retransmissions`).
+    "Win32_Networking_WinSock",
+    # `FILE_RENAME_FLAG_REPLACE_IF_EXISTS` and `_POSIX_SEMANTICS`, the flags
+    # of the handle-based rename (`replace`).
+    "Win32_System_WindowsProgramming",
+    # A service's rendezvous record, a value under HKLM\SOFTWARE\Shekyl
+    # (`registry`).
+    "Win32_System_Registry",
+    # `NtQueryVolumeInformationFile` with `FileFsDeviceInformation`, whose
+    # `FILE_REMOTE_DEVICE` makes a network drive's replace unconfirmed
+    # (`replace`).
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_SystemServices",
 ] }
 # The self-hosted listener (WP-W2) is built on tokio's named-pipe support, so
 # the crate that holds the `unsafe` `create_with_security_attributes_raw` call
@@ -70,7 +83,15 @@ required-features = ["test-utils"]
 # The probe suite drives real pipes under a runtime; the runtime features are
 # test-only, the `net` half is the transport's own dependency above.
 tokio = { version = "1", features = ["net", "rt", "macros"] }
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+# `NtQueryInformationFile` and `FileModeInformation`, which read a staged
+# handle's write-through mode back in a test (`replace`).
+windows-sys = { version = "0.61", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Wdk_Storage_FileSystem",
+] }
+# The rendezvous tests make their directories under a fresh temporary one.
+tempfile = "3"
 
 [lints]
 workspace = true

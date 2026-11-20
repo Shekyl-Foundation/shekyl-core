@@ -10,7 +10,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shekyl V3.1 multisig (Option E′): the FROST spend-ceremony FSM, blob format, and nonce typestates. Pure logic — no ledger, no I/O, no transport."
+description = "Shekyl V3.1 multisig (Option E′): the FROST spend-ceremony FSM, the ceremony file format, and nonce typestates. Pure logic — no ledger, no I/O, no transport."
 build = "build.rs"
 
 # The dependency list IS the "no transport" ban (MS-1(a), the crate that lets the
@@ -23,25 +23,68 @@ build = "build.rs"
 [dependencies]
 shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The member file (`member_file.rs`) carries the address payload. The group
+# transport secret is derived in `shekyl-crypto-pq` and passed in as bytes.
+# The ceremony files are sealed (`multisig_blob`, R-4, R-10) and their
+# senders' envelope signatures made and checked (`multisig_envelope`, R-6)
+# there too: this crate derives, hashes, signs and encrypts nothing under a
+# secret itself (rule 36); it holds crypto-pq's typed values and lays out
+# the plaintext. The intent's deadline is the reference block's age as
+# consensus measures it, which `shekyl-curve-tree::reference` owns (R-13).
+# None of the three reaches a transport crate, so the dependency list still
+# enforces the "no transport" ban.
+shekyl-address = { path = "../shekyl-address" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# Every input's pseudo-out blind, the last balancing the outputs' masks
+# (`PseudoOutBlinds::from_intent`).
+shekyl-ct-balance = { path = "../shekyl-ct-balance" }
+shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+shekyl-network = { path = "../shekyl-network" }
+shekyl-types = { path = "../shekyl-types" }
+# The signing ceremony (`ceremony/`): the FROST SAL machines and the FCMP++
+# prove and verify (`shekyl-fcmp`, feature `multisig`), the transaction it
+# assembles and signs over (`shekyl-wire`), and the range proof the proposer
+# makes and every signer verifies (`shekyl-bulletproofs`). Each member
+# builds the spend's outputs with the builder every spend uses
+# (`shekyl-tx-builder::outputs`, R-7), so a group's transaction is built
+# exactly as a solo one is; the outputs' openings are
+# `shekyl-curve-primitives` commitments, which wipe on drop. This crate
+# combines no mask (rule 36) and does no curve arithmetic of its own.
+# Crypto, builder and wire crates only: none reaches a transport crate, and
+# none takes an edge back to this crate.
+shekyl-fcmp = { path = "../shekyl-fcmp", features = ["multisig"] }
+shekyl-wire = { path = "../shekyl-wire" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
+shekyl-curve-io = { path = "../shekyl-curve-io" }
+rand = "0.8"
 serde = { workspace = true }
 serde_json = "1"
 thiserror = { workspace = true }
 zeroize = { workspace = true }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
 
 [build-dependencies]
 # Generate the FCMP reference-block age bounds + CT type from the JSON authority
-# `config/consensus_constants.json` (the same source the C++ header and
-# engine-core's build.rs read), so `intent.rs` never hardcodes them. See build.rs.
+# `config/consensus_constants.json` (the same source engine-core's and
+# shekyl-wire's build.rs read), so `intent.rs` never hardcodes them. See build.rs.
 serde_json = "1"
 
 [dev-dependencies]
-# Test-only: `intent.rs`'s canonical-bytes test cross-checks against
-# `shekyl_wire::transaction::CT_TYPE_FCMP`. A dev-dependency edge (cargo permits
-# dev-dep cycles), so it never enters the runtime dependency surface the ban covers.
-shekyl-wire = { path = "../shekyl-wire" }
+# `tests/`: the spend end to end, from a dealt group's member files and slice
+# 1's outputs, through the ceremony into a transaction.
+ciphersuite = "0.4"
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
+# The ceremony gate checks the scheme-2 weight prediction against the real
+# spend it signs (slice 4a §2.4).
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
+# `test-paths` compiles `AssembledPath::from_parts_unchecked`: the tests'
+# ledgers hold paths to a hand-built tree, and the adversary tests tamper a
+# recorded path's tree (R-25). Test builds only (resolver v2); production
+# keeps the plain dependency above.
+shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-paths"] }
+rand_core = { version = "0.6", features = ["std"] }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # Wall-clock micro-benchmarks for the format-module operations (moved here with

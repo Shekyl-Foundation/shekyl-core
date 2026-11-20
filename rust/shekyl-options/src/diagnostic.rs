@@ -83,15 +83,49 @@ pub enum Code {
     BanFileLine,
     /// A runtime set names a row that is not marked runtime.
     RuntimeStartupOnly,
-    /// A client-mode command has no admin endpoint to reach.
-    ClientNoEndpoint,
-    /// The service run mode is not available on this platform.
+    /// The service run mode is not available on this platform yet.
     ServicePlatform,
     /// The service run mode was asked for outside the service manager.
     ServiceNoManager,
     /// The service run mode's machine-wide root is missing, mis-owned, or
     /// writable outside its permitted principals.
     ServiceRoot,
+    /// A service daemon's rendezvous directory is missing, a link, not the
+    /// daemon's account's, writable by its group or by others, or the daemon
+    /// runs as root (`RPC_CHANNEL.md` §7.1).
+    ServiceRendezvous,
+    /// A run-as-me daemon has no per-user session directory and was named
+    /// no socket directory (`RPC_CHANNEL.md` §7.1).
+    SocketDirNone,
+    /// The owner's socket directory is not the daemon user's alone, not a
+    /// local directory, or cannot hold a socket.
+    SocketDirUnusable,
+    /// The owner's socket path is longer than the platform's socket limit.
+    SocketPathLong,
+    /// A file the daemon replaces at its start was held open by another
+    /// program (an antivirus scanner, a search indexer) for longer than the
+    /// daemon waits (Rick, 2026-11-18).
+    ReplaceHeldOpen,
+    /// A file the daemon replaces at its start has its read-only attribute
+    /// set, which refused the replace (Windows; Rick, 2026-11-19).
+    ReplaceReadOnly,
+    /// A Windows service's rendezvous key, `HKLM\SOFTWARE\Shekyl\Rendezvous`,
+    /// is missing, or its owner, readers or writers are not the installer's
+    /// (Rick, 2026-11-18).
+    ServiceRendezvousKey,
+    /// An operator-named socket directory on a platform whose owner's leg
+    /// has no socket directory: Windows, whose rendezvous directory is
+    /// fixed (Rick, 2026-11-14).
+    SocketDirPlatform,
+    /// Another daemon of this user, network and instance answers at the
+    /// owner's socket.
+    SocketRunning,
+    /// Something that is not this user's daemon holds the owner's socket
+    /// path.
+    SocketImpostor,
+    /// The number given as the owning connection is not an open, connected
+    /// stream socket (`INPUT_GRAMMAR.md` IG-Q106).
+    OwningConnectionUnusable,
 }
 
 impl Code {
@@ -130,10 +164,20 @@ impl Code {
             Self::BanFileUnreadable => "config.ban-file.unreadable",
             Self::BanFileLine => "config.ban-file.line",
             Self::RuntimeStartupOnly => "config.runtime.startup-only",
-            Self::ClientNoEndpoint => "config.client.no-endpoint",
             Self::ServicePlatform => "config.service.platform",
             Self::ServiceNoManager => "config.service.no-manager",
             Self::ServiceRoot => "config.service.root",
+            Self::ServiceRendezvous => "config.service.rendezvous",
+            Self::SocketDirNone => "config.socket-dir.none",
+            Self::SocketDirUnusable => "config.socket-dir.unusable",
+            Self::SocketPathLong => "config.socket-dir.path-long",
+            Self::ReplaceHeldOpen => "config.replace.held-open",
+            Self::ReplaceReadOnly => "config.replace.read-only",
+            Self::ServiceRendezvousKey => "config.service.rendezvous-key",
+            Self::SocketDirPlatform => "config.socket-dir.platform",
+            Self::SocketRunning => "config.socket.running",
+            Self::SocketImpostor => "config.socket.impostor",
+            Self::OwningConnectionUnusable => "config.owning-connection.unusable",
         }
     }
 }
@@ -357,11 +401,9 @@ impl Diagnostic {
             Code::RuntimeStartupOnly => format!(
                 "`{opt}` can only be set at startup; change it in the configuration file and restart"
             ),
-            Code::ClientNoEndpoint => format!(
-                "a command needs a daemon to reach, and `{opt}` is `none`; give the daemon's admin endpoint"
-            ),
             Code::ServicePlatform => format!(
-                "`{opt}` exists only on Windows; on this platform the service manager runs the daemon in the foreground"
+                "`{opt}` is not available on this platform yet: {}",
+                p("reason")
             ),
             Code::ServiceNoManager => format!(
                 "`{opt}` is for the Windows service manager; install the service and start it with the service manager"
@@ -369,6 +411,61 @@ impl Diagnostic {
             Code::ServiceRoot => format!(
                 "the service root {} cannot be used: {}; the installer creates it with the right owner and access",
                 p("path"),
+                p("found")
+            ),
+            Code::ServiceRendezvous => format!(
+                "`{opt}` cannot run here: {}; a service runs under the daemon's own account, never root, and the installer or the service manager gives that account the service's rendezvous directory {}",
+                p("found"),
+                p("path")
+            ),
+            Code::SocketDirNone => format!(
+                "this account has no session directory ({}) to hold the owner's socket, so a daemon run as this user cannot start here; run it unattended with `--service`, keep this user's session past logout with `loginctl enable-linger`, or name a directory you own with `--rpc-socket-dir`",
+                p("looked")
+            ),
+            Code::SocketDirUnusable => format!(
+                "the owner's socket directory {} cannot be used: {}; it must be a local directory owned by this account with mode 0700",
+                p("path"),
+                p("found")
+            ),
+            Code::SocketDirPlatform => format!(
+                "`{opt}` is not available on this platform: {}",
+                p("reason")
+            ),
+            Code::ServiceRendezvousKey => format!(
+                "the service's rendezvous key {} cannot be used: {}; the installer creates it with the service account, owned by Administrators or SYSTEM, readable by every account and writable only by the service account, Administrators and SYSTEM",
+                p("path"),
+                p("found")
+            ),
+            Code::ReplaceHeldOpen => format!(
+                "{} could not be written: {}; {} and start the daemon again",
+                p("path"),
+                p("cause"),
+                p("remedy")
+            ),
+            Code::ReplaceReadOnly => format!(
+                "{} could not be written: it is read-only; clear its read-only attribute and start the daemon again",
+                p("path")
+            ),
+            Code::SocketPathLong => format!(
+                "the owner's socket path {} is {} bytes and this platform allows {}; name a shorter `--rpc-socket-dir`",
+                p("path"),
+                p("length"),
+                p("limit")
+            ),
+            Code::SocketRunning => format!(
+                "a daemon for network {}, instance {}, is already running as this user at {}; stop it first, or start this one as a named `--instance` with its own `--data-dir`",
+                p("network"),
+                p("instance"),
+                p("path")
+            ),
+            Code::SocketImpostor => format!(
+                "the owner's socket path {} is held by something that is not this account's daemon ({}); remove it once you know what put it there",
+                p("path"),
+                p("found")
+            ),
+            Code::OwningConnectionUnusable => format!(
+                "`{opt}` {} cannot be the owning connection: {}; the process that starts the daemon passes one end of a connected stream socket pair it created, inherited by the daemon",
+                p("value"),
                 p("found")
             ),
         };
@@ -464,10 +561,20 @@ mod tests {
             Code::BanFileUnreadable,
             Code::BanFileLine,
             Code::RuntimeStartupOnly,
-            Code::ClientNoEndpoint,
             Code::ServicePlatform,
             Code::ServiceNoManager,
             Code::ServiceRoot,
+            Code::ServiceRendezvous,
+            Code::SocketDirNone,
+            Code::SocketDirUnusable,
+            Code::SocketPathLong,
+            Code::SocketDirPlatform,
+            Code::ReplaceHeldOpen,
+            Code::ReplaceReadOnly,
+            Code::ServiceRendezvousKey,
+            Code::SocketRunning,
+            Code::SocketImpostor,
+            Code::OwningConnectionUnusable,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for code in all {

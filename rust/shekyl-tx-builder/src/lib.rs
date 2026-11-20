@@ -55,10 +55,10 @@
 // tripwire is placed here independently of Tripwire A so a future refactor
 // that narrows the dependency shape cannot silently drop the refusal.
 //
-// Matching gates: Tripwire A (shekyl-crypto-pq, primary), Tripwire B
-// (shekyl-ffi, structural-not-observable), Tripwire D (top-level
-// CMakeLists.txt, C++-side configure gate). All four duplicate the refusal
-// by design; none of them should be deleted on "never fires" grounds.
+// Matching gates: Tripwire A (shekyl-crypto-pq, primary) and Tripwire D
+// (top-level CMakeLists.txt, configure gate). All three duplicate the
+// refusal by design; none of them should be deleted on "never fires"
+// grounds.
 //
 // See docs/CHANGELOG.md "Retired 32-bit build targets" and
 // docs/audit_trail/ "Chore #3" before attempting to revert this gate.
@@ -71,14 +71,15 @@ compile_error!(
      against native 64-bit arithmetic; on 32-bit targets the compiler \
      emits libgcc helpers (__muldi3, __udivdi3, __ashldi3) with no CT \
      guarantee — the exact threat model exploited by KyberSlash (Bernstein \
-     et al., 2024). Matching gates live in shekyl-crypto-pq (Tripwire A), \
-     shekyl-ffi (Tripwire B), and the top-level CMakeLists.txt (Tripwire D). \
+     et al., 2024). Matching gates live in shekyl-crypto-pq (Tripwire A) \
+     and the top-level CMakeLists.txt (Tripwire D). \
      See docs/CHANGELOG.md entry 'Retired 32-bit build targets' before \
      attempting to revert this gate."
 );
 
 mod assemble;
 mod error;
+pub mod outputs;
 mod sign;
 pub mod types;
 mod validate;
@@ -87,14 +88,22 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "seeded-rng")]
+pub use assemble::open_spend_seeded;
 pub use assemble::{open_spend, AuthSlots, OpenSpend, SpendLayout};
-pub use error::TxBuilderError;
+pub use error::{InternalSignFault, SignFault, TxBuilderError};
 pub use sign::{
     prove_backing_membership, sign_pqc_auths, sign_transaction, sign_transaction_with_terms,
-    MembershipOnlyProof,
+    tx_signable_for, MembershipOnlyProof,
+};
+#[cfg(feature = "seeded-rng")]
+pub use sign::{
+    prove_backing_membership_seeded, sign_pqc_auths_seeded, sign_transaction_with_terms_seeded,
+    ProofSeeds,
 };
 pub use types::{
-    LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
+    LeafEntry, OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext,
+    PQC_AUTH_VERSION,
 };
 
 /// Cleartext balance terms, re-exported so `sign_transaction_with_terms`

@@ -1,0 +1,26 @@
+{
+  "floor": [
+    {
+      "connector": "clearnet",
+      "outbound_count": 8,
+      "outbound_min": 12,
+      "below": true
+    }
+  ],
+  "tally": [
+    {
+      "connection": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "connector": "tor",
+      "propagated": 14,
+      "silent": 2,
+      "sender_count": 3
+    },
+    {
+      "connection": "1f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "connector": null,
+      "propagated": 0,
+      "silent": 1,
+      "sender_count": 0
+    }
+  ]
+}

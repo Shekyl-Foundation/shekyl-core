@@ -41,15 +41,11 @@ import subprocess
 import sys
 from typing import Any
 
+from compare import VERDICT_ORDER, format_delta_pct
+
 
 MARKER = "<!-- shekyl-benchmarks-comment -->"
-
-
-def _fmt_pct(delta: float) -> str:
-    # Show at most one decimal and always include the sign, because
-    # "0.0%" reads very differently from "+0.0%" on a delta column.
-    sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta * 100:.2f}%"
+_VERDICT_RANK = {name: index for index, name in enumerate(VERDICT_ORDER)}
 
 
 def _fmt_verdict_badge(verdict: str) -> str:
@@ -63,6 +59,13 @@ def _fmt_verdict_badge(verdict: str) -> str:
         "missing": "**missing**",
         "baseline_zero": "_baseline=0_",
     }.get(verdict, verdict)
+
+
+def _fmt_moved_from(entry: dict[str, Any]) -> str:
+    """The cell suffix for an entry compared across a crate move."""
+    if "moved_from" not in entry:
+        return ""
+    return f" (moved from `{entry['moved_from'].split('/', 1)[0]}`)"
 
 
 def _fmt_host_line(host: dict[str, Any]) -> str:
@@ -114,6 +117,20 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
             f"- **Missing in PR (treated as `fail`):** "
             f"{len(summary['missing_in_pr'])} entries — see table."
         )
+    if summary.get("moved"):
+        lines.append(
+            f"- **Moved crate (compared across the move):** "
+            f"{len(summary['moved'])} entries — gated like any other."
+        )
+    if summary.get("out_of_scope"):
+        rows = summary.get("captured_rows")
+        ran = ", ".join(f"`{row}`" for row in rows) if isinstance(rows, list) else "all"
+        lines.append(
+            f"- **Out of this capture's scope (not run, not gated):** "
+            f"{len(summary['out_of_scope'])} baseline entries. This pull "
+            f"request's change reaches the rows {ran}; the push to `dev` "
+            f"captures every row."
+        )
     if summary["added_in_pr"]:
         lines.append(
             f"- **New in PR (informational):** "
@@ -161,19 +178,19 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
     # bucket, by absolute delta descending so the biggest swings are
     # near the top of the bucket.
     def _sort_key(e: dict[str, Any]) -> tuple[int, float]:
-        rank = {"fail": 0, "warn": 1, "unrouted": 2, "ok": 3}.get(
-            e["verdict"], 4
+        return (
+            _VERDICT_RANK.get(e["verdict"], len(VERDICT_ORDER)),
+            -abs(e["delta_pct"]),
         )
-        return (rank, -abs(e["delta_pct"]))
 
     for e in sorted(report["entries"], key=_sort_key):
         lines.append(
             f"| {_fmt_verdict_badge(e['verdict'])} "
-            f"| `{e['full_id']}` "
+            f"| `{e['full_id']}`{_fmt_moved_from(e)} "
             f"| {e['class']} "
             f"| {e['baseline']:,} "
             f"| {e['pr']:,} "
-            f"| {_fmt_pct(e['delta_pct'])} |"
+            f"| {format_delta_pct(e['delta_pct'])} |"
         )
 
     for fid in summary["missing_in_pr"]:
@@ -220,7 +237,7 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
                     f"| `{e['full_id']}` "
                     f"| {bm / 1_000:.2f} µs "
                     f"| {pm / 1_000:.2f} µs "
-                    f"| {_fmt_pct(e['delta_pct'])} |"
+                    f"| {format_delta_pct(e['delta_pct'])} |"
                 )
             elif e["verdict"] == "added":
                 lines.append(

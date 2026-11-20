@@ -161,7 +161,6 @@ surface. The **Owning doc** column carries the path where the entry has one.
 | 460 | incomplete | pre-genesis | *undetermined* | Shard assignment for market staking — the `NoShardsAvailable` |
 | 481 | incomplete | pre-genesis | *undetermined* | Serve-credit decision-site flip: Rust becomes the primary decision |
 | 487 | reads complete | pre-genesis | *undetermined* | Remove or retain the orphaned `ActivityMetric.total_staked` observable |
-| 550 | incomplete | pre-genesis | *undetermined* | PQC Multisig : Option-D residue left standing after the F-6 |
 | 574 | incomplete | pre-genesis | *undetermined* | Resolution: FCMP++ historical-reference cutover via Stage 5 |
 | 628 | incomplete | pre-genesis | *undetermined* | Relay: the `t_core` arrival harness — the witness this path has never |
 | 640 | incomplete | pre-genesis | *undetermined* | Relay: re-derive `fluff_return_ms` once, when a degree distribution |

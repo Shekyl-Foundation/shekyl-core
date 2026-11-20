@@ -10,9 +10,9 @@
 //! Two stages: [`form`] takes a candidate block, a `RuleSet` and a
 //! [`Substrate`] (clock, longhash — the world, not the chain) and yields a
 //! [`StructurallyValid`], stateless and outside any transaction;
-//! [`validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
+//! [`fn@validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
 //! **recorded** chain facts), the rule set in force and the node's [`Trust`]
-//! (the release anchors; from slice 6, the below-anchor posture), and yields
+//! (the genesis pin it carries), and yields
 //! `ChainValid<'id, V>` or `InvalidBlock { rule: CenRow, .. }` — or a
 //! [`Fault`], which is neither. Ruled in
 //! [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../../docs/completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -54,15 +54,16 @@
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
 //! the alt window, recorded by the cheap tier beside D4 — slice 9); slice 3
 //! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
-//! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
+//! release-carried [`GenesisPin`], the [`Trust`] input to `validate`,
 //! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
-//! E2 waits on the alt view and `D_max`); slice 4 (`CHAIN_RULES_SLICE_4.md`)
+//! CEN-E2 is rejected: no coded checkpoints, and `D_max` stays the switch's
+//! local limit); slice 4 (`CHAIN_RULES_SLICE_4.md`)
 //! landed 4.F's sixteen operand-complete rows — the coinbase's shape and
 //! height claims as predicates at [`TxSlot::Miner`], the emission
 //! definitions derived and recorded in coverage (the priced value stays
 //! off the verdict until F14b's paid reward), four rows `by_construction`
 //! (the first of that status), every public network's genesis pinned in
-//! [`ReleaseAnchors`] — verified by equality, in no trust band — and
+//! [`GenesisPin`] — verified by equality, in no trust band — and
 //! `RuleSet::mined_money_unlock_window` (the split epoch is
 //! `shekyl_economics::EMISSION_SPLIT_EPOCH`, read by the split itself); F14/F14b/F16/F18 wait on CEN-G6's
 //! median (slice 7) and F17 on the curve tree's writer (DRS-E3); slice 5
@@ -81,7 +82,7 @@
 //!
 //! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
 //!   — the ingest driver supplies the [`Substrate`] and its seed, target and
-//!   rule-set claims — then [`validate`] inside it, over the store's
+//!   rule-set claims — then [`fn@validate`] inside it, over the store's
 //!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
 //!   only thing `connect` accepts, branded with both the batch `'id` and
 //!   the view type `V` so an unbranded impl cannot satisfy `connect`. A
@@ -93,22 +94,21 @@
 //!   unconfirmed set. There is no second validator
 //!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1). The one block-scoped row
 //!   a transaction must also pass is CEN-H19's range proof, which
-//!   [`validate`] folds over the block; the pool verifies it as a batch of
+//!   [`fn@validate`] folds over the block; the pool verifies it as a batch of
 //!   one through the same body (`shekyl_bulletproofs::verify_batch`), as the
 //!   submit engine does.
-//! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
-//!   disagreement is routed through `shekyl_chain_store::conformance::grade`
-//!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
-//!   a DIVERGENT row is the *expected* outcome and agreement is the failure.
-//!   This crate never imports the grader; the harness that does lives with
-//!   the replay.
+//! * **Replay** (DRS-E2): every block of a captured chain through
+//!   [`fn@validate`], held to the chain's Rust baseline (`shekyl-chain-ingest`'s
+//!   `rebaseline`): a refusal, or a derived value that differs from the
+//!   baseline, is a change in what this crate decides.
 //!
 //! # Faults are not verdicts
 //!
-//! A view's substrate can fail to answer. That is [`ChainView::Fault`], an
-//! associated type the crate never inspects, returned as the *outer* `Err`
-//! of [`tx_against`] and — wrapped in [`Fault::View`] — of [`validate`].
-//! [`validate`] has two more outer arms of its own ([`Fault::Stale`],
+//! A view's substrate can fail to answer. That is
+//! [`ChainView::Fault`](HeaderView::Fault), an associated type the crate
+//! never inspects, returned as the *outer* `Err` of [`tx_against`] and —
+//! wrapped in [`Fault::View`] — of [`fn@validate`]. [`fn@validate`] has two
+//! more outer arms of its own ([`Fault::Stale`],
 //! [`Fault::Corrupt`]; `fault.rs`): a claim the stateless stage was given
 //! that the committing view refutes, and view data no conforming store
 //! holds. [`form`]'s outer position is the [`Substrate`]'s fault; [`tx_form`]
@@ -123,7 +123,6 @@
 #![deny(unsafe_code)]
 
 mod alt;
-mod anchors;
 mod archival;
 mod archival_reads;
 mod block;
@@ -132,6 +131,7 @@ mod coverage;
 mod drain;
 mod epoch_floor;
 mod fault;
+mod genesis_pin;
 mod header_facts;
 mod header_ladder;
 mod header_path;
@@ -161,25 +161,31 @@ mod view;
 pub mod harness;
 pub mod relay_floor;
 
-pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
-pub use anchors::{Anchor, ReleaseAnchors};
+pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, remember_window_epochs,
     shard_close, shard_close_height, Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta,
     ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather, EpochIssues,
-    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    RecordWrite, RecordWriteKind, ReleasePreImage, Settlement, Slash, SupportIssue,
     SupportSettlement, WALK_BACK_EPOCHS,
 };
+pub use genesis_pin::GenesisPin;
+// The support stream's schedule on the connect path (`SO-D12` S1): the
+// transition writes a block's seats with it, and the store's bundle view
+// requires the stored row to equal it (SI-43).
+pub use archival::scheduled_seats;
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED on the
 // connect path. The verifier and its view trait are exported for the
 // lanes that wire them (`SO-D12`'s cutover); the bundle queue runs the
-// verifier against the tip, and a block's producer derives its draws with
-// the verifier's own selection. `form` and `validate` do not call them.
+// verifier against the tip, a block's producer derives its draws with
+// the verifier's own selection, and the template fills its section at
+// the switch. `form` and `validate` do not call them.
 pub use archival::{
-    check_section, check_section_until_switch, draw_targets, judge_bundles, open_body,
-    open_reference, verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused,
-    BundleUnanswered, BundleView, DerivedDraw, DrawOrigin, DrawTargets, Drawn, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
+    check_section, check_section_stateless, draw_targets, fill_section, judge_bundles, open_body,
+    open_reference, seats_with_carry, support_step, verify_bundle, AdmissionFault, Admitted,
+    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, DrawOrigin,
+    DrawTargets, Drawn, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportCarry, SupportSeat, SupportStepFault, WindowClosed,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
@@ -201,23 +207,26 @@ pub use header_path::{
     ProspectFault,
 };
 pub use policy::{policy_form, PolicyRefused};
-pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};
+pub use relay_floor::{
+    fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_under, relay_floor_window,
+    relay_floor_window_under,
+};
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
-    AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
-    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch,
-    ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
-    SettlementSchedule,
+    AdmissionPolicy, AdmissionPolicyId, CappedEpoch, CappedEpochRefused, DifficultyRule,
+    ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
+    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
-pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
-    effective_median_at, even_pair_median, median, medians_from, medians_over, EffectiveMedian,
-    Weights,
+    block_weight_limit_at, effective_median_at, effective_median_at_windows, even_pair_median,
+    median, medians_from, medians_over, medians_over_window, EffectiveMedian, Weights,
 };
 pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
+pub use rules::genesis::GenesisConflict;
 pub use rules::miner::{
-    closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
+    closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_span_of,
+    tx_volume_window, TxVolumeSpan,
 };
 #[cfg(any(test, feature = "harness"))]
 pub use rules::proofs::probes;
@@ -235,7 +244,7 @@ pub use rules::tx_emission_against::{
     EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
-pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
+pub use shekyl_archival_retention::{CarriedBodies, DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{
@@ -243,9 +252,11 @@ pub use tree_growth::{
     TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
+#[cfg(any(test, feature = "harness"))]
+pub use trust::HARNESS_NETWORK_ID;
 pub use validate::{
     form, form_judged, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
-    validate_with_memo, StatelessPass,
+    validate_with_memo, FormClaims, StatelessPass,
 };
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{

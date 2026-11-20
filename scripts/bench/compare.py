@@ -21,7 +21,8 @@
 #           "baseline": 12064698,
 #           "pr": 12064698,
 #           "delta_pct": 0.0,
-#           "verdict": "ok" | "warn" | "fail"
+#           "verdict": "ok" | "warn" | "fail",
+#           "moved_from": "<baseline id>"   (only on a crate move)
 #         },
 #         ...
 #       ],
@@ -33,7 +34,8 @@
 #         "has_fail": false,
 #         "has_warn": false,
 #         "unrouted": [],
-#         "baseline_zero": []
+#         "baseline_zero": [],
+#         "moved": [{"from": "<baseline id>", "to": "<PR id>"}]
 #       }
 #     }
 #
@@ -54,8 +56,18 @@
 #
 # Exit code:
 #   0 — no fails. warn entries are reported but do not exit nonzero.
-#   1 — at least one fail. CI uses this as the gate.
+#   1 — at least one fail, or a bench present on the baseline and
+#       absent from an in-scope capture. CI uses this as the gate.
 #   2 — input error (bad JSON, missing file, schema mismatch).
+#
+# The log (`render_log`) is the count line, then every row. A missing
+# bench is named there; it is not an entry. `--alarm-label` and
+# `--alarm-against` add one `::error::` line naming those rows. When
+# `--out` is a file the log and that line go to stdout, which is the
+# stream a workflow command is read from. When `--out` is stdout the
+# JSON owns that stream and the log goes to stderr. The percentage is
+# `format_delta_pct` (the fraction times 100, two decimal places, sign
+# included). `post_comment.py` uses that function.
 #
 # The script is deliberately self-contained (only stdlib) so the CI
 # workflow can `python3 scripts/bench/compare.py ...` without an
@@ -73,7 +85,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any
+from typing import Any, NamedTuple
 
 
 SCHEMA_VERSION_IN = "shekyl_rust_v0"
@@ -133,6 +145,19 @@ ENGINE_TRAIT_FAIL = 0.25
 # releases; the other counters are kept in the envelope for human
 # triage of a tripped gate but are not themselves gated.
 GATE_METRIC = "instructions"
+
+# `delta_pct` is a fraction of the earlier value: 0.051 is a 5.1% move.
+# The log and the pull-request comment share one rendering of it.
+PERCENT_PER_FRACTION = 100
+DELTA_DISPLAY_DECIMALS = 2
+
+# Compared rows are listed in this order, then by absolute delta
+# descending inside a verdict. `missing` is not a verdict: a deleted
+# bench is absent from `entries` and is still a gating failure.
+VERDICT_ORDER = ("fail", "warn", "unrouted", "ok")
+GATING_LOG_KINDS = frozenset({"missing", "fail"})
+_LOG_KINDS = ("missing",) + VERDICT_ORDER + ("added", "baseline-zero")
+_KIND_WIDTH = max(len(kind) for kind in _LOG_KINDS)
 
 
 def classify(function_name: str) -> str:
@@ -202,6 +227,36 @@ def _iai_full_id(entry: dict[str, Any]) -> str:
     )
 
 
+def _moves(base_ids: set[str], pr_ids: set[str]) -> dict[str, str]:
+    """Benches that moved crate: baseline id -> PR id.
+
+    A bench whose crate changes changes its full id, and the old id
+    reads as missing, which fails the gate because a deleted bench is
+    the most dangerous regression. A move is not a deletion: the same
+    bench target, group, function and run id under another crate. It is
+    paired only when that match is unique in both directions, and a
+    paired move is then COMPARED under the normal thresholds, so a move
+    that also changed the workload still fails. An ambiguous match is
+    not paired, and the old id stays missing.
+    """
+    def rest(full_id: str) -> str:
+        return full_id.split("/", 1)[1]
+
+    missing = sorted(base_ids - pr_ids)
+    added = sorted(pr_ids - base_ids)
+    by_rest_missing: dict[str, list[str]] = {}
+    by_rest_added: dict[str, list[str]] = {}
+    for fid in missing:
+        by_rest_missing.setdefault(rest(fid), []).append(fid)
+    for fid in added:
+        by_rest_added.setdefault(rest(fid), []).append(fid)
+    return {
+        olds[0]: by_rest_added[key][0]
+        for key, olds in by_rest_missing.items()
+        if len(olds) == 1 and len(by_rest_added.get(key, [])) == 1
+    }
+
+
 def _criterion_full_id(entry: dict[str, Any]) -> str:
     return entry["full_id"]
 
@@ -228,21 +283,48 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     unrouted: list[str] = []
     missing_in_pr: list[str] = []
     added_in_pr: list[str] = []
+    # A scoped capture ran only the rows a change can reach
+    # (`captured_rows` in the PR envelope: `all`, or a list of
+    # `<crate>::<gungraun-target>`). A baseline entry of a row it did not
+    # run is out of scope: counted here, not gated, and never "missing".
+    # An entry of a row it DID run that is absent is still missing, and
+    # still fails: that is a deleted bench.
+    out_of_scope: list[str] = []
+    captured = pr.get("captured_rows", "all")
+    if captured != "all" and not (
+        isinstance(captured, list) and all(isinstance(row, str) for row in captured)
+    ):
+        raise SystemExit(
+            f"[compare] the PR envelope's captured_rows is neither 'all' nor a "
+            f"list of row names: {captured!r}"
+        )
+
+    def in_scope(entry: dict[str, Any]) -> bool:
+        return captured == "all" or f"{entry['crate']}::{entry['bench_target']}" in captured
     # `baseline_zero` carries `{full_id, class, pr}` (not just full_id)
     # so the renderer can surface the PR-side measurement alongside
     # the anomaly notice. The other buckets above are
     # `list[str]`-shaped because the missing side has no value to
     # carry; here the PR side has a real number.
     baseline_zero: list[dict[str, Any]] = []
+    moves = _moves(set(base_iai), set(pr_iai))
+    moved: list[dict[str, str]] = [{"from": old, "to": new} for old, new in moves.items()]
+    moved_to = {new: old for old, new in moves.items()}
 
     for full_id in sorted(set(base_iai) | set(pr_iai)):
-        b = base_iai.get(full_id)
+        if full_id in moves:
+            # Compared under its PR id, below.
+            continue
+        b = base_iai.get(moved_to.get(full_id, full_id))
         p = pr_iai.get(full_id)
         if b is None:
             added_in_pr.append(full_id)
             continue
         if p is None:
-            missing_in_pr.append(full_id)
+            if in_scope(b):
+                missing_in_pr.append(full_id)
+            else:
+                out_of_scope.append(full_id)
             continue
 
         func = b["function"]
@@ -274,17 +356,18 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         else:
             delta_pct = (pr_val - base_val) / base_val
 
-        iai_entries.append(
-            {
-                "full_id": full_id,
-                "class": cls,
-                "metric": GATE_METRIC,
-                "baseline": base_val,
-                "pr": pr_val,
-                "delta_pct": delta_pct,
-                "verdict": verdict_for(cls, delta_pct),
-            }
-        )
+        entry = {
+            "full_id": full_id,
+            "class": cls,
+            "metric": GATE_METRIC,
+            "baseline": base_val,
+            "pr": pr_val,
+            "delta_pct": delta_pct,
+            "verdict": verdict_for(cls, delta_pct),
+        }
+        if full_id in moved_to:
+            entry["moved_from"] = moved_to[full_id]
+        iai_entries.append(entry)
 
     # Criterion passthrough — informational only, no threshold. The
     # median_ns swing is what humans read; mean_ns is included for
@@ -343,7 +426,10 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         "unrouted": unrouted,
         "missing_in_pr": missing_in_pr,
         "added_in_pr": added_in_pr,
+        "out_of_scope": out_of_scope,
+        "captured_rows": captured,
         "baseline_zero": baseline_zero,
+        "moved": moved,
     }
     counts["has_fail"] = counts["fail"] > 0 or bool(missing_in_pr)
     counts["has_warn"] = counts["warn"] > 0
@@ -370,6 +456,136 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def format_delta_pct(delta_pct: float) -> str:
+    """A fractional delta as a signed percentage.
+
+    The sign is part of the reading: `+0.00%` and a bare `0.00%` do
+    not say the same thing on a delta column. A negative fraction
+    already carries its sign through the format.
+    """
+    sign = "+" if delta_pct >= 0 else ""
+    scaled = delta_pct * PERCENT_PER_FRACTION
+    return f"{sign}{scaled:.{DELTA_DISPLAY_DECIMALS}f}%"
+
+
+# A one-fold change renders as `+100.00%`. Wider deltas still print
+# in full; this is only the column width the common case aligns to.
+_DELTA_CELL_WIDTH = len(format_delta_pct(1))
+
+
+class LogRow(NamedTuple):
+    """One line of the drift log.
+
+    `kind` is a verdict, or `missing` / `added` / `baseline-zero` for
+    a row that has no compared delta. `delta_pct` is the fraction
+    `compare` stored, or None when the row has no later or earlier value.
+    """
+
+    kind: str
+    full_id: str
+    delta_pct: float | None = None
+
+
+def log_rows(report: dict[str, Any]) -> list[LogRow]:
+    """Every row a person reads, gating failures first.
+
+    A missing bench is not an entry. Listing `entries` alone drops
+    the row that makes a deleted bench exit 1.
+    """
+    summary = report["summary"]
+    rank = {name: index for index, name in enumerate(VERDICT_ORDER)}
+    entries = sorted(
+        report["entries"],
+        key=lambda entry: (
+            rank.get(entry["verdict"], len(VERDICT_ORDER)),
+            -abs(entry["delta_pct"]),
+        ),
+    )
+    rows = [LogRow("missing", full_id) for full_id in summary["missing_in_pr"]]
+    rows.extend(
+        LogRow(entry["verdict"], entry["full_id"], entry["delta_pct"])
+        for entry in entries
+    )
+    rows.extend(LogRow("added", full_id) for full_id in summary["added_in_pr"])
+    rows.extend(
+        LogRow("baseline-zero", entry["full_id"])
+        for entry in summary.get("baseline_zero", [])
+    )
+    return rows
+
+
+def format_log_row(kind: str, full_id: str, delta_pct: float | None) -> str:
+    cell = (
+        format_delta_pct(delta_pct)
+        if delta_pct is not None
+        else " " * _DELTA_CELL_WIDTH
+    )
+    return f"{kind:<{_KIND_WIDTH}} {cell:>{_DELTA_CELL_WIDTH}}  {full_id}"
+
+
+def summary_line(report: dict[str, Any]) -> str:
+    """The one-line count. The row names are `render_log`'s, not this line's."""
+    summary = report["summary"]
+    line = (
+        f"[compare] {summary['gated_total']} gated iai entries: "
+        f"{summary['ok']} ok, {summary['warn']} warn, {summary['fail']} fail"
+    )
+    if summary["unrouted"]:
+        line += f", {len(summary['unrouted'])} unrouted"
+    if summary["missing_in_pr"]:
+        line += f", {len(summary['missing_in_pr'])} missing in PR"
+    if summary["added_in_pr"]:
+        line += f", {len(summary['added_in_pr'])} added in PR"
+    if summary["out_of_scope"]:
+        line += f", {len(summary['out_of_scope'])} out of this capture's scope"
+    if summary["baseline_zero"]:
+        line += f", {len(summary['baseline_zero'])} baseline-zero anomaly"
+    return line
+
+
+def render_log(report: dict[str, Any]) -> str:
+    """The log the drift alarm and the compare step print.
+
+    Gating failures come first, each named. The percentage is
+    `format_delta_pct`, the same function the pull-request comment uses.
+    """
+    lines = [
+        summary_line(report),
+        (
+            f"earlier {report['baseline_git_rev']} -> "
+            f"later {report['pr_git_rev']}"
+        ),
+    ]
+    lines.extend(
+        format_log_row(row.kind, row.full_id, row.delta_pct) for row in log_rows(report)
+    )
+    return "\n".join(lines)
+
+
+def alarm_annotation(report: dict[str, Any], label: str, against: str) -> str | None:
+    """The `::error::` line for a comparison that exits 1, or None.
+
+    A fail with no named gating row is a broken report, not a quiet red.
+    """
+    if not report["summary"]["has_fail"]:
+        return None
+    clauses: list[str] = []
+    for row in log_rows(report):
+        if row.kind not in GATING_LOG_KINDS:
+            continue
+        if row.delta_pct is None:
+            clauses.append(f"{row.kind} {row.full_id}")
+        else:
+            clauses.append(
+                f"{row.kind} {row.full_id} ({format_delta_pct(row.delta_pct)})"
+            )
+    if not clauses:
+        raise SystemExit(
+            "[compare] the report fails the gate and names no gating row"
+        )
+    return f"::error::{label}: {'; '.join(clauses)}, against {against}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=(
@@ -392,7 +608,23 @@ def main() -> int:
         default="-",
         help='Write the JSON report here. "-" (default) writes to stdout.',
     )
+    ap.add_argument(
+        "--alarm-label",
+        default=None,
+        help="With --alarm-against, name this comparison on the ::error:: line.",
+    )
+    ap.add_argument(
+        "--alarm-against",
+        default=None,
+        help="What the earlier capture is, printed on the ::error:: line.",
+    )
     args = ap.parse_args()
+    if (args.alarm_label is None) != (args.alarm_against is None):
+        ap.error("--alarm-label and --alarm-against are one pair")
+    if args.alarm_label is not None and (
+        args.alarm_label == "" or args.alarm_against == ""
+    ):
+        ap.error("--alarm-label and --alarm-against are one pair")
 
     try:
         baseline = load_envelope(args.baseline)
@@ -412,30 +644,16 @@ def main() -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(out_text + "\n")
 
-    # Concise stderr summary so humans tailing CI logs get the TL;DR
-    # without having to parse the JSON. "gated entries" is the
-    # explicit label so the count's relationship to ok/warn/fail is
-    # unambiguous when `baseline_zero` is non-empty.
-    s = report["summary"]
-    print(
-        f"[compare] {s['gated_total']} gated iai entries: "
-        f"{s['ok']} ok, {s['warn']} warn, {s['fail']} fail"
-        + (f", {len(s['unrouted'])} unrouted" if s["unrouted"] else "")
-        + (
-            f", {len(s['missing_in_pr'])} missing in PR"
-            if s["missing_in_pr"]
-            else ""
-        )
-        + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else "")
-        + (
-            f", {len(s['baseline_zero'])} baseline-zero anomaly"
-            if s["baseline_zero"]
-            else ""
-        ),
-        file=sys.stderr,
-    )
+    # `--out -` writes the JSON to stdout, so the log cannot share
+    # that stream. A file out leaves stdout for the workflow command.
+    log_stream = sys.stderr if args.out == "-" else sys.stdout
+    print(render_log(report), file=log_stream)
+    if args.alarm_label is not None:
+        annotation = alarm_annotation(report, args.alarm_label, args.alarm_against)
+        if annotation is not None:
+            print(annotation, file=log_stream)
 
-    return 1 if s["has_fail"] else 0
+    return 1 if report["summary"]["has_fail"] else 0
 
 
 if __name__ == "__main__":

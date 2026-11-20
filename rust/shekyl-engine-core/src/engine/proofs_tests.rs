@@ -36,11 +36,16 @@ fn test_address() -> ShekylAddress {
 fn canonical_address_bytes_layout_is_pinned() {
     let addr = test_address();
     let bytes = canonical_address_bytes(&addr);
-    assert_eq!(bytes.len(), 1 + 32 + 32 + 1184);
-    assert_eq!(bytes[0], Network::Mainnet.as_u8());
-    assert_eq!(&bytes[1..33], &[0xAA; 32]);
-    assert_eq!(&bytes[33..65], &[0xBB; 32]);
-    assert_eq!(&bytes[65..], &[0xCC; 1184][..]);
+    assert_eq!(bytes.len(), 32 + 32 + 1184);
+    assert_eq!(&bytes[..32], &[0xAA; 32]);
+    assert_eq!(&bytes[32..64], &[0xBB; 32]);
+    assert_eq!(&bytes[64..], &[0xCC; 1184][..]);
+    // An address and only an address: the network a proof is valid on is the
+    // envelope's binding, not these bytes (the signing envelope §2.3), so the
+    // same keys on another network are the same bytes.
+    let mut other = addr.clone();
+    other.network = Network::Testnet;
+    assert_eq!(canonical_address_bytes(&other), bytes);
 }
 
 // ── tx-proof framing ─────────────────────────────────────────────
@@ -78,11 +83,16 @@ fn decode_rejects_wrong_hrp() {
     ));
 }
 
+/// A proof has one string, as an address does (R-23): the upper-cased
+/// spelling of a valid proof is refused.
 #[test]
-fn decode_accepts_uppercase_reencoding() {
+fn decode_refuses_an_uppercase_spelling() {
     let encoded = encode_tx_proof(TxProofDirection::Inbound, &[7u8; 10]).unwrap();
-    let upper = encoded.to_uppercase();
-    let payload = decode_proof_payload(&upper, HRP_TX_PROOF).unwrap();
+    assert!(matches!(
+        decode_proof_payload(&encoded.to_uppercase(), HRP_TX_PROOF),
+        Err(ProofsError::Malformed(_))
+    ));
+    let payload = decode_proof_payload(&encoded, HRP_TX_PROOF).unwrap();
     assert_eq!(payload[0], DIRECTION_INBOUND);
 }
 
@@ -165,6 +175,79 @@ fn candidate(tag: u8, amount: u64) -> ReserveCandidate {
         key_image: KeyImage::from_canonical_bytes([tag; 32]),
         output_key: [tag; 32],
     }
+}
+
+/// One ledger row, disclosable (key image and source ciphertext set),
+/// eligible at `eligible` (tagged `tag` throughout).
+fn row(tag: u8, amount: u64, eligible: u64) -> shekyl_engine_state::TransferDetails {
+    shekyl_engine_state::TransferDetails {
+        tx_hash: shekyl_types::TxHash::from_bytes([tag; 32]),
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(tag)),
+        block_height: shekyl_types::BlockHeight::from_raw(eligible.saturating_sub(10)),
+        key: curve25519_dalek::constants::ED25519_BASEPOINT_POINT,
+        key_offset: curve25519_dalek::Scalar::ZERO,
+        commitment: shekyl_curve_primitives::Commitment::new(
+            curve25519_dalek::Scalar::ZERO,
+            amount,
+        ),
+        payment_id: None,
+        spent: false,
+        spent_height: None,
+        key_image: Some(KeyImage::from_canonical_bytes([tag; 32])),
+        spending_tx_hash: None,
+        source_ciphertext: Some(HybridCiphertext {
+            x25519: [tag; 32],
+            ml_kem: vec![tag; 4],
+        }),
+        output_handle: None,
+        eligible_height: shekyl_types::BlockHeight::from_raw(eligible),
+        unspendable: None,
+        fcmp_precomputed_path: None,
+        receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
+    }
+}
+
+/// A reserve proof discloses money held: every on-chain output in the
+/// balance. An output still incoming (on chain, not yet in the reference
+/// block's tree) is a candidate, as is a spendable one; an
+/// in-flight send's input, an unspendable output and a spent one are not.
+/// Bites if the candidates go back to the spendable set (the incoming
+/// output drops out).
+#[test]
+fn a_reserve_proof_includes_money_still_incoming() {
+    use shekyl_engine_state::{SendInputRef, SendJournalBlock, SpendHorizon, UnspendableReason};
+    let tip = 1_000;
+    let spendable = row(1, 100, 10);
+    let incoming = row(2, 200, tip - 1);
+    let in_flight = row(4, 400, 10);
+    let mut unspendable = row(5, 500, 10);
+    unspendable.unspendable = Some(UnspendableReason::PqcLeafMismatch);
+    let mut spent = row(6, 600, 10);
+    spent.spent = true;
+
+    let mut journal = SendJournalBlock::empty();
+    journal.record_dispatched(
+        [9; 32],
+        shekyl_types::BlockHeight::from_raw(tip),
+        0,
+        Vec::new(),
+        vec![SendInputRef {
+            gindex: 4,
+            amount: 400,
+        }],
+        vec![0xAA],
+    );
+    assert!(journal.stamp_lock_baseline(&[9; 32], tip));
+
+    let candidates = reserve_candidates(
+        &[spendable, incoming, in_flight, unspendable, spent],
+        SpendHorizon::at_tip(shekyl_types::BlockHeight::from_raw(tip)),
+        &journal.spend_locks(),
+    );
+    let mut tags: Vec<u8> = candidates.iter().map(|c| c.txid[0]).collect();
+    tags.sort_unstable();
+    assert_eq!(tags, vec![1, 2], "spendable and incoming");
 }
 
 #[test]
@@ -262,6 +345,9 @@ mod check_workflows {
 
     use crate::engine::local_keys::LocalKeys;
     use crate::engine::proof_bridge;
+    use shekyl_rpc_types::hash::HashHex;
+    use shekyl_rpc_types::kinds::{Bytes, Count, Height, Size, Time};
+    use shekyl_rpc_types::nullable::Nullable;
 
     /// Deterministic wallet under test (testnet raw-seed derivation).
     const TEST_SEED: [u8; 32] = [0xA7; 32];
@@ -270,7 +356,8 @@ mod check_workflows {
     const TX_KEY_SECRET: [u8; 32] = [11u8; 32];
     /// Challenge message bound into every generated proof.
     const MSG: &str = "WI-RPC-3 check round trip";
-    /// Mock daemon chain height (block COUNT, per `get_height`).
+    /// Mock daemon chain height (block COUNT, per `get_height`; the wire
+    /// carries the tip, one less).
     const CHAIN_HEIGHT: usize = 108;
     /// The fixture tx's 0-based block height; with the height above
     /// the contract pin yields 8 confirmations.
@@ -278,194 +365,128 @@ mod check_workflows {
     /// Amounts paid to the wallet at vout 0 and vout 1.
     const AMOUNTS: [u64; 2] = [5_000, 7_500];
 
-    /// Canned daemon: serves `get_transactions` (pruned bodies by
-    /// txid hex, `missed_tx` for anything else), `get_height`, and
-    /// `is_key_image_spent` from fixed tables. Counts
-    /// `get_transactions` calls so tests can pin the batching
+    /// Canned daemon: serves `tx_list` (pruned bodies by
+    /// txid hex, `{"missing": null}` for anything else), `chain_height`, and
+    /// `chain_spent` from fixed tables. Counts
+    /// `tx_list` calls so tests can pin the batching
     /// behavior (one chunked call, not one call per txid).
     #[derive(Clone)]
     struct MockRpc {
         /// txid hex → pruned body hex.
         txs: Arc<BTreeMap<String, String>>,
-        /// `is_key_image_spent` reply, positional (0 = unspent).
+        /// `chain_spent` reply, positional (0 unspent, 1 chain, 2 txpool).
         spent_status: Arc<Vec<u64>>,
         height: usize,
-        /// Number of `get_transactions` requests served.
-        get_transactions_calls: Arc<AtomicUsize>,
+        /// Number of `tx_list` requests served.
+        tx_list_calls: Arc<AtomicUsize>,
         /// txid hexes the daemon reports from its POOL rather than the
         /// chain — the reserve path must refuse these, the tx-proof
         /// path must report them honestly.
         pooled: Arc<std::collections::BTreeSet<String>>,
-        /// Selects [`crate::engine::test_support::daemon_get_info`]'s
-        /// syncing reply. This double does not build a `get_info` document.
+        /// Selects [`crate::engine::test_support::daemon_status`]'s
+        /// syncing reply. This double does not build a status document.
         synchronized: bool,
         /// The re-read of the witness tip returns a different hash than
-        /// `get_info` recorded. A verdict from this double is a failed seal.
+        /// `daemon_status` recorded. A verdict from this double is a failed seal.
         witness_replaced: bool,
     }
 
-    fn witness_block_header(height: u64, hash: [u8; 32]) -> shekyl_rpc_types::BlockHeader {
-        use shekyl_rpc_types::HashHex;
-        let zero = HashHex::from_bytes([0u8; 32]);
-        shekyl_rpc_types::BlockHeader {
-            major_version: 1,
-            minor_version: 1,
-            timestamp: 0,
-            prev_hash: zero,
-            nonce: 0,
-            orphan_status: false,
-            height,
-            depth: 0,
-            hash: HashHex::from_bytes(hash),
-            difficulty: 1,
-            wide_difficulty: "0x1".to_owned(),
-            difficulty_top64: 0,
-            cumulative_difficulty: 1,
-            wide_cumulative_difficulty: "0x1".to_owned(),
-            cumulative_difficulty_top64: 0,
-            reward: 0,
-            block_size: 0,
-            block_weight: 0,
-            num_txes: 0,
-            pow_hash: None,
-            long_term_weight: 0,
-            miner_tx_hash: zero,
-            curve_tree_root: zero,
-            attestation_root: zero,
-        }
+    /// A `block_header_show` reply for the witness re-read: the header at
+    /// `height` under `hash`, every other member unremarkable.
+    fn witness_block_header(height: u64, hash: [u8; 32]) -> serde_json::Value {
+        let zero = "00".repeat(32);
+        serde_json::json!({
+            "height": height, "hash": hex::encode(hash), "parent": zero,
+            "version_major": 1, "version_minor": 1, "time": 0, "nonce": 0,
+            "orphan": false, "depth": 0, "difficulty": "0x1",
+            "difficulty_cumulative": "0x1", "reward": "0", "weight": 0,
+            "weight_longterm": null, "tx_count": 0, "coinbase": zero,
+            "curve_root": zero, "section_root": zero,
+        })
     }
 
     impl Rpc for MockRpc {
-        async fn post(&self, route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
-            let reply = match route {
-                // Built from the wire type for the same reason `get_height`
-                // below is — and this one is the proof the reason is real. It
-                // was a `json!` literal until RK-4c, and the moment the reader
-                // became typed the literal stopped decoding: it named four
-                // fields where the contract has nine. A double that cannot
-                // express the reply is a double that was never checked against
-                // it.
-                "get_transactions" => {
-                    self.get_transactions_calls.fetch_add(1, Ordering::SeqCst);
-                    let req: shekyl_rpc_types::GetTransactionsRequest =
-                        serde_json::from_slice(&body).expect("request decodes");
-                    let mut txs = Vec::new();
-                    let mut missed = Vec::new();
-                    for h in &req.txs_hashes {
-                        match self.txs.get(h.as_str()) {
-                            Some(body_hex) => txs.push(shekyl_rpc_types::TxEntry {
-                                tx_hash: shekyl_rpc_types::HashHex::from_hex(h)
-                                    .expect("txid is 32 bytes of hex"),
-                                as_hex: String::new(),
-                                pruned_as_hex: (*body_hex).clone(),
-                                prunable_as_hex: String::new(),
-                                prunable_hash: shekyl_rpc_types::HashHex::ZERO,
-                                archival_len: 0,
-                                as_json: None,
-                                pruned: false,
-                                double_spend_seen: false,
-                                location: if self.pooled.contains(h.as_str()) {
-                                    shekyl_rpc_types::TxLocation::Pooled {
-                                        relayed: true,
-                                        received_timestamp: Some(1),
-                                    }
-                                } else {
-                                    shekyl_rpc_types::TxLocation::Mined {
-                                        block_height: TX_BLOCK_HEIGHT,
-                                        // Derived, not invented: the daemon
-                                        // computes this against the tip it
-                                        // read for the whole gather, so a
-                                        // double that hard-codes it disagrees
-                                        // with its own heights and only
-                                        // passed while the wallet recomputed
-                                        // the value instead of reading it.
-                                        confirmations: CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT,
-                                        block_timestamp: 0,
-                                        output_indices: Vec::new(),
-                                    }
-                                },
-                            }),
-                            None => missed.push(
-                                shekyl_rpc_types::HashHex::from_hex(h)
-                                    .expect("txid is 32 bytes of hex"),
-                            ),
-                        }
-                    }
-                    serde_json::to_value(shekyl_rpc_types::GetTransactionsResponse {
-                        status: shekyl_rpc_types::RpcStatus::ok(),
-                        txs,
-                        missed_tx: missed,
-                        unavailable_tx: Vec::new(),
-                    })
-                    .expect("wire type serializes")
-                }
-                // Built from the daemon's own wire type, not a JSON literal:
-                // the compiler holds this double to the contract's field set
-                // (a hand-written `{"height": ..}` once drifted and was only
-                // caught when the typed reader refused it).
-                // `json_rpc_call` posts every JSON-RPC method to this one
-                // route with the method in the body, so `get_info` arrives
-                // here. The result is [`crate::engine::test_support::daemon_get_info`],
-                // the same document `TestDaemon` serves — this arm does not
-                // carry a second schema.
-                "json_rpc" => {
-                    let req: serde_json::Value =
-                        serde_json::from_slice(&body).expect("json-rpc request decodes");
-                    let method = req
-                        .get("method")
-                        .and_then(serde_json::Value::as_str)
-                        .expect("json-rpc request names a method");
-                    let result = match method {
-                        "get_info" => crate::engine::test_support::daemon_get_info(
-                            self.height as u64,
-                            !self.synchronized,
-                        ),
-                        "get_block_header_by_height" => {
-                            let height = req
-                                .pointer("/params/height")
-                                .and_then(serde_json::Value::as_u64)
-                                .expect("height is a number");
-                            let mut hash = crate::engine::test_support::test_block_hash_at(height);
-                            if self.witness_replaced {
-                                hash[0] ^= 0xff;
-                            }
-                            serde_json::to_value(shekyl_rpc_types::GetBlockHeaderByHeightResponse {
-                                status: shekyl_rpc_types::RpcStatus::ok(),
-                                block_header: witness_block_header(height, hash),
-                            })
-                            .expect("header serializes")
-                        }
-                        other => panic!("mock json-rpc does not serve {other}"),
-                    };
-                    serde_json::json!({ "jsonrpc": "2.0", "id": "0", "result": result })
-                }
-                "get_height" => serde_json::to_value(shekyl_rpc_types::GetHeightResponse {
-                    status: shekyl_rpc_types::RpcStatus::ok(),
-                    height: self.height as u64,
-                    hash: shekyl_rpc_types::HashHex::ZERO,
-                })
-                .expect("wire type serializes"),
-                "is_key_image_spent" => {
-                    let req: shekyl_rpc_types::IsKeyImageSpentRequest =
-                        serde_json::from_slice(&body).expect("request decodes");
-                    let statuses: Vec<shekyl_rpc_types::KeyImageStatus> = (0..req.key_images.len())
-                        .map(|i| {
-                            let raw = self.spent_status.get(i).copied().unwrap_or(0);
-                            shekyl_rpc_types::KeyImageStatus::try_from(
-                                u8::try_from(raw).expect("fixture status is 0..2"),
-                            )
-                            .expect("fixture status is a defined state")
-                        })
-                        .collect();
-                    serde_json::to_value(shekyl_rpc_types::IsKeyImageSpentResponse {
-                        status: shekyl_rpc_types::RpcStatus::ok(),
-                        spent_status: statuses,
-                    })
-                    .expect("wire type serializes")
-                }
-                other => panic!("mock daemon received unexpected route {other}"),
+        async fn post(&self, _route: &str, body: Vec<u8>) -> Result<Vec<u8>, RpcError> {
+            use crate::engine::test_support::{
+                method_name, requested_method, requested_params, result_envelope,
             };
-            Ok(reply.to_string().into_bytes())
+            use shekyl_rpc_client::wire;
+            let method = requested_method(&body);
+            let params = requested_params(&body);
+            let result = if method == method_name::<wire::TxList>() {
+                self.tx_list_calls.fetch_add(1, Ordering::SeqCst);
+                let ids = params["id"].as_array().expect("tx_list names ids").clone();
+                let slots: Vec<serde_json::Value> = ids
+                    .iter()
+                    .map(|id| {
+                        let h = id.as_str().expect("an id is hex");
+                        match self.txs.get(h) {
+                            // Built from the wire type, so the double cannot
+                            // describe a shape the daemon does not produce.
+                            Some(body_hex) => {
+                                let pooled = self.pooled.contains(h);
+                                serde_json::to_value(wire::tx::TxEntry {
+                                    id: HashHex::from_hex(h).expect("txid is 32 bytes of hex"),
+                                    body: Bytes(hex::decode(body_hex).expect("fixture hex")),
+                                    // The proofs read asks with `prune`.
+                                    prunable_hash: shekyl_rpc_types::kinds::Asked::Present(
+                                        HashHex::ZERO,
+                                    ),
+                                    pqc_auth_hash: shekyl_rpc_types::kinds::Asked::Present(
+                                        Nullable(None),
+                                    ),
+                                    archival_size: shekyl_rpc_types::kinds::Asked::Present(Size(0)),
+                                    pooled,
+                                    mined_height: (!pooled)
+                                        .then_some(Height(TX_BLOCK_HEIGHT))
+                                        .into(),
+                                    // Derived, not invented: the daemon
+                                    // computes this against the tip it read
+                                    // for the whole gather.
+                                    confirmations: (!pooled)
+                                        .then_some(Count(CHAIN_HEIGHT as u64 - TX_BLOCK_HEIGHT))
+                                        .into(),
+                                    mined_time: (!pooled).then_some(Time(0)).into(),
+                                    output_index: Vec::new(),
+                                    public: pooled.then_some(true).into(),
+                                })
+                                .expect("wire type serializes")
+                            }
+                            None => serde_json::json!({ "missing": null }),
+                        }
+                    })
+                    .collect();
+                serde_json::Value::Array(slots)
+            } else if method == method_name::<wire::DaemonStatus>() {
+                crate::engine::test_support::daemon_status(self.height as u64, !self.synchronized)
+            } else if method == method_name::<wire::BlockHeaderShow>() {
+                let height = params["height"].as_u64().expect("height is a number");
+                let mut hash = crate::engine::test_support::test_block_hash_at(height).to_bytes();
+                if self.witness_replaced {
+                    hash[0] ^= 0xff;
+                }
+                witness_block_header(height, hash)
+            } else if method == method_name::<wire::ChainHeight>() {
+                serde_json::json!({
+                    "height": self.height as u64 - 1,
+                    "hash": "00".repeat(32),
+                    "writer": {"live": null},
+                })
+            } else if method == method_name::<wire::ChainSpent>() {
+                let asked = params["key_image"].as_array().expect("key images").len();
+                let spent: Vec<&str> = (0..asked)
+                    .map(|i| match self.spent_status.get(i).copied().unwrap_or(0) {
+                        0 => "unspent",
+                        1 => "chain",
+                        2 => "txpool",
+                        other => panic!("fixture status {other} is not a state"),
+                    })
+                    .collect();
+                serde_json::json!(spent)
+            } else {
+                panic!("mock daemon does not serve {method}")
+            };
+            Ok(result_envelope(&result))
         }
     }
 
@@ -495,7 +516,7 @@ mod check_workflows {
             .enumerate()
             .map(|(i, &amount)| {
                 construct_output(
-                    &TX_KEY_SECRET,
+                    &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
                     &keys.x25519_pk,
                     &keys.ml_kem_ek,
                     keys.spend_pk.as_canonical_bytes(),
@@ -526,12 +547,10 @@ mod check_workflows {
 
         let tx = Transaction {
             prefix: TxPrefix {
-                unlock_time: 0,
-                inputs: vec![Input::ToKey {
-                    amount: 0,
-                    key_offsets: vec![],
-                    key_image: [0x42u8; 32],
-                }],
+                unlock_time: TxPrefix::NO_UNLOCK_TIME,
+                inputs: vec![Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(
+                    [0x42u8; 32],
+                ))],
                 outputs: outputs
                     .iter()
                     .map(|od| Output {
@@ -569,7 +588,11 @@ mod check_workflows {
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
         let txid = tx
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
@@ -584,7 +607,7 @@ mod check_workflows {
                 txs: Arc::new(txs),
                 spent_status: Arc::new(spent_status),
                 height: CHAIN_HEIGHT,
-                get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+                tx_list_calls: Arc::new(AtomicUsize::new(0)),
                 pooled: Arc::new(std::collections::BTreeSet::new()),
                 synchronized: true,
                 witness_replaced: false,
@@ -599,6 +622,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_inbound_proof(
             &fx.local,
             &InboundProofRequest {
+                network_id: fx.address.network.network_id(),
                 txid: fx.txid,
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
@@ -642,6 +666,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: fx
@@ -704,7 +729,8 @@ mod check_workflows {
         // both outputs, exactly what `generate_outbound` produces
         // after vout discovery.
         let bytes = generate_outbound_proof(
-            &TX_KEY_SECRET,
+            &fx.address.network.network_id(),
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &canonical_address_bytes(&fx.address),
             MSG.as_bytes(),
@@ -852,6 +878,7 @@ mod check_workflows {
         let bytes = proof_bridge::generate_reserve_proof(
             &fx.local,
             &ReserveProofRequest {
+                network_id: fx.address.network.network_id(),
                 address_bytes: canonical_address_bytes(&fx.address),
                 message: MSG.as_bytes().to_vec(),
                 outputs: vec![dup(0), dup(0)],
@@ -870,7 +897,7 @@ mod check_workflows {
     #[tokio::test]
     async fn check_reserve_proof_batches_unique_tx_fetches_into_one_call() {
         // F2 regression: locators spanning multiple txids must
-        // resolve in chunked batched get_transactions calls, not
+        // resolve in chunked batched tx_list calls, not
         // one awaited call per unique txid.
         let mut fx = make_fixture(vec![]);
         // A SECOND, genuinely different transaction under its own hash, so
@@ -891,7 +918,11 @@ mod check_workflows {
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
         let txid2 = second
-            .hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]), ArchivalLength::ZERO)
+            .hash_with_supplied_components(
+                None,
+                PrunableHash::from_bytes([0u8; 32]),
+                ArchivalLength::ZERO,
+            )
             .to_bytes();
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
@@ -909,8 +940,8 @@ mod check_workflows {
             .expect("check succeeds");
         assert!(matches!(checked, CheckedReserveProof::Valid { .. }));
         // Two unique txids fit one TXS_PER_REQUEST chunk: exactly
-        // one get_transactions round trip.
-        assert_eq!(fx.rpc.get_transactions_calls.load(Ordering::SeqCst), 1);
+        // one tx_list round trip.
+        assert_eq!(fx.rpc.tx_list_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -938,7 +969,8 @@ mod check_workflows {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
             let id = tx
-                .hash_with_supplied_prunable(
+                .hash_with_supplied_components(
+                    None,
                     PrunableHash::from_bytes([0u8; 32]),
                     ArchivalLength::ZERO,
                 )
@@ -951,7 +983,7 @@ mod check_workflows {
             txs: Arc::new(txs),
             spent_status: Arc::new(vec![]),
             height: CHAIN_HEIGHT,
-            get_transactions_calls: Arc::new(AtomicUsize::new(0)),
+            tx_list_calls: Arc::new(AtomicUsize::new(0)),
             pooled: Arc::new(std::collections::BTreeSet::new()),
             synchronized: true,
             witness_replaced: false,
@@ -962,7 +994,7 @@ mod check_workflows {
             .expect("fixture daemon is synchronized");
         let bodies = chain.txs(&rpc, &ids).await.expect("all txs served");
         assert_eq!(bodies.len(), 250);
-        assert_eq!(rpc.get_transactions_calls.load(Ordering::SeqCst), 3);
+        assert_eq!(rpc.tx_list_calls.load(Ordering::SeqCst), 3);
     }
 
     /// Verification refuses while the daemon reports syncing, on both
@@ -986,7 +1018,7 @@ mod check_workflows {
         check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &proof)
             .await
             .expect("a synchronized daemon verifies");
-        let fetches_after_control = fx.rpc.get_transactions_calls.load(Ordering::SeqCst);
+        let fetches_after_control = fx.rpc.tx_list_calls.load(Ordering::SeqCst);
 
         let err = check_tx_proof(&syncing, fx.txid, &fx.address, MSG, &proof)
             .await
@@ -996,9 +1028,9 @@ mod check_workflows {
             "expected DaemonSyncing, got {err:?}"
         );
         assert_eq!(
-            syncing.get_transactions_calls.load(Ordering::SeqCst),
+            syncing.tx_list_calls.load(Ordering::SeqCst),
             fetches_after_control,
-            "tx-proof verification must refuse before get_transactions"
+            "tx-proof verification must refuse before tx_list"
         );
 
         let reserve = reserve_proof_string(&fx);
@@ -1010,16 +1042,16 @@ mod check_workflows {
             "expected DaemonSyncing, got {err:?}"
         );
         assert_eq!(
-            syncing.get_transactions_calls.load(Ordering::SeqCst),
+            syncing.tx_list_calls.load(Ordering::SeqCst),
             fetches_after_control,
-            "reserve verification must refuse before get_transactions"
+            "reserve verification must refuse before tx_list"
         );
     }
 
     /// A witness tip that was replaced after the reads is not a verdict.
     ///
-    /// The mock returns `get_info`'s tip hash with one byte flipped on
-    /// `get_block_header_by_height`. Bites against `seal` returning a
+    /// The mock returns `daemon_status`'s tip hash with one byte flipped on
+    /// `block_header_show`. Bites against `seal` returning a
     /// token without calling `bracket`: both checks then return `Valid`.
     /// It does **not** cover a gather that is merely shorter than the
     /// witness, which is the next test.
@@ -1178,14 +1210,19 @@ mod check_workflows {
             .expect("fixture tx fetches");
         let on_chain = on_chain_outputs_of(&fetched.tx).expect("outputs project");
 
-        let discovered =
-            discover_recipient_outputs(&TX_KEY_SECRET, &keys.x25519_pk, &keys.ml_kem_ek, &on_chain);
+        let discovered = discover_recipient_outputs(
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
+            &keys.x25519_pk,
+            &keys.ml_kem_ek,
+            &on_chain,
+        );
         let vouts: Vec<u64> = discovered.iter().map(|(i, _)| *i).collect();
         assert_eq!(vouts, vec![0, 1], "both fixture outputs pay the wallet");
 
         let address_bytes = canonical_address_bytes(&fx.address);
         let with_secrets = generate_outbound_proof_with_secrets(
-            &TX_KEY_SECRET,
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),
@@ -1193,7 +1230,8 @@ mod check_workflows {
         )
         .expect("with-secrets generation succeeds");
         let rederived = generate_outbound_proof(
-            &TX_KEY_SECRET,
+            &shekyl_network::HARNESS_NETWORK_ID,
+            &shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET),
             &fx.txid,
             &address_bytes,
             MSG.as_bytes(),
@@ -1208,6 +1246,7 @@ mod check_workflows {
         assert_eq!(with_secrets[97..], rederived[97..]);
 
         let verified = verify_outbound_proof(
+            &shekyl_network::HARNESS_NETWORK_ID,
             &with_secrets,
             &fx.txid,
             &address_bytes,
@@ -1219,6 +1258,98 @@ mod check_workflows {
         )
         .expect("with-secrets proof verifies");
         assert_eq!(verified.len(), 2);
+    }
+
+    /// What `get_tx_proof` reads for an OUTBOUND proof: the fixture's
+    /// ledger holding `retained` (if any) under the fixture's txid, a key
+    /// actor for another wallet (OUTBOUND never signs in the actor), and
+    /// that other wallet's address as the primary, so the fixture's own
+    /// address is a counterparty.
+    async fn outbound_from_ledger(
+        fx: &CheckFixture,
+        retained: Option<shekyl_engine_state::TxSecretKey>,
+    ) -> Result<GeneratedTxProof, ProofsError> {
+        const SENDER_SEED: [u8; 32] = [0x5C; 32];
+        let (_, blob) =
+            shekyl_crypto_pq::account::account_from_seed(&SENDER_SEED, Network::Testnet)
+                .expect("the sender's account derives");
+        let key = KeyEngineHandle::spawn(blob);
+        let sender = LocalKeys::from_test_seed(SENDER_SEED);
+        let ledger = LocalLedger::from_test_blocks(Vec::new());
+        if let Some(retained) = retained {
+            ledger
+                .write()
+                .ledger
+                .record_retained_tx_key(fx.txid, retained);
+        }
+        let ctx = ProofsCtx {
+            key: &key,
+            daemon: &fx.rpc,
+            ledger: &ledger,
+            primary_address: sender.keys.to_address(Network::Testnet),
+        };
+        get_tx_proof(&ctx, TxHash::from_bytes(fx.txid), &fx.address, MSG).await
+    }
+
+    /// The OUTBOUND ledger path end to end: the key the sender retained,
+    /// stored and opened again, proves both outputs, and the proof checks.
+    #[tokio::test]
+    async fn an_outbound_proof_from_the_retained_key_checks() {
+        let fx = make_fixture(vec![]);
+        let retained = shekyl_engine_state::TxSecretKey::new(
+            shekyl_crypto_pq::TxKey::seeded(TX_KEY_SECRET).store(),
+        );
+        let generated = outbound_from_ledger(&fx, Some(retained))
+            .await
+            .expect("the retained key proves the payment");
+        assert_eq!(generated.direction, TxProofDirection::Outbound);
+        let checked = check_tx_proof(&fx.rpc, fx.txid, &fx.address, MSG, &generated.proof)
+            .await
+            .expect("check succeeds");
+        let CheckedTxProof::Valid {
+            direction, outputs, ..
+        } = checked
+        else {
+            panic!("expected Valid, got Invalid");
+        };
+        assert_eq!(direction, TxProofDirection::Outbound);
+        assert_eq!(outputs.len(), 2);
+    }
+
+    /// A retained record that is not a canonical scalar loads with the
+    /// ledger but does not open, and the proof is refused by name.
+    #[tokio::test]
+    async fn a_retained_key_that_does_not_open_is_refused() {
+        let fx = make_fixture(vec![]);
+        // The record's bytes, read as the ledger reads any record (its
+        // serialized form is the 32 bytes); only `TxKey::store` writes one in
+        // code.
+        let unreadable: shekyl_engine_state::TxSecretKey =
+            serde_json::from_value(serde_json::json!([0xFFu8; 32].to_vec()))
+                .expect("the record reads");
+        let err = outbound_from_ledger(&fx, Some(unreadable))
+            .await
+            .expect_err("a record that does not open proves nothing");
+        assert!(
+            matches!(
+                err,
+                ProofsError::TxSecretUnreadable(StoredKeyError::NotCanonical)
+            ),
+            "expected TxSecretUnreadable, got {err:?}"
+        );
+    }
+
+    /// No retained record: this wallet did not send the transaction.
+    #[tokio::test]
+    async fn an_outbound_proof_with_no_retained_key_is_unavailable() {
+        let fx = make_fixture(vec![]);
+        let err = outbound_from_ledger(&fx, None)
+            .await
+            .expect_err("no retained key proves nothing");
+        assert!(
+            matches!(err, ProofsError::TxSecretUnavailable),
+            "expected TxSecretUnavailable, got {err:?}"
+        );
     }
 }
 

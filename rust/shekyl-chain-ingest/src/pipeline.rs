@@ -42,9 +42,7 @@
 //! [`crate::trace::Digest`] and the archival rows (DRS-E4 §3.8.1, version
 //! `0x01`), one read — and records the digest beside the trace's
 //! expectation and the rows' diff against the trace's `0x04` record. At the
-//! end, not at the connect: an `Inject` filed at the covered tip commits
-//! after the block it is attributed to, and the trace's rows already carry
-//! it. A refusal is a **recorded verdict**: the writer stays up;
+//! end, after the run's last committed event. A refusal is a **recorded verdict**: the writer stays up;
 //! this driver ends the run (an honest chain that refuses is a
 //! disagreement; the live daemon (DRS-X) and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
@@ -56,11 +54,13 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid, Substrate,
+    form, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid,
     Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
+use shekyl_hasher::{Class, Ranked};
+use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
 };
@@ -69,15 +69,15 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::connector::{
-    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
-    ObserveTarget, Rewind, Rewound, RunFault,
+    Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, ObserveTarget,
+    Rewind, Rewound, RunFault,
 };
-use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
-use crate::source::{IngestEvent, Injection, SequenceNo, Sequenced, ServeCredit, Source};
+use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
 use crate::target::TargetLedger;
 use crate::trace::Trace;
 
@@ -90,6 +90,12 @@ pub struct PipelineConfig {
     pub window: NonZeroUsize,
     /// `form` workers hashing at once.
     pub hashers: NonZeroUsize,
+    /// Record [`crate::trace::Digest`] at every committed height. Legal
+    /// only when each [`Apply`] connects one block: a wider commit writes
+    /// the batch in one transaction, and a digest read after it names only
+    /// the batch tip. The baseline that asks for a row per height sets this
+    /// and a window of one. A normal run leaves it off and pays no scan.
+    pub digest_each_commit: bool,
 }
 
 impl PipelineConfig {
@@ -118,6 +124,7 @@ impl Default for PipelineConfig {
         Self {
             window: Self::DEFAULT_WINDOW,
             hashers: Self::default_hashers(),
+            digest_each_commit: false,
         }
     }
 }
@@ -127,6 +134,13 @@ impl Default for PipelineConfig {
 pub struct RunReport {
     /// Blocks connected, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
+    /// `logical_state_digest_v0` at every height committed one block at a
+    /// time, and at each rewind's `to`. Empty unless
+    /// [`PipelineConfig::digest_each_commit`]: the scan is the store's own
+    /// read, and a run that did not ask for the table does not take it.
+    /// Keyed by height so a rewind drops the branch it popped and a
+    /// re-extension replaces those rows.
+    pub digests: BTreeMap<BlockHeight, crate::trace::Digest>,
     /// The census rows the connected blocks' verdicts exercised — the union
     /// of every `ChainValid`'s coverage.
     pub exercised: BTreeSet<&'static str>,
@@ -142,37 +156,36 @@ pub struct RunReport {
     /// trace's `0x04` record, family by family, from the same read as
     /// `checkpoint` and `None` exactly when it is.
     pub archival: Option<ArchivalCheckpoint>,
-    /// The derived-vs-trace root comparison, per connected height the trace
-    /// has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8): how many
-    /// heights were compared, and every one that disagreed. **Every**
-    /// covered height of the **canonical** chain, never a sample — this
-    /// comparison exists only while the LMDB trace does. The trace is
-    /// indexed by height and describes the chain the daemon ended on, so a
-    /// height an abandoned branch connected is not a comparison against
-    /// anything: a `Rewind { to }` retracts every result above `to`, and the
+    /// The derived-vs-baseline root comparison, per connected height the
+    /// trace has facts for (DRS-E3 CTW-5, `DRS_E3_CURVE_WRITER.md` §3.8):
+    /// how many heights were compared, and every one that disagreed.
+    /// **Every** covered height of the **canonical** chain, never a sample.
+    /// The trace is the Rust baseline [`crate::rebaseline`] wrote, indexed
+    /// by height and describing the chain that run ended on, so a height an
+    /// abandoned branch connected is not a comparison against anything: a
+    /// `Rewind { to }` retracts every result above `to`, and the
     /// re-extension compares afresh. Zero compared on a trace with facts is
     /// a run that connected nothing, which the connected count already
-    /// says; a gate over this field asserts the count first (rule 47).
+    /// says; a gate over this field asserts the count first (rule 47). An
+    /// empty trace ([`crate::trace::Trace::empty`]) compares nothing.
     pub roots: RootComparisons,
-    /// The derived-vs-trace **weights** comparison (CEN-G6/G6b, slice 7
+    /// The derived-vs-baseline **weights** comparison (CEN-G6/G6b, slice 7
     /// commit 4), the same shape and the same canonical-heights-only
     /// discipline as `roots`: at every connected height the trace has
     /// facts for, the verdict's `weight`, `long_term_weight` and
-    /// `long_term_effective_median` against the C++'s two `block_info`
-    /// columns and the exporter's re-derived median. The parity pin for
-    /// the two medians over every captured chain, taken while the LMDB
-    /// trace exists; a divergence is recorded, never patched.
+    /// `long_term_effective_median` against the baseline's three weight
+    /// facts. A divergence is a change in what the Rust derives, recorded
+    /// and never patched.
     pub weights: WeightComparisons,
-    /// The derived-vs-trace **emission** comparison (CEN-F14b / G12, slice
-    /// 7 commit 5; CEN-F17 / G11, wave B), the same shape: at every
+    /// The derived-vs-baseline **emission** comparison (CEN-F14b / G12,
+    /// slice 7 commit 5; CEN-F17 / G11, wave B), the same shape: at every
     /// connected height the trace has facts for, the verdict's
-    /// `coins_generated` against the C++'s `block_info.bi_coins` and the
-    /// verdict's burn against its `block_burn`. Consecutive accumulator
-    /// rows differ by the paid reward, so this is the penalty's parity
-    /// oracle wherever a captured block is over the median (`median-full`'s
-    /// block 211 is the one on record); the burn column is the fee split's
-    /// — the burn ratio over the FL-R16c supply and the escalation operand
-    /// — wherever a captured block carries a fee.
+    /// `coins_generated` and burn against the baseline's. Consecutive
+    /// accumulator rows differ by the paid reward, so this holds the
+    /// penalty wherever a captured block is over the median (`median-full`'s
+    /// block 211 is the one on record); the burn holds the fee split — the
+    /// burn ratio over the FL-R16c supply and the escalation operand —
+    /// wherever a captured block carries a fee.
     pub emission: EmissionComparisons,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
@@ -181,14 +194,6 @@ pub struct RunReport {
     /// pop-symmetry check through the actor (the state at `to` must be the
     /// state the chain had when `to` was first the tip).
     pub switches: Vec<Switch>,
-    /// One entry per committed `Inject` (DRS-E4 §3.8 item 3): the credit
-    /// and the height the store attributed it to. The record a later
-    /// `Rewind` is checked against — a pop below an injection's height
-    /// would strand the bit, so it is refused
-    /// ([`PipelineFault::RewindBelowInjection`]) — and the trace half of
-    /// the capture's out-of-band contract: a vector's manifest names each
-    /// one, and the replay reports each one.
-    pub injected: Vec<Injection>,
 }
 
 /// The per-height root oracle's results (`RunReport::roots`), one per
@@ -244,7 +249,8 @@ pub struct RootDivergence {
     pub at: BlockHeight,
     /// The verdict's derivation, recorded at `curve_tree_roots[at + 1]`.
     pub ours: CurveTreeRoot,
-    /// The trace's `root_after` — what the C++ grower left.
+    /// The baseline's `root_after` — the root the store recorded after this
+    /// block's drain.
     pub theirs: CurveTreeRoot,
 }
 
@@ -292,14 +298,13 @@ impl WeightComparisons {
     }
 }
 
-/// The trace's three weight facts for one height — what the C++ recorded
-/// (`block_info.bi_weight`, `bi_long_term_block_weight`) and what the
-/// exporter re-derived with the daemon's own rolling median.
+/// The baseline's three weight facts for one height: the block weight, the
+/// long-term weight, and the long-term effective median the store recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedWeightFacts {
-    /// `block_info.bi_weight`.
+    /// The block's weight.
     pub weight: BlockWeight,
-    /// `block_info.bi_long_term_block_weight`.
+    /// The block's long-term weight.
     pub long_term_weight: LongTermWeight,
     /// The long-term effective median in force for the block.
     pub long_term_effective_median: LongTermWeight,
@@ -367,17 +372,16 @@ impl EmissionComparisons {
     }
 }
 
-/// The two emission values the trace records per height, as the oracle
-/// compares them: the C++'s accumulator (`block_info.bi_coins`, CEN-G12)
-/// and its destroyed amount (`block_burn`, CEN-F17 / G11 — the fee split
-/// over the same parent-state operands, so a match here is the burn ratio,
-/// the supply definition and the escalation operand agreeing, not the
-/// accumulator alone).
+/// The two emission values the baseline records per height: the
+/// accumulator (`coins_generated`, CEN-G12) and the destroyed amount
+/// (`burned`, CEN-F17 / G11 — the fee split over the same parent-state
+/// operands, so a match here is the burn ratio, the supply definition and
+/// the escalation operand agreeing, not the accumulator alone).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedEmissionFacts {
-    /// The trace's `coins_generated`.
+    /// The baseline's `coins_generated`.
     pub coins_generated: AtomicUnits,
-    /// The trace's `burned`.
+    /// The baseline's `burned`.
     pub burned: AtomicUnits,
 }
 
@@ -411,7 +415,8 @@ pub struct Checkpoint {
     pub at: BlockHeight,
     /// The redb-side logical state.
     pub ours: crate::trace::Digest,
-    /// The trace's expectation (the LMDB side).
+    /// The baseline's expectation: the digest the trace recorded at this
+    /// height.
     pub theirs: crate::trace::Digest,
 }
 
@@ -428,8 +433,8 @@ impl Checkpoint {
 pub struct ArchivalCheckpoint {
     /// The height after which both sides' rows were taken.
     pub at: BlockHeight,
-    /// The redb rows against the trace's, per family: `ours` is the redb
-    /// side, `theirs` the trace's (the LMDB side).
+    /// The redb rows against the baseline's, per family: `ours` is this
+    /// run's redb side, `theirs` the trace's.
     pub diff: SnapshotDiff,
 }
 
@@ -478,9 +483,9 @@ pub enum Disagreement {
         at: BlockHeight,
     },
     /// The derived curve-tree root after a block differed from the root
-    /// the trace recorded for it (DRS-E3 CTW-5). Adjudicated against the
-    /// spec, never patched around: the fixtures are chains the C++
-    /// accepted and the root is the validator's.
+    /// the baseline recorded for it (DRS-E3 CTW-5). Adjudicated against the
+    /// spec, never patched around: the fixtures are chains a previous run
+    /// connected and the root is this run's derivation.
     RootDiverged {
         /// The connected height.
         at: BlockHeight,
@@ -507,35 +512,6 @@ impl RunReport {
     #[must_use]
     pub fn popped(&self) -> u64 {
         self.switches.iter().map(|s| s.popped).sum()
-    }
-
-    /// What the grader reads (RD-Q9), derived from the report so the two
-    /// cannot disagree: exercised rows, the refusal, the covered-tip digest,
-    /// the per-height root oracle (CTW-5), and the archival oracle at the
-    /// checkpoint (DRS-E4 §3.8.1). The digest and the oracles stay
-    /// separate. The digest carries only the live root, so an interior
-    /// miss is invisible to it, and it carries no archival state;
-    /// `digest_identical` is `None` and `archival.compared` is `false`
-    /// when no checkpoint was compared.
-    #[must_use]
-    pub fn observations(&self) -> Observations {
-        Observations {
-            exercised: self.exercised.clone(),
-            refused: self
-                .refused
-                .as_ref()
-                .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
-            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
-            roots: crate::grader::RootOracle {
-                compared: self.roots.compared(),
-                diverged_at: self.roots.diverged().map(|d| d.at).collect(),
-            },
-            archival: self
-                .archival
-                .as_ref()
-                .map(|a| crate::grader::ArchivalOracle::from_diff(a.at, &a.diff))
-                .unwrap_or_default(),
-        }
     }
 
     /// Every way the run disagreed with the chain, in the order they can
@@ -599,6 +575,10 @@ pub enum PipelineFault<SrcF, SubF> {
     /// The verifier could not compute (§1.1: terminal for the run).
     #[error("substrate: {0:?}")]
     Substrate(SubF),
+    /// The hasher stopped under the run: a form's job was never granted.
+    /// The caller stopped it while the run still formed.
+    #[error("the hasher stopped before a form's job was granted")]
+    HasherStopped,
     /// A `form` worker was cancelled or panicked.
     #[error("form worker: {0}")]
     Worker(#[from] tokio::task::JoinError),
@@ -645,21 +625,6 @@ pub enum PipelineFault<SrcF, SubF> {
     /// mailbox full.
     #[error("connector unreachable")]
     Mailbox,
-    /// A `Rewind { to }` below the height an `Inject` was attributed to.
-    /// The bit is not block-owned and not journaled, so the pop would not
-    /// carry it away: the store would hold a credit at a height the chain
-    /// no longer has — the stranding the C++ warns of at its injector.
-    /// No source the capture produces does this (the injector writes
-    /// after the chain is final); one that does is defective.
-    #[error("rewind to {to} is below the serve credit injected at {injected_at} (persona {persona}, shard {shard}, epoch {epoch}); the bit is not block-owned and the pop would strand it", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    RewindBelowInjection {
-        /// The rewind's target.
-        to: BlockHeight,
-        /// Where the bit was attributed.
-        injected_at: BlockHeight,
-        /// The bit.
-        credit: ServeCredit,
-    },
     /// The source's `Rewind { to }` would pop a block below the lowest
     /// poppable height. The writer refused it before any pop; a source
     /// that asks for it is defective.
@@ -672,23 +637,43 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The lowest poppable height.
         floor: BlockHeight,
     },
-}
-
-/// A barrier event waiting for the stage ahead of it to drain: no `Extend`
-/// is formed past it, and it commits once nothing is in flight.
-enum Barrier {
-    /// Pop to `to`.
-    Rewind {
-        /// The target.
-        to: BlockHeight,
+    /// [`PipelineConfig::digest_each_commit`] needs one block per commit.
+    /// A wider window can put several blocks in one transaction, and a
+    /// digest read after that transaction names only the batch tip. The
+    /// run refuses that window before it connects anything, and refuses
+    /// again if an apply still covers more than one block.
+    #[error(
+        "a digest at every height needs one block per commit; {connected} blocks would share one"
+    )]
+    DigestWindow {
+        /// How many blocks one commit would cover.
+        connected: usize,
     },
-    /// Write the out-of-band serve credit at the tip.
-    Inject(ServeCredit),
 }
 
 /// What a `form` worker hands the sequencer: the formed height, or the
 /// substrate's inability to compute.
-type Formed<F> = Result<(BlockHeight, Verdict<StructurallyValid>), F>;
+type Formed<F> = Result<(BlockHeight, Verdict<StructurallyValid>), Unformed<F>>;
+
+/// Why a form produced no verdict.
+enum Unformed<F> {
+    /// The substrate faulted.
+    Substrate(F),
+    /// The job was never granted ([`PipelineFault::HasherStopped`]).
+    HasherStopped,
+}
+
+impl<F> Unformed<F> {
+    fn fault<SrcF>(self) -> PipelineFault<SrcF, F> {
+        match self {
+            Self::Substrate(fault) => PipelineFault::Substrate(fault),
+            Self::HasherStopped => PipelineFault::HasherStopped,
+        }
+    }
+}
+
+/// The replay run has no stop of its own: its jobs wait for the hasher.
+static NEVER_STOPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A handler's own error is the connector's fault; every other way an
 /// `ask` can fail is the mailbox.
@@ -714,28 +699,40 @@ fn next_height(tip: Option<BlockHeight>) -> BlockHeight {
 
 /// Run a source to exhaustion against `store`.
 ///
-/// `metrics` must be the sink `substrate` records into (`substrate` module
-/// docs): the pipeline times each block's `form` into it and snapshots it
-/// for the report.
+/// `metrics` must be the sink `pow` records into (`pow` module docs): the
+/// pipeline times each block's `form` into it and snapshots it for the
+/// report, with `pow`'s derives.
+///
+/// Each block is formed as one job on its seed ([`Pow::run`]). The run
+/// ranks the seed it forms under first and the one before it second, so
+/// a seed epoch's cache stays warm between forms and the previous epoch's
+/// serves the forms still in flight under it.
 ///
 /// # Errors
 ///
 /// Any [`PipelineFault`]; the report up to the fault is not returned (the
 /// store carries what landed; `metrics` carries the measurement).
-pub async fn run<Src, S>(
+pub async fn run<Src, P>(
     source: &mut Src,
-    substrate: Arc<S>,
+    pow: Arc<P>,
     metrics: Arc<Metrics>,
     rules: ChainRules,
     store: ChainStore,
     trace: Arc<Trace>,
     cfg: PipelineConfig,
-) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
+) -> Result<RunReport, PipelineFault<Src::Fault, P::Fault>>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
+    // A per-height digest is the digest after that height's own commit.
+    // Refusing a wider window here leaves the store untouched: the check
+    // inside the apply is the backstop if a one-block window still batches.
+    if cfg.digest_each_commit && cfg.window != NonZeroUsize::MIN {
+        return Err(PipelineFault::DigestWindow {
+            connected: cfg.window.get(),
+        });
+    }
     let form_at = next_height(store.begin_read()?.tip()?.recorded.map(|t| t.height));
     if source.first_height() != form_at {
         return Err(PipelineFault::Misaligned {
@@ -757,11 +754,13 @@ where
     let actor_task = prepared.spawn(ConnectorArgs {
         store: Arc::new(store),
         rules,
+        bundle_queued: None,
+        ranked: None,
     });
 
     let mut drive = Drive {
         source,
-        substrate,
+        pow,
         metrics: &metrics,
         rules,
         connector: &connector,
@@ -774,10 +773,10 @@ where
         checkpoint_at: trace.checkpoint().map(|(h, _)| h),
         report: RunReport::default(),
         sequencer: Sequencer::new(SequenceNo::FIRST),
-        pinned: None,
+        ranked: None,
         hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
-        pending_barrier: None,
+        pending_rewind: None,
         exhausted: false,
         unclaimable: None,
     };
@@ -795,14 +794,13 @@ where
 
 /// The loop's state, named. Fill, collect, apply, barrier are the four
 /// steps; a `Drive` is what holds them together.
-struct Drive<'a, Src, S>
+struct Drive<'a, Src, P>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
     source: &'a mut Src,
-    substrate: Arc<S>,
+    pow: Arc<P>,
     metrics: &'a Arc<Metrics>,
     rules: ChainRules,
     connector: &'a kameo::actor::ActorRef<Connector>,
@@ -817,16 +815,18 @@ where
     next_seq: SequenceNo,
     checkpoint_at: Option<BlockHeight>,
     report: RunReport,
-    sequencer: Sequencer<Formed<S::Fault>>,
-    /// The seed last pinned on the substrate.
-    pinned: Option<BlockHash>,
+    sequencer: Sequencer<Formed<P::Fault>>,
+    /// The seed the forms hash under now, which the last list sent ranks
+    /// first.
+    ranked: Option<BlockHash>,
     /// One permit per hasher; a worker holds its permit for the life of
     /// its `form`.
     hashers: Arc<Semaphore>,
-    in_flight: JoinSet<Sequenced<Formed<S::Fault>>>,
-    /// The barrier read but not yet committed, if any; `fill` reads
-    /// nothing past it.
-    pending_barrier: Option<Sequenced<Barrier>>,
+    in_flight: JoinSet<Sequenced<Formed<P::Fault>>>,
+    /// The `Rewind` read but not yet committed, if any, as its target: a
+    /// barrier, so `fill` reads nothing past it and it commits once nothing
+    /// is in flight ahead of it.
+    pending_rewind: Option<Sequenced<BlockHeight>>,
     /// No further event is read: the source ended, or a block was refused
     /// or found unclaimable before it was formed. A refusal ends the run,
     /// and nothing past an unformed block has a target to claim.
@@ -837,13 +837,12 @@ where
     unclaimable: Option<(BlockHeight, shekyl_chain_rules::Corrupt)>,
 }
 
-impl<Src, S> Drive<'_, Src, S>
+impl<Src, P> Drive<'_, Src, P>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: Send + 'static,
+    P: Pow,
 {
-    async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>> {
+    async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, P::Fault>> {
         loop {
             self.fill().await?;
             self.collect().await?;
@@ -851,8 +850,8 @@ where
             if self.report.refused.is_some() {
                 break;
             }
-            self.try_barrier().await?;
-            if self.exhausted && self.in_flight.is_empty() && self.pending_barrier.is_none() {
+            self.try_rewind().await?;
+            if self.exhausted && self.in_flight.is_empty() && self.pending_rewind.is_none() {
                 // Every block ahead of an unclaimable one has been judged,
                 // so the writer's tip is its parent: the writer re-derives
                 // the window over its own view and halts on what it sees.
@@ -874,16 +873,15 @@ where
             }
         }
         self.compare_checkpoint().await?;
-        self.report.metrics = self.metrics.snapshot();
+        self.report.metrics = self.metrics.snapshot(self.pow.derives());
         Ok(std::mem::take(&mut self.report))
     }
 
     /// Read events and start forming them, while the window has room and a
-    /// hasher is free. Stops at a barrier (`Rewind`, `Inject`) and at
-    /// exhaustion.
-    async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    /// hasher is free. Stops at a `Rewind` (a barrier) and at exhaustion.
+    async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         while !self.exhausted
-            && self.pending_barrier.is_none()
+            && self.pending_rewind.is_none()
             && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
         {
             // The permit is taken before the event is read, so no event is
@@ -898,15 +896,9 @@ where
             self.take_sequence(event.seq)?;
             match event.event {
                 IngestEvent::Rewind { to } => {
-                    self.pending_barrier = Some(Sequenced {
+                    self.pending_rewind = Some(Sequenced {
                         seq: event.seq,
-                        event: Barrier::Rewind { to },
-                    });
-                }
-                IngestEvent::Inject(credit) => {
-                    self.pending_barrier = Some(Sequenced {
-                        seq: event.seq,
-                        event: Barrier::Inject(credit),
+                        event: to,
                     });
                 }
                 IngestEvent::Extend(candidate) => {
@@ -931,7 +923,7 @@ where
         Ok(())
     }
 
-    /// Assign the next height, claim its seed, pin the epoch if it changed,
+    /// Assign the next height, claim its seed, rank the epoch if it changed,
     /// and start the worker. The permit rides with the worker and is
     /// released when `form` returns.
     async fn spawn_form(
@@ -939,29 +931,14 @@ where
         seq: SequenceNo,
         candidate: Box<shekyl_chain_rules::Candidate>,
         permit: OwnedSemaphorePermit,
-    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let height = self.form_at;
         self.form_at = next_height(Some(height));
         self.ledger.record(height, candidate.block.hash());
         let seed = self.claim_seed(height).await?;
         let in_force = self.rules.in_force(height);
         let target = match self.claim_target(height, &in_force).await? {
-            Ok(Ok(target)) => target,
-            // CEN-D6 on the claim's own derivation: `validate` would refuse
-            // the block on the same headers, so that refusal is its verdict
-            // and it is not formed (`target` module docs). The refusal ends
-            // the run, and the ledger has no header at this height for a
-            // successor to claim against, so nothing more is read; the
-            // workers already numbered drain in order.
-            Ok(Err(refused)) => {
-                drop(permit);
-                self.exhausted = true;
-                self.in_flight.spawn_blocking(move || Sequenced {
-                    seq,
-                    event: Ok((height, Err(refused))),
-                });
-                return Ok(());
-            }
+            Ok(target) => target,
             Err(corrupt) => {
                 self.unclaimable(height, corrupt);
                 return Ok(());
@@ -980,32 +957,46 @@ where
             return Ok(());
         }
         self.targets.forget_below_window_of(height);
-        // The null seed is genesis's cache, a real 256 MiB fill. Skipping
-        // it here would make the lookup-only longhash fault on block 0.
-        if self.pinned != Some(seed) {
-            let substrate = Arc::clone(&self.substrate);
-            tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
-            self.pinned = Some(seed);
+        // The seed this run forms under now is ranked first and the one
+        // before it second: a ranked seed stays warm between forms, where
+        // an unranked one is freed whenever no form holds it. The null
+        // seed is genesis's cache, a real 256 MiB fill, and is ranked like
+        // any other here: this run has no store-backed ranker.
+        if self.ranked != Some(seed) {
+            let as_seed = |seed: &BlockHash| Seedhash::from_bytes(*seed.as_bytes());
+            let list = Ranked::new(as_seed(&seed), self.ranked.as_ref().map(as_seed), None)
+                .expect("the seed changed, so the two differ");
+            self.pow.rank(list);
+            self.ranked = Some(seed);
         }
-        let substrate = Arc::clone(&self.substrate);
+        let pow = Arc::clone(&self.pow);
         let metrics = Arc::clone(self.metrics);
+        let network = self.rules.trust().network_id();
         self.in_flight.spawn_blocking(move || {
-            let started = std::time::Instant::now();
-            let verdict = form(
-                *candidate,
-                &in_force,
-                &*substrate,
-                seed,
-                target,
-                &references,
-                FormAttempt::FIRST,
-            );
-            metrics.block_formed(started.elapsed());
+            let formed = pow.run(Class::Chain, seed, &NEVER_STOPS, |job| {
+                let started = std::time::Instant::now();
+                let verdict = form(
+                    *candidate,
+                    &FormClaims {
+                        rule_set: &in_force,
+                        seed,
+                        target,
+                        references: &references,
+                        network,
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                );
+                metrics.block_formed(started.elapsed());
+                verdict
+            });
             drop(permit);
-            Sequenced {
-                seq,
-                event: verdict.map(|verdict| (height, verdict)),
-            }
+            let event = match formed {
+                Some(Ok(verdict)) => Ok((height, verdict)),
+                Some(Err(fault)) => Err(Unformed::Substrate(fault)),
+                None => Err(Unformed::HasherStopped),
+            };
+            Sequenced { seq, event }
         });
         Ok(())
     }
@@ -1018,7 +1009,7 @@ where
     async fn claim_seed(
         &mut self,
         connecting: BlockHeight,
-    ) -> Result<BlockHash, PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<BlockHash, PipelineFault<Src::Fault, P::Fault>> {
         let seed = match self.ledger.claim(connecting) {
             SeedClaim::Known(seed) => seed,
             SeedClaim::Unread { seed_height } => {
@@ -1048,15 +1039,14 @@ where
     /// The target for a block connecting at `connecting` under `rule_set`:
     /// the ledger's derivation, after the store has answered every height
     /// the ledger's window lacks (`target` module docs). The inner `Err` is
-    /// CEN-D6 on the derivation itself; the outer is a corrupt window, the
-    /// writer's to judge.
+    /// a corrupt window, the writer's to judge.
     async fn claim_target(
         &mut self,
         connecting: BlockHeight,
         rule_set: &shekyl_chain_rules::RuleSet,
     ) -> Result<
-        Result<Verdict<shekyl_chain_rules::Target>, shekyl_chain_rules::Corrupt>,
-        PipelineFault<Src::Fault, S::Fault>,
+        Result<shekyl_chain_rules::Target, shekyl_chain_rules::Corrupt>,
+        PipelineFault<Src::Fault, P::Fault>,
     > {
         for height in self.targets.missing_for(connecting) {
             let recorded = self
@@ -1090,7 +1080,7 @@ where
         &mut self,
         height: BlockHeight,
         corrupt: shekyl_chain_rules::Corrupt,
-    ) -> PipelineFault<Src::Fault, S::Fault> {
+    ) -> PipelineFault<Src::Fault, P::Fault> {
         match self.connector.ask(ObserveTarget { height }).await {
             Err(fault) => collapse(fault),
             Ok(()) => PipelineFault::TargetLedger { height, corrupt },
@@ -1099,7 +1089,7 @@ where
 
     /// Wait for one worker, then take every other one already finished, so
     /// a run covers everything formed by the time the writer is asked.
-    async fn collect(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn collect(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let Some(done) = self.in_flight.join_next().await else {
             return Ok(());
         };
@@ -1112,10 +1102,10 @@ where
 
     /// Send the releasable run — at most a window, by the fill bound — to
     /// the writer, and record what it did.
-    async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let mut run: Vec<(BlockHeight, Verdict<StructurallyValid>)> = Vec::new();
         while let Some(item) = self.sequencer.pop_ready() {
-            run.push(item.event.map_err(PipelineFault::Substrate)?);
+            run.push(item.event.map_err(Unformed::fault)?);
         }
         if run.is_empty() {
             return Ok(());
@@ -1159,26 +1149,46 @@ where
         if let Some(refused) = applied.refused {
             self.report.refused = Some(refused);
         }
+        if self.cfg.digest_each_commit {
+            self.record_commit_digest(&applied.connected).await?;
+        }
+        Ok(())
+    }
+
+    /// The digest at the one height `connected` names. An empty connect
+    /// committed nothing (a refusal) and records nothing. More than one
+    /// block in the commit is [`PipelineFault::DigestWindow`]: those
+    /// heights were not committed on their own.
+    async fn record_commit_digest(
+        &mut self,
+        connected: &[(BlockHeight, BlockHash)],
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let height = match connected {
+            [(height, _)] => *height,
+            [] => return Ok(()),
+            several => {
+                return Err(PipelineFault::DigestWindow {
+                    connected: several.len(),
+                });
+            }
+        };
+        let digest = self.connector.ask(Digest).await.map_err(collapse)?;
+        self.report.digests.insert(height, digest);
         Ok(())
     }
 
     /// The covered-tip checkpoint (RD-F18; DRS-E4 §3.8.1), both encodings
     /// in one read, taken **after the run's last committed event**. The
-    /// trace's walker read one LMDB snapshot after the daemon's last write
-    /// — blocks and the regtest injector's out-of-band row alike — and the
-    /// redb side is read the same way: once, at the end, through
-    /// [`CheckpointState`]. Not when the covered tip connects: an `Inject`
-    /// attributed to that tip is a barrier that commits *after* the block
-    /// it is attributed to, so a comparison at the connect would hold the
-    /// trace's rows (credit included) against a redb side that had not yet
-    /// written it, and a faithful replay would read as divergent.
+    /// baseline's two checkpoint records came from one read of the store
+    /// that wrote them, and this run's redb side is read the same way:
+    /// once, at the end, through [`CheckpointState`].
     ///
     /// Compared only when the committed tip *is* the covered tip; a run
     /// that ended elsewhere leaves both fields `None` — not compared, never
     /// identical. A trace carries both encodings or neither
     /// (`TraceFault::MissingSnapshot`), so a checkpoint height without a
     /// snapshot is unreachable here.
-    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+    async fn compare_checkpoint(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let Some(at) = self.checkpoint_at else {
             return Ok(());
         };
@@ -1211,49 +1221,23 @@ where
         Ok(())
     }
 
-    /// Commit the pending barrier once nothing is in flight ahead of it.
-    /// A `Rewind` records the digest after the pop and moves the ledger and
-    /// the next height to the post-rewind chain; an `Inject` writes the
-    /// credit at the tip and records where the store attributed it.
-    async fn try_barrier(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
-        let Some(barrier) = self.pending_barrier.take() else {
+    /// Commit the pending `Rewind` once nothing is in flight ahead of it:
+    /// it records the digest after the pop and moves the ledger and the
+    /// next height to the post-rewind chain.
+    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let Some(rewind) = self.pending_rewind.take() else {
             return Ok(());
         };
         if !(self.in_flight.is_empty() && self.sequencer.pending() == 0) {
-            self.pending_barrier = Some(barrier);
+            self.pending_rewind = Some(rewind);
             return Ok(());
         }
-        self.sequencer.advance(barrier.seq)?;
-        match barrier.event {
-            Barrier::Rewind { to } => self.rewind(to).await,
-            Barrier::Inject(credit) => self.inject(credit).await,
-        }
+        self.sequencer.advance(rewind.seq)?;
+        self.rewind(rewind.event).await
     }
 
-    /// Write the out-of-band credit at the committed tip (DRS-E4 §3.8
-    /// item 3). The store attributes it; the report records where.
-    async fn inject(
-        &mut self,
-        credit: ServeCredit,
-    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
-        let injected = self.connector.ask(Inject(credit)).await.map_err(collapse)?;
-        self.report.injected.push(Injection {
-            at: injected.at,
-            credit,
-        });
-        Ok(())
-    }
-
-    /// Pop to `to`, unless a committed injection sits above it — the bit is
-    /// not block-owned, and the pop would strand it.
-    async fn rewind(&mut self, to: BlockHeight) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
-        if let Some(stranded) = self.report.injected.iter().find(|i| i.at > to) {
-            return Err(PipelineFault::RewindBelowInjection {
-                to,
-                injected_at: stranded.at,
-                credit: stranded.credit,
-            });
-        }
+    /// Pop to `to`.
+    async fn rewind(&mut self, to: BlockHeight) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
         if let Rewound::Refused { tip, floor } = rewound {
             return Err(PipelineFault::RewindBelowFloor { to, tip, floor });
@@ -1264,6 +1248,10 @@ where
             popped: rewound.popped(),
             digest,
         });
+        if self.cfg.digest_each_commit {
+            self.report.digests.retain(|height, _| *height <= to);
+            self.report.digests.insert(to, digest);
+        }
         // The popped heights' root comparisons were against the trace's
         // rows for a branch the chain has now left; the re-extension will
         // compare the canonical blocks at those heights.

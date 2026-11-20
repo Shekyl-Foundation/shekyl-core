@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use shekyl_engine_core::Capability;
+use shekyl_engine_core::{Capability, Network};
 use shekyl_rpc_types::Nullable;
 
 use crate::error::WalletRpcError;
@@ -214,6 +214,20 @@ pub fn capability_mode_str(cap: Capability) -> &'static str {
     }
 }
 
+/// The wallet-rpc wire spelling of a network. Uppercase and frozen:
+/// `MAINNET`, `TESTNET`, `STAGENET`, `REGTEST`
+/// (`docs/api/wallet_rpc.yaml`). The operator grammar is
+/// [`Network::name`], lowercase.
+#[must_use]
+pub(crate) fn network_wire(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "MAINNET",
+        Network::Testnet => "TESTNET",
+        Network::Stagenet => "STAGENET",
+        Network::Regtest => "REGTEST",
+    }
+}
+
 /// `WalletHandle` returned by lifecycle methods that leave a wallet open.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WalletHandle {
@@ -221,7 +235,7 @@ pub struct WalletHandle {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Present when open reconstructed state from `restore_height_hint`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,37 +255,43 @@ pub use shekyl_units::AtomicUnitsString;
 /// a placeholder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetBalanceResult {
-    /// Spendable liquid balance (maps from unlocked until staking splits
-    /// liquid from locked principal).
-    pub liquid: AtomicUnitsString,
+    /// The balance: `spendable + incoming`. The only field that is
+    /// a sum of others (A17).
+    pub balance: AtomicUnitsString,
+    /// What a send could use now.
+    pub spendable: AtomicUnitsString,
+    /// Received and not yet spendable, plus in-flight sends' change.
+    pub incoming: AtomicUnitsString,
+    /// Blocks until the soonest on-chain incoming output is spendable.
+    /// **Absent (not `0`)** when no incoming output is on chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_wait: Option<u64>,
+    /// Σ (recipients + fee) of the in-flight sends. Beside the balance.
+    pub outgoing: AtomicUnitsString,
+    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
+    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
+    /// Beside the balance. Always present; `"0"` is a true zero.
+    pub unspendable: AtomicUnitsString,
     /// Bond principal under confirmed live bonds PLUS principal committed
     /// by in-flight sealed posts — the sum of `get_staked_balance`'s two
     /// bonded legs (the legs stay separate on that method).
     ///
     /// **Absent (not `"0"`) when the wallet's sealed staking state cannot
-    /// be read**: the liquid fields stay authoritative while the staking
+    /// be read**: the ledger's legs stay authoritative while the staking
     /// projection degrades, and absence is structurally distinct from a
     /// zero — the engine pin "never render nothing-staked over a bad seal"
     /// holds on the wire. A non-staker's `"0"` is a true zero and is
     /// always present.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staked: Option<AtomicUnitsString>,
-    /// Unlocked / spendable now.
-    pub unlocked: AtomicUnitsString,
-    /// Money in received-but-unspendable outputs (`TransferState::Unspendable`;
-    /// `PL-D3` §6.2): on chain, retained, never spendable by this wallet.
-    /// Always present; `"0"` is a true zero.
-    pub unspendable: AtomicUnitsString,
     /// Emission-reward money received and still unspent in staking-side
     /// outputs — the same quantity as
     /// `get_staked_balance.rewards_received_unspent`; NOT a claim-era
     /// "accrued but unclaimed" entitlement (no such user-visible quantity
     /// exists in the archival design). Absent exactly when `staked` is
     /// (unreadable staking seal — degrade, never a fabricated zero).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimable_rewards: Option<AtomicUnitsString>,
-    /// Awaiting-confirmation / in-flight spend lock.
-    pub pending: AtomicUnitsString,
 }
 
 /// `get_primary_address` result.
@@ -332,9 +352,11 @@ pub struct VerifyMessageResult {
 /// `get_height` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetHeightResult {
-    /// Wallet synced height (always available — read from local state).
+    /// Blocks the wallet has scanned through, counted like `daemon_height`:
+    /// `0` before the first scan, and equal to `daemon_height` once synced
+    /// (always available — read from local state).
     pub wallet_height: i64,
-    /// Daemon chain height, or `null` when the daemon is unreachable. The
+    /// Daemon chain height (its block count), or `null` when the daemon is unreachable. The
     /// wallet height is still returned in that case so an offline/​syncing
     /// node does not hide the wallet's own status.
     pub daemon_height: Option<i64>,
@@ -448,9 +470,14 @@ pub struct TransferView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_height: Option<i64>,
     /// Why the output is `UNSPENDABLE` (present exactly when `state` is
-    /// `UNSPENDABLE`): `PQC_LEAF_MISMATCH` — the published leaf entry is not
-    /// this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the transaction
-    /// carries no entry for the output.
+    /// `UNSPENDABLE`). Solo: `PQC_LEAF_MISMATCH` — the published leaf entry
+    /// is not this wallet's derivation; `PQC_LEAF_ENTRY_ABSENT` — the
+    /// transaction carries no leaf entry for the output. Multisig:
+    /// `MULTISIG_ENTRY_ABSENT`, `MULTISIG_GROUP_SIZE`,
+    /// `MULTISIG_HASHES_UNDECRYPTABLE`, `MULTISIG_MEMBER_DECAP`,
+    /// `MULTISIG_MEMBER_KEY_HASH`, `MULTISIG_DUPLICATE_KEY_HASH`,
+    /// `MULTISIG_LEAF_MISMATCH` — the check of that name failed, and the
+    /// output can never be spent from this wallet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unspendable_reason: Option<String>,
     /// Receive attribution (WI-RPC-4).
@@ -479,13 +506,13 @@ pub struct GetWalletInfoResult {
     pub name: String,
     /// Capability mode. Always `FULL` — the only capability (rule 23).
     pub capability: String,
-    /// Network (`MAINNET` / `TESTNET` / `STAGENET`).
+    /// Network (`MAINNET` / `TESTNET` / `STAGENET` / `REGTEST`).
     pub network: String,
     /// Primary address.
     pub address: String,
-    /// Wallet synced height.
+    /// Wallet synced height, counted like `daemon_height` (as `get_height`).
     pub wallet_height: i64,
-    /// Daemon height, or `null` when unreachable.
+    /// Daemon height (its block count), or `null` when unreachable.
     pub daemon_height: Option<i64>,
     /// Scan floor (`restore_from_height`) for this wallet.
     pub restore_height: i64,
@@ -521,7 +548,8 @@ pub struct RefreshResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the refresh.
+    /// Wallet synced height after the refresh, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
     /// Present iff a reorg was detected and rewound this refresh.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -545,7 +573,8 @@ pub struct RescanBlockchainResult {
     pub blocks_processed: i64,
     /// Detected transfers ingested this call.
     pub transfers_detected: i64,
-    /// Wallet synced height after the rescan.
+    /// Wallet synced height after the rescan, counted as `get_height`'s
+    /// `wallet_height`.
     pub synced_height: i64,
 }
 
@@ -582,11 +611,16 @@ pub enum SubmitVerdictView {
     AlreadyInChain,
 }
 
-/// `submit_pending_tx` result.
+/// `submit_pending_tx` result, and `tx_resend`'s.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubmitPendingTxResult {
     /// Transaction hash (lowercase hex).
     pub tx_hash: String,
+    /// `false` when the bytes left and the verdict stands, but saving what
+    /// the verdict changed failed (A19). The send is not undone; the
+    /// next successful save writes it, and until then a restart lists the
+    /// send under `tx_alarm`. The cause is in the wallet's log.
+    pub verdict_saved: bool,
     /// Success verdict.
     pub verdict: SubmitVerdictView,
     /// Present iff verdict is `ALREADY_IN_CHAIN`: the daemon-claimed
@@ -596,6 +630,43 @@ pub struct SubmitPendingTxResult {
     /// view shares it, structurally.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_height: Option<i64>,
+}
+
+/// Why a held send needs the user's decision (`tx_alarm`; A19,
+/// `DAEMON_SUBMIT_VERDICT.md` §5.3 rung 2). Keywords per IG-Q86.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TxAlarmCause {
+    /// Sent before this session (a restart crossed the verdict).
+    /// Resending — perhaps to a different daemon — is the user's
+    /// decision, never the wallet's own.
+    EarlierSession,
+    /// The daemon holds the transaction past its own publication budget.
+    Overdue,
+    /// Pool-resident, and the daemon has no record of publishing it.
+    Untracked,
+    /// Published, and not mined within the fee ladder's lookback.
+    PublishedPastLookback,
+    /// The daemon has no peers: it cannot relay.
+    Peerless,
+    /// The daemon was started offline: it relays nothing.
+    Offline,
+    /// The daemon refused the bytes for a stale reference: they cannot be
+    /// offered again as they are. Rebuilding is the user's decision.
+    ReferenceStale,
+    /// The send's record holds no bytes to resend.
+    BytesMissing,
+}
+
+/// One held send that needs the user's decision (`tx_alarm`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TxAlarmView {
+    /// The send's transaction id (lowercase hex).
+    pub id: String,
+    /// Why it needs a decision.
+    pub alarm: TxAlarmCause,
+    /// The wallet's synced height when the send left.
+    pub sent_height: i64,
 }
 
 /// `discard_pending_tx` result (empty object).
@@ -736,14 +807,12 @@ pub struct EstimateTxSizeAndWeightResult {
 /// `get_default_fee_priority` result (WI-RPC-1 fees).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetDefaultFeePriorityResult {
-    /// The default tier (`STANDARD`).
-    pub default_priority: String,
-    /// Converged fee at the daemon's economy rate for the given shape.
-    pub economy_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's standard rate (the default tier).
-    pub standard_fee: AtomicUnitsString,
-    /// Converged fee at the daemon's priority rate.
-    pub priority_fee: AtomicUnitsString,
+    /// Converged fee at the economy rung for the given shape.
+    pub economy: AtomicUnitsString,
+    /// Converged fee at the standard rung.
+    pub standard: AtomicUnitsString,
+    /// Converged fee at the high rung.
+    pub high: AtomicUnitsString,
     /// Curve-tree depth the quotes were evaluated at.
     pub tree_depth: i64,
 }
@@ -847,10 +916,15 @@ pub struct InFlightEntry {
     /// Sends so far, the first included; `0` when never sent.
     pub attempts: u32,
     /// For `refused` and `expired`: the end date, after which the
-    /// transaction can never be mined. The funds return once
-    /// `pscan_synced_height` is greater than it. `null` in the other states,
+    /// transaction can never be mined. What the record holds (`reserved`)
+    /// returns once `pscan_synced_height` is greater than it. `null` in the other states,
     /// where no return is expected.
     pub funds_return_at: Nullable<i64>,
+    /// What the record still holds (WR-Q6): the amounts of its reserved
+    /// inputs that are still unspent, `"0"` when nothing is held. `null`
+    /// when the staking scan has not run yet, so what is held cannot be
+    /// read.
+    pub reserved: Nullable<AtomicUnitsString>,
     /// What a node said, whenever one refused the record (`refused`, and
     /// `expired` after a refusal), and for `held` why the stake is kept, as a
     /// user sentence. `null` otherwise.
@@ -1082,6 +1156,30 @@ pub struct CheckReserveProofResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fee reply prints the three tiers by their one name each, the
+    /// fees under `economy`, `standard`, `high`, and nothing else.
+    #[test]
+    fn the_fee_reply_prints_the_three_tier_names() {
+        use shekyl_units::AtomicUnits;
+        let reply = GetDefaultFeePriorityResult {
+            economy: AtomicUnits::from_raw(1).into(),
+            standard: AtomicUnits::from_raw(4).into(),
+            high: AtomicUnits::from_raw(8).into(),
+            tree_depth: 3,
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        assert!(
+            json.get("default_priority").is_none(),
+            "no front end reads it"
+        );
+        assert_eq!(json["economy"], "1");
+        assert_eq!(json["standard"], "4");
+        assert_eq!(json["high"], "8");
+        for gone in ["economy_fee", "standard_fee", "priority_fee"] {
+            assert!(json.get(gone).is_none(), "{gone}");
+        }
+    }
     use crate::error::WalletRpcErrorCode;
     use serde_json::json;
 
@@ -1104,6 +1202,7 @@ mod tests {
                 "dispatched_at_height": 5_010,
                 "attempts": 1,
                 "funds_return_at": 5_100,
+                "reserved": "350",
                 "reason": "The node refused it."
             }],
             "outcomes": [{
@@ -1124,6 +1223,26 @@ mod tests {
             serde_json::from_value(staking_info_reply()).expect("the full reply decodes");
         assert_eq!(ok.pscan_synced_height, Nullable::NULL);
         assert_eq!(ok.in_flight[0].funds_return_at, Nullable::value(5_100));
+        assert_eq!(
+            ok.in_flight[0].reserved,
+            Nullable::value(AtomicUnitsString::from(
+                shekyl_units::AtomicUnits::from_raw(350)
+            ))
+        );
+        // WR-Q6: `null` is "not known yet", an answer; an amount is a
+        // decimal string, never a JSON number.
+        let mut unknown = staking_info_reply();
+        unknown["in_flight"][0]["reserved"] = Value::Null;
+        assert_eq!(
+            serde_json::from_value::<StakingInfoResult>(unknown)
+                .expect("a null reserved decodes")
+                .in_flight[0]
+                .reserved,
+            Nullable::NULL
+        );
+        let mut number = staking_info_reply();
+        number["in_flight"][0]["reserved"] = json!(350);
+        assert!(serde_json::from_value::<StakingInfoResult>(number).is_err());
         // A later contract may add a state; an unknown value still decodes.
         let mut later = staking_info_reply();
         later["in_flight"][0]["state"] = json!("some_later_state");
@@ -1154,7 +1273,12 @@ mod tests {
                 "`{field}: null` must not decode"
             );
         }
-        for field in ["dispatched_at_height", "funds_return_at", "reason"] {
+        for field in [
+            "dispatched_at_height",
+            "funds_return_at",
+            "reserved",
+            "reason",
+        ] {
             let mut missing = staking_info_reply();
             missing["in_flight"][0]
                 .as_object_mut()

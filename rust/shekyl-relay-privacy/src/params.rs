@@ -6,8 +6,8 @@
 //! Dandelion++ parameters — **derived from the paper, not inherited as
 //! constants**.
 //!
-//! This is the module PR-1 exists for. The inherited daemon hard-codes six
-//! `#define`s in `src/cryptonote_config.h` and explains one of them in a
+//! This is the module PR-1 exists for. The inherited daemon hard-coded six
+//! `#define`s in `src/cryptonote_config.h` and explained one of them in a
 //! comment in `src/cryptonote_core/tx_pool.cpp`. That comment states the
 //! derivation inputs — `k = 5`, `ep = 0.10`, `hop = 175 ms` — and then states
 //! the answer: 39 seconds. **The stated inputs do not produce the stated
@@ -170,12 +170,12 @@ pub fn divert_to_anonymity_zone<R: shekyl_draw_rng::RelayRng + ?Sized>(rng: &mut
 /// Outbound connections a node opens per zone by default — the deployed
 /// network's out-degree.
 ///
-/// **Rust owns this value; C++ consumes it** through
-/// `shekyl_p2p_default_out_peers` (rule 20). It was `#define
-/// P2P_DEFAULT_CONNECTIONS_COUNT 12` in `cryptonote_config.h`, mirrored by
-/// hand into every Rust instrument that simulates the deployed topology —
-/// five copies, no owner, and nothing that fails when the daemon's value
-/// moves. That is F-7's failure mode one layer down: an instrument measuring
+/// **This is the one owner of the value**: the transport's dial profile
+/// (`shekyl-transport-layer` `profile.rs`) and the conformance instruments
+/// read it. It was `#define P2P_DEFAULT_CONNECTIONS_COUNT 12` in the
+/// inherited `cryptonote_config.h`, mirrored by hand into every Rust
+/// instrument that simulates the deployed topology — five copies, no owner,
+/// and nothing that fails when the daemon's value moves. That is F-7's failure mode one layer down: an instrument measuring
 /// a degree the deployment does not run, feeding derivations that then report
 /// numbers for a network that does not exist.
 ///
@@ -276,17 +276,19 @@ pub struct DandelionParams {
     /// hop  =  A→B transit  +  B's verification  +  B's scheduling
     /// ```
     ///
-    /// **Verification is inside the critical path**, not beside it:
-    /// `cryptonote_protocol_handler.inl` calls `handle_incoming_tx` in the
-    /// per-transaction loop and reaches `relay_transactions` only after that
-    /// loop closes. The term is **FCMP++ membership-proof verification**
-    /// (`shekyl_fcmp_verify`, scaling with input count) plus a per-output
-    /// prime-order check (`shekyl_check_commitment_masks`) — **not** ML-DSA-65,
-    /// whose public-key hashes are bound into the proof as scalars rather than
-    /// verified as signatures (§72.2). It is not a rounding error, and **it
-    /// moves when the proof system moves** — this is not a network constant
-    /// that can be measured once, which is why an instruction-count gate on the
-    /// admission path belongs beside it rather than a comment.
+    /// **Verification is inside the critical path**, not beside it: the
+    /// relay owner stems or fluffs a 2002 batch only after the pool has
+    /// admitted it (`shekyl-relay`'s `owner`), and the pool's door is
+    /// `shekyl_chain_rules::judge_slot_stateless` at `TxSlot::Lone`. The term
+    /// is that door's sequence: one authorization check per input (CEN-I18;
+    /// one hybrid Ed25519 + ML-DSA-65 verification for a single-signer input,
+    /// M of them for an M-of-N multisig input, M ≤ 5), the FCMP++ membership
+    /// proof (scaling with input count) with the per-output mask check, and
+    /// the range proof as a batch of one (CEN-H19) (§72.2, amended
+    /// 2026-11-08). It is not a rounding error, and **it moves when the proof
+    /// system moves** — this is not a network constant that can be measured
+    /// once, which is why an instruction-count gate on the admission path
+    /// belongs beside it rather than a comment.
     ///
     /// The inherited `175` already carried a processing term: §21 records its
     /// whole justification as *"a testrun from a recent Intel laptop took
@@ -348,7 +350,7 @@ pub struct DandelionParams {
     /// window therefore carries a diffusion-return term on top of its stem
     /// slack, and the closed form has no place to put it.
     ///
-    /// Measured by [`crate::conformance::simulate_fluff_return`], not assumed.
+    /// Measured by `conformance::simulate_fluff_return`, not assumed.
     /// Like [`Self::time_between_hop_ms`] this is a topology input with a
     /// testnet reopening trigger, and it is set from a high quantile rather
     /// than a mean because over-estimating lengthens the embargo (safe) while
@@ -364,8 +366,9 @@ pub struct DandelionParams {
 }
 
 impl DandelionParams {
-    /// The parameter set Shekyl currently inherits, transcribed from
-    /// `src/cryptonote_config.h` lines 101-106.
+    /// The parameter set Shekyl inherited from the C++ relay's
+    /// `CRYPTONOTE_DANDELIONPP_*` defines. Those defines are deleted; this is
+    /// the only copy of the values.
     ///
     /// This constructor exists to be *measured against*, not to be shipped.
     /// It is the baseline the design round compares its own derivation to.
@@ -429,23 +432,21 @@ impl DandelionParams {
     }
 
     /// The parameter set production ships — [`Self::inherited`] with the
-    /// `hop` input re-anchored to measured provenance (§80, §85.3).
+    /// `hop` input derived from measured provenance (§80, §85.3, §72.2).
     ///
     /// # What moved, and what deliberately did not
     ///
-    /// **`time_between_hop_ms` is now derived through
+    /// **`time_between_hop_ms` is derived through
     /// [`crate::verify_cost::adopted_hop_ms`]** — the spec machine's modal
-    /// verification cell (124.5 ms, Pi 4, genesis tree) plus the labelled
-    /// 50 ms transit assumption — instead of restating the inherited `175`.
-    /// The two are numerically equal, and that is arithmetic rather than
-    /// coincidence: the inherited number was never pure transit (§71.3 — a
-    /// ~80 ms Monero-era verification figure plus one ocean crossing), and
-    /// re-deriving its shape with our verification cost lands on the same
-    /// milliseconds. So the cutover from `inherited()` moved **provenance,
-    /// not behaviour on clearnet**: the clearnet embargo stays 190 s.
-    /// (A longer measured transit takes a longer hop — see
-    /// [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is the
-    /// longest measured transit's quantile, currently 2297 s —
+    /// verification cell (the pool door's sequence at 1 input, genesis tree:
+    /// 144.31 ms on the Pi 4), its node crypto (0.96 ms), and the labelled
+    /// 50 ms transit assumption: 195 ms, where the inherited set restates
+    /// `175`. The inherited number was never pure transit (§71.3 — a ~80 ms
+    /// Monero-era verification figure plus one ocean crossing); our
+    /// verification is larger, so the clearnet embargo is 194 s against the
+    /// inherited set's 190 s. (A longer measured transit takes a longer hop —
+    /// see [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is
+    /// the longest measured transit's quantile, currently 2352 s —
     /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
     /// §89.6.)
     ///
@@ -612,12 +613,11 @@ pub fn reconciles_under_log10(params: &DandelionParams) -> f64 {
     (-k * (k - 1.0) * hop) / (2.0 * EMBARGO_FULL_TRAVEL_PROBABILITY.log10())
 }
 
-/// Constants transcribed from the inherited `src/cryptonote_config.h` relay
-/// block, so this crate is the single Rust mirror of that surface.
+/// The values the inherited C++ relay block carried, kept as the only copy:
+/// the `#define`s they came from are deleted and no C++ reads any of them.
 ///
 /// These are *not* re-derived — they are the current values, present so a
-/// measurement run and a design round can reference them without re-reading
-/// the C++ header, and so a future FFI cut has one place to reconcile.
+/// measurement run and a design round can reference them.
 pub mod inherited {
     /// `CRYPTONOTE_DANDELIONPP_FLUSH_AVERAGE` — mean fluff-flush delay for
     /// *inbound* peers, in seconds. Drawn as a Poisson over quarter-seconds
@@ -635,13 +635,13 @@ pub mod inherited {
     //
     // They were mirrors of `CRYPTONOTE_NOISE_MIN_DELAY` and
     // `CRYPTONOTE_NOISE_DELAY_RANGE`; both `#define`s had zero readers and are
-    // deleted by the same change. This module is the mirror of the
-    // `cryptonote_config.h` relay block, so a value that mirrors nothing does
-    // not belong here — and the carrier module is where the ceiling those
+    // deleted by the same change. This module holds the inherited relay
+    // values, so a value that is derived rather than inherited does not
+    // belong here — and the carrier module is where the ceiling those
     // numbers now have to satisfy can be asserted against `WINDOW_BYTES`.
 
-    /// `CRYPTONOTE_NOISE_CHANNELS` — max outbound connections per zone used
-    /// for covert sending.
+    /// Max outbound connections per zone used for covert sending (the
+    /// inherited `CRYPTONOTE_NOISE_CHANNELS`).
     pub const NOISE_CHANNELS: usize = 2;
 }
 
@@ -820,15 +820,25 @@ mod tests {
         }
     }
 
-    /// The adopted set moved the `hop` input's provenance, not its value:
-    /// the Pi modal verification cell plus the stated transit assumption
-    /// lands on the inherited 175 by arithmetic (§71.3). If this assertion
-    /// ever fails, a table cell or the transit assumption moved — which is
-    /// a legitimate act, but one that re-derives the embargo (the §80.2
-    /// price list moves with it) and owes a CHANGELOG entry saying so.
+    /// The adopted set differs from the inherited one in the `hop` input
+    /// alone: the Pi modal cell's door sequence plus the stated transit
+    /// assumption is 195 ms against the inherited 175 (§72.2). Every other
+    /// field is the inherited value. If the hop assertion fails, a table cell
+    /// or the transit assumption moved — a legitimate act, but one that
+    /// re-derives the embargo (the §80.2 price list moves with it) and owes a
+    /// CHANGELOG entry saying so.
     #[test]
-    fn adopted_params_change_provenance_not_behaviour() {
-        assert_eq!(DandelionParams::adopted(), DandelionParams::inherited());
+    fn adopted_params_differ_from_inherited_only_in_the_hop() {
+        let adopted = DandelionParams::adopted();
+        assert_eq!(adopted.time_between_hop_ms.ms(), 195);
+        assert_eq!(DandelionParams::inherited().time_between_hop_ms.ms(), 175);
+        assert_eq!(
+            DandelionParams {
+                time_between_hop_ms: INHERITED_HOP,
+                ..adopted
+            },
+            DandelionParams::inherited()
+        );
     }
 
     #[test]
@@ -840,8 +850,8 @@ mod tests {
         );
         assert_eq!(
             DandelionParams::adopted().time_between_hop_ms.ms(),
-            175,
-            "the clearnet hop moved off its §88 value"
+            195,
+            "the clearnet hop moved off its derived value (§88, §72.2)"
         );
         // The adopted hop carries the clearnet transit's basis: an assumption.
         assert_eq!(
@@ -859,7 +869,7 @@ mod tests {
         let anon = DandelionParams::adopted_for_transit_ms(crate::verify_cost::ANON_ZONE_TRANSIT);
         // *Records-was:* §89.2 keyed this hop on `RelayZone::Tor`. The live
         // input is that connector's measured transit.
-        assert_eq!(anon.time_between_hop_ms.ms(), 1_750);
+        assert_eq!(anon.time_between_hop_ms.ms(), 1_770);
         assert!(
             anon.time_between_hop_ms.ms() > DandelionParams::adopted().time_between_hop_ms.ms(),
             "the anonymity hop must exceed clearnet's: a rendezvous path is six \

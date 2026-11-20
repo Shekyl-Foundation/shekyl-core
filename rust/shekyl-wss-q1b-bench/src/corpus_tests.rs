@@ -80,8 +80,8 @@ const SCALARS_PER_LEAF_BYTES: u64 = 4 * 32;
 
 #[test]
 fn the_weight_ceiling_is_the_landed_clamp_not_a_json_constant() {
-    // 2 x max(S x zone, zone) = 2 x 4 x 300_000.
-    assert_eq!(sustained_block_weight_ceiling(), 2_400_000);
+    // 2 x max(S x zone, zone) = 2 x 3 x 300_000.
+    assert_eq!(sustained_block_weight_ceiling(), 1_800_000);
 }
 
 #[test]

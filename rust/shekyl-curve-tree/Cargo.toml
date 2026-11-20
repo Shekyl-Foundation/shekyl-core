@@ -18,8 +18,8 @@ license.workspace = true
 # parsed blob and owns only the daemon-parity post-parse validation
 # (`recon::extract_leaf_commitments`). Keeping scanner's heavy dependency
 # fan-in (rpc, crypto-pq, staking, ...) out of the curve-tree client
-# matches `20-rust-vs-cpp-policy.mdc` / `25-rust-architecture.mdc`
-# layering and the wallet/mobile consumption surface.
+# matches `25-rust-architecture.mdc` layering and the wallet/mobile
+# consumption surface.
 [dependencies]
 redb = { workspace = true }
 # Canonical curve-tree composition primitives: `construct_leaf`,
@@ -59,16 +59,30 @@ serde_json = "1"
 [features]
 # Compiles `LeafStore::test_tamper_clear_prune_disabled`, the tampering
 # fixture behind the `Staleness::PostureLost` / posture-loss KATs in
-# `shekyl-p-host` (enabled there via dev-dependencies only). Default-off
+# `shekyl-p-host`, and `CurveTreeClient::test_tamper_poison`, behind the
+# curve-tree actor's in-place recovery tests in `shekyl-engine-core` (each
+# enabled via dev-dependencies only). Default-off
 # and never enabled by a production dependency edge: the prune-disabled
 # posture is one-way by ruling (rule 21), so the clear path must not
 # EXIST in shipped code — a `#[doc(hidden)]` method would still be
 # callable, which is visibility theater, not a gate. With resolver v2 a
 # dev-dependency feature does not leak into normal builds.
 test-tamper = []
+# Compiles `AssembledPath::from_parts_unchecked`: a membership path written
+# from its parts, with neither of the assembler's checks (R-25), for the
+# engine's and the multisig crate's tests. Default-off and enabled from
+# dev-dependency edges only, so no shipped binary holds a path the checked
+# assembler did not seal; a TEST_ONLY row of
+# `scripts/ci/check_test_only_features.py` holds that.
+test-paths = []
 
 [dev-dependencies]
 ciphersuite = "0.4"
+# The reference-window predicates are pinned against CEN-I11 itself
+# (`reference::tests::the_window_is_cen_i11`): the wallet's window is
+# the consensus window, measured from the connecting height, or the test
+# fails. Test-only; `shekyl-chain-rules` does not reach this crate.
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 rand_chacha = { workspace = true }
 serde_json = { workspace = true }

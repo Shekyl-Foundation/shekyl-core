@@ -6,10 +6,10 @@
 //! Chain-sync commands 2011–2014 (CS-Q3).
 //!
 //! Pins the encoded bytes, the cap checked before the codec runs, and the
-//! body-response partition. The ids are not [`DefinedCommand`] arms.
+//! body-response partition. The ids are [`Command`] arms.
 
 use shekyl_levin::{
-    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, DefinedCommand, PayloadError,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, Command, PayloadError,
     PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
     BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
     CAP_RESPONSE_HEADERS, HASH_SIZE, HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES,
@@ -76,20 +76,28 @@ fn carried(block: Vec<u8>) -> BlockBody {
     BlockBody {
         block,
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
-/// The new ids are named and are not dispatched. Ingress admits a command
-/// for a handler, and none exists until the cutover.
+/// The chain-sync ids are named and the C++ ingress does not dispatch them:
+/// the router hands them to chain sync's owner.
 #[test]
-fn sync_commands_are_not_admitted_at_ingress() {
+fn sync_commands_are_admitted_at_ingress_under_their_caps() {
     assert_eq!(NOTIFY_REQUEST_HEADERS, 2011);
     assert_eq!(NOTIFY_RESPONSE_HEADERS, 2012);
     assert_eq!(NOTIFY_REQUEST_BODIES, 2013);
     assert_eq!(NOTIFY_RESPONSE_BODIES, 2014);
-    for id in 2011..=2014 {
-        assert_eq!(DefinedCommand::from_wire(id), None);
+    for (id, cap) in [
+        (2011, CAP_REQUEST_HEADERS),
+        (2012, CAP_RESPONSE_HEADERS),
+        (2013, CAP_REQUEST_BODIES),
+        (2014, CAP_RESPONSE_BODIES),
+    ] {
+        let command = Command::from_wire(id).expect("a chain-sync command is a Command");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap);
     }
 }
 
@@ -160,7 +168,8 @@ fn response_bodies_bytes_are_pinned_and_debug_redacts_blobs() {
                     archival_len: ArchivalLength::from_raw(7),
                 }),
             ],
-            attestation_witness: vec![0x0d],
+            bundle_references: vec![vec![0x0d]],
+            bundle_bodies: Vec::new(),
         }],
         deferred: vec![[0x55; HASH_SIZE]],
         missed_ids: vec![[0x66; HASH_SIZE]],
@@ -171,7 +180,7 @@ fn response_bodies_bytes_are_pinned_and_debug_redacts_blobs() {
         "{rendered}"
     );
     assert!(rendered.contains("Full"), "{rendered}");
-    pin(&msg, "0111010101010201010c06626f646965738c040c136174746573746174696f6e5f7769746e6573730a040d05626c6f636b0a15030100000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000100000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037478738c080804626c6f620a080a0b04666f726d0801140c617263686976616c5f6c656e05070000000000000004666f726d08020d7071635f617574685f686173680a8044444444444444444444444444444444444444444444444444444444444444440d7072756e61626c655f686173680a8033333333333333333333333333333333333333333333333333333333333333330a756e7072756e61626c650a040c0864656665727265640a8055555555555555555555555555555555555555555555555555555555555555550a6d69737365645f6964730a806666666666666666666666666666666666666666666666666666666666666666");
+    pin(&msg, "0111010101010201010c06626f646965738c040c05626c6f636b0a150301000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000030001000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001162756e646c655f7265666572656e6365738a04040d037478738c080804626c6f620a080a0b04666f726d0801140c617263686976616c5f6c656e05070000000000000004666f726d08020d7071635f617574685f686173680a8044444444444444444444444444444444444444444444444444444444444444440d7072756e61626c655f686173680a8033333333333333333333333333333333333333333333333333333333333333330a756e7072756e61626c650a040c0864656665727265640a8055555555555555555555555555555555555555555555555555555555555555550a6d69737365645f6964730a806666666666666666666666666666666666666666666666666666666666666666");
 }
 
 /// Each decoder refuses one byte over its encoded cap before the codec
@@ -275,7 +284,8 @@ fn many_small_skeletons_round_trip() {
     let body = BlockBody {
         block: vec![0x11],
         txs: vec![tx; 90],
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let msg = ResponseBodies {
         bodies: vec![body; 100],
@@ -517,7 +527,8 @@ fn sized_body(block_len: usize) -> BlockBody {
     BlockBody {
         block: vec![0; block_len],
         txs: Vec::new(),
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -595,7 +606,8 @@ fn body_of_total(id: &[u8; HASH_SIZE], total: usize) -> BlockBody {
         } else {
             vec![TxBody::Full(vec![0; extra])]
         },
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     }
 }
 
@@ -839,7 +851,7 @@ fn a_budget_of_minimum_skeletons_decodes() {
     let segment = {
         let tx = shekyl_wire::Transaction {
             prefix: shekyl_wire::TxPrefix {
-                unlock_time: 0,
+                unlock_time: shekyl_wire::TxPrefix::NO_UNLOCK_TIME,
                 inputs: Vec::new(),
                 outputs: Vec::new(),
                 extra: Vec::new(),
@@ -863,7 +875,8 @@ fn a_budget_of_minimum_skeletons_decodes() {
     let one = BlockBody {
         block: vec![0x11],
         txs: vec![skeleton.clone()],
-        attestation_witness: Vec::new(),
+        bundle_references: Vec::new(),
+        bundle_bodies: Vec::new(),
     };
     let each = body_budget_bytes(&one) - one.block.len();
     let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
@@ -881,7 +894,8 @@ fn a_budget_of_minimum_skeletons_decodes() {
             BlockBody {
                 block: vec![0x11],
                 txs: vec![skeleton.clone(); n],
-                attestation_witness: Vec::new(),
+                bundle_references: Vec::new(),
+                bundle_bodies: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -897,29 +911,71 @@ fn a_budget_of_minimum_skeletons_decodes() {
     assert_eq!(ResponseBodies::decode(&bytes).expect("and decodes"), msg);
 }
 
-/// The router's admission of 2011–2014 is its own set, beside the C++
-/// ingress's: every id round-trips, each cap is the one its decoder uses,
-/// and no other id is a chain-sync command.
+/// The four chain-sync commands are arms of the one set: each id
+/// round-trips and each cap is the one its decoder uses.
 #[test]
-fn the_router_admits_exactly_the_four_sync_commands_with_their_caps() {
+fn the_four_sync_commands_carry_their_decoders_caps() {
     use shekyl_levin::{
-        SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
-        CAP_RESPONSE_HEADERS,
+        CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS,
     };
-    for command in SyncCommand::ALL {
-        assert_eq!(SyncCommand::from_wire(command.wire_id()), Some(command));
-        assert_eq!(DefinedCommand::from_wire(command.wire_id()), None);
+    let sync = [
+        (2011, Command::RequestHeaders, CAP_REQUEST_HEADERS),
+        (2012, Command::ResponseHeaders, CAP_RESPONSE_HEADERS),
+        (2013, Command::RequestBodies, CAP_REQUEST_BODIES),
+        (2014, Command::ResponseBodies, CAP_RESPONSE_BODIES),
+    ];
+    for (id, command, cap) in sync {
+        assert_eq!(Command::from_wire(id), Some(command), "{id}");
+        assert_eq!(command.wire_id(), id);
+        assert_eq!(command.payload_cap(), cap, "{id}");
     }
+}
+
+/// A body response carries the bundle bodies its server holds beside the
+/// references (the switch's C3), and they round-trip. No more bodies than a
+/// section has references: one over is refused on encode and on decode.
+/// Red edit: drop `check_bundle_bodies` from the decoder — the over-full
+/// response decodes.
+#[test]
+fn bundle_bodies_ride_a_body_response_up_to_the_section_bound() {
+    use shekyl_levin::MAX_BUNDLE_REFERENCES;
+    let (block, _) = coined(3);
+    let mut body = carried(block);
+    body.bundle_references = vec![vec![0x0d], vec![0x0e]];
+    body.bundle_bodies = vec![vec![0xb0; 40], vec![0xb1; 41]];
+    let msg = ResponseBodies {
+        bodies: vec![body.clone()],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    let bytes = msg.store().expect("encodes");
+    let back = ResponseBodies::decode(&bytes).expect("decodes");
+    assert_eq!(back.bodies[0].bundle_bodies, body.bundle_bodies);
     assert_eq!(
-        SyncCommand::ALL.map(SyncCommand::payload_cap),
-        [
-            CAP_REQUEST_HEADERS,
-            CAP_RESPONSE_HEADERS,
-            CAP_REQUEST_BODIES,
-            CAP_RESPONSE_BODIES
-        ]
+        body_budget_bytes(&back.bodies[0]),
+        back.bodies[0].block.len() + 2 + 81,
+        "the bodies count toward the response budget"
     );
-    for id in [0, 1001, 1002, 2002, 2003, 2004, 2008, 2010, 2015] {
-        assert_eq!(SyncCommand::from_wire(id), None, "{id}");
-    }
+
+    let mut over = body;
+    over.bundle_bodies = vec![vec![0xb2; 4]; MAX_BUNDLE_REFERENCES + 1];
+    let over = ResponseBodies {
+        bodies: vec![over],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    assert!(matches!(
+        over.store(),
+        Err(PayloadError::TooManyBundleBodies { .. })
+    ));
+    let mut section = Section::new();
+    section.insert("block", Value::Bytes(coined(4).0));
+    section.insert(
+        "bundle_bodies",
+        Value::Array(Array::Bytes(vec![vec![0xb2; 4]; MAX_BUNDLE_REFERENCES + 1])),
+    );
+    let mut root = Section::new();
+    root.insert("bodies", Value::Array(Array::Object(vec![section])));
+    let bytes = store_to_binary(&root).expect("stores");
+    assert!(ResponseBodies::decode(&bytes).is_err());
 }

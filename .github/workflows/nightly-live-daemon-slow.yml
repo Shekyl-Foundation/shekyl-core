@@ -31,17 +31,14 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake libboost-all-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev libsodium-dev ccache git curl clang libclang-dev'
+  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
     Acquire::http::Timeout "120";
     Acquire::ftp::Timeout "120";
     EOF
-  CCACHE_SETTINGS: |
-    ccache --max-size=150M
-    ccache --set-config=compression=true
 
 jobs:
   slow-gates:
@@ -59,8 +56,6 @@ jobs:
       image: ubuntu:24.04
       env:
         DEBIAN_FRONTEND: noninteractive
-        CCACHE_TEMPDIR: /tmp/.ccache-temp
-        CCACHE_DIR: ~/.ccache
     steps:
       - name: set apt conf
         run: ${{env.APT_SET_CONF}}
@@ -78,20 +73,11 @@ jobs:
         # Composite action (.github/actions/install-rust) — see build.yml
         # for why it must come after checkout and before the daemon build.
         uses: ./.github/actions/install-rust
-      - uses: actions/cache@v5
-        with:
-          path: ~/.ccache
-          key: ccache-nightly-slow-${{ matrix.branch }}-${{ github.sha }}
-          restore-keys: |
-            ccache-nightly-slow-${{ matrix.branch }}-
-            ccache-ubuntu:24.04-build-
       - uses: ./.github/actions/set-make-job-count
       - name: build
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: |
-          ${{env.CCACHE_SETTINGS}}
-          ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_DEFAULT_LINUX}}
       - name: slow live-daemon gates
         # `shell: bash` for the same reason as build.yml's per-PR step: the
         # container default is dash, which rejects `set -o pipefail`.

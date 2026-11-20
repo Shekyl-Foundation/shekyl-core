@@ -1,3 +1,11 @@
+# `seeds/<target>/` is committed and read by every run of that target
+# (the nightly workflow's `fuzz` job; locally,
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
+# `crash_commitments_passed_times_eight` is the first input the first
+# nightly dispatch drove into the prover: the harness handed the verifier
+# `8·C` where it reads `C` as carried, so every proof failed. A crash's
+# input joins its target's directory with the fix.
+
 [package]
 name = "shekyl-tx-builder-fuzz"
 version = "0.0.0"

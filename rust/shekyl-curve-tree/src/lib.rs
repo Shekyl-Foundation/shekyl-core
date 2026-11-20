@@ -64,15 +64,16 @@ pub mod store;
 pub mod types;
 
 pub use assemble::PathRootFault;
+pub use assemble::{AssembledPath, AssembledPaths, PathParts};
 pub use client::{
     BlockLeaves, CaptureReconciliation, ClientError, CurveTreeClient, ExpectedOutput,
-    OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs, WriterRecovery,
+    OwnedRegistration, OwnershipSync, RawOutput, TxLeafInputs,
 };
 pub use reference::{
     blocks_until_in_tree, drained_through, in_tree_at_reference, proof_expired, proof_submittable,
-    reference_block_age, select_reference_height, should_reanchor, two_sided_reference_height,
-    TwoSidedRefusal, PROOF_VALIDITY_HORIZON, REBUILD_AT, REFERENCE_BLOCK_MAX_AGE,
-    REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
+    reference_block_age, select_reference_height, should_reanchor, tip_blocks_until_in_tree,
+    two_sided_reference_height, TwoSidedRefusal, DISPATCHED_PROOF_LIFE, PROOF_VALIDITY_HORIZON,
+    REBUILD_AT, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE, REF_ANCHOR_AGE,
 };
 pub use segment::{
     leaves_per_segment, outputs_per_node, segment_freeze_eligible, SegmentId,
@@ -81,11 +82,11 @@ pub use segment::{
 };
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, CapturedChunk, FrozenSegmentBody,
-    FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader,
-    StoreError, StoreOpenFault,
+    FrozenSegmentRecord, LeafStore, MixedRootError, PostureDeclaration, SegmentPin, StoreError,
+    StoreOpenFault,
 };
 pub use types::{
-    AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,
-    CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind,
-    TreeContext, TreePosition,
+    AssembleInput, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes, CurveTreeRoot, Gindex,
+    LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
+    TreePosition,
 };

@@ -54,6 +54,7 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
@@ -129,14 +130,10 @@ fn assemble(
 ) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: 0,
+            unlock_time: TxPrefix::NO_UNLOCK_TIME,
             inputs: key_images
                 .iter()
-                .map(|key_image| Input::ToKey {
-                    amount: 0,
-                    key_offsets: Vec::new(),
-                    key_image: *key_image,
-                })
+                .map(|key_image| Input::fcmp_spend(shekyl_types::KeyImage::from_bytes(*key_image)))
                 .collect(),
             outputs: vec![
                 Output {
@@ -162,7 +159,6 @@ fn assemble(
             },
             pqc_auths,
             prunable: Some(Prunable {
-                serve_credit_pruned: Vec::new(),
                 bulletproofs: vec![bp_plus_from_blob(&signed.bulletproof_plus)],
                 tree_depth: u64::from(signed.tree_depth.checked_sub(1).expect("L >= 1")),
                 fcmp_proof: signed.fcmp_proof.clone(),
@@ -223,7 +219,7 @@ fn tree_with(
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     for index in 0..max_spent as u64 {
-        let tx_secret = Scalar::random(rng).to_bytes();
+        let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
         let data = construct_output(
             &tx_secret,
             &wallet.x25519_pk,
@@ -349,43 +345,41 @@ fn measure(
     let mut chosen: Vec<&Spent> = spent[..n].iter().collect();
     chosen.sort_unstable_by(|a, b| b.key_image.as_bytes().cmp(a.key_image.as_bytes()));
 
+    let asked: Vec<AssembleInput> = chosen
+        .iter()
+        .map(|s| AssembleInput {
+            gindex: Gindex::from_raw(s.index),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(s.data.commitment),
+        })
+        .collect();
+    let paths = client
+        .assemble_paths(&asked, &reference)
+        .expect("assemble membership paths");
     let spend_inputs: Vec<SpendInput> = chosen
         .iter()
-        .map(|s| {
-            let path = client
-                .assemble_path(
-                    &AssembleInput {
-                        gindex: Gindex::from_raw(s.index),
-                        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(s.data.output_key),
-                        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
-                            s.data.commitment,
-                        ),
-                    },
-                    &reference,
-                )
-                .expect("assemble membership path");
-            SpendInput {
-                output_key: s.data.output_key,
-                commitment: s.data.commitment,
-                amount: AtomicUnits::from_raw(input_amount),
-                spend_key_x: s.spend_secret_x,
-                spend_key_y: s.data.y,
-                commitment_mask: s.data.z,
-                combined_ss: s.combined_ss.to_vec(),
-                output_index: s.index,
-                leaf_chunk: path
-                    .leaf_chunk
-                    .iter()
-                    .map(|cl| LeafEntry {
-                        output_key: cl.output_key.to_bytes(),
-                        key_image_gen: cl.key_image_gen,
-                        commitment: cl.commitment.to_bytes(),
-                        cm_x: cl.cm_x,
-                    })
-                    .collect(),
-                c1_layers: path.c1_layers.clone(),
-                c2_layers: path.c2_layers.clone(),
-            }
+        .zip(paths.paths())
+        .map(|(s, (_, path))| SpendInput {
+            output_key: s.data.output_key,
+            commitment: s.data.commitment,
+            amount: AtomicUnits::from_raw(input_amount),
+            spend_key_x: s.spend_secret_x,
+            spend_key_y: s.data.y,
+            commitment_mask: s.data.z,
+            combined_ss: s.combined_ss.to_vec(),
+            output_index: s.index,
+            leaf_chunk: path
+                .leaf_chunk()
+                .iter()
+                .map(|cl| LeafEntry {
+                    output_key: cl.output_key.to_bytes(),
+                    key_image_gen: cl.key_image_gen,
+                    commitment: cl.commitment.to_bytes(),
+                    cm_x: cl.cm_x,
+                })
+                .collect(),
+            c1_layers: path.c1_layers().to_vec(),
+            c2_layers: path.c2_layers().to_vec(),
         })
         .collect();
 
@@ -395,7 +389,7 @@ fn measure(
     let payment_amount = (total_in - fee) / 2;
     let change_amount = total_in - fee - payment_amount;
     let recipient = random_wallet(rng);
-    let dest_secret = Scalar::random(rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     let payment = construct_output(
         &dest_secret,
         &recipient.x25519_pk,
@@ -417,7 +411,7 @@ fn measure(
     let pack = |out: &OutputData, amount: u64| OutputInfo {
         dest_key: out.output_key,
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: out.z,
+        commitment_mask: out.commitment_mask(),
         enc_amount: out.enc_amount_wire(),
         enc_label: out.enc_label_wire(),
     };
@@ -446,6 +440,7 @@ fn measure(
 
     let started = Instant::now();
     let signed = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
         tx_prefix_hash,
         &spend_inputs,
         &outputs,
@@ -479,15 +474,15 @@ fn measure(
         hybrid_pks
             .iter()
             .map(|pk| shekyl_wire::PqcAuth {
-                auth_version: 1,
-                scheme_id: 1,
-                flags: 0,
+                auth_version: shekyl_wire::PqcAuth::VERSION,
+                scheme_id: shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
+                flags: shekyl_wire::PqcAuth::NO_FLAGS,
                 hybrid_public_key: pk.clone(),
                 hybrid_signature: Vec::new(),
             })
             .collect(),
     );
-    let payload_hashes = wire_tx.pqc_signing_payload_hashes();
+    let payload_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(payload_hashes.len(), n, "one payload hash per input");
     let auths = sign_pqc_auths(&payload_hashes, &spend_inputs).expect("Phase-2 PQC auth signing");
     if let Ct::Fcmp { pqc_auths, .. } = &mut wire_tx.ct {
@@ -518,9 +513,10 @@ fn measure(
         &kis,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        tree_root.as_bytes(),
+        &tree_root,
         signed.tree_depth,
-        tx_prefix_hash.to_bytes(),
+        // The message the proof was made over (the signing envelope §2.2).
+        signed.tx_signable,
     )
     .expect("verify must not error");
     let verify_proof = started.elapsed();
@@ -532,7 +528,7 @@ fn measure(
     // The hashing is inside the timer because the validator pays it.
     let started = Instant::now();
     let scheme = HybridEd25519MlDsa;
-    let verifier_hashes = wire_tx.pqc_signing_payload_hashes();
+    let verifier_hashes = wire_tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     for (auth, message) in auths.iter().zip(&verifier_hashes) {
         let pk = HybridPublicKey::from_canonical_bytes(&auth.public_key).expect("key parses");
         let sig = HybridSignature::from_canonical_bytes(&auth.signature).expect("sig parses");

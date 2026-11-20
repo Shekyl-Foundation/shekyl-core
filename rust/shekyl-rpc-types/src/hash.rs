@@ -19,8 +19,8 @@
 //! newtypes exist to prevent. Rule 18 already settles this: *RPC* wire
 //! structs store the raw bytes and convert at their edge. (The consensus
 //! header in `shekyl-wire` types those fields — `previous` is `BlockHash`,
-//! `curve_tree_root` is `CurveTreeRoot`, `attestation_root` is
-//! `AttestationRoot` — because that crate *does* know which kind each
+//! `curve_tree_root` is `CurveTreeRoot`, `section_root` is
+//! `SectionRoot` — because that crate *does* know which kind each
 //! field is.) A consumer that knows which kind a `HashHex` holds names it
 //! there — `BlockHash::from_bytes(h.to_bytes())` — and that knowledge stays
 //! where it is actually available.
@@ -127,10 +127,10 @@ impl core::error::Error for HashHexError {}
 
 /// What serde completes "expected …" with.
 ///
-/// A bare noun phrase, deliberately not the [`Display`] sentence: serde's
+/// A bare noun phrase, deliberately not the [`Display`](fmt::Display) sentence: serde's
 /// message already echoes the offending value, so repeating what was seen
 /// would render as "invalid value: string \"beef\", expected expected 64 hex
-/// characters …". [`Display`] stands alone and does say what it saw.
+/// characters …". [`Display`](fmt::Display) stands alone and does say what it saw.
 impl serde::de::Expected for HashHexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("64 hex characters (32 bytes)")

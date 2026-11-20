@@ -17,17 +17,7 @@ use shekyl_types::{KeyImage, TxHash, UnixSeconds};
 
 use super::Removed;
 use crate::pool::{Pool, PoolFault};
-
-fn tmp(name: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "shekyl-mempool-{name}-{}-{:?}.redb",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&path));
-    path
-}
+use crate::test_paths::tmp;
 
 /// The clock the opens in this module read.
 const NOW: UnixSeconds = UnixSeconds::from_raw(7_200);
@@ -39,13 +29,14 @@ const ADMITTED: PoolRecord = PoolRecord {
 
 /// A pool at `path` holding two fixture spends as admitted entries — each
 /// refused on its bytes when judged again, so a reconcile removes both.
-fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
+fn two_planted(path: impl AsRef<std::path::Path>) -> (Pool, [TxHash; 2]) {
     let chain = spendable_chain();
     let (mut pool, _) = Pool::create(
         path,
         crate::Limits {
             max_weight: u64::MAX,
         },
+        shekyl_chain_rules::HARNESS_NETWORK_ID,
     )
     .unwrap();
     let a = pool.plant(listed_on(&chain, [0x41; 32]), ADMITTED);
@@ -91,8 +82,6 @@ fn a_chain_fault_mid_reconcile_leaves_the_pool_as_it_was() {
     assert_eq!(reconciled.removed.len(), 2);
     assert!(pool.is_empty() && pool.key_images().is_empty());
     assert!(filed(&pool).is_empty(), "the file followed");
-    drop(pool);
-    drop(std::fs::remove_file(&path));
 }
 
 #[test]
@@ -123,8 +112,6 @@ fn a_refused_write_leaves_the_index_and_the_file_as_they_were_and_the_retry_writ
         filed(&pool).is_empty(),
         "and wrote what the faulted one could not"
     );
-    drop(pool);
-    drop(std::fs::remove_file(&path));
 }
 
 fn sorted(mut txids: [TxHash; 2]) -> Vec<TxHash> {
@@ -134,13 +121,7 @@ fn sorted(mut txids: [TxHash; 2]) -> Vec<TxHash> {
 
 #[test]
 fn an_entry_that_does_not_parse_is_dropped_at_open() {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "shekyl-mempool-unparseable-{}-{:?}.redb",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    drop(std::fs::remove_file(&path));
+    let path = tmp("unparseable");
     let txid = TxHash::from_bytes([0x51; 32]);
     {
         let (store, _) = PoolStore::create(&path).unwrap();
@@ -156,6 +137,7 @@ fn an_entry_that_does_not_parse_is_dropped_at_open() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap();
@@ -167,8 +149,6 @@ fn an_entry_that_does_not_parse_is_dropped_at_open() {
         store.begin_read().unwrap().is_empty().unwrap(),
         "the file lost it too"
     );
-    drop(store);
-    drop(std::fs::remove_file(&path));
 }
 
 /// The file is not trusted: two admitted entries in it claiming one key
@@ -198,13 +178,13 @@ fn two_filed_entries_claiming_one_image_open_and_are_judged() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .unwrap()
         .2
     });
     assert_eq!(reconciled.removed.len(), 2, "both judged");
-    drop(std::fs::remove_file(&path));
 }
 
 /// Nothing in the file is trusted (the review of #1102, S2): a row whose
@@ -251,6 +231,7 @@ fn a_misfiled_row_and_an_unreadable_one_are_dropped_and_the_pool_opens() {
             NOW,
             &view,
             &RuleSet::GENESIS,
+            &shekyl_chain_rules::HARNESS_NETWORK_ID,
             &AdmissionPolicy::GENESIS,
         )
         .expect("a discardable file never stops the open")
@@ -270,6 +251,4 @@ fn a_misfiled_row_and_an_unreadable_one_are_dropped_and_the_pool_opens() {
         store.begin_read().unwrap().is_empty().unwrap(),
         "the file lost both"
     );
-    drop(store);
-    drop(std::fs::remove_file(&path));
 }

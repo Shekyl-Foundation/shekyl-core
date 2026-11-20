@@ -171,13 +171,13 @@ mod tests {
     }
 
     /// The first height of epoch `e` under [`SCHEDULE`] — the C++ fixture's
-    /// `shekyl_archival_epoch_open_height`.
+    /// epoch-open FFI (deleted, `DEL-008`).
     fn open(e: u64) -> BlockHeight {
         h(SCHEDULE.open_height(e))
     }
 
     /// Epoch `e`'s last block under [`SCHEDULE`], `(e + 1)·SEB − 1` — the
-    /// C++ fixture's `shekyl_archival_epoch_last_block`, one below the
+    /// C++ fixture's epoch-last-block FFI (deleted, `DEL-008`), one below the
     /// close-*processing* height `consensus_state::epoch_close_height`
     /// names.
     fn last(e: u64) -> BlockHeight {

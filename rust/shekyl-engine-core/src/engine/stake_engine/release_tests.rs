@@ -188,6 +188,7 @@ async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
     // describes, so a refusal can only be the binding check.
     let ready_source = || EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
         bond: Some(BondContext {
             join_settlement_epoch: 1,
@@ -352,6 +353,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
         mine,
         EmissionClaimSource {
             chain_height: ChainCount::from_raw(30001),
+            tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
             current_settled_epoch: 4 + RELEASE_COOLDOWN_EPOCHS,
             bond: Some(BondContext {
                 join_settlement_epoch: 1,
@@ -436,7 +438,7 @@ async fn the_exit_authorizes_under_bond_spend_pk_never_the_identity_key() {
     // `pqc_signing_payload_hashes` is the same method the daemon's
     // `verify_pqc_auths` calls, under the same domain — so this is the real
     // check over the real bytes, not a restatement of what the handler did.
-    let payload_hashes = tx.pqc_signing_payload_hashes();
+    let payload_hashes = tx.pqc_signing_payload_hashes(&shekyl_network::HARNESS_NETWORK_ID);
     assert_eq!(payload_hashes.len(), pqc_auths.len());
     let pk = HybridPublicKey::from_canonical_bytes(&auth.hybrid_public_key)
         .expect("the auth slot carries a canonical hybrid public key");
@@ -465,6 +467,7 @@ fn the_record_carries_the_persona_it_was_read_for() {
     let want = PCanonicalId::from_bytes([0xA5; 32]);
     let source = EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 3,
         bond: Some(BondContext {
             join_settlement_epoch: 1,
@@ -498,6 +501,7 @@ fn the_record_carries_the_persona_it_was_read_for() {
 fn a_response_without_a_bond_record_yields_no_state() {
     let source = EmissionClaimSource {
         chain_height: ChainCount::from_raw(30001),
+        tip_hash: crate::engine::test_support::test_block_hash_at(30_000),
         current_settled_epoch: 3,
         bond: None,
         epochs: vec![],
@@ -521,7 +525,7 @@ fn a_record_served_at_epoch_zero_is_refused_by_its_own_anchor() {
     // Premise, from consensus's own predicate rather than restated here: an
     // exit at the very epoch a record served is inside the cooldown.
     assert!(
-        !release_cooldown_elapsed(Some(0), 0),
+        !release_cooldown_elapsed(Some(0), 0, shekyl_archival_retention::archival_params()),
         "premise: the serving epoch itself is not past the cooldown"
     );
     let mut r = ready();
@@ -580,7 +584,8 @@ fn slash_settlement_is_checked_even_when_the_cooldown_has_elapsed() {
     r.last_settled_slash = SlashWatermark::SettledThrough(3);
     assert!(release_cooldown_elapsed(
         r.last_served.as_verify_operand(),
-        r.current_settlement_epoch
+        r.current_settlement_epoch,
+        shekyl_archival_retention::archival_params()
     ));
     assert_eq!(
         r.ensure_exit_ready(),

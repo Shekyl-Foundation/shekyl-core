@@ -31,7 +31,7 @@ use serde::Deserialize;
 use shekyl_economics::params::mul_scale;
 use shekyl_economics::{
     base_block_reward, calc_burn_pct_from_activity, params_digest, ActivityMetric, EconomicParams,
-    TxVolume, CALIBRATION_GENERATION, STAKER_EMISSION_DECAY, STAKER_EMISSION_SHARE,
+    TxVolume, CALIBRATION_GENERATION,
 };
 
 use super::economics_snapshot::snapshot_calibration_digest;
@@ -181,7 +181,7 @@ fn economics_differential_records_match_engine() {
         assert_eq!(snap.as_of.generation, CALIBRATION_GENERATION);
         assert_eq!(
             snap.as_of.params_digest,
-            snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY)
+            snapshot_calibration_digest(&params)
         );
     }
 }
@@ -211,48 +211,42 @@ fn economics_params_digest_round_trip() {
     assert_eq!(params_digest(&params), params_digest(&params));
 }
 
-/// §6.3 G5: the snapshot stamp must cover *every* calibration value the
-/// snapshot exposes, not just `EconomicParams`. Were it the bare
-/// `EconomicParams` digest, a staker-emission change with no `generation`
-/// bump would be a silent false-accept.
+/// The stamp is one version byte and `params_digest`. Share and decay
+/// move it because they are fields. The version byte keeps the stamp
+/// off the bare sub-digest.
 #[test]
 fn snapshot_calibration_digest_covers_full_surface() {
     let params = EconomicParams::default();
-    let base = snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY);
+    let base = snapshot_calibration_digest(&params);
 
-    // Deterministic, and strictly broader than the EconomicParams digest
-    // (the gap Copilot flagged: the stamp used to equal this).
-    assert_eq!(
-        base,
-        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY)
-    );
+    assert_eq!(base, snapshot_calibration_digest(&params));
     assert_ne!(
         base,
         params_digest(&params),
-        "snapshot stamp must not collapse to the EconomicParams-only digest"
+        "the version tag keeps the stamp off the EconomicParams digest"
     );
 
-    // A staker-emission share change moves the digest.
+    let mut share = params.clone();
+    share.staker_emission_share += 1;
     assert_ne!(
         base,
-        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE + 1, STAKER_EMISSION_DECAY),
+        snapshot_calibration_digest(&share),
         "staker_emission_share must be covered"
     );
 
-    // A staker-emission decay change moves the digest.
+    let mut decay = params.clone();
+    decay.staker_emission_decay += 1;
     assert_ne!(
         base,
-        snapshot_calibration_digest(&params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY + 1),
+        snapshot_calibration_digest(&decay),
         "staker_emission_decay must be covered"
     );
 
-    // An EconomicParams change still moves the digest (the sub-digest is
-    // folded in, not dropped).
     let mut bumped_params = params.clone();
     bumped_params.burn_cap += 1;
     assert_ne!(
         base,
-        snapshot_calibration_digest(&bumped_params, STAKER_EMISSION_SHARE, STAKER_EMISSION_DECAY),
+        snapshot_calibration_digest(&bumped_params),
         "EconomicParams sub-digest must still be covered"
     );
 }

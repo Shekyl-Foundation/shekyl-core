@@ -18,7 +18,7 @@
 //! the one child-row table. [`ban`] reads the ban file. A row the table
 //! fills with a literal is required: its default is not restated here.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
@@ -169,6 +169,14 @@ pub struct Rpc {
     pub cors_origins: Vec<String>,
     /// The connection cap.
     pub connections_max: NonZeroU32,
+    /// Which node this is on the machine (`RPC_CHANNEL.md` §7.1): the
+    /// default instance, or one the operator named.
+    pub instance: shekyl_rpc_rendezvous::Instance,
+    /// The operator-named directory for the owner's socket, for an account
+    /// with no session directory. Never set in service mode, nor on Windows.
+    pub socket_dir: Option<PathBuf>,
+    /// The channel's listeners (RT-W10 step 4); empty is none.
+    pub channel_listen: Vec<SocketAddr>,
 }
 
 /// The logging owner's section.
@@ -191,7 +199,7 @@ impl Logging {
     /// The table admits only level words and subsystem keys, and [`build`]
     /// refuses anything else, so a built section's words are in that set.
     #[must_use]
-    pub fn directive(&self) -> String {
+    pub fn directive(&self) -> shekyl_logging::filter::Directive {
         let overrides: Vec<(&str, &str)> = self
             .categories
             .iter()
@@ -253,10 +261,15 @@ pub struct MineAddress {
 /// The miner's section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mine {
-    /// Mine to this address from start.
+    /// `mine = on`: the node starts the miner once it has opened, to
+    /// `address`, with `threads`. Off, the miner starts on `mine_start`.
+    /// On without an address is refused at parse (Rick, 2026-11-02).
+    pub start: bool,
+    /// The address the miner pays. It starts nothing by itself.
     pub address: Option<MineAddress>,
-    /// The thread count; `None` is `auto`, which the miner receives as 0
-    /// and resolves itself.
+    /// The thread count for the start-time miner and for a `mine_start`
+    /// that names none; `None` is `auto`, the host's parallelism. A count
+    /// above the host's is the configuration check's refusal.
     pub threads: Option<NonZeroU32>,
 }
 
@@ -271,7 +284,7 @@ pub struct Dev {
     pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
-    /// Serve the armed test levers (`generateblocks`, `pop_blocks`) to the
+    /// Serve the armed test levers (`dev_block_generate`, `dev_chain_pop`) to the
     /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
     /// DX-Q3, Q8).
     pub rpc: bool,
@@ -285,21 +298,20 @@ pub struct Dev {
     pub archival_reorg_depth: Option<u64>,
 }
 
-/// The interim C++ console's section, until `shekyl-cli` serves it (R8).
+/// This process start: whether it checks the configuration and exits
+/// (`config-verify`, IG-Q58), and the owning connection it was handed
+/// (`owning-connection`, IG-Q106).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Session {
-    /// Run the interactive console.
-    pub console: bool,
-    /// Check the configuration as a start would and exit without starting
-    /// (`config-verify`, IG-Q58).
+    /// Check the configuration as a start would and exit without starting.
     pub verify: bool,
-    /// The positional words: a client-mode command, empty for a daemon
-    /// start.
-    pub command: Vec<String>,
-    /// The admin endpoint a client-mode command reaches. Present only in
-    /// client mode, and only when that endpoint is IPv4: the console dials
-    /// four octets and a port. A daemon may still bind IPv6.
-    pub client_endpoint: Option<SocketAddrV4>,
+    /// Replace the service's console key and exit (`INPUT_GRAMMAR.md`
+    /// IG-Q88).
+    pub console_key_reset: bool,
+    /// The number of the inherited end the starting process holds this
+    /// daemon's life by. The daemon adopts it before it loads the
+    /// configuration; this is the value the checks and the report read.
+    pub owning_connection: Option<u64>,
 }
 
 /// The whole configuration, by section.
@@ -323,15 +335,13 @@ pub struct DaemonConfig {
     pub p2p: P2p,
     /// The RPC service.
     pub rpc: Rpc,
-    /// The transaction pool's weight bound.
-    pub txpool_weight_max: u64,
     /// The notify runner.
     pub notify: Notify,
     /// The miner.
     pub mine: Mine,
     /// The development levers.
     pub dev: Dev,
-    /// The console.
+    /// The configuration check.
     pub session: Session,
 }
 
@@ -351,13 +361,6 @@ impl DaemonConfig {
             Clearnet::On { .. } => true,
         }
     }
-
-    /// Whether this process is a client of a running daemon (§2.2, client
-    /// mode).
-    #[must_use]
-    pub fn is_client(&self) -> bool {
-        !self.session.command.is_empty()
-    }
 }
 
 /// Builds the sections from the resolved values.
@@ -373,7 +376,7 @@ impl DaemonConfig {
 /// value of the wrong arm, every path that needs a home the account lacks,
 /// a mining address off the network, and a ban file that cannot be read or
 /// holds a line that does not parse.
-pub fn build(
+pub(crate) fn build(
     resolved: &mut Resolved,
     network: Network,
     run_mode: RunMode,
@@ -381,6 +384,9 @@ pub fn build(
     config_file: Option<&Path>,
 ) -> Result<DaemonConfig, Vec<Diagnostic>> {
     let mut faults = materialize::fill(resolved, network, run_mode, platform);
+    if cfg!(windows) && run_mode == RunMode::Service {
+        faults.push(windows_service_not_yet(resolved));
+    }
     let mut r = Reader::new(resolved);
     let data_dir = taken_path(&mut r, "data-dir");
     let log_file = taken_path(&mut r, "log-file");
@@ -400,12 +406,11 @@ pub fn build(
         tor_on,
     );
     let p2p = p2p_section(&mut r, peers, closed_peers);
-    let rpc = rpc_section(&mut r);
+    let rpc = rpc_section(&mut r, run_mode);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
-    let session = session_section(&mut r, &rpc.admin_listen);
+    let session = session_section(&mut r, run_mode);
     let notify = notify_section(&mut r);
-    let txpool_weight_max = r.required_bytes("txpool-weight-max");
 
     faults.append(&mut r.faults);
     if !faults.is_empty() {
@@ -427,14 +432,30 @@ pub fn build(
             connections_max: rpc
                 .connections_max
                 .expect("rpc-connections-max was read or a fault was recorded"),
+            instance: rpc.instance,
+            socket_dir: rpc.socket_dir,
+            channel_listen: rpc.channel_listen,
         },
-        txpool_weight_max: txpool_weight_max
-            .expect("txpool-weight-max was read or a fault was recorded"),
         notify,
         mine,
         dev,
         session,
     })
+}
+
+/// `service` on Windows: the switch also answers the service manager, and
+/// that dispatcher is RT-W14's (IG-Q105), so until it is built a Windows
+/// start refuses the switch, naming RT-W14.
+fn windows_service_not_yet(resolved: &Resolved) -> Diagnostic {
+    Diagnostic::new(
+        Code::ServicePlatform,
+        resolved.source("service").cloned().unwrap_or(Source::Cli),
+    )
+    .option("service")
+    .param(
+        "reason",
+        "on Windows the service run mode answers the service manager (RPC_CHANNEL.md RT-16), and RT-W14 builds that dispatcher",
+    )
 }
 
 /// The path [`materialize`] wrote, or the path the operator gave. Absence
@@ -475,6 +496,23 @@ fn read_log_words(r: &mut Reader<'_>) -> Option<(&'static str, Vec<(String, &'st
     Some((level?, categories))
 }
 
+/// The logging section of another binary's resolved table whose logging
+/// rows are the daemon's (`log-level`, `log-category`, `log-size-max`, of
+/// the kinds [`crate::table::LEVEL`], [`crate::table::LOG_CATEGORY`] and
+/// [`crate::table::BYTES`]), its log at `file`: one mapping to the logging
+/// owner for every binary that has these rows (`shekyl-rpc-tunnel`).
+///
+/// # Errors
+/// A logging row absent where the table fills it, or a word outside it.
+pub fn logging(resolved: &Resolved, file: PathBuf) -> Result<Logging, Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let logging = logging_section(&mut r, file);
+    if !r.faults.is_empty() {
+        return Err(r.faults);
+    }
+    Ok(logging.expect("the logging rows were read or a fault was recorded"))
+}
+
 /// Installs the logging rows on the live filter.
 ///
 /// The directive is [`shekyl_logging::subsystem::directive_from_words`], the
@@ -497,7 +535,7 @@ pub fn apply_logging(resolved: &Resolved) -> Result<(), Vec<Diagnostic>> {
         .collect();
     let directive = shekyl_logging::subsystem::directive_from_words(level, &overrides)
         .expect("the table admits only level words and subsystem keys");
-    shekyl_logging::subsystem::apply_directive(directive);
+    shekyl_logging::subsystem::apply_directive(&directive);
     Ok(())
 }
 
@@ -568,38 +606,87 @@ struct RpcRead {
     view_listen: Vec<SocketAddr>,
     cors_origins: Vec<String>,
     connections_max: Option<NonZeroU32>,
+    instance: shekyl_rpc_rendezvous::Instance,
+    socket_dir: Option<PathBuf>,
+    channel_listen: Vec<SocketAddr>,
 }
 
-fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
+/// The RPC rows, and the two rules between them and the run mode
+/// (`RPC_CHANNEL.md` §7.1): a named instance is a second node and names its
+/// own data home, so `instance` needs an explicit `data-dir`; and a service
+/// serves no owner socket, so `rpc-socket-dir` is refused with `service`
+/// (IG-Q105) rather than ignored.
+fn rpc_section(r: &mut Reader<'_>, run_mode: RunMode) -> RpcRead {
+    let instance = match r.name("instance") {
+        Read::Present(text) => match shekyl_rpc_rendezvous::InstanceName::parse(&text) {
+            Ok(name) => {
+                if !r.given("data-dir") {
+                    r.requires(
+                        "instance",
+                        "an explicit `data-dir`: a named instance is a second node and keeps its own state",
+                    );
+                }
+                shekyl_rpc_rendezvous::Instance::Named(name)
+            }
+            // The kind's rule already refused it at parse.
+            Err(_) => shekyl_rpc_rendezvous::Instance::Default,
+        },
+        Read::Absent | Read::Unreadable => shekyl_rpc_rendezvous::Instance::Default,
+    };
+    let socket_dir = r.optional_path("rpc-socket-dir").present();
+    if socket_dir.is_some() && cfg!(windows) {
+        r.platform_refusal(
+            "rpc-socket-dir",
+            "on Windows the owner's rendezvous directory is fixed, %LOCALAPPDATA%\\Shekyl\\rendezvous (RPC_CHANNEL.md §7.1)",
+        );
+    }
+    if socket_dir.is_some() && run_mode == RunMode::Service {
+        r.conflict(
+            "rpc-socket-dir",
+            "`service` is set: a service serves no owner socket",
+        );
+    }
     RpcRead {
         admin_listen: r.endpoint_list("rpc-admin-listen", true),
         view_listen: r.endpoint_list("rpc-view-listen", true),
         cors_origins: r.origin_list("rpc-cors-origin"),
         connections_max: r.required_count("rpc-connections-max"),
+        instance,
+        socket_dir: if cfg!(windows) { None } else { socket_dir },
+        channel_listen: r.endpoint_list("rpc-listen", true),
     }
 }
 
 fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
+    let start = match r.optional_word("mine") {
+        Read::Present("on") => true,
+        // Absent is the table's default, off. Unreadable already recorded
+        // its fault; off starts nothing while the rest of the section builds.
+        Read::Absent | Read::Present("off") | Read::Unreadable => false,
+        Read::Present(other) => {
+            r.word_choice("mine", other, "on, off");
+            false
+        }
+    };
     let address = match r.address("mine-address") {
         Read::Present(text) => {
-            let decoded =
-                shekyl_address::ShekylAddress::decode_for_network(&text, network.address_network())
-                    .map_err(|error| error.to_string())
-                    .and_then(|decoded| {
-                        if !decoded.has_pqc_segment() {
-                            return Err(
-                                "the address has no post-quantum segments; mine to the full address"
-                                    .to_owned(),
-                            );
-                        }
-                        shekyl_crypto_pq::account::coinbase_recipient(
-                            &decoded.spend_key,
-                            &decoded.view_key,
-                            &decoded.ml_kem_encap_key,
-                        )
-                        .map(|x25519| (decoded, x25519))
-                        .map_err(|refused| refused.to_string())
-                    });
+            let decoded = shekyl_address::ShekylAddress::decode_for_network(&text, network)
+                .map_err(|error| error.to_string())
+                .and_then(|decoded| {
+                    if !decoded.has_pqc_segment() {
+                        return Err(
+                            "the address has no post-quantum segments; mine to the full address"
+                                .to_owned(),
+                        );
+                    }
+                    shekyl_crypto_pq::account::coinbase_recipient(
+                        &decoded.spend_key,
+                        &decoded.view_key,
+                        &decoded.ml_kem_encap_key,
+                    )
+                    .map(|x25519| (decoded, x25519))
+                    .map_err(|refused| refused.to_string())
+                });
             match decoded {
                 Ok((decoded, x25519)) => Some(MineAddress {
                     text,
@@ -621,7 +708,11 @@ fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
         }
         Read::Absent | Read::Unreadable => None,
     };
+    if start && address.is_none() {
+        r.requires("mine", "mine-address");
+    }
     Mine {
+        start,
         address,
         threads: match r.thread_count("mine-threads") {
             ThreadCount::Counted(count) => Some(count),
@@ -642,47 +733,41 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         }
     };
     Dev {
-        difficulty: r.dev_integer("dev-difficulty"),
+        difficulty: r.optional_integer("dev-difficulty"),
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
         rpc: r.switch("dev-rpc"),
-        pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
-        pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
-        settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),
-        archival_reorg_depth: r.dev_integer("dev-archival-reorg-depth"),
+        pow_seed_epoch_blocks: r.optional_integer("dev-pow-seed-epoch-blocks"),
+        pow_seed_epoch_lag: r.optional_integer("dev-pow-seed-epoch-lag"),
+        settlement_epoch_blocks: r.optional_integer("dev-settlement-epoch-blocks"),
+        archival_reorg_depth: r.optional_integer("dev-archival-reorg-depth"),
     }
 }
 
-fn session_section(r: &mut Reader<'_>, admin_listen: &[SocketAddr]) -> Session {
-    let command = r.positional().to_vec();
-    let client_endpoint = if command.is_empty() {
-        None
-    } else {
-        match admin_listen.first() {
-            Some(SocketAddr::V4(endpoint)) => Some(*endpoint),
-            Some(endpoint) => {
-                r.faults.push(
-                    Diagnostic::new(Code::ValueRange, r.source("rpc-admin-listen"))
-                        .option("rpc-admin-listen")
-                        .param("value", endpoint.to_string())
-                        .param("rule", "the console client reaches an IPv4 admin endpoint"),
-                );
-                None
-            }
-            None => {
-                r.faults.push(
-                    Diagnostic::new(Code::ClientNoEndpoint, Source::Cli).option("rpc-admin-listen"),
-                );
-                None
-            }
-        }
-    };
+/// The session rows, and their rules with the run mode: only a service has
+/// a console key, so its reset is refused in any other run mode (IG-Q88);
+/// the service manager holds a service's life, so a service is handed no
+/// owning connection (IG-Q106).
+fn session_section(r: &mut Reader<'_>, run_mode: RunMode) -> Session {
+    let console_key_reset = r.switch("rpc-console-key-reset");
+    if console_key_reset && run_mode != RunMode::Service {
+        r.requires(
+            "rpc-console-key-reset",
+            "`service`: only the machine's service instance has a console key",
+        );
+    }
+    let owning_connection = r.optional_integer("owning-connection");
+    if owning_connection.is_some() && run_mode == RunMode::Service {
+        r.conflict(
+            "owning-connection",
+            "`service` is set: the service manager holds a service's life",
+        );
+    }
     Session {
-        console: r.switch("console"),
         verify: r.switch("config-verify"),
-        command,
-        client_endpoint,
+        console_key_reset,
+        owning_connection,
     }
 }
 

@@ -28,7 +28,7 @@
 //! pre-genesis testnet recalibration** (emission speed factor, burn
 //! coefficients, staker shares). The method *surfaces* are
 //! stable; the *values* may churn each calibration generation
-//! ([`CALIBRATION_GENERATION`](shekyl_economics::CALIBRATION_GENERATION)).
+//! ([`CALIBRATION_GENERATION`]).
 //! Value-vector tests are calibration-tagged; the generation-invariant
 //! differential (C4) survives recalibration because it pins the shared 0h
 //! primitive, not a specific height's emission.
@@ -65,7 +65,7 @@ impl LocalEconomics {
     /// Construct with the build-time-resolved [`EconomicParams`] loader.
     pub(crate) fn new() -> Self {
         Self {
-            params: EconomicParams::default(),
+            params: shekyl_economics::economic_params().clone(),
         }
     }
 
@@ -144,21 +144,13 @@ impl EconomicsEngine for LocalEconomics {
             burn_base_rate_bp: scale_to_bp(p.burn_base_rate),
             burn_cap_bp: scale_to_bp(p.burn_cap),
             staker_fee_pool_share_bp: scale_to_bp(p.staker_pool_share),
-            staker_emission_share_bp: scale_to_bp(shekyl_economics::STAKER_EMISSION_SHARE),
-            staker_emission_decay_milli: scale_to_milli_u16(
-                shekyl_economics::STAKER_EMISSION_DECAY,
-            ),
+            staker_emission_share_bp: scale_to_bp(p.staker_emission_share),
+            staker_emission_decay_milli: scale_to_milli_u16(p.staker_emission_decay),
             as_of: CalibrationStamp {
                 generation: CALIBRATION_GENERATION,
-                // Full-surface digest: covers `EconomicParams` *and* the
-                // staker-emission consts this snapshot also exposes
-                // (§6.3 G5) — not just the `EconomicParams` sub-digest
-                // `shekyl_economics::params_digest` produces.
-                params_digest: snapshot_calibration_digest(
-                    p,
-                    shekyl_economics::STAKER_EMISSION_SHARE,
-                    shekyl_economics::STAKER_EMISSION_DECAY,
-                ),
+                // One version byte and `params_digest`. Share and decay
+                // move the stamp because they are fields of that digest.
+                params_digest: snapshot_calibration_digest(p),
             },
         }
     }

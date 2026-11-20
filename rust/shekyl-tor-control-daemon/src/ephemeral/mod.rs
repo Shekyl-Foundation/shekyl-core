@@ -6,12 +6,15 @@
 //! One managed Tor incarnation (PWD-E7 piece 2).
 //!
 //! [`DaemonTorControl::spawn_keeping`] creates a data directory under the
-//! caller-named parent and returns when `GETINFO version` answers. Bootstrap
-//! is not a gate. The directory is kept across a respawn in the same boot
-//! and wiped when the daemon stops (`TSR-Q1`).
+//! caller-named parent and returns when `GETINFO version` answers, waiting
+//! for it as long as the caller says. Bootstrap is not a gate. The directory is kept across a respawn in the same boot
+//! (`TSR-Q1`) and retired when the daemon stops: Tor's log is kept beside it,
+//! the directory becomes a tombstone, and the tombstone is deleted off the
+//! stop path under [`TOMBSTONE_DELETE_BOUND`] (`TOR_SUPERVISOR.md` §4.7).
 //!
-//! The boot's onion seed is minted once, with [`DaemonTorControl::mint_seed`],
-//! and passed to every [`DaemonTorControl::publish`]. A publish failure
+//! The boot's onion identity is minted once, with
+//! [`DaemonTorControl::mint_identity`], and passed to every
+//! [`DaemonTorControl::publish`]. A publish failure
 //! leaves the incarnation up: Tor's SOCKS proxy still works, and the caller
 //! serves no overlay inbound until a later publish succeeds.
 
@@ -21,22 +24,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::watch;
-use zeroize::{Zeroize, Zeroizing};
+use tokio::sync::{oneshot, watch};
 
+use shekyl_onion_key::OnionKeypair;
+use shekyl_tor_control_client::awake;
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError, BootstrapState,
-    Command, ControlError, DiskWrites, EventSink, OnionFlags, OnionPort, OnionPow, ServiceId,
-    SocksTimeout, TorControlClient, TorExit,
+    AddOnionReplyError, BootstrapState, Command, ControlError, ControlReply, EventSink, OnionPow,
+    ServiceId, SocksTimeout, TorControlClient, TorExit,
 };
 use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
-use crate::data_dir::EphemeralDataDir;
+use crate::data_dir::{EphemeralDataDir, KeptLog};
 
+mod asker;
 mod spawn;
 
+pub use asker::ControlAsker;
 pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 
 /// Bound on the whole teardown sequence (graceful actor stop + child reap),
@@ -46,11 +51,30 @@ pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
 /// connection, whose close exits tor, backstop the child reap.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Spawn-time configuration for [`DaemonTorControl::start`].
+/// The longest delete of a used `DataDirectory` on the floor device, in
+/// milliseconds (`TSR-M10`, measured 2026-10-19: 100 used directories, max
+/// 13 ms; x86 max 7 ms).
+const FLOOR_DELETE_MAX_MS: u64 = 13;
+
+/// How long a stop waits for a tombstone's delete: ten times
+/// [`FLOOR_DELETE_MAX_MS`], provisioned at the floor device. A delete that
+/// outlives it costs nothing but disk until the next start's sweep, so the
+/// bound need not cover every delete, only keep the stop from waiting on a
+/// stalled card. The daemon's runtime ends without waiting for a delete still
+/// running (`shutdown_background`).
+pub const TOMBSTONE_DELETE_BOUND: Duration = Duration::from_millis(FLOOR_DELETE_MAX_MS * 10);
+
+/// `DEL_ONION` removed the service.
+const DEL_ONION_REMOVED: u16 = 250;
+/// `DEL_ONION` named a service Tor does not hold (`552 Unknown Onion
+/// Service`): nothing of ours is loaded, which is what the delete wanted.
+const DEL_ONION_UNKNOWN: u16 = 552;
+
+/// Spawn-time configuration for [`DaemonTorControl::launch`].
 ///
 /// Every instance-identifying input is a parameter (PWD-E9): the binary
 /// witness and the DataDirectory *parent* arrive from the caller; this crate
-/// creates a unique subdirectory and wipes it on teardown. The onion's ports
+/// creates a unique subdirectory and retires it on teardown. The onion's ports
 /// are *not* here — they belong to [`DaemonTorControl::publish`], which runs
 /// after the caller has bound its inbound listener.
 pub struct DaemonTorConfig {
@@ -71,7 +95,7 @@ pub struct DaemonTorConfig {
     pub socks_timeout: SocksTimeout,
 }
 
-/// Why [`DaemonTorControl::start`] failed. Terminal for the boot: the caller
+/// Why [`DaemonTorControl::launch`] failed. Terminal for the boot: the caller
 /// logs and continues with no tor zone (this crate does not retry — see the
 /// crate doc's no-respawn rationale).
 #[derive(Debug)]
@@ -84,6 +108,10 @@ pub enum DaemonTorStartError {
     /// or the actor stopped). Carries the reaped exit when teardown observed
     /// it.
     Died(Option<TorExit>),
+    /// The spawn stopped waiting for Tor's first control reply: the
+    /// caller's deadline passed, or its supervisor abandoned the launch.
+    /// The child was stopped and reaped.
+    Unanswered,
 }
 
 impl std::fmt::Display for DaemonTorStartError {
@@ -92,6 +120,9 @@ impl std::fmt::Display for DaemonTorStartError {
             Self::DataDir(e) => write!(f, "ephemeral tor data directory: {e}"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died(exit) => write!(f, "tor died during start ({exit:?})"),
+            Self::Unanswered => {
+                f.write_str("tor gave no first control reply before the spawn stopped waiting")
+            }
         }
     }
 }
@@ -109,8 +140,9 @@ pub enum DaemonTorPublishError {
         /// The refused target.
         target: SocketAddr,
     },
-    /// The OS CSPRNG refused to produce the hs-id seed. No fallback by
-    /// design — a weaker source would mint a guessable service key.
+    /// The OS CSPRNG refused to produce a per-boot secret (the onion key,
+    /// or the probe's isolation pair). No fallback by design — a weaker
+    /// source would mint a guessable service key.
     SeedRng,
     /// The control round-trip failed.
     Control(ControlError),
@@ -135,7 +167,7 @@ impl std::fmt::Display for DaemonTorPublishError {
             Self::TargetNotLoopback { target } => {
                 write!(f, "onion target {target} is not a loopback address")
             }
-            Self::SeedRng => write!(f, "OS CSPRNG unavailable for the hs-id seed"),
+            Self::SeedRng => write!(f, "OS CSPRNG unavailable for a per-boot secret"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
             Self::Died => write!(f, "tor died during publish"),
             Self::Publish(e) => write!(f, "ADD_ONION failed: {e:?}"),
@@ -194,8 +226,8 @@ pub enum TorDeath {
 /// after a successful [`Self::publish`] — an onion service published. Dropping
 /// the handle without [`DaemonTorControl::shutdown`] still reaps the child
 /// (`kill_on_drop`, and the owning control connection, whose close exits tor) and
-/// wipes the DataDirectory, but the
-/// bounded graceful path is the intended exit.
+/// retires the DataDirectory, leaving its tombstone to the next start's sweep,
+/// but the bounded graceful path is the intended exit.
 pub struct DaemonTorControl {
     actor: kameo::actor::ActorRef<TorControlClient>,
     /// The reap, once the child watcher has published it. The bridge task
@@ -215,34 +247,15 @@ pub struct DaemonTorControl {
     /// Bootstrap as the actor's poll reports it. The supervisor reads it;
     /// launch does not wait on it.
     ready: watch::Receiver<BootstrapState>,
-    /// Declared last so a plain drop wipes the directory after the actor
+    /// Ends the actor's wait for Tor's first reply ([`HandshakeWait::Until`])
+    /// when sent on or dropped: the actor cannot be stopped while it waits,
+    /// so every stop drops this first. `None` once dropped.
+    ///
+    /// [`HandshakeWait::Until`]: shekyl_tor_control_client::control::HandshakeWait::Until
+    handshake: Option<oneshot::Sender<()>>,
+    /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
-}
-
-/// The hs-id seed for one boot.
-///
-/// The bytes stay inside the `Zeroizing`. There is no `Deref`, so a caller
-/// cannot hold a slice of them in async state. [`DaemonTorControl::publish`]
-/// is the only function that reads them, and it borrows this value.
-pub struct OnionSeed(Zeroizing<[u8; 32]>);
-
-impl OnionSeed {
-    fn bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl Drop for OnionSeed {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
-impl std::fmt::Debug for OnionSeed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("OnionSeed")
-    }
 }
 
 impl DaemonTorControl {
@@ -253,7 +266,7 @@ impl DaemonTorControl {
     }
 
     /// This incarnation's data directory, while the control still holds it.
-    /// `None` after a stop or a wipe has taken it.
+    /// `None` after a stop has taken it.
     #[must_use]
     pub fn data_path(&self) -> Option<&Path> {
         self.data_dir.as_ref().map(EphemeralDataDir::path)
@@ -269,25 +282,37 @@ impl DaemonTorControl {
         self.socks_addr = socks;
     }
 
-    /// `SETCONF AvoidDiskWrites=1` on this owning connection.
+    /// A clone of this incarnation's control actor, for a request run off
+    /// the caller's loop with no bound of its own ([`ControlAsker`]).
+    #[must_use]
+    pub fn asker(&self) -> ControlAsker {
+        ControlAsker::new(self.actor.clone())
+    }
+
+    /// `SETCONF AvoidDiskWrites=1` on this owning connection, under the
+    /// reply deadline.
+    ///
+    /// # Errors
+    /// As [`ControlAsker::defer_disk_writes`], and a reply past the deadline.
     pub async fn defer_disk_writes(&self) -> Result<(), DaemonTorStartError> {
-        self.ask_bounded(
-            Command::SetConfDiskWrites(DiskWrites::Deferred),
-            self.reply_deadline,
-        )
-        .await
-        .map(|_| ())
+        awake::timeout(self.reply_deadline, self.asker().defer_disk_writes())
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     async fn stop_actor(&mut self) -> Option<TorExit> {
         self.stopping.store(true, Ordering::Release);
+        // A Tor that has not answered its first reply is killed and reaped
+        // by the actor's start, which then ends; the stop below finds it
+        // ended. One that answered is past this.
+        drop(self.handshake.take());
         let actor = self.actor.clone();
         let mut exit_watch = self.exit_watch.clone();
         let stop = async {
             actor.stop_gracefully().await.ok();
             observed_exit(&mut exit_watch).await
         };
-        match tokio::time::timeout(REAP_TIMEOUT, stop).await {
+        match awake::timeout(REAP_TIMEOUT, stop).await {
             Ok(exit) => exit,
             Err(_timeout) => {
                 self.actor.kill();
@@ -296,23 +321,27 @@ impl DaemonTorControl {
         }
     }
 
-    /// The boot's hs-id seed. The supervisor holds one until the daemon stops
-    /// and passes that same value to every [`Self::publish`].
-    pub fn mint_seed() -> Result<OnionSeed, DaemonTorPublishError> {
-        let mut bytes = Zeroizing::new([0u8; 32]);
-        if getrandom::getrandom(bytes.as_mut()).is_err() {
-            return Err(DaemonTorPublishError::SeedRng);
-        }
-        Ok(OnionSeed(bytes))
+    /// The boot's onion identity, from an ephemeral keypair
+    /// (`shekyl_onion_key::OnionKeypair::ephemeral`, which draws its
+    /// seed from the OS CSPRNG and keeps it). The supervisor holds one until
+    /// the daemon stops and passes that same value to every
+    /// [`Self::publish`]; it is the keypair Tor is handed, and nothing more.
+    ///
+    /// # Errors
+    /// [`DaemonTorPublishError::SeedRng`] when the CSPRNG refuses.
+    pub fn mint_identity() -> Result<OnionIdentity, DaemonTorPublishError> {
+        OnionKeypair::ephemeral()
+            .map(OnionIdentity::from_keypair)
+            .map_err(|_| DaemonTorPublishError::SeedRng)
     }
 
-    /// Publish the onion from `seed`. The seed stays with the caller.
+    /// Publish the onion for `identity`, which stays with the caller.
     /// `local_target` (loopback only, enforced structurally by
-    /// [`OnionPort::loopback`]). Runs after the caller has bound its inbound
+    /// [`OnionPort::loopback`](shekyl_tor_control_client::control::onion::OnionPort::loopback)). Runs after the caller has bound its inbound
     /// listener, so the target names a port the OS actually granted.
     ///
-    /// The caller keeps `seed` for the boot. This call derives an identity
-    /// from it and drops that identity when the reply has been checked.
+    /// The caller keeps `identity` for the boot. This call mints one
+    /// `ADD_ONION` key from it.
     ///
     /// A failure does **not** tear the incarnation down: tor is up and its
     /// SOCKS proxy works, so the caller's ruled degrade is outbound-only on
@@ -325,51 +354,53 @@ impl DaemonTorControl {
     /// either one and does not send another `ADD_ONION`.
     pub async fn publish(
         &self,
-        seed: &OnionSeed,
+        identity: &OnionIdentity,
         virtual_port: u16,
         local_target: SocketAddr,
         max_streams: u16,
         pow: OnionPow,
     ) -> Result<ServiceId, DaemonTorPublishError> {
-        let port = OnionPort::loopback(virtual_port, local_target).ok_or(
-            DaemonTorPublishError::TargetNotLoopback {
-                target: local_target,
-            },
-        )?;
-
-        let identity = OnionIdentity::from_hs_id_seed(seed.bytes());
-        let expected = identity.service_id().clone();
-        let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
-            .with_flags(OnionFlags { discard_pk: true })
-            .with_pow(pow);
-        let reply = match ask_timed(&self.actor, Command::AddOnion(request), self.reply_deadline)
+        let asker = self.asker();
+        let add = asker.add_onion(identity, virtual_port, local_target, max_streams, pow);
+        awake::timeout(self.reply_deadline, add)
             .await
-        {
-            Ok(reply) => reply,
-            Err(AskError::Timeout) => {
-                return Err(DaemonTorPublishError::Control(ControlError::Timeout));
-            }
-            Err(AskError::Control(control)) => return Err(DaemonTorPublishError::Control(control)),
-            Err(AskError::ActorGone) => return Err(DaemonTorPublishError::Died),
-        };
-        if let Some(refused) = pow_refusal(pow, reply.status(), reply.lines()) {
-            return Err(refused);
-        }
-        evaluate_add_onion_reply(&reply, &expected).map_err(DaemonTorPublishError::Publish)?;
-        Ok(expected)
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))
+    }
+
+    /// Publish the onion for `identity` again on this running Tor
+    /// (`TOR_SUPERVISOR.md` §4.4, Service class): `DEL_ONION`, then
+    /// [`Self::publish`]. Tor refuses an `ADD_ONION` for a service it still
+    /// holds (`550`, address collision), so a republish that skipped the
+    /// delete could never succeed against a live service. The delete's
+    /// `552` (no such service: a fresh Tor, or one that lost it) is the
+    /// same as a `250`: nothing of ours is loaded. Any other refusal is
+    /// [`DaemonTorPublishError::Publish`], and no `ADD_ONION` is sent.
+    ///
+    /// # Errors
+    /// As [`Self::publish`], and a refused delete.
+    pub async fn republish(
+        &self,
+        identity: &OnionIdentity,
+        virtual_port: u16,
+        local_target: SocketAddr,
+        max_streams: u16,
+        pow: OnionPow,
+    ) -> Result<ServiceId, DaemonTorPublishError> {
+        awake::timeout(self.reply_deadline, self.asker().delete_onion(identity))
+            .await
+            .unwrap_or(Err(DaemonTorPublishError::Control(ControlError::Timeout)))?;
+        self.publish(identity, virtual_port, local_target, max_streams, pow)
+            .await
     }
 
     async fn ask_bounded(
         &self,
         command: Command,
         deadline: Duration,
-    ) -> Result<shekyl_tor_control_client::control::ControlReply, DaemonTorStartError> {
-        match ask_timed(&self.actor, command, deadline).await {
-            Ok(reply) => Ok(reply),
-            Err(AskError::Timeout) => Err(DaemonTorStartError::Control(ControlError::Timeout)),
-            Err(AskError::Control(control)) => Err(DaemonTorStartError::Control(control)),
-            Err(AskError::ActorGone) => Err(DaemonTorStartError::Died(None)),
-        }
+    ) -> Result<ControlReply, DaemonTorStartError> {
+        awake::timeout(deadline, self.asker().ask(command))
+            .await
+            .unwrap_or(Err(DaemonTorStartError::Control(ControlError::Timeout)))
     }
 
     pub async fn ask(
@@ -422,24 +453,27 @@ impl DaemonTorControl {
         }
     }
 
-    /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
-    /// service and SIGTERM→wait→SIGKILL→reaps the child), then the exit
-    /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and
-    /// proceed — the child reap is backstopped by `kill_on_drop` and by the owning
-    /// control connection, whose close exits tor.
+    /// Bounded teardown at the daemon's stop (`TOR_SUPERVISOR.md` §4.7): the
+    /// actor's graceful stop, which closes the owning control connection and
+    /// reaps the child within `SHUTDOWN_GRACE`, killing it past that; then the
+    /// cache write-back; then the directory is retired and its tombstone
+    /// deleted under [`TOMBSTONE_DELETE_BOUND`]. On a wedged actor, kill and
+    /// proceed — the child reap is backstopped by `kill_on_drop` and by the
+    /// owning control connection, whose close exits tor.
     pub async fn shutdown(mut self) -> Teardown {
-        self.teardown().await
-    }
-
-    async fn teardown(&mut self) -> Teardown {
         let exit = self.stop_actor().await;
-        // After the reap, before the directory goes away. A crash (Tor died,
+        // After the reap, before the directory is retired. A crash (Tor died,
         // or we had to kill it) saves nothing: the previous cache stays.
         let cache = self.save_if_clean(&exit).await;
-        if let Some(dir) = self.data_dir.take() {
-            dir.wipe();
+        let retirement = match self.data_dir.take() {
+            Some(dir) => Some(retire(dir).await),
+            None => None,
+        };
+        Teardown {
+            exit,
+            cache,
+            retirement,
         }
-        Teardown { exit, cache }
     }
 
     async fn save_if_clean(&self, exit: &Option<TorExit>) -> CacheSave {
@@ -489,6 +523,57 @@ pub struct Teardown {
     pub exit: Option<TorExit>,
     /// The public directory cache's write-back (`TSR-Q8`).
     pub cache: CacheSave,
+    /// What became of the directory and Tor's log. `None` when the control
+    /// held no directory.
+    pub retirement: Option<Retirement>,
+}
+
+/// A retired directory: where Tor's log went and what became of the
+/// tombstone. This crate does not log; the caller says what failed.
+#[derive(Debug)]
+pub struct Retirement {
+    /// Tor's log, kept beside the directory until the next start's sweep.
+    pub log: KeptLog,
+    /// The directory's end.
+    pub tombstone: TombstoneEnd,
+}
+
+/// What became of a retired directory.
+#[derive(Debug)]
+pub enum TombstoneEnd {
+    /// Deleted within [`TOMBSTONE_DELETE_BOUND`].
+    Deleted,
+    /// The delete was still running at the bound. It goes on, and whatever
+    /// the process exit cuts short is swept at the next start.
+    Outlived(PathBuf),
+    /// The delete failed. The next start's sweep tries again.
+    NotDeleted(PathBuf, std::io::Error),
+    /// The rename failed (on Windows, a scanner holding a file). The
+    /// directory stays under its live name for the next start's sweep.
+    NotRenamed(std::io::Error),
+}
+
+/// Retire `dir` and delete its tombstone on the blocking pool, waiting at
+/// most [`TOMBSTONE_DELETE_BOUND`]. The two renames are metadata operations
+/// and run here; the delete is the part that can stall.
+async fn retire(dir: EphemeralDataDir) -> Retirement {
+    let (log, renamed) = dir.retire();
+    let tombstone = match renamed {
+        Ok(tombstone) => delete_within_bound(tombstone).await,
+        Err(error) => TombstoneEnd::NotRenamed(error),
+    };
+    Retirement { log, tombstone }
+}
+
+async fn delete_within_bound(tombstone: PathBuf) -> TombstoneEnd {
+    let target = tombstone.clone();
+    let delete = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(target));
+    match awake::timeout(TOMBSTONE_DELETE_BOUND, delete).await {
+        Ok(Ok(Ok(()))) => TombstoneEnd::Deleted,
+        Ok(Ok(Err(error))) => TombstoneEnd::NotDeleted(tombstone, error),
+        Ok(Err(joined)) => TombstoneEnd::NotDeleted(tombstone, std::io::Error::other(joined)),
+        Err(_bound) => TombstoneEnd::Outlived(tombstone),
+    }
 }
 
 /// The directory cache's write-back at a teardown. This crate does not log;
@@ -529,7 +614,7 @@ async fn save_directory_cache(data_dir: &Path) -> CacheSave {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -585,21 +670,17 @@ mod tests {
         );
     }
 
-    /// Debug names the type and not the seed. A derived `Debug` fails this.
-    #[test]
-    fn an_onion_seed_prints_no_bytes() {
-        let seed = OnionSeed(Zeroizing::new([0xab; 32]));
-        assert_eq!(format!("{seed:?}"), "OnionSeed");
-    }
-
     use crate::test_support::tor_binary;
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
     use shekyl_tor_control_client::control::BootstrapState;
 
     /// The ignored live tests wait here so a published onion has a network.
     /// A hang bound in a test is not a daemon deadline: nothing in the
-    /// supervisor gives a bootstrap up.
-    async fn wait_for_the_network(boot: &mut DaemonTorControl) {
+    /// supervisor gives a bootstrap up. Past it Tor is still connecting, and
+    /// the panic says "did not bootstrap": the live-test runner retries a
+    /// step once when that is every failure in it
+    /// (`scripts/ci/run_live_tor_tests.sh`).
+    pub(crate) async fn wait_for_the_network(boot: &mut DaemonTorControl) {
         let hang = tokio::time::Instant::now() + Duration::from_secs(300);
         let mut watch = boot.watch_bootstrap();
         loop {
@@ -621,7 +702,7 @@ mod tests {
                 BootstrapState::Connecting { .. } => {}
             }
             if tokio::time::Instant::now() >= hang {
-                panic!("the live test stopped waiting");
+                panic!("tor did not bootstrap within 300 s: still connecting");
             }
             tokio::select! {
                 changed = watch.changed() => {
@@ -657,14 +738,52 @@ mod tests {
             Err(DaemonTorStartError::Control(_) | DaemonTorStartError::Died(_)) => {}
             other => panic!("expected Control/Died, got {other:?}"),
         }
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        // A failed start retires its directory. A tombstone may remain when
+        // its delete outlived the bound; a live directory may not.
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect();
         assert!(
-            leftovers.is_empty(),
-            "a failed start must wipe the per-boot DataDirectory, leftover: {leftovers:?}"
+            leftovers.iter().all(|name| name.ends_with(".tomb")),
+            "a failed start must retire the per-boot DataDirectory, leftover: {leftovers:?}"
         );
+    }
+
+    /// Switching to a fresh directory sweeps what earlier incarnations left
+    /// and keeps the log of the one it replaces, the last dead incarnation's
+    /// evidence (`TOR_SUPERVISOR.md` §4.10). Red edit: retire before the
+    /// sweep, and the sweep removes the log just kept.
+    #[tokio::test]
+    async fn a_fresh_directory_keeps_the_replaced_incarnations_log() {
+        let parent = tempfile::tempdir().unwrap();
+        let older = parent.path().join("ephemeral-tor-0000000000000000.log");
+        std::fs::write(&older, b"an older incarnation").unwrap();
+        let config = config_with(
+            VerifiedTorBinary::unchecked_for_test(PathBuf::from("/nonexistent/tor")),
+            parent.path().to_path_buf(),
+        );
+        let old = match DaemonTorControl::spawn_keeping(config, std::future::pending()).await {
+            Err(SpawnError::Launch(failure)) => failure.directory,
+            Err(SpawnError::DataDir(error)) => panic!("the directory was not created: {error}"),
+            Ok(_) => panic!("a missing binary does not come up"),
+        };
+        std::fs::write(
+            old.path()
+                .join(shekyl_tor_control_client::control::LOG_FILE_NAME),
+            b"the replaced incarnation",
+        )
+        .unwrap();
+
+        let retirement = old.replace().await;
+        let KeptLog::Kept(kept) = retirement.log else {
+            panic!(
+                "the replaced incarnation's log is kept: {:?}",
+                retirement.log
+            );
+        };
+        assert_eq!(std::fs::read(&kept).unwrap(), b"the replaced incarnation");
+        assert!(!older.exists(), "the older incarnation's log is swept");
     }
 
     impl std::fmt::Debug for DaemonTorControl {
@@ -695,7 +814,7 @@ mod tests {
                 .await
                 .expect("first boot start");
         wait_for_the_network(&mut boot1).await;
-        let seed1 = DaemonTorControl::mint_seed().expect("seed");
+        let identity1 = DaemonTorControl::mint_identity().expect("identity");
         assert_eq!(
             boot1.directory_cache_copied().is_empty(),
             !lane_seed_holds_a_file(),
@@ -706,7 +825,7 @@ mod tests {
 
         match boot1
             .publish(
-                &seed1,
+                &identity1,
                 18080,
                 "192.168.1.10:18080".parse().unwrap(),
                 64,
@@ -723,7 +842,7 @@ mod tests {
 
         let first_id = boot1
             .publish(
-                &seed1,
+                &identity1,
                 18080,
                 "127.0.0.1:48080".parse().unwrap(),
                 64,
@@ -732,9 +851,9 @@ mod tests {
             .await
             .expect("first boot publish");
         assert_eq!(first_id.as_str().len(), 56);
-        let exit = boot1.shutdown().await.exit;
-        assert!(exit.is_some(), "teardown must observe a real reap");
-        assert_only_directory_cache(parent.path());
+        let teardown = boot1.shutdown().await;
+        assert!(teardown.exit.is_some(), "teardown must observe a real reap");
+        assert_retired_beside_the_cache(parent.path(), &teardown);
 
         let mut boot2 = DaemonTorControl::launch(config_with(binary, parent.path().to_path_buf()))
             .await
@@ -744,10 +863,10 @@ mod tests {
             !boot2.directory_cache_copied().is_empty(),
             "the second boot copies the cache the first stop saved"
         );
-        let seed2 = DaemonTorControl::mint_seed().expect("seed");
+        let identity2 = DaemonTorControl::mint_identity().expect("identity");
         let second_id = boot2
             .publish(
-                &seed2,
+                &identity2,
                 18080,
                 "127.0.0.1:48080".parse().unwrap(),
                 64,
@@ -789,11 +908,9 @@ mod tests {
             "the cold boot has nothing to copy"
         );
         wait_for_the_network(&mut boot).await;
-        assert!(
-            boot.shutdown().await.exit.is_some(),
-            "the stop observes a real reap"
-        );
-        assert_only_directory_cache(parent.path());
+        let teardown = boot.shutdown().await;
+        assert!(teardown.exit.is_some(), "the stop observes a real reap");
+        assert_retired_beside_the_cache(parent.path(), &teardown);
         // The lane's seed is the cache a clean stop wrote. Copying it while
         // Tor still held the data directory would publish a journal Tor was
         // still appending.
@@ -814,16 +931,40 @@ mod tests {
         })
     }
 
-    fn assert_only_directory_cache(parent: &std::path::Path) {
+    /// After a clean stop the parent holds the cache, Tor's kept log, and a
+    /// tombstone only when its delete outlived the bound; no live directory
+    /// (`TOR_SUPERVISOR.md` §4.7, §4.10). The kept log is Tor's own: it says
+    /// Tor bootstrapped.
+    fn assert_retired_beside_the_cache(parent: &std::path::Path, teardown: &Teardown) {
+        let retirement = teardown
+            .retirement
+            .as_ref()
+            .expect("the stop retired a directory");
+        let KeptLog::Kept(log) = &retirement.log else {
+            panic!("Tor's log is kept: {:?}", retirement.log);
+        };
+        let said = std::fs::read_to_string(log).expect("the kept log");
+        assert!(said.contains("Bootstrapped 100%"), "Tor's own log: {said}");
+        let mut expected = vec![
+            std::ffi::OsString::from(crate::data_dir::CACHE_DIR_NAME),
+            log.file_name().expect("named").to_owned(),
+        ];
+        match &retirement.tombstone {
+            TombstoneEnd::Deleted => {}
+            TombstoneEnd::Outlived(tombstone) => {
+                expected.push(tombstone.file_name().expect("named").to_owned());
+            }
+            other => panic!("the tombstone ends: {other:?}"),
+        }
+        expected.sort();
         let mut names: Vec<_> = std::fs::read_dir(parent)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
         names.sort();
         assert_eq!(
-            names,
-            vec![std::ffi::OsString::from(crate::data_dir::CACHE_DIR_NAME)],
-            "shutdown wipes the per-boot directory and leaves the cache"
+            names, expected,
+            "shutdown retires the per-boot directory and leaves the cache"
         );
         let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
         assert!(!cache.join("state").exists(), "state is not a cache file");
@@ -836,25 +977,11 @@ mod tests {
         );
     }
 
-    /// The tor process launched with `dir` as its DataDirectory parent.
-    #[cfg(target_os = "linux")]
-    fn tor_under(dir: &std::path::Path) -> Option<u32> {
-        let needle = dir.to_string_lossy().into_owned();
-        std::fs::read_dir("/proc").ok()?.find_map(|entry| {
-            let entry = entry.ok()?;
-            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
-            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
-            String::from_utf8_lossy(&cmdline)
-                .contains(&needle)
-                .then_some(pid)
-        })
-    }
-
     /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
-    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
-    /// `Stopped`.
+    /// incarnation end. A tor killed from outside is `Exited`, and the exit
+    /// code is what [`shekyl_tor_control_client::outside_kill::reaped_exit_code`]
+    /// says that kill leaves. A shutdown is `Stopped`.
     #[tokio::test]
-    #[cfg(target_os = "linux")]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
         let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
@@ -866,18 +993,21 @@ mod tests {
                 .await
                 .expect("start");
         let death = tokio::spawn(killed.death());
-        let pid = tor_under(dir.path()).expect("the tor under this directory");
         // Under the spawn lock, as every spawn in a crate that launches tor
         // is (TOR_SUPERVISOR.md 4.7): a child started in the launch window
         // would inherit tor's end.
-        let status = shekyl_tor_control_client::spawn_lock::status(
-            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
-        )
-        .expect("kill");
-        assert!(status.success());
+        assert!(
+            shekyl_tor_control_client::outside_kill::kill_tor_named_by(dir.path()),
+            "the tor under this directory was found and killed"
+        );
+        let death = heard(death).await.expect("heard").expect("watcher");
+        let TorDeath::Exited { code } = death else {
+            panic!("a tor killed from outside is Exited, was {death:?}");
+        };
         assert_eq!(
-            heard(death).await.expect("heard").expect("watcher"),
-            TorDeath::Exited { code: None }
+            code,
+            shekyl_tor_control_client::outside_kill::reaped_exit_code(),
+            "the reap reports the outside kill"
         );
         assert!(!killed.is_alive());
         let _exit_after_kill = killed.shutdown().await;

@@ -16,6 +16,7 @@
 //! discardable by ruling (`SPL-Q8`): a pool that loses it loses only the
 //! transactions it held, never a fact the chain needs.
 
+use shekyl_network::NetworkId;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -32,8 +33,8 @@ use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, DoorFault, Judged};
-use crate::evict::Limits;
-use crate::rate::{AdmissionRank, FeeRate};
+use crate::policy::Limits;
+use crate::policy::{AdmissionRank, FeeRate};
 use crate::view::KeyImages;
 
 /// Step 1 of the door, relative to the pool lock.
@@ -176,7 +177,7 @@ impl Held {
     }
 
     /// This entry in the order eviction and template selection share.
-    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank {
+    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank<ReceivedHour> {
         AdmissionRank::new(self.rate(), self.record.received, txid)
     }
 }
@@ -208,6 +209,11 @@ pub struct Pool {
     /// ordered it. `None` when they were not judged at one tip.
     /// [`Pool::judged_at`] is the tip a template compares to its parent.
     judged_at: Option<JudgedTip>,
+    /// The one network this pool judges under for its lifetime (NI-Q4).
+    /// Taken at [`Pool::create`] / [`Pool::open`]; admission, reconcile, and
+    /// a template selection over this pool read it here rather than taking
+    /// it again beside the rule set.
+    network: NetworkId,
 }
 
 /// A tip the pool judged against, and the fork-choice work through it.
@@ -232,10 +238,12 @@ impl core::fmt::Debug for Pool {
 
 impl Pool {
     /// The pool file at `path`, with nothing in memory yet — [`Pool::open`]'s
-    /// first step, which then reads the file back and reconciles it.
+    /// first step, which then reads the file back and reconciles it. `network`
+    /// is the id every later judgement of this pool uses.
     pub(crate) fn create(
         path: impl AsRef<Path>,
         limits: Limits,
+        network: NetworkId,
     ) -> Result<(Self, PoolOpen), StoreError> {
         let (store, how) = PoolStore::create(path)?;
         Ok((
@@ -246,15 +254,22 @@ impl Pool {
                 limits,
                 prepared: HashMap::new(),
                 judged_at: None,
+                network,
             },
             how,
         ))
     }
 
+    /// The network this pool was opened on.
+    #[must_use]
+    pub const fn network(&self) -> &NetworkId {
+        &self.network
+    }
+
     /// Admit `tx`, relayed — from a peer or this node's own submit — at
-    /// `now`, against `chain` under `rule_set` and `policy`: the one way
-    /// into the pool from outside it. Not public until the relay's fluff
-    /// event says so.
+    /// `now`, against `chain` under `rule_set` and `policy`, on this pool's
+    /// network: the one way into the pool from outside it. Not public until
+    /// the relay's fluff event says so.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
     /// a [`Duplicate`] and nothing is judged. Then CEN-M10's rising
@@ -315,6 +330,33 @@ impl Pool {
         )
     }
 
+    /// Whether `txid` is a duplicate: the pool holds it, or the chain
+    /// carries it. Admission answers this first, before any judgement. A
+    /// door that verifies outside the pool's lock asks it before verifying,
+    /// so a transaction this node already has costs a peer that re-sends it
+    /// no proofs. The answer can change once the lock is released, and
+    /// admission asks again under it.
+    ///
+    /// # Errors
+    ///
+    /// The chain view's fault.
+    pub fn duplicate<'id, V: ChainView<'id>>(
+        &self,
+        txid: &TxHash,
+        chain: &V,
+    ) -> Result<Option<Duplicate>, PoolFault<V::Fault>> {
+        if self.held.contains_key(txid) {
+            return Ok(Some(Duplicate::InPool));
+        }
+        if chain
+            .has_transaction(txid)
+            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
+        {
+            return Ok(Some(Duplicate::OnChain));
+        }
+        Ok(None)
+    }
+
     /// Admission by `arrival`. A held transaction a block carries is made
     /// public (P2): a block has published it on every node, and a pool
     /// that kept it hidden would answer peer sync differently for a
@@ -336,18 +378,20 @@ impl Pool {
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
         let carried = arrival == Arrival::Carried;
-        if let Some(held) = self.held.get_mut(&txid) {
-            if carried && !held.record.public {
-                self.store.write(|batch| batch.publish(&txid))?;
-                held.record.public = true;
+        match self.duplicate(&txid, chain)? {
+            Some(Duplicate::InPool) => {
+                if carried {
+                    if let Some(held) = self.held.get_mut(&txid) {
+                        if !held.record.public {
+                            self.store.write(|batch| batch.publish(&txid))?;
+                            held.record.public = true;
+                        }
+                    }
+                }
+                return Ok(Admission::Duplicate(Duplicate::InPool));
             }
-            return Ok(Admission::Duplicate(Duplicate::InPool));
-        }
-        if chain
-            .has_transaction(&txid)
-            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
-        {
-            return Ok(Admission::Duplicate(Duplicate::OnChain));
+            Some(duplicate) => return Ok(Admission::Duplicate(duplicate)),
+            None => {}
         }
         // CEN-M10's rising minimum, before the door's crypto: a full pool
         // holds nothing it would give up for a candidate paying no more per
@@ -372,6 +416,7 @@ impl Pool {
             chain,
             &self.key_images,
             rule_set,
+            self.network(),
             policy,
             prior.as_ref(),
         )
@@ -466,7 +511,7 @@ impl Pool {
                     let claims = shekyl_chain_rules::ReferenceClaims::for_transaction(
                         chain, connecting, &held.tx,
                     )?;
-                    pass.holds_under(&held.tx, rule_set, &claims)
+                    pass.holds_under(&held.tx, rule_set, self.network(), &claims)
                 }
             };
             if !holds {

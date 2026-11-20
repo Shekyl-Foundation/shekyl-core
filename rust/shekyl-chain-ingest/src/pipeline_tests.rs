@@ -14,35 +14,33 @@ use kameo::error::SendError;
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    form, Candidate, CenRow, FormAttempt, InvalidBlock, Locus, ReferenceClaims, Retry, RuleSet,
-    StructurallyValid, Verdict,
+    form, Candidate, CenRow, FormAttempt, FormClaims, InvalidBlock, Locus, ReferenceClaims, Retry,
+    RuleSet, StructurallyValid, Verdict,
 };
 use shekyl_chain_store::codec::{BlockInfo, Canonical, Present};
 use shekyl_chain_store::lmdb_order::LmdbHashKey;
 use shekyl_chain_store::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 use shekyl_chain_store::store::{ConnectState, StoreError, StoreInvariant};
 use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
-use crate::corpus::CorpusReader;
+use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
 use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
 use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
-    at, bare_chain, block_with_nonce, chain, cleanup, corpus_from, corpus_of, corpus_of_reorg,
+    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_reorg,
     expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of,
     Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
-const GENESIS_RULES: ChainRules = ChainRules::Regtest {
-    fixed_difficulty: None,
-    schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-};
+const GENESIS_RULES: ChainRules =
+    ChainRules::harness_regtest(None, shekyl_chain_rules::CappedEpoch::PRODUCTION);
 
 fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).expect("non-zero")
@@ -54,6 +52,7 @@ fn cfg(window: usize) -> PipelineConfig {
     PipelineConfig {
         window: nz(window),
         hashers: nz(2),
+        digest_each_commit: false,
     }
 }
 
@@ -73,27 +72,26 @@ fn formed(
     let mut ledger = crate::target::TargetLedger::new();
     for (at, parent) in parents.iter().enumerate() {
         let at = h(u64::try_from(at).expect("small"));
-        let target = ledger
-            .claim(at, &RuleSet::GENESIS)
-            .expect("consistent")
-            .expect("a target");
+        let target = ledger.claim(at, &RuleSet::GENESIS).expect("consistent");
         ledger.extend(at, parent, target).expect("consistent");
     }
     let target = ledger
         .claim(h(height), &RuleSet::GENESIS)
-        .expect("consistent")
-        .expect("a target");
+        .expect("consistent");
     let references = match ReferenceClaims::from_headers(&ledger, h(height), &candidate) {
         Ok(references) => references,
         Err(never) => match never {},
     };
     let verdict = form(
         candidate,
-        &RuleSet::GENESIS,
+        &FormClaims {
+            rule_set: &RuleSet::GENESIS,
+            seed,
+            target,
+            references: &references,
+            network: shekyl_network::HARNESS_NETWORK_ID,
+        },
         &MockSubstrate::default(),
-        seed,
-        target,
-        &references,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");
@@ -104,7 +102,8 @@ fn candidate(b: &shekyl_wire::Block, txs: &[shekyl_wire::Transaction]) -> Candid
     Candidate::new(b.clone(), txs.to_vec())
 }
 
-fn tip_of(path: &std::path::Path) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+fn tip_of(path: impl AsRef<std::path::Path>) -> Option<(shekyl_types::BlockHeight, BlockHash)> {
+    let path: &std::path::Path = path.as_ref();
     let reopened = open_store(path);
     let tip = reopened
         .begin_read()
@@ -136,6 +135,8 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         let first = JoinedConnector::spawn(ConnectorArgs {
             store: open_store(&path).into(),
             rules: GENESIS_RULES,
+            bundle_queued: None,
+            ranked: None,
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
         let applied = first
@@ -160,6 +161,8 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     let joined = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
+        bundle_queued: None,
+        ranked: None,
     });
     let connector = joined.actor.clone();
 
@@ -258,87 +261,9 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     assert_eq!(reopened.connect_state(), ConnectState::Live);
     drop(reopened);
     assert_eq!(tip_of(&path).map(|t| t.0), Some(h(0)));
-    cleanup(&path);
 }
 
 // ------------------------------------------------------------ the run
-
-/// An `Inject` under a public network's rules is refused at the connector
-/// before the store is asked (DRS-E4 §3.8 item 3: the out-of-band write
-/// has one producer, the regtest injector, and no public chain carries
-/// one) — and the refusal is not a halt: the writer answers afterwards.
-/// The regtest path, with a bonded persona, is
-/// `scenario_archival_tests::an_injected_serve_credit_lands_at_the_tip_and_is_one_snapshot_row`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
-    let path = tmp("connector-inject-off-regtest");
-    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
-    let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path).into(),
-        rules,
-    });
-    let credit = crate::source::ServeCredit {
-        persona: shekyl_types::PCanonicalId::from_bytes([0x51; 32]),
-        shard: shekyl_types::ShardId::from_raw(7),
-        epoch: shekyl_types::SettlementEpoch::from_raw(1),
-    };
-    let refused = joined
-        .actor
-        .ask(crate::connector::Inject(credit))
-        .await
-        .expect_err("regtest-only");
-    assert!(
-        matches!(
-            refused,
-            SendError::HandlerError(RunFault::InjectOffRegtest {
-                credit: named,
-                rules: under,
-            }) if named == credit && under == rules
-        ),
-        "{refused:?}"
-    );
-    // The store was never asked (an empty chain would have been
-    // `ChainEmpty`, a different refusal), and the connector is not over.
-    joined.actor.ask(Digest).await.expect("the writer is up");
-    joined.stop_and_join().await;
-    cleanup(&path);
-}
-
-/// The draw-issue door is regtest-only as `Inject` is, refused at the
-/// connector before the store is asked, and the refusal is not a halt.
-/// The regtest path is `archival_slash_tests`' levered chain.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
-    let path = tmp("connector-issue-off-regtest");
-    let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
-    let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path).into(),
-        rules,
-    });
-    let epoch = shekyl_types::SettlementEpoch::from_raw(1);
-    let refused = joined
-        .actor
-        .ask(crate::connector::IssueDraws {
-            epoch,
-            draws: Vec::new(),
-            digest: shekyl_types::archival::IssuedDigest::ZERO,
-        })
-        .await
-        .expect_err("regtest-only");
-    assert!(
-        matches!(
-            refused,
-            SendError::HandlerError(RunFault::IssueOffRegtest {
-                epoch: named,
-                rules: under,
-            }) if named == epoch && under == rules
-        ),
-        "{refused:?}"
-    );
-    joined.actor.ask(Digest).await.expect("the writer is up");
-    joined.stop_and_join().await;
-    cleanup(&path);
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_checkpoint() {
@@ -346,7 +271,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     let chain = chain(5);
     let trace = Arc::new(trace_of(&chain, true));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let metrics = Arc::new(Metrics::new());
     let report = run(
         &mut source,
@@ -375,7 +300,7 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     // expectation, and both equal the state computed from the chain.
     let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(at, h(4));
-    assert_eq!(ours, theirs, "redb and the LMDB-shaped checkpoint agree");
+    assert_eq!(ours, theirs, "redb and the baseline checkpoint agree");
     assert_eq!(ours, expected_state(&chain));
     // The measurement carries the concurrency it was taken under.
     assert_eq!(
@@ -384,7 +309,59 @@ async fn a_corpus_replays_end_to_end_and_the_redb_digest_matches_the_trace_check
     );
     assert_eq!(report.metrics.blocks_formed, 5);
     assert_eq!(tip_of(&path).map(|t| t.0), Some(h(4)));
-    cleanup(&path);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_one_block_window_records_the_store_digest_at_every_height() {
+    let path = tmp("pipeline-height-digests");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(1);
+    config.digest_each_commit = true;
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect("the corpus replays one block per commit");
+    let block_heights: Vec<BlockHeight> = report.digests.keys().copied().collect();
+    assert_eq!(block_heights, vec![h(0), h(1), h(2), h(3), h(4)]);
+    assert_eq!(
+        report.digests[&h(4)],
+        expected_state(&chain),
+        "the last row is the store's digest of the whole chain"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wider_commit_refuses_to_invent_a_digest_per_height() {
+    let path = tmp("pipeline-digest-window");
+    let chain = chain(5);
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut config = cfg(2);
+    config.digest_each_commit = true;
+    let fault = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(crate::trace::Trace::empty()),
+        config,
+    )
+    .await
+    .expect_err("two blocks in one commit have one digest");
+    assert!(
+        matches!(fault, PipelineFault::DigestWindow { connected: 2 }),
+        "{fault:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -397,6 +374,8 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
+        bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -443,7 +422,6 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     assert!(applied.refused.is_none());
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -458,6 +436,8 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
+        bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -497,7 +477,6 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     assert!(applied.refused.is_none());
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -509,6 +488,8 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     let connector = Connector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
+        bundle_queued: None,
+        ranked: None,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
     connector.ask(Apply(vec![(h0, f0)])).await.expect("genesis");
@@ -533,7 +514,6 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     assert_eq!(applied.connected.len(), 1);
     connector.stop_gracefully().await.expect("stop");
     connector.wait_for_shutdown().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -577,12 +557,6 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Refused { height, verdict }]
     );
-    assert_eq!(
-        report.observations().refused,
-        Some(("CEN-A2", h(2))),
-        "derived from the report, not written beside it"
-    );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -600,7 +574,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     let chain = bare_chain(n + 2);
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..=n_us]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -620,7 +594,7 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
     // The next block, through the pipeline, from a store that already holds
     // the chain (the seed claim asks the store for block 0).
     let rest = corpus_from(h(n + 1), &chain[n_us + 1..=n_us + 1]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -648,12 +622,12 @@ async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt
         Some(h(n)),
         "block N + 1 did not land"
     );
-    cleanup(&path);
 }
 
 /// Rewrite `block_info[height].cumulative_difficulty` in the store at
 /// `path`, the way the SI-10 test plants its decrease.
-fn plant_work(path: &std::path::Path, height: shekyl_types::BlockHeight, work: u128) {
+fn plant_work(path: impl AsRef<std::path::Path>, height: shekyl_types::BlockHeight, work: u128) {
+    let path: &std::path::Path = path.as_ref();
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
@@ -684,7 +658,7 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     let chain = bare_chain(4);
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..3]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -699,7 +673,7 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
     plant_work(&path, h(2), u128::MAX);
 
     let rest = corpus_from(h(3), &chain[3..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -722,19 +696,18 @@ async fn an_overflowing_parent_halts_the_writer_on_its_own_observation() {
         Some(h(2)),
         "block 3 did not land"
     );
-    cleanup(&path);
 }
 
-/// CEN-D6 on the claim itself, with another block behind it. `N + 1`
+/// The floor on the claim itself, with another block behind it. `N + 1`
 /// blocks six target solvetimes apart, each recording one unit of work,
-/// make LWMA-1 derive zero for the next block (the rules crate's
-/// `cen_d6_a_slow_window_of_minimal_work_derives_zero_and_refuses_the_block`
-/// window). The sequencer emits that refusal as block `N + 1`'s verdict
-/// without forming it. It reads nothing more, so block `N + 2` — whose
-/// claim would need the unformed block's header — never asks the store for
-/// it, and the refusal reaches the writer.
+/// are the window where LWMA-1 used to derive zero and CEN-D6 refused the
+/// block and every successor (the rules crate's
+/// `cen_d6_a_slow_window_of_minimal_work_floors_at_one` window). LWMA-1
+/// now floors at one (`DAA_LWMA1.md` §5.3 step 10): block `N + 1` is
+/// claimed at one, formed and connected, and block `N + 2` claims against
+/// its header. Red edit: drop step 10, and nothing past `N` lands.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it() {
+async fn a_slow_window_claims_one_and_the_chain_goes_on() {
     let path = tmp("pipeline-d6-claim");
     let n = shekyl_difficulty::N;
     let n_us = usize::try_from(n).expect("N is small");
@@ -752,7 +725,7 @@ async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it
     let chain = growing.finish();
     let trace = Arc::new(trace_of(&chain, false));
     let first = corpus_of(&chain[..=n_us]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&first)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&first)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -770,7 +743,7 @@ async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it
     }
 
     let rest = corpus_from(h(n + 1), &chain[n_us + 1..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&rest)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&rest)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -781,17 +754,13 @@ async fn a_zero_derived_target_is_refused_and_the_next_extend_does_not_strand_it
         PipelineConfig::default(),
     )
     .await
-    .expect("a refusal is a verdict, not a fault");
-    let (at, refused) = report.refused.expect("block N + 1 is refused");
-    assert_eq!(at, h(n + 1));
-    assert_eq!(refused.rule, CenRow::D6);
-    assert_eq!(refused.locus, Locus::Block);
+    .expect("the floor's block replays");
+    assert_eq!(report.refused, None, "nothing is refused at the floor");
     assert_eq!(
         tip_of(&path).map(|t| t.0),
-        Some(h(n)),
-        "nothing past N landed"
+        Some(h(n + 2)),
+        "blocks N + 1 and N + 2 landed past the slow window"
     );
-    cleanup(&path);
 }
 
 /// `ObserveTarget` judges only the height the store connects at next. A
@@ -805,7 +774,7 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
     let chain = bare_chain(3);
     let trace = Arc::new(trace_of(&chain, false));
     let corpus = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&corpus)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&corpus)).expect("open");
     run(
         &mut source,
         substrate(),
@@ -820,6 +789,8 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
     let joined = JoinedConnector::spawn(ConnectorArgs {
         store: open_store(&path).into(),
         rules: GENESIS_RULES,
+        bundle_queued: None,
+        ranked: None,
     });
     let ahead = joined
         .actor
@@ -841,7 +812,6 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
         .expect("a consistent window at the store's next height");
     joined.actor.ask(Digest).await.expect("the writer is up");
     joined.stop_and_join().await;
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -852,7 +822,7 @@ async fn a_misaligned_source_is_refused_before_anything_is_formed() {
     let chain = chain(7);
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_from(h(5), &chain[5..]);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let err = run(
         &mut source,
         substrate(),
@@ -875,7 +845,6 @@ async fn a_misaligned_source_is_refused_before_anything_is_formed() {
         "{err:?}"
     );
     assert_eq!(tip_of(&path), None, "nothing was formed or connected");
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -921,7 +890,6 @@ async fn a_hole_in_the_sources_numbering_is_a_loud_fault_not_a_hang() {
         ),
         "{err:?}"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -988,7 +956,6 @@ async fn a_rewind_pops_behind_the_barrier_and_the_fork_connects() {
     assert_eq!(ours, theirs);
     assert_eq!(ours, expected_state(&r.after));
     assert_eq!(tip_of(&path), Some((h(f + 2), fork_b.hash())));
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1008,7 +975,7 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     let r = reorg_of(bare_chain(boundary + 1), boundary - 2, 3);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1019,6 +986,7 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
         PipelineConfig {
             window: PipelineConfig::DEFAULT_WINDOW,
             hashers: nz(4),
+            digest_each_commit: false,
         },
     )
     .await
@@ -1039,7 +1007,6 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     assert_eq!(at, h(boundary + 1));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1082,7 +1049,7 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
     );
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1116,15 +1083,15 @@ async fn a_rewind_retracts_the_abandoned_branchs_root_comparisons() {
         report.emission
     );
     assert_eq!(report.disagreements().count(), 0);
-    assert!(report.observations().roots.diverged_at.is_empty());
+    assert_eq!(report.roots.diverged().count(), 0);
     let Checkpoint { ours, theirs, .. } = report.checkpoint.expect("covered-tip checkpoint");
     assert_eq!(ours, theirs);
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
-    // RD-Q7 through the pipeline: `--fixed-difficulty 7` → RuleSet::fakechain(7)
+    // RD-Q7 through the pipeline: `--fixed-difficulty 7` →
+    // `RuleSet::GENESIS.with_levers(Some(7), CappedEpoch::PRODUCTION)`
     // in force at every height, formed and validated under the same set,
     // and connect accepts it (RD-F13's repair) while the CEN-B3 belt lands
     // GENESIS's id. Cumulative work climbs by the fixed target per block.
@@ -1132,11 +1099,11 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     let chain = chain(4);
     let trace = Arc::new(trace_of(&chain, false));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: std::num::NonZeroU128::new(7),
-        schedule: shekyl_chain_rules::FakechainSchedule::PRODUCTION,
-    };
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let rules = ChainRules::harness_regtest(
+        std::num::NonZeroU128::new(7),
+        shekyl_chain_rules::CappedEpoch::PRODUCTION,
+    );
     let report = run(
         &mut source,
         substrate(),
@@ -1161,86 +1128,6 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
     );
     drop(snap);
     drop(reopened);
-    cleanup(&path);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_replayed_run_grades_its_exercised_rows_correct_with_every_component_real() {
-    // RD-Q6 through the pipeline: the observations the run emits, graded
-    // against a register in the extractor's shape. Every row the landed
-    // rules exercised grades AcceptedAsCorrect on the verdict clause; the
-    // producers of passed-through facts are Borrowed on the component clause
-    // whatever their verdict; the digest matched, so the rest are real.
-    use crate::grader::{
-        grade_run, ComponentEvidence, GradedAcceptance, Register, VerdictEvidence,
-    };
-    let path = tmp("pipeline-grade");
-    let chain = chain(4);
-    let trace = Arc::new(trace_of(&chain, true));
-    let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
-    let report = run(
-        &mut source,
-        substrate(),
-        Arc::new(Metrics::new()),
-        GENESIS_RULES,
-        open_store(&path),
-        trace,
-        PipelineConfig::default(),
-    )
-    .await
-    .expect("replays");
-    let obs = report.observations();
-    assert!(!obs.exercised.is_empty(), "the landed rules ran");
-    assert_eq!(obs.digest_identical, Some(true));
-
-    // A register naming every exercised row CHECKED-CONFORMANT, plus the
-    // root producers as the register has them.
-    let mut rows: Vec<String> = obs
-        .exercised
-        .iter()
-        .map(|id| format!("{{\"id\": \"{id}\", \"state\": \"CHECKED-CONFORMANT\"}}"))
-        .collect();
-    for extra in ["CEN-G6", "CEN-I12"] {
-        if !obs.exercised.contains(extra) {
-            rows.push(format!(
-                "{{\"id\": \"{extra}\", \"state\": \"CHECKED-CONFORMANT\"}}"
-            ));
-        }
-    }
-    let json = format!(
-        "{{\"schema_version\": \"shekyl_e2_register_v1\", \"rows\": [{}], \"unrecorded_ratified\": []}}",
-        rows.join(",")
-    );
-    let register = Register::from_json(&json).expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(graded.passes(), "{:?}", graded.unadjudicated);
-    assert!(graded.refusal.is_none());
-    for row in &graded.rows {
-        if obs.exercised.contains(row.id.as_str()) {
-            assert_eq!(
-                row.verdict,
-                VerdictEvidence::Exercised { agreed: true },
-                "{}",
-                row.id
-            );
-            assert_eq!(
-                row.verdict_acceptance,
-                Some(GradedAcceptance::AcceptedAsCorrect),
-                "{}",
-                row.id
-            );
-        }
-        // No row borrows since wave B: every component is the replay's own.
-        assert_eq!(
-            row.component,
-            ComponentEvidence::Real { identical: true },
-            "{}",
-            row.id
-        );
-    }
-    assert_eq!(graded.derived_and_conformant, obs.exercised.len());
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1258,7 +1145,7 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     let r = reorg(f + 4, f, 4);
     let trace = Arc::new(trace_of(&r.after, true));
     let bytes = corpus_of_reorg(&r);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1288,8 +1175,6 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     assert_eq!(at, h(f + 4));
     assert_eq!(ours, theirs, "the fork's tip matches its own trace");
     assert_eq!(ours, expected_state(&r.after));
-    let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(true));
     // The checkpoint's other encoding (ARW-25): the redb archival rows
     // against the trace's `0x04` record, at the same height, row for row.
     let archival = report
@@ -1302,11 +1187,8 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
         "{:?}",
         archival.diff.diverged().collect::<Vec<_>>()
     );
-    assert!(obs.archival.compared);
-    assert_eq!(obs.archival.at, Some(f + 4));
-    assert!(obs.archival.diverged.is_empty());
     assert_eq!(
-        obs.archival.rows_equal,
+        archival.diff.rows_equal(),
         u64::try_from(
             GrownTree::over(&r.after)
                 .archival_snapshot_after(h(f + 4))
@@ -1315,17 +1197,14 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
         .expect("fits"),
         "every row the fixture accrued was compared"
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
+async fn a_wrong_checkpoint_goes_red_and_the_run_names_it() {
     // The comparator's negative control on the expectation side (rule 47):
-    // a trace whose checkpoint is anything but the chain's state DIVERGEs,
-    // the report names the disagreement, and the grade fails every
-    // CHECKED-CONFORMANT row on the component clause. The store side's
-    // controls — one mutation per digested family — follow.
-    use crate::grader::{grade_run, Clause, GradedAcceptance, Register};
+    // a trace whose checkpoint is anything but the chain's state DIVERGEs
+    // and the report names the disagreement. The store side's controls —
+    // one mutation per digested family — follow.
     use crate::trace::{Trace, TraceWriter};
     let path = tmp("pipeline-negative-control");
     let chain = chain(3);
@@ -1351,7 +1230,7 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1362,32 +1241,13 @@ async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     let checkpoint = report.checkpoint.expect("covered-tip checkpoint");
     assert!(!checkpoint.identical(), "DIVERGE");
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Diverged { at: h(2) }]
     );
-    let obs = report.observations();
-    assert_eq!(obs.digest_identical, Some(false));
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes());
-    assert_eq!(
-        (
-            graded.unadjudicated[0].clause,
-            graded.unadjudicated[0].acceptance
-        ),
-        (
-            Clause::Component,
-            GradedAcceptance::FailedConformantDiffered
-        )
-    );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1396,9 +1256,8 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
     // whose recorded `root_after` at one interior height is not what the
     // validator derives DIVERGEs at that height — with the checkpoint
     // still matching, because the digest carries only the *live* root —
-    // and the observation folds it in so a graded run does not pass. This
-    // is exactly the disagreement the covered-tip checkpoint cannot see.
-    use crate::grader::{grade_run, Register};
+    // and the report names it. This is exactly the disagreement the
+    // covered-tip checkpoint cannot see.
     use crate::pipeline::Disagreement;
     use crate::trace::{Trace, TraceWriter};
     use shekyl_types::CurveTreeRoot;
@@ -1433,7 +1292,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1444,7 +1303,7 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         PipelineConfig::default(),
     )
     .await
-    .expect("the run itself completes; the verdict is the grader's");
+    .expect("the run itself completes; the disagreement is in the report");
     assert!(
         report.checkpoint.expect("covered tip").identical(),
         "the tip digest agrees: the interior root is invisible to it"
@@ -1466,26 +1325,6 @@ async fn a_wrong_recorded_root_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::RootDiverged { at: h(1) }]
     );
-    let obs = report.observations();
-    assert_eq!(
-        obs.digest_identical,
-        Some(true),
-        "the checkpoint matched; the interior root is the oracle's fact"
-    );
-    assert_eq!(obs.roots.compared, 3);
-    assert_eq!(obs.roots.diverged_at, vec![h(1)]);
-    let register = Register::from_json(
-        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-B5","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
-    )
-    .expect("register");
-    let graded = grade_run(&register, &obs);
-    assert!(!graded.passes(), "the oracle fails the graded run");
-    assert_eq!(graded.root_oracle.diverged_at, vec![h(1)]);
-    assert!(
-        graded.unadjudicated.is_empty(),
-        "the digest clause stays agreed"
-    );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1530,7 +1369,7 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1580,7 +1419,6 @@ async fn a_wrong_recorded_median_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::WeightsDiverged { at: h(1) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1624,7 +1462,7 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1661,7 +1499,6 @@ async fn a_wrong_recorded_accumulator_at_one_height_goes_red_and_names_the_heigh
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::EmissionDiverged { at: h(2) }]
     );
-    cleanup(&path);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1700,7 +1537,7 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
     };
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1729,7 +1566,6 @@ async fn a_wrong_recorded_burn_at_one_height_goes_red_and_names_the_height() {
         report.disagreements().collect::<Vec<_>>(),
         vec![Disagreement::EmissionDiverged { at: h(2) }]
     );
-    cleanup(&path);
 }
 
 /// The store side of the negative control: replay a chain whose trace
@@ -1755,7 +1591,7 @@ async fn digest_after_replay_and_mutation(
     let chain = chain(CONTROL_LEN);
     let trace = Arc::new(trace_of(&chain, true));
     let bytes = corpus_of(&chain);
-    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
     let report = run(
         &mut source,
         substrate(),
@@ -1782,7 +1618,6 @@ async fn digest_after_replay_and_mutation(
         .logical_state_digest_v0()
         .expect("digest");
     drop(reopened);
-    cleanup(&path);
     (checkpoint.theirs, after)
 }
 
@@ -1822,7 +1657,7 @@ async fn a_dropped_spent_key_row_moves_the_digest_off_the_checkpoint() {
             );
         };
         let removed = spent
-            .remove(LmdbHashKey::from_bytes(*spent_at_tip))
+            .remove(LmdbHashKey::from_bytes(spent_at_tip.to_bytes()))
             .expect("remove")
             .is_some();
         assert!(removed, "the row was there to drop");

@@ -22,6 +22,7 @@ use crate::rules::tx_emission_against::J26;
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use shekyl_crypto_pq::signature::verify_pqc_auth;
+use shekyl_network::NetworkId;
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::Ct;
 
@@ -105,7 +106,7 @@ const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 /// whose claim has not moved does not call it
 /// ([`crate::judge_lone_stateless`]).
 pub(crate) fn judge_proofs(
-    cx: &TxContext<'_>,
+    cx: &TxContext<'_, NetworkId>,
     claims: &ReferenceClaims,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
@@ -113,7 +114,7 @@ pub(crate) fn judge_proofs(
         TxClass::Spend { .. } => (I15::ROW, true),
         TxClass::Emission { .. } => (J26::ROW, true),
         TxClass::BondPost { .. } => (J27::ROW, true),
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => (I15::ROW, false),
+        TxClass::Coinbase => (I15::ROW, false),
     };
     for vacuous in PROOF_ROWS {
         if !verifies || vacuous != row {
@@ -150,7 +151,7 @@ pub(crate) fn judge_proofs(
         anchor: claim.root,
         tree_depth,
     };
-    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context).is_err() {
+    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context, cx.network()).is_err() {
         return Err(InvalidBlock::new(row, cx.locus()));
     }
     coverage.insert(row);
@@ -161,7 +162,9 @@ pub(crate) fn judge_proofs(
 /// the PQC signing preimage, `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1: the
 /// pruned segment ‖ keccak256(prunable) ‖ that input's PQC header ‖
 /// keccak256 of every input's hybrid public key, so neither the proof nor
-/// any input's key can be swapped under a standing signature. **Adopted**
+/// any input's key can be swapped under a standing signature, hashed under
+/// the network id (`NETWORK_IDENTITY.md` NI-Q4), so a signature is valid on
+/// one network. **Adopted**
 /// from the wire, not re-derived: [`shekyl_wire::PqcSigningPreimage`] is the
 /// one derivation the wallet signs over and the daemon verifies against
 /// (through `shekyl_tx_pqc_signing_payload_hashes`; slice 6 Q7 (c)), and it
@@ -191,24 +194,23 @@ impl I17 {
     /// signed over the pass record instead (CEN-J10), so this row and I18
     /// are vacuous on it by construction, not by exemption.
     pub(crate) fn signed_hashes(
-        cx: &TxContext<'_>,
+        cx: &TxContext<'_, NetworkId>,
         coverage: &mut RuleCoverage,
     ) -> Vec<SigningPayloadHash> {
         coverage.insert(Self::ROW);
-        cx.tx.pqc_signing_payload_hashes()
+        cx.tx.pqc_signing_payload_hashes(cx.network())
     }
 }
 
 /// CEN-I18: every input's hybrid PQC signature — Ed25519 **and** ML-DSA-65,
 /// or the M-of-N multisig container — verifies over that input's
-/// `signed_hash(i)` (`verify_transaction_pqc_auth`, `tx_pqc_verify.cpp`;
-/// gated at `blockchain.cpp:4277–4285` on every non-coinbase transaction
-/// but the serve credit). The verification body is
+/// `signed_hash(i)`, on every non-coinbase transaction but the serve
+/// credit. The verification body is
 /// [`shekyl_crypto_pq::signature::verify_pqc_auth`], **the same function
-/// the daemon's `shekyl_pqc_verify` and daemon-rpc's K13 call** — scheme
-/// dispatch, the tx-auth domains and the container parse live there once,
-/// so the validator, the daemon and the pool cannot disagree on what a
-/// valid slot is. The slot's structural pins (`auth_version`, `flags`,
+/// daemon-rpc's K13 calls** — scheme dispatch, the tx-auth domains, the
+/// container parse and the multisig key-hash check (bound to this
+/// network's id) live there once, so the validator and the pool cannot
+/// disagree on what a valid slot is. The slot's structural pins (`auth_version`, `flags`,
 /// scheme id, key-blob length) are CEN-I16's, in `tx_form`.
 ///
 /// Refuses at the input whose signature does not verify. Vacuous on the
@@ -238,7 +240,7 @@ impl I18 {
     /// vacuous non-`Fcmp` arm. A refusal leaves it unrecorded, as
     /// [`crate::rules::run_tx`] does for a stateless rule.
     pub(crate) fn check(
-        cx: &TxContext<'_>,
+        cx: &TxContext<'_, NetworkId>,
         hashes: &[SigningPayloadHash],
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
@@ -256,7 +258,8 @@ impl I18 {
                 auth.scheme_id,
                 &auth.hybrid_public_key,
                 &auth.hybrid_signature,
-                hash.as_bytes(),
+                hash,
+                cx.network(),
             )
             .is_err()
             {
@@ -279,7 +282,10 @@ impl I18 {
 /// [`super::tx_against::judge_reference`] uses for I10–I12 — the definition
 /// row records at the derivation, the verification row consumes the operand
 /// it yielded.
-pub(crate) fn judge_signatures(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Verdict<()> {
+pub(crate) fn judge_signatures(
+    cx: &TxContext<'_, NetworkId>,
+    coverage: &mut RuleCoverage,
+) -> Verdict<()> {
     let signed_hashes = I17::signed_hashes(cx, coverage);
     I18::check(cx, &signed_hashes, coverage)
 }

@@ -57,7 +57,7 @@ pub use flood::{
 pub use grade::{grade_bernoulli, grade_poisson, grade_stem_balance, grade_uniform, Grade};
 pub use reshape::{
     simulate_origin_exposure, simulate_precision_increment, simulate_reshape_recovery,
-    OriginExposure, PrecisionIncrement, ReshapeRecovery,
+    OriginExposure, PrecisionIncrement, RecoveryBudget, ReshapeRecovery,
 };
 pub use selection::{
     simulate_epoch_layering, simulate_epsilon_greedy_selection,

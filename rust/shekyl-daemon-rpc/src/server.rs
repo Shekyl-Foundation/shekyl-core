@@ -29,42 +29,54 @@
 //! Axum HTTP server replacing epee's http_server_impl_base for daemon RPC.
 
 use crate::bind::BoundListener;
-use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
-use crate::core::CoreRpc;
-use crate::handlers::{binary, json, json_rpc, submit};
+use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener, Reserve};
+use crate::handlers::rpc;
 use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
-use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
-use crate::submit::{DaemonSubmitEngine, DaemonTxVerifier, FfiSubmitShim, SubmitEngine};
+use crate::shard_view::ShardViewFacts;
+use crate::submit::DaemonSubmitEngine;
 
 use crate::authority::Authority;
-use axum::http::{HeaderValue, Method};
-use axum::routing::{get, post, MethodRouter};
-use axum::Router;
-use std::future::IntoFuture as _;
+use crate::hash_budget::HashBudget;
+use axum::http::{HeaderValue, Method, StatusCode};
+use axum::routing::{post, MethodRouter};
+use axum::{Json, Router};
 use std::sync::Arc;
-use tokio::sync::watch;
+use std::time::Instant;
+use tokio::sync::{watch, Semaphore};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 
 pub struct AppState {
-    pub core: Arc<CoreRpc>,
-    /// The Rust admission engine behind `POST /submit_transaction`
+    /// The Rust admission engine behind `tx_submit`
     /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §3).
     pub submit_engine: Arc<DaemonSubmitEngine>,
     /// Live connection accounting; shared with the [`LimitedListener`] and read
-    /// by `get_info` to report `rpc_connections_count`.
+    /// by `daemon_status` to report `rpc_connections`.
     pub conn_tracker: Arc<ConnTracker>,
-    /// What `request_archival_shard` reads (`shard_view::ShardViewFacts`).
+    /// What `shard_fetch` reads: the node's handle (`shard_view::ShardViewFacts`).
     pub shard_view: Arc<dyn ShardViewFacts>,
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
     pub options: Arc<dyn OptionsFacts>,
-    /// The node's handles (N1). Present, and not yet what the live routes
-    /// read: those keep the C++ `core` until the store flip.
+    /// The node's handles (N1): every route reads through them, the p2p
+    /// facts included.
     pub handles: Handles,
+    /// The daemon's Tor supervisor, as `daemon_status` asks it. Not a node
+    /// handle: the node does not run the supervisor. [`TorAbsent`](crate::tor_facts::TorAbsent)
+    /// when none was composed.
+    pub tor: crate::tor_facts::TorHandle,
+    /// One hash budget for every bounded caller (§6.3).
+    pub hash_budget: Arc<HashBudget>,
+    /// Bounded `chain_coinbase_sum` reads, one at a time. Cold reads wait
+    /// on disk; the permit is taken before the blocking-pool task.
+    pub coinbase_reads: Arc<Semaphore>,
+    /// The RPC channel's state: its key, the enrolled set and the live
+    /// sessions (`crate::channel`). `None` serves the enrollment methods as
+    /// not ready.
+    pub channel: Option<Arc<crate::channel::Channel>>,
 }
 
 pub struct ServerConfig {
@@ -73,17 +85,17 @@ pub struct ServerConfig {
     pub cors_origins: Vec<String>,
     /// Concurrent-connection caps enforced by the [`LimitedListener`].
     pub conn_limits: ConnLimits,
-    /// The shard view's facts source. The composition root that can compose
-    /// a `ViewDesk` (the daemon image, `SV-D9`) supplies it; the default is
-    /// [`SkeletonAbsent`], a daemon that serves no shard view.
-    pub shard_view: Arc<dyn ShardViewFacts>,
     /// The options handle (RT-O26); the default serves no options.
     pub options: Arc<dyn OptionsFacts>,
     /// The node's handles. The default is absent: every call is not ready.
     pub handles: Handles,
+    /// The daemon's Tor supervisor. The default answers not ready.
+    pub tor: crate::tor_facts::TorHandle,
     /// The node's armed-lever switch (`dev-rpc`, `RPC_CHANNEL.md` §6.1): the
     /// admin listener serves the armed test levers only while it is on.
     pub armed: bool,
+    /// The RPC channel's state, opened under the data directory's lock.
+    pub channel: Option<Arc<crate::channel::Channel>>,
 }
 
 impl Default for ServerConfig {
@@ -92,10 +104,11 @@ impl Default for ServerConfig {
             body_limit: DEFAULT_BODY_LIMIT,
             cors_origins: Vec::new(),
             conn_limits: ConnLimits::default(),
-            shard_view: Arc::new(SkeletonAbsent),
             options: Arc::new(OptionsAbsent),
             handles: Handles::absent(),
+            tor: Arc::new(crate::tor_facts::TorAbsent),
             armed: false,
+            channel: None,
         }
     }
 }
@@ -134,262 +147,54 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 }
 
 // ---------------------------------------------------------------------------
-// Route table (§55 / §69 / §70)
+// The one route (RW-Q1, RW-Q2)
 //
-// ONE table. Each row names an endpoint and the path(s) it answers on. A
-// total match ([`handler_for`]) binds what runs; [`assemble`] registers every
-// row with it, and [`build_router`] is `assemble` plus the request layer that
-// stamps the connection's authority and admits each path against its row in
-// the method table (`crate::authority::stamp`) — so the gate tests build the
-// shipping router with a dummy handler and assert admission by *serving
-// requests*, not by re-reading a const.
-//
-// Two properties are structural rather than tested, because the table is keyed
-// by an enum:
-//
-//   * A route with no handler does not compile. `handler_for` matches
-//     [`Endpoint`] exhaustively with no wildcard, so adding a row without
-//     binding it is a compile error, not a `panic!` at daemon start (§70.1).
-//   * A path has exactly one policy: its one row's in the method table
-//     (`shekyl_rpc_types::methods`, RW-Q7), not membership in one of two
-//     lists that could both contain it.
-//
-// Handlers stay out of the table (and out of anything a unit test calls)
-// because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
-// build no daemon image. `assemble`'s generic handler parameter is what keeps
-// that true while still letting a test route the real table.
-//
-// The tests assert against a specification written out separately (§70): an
-// oracle that iterates this table cannot fail when the table changes.
+// Every method is JSON-RPC on `/json_rpc`, dispatched by the method table
+// (`handlers::rpc`), where a table row with no handler does not compile. A
+// path that is not `/json_rpc` is not a method: it is the shared 404 body.
+// `assemble` takes the handler as a parameter so a test can route the real
+// shape without an `AppState`.
 // ---------------------------------------------------------------------------
 
-/// An endpoint the daemon RPC serves.
-///
-/// The key that makes route-to-handler totality a compile-time property.
-/// Deliberately *not* the path string: aliases (`/get_height` //
-/// `/getheight`) are one endpoint answering on two paths, and keeping them
-/// one variant is what stops an alias pair from drifting apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Endpoint {
-    JsonRpc,
-    GetHeight,
-    GetTransactions,
-    GetAltBlocksHashes,
-    IsKeyImageSpent,
-    SubmitTransaction,
-    GetTransactionPool,
-    GetTransactionPoolHashes,
-    GetTransactionPoolStats,
-    GetInfo,
-    GetBlocksByHeightBin,
-    GetOIndexesBin,
-    GetStemTallies,
-    StartMining,
-    StopMining,
-    MiningStatus,
-    SaveBc,
-    GetPeerList,
-    SetLogHashRate,
-    StopDaemon,
-    GetNetStats,
-    PopBlocks,
-}
-
-/// One row of the route table.
-pub(crate) struct Route {
-    pub(crate) endpoint: Endpoint,
-    /// Paths this endpoint answers on. More than one = epee-compatibility
-    /// aliases, which share a handler by construction.
-    pub(crate) paths: &'static [&'static str],
-}
-
-/// The daemon RPC route table — the single source of *what is served where*.
-///
-/// Handler-free so tests can read it without linking `core_rpc_ffi_*`.
-/// [`build_router`] registers every row; the request layer admits each path.
-pub(crate) const ROUTES: &[Route] = &[
-    Route {
-        endpoint: Endpoint::JsonRpc,
-        paths: &["/json_rpc"],
-    },
-    // JSON REST (with aliases) -- GET + POST to match epee behaviour.
-    Route {
-        endpoint: Endpoint::GetHeight,
-        paths: &["/get_height", "/getheight"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactions,
-        paths: &["/get_transactions", "/gettransactions"],
-    },
-    Route {
-        endpoint: Endpoint::GetAltBlocksHashes,
-        paths: &["/get_alt_blocks_hashes"],
-    },
-    Route {
-        endpoint: Endpoint::IsKeyImageSpent,
-        paths: &["/is_key_image_spent"],
-    },
-    // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
-    // submit surface; the legacy /send_raw_transaction proxy was deleted
-    // per §9.3. POST only.
-    Route {
-        endpoint: Endpoint::SubmitTransaction,
-        paths: &["/submit_transaction"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPool,
-        paths: &["/get_transaction_pool"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPoolHashes,
-        paths: &["/get_transaction_pool_hashes"],
-    },
-    Route {
-        endpoint: Endpoint::GetTransactionPoolStats,
-        paths: &["/get_transaction_pool_stats"],
-    },
-    Route {
-        endpoint: Endpoint::GetInfo,
-        paths: &["/get_info", "/getinfo"],
-    },
-    // Binary endpoints.
-    Route {
-        endpoint: Endpoint::GetBlocksByHeightBin,
-        paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
-    },
-    Route {
-        endpoint: Endpoint::GetOIndexesBin,
-        paths: &["/get_o_indexes.bin"],
-    },
-    // §55: anonymity graph — the peer set is the sensitive part.
-    Route {
-        endpoint: Endpoint::GetStemTallies,
-        paths: &["/get_stem_tallies"],
-    },
-    Route {
-        endpoint: Endpoint::StartMining,
-        paths: &["/start_mining"],
-    },
-    Route {
-        endpoint: Endpoint::StopMining,
-        paths: &["/stop_mining"],
-    },
-    Route {
-        endpoint: Endpoint::MiningStatus,
-        paths: &["/mining_status"],
-    },
-    Route {
-        endpoint: Endpoint::SaveBc,
-        paths: &["/save_bc"],
-    },
-    Route {
-        endpoint: Endpoint::GetPeerList,
-        paths: &["/get_peer_list"],
-    },
-    Route {
-        endpoint: Endpoint::SetLogHashRate,
-        paths: &["/set_log_hash_rate"],
-    },
-    Route {
-        endpoint: Endpoint::StopDaemon,
-        paths: &["/stop_daemon"],
-    },
-    Route {
-        endpoint: Endpoint::GetNetStats,
-        paths: &["/get_net_stats"],
-    },
-    Route {
-        endpoint: Endpoint::PopBlocks,
-        paths: &["/pop_blocks"],
-    },
-];
-
-/// Every path the router answers on, over aliases. Test-only view of
-/// [`ROUTES`]; what a connection is *admitted* to is the request layer's.
-#[cfg(test)]
-pub(crate) fn served_paths() -> impl Iterator<Item = &'static str> {
-    ROUTES.iter().flat_map(|route| route.paths.iter().copied())
-}
-
-/// Handler bound to an endpoint.
-///
-/// **Total by construction**: the match is exhaustive over [`Endpoint`] with
-/// no wildcard arm, so a route added to [`ROUTES`] without a handler fails to
-/// compile. It used to key on `&str` and fall through to `panic!`, which made
-/// the same mistake a startup abort — green CI, then a daemon that does not
-/// come up (§70.1).
-///
-/// Deliberately not called from unit tests — naming a handler pulls
-/// `core_rpc_ffi_*` into the test binary (`#[ignore]` skips execution, not
-/// linking), which is why [`assemble`] takes the binding as a parameter.
-fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
-    match endpoint {
-        Endpoint::JsonRpc => post(json_rpc::handle),
-        Endpoint::GetHeight => get(json::get_height).post(json::get_height),
-        Endpoint::GetTransactions => get(json::get_transactions).post(json::get_transactions),
-        Endpoint::GetAltBlocksHashes => {
-            get(json::get_alt_blocks_hashes).post(json::get_alt_blocks_hashes)
-        }
-        Endpoint::IsKeyImageSpent => get(json::is_key_image_spent).post(json::is_key_image_spent),
-        Endpoint::SubmitTransaction => post(submit::submit_transaction),
-        Endpoint::GetTransactionPool => {
-            get(json::get_transaction_pool).post(json::get_transaction_pool)
-        }
-        Endpoint::GetTransactionPoolHashes => {
-            get(json::get_transaction_pool_hashes).post(json::get_transaction_pool_hashes)
-        }
-        Endpoint::GetTransactionPoolStats => {
-            get(json::get_transaction_pool_stats).post(json::get_transaction_pool_stats)
-        }
-        Endpoint::GetInfo => get(json::get_info).post(json::get_info),
-        Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
-        Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
-        // Admin-only (listener selection is the method table's grant, not this
-        // match). §55: anonymity graph — the peer set is the sensitive part.
-        Endpoint::GetStemTallies => get(json::get_stem_tallies).post(json::get_stem_tallies),
-        Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
-        Endpoint::StopMining => get(json::stop_mining).post(json::stop_mining),
-        Endpoint::MiningStatus => get(json::mining_status).post(json::mining_status),
-        Endpoint::SaveBc => get(json::save_bc).post(json::save_bc),
-        Endpoint::GetPeerList => get(json::get_peer_list).post(json::get_peer_list),
-        Endpoint::SetLogHashRate => get(json::set_log_hash_rate).post(json::set_log_hash_rate),
-        Endpoint::StopDaemon => get(json::stop_daemon).post(json::stop_daemon),
-        Endpoint::GetNetStats => get(json::get_net_stats).post(json::get_net_stats),
-        Endpoint::PopBlocks => get(json::pop_blocks).post(json::pop_blocks),
-    }
-}
-
-/// The routed-but-unlayered router for one server (every socket of a start).
-///
-/// Generic over the handler binding **so tests can build the real router**.
-/// [`build_router`] passes [`handler_for`]; the gate tests pass a dummy
-/// handler, which keeps `core_rpc_ffi_*` out of the test link set while still
-/// exercising the thing that ships: `Router::route` over every row.
-/// Route selection is then asserted by *serving requests* rather than by
-/// re-reading a const — and axum's duplicate-path panic fires here as a test
-/// failure instead of at daemon start.
-fn assemble<S, F>(handler: F) -> Router<S>
+/// The routed-but-unlayered router: `/json_rpc` and the 404 fallback.
+fn assemble<S>(json_rpc: MethodRouter<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
-    F: Fn(Endpoint) -> MethodRouter<S>,
 {
-    let mut router = Router::new();
-    for route in ROUTES {
-        for path in route.paths {
-            router = router.route(path, handler(route.endpoint));
-        }
-    }
-    router
+    Router::new()
+        .route(shekyl_rpc_types::endpoint::JSON_RPC_PATH, json_rpc)
+        // A path no row serves gets the shared answer, which names
+        // `/json_rpc`, instead of an empty 404 (the wallet RPC mounts the same).
+        .fallback(unrouted)
+}
+
+/// The answer to a path no route serves: HTTP 404 with the shared
+/// JSON-RPC error body (`shekyl_rpc_types::endpoint`).
+async fn unrouted(uri: axum::http::Uri) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(shekyl_rpc_types::endpoint::unrouted_path(uri.path())),
+    )
 }
 
 /// Build the Axum router for one listener. `cors_origins` empty ⇒
 /// default-deny CORS.
 ///
-/// Routes come only from [`assemble`]; handlers only from [`handler_for`].
+/// The route comes only from [`assemble`], its handler from [`rpc::handle`].
 /// Every request is stamped with `authority`, which every gate reads
 /// (`crate::authority`, RT-O32).
 pub fn build_router(state: Arc<AppState>, cors_origins: &[String], authority: Authority) -> Router {
-    gate(assemble(handler_for), authority)
+    gate(assemble(post(rpc::handle)), authority)
+        .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
+        .layer(cors_layer(cors_origins))
+        .with_state(state)
+}
+
+/// The channel listener's router: the same routes and layers, not stamped.
+/// Each channel connection stamps its own authority and caller
+/// (`crate::channel::listener`).
+pub(crate) fn channel_router(state: Arc<AppState>, cors_origins: &[String]) -> Router {
+    assemble(post(rpc::handle))
         .layer(RequestBodyLimitLayer::new(DEFAULT_BODY_LIMIT))
         .layer(cors_layer(cors_origins))
         .with_state(state)
@@ -406,39 +211,50 @@ where
     }))
 }
 
-/// Serves the RPC section's two listener sets on one core: `admin` at the
+/// Serves the RPC section's two listener sets on one node: `admin` at the
 /// admin listener's authority (every grant, and the host's) and `view` at the
 /// view listener's (`crate::authority::Authority::VIEW_LISTENER`), with one
 /// submit engine and ONE connection
 /// tracker between them: the cap is per daemon, as the section says, and
-/// `get_info` must count every socket. A tracker per listener made a cap of
+/// `daemon_status` must count every socket. A tracker per listener made a cap of
 /// N admit 2N — the same mistake `submit/gate.rs` records for the F39
 /// verification cap ("one cap per daemon, not per listener"), re-made here
 /// once already. An empty set serves nothing; both empty is a daemon with no
 /// RPC, which returns once the stop arrives.
+///
+/// `owner` is the owner's socket (`RPC_CHANNEL.md` RT-15, §7.1), served at
+/// the owner's authority ([`Authority::owner`]) through the same tracker.
 pub async fn serve_listeners(
-    core: Arc<CoreRpc>,
     config: ServerConfig,
-    admin: Vec<BoundListener>,
-    view: Vec<BoundListener>,
+    submit_engine: Arc<DaemonSubmitEngine>,
+    listeners: Listeners,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let submit_engine = Arc::new(SubmitEngine::new(
-        FfiSubmitShim::new(core.clone()),
-        DaemonTxVerifier,
-    ));
+    let Listeners {
+        admin,
+        view,
+        owner,
+        channel_listen,
+        console,
+    } = listeners;
     let conn_tracker = ConnTracker::new(config.conn_limits);
-    let router_at = |authority: Authority| {
-        let state = Arc::new(AppState {
-            core: core.clone(),
+    let hash_budget = Arc::new(HashBudget::new(Instant::now()));
+    let coinbase_reads = Arc::new(Semaphore::new(1));
+    let state_for = || {
+        Arc::new(AppState {
             submit_engine: submit_engine.clone(),
             conn_tracker: conn_tracker.clone(),
-            shard_view: config.shard_view.clone(),
+            shard_view: Arc::clone(&config.handles.shard_view),
             options: config.options.clone(),
             handles: config.handles.clone(),
-        });
-        build_router(state, &config.cors_origins, authority)
+            tor: Arc::clone(&config.tor),
+            hash_budget: Arc::clone(&hash_budget),
+            coinbase_reads: Arc::clone(&coinbase_reads),
+            channel: config.channel.clone(),
+        })
     };
+    let router_at =
+        |authority: Authority| build_router(state_for(), &config.cors_origins, authority);
     // Surface the CORS posture at startup. Default-deny is intentional (a
     // browser cannot reach an unconfigured daemon cross-origin), but it changed
     // from the old permissive reflection, so make it observable rather than a
@@ -459,9 +275,8 @@ pub async fn serve_listeners(
     // operator reads which it is.
     if config.armed {
         tracing::warn!(
-            "RPC armed test levers: ON (dev-rpc): generateblocks, \
-             inject_archival_serve_credit and /pop_blocks are served to the \
-             host's administrator"
+            "RPC armed test levers: ON (dev-rpc): dev_block_generate and \
+             dev_chain_pop are served to the host's administrator"
         );
     } else {
         info!("RPC armed test levers: off (dev-rpc not set)");
@@ -473,6 +288,31 @@ pub async fn serve_listeners(
         );
     }
 
+    let owner = owner.map(|listener| {
+        // Outside the authority stamp, so it runs first: the owner's leg
+        // carries [`OwnerLeg`], and the plaintext listeners, which stamp
+        // the same host authority, do not.
+        let router = router_at(Authority::owner(config.armed)).layer(axum::middleware::from_fn(
+            |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                request.extensions_mut().insert(crate::authority::OwnerLeg);
+                next.run(request).await
+            },
+        ));
+        (router, listener)
+    });
+    let listens = !channel_listen.is_empty() || console.is_some();
+    let channel = match (&config.channel, listens) {
+        (Some(channel), true) => Some(ChannelServed {
+            router: channel_router(state_for(), &config.cors_origins),
+            channel: Arc::clone(channel),
+            network: channel_listen,
+            console,
+        }),
+        (None, true) => {
+            return Err("the RPC channel's listeners were bound with no channel state".into());
+        }
+        (_, false) => None,
+    };
     serve_bound(
         vec![
             (
@@ -482,15 +322,41 @@ pub async fn serve_listeners(
             ),
             (Listener::View, router_at(Authority::VIEW_LISTENER), view),
         ],
+        owner,
+        channel,
         conn_tracker,
         shutdown,
     )
     .await
 }
 
-/// Which listener a bound socket is. An enrolment preset
+/// Every listener a start bound, as [`serve_listeners`] takes them.
+pub struct Listeners {
+    /// The plaintext admin listener's sockets.
+    pub admin: Vec<BoundListener>,
+    /// The plaintext view listener's sockets.
+    pub view: Vec<BoundListener>,
+    /// The owner's socket or pipe (RT-15).
+    pub owner: Option<crate::owner::ServedListener>,
+    /// The channel's `rpc-listen` sockets.
+    pub channel_listen: Vec<BoundListener>,
+    /// A service's console leg (RT-O37).
+    pub console: Option<crate::channel::console_leg::ConsoleListener>,
+}
+
+/// The channel's listeners as [`serve_bound`] serves them: the one router,
+/// the channel's state, the `rpc-listen` sockets and a service's console
+/// leg.
+pub(crate) struct ChannelServed {
+    pub(crate) router: Router,
+    pub(crate) channel: Arc<crate::channel::Channel>,
+    pub(crate) network: Vec<BoundListener>,
+    pub(crate) console: Option<crate::channel::console_leg::ConsoleListener>,
+}
+
+/// Which listener a bound socket is. An enrollment preset
 /// (`shekyl_rpc_grants::Preset`) is a different thing: the view listener
-/// also serves submit and mining work until RT-W12, which the enrolment
+/// also serves submit and mining work until RT-W12, which the enrollment
 /// preset `View` does not.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Listener {
@@ -508,8 +374,8 @@ impl Listener {
 }
 
 /// The lifecycle half of [`serve_listeners`], independent of the core so it
-/// can be tested as one: one `axum::serve` per bound socket, every accepted
-/// connection admitted through the shared tracker, and every acceptor
+/// can be tested as one: one plaintext HTTP/1 serve per bound socket, every
+/// accepted connection admitted through the shared tracker, and every acceptor
 /// stopped by the same level-triggered signal — including one that has not
 /// been polled when the signal arrives, which is the ordering that used to
 /// hang `shekyl_daemon_rpc_stop`. An acceptor that fails must not leave the
@@ -519,11 +385,67 @@ impl Listener {
 /// ([`first_error_stops_the_rest`]).
 pub(crate) async fn serve_bound(
     sets: Vec<(Listener, Router, Vec<BoundListener>)>,
+    owner: Option<(Router, crate::owner::ServedListener)>,
+    channel: Option<ChannelServed>,
     conn_tracker: Arc<ConnTracker>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (fail_tx, fail_rx) = watch::channel(false);
     let mut serves = tokio::task::JoinSet::new();
+    // Either signal is a stop, and either outcome of each is too (the value
+    // turned true, or its sender is gone). `wait_for` is level-triggered: a
+    // send that happened before this future was first polled is still
+    // observed.
+    let stop_on = |mut stop: watch::Receiver<bool>, mut fail: watch::Receiver<bool>| async move {
+        tokio::select! {
+            _signal = stop.wait_for(|&stop| stop) => {}
+            _signal = fail.wait_for(|&fail| fail) => {}
+        }
+    };
+    if let Some((app, listener)) = owner {
+        // The owner's reserve (RT-O37): a full shared pool does not lock
+        // the owner out of its own node.
+        serves.spawn(crate::listener_http::serve_plaintext(
+            LimitedListener::reserved(listener, conn_tracker.clone(), Reserve::Owner),
+            app,
+            stop_on(shutdown.clone(), fail_rx.clone()),
+        ));
+    }
+    if let Some(ChannelServed {
+        router: app,
+        channel,
+        network,
+        console,
+    }) = channel
+    {
+        if let Some(console) = console {
+            info!(target: "global", "shekyl-daemon-rpc listening on the console's leg");
+            // The console's reserve (RT-O37): a full shared pool does not
+            // lock the administrator out of revoking a key.
+            serves.spawn(crate::channel::listener::serve(
+                LimitedListener::reserved(console, conn_tracker.clone(), Reserve::Console),
+                crate::channel::listener::Leg::Console,
+                Arc::clone(&channel),
+                app.clone(),
+                stop_on(shutdown.clone(), fail_rx.clone()),
+            ));
+        }
+        for bound in network {
+            info!(
+                target: "global",
+                "shekyl-daemon-rpc listening on {} (channel listener)",
+                bound.local_addr()
+            );
+            let (_, listener) = bound.into_parts();
+            serves.spawn(crate::channel::listener::serve(
+                LimitedListener::new(listener, conn_tracker.clone()),
+                crate::channel::listener::Leg::Network,
+                Arc::clone(&channel),
+                app.clone(),
+                stop_on(shutdown.clone(), fail_rx.clone()),
+            ));
+        }
+    }
     for (role, app, bound) in sets.into_iter().flat_map(|(role, app, listeners)| {
         listeners
             .into_iter()
@@ -543,22 +465,11 @@ pub(crate) async fn serve_bound(
         // Every accepted connection is admitted through (and accounted in)
         // the one shared tracker.
         let listener = LimitedListener::new(listener, conn_tracker.clone());
-        let mut stop = shutdown.clone();
-        let mut fail = fail_rx.clone();
-        serves.spawn(
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    // Either signal is a stop, and either outcome of each is
-                    // too (the value turned true, or its sender is gone).
-                    // `wait_for` is level-triggered: a send that happened
-                    // before this future was first polled is still observed.
-                    tokio::select! {
-                        _signal = stop.wait_for(|&stop| stop) => {}
-                        _signal = fail.wait_for(|&fail| fail) => {}
-                    }
-                })
-                .into_future(),
-        );
+        serves.spawn(crate::listener_http::serve_plaintext(
+            listener,
+            app,
+            stop_on(shutdown.clone(), fail_rx.clone()),
+        ));
     }
     first_error_stops_the_rest(&mut serves, &fail_tx).await
 }
@@ -596,29 +507,16 @@ where
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::routing::get;
     use http::{Request, StatusCode};
-    use std::collections::BTreeSet;
+    use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
     use tower::ServiceExt;
 
-    // -----------------------------------------------------------------------
-    // The specification, restated independently of the code that builds it.
-    //
-    // **The duplication below is deliberate and must not be "de-duplicated".**
-    // An oracle derived from `ROUTES` re-states whatever that table happens to
-    // say, so it cannot fail when the table changes — which is precisely how
-    // the const-membership check §69 deleted managed to pass under the edit it
-    // existed to catch, and how a loop over the admin rows still misses a path
-    // *moved out* of them. These two arrays are the contract: which paths the
-    // daemon serves, and which of them never reach the public listener.
-    // Changing the route table must therefore change this table too, in a diff
-    // a reviewer reads and a maintainer must justify.
-    // -----------------------------------------------------------------------
-
-    /// Paths the view listener is admitted to (RT-O33: today's set, less
-    /// `/get_alt_blocks_hashes`, which §6.1 moves to `status`).
-    const SPECIFIED_VIEW_PATHS: &[&str] = &[
-        "/json_rpc",
+    /// Every path the 3.x daemon served as a route of its own, and the
+    /// binary sync paths retired before it (RK-4x), written out here rather
+    /// than derived: the 4.0 router serves `/json_rpc` alone (RW-Q1), and
+    /// each of these is now the shared 404 that names it. Changing what the
+    /// router serves must change this list in a diff a reviewer reads.
+    const RETIRED_PATHS: &[&str] = &[
         "/get_height",
         "/getheight",
         "/get_transactions",
@@ -633,224 +531,114 @@ mod tests {
         "/get_blocks_by_height.bin",
         "/getblocks_by_height.bin",
         "/get_o_indexes.bin",
-    ];
-
-    /// Paths the view listener is **refused**. §55: `/get_stem_tallies` is the
-    /// anonymity graph; `/get_alt_blocks_hashes` and `/get_net_stats` are
-    /// `status`; the rest are node administration (mine, peers, shut down,
-    /// roll back).
-    const SPECIFIED_ADMIN_ONLY_PATHS: &[&str] = &[
         "/get_alt_blocks_hashes",
         "/get_stem_tallies",
         "/start_mining",
         "/stop_mining",
         "/mining_status",
-        "/save_bc",
         "/get_peer_list",
-        "/set_log_hash_rate",
         "/stop_daemon",
         "/get_net_stats",
         "/pop_blocks",
+        "/get_output_distribution.bin",
+        "/get_blocks.bin",
+        "/getblocks.bin",
+        "/get_hashes.bin",
+        "/gethashes.bin",
     ];
 
-    /// The router answers on exactly the specified paths, and the view
-    /// listener is admitted to exactly its specified set.
-    ///
-    /// One assertion covers four drift directions the per-path arms cannot:
-    /// a path **dropped** from the table, a path **added** without review, a
-    /// path **moved** into or out of the view listener's grants, and a
-    /// **duplicate** — which axum turns into a panic before the daemon binds.
-    #[test]
-    fn route_table_matches_the_specification() {
-        let served: Vec<&str> = served_paths().collect();
-        let unique: BTreeSet<&str> = served.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            served.len(),
-            "duplicate path in the route table: axum panics on a repeated \
-             route, so this aborts the daemon at startup"
-        );
-
-        let specified: BTreeSet<&str> = SPECIFIED_VIEW_PATHS
-            .iter()
-            .chain(SPECIFIED_ADMIN_ONLY_PATHS)
-            .copied()
-            .collect();
-        assert_eq!(
-            unique, specified,
-            "served surface diverged from the specification above; if the \
-             change is intended, change the specification in the same commit"
-        );
-
-        let view: BTreeSet<&str> = served
-            .iter()
-            .copied()
-            .filter(|path| {
-                shekyl_rpc_types::methods::rest_path(path)
-                    .is_some_and(|row| Authority::VIEW_LISTENER.admit(row).is_ok())
-            })
-            .collect();
-        let specified_view: BTreeSet<&str> = SPECIFIED_VIEW_PATHS.iter().copied().collect();
-        assert_eq!(
-            view, specified_view,
-            "the view listener's admitted paths diverged from the specification"
-        );
-    }
-
-    /// Deleted decoy surface must not reappear.
-    #[test]
-    fn output_distribution_bin_not_registered() {
-        // wallet2's batch sync, retired in RK-4x with the pool departure
-        // history behind it, and the decoy distribution binary. Registering
-        // any of them again turns this red.
-        for path in [
-            "/get_output_distribution.bin",
-            "/get_blocks.bin",
-            "/getblocks.bin",
-            "/get_hashes.bin",
-            "/gethashes.bin",
-        ] {
-            assert!(
-                !served_paths().any(|p| p == path),
-                "{path} was retired and must not be served"
-            );
-        }
-        assert!(
-            served_paths().any(|p| p == "/get_o_indexes.bin"),
-            "control: live binary surface still served"
-        );
-    }
-
-    /// A router with the real route table, the real gate and dummy handlers.
-    ///
-    /// This is [`build_router`]'s own assembly — the same [`assemble`] and
-    /// [`gate`] calls — with only the handler binding swapped, because naming
-    /// a real handler pulls `core_rpc_ffi_*` into the test link set. Both
-    /// methods are bound so an unrouted path answers 404 rather than 405.
+    /// A router with the real route, the real fallback and the real gate:
+    /// [`build_router`]'s own [`assemble`] and [`gate`] calls, with only the
+    /// `/json_rpc` handler swapped for one that answers `ok`, because the
+    /// real one needs an `AppState`. What the handler admits is
+    /// `handlers::rpc`'s tests' subject.
     fn probe_router(authority: Authority) -> Router {
-        gate(
-            assemble(|_| get(|| async { "ok" }).post(|| async { "ok" })),
-            authority,
-        )
+        gate(assemble(post(|| async { "ok" })), authority)
     }
 
-    /// What a request for `path` gets: served (the dummy handler's `ok`),
-    /// refused by the gate with the JSON-RPC error object (its code), or not
-    /// routed (404).
-    #[derive(Debug, PartialEq, Eq)]
-    enum Probe {
-        Served,
-        Refused(i64),
-        NotFound,
-    }
-
-    async fn probe(authority: Authority, path: &str) -> Probe {
+    /// The status and body a request for `path` gets.
+    async fn probe(authority: Authority, method: &str, path: &str) -> (StatusCode, Vec<u8>) {
         let response = probe_router(authority)
             .oneshot(
                 Request::builder()
-                    .method("GET")
+                    .method(method)
                     .uri(path)
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        if response.status() == StatusCode::NOT_FOUND {
-            return Probe::NotFound;
-        }
+        let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        if body.as_ref() == b"ok" {
-            return Probe::Served;
-        }
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("a JSON refusal");
-        Probe::Refused(value["error"]["code"].as_i64().expect("an error code"))
+        (status, body.to_vec())
     }
 
-    const OUTSIDE_THE_GRANT: i64 = -32_002;
-
-    /// The gate, asserted on the router that ships. Dual-armed: the admin
-    /// listener's `Served` is what makes the view listener's refusal mean
-    /// **gated** rather than **misspelled**.
+    /// The router serves `/json_rpc` on both listeners and nothing else:
+    /// every other path, the anonymity-graph readout and the armed levers
+    /// among them, is the shared 404 on both, whichever HTTP method asks.
+    /// Gating is on the method row, so what the view listener may call is
+    /// asserted at dispatch (`handlers::rpc` tests). Red check run:
+    /// routing `/get_info` beside `/json_rpc` in [`assemble`] turns this
+    /// red.
     #[tokio::test]
-    async fn assembled_router_gates_the_anonymity_graph() {
-        let admin = Authority::admin_listener(false);
-        assert_eq!(
-            probe(admin, "/get_stem_tallies").await,
-            Probe::Served,
-            "admin arm: the anonymity-graph readout must be served, or the \
-             view arm proves nothing"
-        );
-        assert_eq!(
-            probe(Authority::VIEW_LISTENER, "/get_stem_tallies").await,
-            Probe::Refused(OUTSIDE_THE_GRANT),
-            "view arm: the anonymity graph is host-only data (§55)"
-        );
-        assert_eq!(
-            probe(Authority::VIEW_LISTENER, "/get_info").await,
-            Probe::Served
-        );
-        assert_eq!(probe(admin, "/get_info").await, Probe::Served);
-    }
-
-    /// Every specified path is served to the authority that holds it and
-    /// refused, with the grant class, to the one that does not — checked by
-    /// serving requests.
-    #[tokio::test]
-    async fn assembled_router_serves_exactly_the_specified_surface() {
-        let admin = Authority::admin_listener(true);
-        for path in SPECIFIED_VIEW_PATHS {
+    async fn only_json_rpc_is_routed() {
+        for authority in [
+            Authority::admin_listener(true),
+            Authority::admin_listener(false),
+            Authority::VIEW_LISTENER,
+        ] {
             assert_eq!(
-                probe(Authority::VIEW_LISTENER, path).await,
-                Probe::Served,
-                "{path}"
+                probe(authority, "POST", JSON_RPC_PATH).await,
+                (StatusCode::OK, b"ok".to_vec()),
+                "control: the one route is served"
             );
-            assert_eq!(probe(admin, path).await, Probe::Served, "{path}");
+            for path in RETIRED_PATHS {
+                for method in ["GET", "POST"] {
+                    let (status, body) = probe(authority, method, path).await;
+                    assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+                    let value: serde_json::Value =
+                        serde_json::from_slice(&body).expect("the shared JSON body");
+                    assert_eq!(value, unrouted_path(path), "{method} {path}");
+                }
+            }
         }
-        for path in SPECIFIED_ADMIN_ONLY_PATHS {
-            assert_eq!(probe(admin, path).await, Probe::Served, "{path}");
-            assert_eq!(
-                probe(Authority::VIEW_LISTENER, path).await,
-                Probe::Refused(OUTSIDE_THE_GRANT),
-                "{path} is refused to the view listener"
-            );
-        }
-        assert_eq!(
-            probe(admin, "/get_output_distribution.bin").await,
-            Probe::NotFound,
-            "control: a path with no row is not a method, so the router answers 404"
-        );
     }
 
-    /// An armed lever is refused to the host's administrator too while the
-    /// switch is off.
+    /// A path no row serves is told where JSON-RPC is: HTTP 404 with the
+    /// shared body, never an empty one. Both listeners, both methods, and a
+    /// path the wallet RPC used to serve (`/`) among them.
     #[tokio::test]
-    async fn pop_blocks_needs_the_armed_switch() {
-        assert_eq!(
-            probe(Authority::admin_listener(false), "/pop_blocks").await,
-            Probe::Refused(OUTSIDE_THE_GRANT)
-        );
-        assert_eq!(
-            probe(Authority::admin_listener(true), "/pop_blocks").await,
-            Probe::Served
-        );
+    async fn an_unrouted_path_is_told_where_json_rpc_is() {
+        for authority in [Authority::admin_listener(false), Authority::VIEW_LISTENER] {
+            for (method, path) in [
+                ("POST", "/"),
+                ("GET", "/no_such_endpoint"),
+                ("POST", "/json_rpc/"),
+            ] {
+                let (status, body) = probe(authority, method, path).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&body).expect("a JSON body, not an empty 404");
+                assert_eq!(value, unrouted_path(path), "{method} {path}");
+            }
+        }
     }
 
+    /// A preflight to the one route from an origin nobody configured gets
+    /// no allow-origin header.
     #[tokio::test]
     async fn cors_default_deny_omits_allow_origin() {
-        // Exercise `cors_layer` without `AppState` / C++ FFI (lib tests cannot
-        // link `core_rpc_ffi_*`).
-        let app = Router::new()
-            .route("/get_info", get(|| async { "ok" }))
-            .layer(cors_layer(&[]));
+        // Exercise `cors_layer` without an `AppState`.
+        let app = assemble(post(|| async { "ok" })).layer(cors_layer(&[]));
         let res = app
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
-                    .uri("/get_info")
+                    .uri(JSON_RPC_PATH)
                     .header("Origin", "https://evil.example")
-                    .header("Access-Control-Request-Method", "GET")
+                    .header("Access-Control-Request-Method", "POST")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -862,16 +650,14 @@ mod tests {
     #[tokio::test]
     async fn cors_allow_list_honors_configured_origin() {
         let origins = vec!["https://wallet.example".to_string()];
-        let app = Router::new()
-            .route("/get_info", get(|| async { "ok" }))
-            .layer(cors_layer(&origins));
+        let app = assemble(post(|| async { "ok" })).layer(cors_layer(&origins));
         let res = app
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
-                    .uri("/get_info")
+                    .uri(JSON_RPC_PATH)
                     .header("Origin", "https://wallet.example")
-                    .header("Access-Control-Request-Method", "GET")
+                    .header("Access-Control-Request-Method", "POST")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -888,10 +674,10 @@ mod tests {
     /// Optional live-daemon smoke (Axum-only shekyld). Not run in CI by default.
     #[tokio::test]
     #[ignore = "requires a running Axum-only shekyld; optional e2e smoke"]
-    async fn e2e_axum_only_get_info_smoke() {
-        // Operators: point a client at a local shekyld RPC and exercise
-        // /get_info + /get_o_indexes.bin. In-lane coverage is the oneshot/CORS
-        // tests above plus RpcArgsDaemonSurface.
+    async fn e2e_axum_only_daemon_status_smoke() {
+        // Operators: point a client at a local shekyld RPC and call
+        // `daemon_status` and `tx_list` on /json_rpc. In-lane coverage is the
+        // oneshot/CORS tests above and the dispatch tests in `handlers::rpc`.
     }
 }
 
@@ -956,12 +742,78 @@ mod lifecycle_tests {
                 (Listener::Admin, admin, vec![admin_listener]),
                 (Listener::View, router(), vec![view_listener]),
             ],
+            None,
+            None,
             ConnTracker::new(ConnLimits::default()),
             rx,
         ));
         assert_eq!(status_of(admin_addr, "/admin_only").await, 200);
         assert_eq!(status_of(view_addr, "/admin_only").await, 404);
         assert_eq!(status_of(view_addr, "/").await, 200);
+        tx.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(5), serving)
+            .await
+            .expect("stops")
+            .expect("joins")
+            .expect("a clean stop is Ok");
+    }
+
+    /// The owner's socket is served beside the TCP listeners, at the
+    /// authority it is given, through the one connection tracker, and stops
+    /// on the same signal. Red edit: drop the owner arm in `serve_bound` and
+    /// the dial finds nothing listening.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_owners_socket_is_served_at_its_authority_through_the_one_tracker() {
+        use super::gate;
+        use crate::authority::Authority;
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.path().join("owner.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        // Into the runtime as the start puts it, before the serve.
+        let listener = crate::owner::serve_ready(listener).unwrap();
+        // The handler reports the authority the gate stamped.
+        let owner_app = gate(
+            axum::Router::new().route(
+                "/",
+                axum::routing::get(
+                    |axum::Extension(a): axum::Extension<Authority>| async move {
+                        format!("host={} armed={}", a.host(), a.armed_switch())
+                    },
+                ),
+            ),
+            Authority::owner(true),
+        );
+        let tracker = ConnTracker::new(ConnLimits::default());
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let serving = tokio::spawn(serve_bound(
+            vec![(Listener::Admin, router(), two_loopback_listeners().await)],
+            Some((owner_app, listener)),
+            None,
+            tracker.clone(),
+            rx,
+        ));
+        let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let mut reply = vec![0u8; 512];
+        let n = stream.read(&mut reply).await.unwrap();
+        let reply = String::from_utf8_lossy(&reply[..n]).into_owned();
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(reply.ends_with("host=true armed=true"), "{reply}");
+        assert_eq!(
+            tracker.active_total(),
+            1,
+            "the owner's connection is counted"
+        );
+        drop(stream);
         tx.send_replace(true);
         tokio::time::timeout(Duration::from_secs(5), serving)
             .await
@@ -989,6 +841,8 @@ mod lifecycle_tests {
             Duration::from_secs(5),
             serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
+                None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ),
@@ -1037,6 +891,8 @@ mod lifecycle_tests {
             let (tx, rx) = tokio::sync::watch::channel(false);
             let serving = tokio::spawn(serve_bound(
                 vec![(Listener::Admin, router(), listeners)],
+                None,
+                None,
                 ConnTracker::new(ConnLimits::default()),
                 rx,
             ));
@@ -1051,36 +907,6 @@ mod lifecycle_tests {
                 .expect("every acceptor must stop")
                 .expect("the serve task must not panic")
                 .expect("a clean stop is Ok");
-        }
-    }
-
-    /// RW-Q7's gate for REST: every route's paths are one row's names in the
-    /// method table, and every REST row is a route. A path served without a
-    /// row, or a row nothing serves, fails here.
-    #[test]
-    fn every_route_is_one_method_row_and_every_rest_row_is_routed() {
-        use shekyl_rpc_types::methods::{rest_path, Surface, METHODS};
-        for route in crate::server::ROUTES {
-            let row = rest_path(route.paths[0])
-                .unwrap_or_else(|| panic!("{} has no row in the method table", route.paths[0]));
-            let mut routed: Vec<&str> = route.paths.to_vec();
-            let mut named: Vec<&str> = row.names().collect();
-            routed.sort_unstable();
-            named.sort_unstable();
-            assert_eq!(
-                routed, named,
-                "{}: the route's paths are its row's names",
-                row.name
-            );
-        }
-        for row in METHODS.iter().filter(|row| row.surface == Surface::Rest) {
-            assert!(
-                crate::server::ROUTES
-                    .iter()
-                    .any(|route| route.paths.contains(&row.name)),
-                "{} is a REST row that no route serves",
-                row.name
-            );
         }
     }
 }

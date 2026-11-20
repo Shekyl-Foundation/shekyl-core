@@ -10,9 +10,11 @@
 //! the verifier checks against the spent key image pool to confirm the
 //! output is unspent.
 //!
-//! Wire format: `69 + 192*N` bytes
+//! ```text
+//! Wire format: 69 + 192*N bytes
 //!   header: version[1] + schnorr[64] + output_count[4]
 //!   per-output: ho[32] + y[32] + k_amount[32] + key_image[32] + dleq(c[32]+s[32])
+//! ```
 //!
 //! The verifier reads `enc_amount` from the blockchain, NOT from the proof.
 //! This is load-bearing for soundness (see FCMP_PLUS_PLUS.md section 21).
@@ -20,7 +22,9 @@
 #![deny(unsafe_code)]
 
 use curve25519_dalek::{
-    constants::ED25519_BASEPOINT_POINT as G_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
+    constants::ED25519_BASEPOINT_POINT as G_POINT,
+    edwards::{CompressedEdwardsY, EdwardsPoint},
+    scalar::Scalar,
 };
 
 use shekyl_curve_generators::T as T_LAZY;
@@ -30,10 +34,28 @@ use crate::error::ProofError;
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::output::ProofSecrets;
 use shekyl_crypto_pq::schnorr;
+use shekyl_network::envelope::{Framed32, IdDomain};
+use shekyl_network::NetworkId;
 
-pub const CURRENT_PROOF_VERSION: u8 = 1;
+/// The reserve proof format's version, the proof's first byte. Version 3: the
+/// Schnorr signs the envelope frame of the proof's fields under the network's
+/// id ([`RESERVE_MESSAGE`]), each DLEQ binds the frame of its context
+/// ([`RESERVE_DLEQ_CONTEXT`]), and the address bytes are the address alone
+/// (the signing envelope §2.3). A proof of another version is refused as an
+/// unsupported version.
+pub const CURRENT_PROOF_VERSION: u8 = 3;
 
 const RESERVE_DOMAIN: &[u8] = b"shekyl-reserve-proof-v1";
+
+/// What a reserve proof's Schnorr signs: the envelope frame, bound to the
+/// network's id, of `[address_bytes, user_message, per_output_data]` (the
+/// signing envelope §2.3; NI-R15: proved against the chain, so the id).
+pub const RESERVE_MESSAGE: IdDomain<3> = IdDomain::new(b"shekyl/reserve-proof-message-v1");
+
+/// What each output's DLEQ binds as its context: the envelope frame, bound
+/// to the network's id, of `[address_bytes, user_message, output_key]`.
+pub const RESERVE_DLEQ_CONTEXT: IdDomain<3> =
+    IdDomain::new(b"shekyl/reserve-proof-dleq-context-v1");
 
 const PER_OUTPUT_SIZE: usize = 192; // ho[32]+y[32]+k_amount[32]+key_image[32]+dleq[64]
 const HEADER_SIZE: usize = 69; // version[1]+sig[64]+count[4]
@@ -86,16 +108,12 @@ fn write_per_output(
 // three copies that existed.
 
 fn assemble_proof_message(
+    network_id: &NetworkId,
     address_bytes: &[u8],
     user_message: &[u8],
     per_output_data: &[u8],
-) -> Vec<u8> {
-    let mut msg =
-        Vec::with_capacity(address_bytes.len() + user_message.len() + per_output_data.len());
-    msg.extend_from_slice(address_bytes);
-    msg.extend_from_slice(user_message);
-    msg.extend_from_slice(per_output_data);
-    msg
+) -> Framed32 {
+    RESERVE_MESSAGE.frame(network_id, [address_bytes, user_message, per_output_data])
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -114,6 +132,7 @@ fn assemble_proof_message(
 /// - `entries`: per-output data including ProofSecrets, key_image, and output_key
 #[allow(clippy::cast_possible_truncation)]
 pub fn generate_reserve_proof(
+    network_id: &NetworkId,
     spend_secret_key: &[u8; 32],
     address_bytes: &[u8],
     user_message: &[u8],
@@ -149,7 +168,8 @@ pub fn generate_reserve_proof(
             ));
         }
 
-        let dleq_msg = assemble_dleq_context(address_bytes, user_message, &entry.output_key);
+        let dleq_msg =
+            assemble_dleq_context(network_id, address_bytes, user_message, &entry.output_key);
         let dleq_proof = dleq::prove_dleq(&x, &hp_of_o, &p, &ki_point, &dleq_msg);
 
         write_per_output(
@@ -160,8 +180,8 @@ pub fn generate_reserve_proof(
         );
     }
 
-    let msg = assemble_proof_message(address_bytes, user_message, &per_output_blob);
-    let sig = schnorr::sign(RESERVE_DOMAIN, &b_scalar, &b_point, &msg);
+    let message = assemble_proof_message(network_id, address_bytes, user_message, &per_output_blob);
+    let sig = sign_reserve(&b_scalar, &b_point, &message);
 
     let mut proof = Vec::with_capacity(HEADER_SIZE + n * PER_OUTPUT_SIZE);
     proof.push(CURRENT_PROOF_VERSION);
@@ -172,16 +192,35 @@ pub fn generate_reserve_proof(
     Ok(proof)
 }
 
+/// Sign a reserve proof's frame under [`RESERVE_DOMAIN`].
+///
+/// The domain lives here, beside the [`Framed32`] it signs, so a caller
+/// cannot apply it to bytes it assembled itself.
+fn sign_reserve(
+    secret: &Scalar,
+    public: &EdwardsPoint,
+    message: &Framed32,
+) -> [u8; schnorr::SIG_LEN] {
+    schnorr::sign(RESERVE_DOMAIN, secret, public, message.as_bytes())
+}
+
+/// Whether `signature` holds for a reserve proof's frame under
+/// [`RESERVE_DOMAIN`].
+fn reserve_holds(
+    public: &EdwardsPoint,
+    message: &Framed32,
+    signature: &[u8; schnorr::SIG_LEN],
+) -> bool {
+    schnorr::verify(RESERVE_DOMAIN, public, message.as_bytes(), signature)
+}
+
 fn assemble_dleq_context(
+    network_id: &NetworkId,
     address_bytes: &[u8],
     user_message: &[u8],
     output_key: &[u8; 32],
-) -> Vec<u8> {
-    let mut ctx = Vec::with_capacity(address_bytes.len() + user_message.len() + 32);
-    ctx.extend_from_slice(address_bytes);
-    ctx.extend_from_slice(user_message);
-    ctx.extend_from_slice(output_key);
-    ctx
+) -> Framed32 {
+    RESERVE_DLEQ_CONTEXT.frame(network_id, [address_bytes, user_message, output_key])
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -210,6 +249,7 @@ pub struct ReserveOnChainOutput {
 /// - `spend_pubkey`: B (32 bytes, the prover's spend public key)
 /// - `on_chain_outputs`: per-output data fetched from the blockchain
 pub fn verify_reserve_proof(
+    network_id: &NetworkId,
     proof_bytes: &[u8],
     address_bytes: &[u8],
     user_message: &[u8],
@@ -255,9 +295,9 @@ pub fn verify_reserve_proof(
         .decompress()
         .ok_or(ProofError::InvalidFormat("invalid spend pubkey".into()))?;
 
-    let msg = assemble_proof_message(address_bytes, user_message, per_output_blob);
+    let message = assemble_proof_message(network_id, address_bytes, user_message, per_output_blob);
 
-    if !schnorr::verify(RESERVE_DOMAIN, &b_point, &msg, &sig) {
+    if !reserve_holds(&b_point, &message, &sig) {
         return Err(ProofError::SignatureFailed);
     }
 
@@ -308,7 +348,12 @@ pub fn verify_reserve_proof(
                 )))?;
 
         let dleq_proof = DleqProof::from_bytes(&dleq_bytes);
-        let dleq_msg = assemble_dleq_context(address_bytes, user_message, &on_chain.output_key);
+        let dleq_msg = assemble_dleq_context(
+            network_id,
+            address_bytes,
+            user_message,
+            &on_chain.output_key,
+        );
 
         if !dleq::verify_dleq(&hp_of_o, &p, &ki_point, &dleq_msg, &dleq_proof) {
             return Err(ProofError::VerificationFailed(format!(

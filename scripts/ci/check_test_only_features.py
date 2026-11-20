@@ -117,14 +117,14 @@ DEFERRED_DOCS / bijection-allowlist shape that records each crate's **exact
 hit set** (feature, consumer, edge kind). A new feature or a new enabler on a
 listed crate is red (an owner-keyed exemption would have covered it
 silently); a recorded hit that vanished is red until deleted; a crate that
-has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
+has joined `GOVERNED_OWNERS` may not also be listed. Two of the entries are
 findings rather than chores — a feature whose name says test-only, enabled
-on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
-the reason) and share the governance FOLLOWUPS row; the third,
-`shekyl-crypto-pq/test-utils` enabled by `shekyl-ffi` directly and by
-`shekyl-p-serve` through forwarding, is **FOLLOWUPS F-7**'s — its exports are unconditional
-`extern "C"` in the production header, so categorizing the feature changes
-nothing and the fix is the structural gate that row already names.
+on a **normal** edge — and are hygiene (move the edge, or rule PERMANENT with
+the reason) under the governance FOLLOWUPS row. A third,
+`shekyl-crypto-pq/test-utils` reaching a normal edge through
+`shekyl-p-serve`'s forwarding `test-signer`, left the list with `CF-1b`
+(CHAIN_FORGE.md): the forward was never needed and is gone, and the crate is
+governed, its `test-utils` and `seeded-rng` TEST_ONLY rows.
 
 # The production-shape lint lane lives next door
 
@@ -173,6 +173,54 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-win-sec",
+        "test-utils",
+    ): "the probe helpers (SID readers, the label reader) and the scratch "
+    "registry key (registry::ScratchKey) the service record's tests publish "
+    "to (Rick, 2026-11-18). Enabled from shekyl-daemon-rpc's Windows dev "
+    "edge and the WP-W1 probe lane's command line, never a normal edge",
+    (
+        "shekyl-rpc-transport",
+        "test-override",
+    ): "LocalTarget::test_override: a test node's own rendezvous directory "
+    "and service directory in place of this account's and this platform's. "
+    "Production names \"this computer\" by its network alone "
+    "(LocalTarget::this_computer, DaemonTarget::ThisComputer), so no client "
+    "can name a wrong directory or leave the service's out (Rick, "
+    "2026-11-18). Enabled from the transport's own, the CLI's, the tunnel's "
+    "and the daemon's dev edges",
+    (
+        "shekyl-curve-tree",
+        "test-tamper",
+    ): "LeafStore::test_tamper_clear_prune_disabled and "
+    "CurveTreeClient::test_tamper_poison: the tampering fixtures behind "
+    "shekyl-p-host's posture-loss KATs and the engine's in-place recovery "
+    "tests (CURVE_TREE_CLIENT.md §11). The prune-disabled posture is one-way "
+    "by ruling, so its clear path must not exist in shipped code; enabled "
+    "from the p-host and engine-core dev edges only",
+    (
+        "shekyl-curve-tree",
+        "test-paths",
+    ): "AssembledPaths::from_parts_unchecked: a batch of membership paths "
+    "written from its parts with none of the assembler's checks (each "
+    "path's branches fold to the batch's root; that root is the reference "
+    "block's header root). Production gets paths only as the checked "
+    "assembler's batch (R-25, R-26), so a path to a made-up tree must not "
+    "be constructible in shipped code. "
+    "Enabled from the engine-core and multisig dev edges only, for their "
+    "placeholder and tampered paths",
+    (
+        "shekyl-wire",
+        "test-fixtures",
+    ): "BoundTx::whole and BoundTx::modify: a fixture's whole body bound to "
+    "the identity it hashes to itself. Production constructs a BoundTx "
+    "through SkeletonTx::bind alone (DRS_SB_BELOW_HORIZON.md SB-Q2), so the "
+    "whole-body constructor is out of every production build. Enabled from "
+    "the scanner's, the engine's and the ingest's dev edges for their unit "
+    "tests; the lib-level fixture surfaces (shekyl-scanner/test-utils, "
+    "shekyl-engine-core/test-helpers) bind through the production path "
+    "(bench_fixtures::bound) and forward nothing",
+    (
         "shekyl-tor-control-client",
         "unpinned-tor-for-tests",
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
@@ -186,6 +234,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "Enabled from shekyl-mempool's dev-dependency edge only. The pool's "
     "reconcile does not know the test exists, and a shipped write commits "
     "exactly what its closure returned",
+    (
+        "shekyl-chain-sync-runtime",
+        "publish-for-test",
+    ): "Running::publish_for_test asks the sync owner to publish a state. "
+    "The owner task remains the only publisher; the node's tests use it "
+    "while the seam is unbound, which is before the task accepts any "
+    "other input. cfg(test) does not cross that crate boundary. Enabled "
+    "from shekyl-node's dev-dependency edge only; a shipped owner "
+    "publishes only what the model derives",
     (
         "shekyl-mempool",
         "pool-commit-fault",
@@ -210,12 +267,12 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     (
         "shekyl-p-host",
         "test-signer",
-    ): "arms shekyl-p-serve's ephemeral TestKeySigner as a PassKey, so a host "
+    ): "arms shekyl-p-serve's ephemeral TestReceiptKeySigner as a PassKey, so a host "
     "under test can be bound with a key whose public half the test holds "
     "(and, since SH-2, exposes RefusingKey — the always-refusing PassKey the "
     "serving-task lifecycle tests bind in place of the persona's resident "
     "key). Enabled from shekyl-engine-core's [dev-dependencies] edge only; "
-    "the production PassKey is the stake actor's ResidentPassKey, and "
+    "the production PassKey is the stake actor's ResidentReceiptKey, and "
     "scripts/ci/check_p_fetch_dep_cut.py asserts this feature is off in "
     "every production graph",
     (
@@ -231,6 +288,53 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "A driver that shipped would be a second producer (the crate's own "
     "docs); this row is what keeps it in tests",
     (
+        "shekyl-archival-retention",
+        "consensus-kat",
+    ): "kat_forge on the emission verify's sealed witnesses (BackingVerified, "
+    "AuthVerified): the assembly KAT exercises emission_vin_verify without "
+    "building a membership-only proof. Enabled from this crate's own dev "
+    "edge only; a production acceptance cannot mint the witness",
+    (
+        "shekyl-archival-retention",
+        "seeded-rng",
+    ): "sign_bundle_commitment_seeded: the witness signature over a bundle "
+    "commitment with FN-DSA's nonce drawn from a caller's seed, so the chain "
+    "forge's bundles come out the same every forging (CHAIN_FORGE.md §5.3, "
+    "S8). Forwards shekyl-crypto-pq's seeded-rng. The production signer is "
+    "sign_bundle_commitment, over the OS; enabled from shekyl-chain-forge's "
+    "dev edge only",
+    (
+        "shekyl-bundle-producer",
+        "seeded-rng",
+    ): "WitnessRing::drawing and RingDraws: a ring whose witness keys, draw "
+    "seeds and bundle signatures come from a caller's draws, not the OS. The "
+    "chain forge's producer plan holds a produced bundle's bytes to its "
+    "plan's seed with it (CHAIN_FORGE.md §4, the producer audit); every "
+    "node's ring is WitnessRing::new's. Forwarded by shekyl-chain-ingest's "
+    "TEST_ONLY forge, whose one enabler is shekyl-chain-forge's dev edge",
+    (
+        "shekyl-chain-ingest",
+        "forge",
+    ): "the scenario driver for the chain forge "
+    "(CHAIN_FORGE.md §5.3, seam T5). The modules the executor names are "
+    "public (scenario, scenario_shard, scenario_archival, chain_drive, "
+    "admitted_draws, archival_driver, emission_assembly); test_support stays "
+    "crate-private. Over optional edges to the harness crates and the "
+    "seeded entry points (it forwards `harness` and the TEST_ONLY "
+    "`seeded-rng` of shekyl-harness-spender, shekyl-tx-builder and "
+    "shekyl-crypto-pq). Enabled from shekyl-chain-forge's dev edge alone, "
+    "whose example and integration test are the forge; a driver in a "
+    "shipped build would be a second producer",
+    (
+        "shekyl-p2p-session",
+        "harness",
+    ): "the in-memory peer and the scripted frames (Loopback, Wire, the "
+    "1001/1002/2002 builders). The session crate's own tests enable it on "
+    "the crate's dev edge, and shekyl-p2p-harness's tests enable it on "
+    "theirs; the harness library builds its own 1001 from the public Levin "
+    "types, so no normal edge names the feature. A shipped session has no "
+    "in-memory peer",
+    (
         "shekyl-draw-rng",
         "splitmix",
     ): "compiles SplitMix64, the seeded reference generator the relay, "
@@ -239,8 +343,101 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "conformance features are the float graders. The type is "
     "cfg(any(test, feature = \"splitmix\")), so with this feature held to "
     "dev edges no production build can name it: a production draw from "
-    "SplitMix64 is a compile error. The production generator is shekyl-ffi's "
+    "SplitMix64 is a compile error. The production generator is shekyl-relay's "
     "SecureRelayRng over OS entropy",
+    (
+        "shekyl-relay-privacy",
+        "conformance",
+    ): "compiles the float goodness-of-fit grader and the timeline "
+    "measurement. The daemon-linked build is the integer draws. Enabled "
+    "from shekyl-relay's dev edge, which pins the origin publication "
+    "budget to the recovery cycle count, and from this crate's own dev "
+    "edge for its instruments. A shipped relay does not grade",
+    (
+        "shekyl-crypto-pq",
+        "test-utils",
+    ): "exposes test-support helpers that take no seed: an ephemeral, non-derived "
+    "hybrid keypair (generate_ephemeral_keypair_for_tests), an FN-DSA key made "
+    "undecodable in place (corrupt_fn_dsa_half_for_tests) and the persona's "
+    "onion-seed derivation (derive_p_hs_id_seed). A non-derived key must never "
+    "reach a wallet. Enabled from dev edges only; shekyl-p-serve's test-signer "
+    "no longer forwards it (it never needed it: F-7, CHAIN_FORGE.md CF-1b)",
+    (
+        "shekyl-ct-balance",
+        "seeded-rng",
+    ): "PseudoOutBlinds::seeded: a spend's pseudo-out blinds drawn from a "
+    "ChaCha20 stream over a caller's seed, the last balancing the outputs' "
+    "masks, so the chain forge's spends come out the same every forging "
+    "(CHAIN_FORGE.md §5.2, S2). The production blinds are "
+    "PseudoOutBlinds::random, over the OS, and a group's from_intent; "
+    "forwarded by shekyl-tx-builder's TEST_ONLY seeded-rng only, so no build "
+    "that ships has blinds a caller seeds (CF-R9)",
+    (
+        "shekyl-crypto-pq",
+        "seeded-rng",
+    ): "exposes deterministic signing: sign_with_ml_dsa_seed, "
+    "sign_pqc_auth_for_output_with_ml_dsa_seed and both FN-DSA sign_with_rng_seed, "
+    "which sign with a caller's seed in place of the OS's. For KATs, "
+    "instruction-count benches and the chain forge's byte-identical chains "
+    "(CHAIN_FORGE.md §5.3, seam T3); no build that ships has these symbols, so "
+    "no production signer can be handed a seed (CF-R9)",
+    (
+        "shekyl-fcmp",
+        "seeded-rng",
+    ): "exposes the provers' seeded forms, proof::prove_with_rng and "
+    "proof::prove_membership_only_with_rng, which take their randomness from a "
+    "caller's generator (CHAIN_FORGE.md §5.3, seam T1). The production entry "
+    "points, prove and prove_membership_only, draw from the OS; no build that "
+    "ships has a prover that takes its caller's randomness (CF-R9, CF-F12). "
+    "Reached through shekyl-verify-cost's TEST_ONLY seeded-rng forward",
+    (
+        "shekyl-verify-cost",
+        "seeded-rng",
+    ): "compiles the crate's fixtures (relay, door, connect), each proving through "
+    "shekyl-fcmp's seeded prover so a run is byte-identical and the drift gate's "
+    "instruction counts hold still; forwards shekyl-fcmp/seeded-rng. Enabled by "
+    "the crate's own dev edge for its benches and pins; without it the library "
+    "is empty, and nothing that ships depends on this crate",
+    (
+        "shekyl-tx-builder",
+        "seeded-rng",
+    ): "exposes the signers' seeded forms (sign_transaction_with_terms_seeded, "
+    "sign_pqc_auths_seeded, open_spend_seeded, prove_backing_membership_seeded), "
+    "which draw the range proof, the pseudo-out blinds, the membership proof and "
+    "the ML-DSA nonces from a caller's seed (CHAIN_FORGE.md §5.3, seam T2). "
+    "Forwards shekyl-fcmp's, shekyl-crypto-pq's and shekyl-ct-balance's "
+    "seeded-rng; the production signers draw from the OS, and no build that "
+    "ships has one that takes its caller's randomness (CF-R9)",
+    (
+        "shekyl-harness-spender",
+        "seeded-rng",
+    ): "exposes seeded building (SpendPlan, Spender::drawing, "
+    "Persona::with_signing_seed): each spend's seeds are drawn on the planning "
+    "thread and handed to that spend, and a persona's ML-DSA randomness comes "
+    "from its own seed, so a chain built twice comes out byte for byte the same "
+    "(CHAIN_FORGE.md §5.3, seam T4). Forwards shekyl-tx-builder's and "
+    "shekyl-crypto-pq's seeded-rng. The crate is test support reached through dev "
+    "edges only; this row keeps the seeded surface there too",
+    (
+        "shekyl-harness-wallet",
+        "seeded-rng",
+    ): "exposes the fixture coinbase (coinbase.rs: paying, repay, paid), whose "
+    "transaction key is pinned per height through shekyl-crypto-pq's "
+    "TxKey::seeded (R-21), so one recipient's coinbase at one height is the same "
+    "bytes in every run. Forwards shekyl-crypto-pq's seeded-rng; forwarded by "
+    "shekyl-chain-rules' TEST_ONLY harness and shekyl-harness-spender's "
+    "TEST_ONLY seeded-rng (CF-F5's rule accepts both), and enabled on the store's, "
+    "the ingest's and the rules crate's dev edges. A shipped build has no coinbase "
+    "a caller can pin",
+    (
+        "shekyl-network",
+        "harness",
+    ): "exposes HARNESS_NETWORK_ID, the id a harness chain that mines its own "
+    "genesis is judged under (Trust::UNPINNED): no network's row has it, and no "
+    "build that ships has the constant (CHAIN_FORGE.md CF-R15; deleted in CF-5). "
+    "Forwarded by shekyl-chain-rules' TEST_ONLY harness feature (CF-F5's rule "
+    "accepts the forward), and enabled from the dev edges of the crates whose "
+    "tests sign or judge under it",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -259,6 +456,16 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
         "(BA-I22). The derived keys stay in the crate; the function returns "
         "nothing. The bench is the one caller, and the feature dies with it",
     ),
+    (
+        "randomx-v2-sys",
+        "full-dataset",
+    ): (
+        "shekyl-randomx-differential",
+        "the five miner symbols (randomx_get_flags and the dataset functions) "
+        "exist for the Hole-1 parity harness. The light oracle build does not "
+        "enable them. A second crate enabling the feature is the isolation "
+        "failure this row exists to catch, and the feature dies with the harness",
+    ),
 }
 
 # (owning crate, feature) → why it is an ordinary, permanent feature. The third
@@ -266,9 +473,36 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # categorized without forcing every feature into the two special classes.
 # `shekyl-chain-ingest`'s three (its manifest's own words): the pipeline's
 # actor runtime, the corpus fetcher's RPC client, and the replay CLI — the
-# production surfaces its consumers choose between (`shekyl-ffi` compiles the
-# trace writer alone with `default-features = false`).
+# production surfaces its consumers choose between (`shekyl-chain-sync-runtime`
+# and `shekyl-p2p-harness` take `pipeline` alone with `default-features =
+# false`; `shekyl-chain-sync` takes none).
 PERMANENT: dict[tuple[str, str], str] = {
+    (
+        "shekyl-mempool",
+        "pool",
+    ): "the pool itself: the store, the door, the relay bit, the reconcile "
+    "and template selection. On by default, so every daemon-side consumer "
+    "takes it; the economics sim takes the crate with default features off "
+    "for CEN-M10's store-free policy (the limit, the two orders, the "
+    "eviction walks), which ESR-17 calls rather than restates",
+    (
+        "shekyl-network",
+        "serde",
+    ): "the network's lowercase name on the wire and in files: shekyl-address "
+    "and shekyl-rpc-types serialize the one Network type with it (the RPC's "
+    "`regtest`, NETWORK_IDENTITY.md NI-Q1). A production surface, not a test "
+    "seam",
+    (
+        "shekyl-chain-ingest",
+        "bench-internals",
+    ): "the bench capture's selector: scripts/bench/capture_rust_baseline.sh "
+    "passes it, with `harness`, to build benches/block_path_iai.rs and the "
+    "four benches that read or serve from the same store (serve_bodies, "
+    "levin_bodies, block_template, wallet_block_read), and it "
+    "compiles bench_support.rs, the connector's form, validate and connect "
+    "calls made on one thread over a committed corpus. It turns on the "
+    "optional tempfile edge for the bench store's directory and enables no "
+    "other feature; no dependency edge names it",
     (
         "shekyl-chain-sync",
         "cs2-long-run",
@@ -279,7 +513,7 @@ PERMANENT: dict[tuple[str, str], str] = {
     (
         "shekyl-chain-ingest",
         "pipeline",
-    ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
+    ): "the sequencer and the validate+connect actor (kameo/tokio) "
     "— the one stateful stage is an actor (RD-Q11)",
     (
         "shekyl-chain-ingest",
@@ -295,15 +529,27 @@ PERMANENT: dict[tuple[str, str], str] = {
         "producer",
     ): "the bundle producer's read path (SO-D12 increment 4c): the fetch "
     "scheduler, its store-backed facts and the producer's task. The node "
-    "takes it by default; shekyl-ffi, the wallet-side image, stays on "
-    "`pipeline` so the shard-fetch client is not in its graph (SF-D4)",
+    "takes it by default; a crate that takes `pipeline` alone "
+    "(shekyl-chain-sync-runtime, shekyl-p2p-harness) has no shard-fetch "
+    "client in its graph (SF-D4)",
     (
         "shekyl-bundle-producer",
         "fetch",
     ): "the producer's challenge read over the fetch scheduler. Off by "
     "default because the ring alone is linked through the ingest crate's "
-    "`pipeline`, which shekyl-ffi takes; the ingest crate's `producer` "
-    "feature turns it on for the node",
+    "`pipeline`, which shekyl-chain-sync-runtime and shekyl-p2p-harness take "
+    "alone; the ingest crate's `producer` feature turns it on for the node",
+    (
+        "shekyl-fcmp",
+        "std",
+    ): "the crate's std build, on by default; every consumer takes it",
+    (
+        "shekyl-fcmp",
+        "multisig",
+    ): "the threshold spend: frost_sal's dealer split, share loader and FROST "
+    "SAL drivers over modular_frost, and the fcmp-proofs multisig SAL. Off by "
+    "default so a solo build links no FROST code; the multisig wallet's "
+    "signing ceremony takes it on a normal edge (shekyl-multisig)",
 }
 
 # Crates whose feature table must be exhaustively categorized (third limb).
@@ -325,8 +571,24 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-chain-sync` joined 2026-10-23 (CS-3). It is the pure model; its
 # one feature is the floor job's `cs2-long-run`, and its runtime half is the
 # separate crate `shekyl-chain-sync-runtime` (Rick, 2026-10-23).
+# `shekyl-chain-sync-runtime` joined 2026-11-04, the commit that declared
+# `publish-for-test` for shekyl-node's follower tests. That is its only
+# feature, and it is test-only.
 # `shekyl-bundle-producer` joined 2026-10-25, the commit whose ingest
 # feature first enables its `fetch` (`SO-D12` increment 4c).
+# `shekyl-p2p-session` joined 2026-11-05 (the p2p remnant cutover, PR #1272):
+# its `harness` feature is enabled across a crate boundary by
+# shekyl-p2p-harness's tests. That is its only feature, and it is test-only.
+# `randomx-v2-sys` joined 2026-11-06, the commit that declared
+# `full-dataset` for shekyl-randomx-differential's Hole-1 bins. That is
+# its only feature. It is consumer-owned: the light differential build
+# does not enable it, and the feature dies with the harness.
+# `shekyl-relay-privacy` joined 2026-11-06: `conformance` is its only
+# feature, and shekyl-relay's dev edge enables it for the origin-budget
+# pin. The crate's own tests enable it too; no normal edge does.
+# `shekyl-fcmp` joined 2026-11-13 (multisig slice 3 PR-B), the commit whose
+# move of the end-to-end spend test into shekyl-multisig first enabled its
+# `multisig` from another crate. Both its features are PERMANENT.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -340,6 +602,10 @@ PERMANENT: dict[tuple[str, str], str] = {
 # the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset(
     {
+        "shekyl-win-sec",
+        "shekyl-rpc-transport",
+        "shekyl-wire",
+        "shekyl-archival-retention",
         "shekyl-chain-store",
         "shekyl-tor-control-client",
         "shekyl-chain-rules",
@@ -348,8 +614,20 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-draw-rng",
         "shekyl-noise",
         "shekyl-chain-sync",
+        "shekyl-chain-sync-runtime",
         "shekyl-mempool",
         "shekyl-bundle-producer",
+        "shekyl-curve-tree",
+        "shekyl-p2p-session",
+        "shekyl-relay-privacy",
+        "shekyl-network",
+        "randomx-v2-sys",
+        "shekyl-fcmp",
+        "shekyl-crypto-pq",
+        "shekyl-tx-builder",
+        "shekyl-harness-spender",
+        "shekyl-harness-wallet",
+        "shekyl-ct-balance",
     }
 )
 
@@ -361,33 +639,25 @@ Hit = tuple[str, str, str]  # feature, consumer, edge kind
 # consumer, edge kind) — so a new feature or enabler on a listed crate is red,
 # and a vanished hit is red until deleted. Shrink-only: a crate leaves this
 # list by joining GOVERNED_OWNERS
-# with its features categorized (FOLLOWUPS "Fourteen crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the fifteenth entry,
-# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
+# with its features categorized (FOLLOWUPS "Thirteen crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis; shekyl-crypto-pq left
+# with CF-1b, governed). Entries marked FINDING enable
 # a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first. Forwarding raised the count from twelve to fifteen
 # (shekyl-curve-io, shekyl-curve-primitives, shekyl-fcmp are reached only by
 # forwarded `std` / `multisig` features) and added the two forwarded
 # normal-edge test paths named in the FINDING notes.
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
-    "shekyl-crypto-pq": (
-        "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
-        "shekyl-ffi on a NORMAL edge directly and shekyl-p-serve on a NORMAL edge by "
-        "forwarding (its test-signer feature); the FFI exports that call it are "
-        "unconditional extern \"C\" in the production header, so categorizing changes "
-        "nothing. Leaves this list when F-7 lands.",
-        frozenset({
-            ("test-utils", "shekyl-archival-retention", "dev"),
-            ("test-utils", "shekyl-ffi", "normal"),
-            ("test-utils", "shekyl-p-fetch", "dev"),
-            ("test-utils", "shekyl-p-serve", "normal"),
-            ("test-utils", "shekyl-tx-builder", "dev"),
-        }),
-    ),
     "shekyl-curve-generators": (
-        "categorization only",
+        "categorization only. The two normal-edge `std` hits are the build-edge "
+        "forwards of shekyl-bulletproofs' and shekyl-fcmp-proofs' own `std`, seen "
+        "on the normal edge each crate also has to this one once forwards were "
+        "recorded per edge (CHAIN_FORGE.md CF-F5, 2026-11-14): the same forwards, "
+        "not new enablers.",
         frozenset({
             ("std", "shekyl-bulletproofs", "build"),
+            ("std", "shekyl-bulletproofs", "normal"),
+            ("std", "shekyl-fcmp-proofs", "normal"),
             ("std", "shekyl-curve-primitives", "normal"),
             ("std", "shekyl-fcmp-proofs", "build"),
             ("std", "shekyl-scanner", "normal"),
@@ -408,23 +678,11 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
             ("std", "shekyl-scanner", "normal"),
         }),
     ),
-    "shekyl-curve-tree": (
-        "categorization only",
-        frozenset({
-            ("test-tamper", "shekyl-p-host", "dev"),
-        }),
-    ),
     "shekyl-engine-core": (
         "categorization only",
         frozenset({
             ("test-helpers", "shekyl-wallet-rpc", "dev"),
             ("test-helpers", "shekyl-chain-ingest", "dev"),
-        }),
-    ),
-    "shekyl-fcmp": (
-        "categorization only",
-        frozenset({
-            ("multisig", "shekyl-ffi", "normal"),
         }),
     ),
     "shekyl-fcmp-proofs": (
@@ -460,9 +718,10 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-rpc-client": (
-        "categorization only",
+        "categorization only. The console client's `std` hit left with "
+        "shekyl-daemon-ctl (R8); the remaining hits are the ones that crate's "
+        "deletion did not own.",
         frozenset({
-            ("std", "shekyl-daemon-rpc", "normal"),
             ("std", "shekyl-engine-core", "normal"),
             ("std", "shekyl-rpc-transport", "normal"),
             ("std", "shekyl-scanner", "normal"),
@@ -470,9 +729,16 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         }),
     ),
     "shekyl-scanner": (
-        "categorization only",
+        "categorization only. The normal-edge test-utils hit is shekyl-engine-core's "
+        "`test-helpers = [\"shekyl-scanner/test-utils\"]` forward, seen on the normal "
+        "edge engine-core also has to this crate once forwards were recorded per edge "
+        "(CHAIN_FORGE.md CF-F5, 2026-11-14). It is on only when test-helpers is, and "
+        "test-helpers' only enablers are dev edges (shekyl-engine-core's own entry "
+        "below); the gate holds that once engine-core is governed with test-helpers "
+        "as a TEST_ONLY row, whose forwards CF-F5 then accepts.",
         frozenset({
             ("test-utils", "shekyl-engine-core", "dev"),
+            ("test-utils", "shekyl-engine-core", "normal"),
             ("test-utils", "shekyl-wallet-rpc", "dev"),
         }),
     ),
@@ -527,6 +793,13 @@ def cargo_metadata() -> dict:
 # consumer's *alias* for it (`package = "..."` renames), resolved through the
 # consumer's dependency list; `"dep:<name>"` entries enable an optional
 # dependency and no feature, and are not enablements.
+#
+# **One forward, every edge (`CHAIN_FORGE.md` `CF-F5`).** A consumer may name
+# the same owner on more than one edge (a normal dependency and a dev one).
+# Cargo applies a forward to whichever of those edges a build activates, so a
+# forward is recorded once per edge the alias names. Recording it once, for
+# the edge the manifest happened to list last, let a forward over a normal
+# edge pass as dev.
 Enablement = tuple[str, str, str, str, str]  # owner, feature, consumer, kind, via
 
 
@@ -536,11 +809,13 @@ def enablements(meta: dict) -> list[Enablement]:
     members = {p["name"] for p in meta["packages"]}
     out: list[Enablement] = []
     for consumer in meta["packages"]:
-        alias_to_edge: dict[str, tuple[str, str]] = {}
+        alias_to_edges: dict[str, list[tuple[str, str]]] = {}
         for dep in consumer["dependencies"]:
             kind = dep.get("kind") or "normal"
             alias = dep.get("rename") or dep["name"]
-            alias_to_edge[alias] = (dep["name"], kind)
+            edges = alias_to_edges.setdefault(alias, [])
+            if (dep["name"], kind) not in edges:
+                edges.append((dep["name"], kind))
             for feature in dep.get("features", []):
                 out.append((dep["name"], feature, consumer["name"], kind, "edge"))
         for fname, entries in consumer.get("features", {}).items():
@@ -549,13 +824,94 @@ def enablements(meta: dict) -> list[Enablement]:
                     continue
                 alias, feature = entry.split("/", 1)
                 alias = alias.rstrip("?")
-                edge = alias_to_edge.get(alias)
-                if edge is None:
-                    continue
-                owner, kind = edge
-                if owner in members:
-                    out.append((owner, feature, consumer["name"], kind, f"feature:{fname}"))
+                for owner, kind in alias_to_edges.get(alias, []):
+                    if owner in members:
+                        out.append((owner, feature, consumer["name"], kind, f"feature:{fname}"))
     return out
+
+
+def check_test_only(
+    meta: dict,
+    registry: dict[tuple[str, str], str],
+    all_enablements: list[Enablement] | None = None,
+) -> list[str]:
+    """The test-only limb, over one `cargo metadata` document: every feature
+    in `registry` is declared, enabled by no other feature of its owner, by
+    no non-dev edge, and by at least one dev edge.
+
+    One exception, and it is the only one (`CHAIN_FORGE.md` `CF-F5`): a
+    forward over a non-dev edge passes when the feature that forwards it is
+    itself a row of `registry`. That row's own limbs keep the forwarding
+    feature on dev edges only, so the forward is on only in the builds the
+    row allows. A forward from any other feature over a normal edge is red.
+    Such a forward also answers the subject check below: the chain it
+    starts ends in a dev edge, because the forwarding row needs one.
+    """
+    packages = {p["name"]: p for p in meta["packages"]}
+    if all_enablements is None:
+        all_enablements = enablements(meta)
+    failures: list[str] = []
+    for (owner, feature), why in sorted(registry.items()):
+        # Subject assertion: the feature must exist where it is claimed to.
+        pkg = packages.get(owner)
+        if pkg is None:
+            failures.append(
+                f"{owner}: registered in TEST_ONLY but is not a workspace member — "
+                f"stale row, or the crate was renamed"
+            )
+            continue
+        features_map = pkg.get("features", {})
+        if feature not in features_map:
+            failures.append(
+                f"{owner}: no feature `{feature}` — TEST_ONLY names a feature this "
+                f"crate does not declare, so every edge check below is vacuous"
+            )
+            continue
+
+        # Owner-side enablement ships the arm to every consumer, including
+        # those whose edges never name it. `default` is the loud case;
+        # any other feature that lists this one is the same hole with a
+        # different name.
+        for other, enables in sorted(features_map.items()):
+            if other == feature:
+                continue
+            if feature in enables:
+                failures.append(
+                    f"{owner}: feature `{other}` enables `{feature}` — this "
+                    f"feature {why}, and an intra-crate enablement puts it in "
+                    f"every build that takes `{other}` (including `default`). "
+                    f"Keep `{feature}` as a standalone empty feature enabled "
+                    f"only from a consumer's [dev-dependencies] edge."
+                )
+
+        dev_enablers: list[str] = []
+        for o, f, consumer, kind, via in all_enablements:
+            if o != owner or f != feature:
+                continue
+            if kind == "dev":
+                dev_enablers.append(consumer)
+                continue
+            if via.startswith("feature:") and (consumer, via[len("feature:"):]) in registry:
+                dev_enablers.append(consumer)
+                continue
+            how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
+            failures.append(
+                f"{consumer}: enables `{owner}/{feature}` {how} {kind} "
+                f"dependency edge — this feature {why}, and a non-dev edge puts "
+                f"it in builds that ship. Move the feature to the "
+                f"[dev-dependencies] edge, or forward it only from a feature "
+                f"that is itself TEST_ONLY."
+            )
+
+        if not dev_enablers:
+            failures.append(
+                f"{owner}/{feature}: no dev-dependency edge enables it, directly or "
+                f"through a TEST_ONLY feature's forward. Either the "
+                f"consumer stopped needing it (delete the feature and this row) or "
+                f"the edge was renamed — until one is true, the non-dev check above "
+                f"passes without a subject."
+            )
+    return failures
 
 
 def check_consumer_owned(
@@ -739,6 +1095,31 @@ def _synthetic_forwarded() -> dict:
                 "name": "forwarder",
                 "features": {"x": ["owner/cfeat"]},
                 "dependencies": [{"name": "owner", "features": [], "kind": None}],
+            },
+        ]
+    }
+
+
+def _synthetic_dual_edge_forward() -> dict:
+    """`CF-F5`'s shape: `fwd` depends on `owner` twice, a normal edge and a
+    dev edge (the dev edge listed last, which is the order that hid the
+    normal one), and forwards `owner/cfeat` from its own feature `x`.
+    `tester` turns `x` on from a dev edge only."""
+    return {
+        "packages": [
+            {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+            {
+                "name": "fwd",
+                "features": {"x": ["owner/cfeat"]},
+                "dependencies": [
+                    {"name": "owner", "features": [], "kind": None},
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"},
+                ],
+            },
+            {
+                "name": "tester",
+                "features": {},
+                "dependencies": [{"name": "fwd", "features": ["x"], "kind": "dev"}],
             },
         ]
     }
@@ -930,7 +1311,77 @@ def selftest() -> int:
     fwd_en = enablements(fwd)
     if ("owner", "cfeat", "forwarder", "normal", "feature:x") not in fwd_en:
         bad_pre.append(f"enablements() did not record the forwarded activation: {fwd_en!r}")
+    # CF-F5: a forward is recorded on every edge its alias names.
+    dual = _synthetic_dual_edge_forward()
+    dual_en = enablements(dual)
+    for kind in ("normal", "dev"):
+        if ("owner", "cfeat", "fwd", kind, "feature:x") not in dual_en:
+            bad_pre.append(
+                f"enablements() did not record the dual-edge forward on its {kind} edge: {dual_en!r}"
+            )
+    test_only_cases = [
+        (
+            "dev edge only: green",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+                {"name": "t", "features": {}, "dependencies": [
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only"},
+            [],
+        ),
+        (
+            "normal edge: red",
+            _synthetic({"cfeat": []}, {"shipper": [("owner", ["cfeat"])]}),
+            {("owner", "cfeat"): "is test-only"},
+            ["on a normal dependency edge"],
+        ),
+        (
+            "dual-edge forward from an ordinary feature: red (green before CF-F5)",
+            _synthetic_dual_edge_forward(),
+            {("owner", "cfeat"): "is test-only"},
+            ["by forwarding (`feature:x`) over a normal"],
+        ),
+        (
+            "dual-edge forward from a TEST_ONLY feature: green",
+            _synthetic_dual_edge_forward(),
+            {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
+            [],
+        ),
+        (
+            "only a TEST_ONLY feature's normal-edge forward enables it: green",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+                {"name": "fwd", "features": {"x": ["owner/cfeat"]}, "dependencies": [
+                    {"name": "owner", "features": [], "kind": None}]},
+                {"name": "tester", "features": {}, "dependencies": [
+                    {"name": "fwd", "features": ["x"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only", ("fwd", "x"): "is test-only too"},
+            [],
+        ),
+        (
+            "no dev edge enables it: red",
+            _synthetic({"cfeat": []}, {"unrelated": [("owner", [])]}),
+            {("owner", "cfeat"): "is test-only"},
+            ["no dev-dependency edge enables it"],
+        ),
+        (
+            "the owner's own feature enables it: red",
+            {"packages": [
+                {"name": "owner", "features": {"cfeat": [], "default": ["cfeat"]}, "dependencies": []},
+                {"name": "t", "features": {}, "dependencies": [
+                    {"name": "owner", "features": ["cfeat"], "kind": "dev"}]}]},
+            {("owner", "cfeat"): "is test-only"},
+            ["intra-crate enablement"],
+        ),
+    ]
     bad: list[str] = list(bad_pre)
+    for label, meta, registry, want in test_only_cases:
+        got = check_test_only(meta, registry)
+        if not want and got:
+            bad.append(f"{label}: expected green, got {got!r}")
+        for needle in want:
+            if not any(needle in f for f in got):
+                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
     for label, meta, governed, grand, want in trigger_cases:
         got = check_trigger(meta, governed, grand)
         if not want and got:
@@ -969,7 +1420,7 @@ def selftest() -> int:
     print(
         f"feature-gate selftest: {len(cases)} consumer-owned cases + "
         f"{len(exhaustive_cases) + 1} exhaustiveness cases + "
-        f"{len(trigger_cases)} trigger cases held"
+        f"{len(trigger_cases)} trigger cases + {len(test_only_cases)} test-only cases held"
     )
     return 0
 
@@ -986,61 +1437,7 @@ def main() -> int:
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
     failures += check_trigger(meta, GOVERNED_OWNERS, MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)
 
-    for (owner, feature), why in sorted(TEST_ONLY.items()):
-        # Subject assertion: the feature must exist where it is claimed to.
-        pkg = packages.get(owner)
-        if pkg is None:
-            failures.append(
-                f"{owner}: registered in TEST_ONLY but is not a workspace member — "
-                f"stale row, or the crate was renamed"
-            )
-            continue
-        features_map = pkg.get("features", {})
-        if feature not in features_map:
-            failures.append(
-                f"{owner}: no feature `{feature}` — TEST_ONLY names a feature this "
-                f"crate does not declare, so every edge check below is vacuous"
-            )
-            continue
-
-        # Owner-side enablement ships the arm to every consumer, including
-        # those whose edges never name it. `default` is the loud case;
-        # any other feature that lists this one is the same hole with a
-        # different name.
-        for other, enables in sorted(features_map.items()):
-            if other == feature:
-                continue
-            if feature in enables:
-                failures.append(
-                    f"{owner}: feature `{other}` enables `{feature}` — this "
-                    f"feature {why}, and an intra-crate enablement puts it in "
-                    f"every build that takes `{other}` (including `default`). "
-                    f"Keep `{feature}` as a standalone empty feature enabled "
-                    f"only from a consumer's [dev-dependencies] edge."
-                )
-
-        dev_enablers: list[str] = []
-        for o, f, consumer, kind, via in all_enablements:
-            if o != owner or f != feature:
-                continue
-            if kind == "dev":
-                dev_enablers.append(consumer)
-            else:
-                how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
-                failures.append(
-                    f"{consumer}: enables `{owner}/{feature}` {how} {kind} "
-                    f"dependency edge — this feature {why}, and a non-dev edge puts "
-                    f"it in builds that ship. Move the feature to the "
-                    f"[dev-dependencies] edge."
-                )
-
-        if not dev_enablers:
-            failures.append(
-                f"{owner}/{feature}: no dev-dependency edge enables it. Either the "
-                f"consumer stopped needing it (delete the feature and this row) or "
-                f"the edge was renamed — until one is true, the non-dev check above "
-                f"passes without a subject."
-            )
+    failures += check_test_only(meta, TEST_ONLY, all_enablements)
 
     if failures:
         print("Test-only feature gate FAILED:\n", file=sys.stderr)

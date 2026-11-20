@@ -12,9 +12,14 @@ use std::time::Duration;
 
 use super::super::super::posture::BootstrapPace;
 use super::{
-    announces, carrying, duration_ns, held, managed, policy, reach_usable, render, socks,
+    announces, carrying, duration_ns, held, managed, policy, reach_usable, replied, socks,
     takes_down, Action, Core, Input, Shown,
 };
+
+/// The status in words, as the daemon's log says it.
+fn said(core: &Core) -> String {
+    shekyl_tor_status::render(&core.view(u64::MAX), Some("/data"))
+}
 
 fn says_progress(step: &super::Step) -> usize {
     step.actions
@@ -33,6 +38,8 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
     core.on(Input::StateFileAppeared, 0);
+    // The deferred writes' `SETCONF` is answered.
+    replied(&mut core, 0);
     let alive = duration_ns(Duration::from_secs(4));
     assert_eq!(core.deadline(), Some(alive), "the liveness sample is armed");
 
@@ -47,6 +54,7 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
         },
         alive,
     );
+    replied(&mut core, alive);
     assert_eq!(core.deadline(), Some(2 * alive), "the next sample is armed");
     assert_eq!(
         core.status().shown,
@@ -57,7 +65,7 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
     // A wedged Tor: the next sample's reply misses the bound.
     let step = core.on_deadline(2 * alive);
     assert!(step.actions.contains(&Action::Sample));
-    let fault = core.on(Input::ReplyLate, 2 * alive);
+    let fault = core.on_deadline(2 * alive + duration_ns(policy().reply_bound));
     assert!(takes_down(&fault), "a late reply withdraws the route");
     // Health is the relay's verdict (`GS-Q3`), reported by the relay, not
     // by this fault; the link's own state is what the fault moves.
@@ -95,8 +103,13 @@ fn the_liveness_sample_ends_with_the_running_phase() {
 #[test]
 fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
+    // The launch and its subscription. The progress line is not said from
+    // behind a request this test has already left behind.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     let sample = |progress, read| Input::DirectorySample {
         progress: Some(progress),
         socks: Some(socks()),
@@ -108,12 +121,17 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     let window = duration_ns(Duration::from_secs(4));
     let step = core.on_deadline(window);
     assert_eq!(says_progress(&step), 1, "the progress line is said");
+    // The same deadline's sample stays in flight. The next progress line
+    // waits until that sample is answered.
+    if step.actions.contains(&Action::Sample) {
+        replied(&mut core, window);
+    }
     assert_eq!(announces(&step), 0, "the line is not a posture warning");
     let line = core.status().bootstrap.expect("a line while bootstrapping");
     assert_eq!(line.received, Some(3_200_000));
     assert_eq!(line.window, Duration::from_secs(4));
     assert_eq!(core.status().pace, Some(BootstrapPace::SlowButNormal));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("55%"), "{text}");
     assert!(text.contains("unchanged for 4 s"), "{text}");
     assert!(text.contains("3.2 MB arrived in the last 4 s"), "{text}");
@@ -130,7 +148,7 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
     assert_eq!(says_progress(&step), 1);
     assert_eq!(announces(&step), 0);
     assert_eq!(core.status().pace, Some(BootstrapPace::Stalled));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("Nothing arrived in the last 5 s"), "{text}");
     assert!(text.contains("unchanged for 8 s"), "{text}");
 
@@ -144,7 +162,7 @@ fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
 #[test]
 fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     core.on(
         Input::DirectorySample {
@@ -155,7 +173,7 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
         1,
     );
     core.on_deadline(duration_ns(Duration::from_secs(4)));
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("30%"), "{text}");
     assert!(!text.contains("Nothing arrived"), "{text}");
 }
@@ -167,7 +185,7 @@ fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
 #[test]
 fn a_blocked_bootstrap_is_said_by_its_cause_not_by_the_progress_line() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     let first = core.on(Input::ExternalBlocked, 1);
     assert_eq!(
@@ -201,8 +219,11 @@ fn a_blocked_bootstrap_is_said_by_its_cause_not_by_the_progress_line() {
 #[test]
 fn the_progress_line_measures_the_span_it_names() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     let count_at = duration_ns(Duration::from_secs(1));
     core.on(
         Input::DirectorySample {
@@ -227,7 +248,7 @@ fn the_progress_line_measures_the_span_it_names() {
     assert_eq!(line.received, Some(5_000_000));
     assert_eq!(line.window, Duration::from_secs(5));
     assert_ne!(line.window, policy().alive_every);
-    let text = render(&core.status());
+    let text = said(&core);
     assert!(text.contains("5.0 MB arrived in the last 5 s"), "{text}");
     assert!(text.contains("unchanged for 5 s"), "{text}");
 }
@@ -241,8 +262,12 @@ fn the_progress_line_measures_the_span_it_names() {
 #[test]
 fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
+    // The launch, then the subscription; its `Replied` sends the first
+    // sample, answered here.
+    replied(&mut core, 0);
+    replied(&mut core, 0);
     core.on(
         Input::DirectorySample {
             progress: Some(40),
@@ -251,6 +276,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
         },
         0,
     );
+    replied(&mut core, 0);
     let sample_due = duration_ns(policy().sample_every);
     // Halfway is the actor's poll shape: earlier than the sample, later
     // than the arm. The core does not import the actor's interval.
@@ -273,6 +299,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
         },
         sample_due,
     );
+    replied(&mut core, sample_due);
     let between = core.on(
         Input::BootstrapNoted { progress: 40 },
         sample_due + notice_at,
@@ -298,7 +325,7 @@ fn a_bootstrap_notice_leaves_the_traffic_sample_where_it_was_armed() {
 #[test]
 fn an_origin_hold_during_bootstrap_is_announced_not_said_as_progress() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
-    core.on(Input::PinAccepted, 0);
+    core.on(Input::accepted(), 0);
     core.on(Input::Spawned, 0);
     let up = core.on(carrying(), 0);
     assert_eq!(announces(&up), 1, "a recovery is the posture line");

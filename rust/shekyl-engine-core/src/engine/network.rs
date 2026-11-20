@@ -13,13 +13,7 @@
 //! > variants at compile time, and a daemon-network mismatch is a typed
 //! > error (`OpenError::NetworkMismatch`), never a warning.
 //!
-//! The current address-layer enum has three variants
-//! (`Mainnet | Testnet | Stagenet`); the plan additionally calls out a
-//! `Fakechain` variant for regtest / dev. Adding `Fakechain` is a
-//! workspace-wide change (HRP tables, `NetworkSafetyConstants`,
-//! `DerivationNetwork`, wallet-file region-1 byte parse) and is
-//! deliberately scheduled as a separate commit on this same Phase 1
-//! branch, so this commit's diff stays scoped to the wallet-core
-//! skeleton. See `docs/V3_WALLET_DECISION_LOG.md`.
+//! The network is the network table's (`shekyl-network`, four networks,
+//! regtest included; `NETWORK_IDENTITY.md`).
 
 pub use shekyl_address::Network;

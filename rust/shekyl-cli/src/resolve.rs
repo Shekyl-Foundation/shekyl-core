@@ -15,23 +15,8 @@
 
 use shekyl_types::Timestamp;
 
-/// Named send-fee tier. The wire spellings are the OpenAPI `FeePriority` values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeePriority {
-    Economy,
-    Standard,
-    High,
-}
-
-impl FeePriority {
-    pub(crate) fn wire(self) -> &'static str {
-        match self {
-            Self::Economy => "ECONOMY",
-            Self::Standard => "STANDARD",
-            Self::High => "PRIORITY",
-        }
-    }
-}
+/// The send-fee tier: the one tier set, defined beside the fee ladder.
+pub use shekyl_economics::FeePriority;
 
 /// Which payment requests `request list` asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +32,199 @@ impl RequestFilter {
             Self::Pending => "PENDING",
             Self::Matched => "MATCHED",
             Self::All => "ALL",
+        }
+    }
+}
+
+/// A block named by its hash or by its height. A 64-character hex string is
+/// the hash; anything else that is a `u64` is the height.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockRef {
+    /// 64 lowercase hexadecimal characters.
+    Hash(String),
+    /// A chain height.
+    Height(u64),
+}
+
+/// One daemon word (`INPUT_GRAMMAR.md` §13), with its arguments already
+/// checked. The renderer is called with this value; it does not parse again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum View {
+    /// `chain height`.
+    ChainHeight,
+    /// `chain difficulty`.
+    ChainDifficulty,
+    /// `chain stats --last`.
+    ChainStats {
+        /// How many recent blocks the summary covers.
+        last: u64,
+    },
+    /// `chain alt`.
+    ChainAlt,
+    /// `chain spent <key-image>`. `hash` is 64 lowercase hex characters.
+    ChainSpent {
+        /// The key image.
+        hash: String,
+    },
+    /// `block show <hash|height>`.
+    BlockShow(BlockRef),
+    /// `block header list --from --to`, inclusive heights, `from` not after `to`.
+    BlockHeaderList {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `peer list`. Neither switch means both lists.
+    PeerList {
+        /// Include the white list.
+        white: bool,
+        /// Include the gray list.
+        gray: bool,
+        /// Per-list cap. `None` is the whole list.
+        max: Option<u64>,
+    },
+    /// `peer stats`.
+    PeerStats,
+    /// `peer connections`.
+    PeerConnections,
+    /// `p2p stats`.
+    P2pStats,
+    /// `sync status`.
+    SyncStatus,
+    /// `daemon status`.
+    DaemonStatus,
+    /// `txpool stats`.
+    TxpoolStats,
+    /// `chain coinbase sum --from --to`.
+    ChainCoinbaseSum {
+        /// First height.
+        from: u64,
+        /// Last height.
+        to: u64,
+    },
+    /// `tx relay <id>`.
+    TxRelay {
+        /// The transaction id.
+        hash: String,
+    },
+    /// `txpool list [--short]`.
+    TxpoolList {
+        /// Hashes only.
+        short: bool,
+    },
+    /// `txpool flush [id]`. `None` flushes the pool.
+    TxpoolFlush {
+        /// One transaction, or the whole pool.
+        id: Option<String>,
+    },
+    /// `ban list`.
+    BanList,
+    /// `ban add`. `duration` is seconds.
+    BanAdd {
+        /// The host, or an IPv4 subnet.
+        ip: String,
+        /// How long, when the ban is not until lifted.
+        duration: Option<u64>,
+    },
+    /// `ban remove`.
+    BanRemove {
+        /// The host.
+        ip: String,
+    },
+    /// `ban show`.
+    BanShow {
+        /// The host.
+        ip: String,
+    },
+    /// `option set`.
+    OptionSet {
+        /// The option name.
+        name: String,
+        /// The value text.
+        value: String,
+    },
+    /// `option show`.
+    OptionShow {
+        /// One row, or every row the caller may see.
+        name: Option<String>,
+    },
+    /// `daemon stop`.
+    DaemonStop,
+}
+
+impl View {
+    /// The word, for the command's displayed name.
+    #[must_use]
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::ChainHeight => "chain height",
+            Self::ChainDifficulty => "chain difficulty",
+            Self::ChainStats { .. } => "chain stats",
+            Self::ChainAlt => "chain alt",
+            Self::ChainSpent { .. } => "chain spent",
+            Self::BlockShow(_) => "block show",
+            Self::BlockHeaderList { .. } => "block header list",
+            Self::PeerList { .. } => "peer list",
+            Self::PeerStats => "peer stats",
+            Self::PeerConnections => "peer connections",
+            Self::P2pStats => "p2p stats",
+            Self::SyncStatus => "sync status",
+            Self::DaemonStatus => "daemon status",
+            Self::TxpoolStats => "txpool stats",
+            Self::ChainCoinbaseSum { .. } => "chain coinbase sum",
+            Self::TxRelay { .. } => "tx relay",
+            Self::TxpoolList { .. } => "txpool list",
+            Self::TxpoolFlush { .. } => "txpool flush",
+            Self::BanList => "ban list",
+            Self::BanAdd { .. } => "ban add",
+            Self::BanRemove { .. } => "ban remove",
+            Self::BanShow { .. } => "ban show",
+            Self::OptionSet { .. } => "option set",
+            Self::OptionShow { .. } => "option show",
+            Self::DaemonStop => "daemon stop",
+        }
+    }
+}
+
+/// The words that enroll clients on a node, and this client's own channel
+/// key (`INPUT_GRAMMAR.md` IG-Q87, IG-Q109).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Enroll {
+    /// `rpc client add <fingerprint> --ceiling <word>...`.
+    ClientAdd {
+        fingerprint: String,
+        ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,
+    },
+    /// `rpc client set <fingerprint> --ceiling <word>...`.
+    ClientSet {
+        fingerprint: String,
+        ceiling: Vec<shekyl_rpc_types::wire::rpc::CeilingWord>,
+    },
+    /// `rpc client remove <fingerprint>`.
+    ClientRemove { fingerprint: String },
+    /// `rpc client list`.
+    ClientList,
+    /// `rpc bundle show`.
+    BundleShow,
+    /// `rpc key create`: this client's key, for a node on another host.
+    KeyCreate,
+    /// `rpc key show`: this client's fingerprint.
+    KeyShow,
+}
+
+impl Enroll {
+    /// The words, as the person typed them.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::ClientAdd { .. } => "rpc client add",
+            Self::ClientSet { .. } => "rpc client set",
+            Self::ClientRemove { .. } => "rpc client remove",
+            Self::ClientList => "rpc client list",
+            Self::BundleShow => "rpc bundle show",
+            Self::KeyCreate => "rpc key create",
+            Self::KeyShow => "rpc key show",
         }
     }
 }
@@ -102,6 +280,8 @@ pub enum ResolvedCommand {
     },
     ShowTransfer {
         txid: String,
+        /// Fetch the serialized bytes from the daemon.
+        body: bool,
     },
     GetTxNote {
         txid: String,
@@ -117,6 +297,13 @@ pub enum ResolvedCommand {
     Abandon {
         txid: String,
     },
+    /// The held sends that need the user's decision (`tx_alarm`, A19).
+    TxAlarm,
+    /// Resend a held send's saved bytes, by the user's decision
+    /// (`tx_resend`, A19).
+    TxResend {
+        txid: String,
+    },
 
     // -- Receiving (payment requests / URIs, WI-RPC-1) --
     RequestNew {
@@ -124,7 +311,7 @@ pub enum ResolvedCommand {
         label: String,
         /// Invoice expiry as wall-clock Unix seconds (`Timestamp`, RTN-6).
         /// Accepts an absolute unix timestamp or a relative duration
-        /// (`1h`, `30m`, `7d`) resolved at parse time. The JSON-RPC wire
+        /// (`1h`, `5min`, `7d`) resolved at parse time. The JSON-RPC wire
         /// still carries a raw integer.
         expiry: Option<Timestamp>,
     },
@@ -209,6 +396,12 @@ pub enum ResolvedCommand {
     },
 
     ChainHealth,
+    /// A daemon word (`INPUT_GRAMMAR.md` §13). The arguments are typed.
+    Daemon(View),
+    /// An enrollment word (IG-Q87) or this client's channel key (IG-Q109),
+    /// reached on its own leg, never the plaintext listener
+    /// (`RPC_CHANNEL.md` §5; [`crate::enroll`]).
+    Enroll(Enroll),
 
     // -- Proofs (WI-RPC-3 surface) --
     GetTxProof {
@@ -267,7 +460,7 @@ pub enum ResolvedCommand {
 
     // -- Unknown --
     /// An unrecognized command token (the `other` catch-all). Rendered as
-    /// "Unknown command: <cmd>. Type help ...".
+    /// `"Unknown command: <cmd>. Type help ..."`.
     Unknown {
         cmd: String,
     },
@@ -285,8 +478,8 @@ pub enum ResolvedCommand {
 ///
 /// This is the message grammar for `sign` / `verify`: the message binds
 /// into the signature byte-for-byte, so internal whitespace must survive
-/// exactly as typed — [`trailing_message`]'s re-join would collapse it
-/// and make a genuine signature unverifiable. The REPL trims the line
+/// exactly as typed — re-joining the tokens would collapse it and make a
+/// genuine signature unverifiable. The REPL trims the line
 /// before parsing, so there is no trailing-whitespace ambiguity to
 /// resolve here. `None` when fewer than `n` tokens exist or nothing
 /// follows them.
@@ -377,6 +570,12 @@ pub(crate) fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String>
              (V3_WALLET_DECISION_LOG.md 2026-09-07). Cold storage is your \
              seed phrase.",
         ),
+        "freeze" | "thaw" | "frozen" => Some(
+            "the wallet has no user-set hold on outputs: FCMP++ hides which \
+             outputs a spend uses, and the wallet's own reservations keep \
+             built and staking-held outputs out of selection. Rejected \
+             (V3_WALLET_DECISION_LOG.md 2026-11-15).",
+        ),
         _ => None,
     };
     removed.map(|reason| format!("removed command {cmd}: {reason}"))
@@ -427,8 +626,9 @@ pub(crate) fn unix_now() -> Timestamp {
     )
 }
 
-/// Absolute unix seconds, or a relative duration (`30s`/`5m`/`1h`/`7d`)
+/// Absolute unix seconds, or an IG-6 duration (`30s`/`5min`/`1h`/`7d`)
 /// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
+/// `5m` is refused: the unit is `min`.
 pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<u64>() {
         // A bare integer below INVOICE_UNIX_FLOOR is a height-shaped
@@ -436,26 +636,26 @@ pub(crate) fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestam
         // it rather than minting a 1970 timestamp.
         return Timestamp::from_invoice_unix(secs);
     }
-    let duration = parse_duration_secs(raw)?;
+    let duration = parse_ig6_duration_secs(raw).ok()?;
     now.checked_add_secs(duration)
 }
 
-fn parse_duration_secs(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (last_idx, unit) = raw.char_indices().next_back()?;
-    if last_idx == 0 {
-        return None;
-    }
-    let digits = raw.get(..last_idx)?;
-    let n: u64 = digits.parse().ok()?;
-    let mul = match unit {
-        's' => 1,
-        'm' => 60,
-        'h' => 3600,
-        'd' => 86400,
-        _ => return None,
+/// An IG-6 duration, in whole seconds. `ms` rounds up to the next second.
+pub(crate) fn parse_ig6_duration_secs(raw: &str) -> Result<u64, String> {
+    const DURATION: shekyl_options::Kind = shekyl_options::Kind::Quantity {
+        dimension: shekyl_options::Dimension::Duration,
+        min: 0,
+        keywords: &[],
     };
-    n.checked_mul(mul)
+    match DURATION.parse_text(raw.trim()) {
+        Ok(shekyl_options::Value::Duration(duration)) => {
+            let millis = u64::try_from(duration.as_millis())
+                .map_err(|_| format!("{raw:?} is not a duration"))?;
+            Ok(millis.div_ceil(1000))
+        }
+        Err(fault) => Err(fault.at("--duration", shekyl_options::Source::Cli).render()),
+        Ok(_) => Err(format!("{raw:?} is not a duration")),
+    }
 }
 
 /// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].

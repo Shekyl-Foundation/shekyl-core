@@ -17,6 +17,12 @@ license.workspace = true
 # cannot accidentally pass arbitrary `[u8; 32]` payloads (commitments,
 # pseudo-outs, hashes) where a key image is required.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The proof takes the tree root and the message it proves over by type
+# (`CurveTreeRoot`, `TxSignableHash`; `DOMAIN_BINDING_RATCHET.tsv`).
+# `CurveTreeRoot::EMPTY` is pinned as bytes there so the store can name the
+# empty tree without this crate; `tests/empty_root_kat.rs` is what stops that
+# pin drifting from `SELENE_HASH_INIT` (S-CHAIN-W §3.4).
+shekyl-types = { path = "../shekyl-types" }
 # First-party FCMP++ proof + generator crates (relocated out of shekyl-oxide in the
 # un-vendor; no longer tracked upstream).
 shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
@@ -43,7 +49,10 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # FROST multisig (optional)
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"], optional = true }
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
-dkg-pedpop = { version = "0.6", optional = true }
+# The dealer split of a new group's `y_group` (`frost_sal::dealer_split`): the
+# same publisher and pin family as `modular-frost`, already in the lockfile as
+# its optional dependency.
+dkg-dealer = { version = "0.6", default-features = false, features = ["std"], optional = true }
 
 tracing = "0.1"
 thiserror.workspace = true
@@ -51,22 +60,27 @@ serde.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
-# `CurveTreeRoot::EMPTY` is pinned as bytes in `shekyl-types` so the store
-# can name the empty tree without this crate; `tests/empty_root_kat.rs` is
-# what stops that pin drifting from `SELENE_HASH_INIT` (S-CHAIN-W §3.4).
-shekyl-types = { path = "../shekyl-types" }
 # `PqcKeyScalar`'s manual `Deserialize` is a refuse-don't-reduce boundary
 # check; its refusal test exercises it through a real serde format.
 serde_json = "1"
 modular-frost = { version = "0.11", features = ["ed25519", "tests"] }
-dkg-pedpop = "0.6"
 transcript = { package = "flexible-transcript", version = "0.3", features = ["recommended"] }
 rand_chacha = "0.3"
+# The tests pin an input's rerandomization seed (`RerandomizationSeed::seeded`)
+# where production derives it from the intent.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
 
 [features]
 default = ["std"]
 std = []
-multisig = ["shekyl-fcmp-proofs/multisig", "transcript", "modular-frost", "dkg-pedpop"]
+multisig = ["shekyl-fcmp-proofs/multisig", "dep:transcript", "dep:modular-frost", "dep:dkg-dealer"]
+# The provers' seeded forms, `proof::prove_with_rng` and
+# `proof::prove_membership_only_with_rng`, which take their randomness from a
+# caller's generator: the instruction-count drift gate (`shekyl-verify-cost`)
+# and the chain forge's byte-identical chains (CHAIN_FORGE.md §5.3, seam T1).
+# TEST_ONLY (`scripts/ci/check_test_only_features.py`): no build that ships has
+# a prover that takes its caller's randomness (CF-R9).
+seeded-rng = []
 
 [lints]
 workspace = true

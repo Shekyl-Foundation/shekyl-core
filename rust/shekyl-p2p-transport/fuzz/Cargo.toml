@@ -1,3 +1,12 @@
+# `seeds/<target>/` is committed and read by every run of that target
+# (the nightly workflow's `fuzz` job; locally,
+#   cargo +nightly fuzz run <target> corpus/<target> seeds/<target>).
+# `fuzz_read_message1`'s seed is the pinned message 1, `src/kat_m1.hex`
+# as bytes. The responder refuses any length but `MESSAGE1_LEN` (1216
+# bytes) first, and unseeded the fuzzer never grows an input that long:
+# 80 million executions on the first nightly dispatch never left the
+# length check. A crash's input joins its target's directory with the fix.
+
 [package]
 name = "shekyl-p2p-transport-fuzz"
 version = "0.0.0"

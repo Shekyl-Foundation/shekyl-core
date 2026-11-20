@@ -58,6 +58,7 @@ Total bytes for this vector: 32.
 Generator
 ---------
 source      = ./_generator/phase2c/gen.cpp (mode t8)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 build       = ./_generator/phase2c/Makefile (`make gen`)
 command     = ./gen t8 > t8_vm_compute_hash_nop.bin
 output_size = 32 bytes

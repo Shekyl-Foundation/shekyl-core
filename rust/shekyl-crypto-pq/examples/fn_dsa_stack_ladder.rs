@@ -14,8 +14,8 @@
 //! and the thread-local storage. A thread asked for 16 KiB on the floor
 //! device gets about 132 KiB, so a ladder of thread sizes cannot see any
 //! need below that. Painting the stack, or asking the thread its real size,
-//! would see it, and both need `unsafe`, which this workspace allows only
-//! in `shekyl-ffi` (rules 25 and 45).
+//! would see it, and both need `unsafe`, which this crate denies
+//! (`#![deny(unsafe_code)]`; rules 25 and 45).
 //!
 //! # What this does instead
 //!
@@ -63,7 +63,7 @@ use std::hint::black_box;
 use std::io::Write;
 use std::process::{Command, ExitCode};
 
-use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::account::{Network, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSigner, HybridEd25519FnDsa};
 use shekyl_crypto_pq::signature::{SignatureScheme, SCHEME_DOMAIN_RECEIPT};
@@ -321,10 +321,7 @@ fn operation(op: &str) -> Option<Box<dyn FnMut() -> bool + Send>> {
         "keygen" => {
             Box::new(|| HybridEd25519FnDsa::keypair_from_seeds(&ED25519_SEED, &FN_DSA_SEED).is_ok())
         }
-        "persona" => Box::new(|| {
-            derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
-                .is_ok()
-        }),
+        "persona" => Box::new(|| derive_archival_p_keys(&MASTER, Network::Mainnet, 0).is_ok()),
         _ => return None,
     };
     Some(operation)

@@ -7,7 +7,7 @@
 //!
 //! Design: `docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md`
 //! §9.1 (admission, the ordered checks) and §9.6 (the verifier and its two
-//! contracts). Three functions:
+//! contracts). Four functions:
 //!
 //! - [`check_section`] — form, the window, then the budget. The references
 //!   are in strictly ascending `h`, the header root recomputes from them,
@@ -18,10 +18,20 @@
 //!   [`DrawableEpoch::len`](shekyl_archival_retention::DrawableEpoch::len),
 //!   read here from [`BundleView::drawable_epoch`]. The function takes no
 //!   cap.
-//! - [`check_section_until_switch`] — the same form and window checks at
+//! - [`check_section_stateless`] — the same form and window checks at
 //!   arrival, when this chain does not yet hold those epochs (`SCS-P23`).
 //!   An empty section is admitted. Any other section that passes them
 //!   waits: the budget comparison is [`check_section`]'s, at the switch.
+//! - [`fill_section`] — the references a block template puts in the next
+//!   block's section. The queue is walked in ascending `h`. A reference
+//!   inside the window whose epoch's `D` is known is a candidate; one that
+//!   repeats or precedes a height already walked is passed over. The
+//!   candidates span at most two epochs (`W₂ < SEB`) and are packed
+//!   oldest-first under the budget the epochs they keep earn:
+//!   `section_budget` of the largest `D` among those epochs, the cap
+//!   [`check_section`] applies. A reference that would exceed that budget
+//!   is passed over, and so is one that would crowd out the epoch earning
+//!   it. The block template calls it at the switch.
 //! - [`verify_bundle`] — everything else, for one bundle, against a
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
@@ -29,68 +39,31 @@
 //!   projection and every derived draw, which is all
 //!   [`admission_plan`](crate::admission_plan) needs (`SCS-P37`).
 //!
-//! All three are pure. None names a store type, and none writes.
+//! All four are pure. None names a store type, and none writes.
 //!
-//! # Disposition: STAGED on the connect path; live in the bundle queue
+//! # Disposition: LIVE on the connect path and in the bundle queue
 //!
-//! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
+//! Rule `23-disposition-visibility`.
 //!
-//! - **What is here:** the verifier, [`judge_bundles`], [`draw_targets`],
-//!   the view trait, the fixture, and the unbound rule types
-//!   `rules::bundle_admission::J29` through `J37`. Increment 4a also
-//!   implements the view on the store (`shekyl-chain-store`'s
-//!   `StoreBundleView`, the batch view plus the drawable memo). The
-//!   census rows stay `pending`.
-//! - **What is live (increment 4c):** the bundle queue. Its admission is
+//! - **On the connect path (the switch's C3, `SO-D12` 4b):** `validate`
+//!   calls [`judge_bundles`] through `rules::bundle_admission::admit`, at
+//!   the slot the deleted CEN-B4 held, over the chain view's own bundle
+//!   view ([`crate::ChainView::bundles`]; the store's is
+//!   `StoreBundleView`). The census rows CEN-J29 through CEN-J37 are
+//!   bound. `bind_body` runs [`open_reference`] and
+//!   [`check_section_stateless`], the stateless half, when a body
+//!   arrives. A body that cannot be had is no verdict
+//!   ([`BundleRefused::BodyNotReferenced`]; `crate::Stale::BundleBody`
+//!   inside `validate`).
+//! - **In the bundle queue (increment 4c):** its admission is
 //!   [`judge_bundles`] against the tip, through the ingest connector's
 //!   single writer, and it re-judges every entry after a reorg. The
-//!   producer of a block derives the draws it reads with
-//!   [`draw_targets`], the same selection [`verify_bundle`] runs. The
-//!   queue is pool-like state fed only by this daemon's own bundles until
-//!   references travel (4b); it is not the connect path, and no block
-//!   carries what it holds.
-//! - **What is not:** `form` and `validate` do not call them. The rule
-//!   types are not bound. A block that carries a bundle section is not
-//!   judged by this module today.
-//! - **Who calls it, and when:** increment 4b, after the DRS-X flip
-//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it calls
-//!   [`judge_bundles`] from `validate`, binds the rows, and deletes the
-//!   attestation path (CEN-B4). [`check_section`] takes that view, the
-//!   block's height and its rule set; the cap is the section's. DRS-E5 is transport
-//!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
-//!   tier has landed ([`crate::alt_against`]) and does not call this
-//!   module: an alternative block's row still carries the attestation
-//!   witness, not bundle references. When E5 replaces that with
-//!   references, an arrival that can see the chain calls [`open_reference`]
-//!   and [`check_section`]: an epoch above the fork has no `D`, and one
-//!   such epoch waits the whole section (`SCS-P23`). The window check
-//!   comes first, so only an epoch of a reference inside the window can do
-//!   that (`SCS-P41`).
-//!   [`check_section_until_switch`] is that form when the arrival has no
-//!   view. At the switch, `validate` runs [`check_section`] and
-//!   [`verify_bundle`] over the switch's batch view, on which E5 implements
-//!   [`BundleView`]. A body that cannot be fetched before the switch is no
-//!   switch and no verdict, which is [`BundleRefused::BodyNotReferenced`]'s
-//!   side of the same line. The body store and the bundle queue are
-//!   built (4c, in `shekyl-chain-store`); a connecting block pulling its
-//!   bodies from them by reference is 4b's.
-//! - **The census rows** these refusals name, CEN-J29 through CEN-J37, are
-//!   registered `pending` for the same reason: a `pending` row is in the
-//!   denominator and no rule type is bound to it. The cutover flips them.
-//! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
-//!   reads every non-test source of this crate but the fixture, the
-//!   registry, `archival/bundle.rs`, `archival/bundle_targets.rs`,
-//!   `archival/bundle_admission.rs`, `archival/bundle_records.rs` and
-//!   `archival/bundle_section.rs`, and fails when any other names this
-//!   module's functions, apart from the one `pub use` in `archival/mod.rs`
-//!   and `lib.rs` that exports them. The queue's caller is in another
-//!   crate (the ingest connector), so it does not move this test: the
-//!   test guards this crate's connect path, which the queue is not.
-//!   The section file stays exempt only while it holds `check_section`.
-//!   It requires `validate.rs`,
-//!   `block.rs`, `alt.rs`, `header_ladder.rs`, `drain.rs`, `archival/mod.rs`
-//!   and `rules/mod.rs` by name, so the walk cannot shrink silently. The
-//!   cutover deletes that test in the change that wires them.
+//!   producer derives the draws it reads with [`draw_targets`], the same
+//!   selection [`verify_bundle`] runs.
+//! - **The template and the carry (the switch's C4 and C5):**
+//!   [`fill_section`] is the block template's selection
+//!   (`shekyl-chain-ingest`'s `template.rs`), and [`seats_with_carry`]
+//!   is the count phase's seats. Nothing of this module is staged.
 //!
 //! # One name: `DrawableEpoch`
 //!
@@ -144,7 +117,8 @@
 //! builder of the drawable set this rule indexes
 //! ([`drawable_epoch_walked_back`](super::drawable_epoch_walked_back)) and
 //! the settlement fold that consumes what admission writes. The rule types
-//! that succeed CEN-B4 land in `rules/` at the cutover and call into here.
+//! that succeed CEN-B4 are in `rules/bundle_admission.rs` and call into
+//! here.
 //!
 //! # Precondition on the rule set: `W₂ + L ≤` anchor depth
 //!
@@ -155,8 +129,8 @@
 //! [`RuleSet::anchor_covers_response_window`], and it is held where rule
 //! sets are made, not here: on the production constants where they are
 //! defined (`shekyl-archival-retention`, `pass_anchor.rs`), on every
-//! issued set at compile time, and on a Fakechain set by
-//! `FakechainSchedule::new`, which refuses a pair that breaks it with a
+//! issued set at compile time, and on a levered set by
+//! `CappedEpoch::new`, which refuses a pair that breaks it with a
 //! typed error. So every `rule_set` this function can be
 //! handed satisfies it. [`verify_bundle`] does not re-check it: under a
 //! set that broke it the rule would still be the rule, and honest
@@ -190,6 +164,7 @@
 use core::fmt;
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 
 use shekyl_archival_retention::{
     draw_commit, select_draw, BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch,
@@ -199,7 +174,9 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
-use shekyl_types::archival::{DrawCommitment, ReceiptSignPk};
+use shekyl_network::envelope::Framed64;
+use shekyl_network::NetworkId;
+use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -267,9 +244,11 @@ pub trait BundleView {
     /// verifier asks only when [`Self::support_count`] is not zero.
     fn support_roster(&self, h: BlockHeight) -> Result<Option<Vec<SupportSeat>>, Self::Fault>;
 
-    /// The archive width the support draw selects a shard from. `None` is
-    /// the view's hole. Asked only when the block issued support draws.
-    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, Self::Fault>;
+    /// The archive width the support draw selects a shard from: the roster's
+    /// width at `h_open` of `h`'s epoch, never zero (an epoch whose archive
+    /// had no closed shard has no support stream). `None` is the view's
+    /// hole. Asked only when the block issued support draws.
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<NonZeroU64>, Self::Fault>;
 }
 
 /// One complete tree scheduled at a block: the persona and the receipt
@@ -278,13 +257,14 @@ pub trait BundleView {
 pub struct SupportSeat {
     /// The tree.
     pub persona: PCanonicalId,
-    /// Its receipt key, as the bond record carries it.
-    pub receipt_key: ReceiptSignPk,
+    /// Its receipt key, parsed: the epoch snapshot's, which parsed the bond
+    /// record's when it was built (`SO-D12` S1).
+    pub receipt_key: FnDsaHybridPublicKey,
 }
 
-/// The section checker: form, the window, then the budget. The only
-/// admission path. `bundle_section::inside_window` is the window
-/// [`verify_bundle`] asks too.
+// The section checker: form, the window, then the budget. The only
+// admission path. `bundle_section::inside_window` is the window
+// [`verify_bundle`] asks too.
 #[path = "bundle_section.rs"]
 mod bundle_section;
 
@@ -293,8 +273,17 @@ mod bundle_section;
 mod records;
 
 pub use bundle_section::{
-    check_section, check_section_until_switch, open_reference, SectionCharge, SectionCheckFailed,
-    SectionRefused, SectionStanding,
+    check_section, check_section_stateless, fill_section, open_reference, SectionCharge,
+    SectionCheckFailed, SectionRefused, SectionStanding,
+};
+
+// The support stream's carry (`SO-D12` S2), on the connect path since the
+// switch's C5.
+#[path = "support_carry.rs"]
+mod support_carry;
+
+pub use support_carry::{
+    seats_with_carry, support_step, SupportCarry, SupportStepFault, WindowClosed,
 };
 
 /// `epoch`'s drawable epoch, if the view holds the one filed for it. A
@@ -575,6 +564,28 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
         .map_err(|_: BundleWireError| BundleRefused::Invalid(BundleInvalid::BodyMalformed))
 }
 
+/// Whether the witness signature holds for `commitment` under
+/// [`SCHEME_DOMAIN_WITNESS_BUNDLE`].
+///
+/// The domain lives here, beside the [`Framed64`] it opens, so the
+/// verifier cannot apply it to bytes it assembled itself. The signer is
+/// [`shekyl_archival_retention::sign_bundle_commitment`], which takes the
+/// same frame.
+fn witness_commitment_holds(
+    key: &FnDsaHybridPublicKey,
+    commitment: &Framed64,
+    signature: &FnDsaHybridSignature,
+) -> bool {
+    HybridEd25519FnDsa
+        .verify(
+            key,
+            SCHEME_DOMAIN_WITNESS_BUNDLE,
+            commitment.as_bytes(),
+            signature,
+        )
+        .is_ok()
+}
+
 /// Everything but the section check, for one bundle: §9.1 steps 3 to 8, in
 /// that order. Receipts included.
 ///
@@ -624,6 +635,7 @@ pub fn verify_bundle<V: BundleView>(
     h_incl: BlockHeight,
     view: &V,
     rule_set: &RuleSet,
+    network_id: &NetworkId,
 ) -> Result<Admitted, BundleRefused<V::Fault>> {
     let invalid = |why: BundleInvalid| Err(BundleRefused::Invalid(why));
     let h = reference.h();
@@ -678,23 +690,17 @@ pub fn verify_bundle<V: BundleView>(
     }
 
     // 5. Witness signature, before any receipt.
-    let scheme = HybridEd25519FnDsa;
     let (Ok(witness_key), Ok(witness_signature)) = (
         FnDsaHybridPublicKey::from_canonical_bytes(body.witness_public_key()),
         FnDsaHybridSignature::from_canonical_bytes(body.witness_signature()),
     ) else {
         return invalid(BundleInvalid::WitnessSignature);
     };
-    let commitment = kept.commitment(body.records_bytes());
-    if scheme
-        .verify(
-            &witness_key,
-            SCHEME_DOMAIN_WITNESS_BUNDLE,
-            &commitment,
-            &witness_signature,
-        )
-        .is_err()
-    {
+    if !witness_commitment_holds(
+        &witness_key,
+        &kept.commitment(network_id, body.records_bytes()),
+        &witness_signature,
+    ) {
         return invalid(BundleInvalid::WitnessSignature);
     }
 
@@ -730,22 +736,16 @@ pub fn verify_bundle<V: BundleView>(
                 height: h,
             }));
         };
-        let draws = derive_draws(view, drawable, &kept, hash_at_h.as_bytes(), count)?;
+        let draws = derive_draws(view, drawable, &kept, &hash_at_h, count)?;
         (draws, Some(drawable), hash_at_h)
     };
 
     let mut passes = Vec::new();
     records::bind_economy(&mut passes, &kept, body, &draws)?;
-    let support = records::bind_support(
-        view,
-        &kept,
-        body,
-        hash_at_h.as_bytes(),
-        economy_records,
-        &mut passes,
-    )?;
+    let support =
+        records::bind_support(view, &kept, body, &hash_at_h, economy_records, &mut passes)?;
     // 7 then 8. Both streams: attempts, then anchors, then receipts.
-    records::judge_passes(view, &kept, hash_at_h.as_bytes(), &passes, drawable)?;
+    records::judge_passes(view, &kept, &hash_at_h, &passes, drawable)?;
 
     Ok(Admitted {
         kept,
@@ -782,7 +782,7 @@ fn derive_draws<V: BundleView>(
     view: &V,
     drawable: &DrawableEpoch,
     kept: &BundleKept,
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     count: u32,
 ) -> Result<Vec<DerivedDraw>, BundleRefused<V::Fault>> {
     Ok(
@@ -811,7 +811,7 @@ fn select_pairs<V: BundleView>(
     drawable: &DrawableEpoch,
     h: BlockHeight,
     seed: &[u8; 32],
-    hash_at_h: &[u8; 32],
+    hash_at_h: &BlockHash,
     count: u32,
 ) -> Result<Vec<(u64, DrawablePair)>, BundleRefused<V::Fault>> {
     let mut asked: BTreeMap<u64, bool> = BTreeMap::new();
@@ -844,8 +844,8 @@ fn select_pairs<V: BundleView>(
     Ok(pairs)
 }
 
-/// The draws a producer reads. Re-exported here so the verifier's module
-/// stays the name callers use.
+// The draws a producer reads. Re-exported here so the verifier's module
+// stays the name callers use.
 #[path = "bundle_targets.rs"]
 mod bundle_targets;
 
@@ -865,8 +865,12 @@ mod bundle_tests;
 mod bundle_section_tests;
 
 #[cfg(test)]
-#[path = "bundle_staging_tests.rs"]
-mod bundle_staging_tests;
+#[path = "bundle_fill_tests.rs"]
+mod bundle_fill_tests;
+
+#[cfg(test)]
+#[path = "bundle_rows_tests.rs"]
+mod bundle_rows_tests;
 
 #[cfg(test)]
 #[path = "bundle_admission_tests.rs"]

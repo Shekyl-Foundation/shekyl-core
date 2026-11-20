@@ -175,9 +175,9 @@ where
     /// Start the serving host iff this wallet is a staker with an active persona.
     pub async fn start_serving_if_staker(
         engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
-        daemon_address: &str,
+        daemon: &shekyl_rpc_transport::DaemonTarget,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
-        Engine::start_serving_if_staker(engine, daemon_address).await
+        Engine::start_serving_if_staker(engine, daemon).await
     }
 }
 
@@ -318,7 +318,7 @@ mod tests {
     /// handle. It does NOT cover first-stake assembly.
     #[tokio::test(flavor = "multi_thread")]
     async fn staker_view_and_handle_predicate_agree() {
-        let (_tmp, engine) = staker_engine(3, SEED);
+        let (_tmp, engine) = staker_engine(3, SEED).await;
         assert!(engine.has_stake_engine());
         let view = engine
             .stake()
@@ -351,10 +351,8 @@ mod tests {
             .stake()
             .balance_view()
             .expect("a non-staker glance is honest zeros");
-        assert_eq!(view.liquid, AtomicUnits::ZERO);
-        assert_eq!(view.unlocked, view.liquid);
-        assert_eq!(view.pending, AtomicUnits::ZERO);
-        assert_eq!(view.unspendable, AtomicUnits::ZERO);
+        assert_eq!(view.legs, shekyl_scanner::BalanceSummary::default());
+        assert_eq!(view.legs.balance(), AtomicUnits::ZERO);
         assert_eq!(
             view.staking,
             Some(StakedTotals {

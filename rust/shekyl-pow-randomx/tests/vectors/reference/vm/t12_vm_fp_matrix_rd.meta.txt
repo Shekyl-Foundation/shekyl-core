@@ -16,6 +16,7 @@ Output layout
 Generator
 ---------
 source      = ./_generator/phase2d/gen.cpp (mode t12)
+provenance  = removed from the tree after ac3836de90, which holds the source, its Makefile and README
 command     = ./gen t12 > t12_vm_fp_matrix_rd.bin
 output_size = 2304 bytes
 

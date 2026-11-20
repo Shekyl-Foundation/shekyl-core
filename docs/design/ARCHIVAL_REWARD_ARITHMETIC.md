@@ -9,12 +9,12 @@
 |-----------|----------|------|
 | `reward_arithmetic` | `rust/shekyl-archival-retention/src/reward_arithmetic.rs` | Integer `Curve`, `g(age)`, scarcity, `Σwork` helpers — **no `f64`** (`#![deny(clippy::float_arithmetic)]`) |
 | `consensus_state` | `rust/shekyl-archival-retention/src/consensus_state.rs` | Pure `R_market` / `good_through` / `shard_age` / epoch-timing replay + `epoch_close_compute` (whole-epoch aggregation) |
-| FFI | `shekyl_archival_epoch_close_compute` (+ `good_through`, `epoch_close_due`, `prune_below_epoch` helpers) | C++ epoch-close sweep: gather rows → one coarse compute call → store results |
+| FFI | `shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) (+ `good_through`, `epoch_close_due`, `prune_below_epoch` helpers) | C++ epoch-close sweep: gather rows → one coarse compute call → store results |
 
 **Boundary (PR 123):** all consensus arithmetic — market membership, scarcity,
 curve, shard age, `R_market` / `Σwork` aggregation — lives in
 `shekyl-archival-retention` and crosses the FFI as a single
-`shekyl_archival_epoch_close_compute` call. The C++ LMDB layer
+`shekyl_archival_epoch_close_compute` (deleted, `DEL-008`) call. The C++ LMDB layer
 (`process_archival_epoch_close_at_height`) is a storage adapter: it reads
 serve-credit / bond / segment rows, marshals them, and persists the returned
 `R_market` and `Σwork` values. Fine-grained arithmetic FFI exports
@@ -39,7 +39,7 @@ Degenerate caps (`cap ≤ 0`, non-finite) credit **zero** on both backends, matc
 |--------|-----------|------|
 | Per-work `Curve` float vs integer | `|Δ| ≤ 0.002` credited work units | `reconciliation_curve_float_vs_integer` |
 | Plateau value | exact milli match | `reconciliation_plateau_cross_check` |
-| Gini / attractor rank (full sweeps) | homeostasis-frame PASS, PR 1.5 2026-06-13 | `--curve-impl=integer` vs float |
+| Gini / attractor rank (full sweeps) | homeostasis-frame PASS, PR 1.5 2026-06-13 | `--curve-impl=integer` vs float, now under `--reward-arm=registered-plateau` |
 
 PR 1.5 (`ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) ran the full sweep on a homeostasis
 frame: the integer `Curve` keeps `spread` 325/325 clean and is **not worse** than

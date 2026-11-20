@@ -106,6 +106,7 @@ GRANDFATHER = os.path.join(
 SCOPE = (
     "shekyl-archival-retention",
     "shekyl-chain-ingest",
+    "shekyl-corpus",
     "shekyl-chain-rules",
     "shekyl-chain-store",
     "shekyl-types",
@@ -141,8 +142,26 @@ SCOPE = (
 # the merge of 2026-10-10 is where the ceiling reads both); 148 at DRS-E5
 # a3 (2026-10-11: the alt fixtures `alt` and `side_block` became
 # `pub(super)` for the `AltView` tests, and a touched site is typed —
-# both take `BlockHeight` — not re-recorded).
-GRANDFATHER_CEILING = 148
+# both take `BlockHeight` — not re-recorded); 147 at the E2 re-baseline
+# (2026-11-01: the grader left with the reconciliation register). The
+# ceiling stood at 144 over a list of 141. 139 after `plant_listed` and
+# `plant_archival` took `BlockHeight` (2026-11-07): widening their path
+# parameter touched the recorded lines, and a touched site is typed.
+# 138 after `settlement_epoch_slash_deadline_height` was deleted
+# (2026-11-08): its one reader, a test, calls the schedule method.
+# 134 with the attestation record's wire tests and KAT (SO-D12 4b C7),
+# four recorded fixture helpers among them. 132 with the pass-anchor
+# window (SO-D12 4b C7): its test helpers `window_at` and `chain_hash`
+# went with it. 123 at the switch's close (SO-D12 4b): the challenge
+# helpers, the gate-2 KAT and the segment-path cross-check went with the
+# serve-credit input and `path.rs`, the ingest's `anchor` helper and the
+# prune tests' `key_of` went with the padded-credit fixtures, one
+# `archival_write.rs` site left with the serve-credit write, and the
+# prune tests' close height is typed. 122 when the corpus format moved to
+# `shekyl-corpus` (CF-4a, 2026-11-18): the record encoder's height was
+# typed as `BlockHeight` there rather than re-recorded, and the codec
+# joined `SCOPE` so the move took none of its sites out of the scan.
+GRANDFATHER_CEILING = 122
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

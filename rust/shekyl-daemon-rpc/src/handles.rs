@@ -8,11 +8,9 @@
 //! shape: a trait object, and an absent value that answers
 //! [`FactsFault::NotReady`].
 //!
-//! **Nothing here is routed.** The live handlers still read the C++ core.
-//! The handles are on [`crate::server::AppState`] so the flip's edit is
-//! which source a handler calls, and a Rust test can already call them
-//! over a real node. An absent handle never answers with a zero or an
-//! empty list (RK-D23): those are what a live, empty node reports.
+//! The handlers and the in-process console read these handles. An absent
+//! handle never answers with a zero or an empty list (RK-D23): those are
+//! what a live, empty node reports.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
@@ -24,27 +22,80 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
 use crate::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
-    FactsFault, FeeEstimate,
+    FactsFault, FeeEstimate, NetStats, P2pFacts,
 };
+use crate::core::{ConnectionsSnapshot, P2pRead, PeerEntry};
 use crate::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
     SessionCounts,
 };
 use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
-    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
+    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAnswer,
     PowSeed, ShardCoverage, SpentAt,
 };
+use crate::sync_facts::{SyncViewFacts, SyncViewRead};
 
-/// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
-/// `ChainReadFacts`' production sources at the flip. One object, the
-/// three traits those handlers already call.
-pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {}
+/// The chain reads. One object, the four traits the handlers call.
+/// The production source is the store.
+pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead {
+    /// This object as the chain-facts trait the method functions take.
+    fn as_chain_facts(&self) -> &dyn ChainFacts;
+    /// This object as the info-facts trait `daemon_status` takes.
+    fn as_info_facts(&self) -> &dyn InfoFacts;
+    /// This object as the read-facts trait the store methods take.
+    fn as_read_facts(&self) -> &dyn ChainReadFacts;
+    /// This object as chain sync's view, which `sync_status` and
+    /// `peer_connections` take.
+    fn as_sync_view(&self) -> &dyn SyncViewRead;
+}
 
-impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
+impl<T> ChainRead for T
+where
+    T: ChainFacts + InfoFacts + ChainReadFacts + SyncViewRead,
+{
+    fn as_chain_facts(&self) -> &dyn ChainFacts {
+        self
+    }
+
+    fn as_info_facts(&self) -> &dyn InfoFacts {
+        self
+    }
+
+    fn as_read_facts(&self) -> &dyn ChainReadFacts {
+        self
+    }
+
+    fn as_sync_view(&self) -> &dyn SyncViewRead {
+        self
+    }
+}
 
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
+
+static LIVE: std::sync::Mutex<Option<Handles>> = std::sync::Mutex::new(None);
+
+/// The handles the running daemon's console reads. Set when the RPC starts.
+pub fn publish_live(handles: &Handles) {
+    *LIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handles.clone());
+}
+
+/// The published handles, or `None` before the RPC has started.
+#[must_use]
+pub fn live_handles() -> Option<Handles> {
+    LIVE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The published chain, or `None` before the RPC has started.
+#[must_use]
+pub fn live_chain() -> Option<ChainReadHandle> {
+    live_handles().map(|handles| handles.chain)
+}
 
 /// One pool entry, as a listing reads it: never when it arrived (S7).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,7 +133,7 @@ pub trait PoolFacts: Send + Sync {
     fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
 
     /// Remove `ids` from the pool, or every entry when `ids` is empty
-    /// (`flush_txpool`); the removed ids. It writes the pool file, so it
+    /// (`txpool_flush`); the removed ids. It writes the pool file, so it
     /// waits: the node runs it on a blocking thread.
     ///
     /// # Errors
@@ -92,15 +143,15 @@ pub trait PoolFacts: Send + Sync {
     /// which retires the pool.
     fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>>;
 
-    /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
-    /// offered. The relay driver is RD's; until it is wired, not ready.
+    /// Offer `ids` to the relay again through the stem entry a fresh
+    /// local submission takes (`tx_relay`); the ids the pool held and
+    /// offered, in the order asked.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] until a relay driver is supplied.
-    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-        Err(FactsFault::NotReady)
-    }
+    /// [`FactsFault::NotReady`] when no pool was supplied, or the pool is
+    /// retired.
+    fn relay(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault>;
 }
 
 /// A pool handle.
@@ -127,7 +178,7 @@ pub trait DoorFacts: Send + Sync {
     fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
 
     /// Pop `count` blocks from the tip, returning their bodies to the pool
-    /// (`pop_blocks`, DX-Q3, Q7). A pop below the lowest poppable height is
+    /// (`dev_chain_pop`, DX-Q3, Q7). A pop below the lowest poppable height is
     /// refused before any pop.
     ///
     /// # Errors
@@ -166,14 +217,28 @@ pub trait MiningFacts: Send + Sync {
     fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault>;
 
     /// Start the built-in miner with `threads` workers, or the host's
-    /// parallelism. The inner error is the node's refusal. Joins nothing,
-    /// but spawns threads: a caller on a runtime calls it from a blocking
-    /// thread.
+    /// parallelism. It searches every posted job. The inner error is the
+    /// node's refusal. Joins nothing, but spawns threads: a caller on a
+    /// runtime calls it from a blocking thread.
     ///
     /// # Errors
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
+
+    /// Start the built-in miner searching no block above `height`. The
+    /// thread count is [`Self::start`] with `None`. A miner already
+    /// running is a refusal, and that miner is left as it is. When its
+    /// search covers `height`, the diagnostic is `mine.running` and the
+    /// caller may wait. When it does not, the diagnostic is
+    /// `mine.bound_short`: waiting would not reach `height`. This call
+    /// does not bound a miner it did not start. Joins nothing, but spawns
+    /// threads: a caller on a runtime calls it from a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn start_until(&self, height: BlockHeight) -> Result<Result<(), Diagnostic>, FactsFault>;
 
     /// Stop the built-in miner; `false` when it was not running. The node
     /// keeps running. Joins the workers, which can be mid-hash: a caller on
@@ -183,6 +248,17 @@ pub trait MiningFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn stop(&self) -> Result<bool, FactsFault>;
+
+    /// Wait until every block the miner has delivered has its answer from
+    /// the door, connected or refused. After [`Self::stop`] the miner
+    /// delivers nothing more, so the chain read after this wait shows
+    /// everything that miner found. Blocks while a delivered block is at
+    /// the door: a caller on a runtime calls it from a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn found_answered(&self) -> Result<(), FactsFault>;
 
     /// The miner, the posted job, and why none is posted.
     ///
@@ -310,7 +386,11 @@ pub trait StopFacts: Send + Sync {
 /// A stop handle.
 pub type StopHandle = Arc<dyn StopFacts>;
 
-/// The six handles, absent unless the composition root supplied a node.
+/// A p2p facts handle: the board, the link totals, the peer lists and the
+/// stem tallies, which the node reads from `shekyl-p2p`'s `Network`.
+pub type P2pHandle = Arc<dyn P2pFacts>;
+
+/// The node's handles, absent unless the composition root supplied a node.
 #[derive(Clone)]
 pub struct Handles {
     /// Chain reads.
@@ -325,6 +405,10 @@ pub struct Handles {
     pub bans: BansHandle,
     /// The stop latch.
     pub stop: StopHandle,
+    /// The p2p facts.
+    pub p2p: P2pHandle,
+    /// The shard view: the node's view desk, or its Tor-off refusal.
+    pub shard_view: crate::shard_view::ShardViewHandle,
 }
 
 impl Default for Handles {
@@ -344,6 +428,8 @@ impl Handles {
             mining: Arc::new(MiningAbsent),
             bans: Arc::new(BansAbsent),
             stop: Arc::new(StopAbsent),
+            p2p: Arc::new(P2pAbsent),
+            shard_view: Arc::new(crate::shard_view::ShardViewAbsent),
         }
     }
 }
@@ -377,6 +463,12 @@ impl ChainFacts for ChainReadAbsent {
     }
 
     fn block_at(&self, _at: BlockLookup, _fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+impl SyncViewRead for ChainReadAbsent {
+    fn sync_view(&self) -> Result<SyncViewFacts, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }
@@ -448,7 +540,12 @@ impl ChainReadFacts for ChainReadAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn pow_hash(&self, _pow_blob: &[u8], _seed: PowSeed) -> Result<PowAt, FactsFault> {
+    fn pow(
+        &self,
+        _seed: PowSeed,
+        _pow_blob: &[u8],
+        _pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault> {
         Err(FactsFault::NotReady)
     }
 
@@ -474,6 +571,10 @@ impl PoolFacts for PoolAbsent {
 
     fn flush(&self, _ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
         Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        Err(FactsFault::NotReady)
     }
 }
 
@@ -512,7 +613,15 @@ impl MiningFacts for MiningAbsent {
         Err(FactsFault::NotReady)
     }
 
+    fn start_until(&self, _height: BlockHeight) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
     fn stop(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn found_answered(&self) -> Result<(), FactsFault> {
         Err(FactsFault::NotReady)
     }
 
@@ -557,6 +666,31 @@ struct StopAbsent;
 
 impl StopFacts for StopAbsent {
     fn request_stop(&self) -> Result<(), FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+/// No p2p facts were supplied.
+pub struct P2pAbsent;
+
+impl P2pFacts for P2pAbsent {
+    fn net_stats(&self) -> Result<NetStats, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn connections(&self) -> Result<ConnectionsSnapshot, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn peer_list(&self, _public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn stem_tallies(&self) -> Result<shekyl_rpc_types::wire::p2p::RelayStats, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

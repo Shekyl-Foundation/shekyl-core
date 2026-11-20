@@ -11,17 +11,9 @@
 
 use core::num::NonZeroU64;
 
-use crate::constants::{
-    effective_settlement_epoch_blocks, SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
-    W2_EPOCH_DIVISOR,
-};
+use crate::constants::{effective_settlement_epoch_blocks, SLASH_GRACE_EPOCHS, W2_EPOCH_DIVISOR};
 use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
-
-const _: () = assert!(
-    SETTLEMENT_EPOCH_BLOCKS > 0,
-    "settlement epoch must be nonzero"
-);
 
 /// The epoch geometry over one [`SettlementEpochBlocks`]: which epoch a
 /// height sits in, where an epoch opens, closes and is slash-final, and
@@ -38,7 +30,7 @@ const _: () = assert!(
 /// **Two ways to obtain one, and which is whose.** The validator reads the
 /// schedule off the rule set in force
 /// (`shekyl_chain_rules::RuleSet::settlement_schedule`) — the genesis
-/// constant on every issued set, a regtest lever's value on a Fakechain set
+/// constant on every issued set, a regtest lever's value on a levered set
 /// — and so never reads a process's environment (rule 71; DRS-E4 `ARW-15`).
 /// The C++ daemon, the FFI shims and the wallet, which hold no rule set,
 /// read [`Self::effective`]: the process-latched schedule the daemon arms
@@ -61,13 +53,8 @@ impl core::fmt::Debug for SettlementSchedule {
 }
 
 impl SettlementSchedule {
-    /// The genesis schedule: [`SETTLEMENT_EPOCH_BLOCKS`] per epoch.
-    pub const GENESIS: Self = Self {
-        blocks: match SettlementEpochBlocks::new(SETTLEMENT_EPOCH_BLOCKS) {
-            Some(blocks) => blocks,
-            None => panic!("SETTLEMENT_EPOCH_BLOCKS is non-zero (asserted above)"),
-        },
-    };
+    /// The genesis schedule: the shipped [`crate::ArchivalParams`]' epoch.
+    pub const GENESIS: Self = crate::ArchivalParams::SHIPPED.schedule();
 
     /// The geometry over `blocks` per epoch.
     #[must_use]

@@ -12,6 +12,9 @@ build = "build.rs"
 serde_json.workspace = true
 
 [dependencies]
+# The network id the spend signature's hash binds (NETWORK_IDENTITY.md
+# NI-Q4).
+shekyl-network = { path = "../shekyl-network" }
 # Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;
 # byte-identical to C++ `cn_fast_hash`). Single source for tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
@@ -32,7 +35,19 @@ shekyl-types = { path = "../shekyl-types" }
 # shekyl-crypto-hash and rand_chacha — no edge back to this crate.
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 
+[features]
+# `BoundTx::whole` / `BoundTx::modify`: a fixture's whole body bound to the
+# identity it hashes to itself. Production binds through `SkeletonTx::bind`
+# alone (`SB-Q2`), so the whole-body constructor is gated out of every
+# production build. TEST_ONLY (check_test_only_features.py): enabled from
+# dev edges alone (the scanner's, the engine's, the ingest's), never
+# forwarded by another crate's feature.
+test-fixtures = []
+
 [dev-dependencies]
+# `HARNESS_NETWORK_ID` for this crate's tests, which sign or judge a
+# harness chain under it: TEST_ONLY (CHAIN_FORGE.md CF-R15), dev edge only.
+shekyl-network = { path = "../shekyl-network", features = ["harness"] }
 # Test-only: load the captured oracle hash vectors so the JSON is the single source
 # of truth for the live-oracle hash KAT (no hand-copied hex). Not a runtime
 # dependency of the serializer.
@@ -47,13 +62,17 @@ serde_json = { workspace = true }
 # fixture cannot leak into the serializer's dependency surface.
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
-shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
-# Live empty-set attestation_root for block-header KATs (no hand-copied pin).
+# `seeded-rng` (TEST_ONLY): the fixtures' transaction keys come from the
+# seeded stream (`TxKey::seeded`, R-21).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+# Live empty-section section_root for block-header KATs (no hand-copied pin).
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # Regtest mining-address emitter (`tests/emit_regtest_addr.rs`).
 shekyl-address = { path = "../shekyl-address" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-units = { path = "../shekyl-units" }
+# The RT-W10 harness's scratch output directory (`tests/rt_w10_tx_parse.rs`).
+tempfile = { workspace = true }
 # Single source for the coinbase maturity window consensus constant
 # (`COINBASE_LOCK_WINDOW`) the e2e fixture references, rather than duplicating
 # the literal `60` and risking silent drift if the parameter ever changes.

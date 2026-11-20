@@ -11,8 +11,8 @@
 //! relies on that). A row narrows its kind with a constraint the kind
 //! carries; the parser enforces it.
 //!
-//! Only the kinds the daemon's table uses are here. The wallet binaries add
-//! theirs (hash, amount, name, text) with their own tables.
+//! `hash` is here too (IG-Q23): 64 hexadecimal characters. Amount, name and
+//! text stay with the wallet binaries.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -73,6 +73,24 @@ impl fmt::Debug for KeyRule {
     }
 }
 
+/// A name's rule, held by its owner (IG-6 `name`: a word an operator types,
+/// whose rule the row names). The check returns the broken rule in words.
+#[derive(Clone, Copy)]
+pub struct NameRule {
+    /// How the name is described in a refusal.
+    pub describe: &'static str,
+    /// `Ok` when the name keeps the rule; otherwise the rule it breaks.
+    pub check: fn(&str) -> Result<(), &'static str>,
+}
+
+impl fmt::Debug for NameRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NameRule")
+            .field("describe", &self.describe)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A value kind with its row's constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
@@ -98,12 +116,20 @@ pub enum Kind {
     },
     /// A literal IP address and a port; no hostnames.
     Endpoint(EndpointRule),
+    /// A listener: a literal IP address with a port, or an address alone,
+    /// whose port its owner names (the view listener takes the network's
+    /// view port). No hostnames.
+    Listen(EndpointRule),
     /// An IP endpoint or a v3 onion with a port.
     PeerEndpoint(PeerRule),
     /// A Shekyl address; checked against the network by its owner.
     Address,
-    /// An absolute path.
-    Path,
+    /// An absolute path, or one of `keywords` (`none`: no file at all,
+    /// where a row has a default one).
+    Path {
+        /// Words accepted in place of a path.
+        keywords: &'static [&'static str],
+    },
     /// A secret: file only, never echoed, zeroized.
     Secret,
     /// A command: file only, an argument array run without a shell, with
@@ -114,6 +140,11 @@ pub enum Kind {
     },
     /// An explicit web origin: `http` or `https`, a host, an optional port.
     Origin,
+    /// 64 hexadecimal characters (IG-Q23): a transaction id, a block hash
+    /// or a key image.
+    Hash,
+    /// A name an operator types, checked by its owner's rule (IG-6 `name`).
+    Name(NameRule),
     /// A list of a scalar kind; `none` is the empty list.
     List(&'static Kind),
     /// A map from a closed key set to a scalar kind; `none` is the empty map.
@@ -184,6 +215,9 @@ pub enum Value {
     Duration(Duration),
     /// A literal endpoint.
     Endpoint(SocketAddr),
+    /// A listener's address given without a port: the owner names the
+    /// port before the value is used ([`Kind::Listen`]).
+    Host(IpAddr),
     /// A peer endpoint.
     Peer(PeerEndpoint),
     /// A Shekyl address, unchecked against the network.
@@ -196,10 +230,29 @@ pub enum Value {
     Command(Vec<String>),
     /// A web origin, in its normal spelling.
     Origin(String),
+    /// 64 lowercase hexadecimal characters.
+    Hash(String),
+    /// A name, as given; its rule held.
+    Name(String),
     /// A list; empty is `none`.
     List(Vec<Value>),
     /// A map; empty is `none`.
     Map(BTreeMap<String, Value>),
+}
+
+/// How a value the operator set stands beside a parent that refuses its row.
+///
+/// A confirmation asks for nothing and restates the parent. A request asks
+/// for something the parent forbids. A row the operator left unset is not a
+/// bearing: the reader that walks children returns `None` for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bearing {
+    /// An empty list or map (`none`), the word `none`, the word `off`, or a
+    /// switch that is off.
+    Confirmation,
+    /// Any other value. The integer `0` is a request: absence is a word or
+    /// an empty collection, not a count.
+    Request,
 }
 
 impl Value {
@@ -216,8 +269,9 @@ impl Value {
             Self::Rate(n) => render_bytes(*n, "/s"),
             Self::Duration(d) => render_duration(*d),
             Self::Endpoint(addr) => addr.to_string(),
+            Self::Host(ip) => ip.to_string(),
             Self::Peer(peer) => peer.to_string(),
-            Self::Address(a) | Self::Origin(a) => a.clone(),
+            Self::Address(a) | Self::Origin(a) | Self::Hash(a) | Self::Name(a) => a.clone(),
             Self::Path(p) => p.display().to_string(),
             Self::Secret(_) => "set".to_owned(),
             Self::Command(args) => format!("{args:?}"),
@@ -242,6 +296,20 @@ impl Value {
                         .join(" ")
                 }
             }
+        }
+    }
+
+    /// How this value stands beside a parent that refuses its row.
+    ///
+    /// A confirmation asks for nothing. Everything else, including the
+    /// integer `0`, is a request.
+    #[must_use]
+    pub fn bearing(&self) -> Bearing {
+        match self {
+            Self::List(items) if items.is_empty() => Bearing::Confirmation,
+            Self::Map(map) if map.is_empty() => Bearing::Confirmation,
+            Self::Word("none" | "off") | Self::Switch(false) => Bearing::Confirmation,
+            _ => Bearing::Request,
         }
     }
 }
@@ -281,6 +349,14 @@ fn render_duration(d: Duration) -> String {
     "0ms".to_owned()
 }
 
+fn parse_hash(text: &str) -> Result<String, Fault> {
+    if text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(text.to_ascii_lowercase())
+    } else {
+        Err(syntax(text, "64 hexadecimal characters"))
+    }
+}
+
 fn syntax(value: &str, expected: &str) -> Fault {
     Fault::new(Code::ValueSyntax)
         .param("value", value)
@@ -313,6 +389,10 @@ fn keyword(text: &str, keywords: &'static [&'static str]) -> Option<&'static str
 }
 
 impl Kind {
+    /// An absolute path. A row that also takes a word names it itself
+    /// (`Path { keywords: &["none"] }` on the daemon's `config-file`).
+    pub const PATH: Self = Self::Path { keywords: &[] };
+
     /// Whether the kind may be given on the command line at all.
     #[must_use]
     pub const fn cli_allowed(&self) -> bool {
@@ -472,6 +552,7 @@ impl Kind {
                 parse_quantity(text, *dimension, *min)
             }
             Self::Endpoint(rule) => parse_endpoint(text, *rule).map(Value::Endpoint),
+            Self::Listen(rule) => parse_listen(text, *rule),
             Self::PeerEndpoint(rule) => parse_peer(text, *rule).map(Value::Peer),
             Self::Address => {
                 if text.is_empty() || text.chars().any(char::is_whitespace) {
@@ -479,7 +560,10 @@ impl Kind {
                 }
                 Ok(Value::Address(text.to_owned()))
             }
-            Self::Path => {
+            Self::Path { keywords } => {
+                if let Some(k) = keyword(text, keywords) {
+                    return Ok(Value::Word(k));
+                }
                 let p = PathBuf::from(text);
                 if !p.is_absolute() {
                     return Err(syntax(text, "an absolute path"));
@@ -487,6 +571,11 @@ impl Kind {
                 Ok(Value::Path(p))
             }
             Self::Origin => parse_origin(text).map(Value::Origin),
+            Self::Hash => parse_hash(text).map(Value::Hash),
+            Self::Name(rule) => match (rule.check)(text) {
+                Ok(()) => Ok(Value::Name(text.to_owned())),
+                Err(broken) => Err(range(text, broken)),
+            },
             Self::Secret | Self::Command { .. } => Err(Fault::new(Code::ValueSurface)
                 .param("given", "the command line")
                 .param("allowed", "in the configuration file")),
@@ -516,13 +605,19 @@ impl Kind {
             Self::Endpoint(_) => {
                 "a literal IP address and port, such as `127.0.0.1:11029` or `[::1]:11029`"
             }
+            Self::Listen(_) => {
+                "a literal IP address, with a port or without one, such as `127.0.0.1` or \
+                 `127.0.0.1:11030`"
+            }
             Self::PeerEndpoint(PeerRule::Any) => "an IP endpoint or a v3 onion with a port",
             Self::PeerEndpoint(PeerRule::OnionOnly) => "a v3 onion with a port",
             Self::Address => "a Shekyl address",
-            Self::Path => "an absolute path",
+            Self::Path { .. } => "an absolute path",
             Self::Secret => "a secret",
             Self::Command { .. } => "an array of strings",
             Self::Origin => "a web origin such as `https://example.org`",
+            Self::Hash => "64 hexadecimal characters",
+            Self::Name(rule) => rule.describe,
             Self::List(_) => "a list",
             Self::Map { .. } => "a map",
         }
@@ -618,10 +713,38 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
     if addr.port() == 0 {
         return Err(range(text, "a port from 1 to 65535"));
     }
+    check_rule(text, addr.ip(), rule)?;
+    Ok(addr)
+}
+
+/// A listener: an endpoint, or an address alone (`127.0.0.1`, `::1`) whose
+/// port the owner names. A bracketed address with no port is refused: the
+/// brackets are the endpoint spelling.
+fn parse_listen(text: &str, rule: EndpointRule) -> Result<Value, Fault> {
+    if let Ok(ip) = text.parse::<IpAddr>() {
+        check_rule(text, ip, rule)?;
+        return Ok(Value::Host(ip));
+    }
+    parse_endpoint(text, rule)
+        .map(Value::Endpoint)
+        .map_err(|fault| {
+            if text.parse::<SocketAddr>().is_ok() {
+                fault
+            } else {
+                syntax(
+                    text,
+                    "a literal IP address, with a port or without one, such as `127.0.0.1` or \
+                 `127.0.0.1:11030`",
+                )
+            }
+        })
+}
+
+fn check_rule(text: &str, ip: IpAddr, rule: EndpointRule) -> Result<(), Fault> {
     match rule {
         EndpointRule::Any => {}
         EndpointRule::Loopback => {
-            if !addr.ip().is_loopback() {
+            if !ip.is_loopback() {
                 return Err(range(
                     text,
                     "a loopback address: a plaintext listener never binds beyond loopback (RT-14)",
@@ -629,7 +752,7 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
             }
         }
         EndpointRule::GlobalUnicast => {
-            if !is_global_unicast(addr.ip()) {
+            if !is_global_unicast(ip) {
                 return Err(range(
                     text,
                     "a global unicast address, one a peer on the internet can reach",
@@ -637,7 +760,7 @@ fn parse_endpoint(text: &str, rule: EndpointRule) -> Result<SocketAddr, Fault> {
             }
         }
     }
-    Ok(addr)
+    Ok(())
 }
 
 /// Whether a peer on the internet can reach the address: not loopback,

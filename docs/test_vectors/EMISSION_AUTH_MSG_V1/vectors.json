@@ -1,35 +1,104 @@
 {
-  "_comment": "EMISSION_AUTH_MSG_V1 — pinned known-answer vectors for the reward-emission vin consensus surfaces: the two role auth digests (emission_wire::auth_msg — the R1.A emission_auth_msg inventory under the Q1 role-distinct cSHAKE256 customizations) and the serialized 0x04 vin wire bytes. Mirrored by rust/shekyl-archival-retention/tests/kat_emission_auth_msg.rs (the fixture is fully deterministic and reproducible from that test's source). A deliberate pre-genesis format change must regenerate this corpus and the test constants in lockstep. Regenerated 2026-09-14 for PL-D3 (the vin lost its pqc_pk_hash field: wire_len and wire digest moved, auth digests did not). Previously regenerated 2026-07-06 at the M1 reward-gate implementation (ARCHIVAL_REWARD_GATE_M1.md §2.3 wire positivity): the fixture's trailing zero reward amount became unencodable, so the fixture moved to [1000000, 2000000, 3000000] and all four pins were re-derived. Regenerated 2026-07-24 for the D1 micro-precision fix (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-E): the auth customizations bumped -v1 -> -v2 because the digested work-claim entries changed meaning (scarcity_milli -> scarcity_micro), moving both role digests; the fixture's scarcity values were left unchanged, so wire_len and the wire digest did NOT move — only the two auth_msg hexes. NAME IS HISTORICAL: the directory label EMISSION_AUTH_MSG_V1 is the corpus revision, fixed at birth; the ACTIVE auth customizations are -v2 (bumped for the D1 milli->micro semantic change) — read V1 as 'corpus rev 1', never as 'customization v1'. The path was deliberately not renamed (renaming churns every reference for no tripwire benefit). SCARCITY VALUES ARE RETAINED OPERANDS, not micro-unit recomputes: the same integers are now interpreted as micro where they were milli, which is why the wire bytes and digest did not move and only the two auth_msg hexes did. They are NOT the x1000-scaled values a physical micro recompute would produce (other fixtures were rescaled where their arithmetic is under test). Holding the operands fixed keeps the wire digest a stable tripwire, so an unintended format change cannot hide behind an intended semantic one.",
-  "digest": "cSHAKE256, 64-byte output",
+  "_comment": "EMISSION_AUTH_MSG_V1 — pinned known-answer vectors for the reward-emission vin consensus surfaces: the two role auth digests (emission_wire::auth_msg — the R1.A emission_auth_msg inventory under the Q1 role-distinct cSHAKE256 customizations) and the serialized 0x04 vin wire bytes. Mirrored by rust/shekyl-archival-retention/tests/kat_emission_auth_msg.rs (the fixture is fully deterministic and reproducible from that test's source). A deliberate pre-genesis format change must regenerate this corpus and the test constants in lockstep. Regenerated 2026-09-14 for PL-D3 (the vin lost its pqc_pk_hash field: wire_len and wire digest moved, auth digests did not). Previously regenerated 2026-07-06 at the M1 reward-gate implementation (ARCHIVAL_REWARD_GATE_M1.md §2.3 wire positivity): the fixture's trailing zero reward amount became unencodable, so the fixture moved to [1000000, 2000000, 3000000] and all four pins were re-derived. Regenerated 2026-07-24 for the D1 micro-precision fix (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md F-E): the auth customizations bumped -v1 -> -v2 because the digested work-claim entries changed meaning (scarcity_milli -> scarcity_micro), moving both role digests; the fixture's scarcity values were left unchanged, so wire_len and the wire digest did NOT move — only the two auth_msg hexes. NAME IS HISTORICAL: the directory label EMISSION_AUTH_MSG_V1 is the corpus revision, fixed at birth; the ACTIVE auth customizations are -v2 (bumped for the D1 milli->micro semantic change) — read V1 as 'corpus rev 1', never as 'customization v1'. The path was deliberately not renamed (renaming churns every reference for no tripwire benefit). SCARCITY VALUES ARE RETAINED OPERANDS, not micro-unit recomputes: the same integers are now interpreted as micro where they were milli, which is why the wire bytes and digest did not move and only the two auth_msg hexes did. They are NOT the x1000-scaled values a physical micro recompute would produce (other fixtures were rescaled where their arithmetic is under test). Holding the operands fixed keeps the wire digest a stable tripwire, so an unintended format change cannot hide behind an intended semantic one. Regenerated 2026-11-04 for NI-F11 (NETWORK_IDENTITY.md): the auth input starts with the network's 16-byte genesis-derived id, unframed at byte 0, and the customizations bumped -v2 -> -v3, so the digests are now pinned per network (expected.auth_msgs_by_network) beside the framed field inventory they hash (expected.auth_msg_framed_hex). scripts/kat/emission_auth_msg_oracle.py recomputes every digest from the framed bytes and anchors those bytes on the -v2 digests pinned on 2026-09-14. The wire length and digest did not move. Regenerated 2026-11-05 for the signing envelope: the role messages are frame(shekyl/archival-emission-auth-<role>-v4, network id, [fields 1-9]) read to 64 bytes, field 8 the transaction's tx_signable (the fixture's 32-byte stand-in) and field 9 the backing's wire bytes; fields 1-8 frame as before, and the oracle builds field 9 from the fixture by the wire layout. The wire length and digest did not move.",
+  "digest": "the signing envelope's frame (cSHAKE256), 64-byte output",
   "customizations": {
-    "backing": "shekyl/archival-emission-auth-backing-v2",
-    "claim": "shekyl/archival-emission-auth-claim-v2"
+    "backing": "shekyl/archival-emission-auth-backing-v4",
+    "claim": "shekyl/archival-emission-auth-claim-v4"
   },
   "fixture": {
     "p_pubkey": "0x5A repeated SINGLE_KEY_CANONICAL_LEN (1996) times",
-    "holdings": { "kind": "ShardSetCompact", "shard_ids": [7, 42] },
-    "settlement_epochs": [11, 12, 15],
+    "holdings": {
+      "kind": "ShardSetCompact",
+      "shard_ids": [
+        7,
+        42
+      ]
+    },
+    "settlement_epochs": [
+      11,
+      12,
+      15
+    ],
     "work_claim": [
-      { "epoch": 11, "shard_entries": [ { "shard_id": 7, "serve_credit_bit": true, "scarcity_micro": 850 }, { "shard_id": 42, "serve_credit_bit": false, "scarcity_micro": 0 } ] },
-      { "epoch": 12, "shard_entries": [ { "shard_id": 7, "serve_credit_bit": true, "scarcity_micro": 1000 } ] },
-      { "epoch": 15, "shard_entries": [] }
+      {
+        "epoch": 11,
+        "shard_entries": [
+          {
+            "shard_id": 7,
+            "serve_credit_bit": true,
+            "scarcity_micro": 850
+          },
+          {
+            "shard_id": 42,
+            "serve_credit_bit": false,
+            "scarcity_micro": 0
+          }
+        ]
+      },
+      {
+        "epoch": 12,
+        "shard_entries": [
+          {
+            "shard_id": 7,
+            "serve_credit_bit": true,
+            "scarcity_micro": 1000
+          }
+        ]
+      },
+      {
+        "epoch": 15,
+        "shard_entries": []
+      }
     ],
     "backing": {
       "proof": "0xEE repeated 64 times",
       "pseudo_out": "0x22 repeated 32 times",
-        "backing_pubkey": "0xB2 repeated SINGLE_KEY_CANONICAL_LEN (1996) times",
+      "backing_pubkey": "0xB2 repeated SINGLE_KEY_CANONICAL_LEN (1996) times",
       "tree_depth": 3
     },
-    "reward_amount_plain": [1000000, 2000000, 3000000],
+    "reward_amount_plain": [
+      1000000,
+      2000000,
+      3000000
+    ],
     "auth_backing": "0xC3 repeated SINGLE_SIG_CANONICAL_LEN (3385) times",
     "auth_claim": "0xD4 repeated SINGLE_SIG_CANONICAL_LEN (3385) times",
-    "reward_commits": [ { "commitment": "0x55 repeated 32 times", "amount_plain": 3000000, "one_time_key": "0x66 repeated 32 times" } ],
-    "signable_tx_hash": "0x42 repeated 32 times"
+    "reward_commits": [
+      {
+        "commitment": "0x55 repeated 32 times",
+        "amount_plain": 3000000,
+        "one_time_key": "0x66 repeated 32 times"
+      }
+    ],
+    "tx_signable": "0x42 repeated 32 times"
   },
   "expected": {
-    "auth_msg_backing": "c975235c70fa6c9bd80b429e8a92f06dea988a22edb6d6af38e53d62fdb7943270947bbcd8320ca7061e0e9b6c3161fdf93dfbfc4116d208287f8d54ac73c901",
-    "auth_msg_claim": "dd39154467976ebd6ca98456ffde6934cbcd29adee749e8621903e7908230fbc28ceeca5dd693e9b571fe7965bc64987ed684e320d46ab5d62f8858eb338b6f5",
     "wire_len": 10901,
-    "wire_digest_cshake256_32_shekyl_emission_wire_kat_v1": "5ae6e93b35c690fc9c08cf95aa5448a3ac0010a8d73ba552285209b335b6f357"
+    "wire_digest_cshake256_32_shekyl_emission_wire_kat_v1": "5ae6e93b35c690fc9c08cf95aa5448a3ac0010a8d73ba552285209b335b6f357",
+    "auth_msg_framed_hex": "2000000000000000c9eb1c7f7d88562089cf3ed2cba1fdaaad5bd1aceb64473a992905db74676885cc070000000000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a04000000000000000002072a18000000000000000b000000000000000c000000000000000f00000000000000180000000000000040420f000000000080841e0000000000c0c62d00000000000e00000000000000020701d2062a0000010701e8070048000000000000005555555555555555555555555555555555555555555555555555555555555555c0c62d0000000000666666666666666666666666666666666666666666666666666666666666666620000000000000004242424242424242424242424242424242424242424242424242424242424242300800000000000040eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee2222222222222222222222222222222222222222222222222222222222222222cc0fb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b203",
+    "auth_msgs_by_network": {
+      "mainnet": {
+        "backing": "1404c44cedb5a4aac0555b034f493a41da5c3a6bdbc31fcb8c2822cd4cb0e909d053016541ca096899c6274ef3396e12a27612ab929d5b3ec1503e896bcde277",
+        "claim": "3e3fbb98654f349cf6126d08808c46b8a433a14f07e1df372bf1d171c1735ddb3b1350b0078de3cc6659c257519e7822789980fb5a8a2906a49bce8a481df5e4"
+      },
+      "testnet": {
+        "backing": "082312ef1ad68620f4f87ecfa3e00262f2f6fd16f8eb10ce65137faca6400acaef2bbf87b1c46e08b0e61246ca6bc07192d6070635df61959bfd77a1a80b572e",
+        "claim": "d11729b425f4d9273531b929cb3c8f9acd140e41e366448baf5ed552011ae5c18906a572063ed6202280f2f3d33996aa4b9c1f78e1595878c97a48a871fe6824"
+      },
+      "stagenet": {
+        "backing": "2b9d58adaf395143c50d9a8c7f8b672a54aaf1f4388f4a4418629084afdf04c52b44e3d2d90789147154e4906ec7808f6fe7421f93113e69e77b9da4f01d16d1",
+        "claim": "08880d4437fb7abc8eb7602a59df0058c8f05533b207678731df06595bc55b8a8b12bcef1ffa226d4c5ddcb029d784d378703a5e846bd0929ab154cda23a4ff8"
+      },
+      "regtest": {
+        "backing": "80cc10491604b14b79c9edbb8308f1ec8daf281024b09d6a685e53bca7a721ae804ec4786c71e48d7b42e5cedb5bbfd6266e6760bdb1969bbeaa50ec8cb37b71",
+        "claim": "66e64f01e83317dbae9844813066db5f3ce785a4fdf27477a2fcbb391e11f854e18dce8259fec15b152f469cda5699005c8b713927088b7cdd18e15119c53edc"
+      }
+    }
+  },
+  "network_ids": {
+    "mainnet": "d7baeb42d838ba20a6abc1ae08e71933",
+    "testnet": "73ebdf3cad085c1978013182687ade42",
+    "stagenet": "0abddf62b16365c0b9a06a3a94df38bd",
+    "regtest": "dd007e2d53a391032af85b8f096d5cae"
   }
 }

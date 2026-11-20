@@ -6,8 +6,9 @@
 //! The ingest service — the live arrival path (`DRS_X_STORE_FLIP.md` DX-Q2,
 //! PR2-Q1).
 //!
-//! [`pipeline::run`](crate::pipeline::run) drives a pulled [`Source`] to
-//! exhaustion, and a source has no path back to its producer, so it cannot
+//! [`pipeline::run`](crate::pipeline::run) drives a pulled
+//! [`Source`](crate::source::Source) to exhaustion, and a source has no path
+//! back to its producer, so it cannot
 //! answer an arrival. The live daemon's arrivals come here instead: a
 //! long-running service that owns the connector actor, the `form` workers
 //! and the router, behind **one door**.
@@ -21,7 +22,7 @@
 //! accepted arrival carries sends [`Reply::Stopped`] if it is dropped
 //! without a reply, so no path through the service can leave a ticket
 //! unanswered. Who uses the door: the protocol handler's FFI entry,
-//! `submit_block` and the miner's found-block sink. There is no second
+//! `block_submit` and the miner's found-block sink. There is no second
 //! path.
 //!
 //! **Room** ([`Door::room`]) is the count of arrivals the service will
@@ -37,12 +38,29 @@
 //! Each span is worked by its own task, so two sessions' spans race to the
 //! one writer, and the router places on snapshots the other span's commits
 //! can move (`router` module docs). Within a span, a run of blocks each
-//! extending the one before it from the tip is formed in parallel, under
-//! the hasher permits, and connected in order; an alternative arrival goes
+//! extending the one before it from the tip is formed in parallel, each
+//! block as a hashing job, and connected in order; an alternative arrival goes
 //! through `OfferAlt` and, if it makes a switch due, the switch. A stale
 //! placement — the connector's `HeightClaim`, a `Stale` claim, or an
 //! `OfferAlt` whose parent became the tip — sends the arrival back to be
 //! placed again, never to a verdict.
+//!
+//! # The ranked list
+//!
+//! The service holds no RandomX cache. Every hash is a job on the node's
+//! one hasher, through the [`Pow`] boundary, and a job always gets its
+//! cache (`RANDOMX_CACHE_ACTOR.md` HA-R1). What the hasher keeps warm
+//! between jobs is the ranked list, and the service is what computes it:
+//! one task, the ranker (`window::rank`), reads a fresh store snapshot and
+//! chain sync's header frontier ([`Follow::frontier`]) and sends the list
+//! whole ([`ranked_on`]). The connector wakes it after every write that
+//! can change the list, and a change of the frontier wakes it too. Wakes
+//! coalesce, so the last list sent is from the newest snapshot.
+//!
+//! The tip follower asks for a ranking of its own before it builds a
+//! template and waits for it: the miner's warm loan is granted only on a
+//! listed seed, so the list names the new tip's seed before a job on it
+//! is posted.
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -50,20 +68,22 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kameo::actor::{ActorRef, PreparedActor};
-use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
+use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_hash_budget::{Budget, Class};
+use shekyl_hasher::Class;
 use shekyl_mempool::{Pool, PoolFault};
-use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
+use shekyl_types::{BlockHash, BlockHeight, TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{
-    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+    BundleOffered, Connector, ConnectorArgs, FiledBundle, OfferBundle, OfferFault,
+    PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip, FILED_FEED_CAPACITY,
 };
 use crate::follower::JobSeat;
+use crate::pow::Pow;
 use crate::schedule::ChainRules;
 
 /// The caller's name for one arrival, carried on its reply.
@@ -85,7 +105,7 @@ pub enum Origin {
         /// Whether this node asked for it.
         solicited: bool,
     },
-    /// This node: `submit_block` or the miner's found-block sink.
+    /// This node: `block_submit` or the miner's found-block sink.
     Local,
 }
 
@@ -102,6 +122,13 @@ pub struct Arrival {
     pub block: Vec<u8>,
     /// The listed bodies it carried, as blobs, in any order.
     pub bodies: Vec<Vec<u8>>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when none.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash. Empty when
+    /// none were carried.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 /// One block chain sync has already proven: its header passed
@@ -110,23 +137,33 @@ pub struct Arrival {
 /// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
 /// the proof and does not hash, so it takes no hasher permit and pins no
 /// seed.
+///
+/// It is seated as a solicited arrival however the body reached the owner.
+/// The owner admits an announcement itself (one unproved announce per
+/// session, proved under the hasher's unsolicited class) and offers only
+/// bodies on `H*`'s path within the room [`Door::room`] reported, so the
+/// door's unsolicited share and bucket have nothing left to decide for it:
+/// until 2026-11-02 they did decide, and a span of more announced bodies
+/// than the share was `NoRoom` in an empty window (the sync owner's
+/// `Event::Room` docs).
 #[derive(Clone, Debug)]
 pub struct BoundArrival {
     /// The caller's name for it.
     pub tag: ArrivalTag,
     /// The session that served the body.
     pub session: SessionId,
-    /// Whether this node asked for the body. An announcement is not.
-    pub solicited: bool,
     /// The header the sync owner's proof accepted.
     pub judged: shekyl_chain_rules::HeaderJudged,
     /// The block blob.
     pub block: Vec<u8>,
     /// The listed bodies, as blobs, in the block's order.
     pub bodies: Vec<Vec<u8>>,
-    /// The attestation witness carried beside the block; empty for an empty
-    /// set.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references carried beside the block, undecoded; empty
+    /// when the block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles it carried, unverified and in no set
+    /// order; assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl BoundArrival {
@@ -142,10 +179,12 @@ impl BoundArrival {
             tag: self.tag,
             origin: Origin::Peer {
                 session: self.session,
-                solicited: self.solicited,
+                solicited: true,
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
+            reference_count: self.bundle_references.len(),
+            bundle_body_count: self.bundle_bodies.len(),
         }
     }
 }
@@ -162,11 +201,23 @@ pub struct ArrivalLengths {
     pub block_len: usize,
     /// Each carried body's length, in the order the caller listed them.
     pub body_lens: Vec<usize>,
+    /// How many bundle references were carried; zero when none were.
+    /// Bounded by [`shekyl_types::archival::MAX_SECTION_REFERENCES`], not by
+    /// [`crate::admission::ArrivalBound`].
+    pub reference_count: usize,
+    /// How many bundle bodies were carried: never more than a section has
+    /// references, and, like the references, not block bytes.
+    pub bundle_body_count: usize,
 }
 
 impl ArrivalLengths {
-    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block
-    /// and the bodies it carried.
+    /// The bytes the door bounds against [`Door::max_arrival_bytes`]: the
+    /// block and the bodies it carried. The bundle references are a sidecar
+    /// with their own cap, a count
+    /// ([`shekyl_types::archival::MAX_SECTION_REFERENCES`]); their bytes
+    /// are not these bytes. A section is not block weight (§7.1: a bundle
+    /// is not a transaction), so a full block carrying one is not oversize,
+    /// and a peer's arrival is already bounded by the packet it came in.
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.body_lens
@@ -180,6 +231,8 @@ impl ArrivalLengths {
             origin: arrival.origin,
             block_len: arrival.block.len(),
             body_lens: arrival.bodies.iter().map(Vec::len).collect(),
+            reference_count: arrival.bundle_references.len(),
+            bundle_body_count: arrival.bundle_bodies.len(),
         }
     }
 }
@@ -274,6 +327,8 @@ pub enum Reply {
     /// Listed bodies neither the arrival carried nor the pool shows, by
     /// their index in the block's list: ask for them and offer it again.
     MissingBodies {
+        /// The block whose list they are: what the re-request names.
+        hash: BlockHash,
         /// The indices, ascending.
         indices: Vec<usize>,
     },
@@ -369,16 +424,6 @@ enum Proof {
     Judged(Box<shekyl_chain_rules::HeaderJudged>),
 }
 
-impl Proof {
-    /// The class a hash waits in. A judged arrival does not hash.
-    const fn hash_class(&self) -> Option<Class> {
-        match self {
-            Self::Hash { class } => Some(*class),
-            Self::Judged(_) => None,
-        }
-    }
-}
-
 /// The hasher class an arrival's `form` waits in: a block this node asked
 /// for or made is the chain's; an announcement is unsolicited.
 const fn class_of(origin: Origin) -> Class {
@@ -399,7 +444,8 @@ struct Staged {
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
     proof: Proof,
-    witness: Vec<u8>,
+    references: Vec<Vec<u8>>,
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl Staged {
@@ -411,7 +457,8 @@ impl Staged {
             proof: Proof::Hash {
                 class: class_of(arrival.origin),
             },
-            witness: Vec::new(),
+            references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 
@@ -421,7 +468,8 @@ impl Staged {
             block: arrival.block,
             bodies: arrival.bodies,
             proof: Proof::Judged(Box::new(arrival.judged)),
-            witness: arrival.attestation_witness,
+            references: arrival.bundle_references,
+            bundle_bodies: arrival.bundle_bodies,
         }
     }
 }
@@ -434,13 +482,16 @@ struct Accepted {
     bodies: Vec<Vec<u8>>,
     /// How this arrival is formed.
     proof: Proof,
-    /// The witness carried beside the block; empty when none was.
-    witness: Vec<u8>,
+    /// The bundle references carried beside the block; empty when none
+    /// were.
+    references: Vec<Vec<u8>>,
+    /// The bundle bodies carried beside the block, unverified.
+    bundle_bodies: Vec<Vec<u8>>,
 }
 
-/// The service's knobs, each with its reason. How many `form` workers hash
-/// at once is not one: it is the daemon's one hasher [`Budget`], handed to
-/// [`Service::start`].
+/// The service's knobs, each with its reason. How many `form` workers hash at
+/// once is not one: it is the daemon's one hasher
+/// [`Budget`](shekyl_hash_budget::Budget), handed to [`Service::start`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServiceConfig {
     /// The arrival window: arrivals accepted and not yet answered, at most.
@@ -487,24 +538,22 @@ pub enum ServiceFault<F> {
     #[error("pool: {0:?}")]
     Pool(PoolFault<StoreError>),
     /// The tip attendant ended while the service had not stopped, or it
-    /// panicked, or a blocking task of the follower's panicked: the seed
-    /// window's install, the pool's judging, the template producer. The
-    /// miner must not keep hashing a job nothing will refresh.
+    /// panicked, or a blocking task of the follower's panicked: the pool's
+    /// judging, the template producer. The miner must not keep hashing a
+    /// job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
+    /// The ranker panicked: nothing tells the hasher which seeds the node
+    /// needs any more. Reached only where a panic unwinds (the test
+    /// profile); dev and release abort.
+    #[error("the ranker ended")]
+    RankerEnded,
     /// An in-cap alternative named a seed below its fork that the window
     /// does not hold. The window's arithmetic says it cannot: a defect in
     /// this node, never a peer's doing (`cache_window` module docs).
     #[error("an in-cap alternative at height {height} named a below-fork seed outside the window")]
     SeedNotInWindow {
         /// The alternative's height on its chain.
-        height: BlockHeight,
-    },
-    /// A form hashed under a seed this node had just prepared, and the
-    /// substrate still had no cache for it.
-    #[error("a prepared seed's cache was absent at height {height}")]
-    PreparedSeedAbsent {
-        /// The block's height on its chain.
         height: BlockHeight,
     },
     /// A block this node connected failed its own stateless rules when a
@@ -518,50 +567,100 @@ pub enum ServiceFault<F> {
     },
 }
 
+impl<F: core::fmt::Debug> ServiceFault<F> {
+    /// This fault's own words. The error line and [`Service::ended`] both
+    /// carry them, so a new variant reaches the daemon's exit line through
+    /// its `thiserror` text and nowhere else.
+    #[must_use]
+    pub fn end(&self) -> ServiceEnd {
+        ServiceEnd {
+            cause: self.to_string(),
+        }
+    }
+}
+
+/// Why the service ended on its own ([`Service::ended`]): the
+/// [`ServiceFault`]'s own words, owned so the process can exit with them.
+///
+/// The fault keeps its payload. This is that payload already rendered.
+/// [`ServiceFault::end`] is how a running service builds one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceEnd {
+    cause: String,
+}
+
+impl ServiceEnd {
+    /// `cause` as a fault already said it. The stop-line tests name a
+    /// sentence; a running service goes through [`ServiceFault::end`].
+    #[must_use]
+    pub fn words(cause: impl Into<String>) -> Self {
+        Self {
+            cause: cause.into(),
+        }
+    }
+}
+
+impl core::fmt::Display for ServiceEnd {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(&self.cause)
+    }
+}
+
 /// What every span task, and the tip attendant, shares.
-pub(crate) struct Shared<S: Substrate> {
+pub(crate) struct Shared<P: Pow> {
     store: Arc<ChainStore>,
     rules: ChainRules,
-    substrate: Arc<S>,
+    /// The proof-of-work boundary every hash goes through, inside a job.
+    pow: Arc<P>,
     connector: ActorRef<Connector>,
-    /// The daemon's one hasher budget.
-    budget: Budget,
-    /// Set with [`Self::request_stop`]. The budget's waiters load it.
+    /// The bundles this node filed and queued, for the sync owner to relay.
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
+    /// Set with [`Self::request_stop`]. Every job's wait loads it.
     stop_flag: Arc<AtomicBool>,
     /// Set once: the service is stopping (a stop, or a fault).
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
-    fault: Mutex<Option<ServiceFault<S::Fault>>>,
-    /// Serializes cache pins. Taken after a hasher permit, never before.
-    pin_lock: Arc<Mutex<()>>,
-    /// Serialises every form under a branch's own seed (B2): an alternative
-    /// arrival's, and a switch that promotes past its branch's seed point.
-    /// Taken before any permit, so the order is gate, permit, `pin_lock`.
-    /// With one such form at a time, the live caches are the canonical, the
-    /// transient, and at most one evicted cache a form still holds.
-    branch_gate: tokio::sync::Mutex<()>,
-    /// The seeds the two slots hold. `None` until the first install.
-    seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
+    fault: Mutex<Option<ServiceFault<P::Fault>>>,
+    /// That fault's own words, published when it is recorded
+    /// ([`Service::ended`]). `None` while the service runs, and after a
+    /// stop that met no fault.
+    ended: tokio::sync::watch::Sender<Option<ServiceEnd>>,
+    /// Wakes the ranker (module docs, *The ranked list*). The connector
+    /// fires it after every write that can change the seeds the node
+    /// needs.
+    ranked: Arc<Notify>,
+    /// How many rankings have been asked for ([`Self::ranked_now`]).
+    rank_asked: std::sync::atomic::AtomicU64,
+    /// The highest ask a completed ranking has served: the ranker reads
+    /// `rank_asked` before its snapshot and publishes that number once
+    /// the list is sent.
+    rank_served: tokio::sync::watch::Sender<u64>,
     /// The last `TipChanged` publication the tip attendant acted on.
     followed: tokio::sync::watch::Sender<u64>,
+    /// The live phases' measurement sink ([`Follow::metrics`]).
+    metrics: Option<Arc<crate::metrics::Metrics>>,
+    /// The postings the follower has written and not yet dropped. The
+    /// follower and the found-block sink share this map: a generation's
+    /// job and the bodies it listed are one record.
+    kept: crate::follower::Postings,
     /// The pool, when one is wired.
     pool: Option<PoolWiring>,
     /// Cleared when the pool file faults. Block ingest does not stop.
     pool_live: Arc<AtomicBool>,
     /// Bodies a span parked because the tip moved under the pool door.
     pending: Mutex<Vec<Transaction>>,
-    /// Wakes the attendant to judge [`pending`](Self::pending).
-    pending_ready: Arc<tokio::sync::Notify>,
+    /// Wakes the attendant: parked bodies, a shown-set change at this tip
+    /// (Q9: once the relay marks an entry shown, the next template lists
+    /// it — N2 rebuilds the posted job, not only on a tip move), and a
+    /// bundle the queue admits at this tip (the connector fires it).
+    pending_ready: Arc<Notify>,
     /// What a test does to the pool between the producer's two locks.
     /// The build clones it, so a test can replace it between wakes.
     #[cfg(test)]
     pub(crate) between_locks: Mutex<Option<Arc<crate::template::HeldBetweenLocks>>>,
 }
 
-impl<S: Substrate> Shared<S>
-where
-    S::Fault: core::fmt::Debug,
-{
+impl<P: Pow> Shared<P> {
     pub(crate) fn stopping(&self) -> bool {
         self.stop_flag.load(Ordering::Acquire)
     }
@@ -571,11 +670,43 @@ where
         self.stop.subscribe()
     }
 
-    /// Stop the service and wake every hasher waiter.
+    /// Stop the service and wake every job waiting for a cache or a
+    /// permit.
     pub(crate) fn request_stop(&self) {
         self.stop_flag.store(true, Ordering::Release);
         self.stop.send_replace(true);
-        self.budget.wake();
+        self.pow.wake();
+    }
+
+    /// Ask the ranker for a ranking and wait until one that began after
+    /// this call has been sent to the hasher. The tip follower calls it
+    /// before it builds a template: the miner's warm loan is granted only
+    /// on a listed seed, so the list must name the new tip's seed before a
+    /// job on it is posted. `false` when the service stopped first.
+    pub(crate) async fn ranked_now(&self) -> bool {
+        let mine = self.rank_asked.fetch_add(1, Ordering::AcqRel) + 1;
+        let mut served = self.rank_served.subscribe();
+        let mut stopping = self.stop_signal();
+        self.ranked.notify_one();
+        tokio::select! {
+            reached = served.wait_for(|served| *served >= mine) => reached.is_ok(),
+            _ = stopping.wait_for(|stop| *stop) => false,
+        }
+    }
+
+    /// The ask count a ranking that starts now will have served.
+    pub(crate) fn rank_asked(&self) -> u64 {
+        self.rank_asked.load(Ordering::Acquire)
+    }
+
+    /// A ranking that read `asked` before its snapshot was sent.
+    pub(crate) fn rank_served(&self, asked: u64) {
+        self.rank_served.send_replace(asked);
+    }
+
+    /// The flag every job's wait loads.
+    pub(crate) const fn stop_flag(&self) -> &Arc<AtomicBool> {
+        &self.stop_flag
     }
 
     /// The tip attendant acted on publication `seq`.
@@ -583,63 +714,10 @@ where
         self.followed.send_replace(seq);
     }
 
-    /// The seeds the slots hold now, including while the service is stopping.
-    pub(crate) fn published_seeds(&self) -> Option<crate::cache_window::SeedPair> {
-        *self.seeds.borrow()
-    }
-
-    /// The seeds an arrival may hash under. `None` while the service is stopping.
-    pub(crate) fn seed_now(&self) -> Option<crate::cache_window::SeedPair> {
-        if self.stopping() {
-            None
-        } else {
-            self.published_seeds()
-        }
-    }
-
-    /// Wait until the slots hold a pair, or the service stops.
-    pub(crate) async fn seed_pair(&self) -> Option<crate::cache_window::SeedPair> {
-        let mut published = self.seeds.subscribe();
-        let mut stopping = self.stop_signal();
-        loop {
-            if self.stopping() {
-                return None;
-            }
-            if let Some(pair) = *published.borrow_and_update() {
-                return Some(pair);
-            }
-            tokio::select! {
-                changed = published.changed() => {
-                    if changed.is_err() {
-                        return None;
-                    }
-                }
-                _ = stopping.wait_for(|stop| *stop) => return None,
-            }
-        }
-    }
-
-    /// Record the seeds a pin just installed.
-    pub(crate) fn note_pins(&self, pinned: &[BlockHash]) {
-        window::note_pins(self, pinned);
-    }
-
-    /// A branch seed was prepared into the transient slot: the published
-    /// pair says so, so the next window install sees the slot it lost.
-    pub(crate) fn note_prepared(&self, seed: BlockHash) {
-        if let Some(pair) = self.published_seeds() {
-            if pair.canonical != seed {
-                self.seeds.send_replace(Some(crate::cache_window::SeedPair {
-                    canonical: pair.canonical,
-                    transient: Some(seed),
-                }));
-            }
-        }
-    }
-
-    /// The gate every form under a branch's own seed takes first.
-    pub(crate) async fn branch_form(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.branch_gate.lock().await
+    /// The publication record the follower writes and the found-block sink
+    /// reads.
+    pub(crate) fn postings(&self) -> crate::follower::Postings {
+        Arc::clone(&self.kept)
     }
 
     pub(crate) const fn store(&self) -> &Arc<ChainStore> {
@@ -650,8 +728,8 @@ where
         self.rules
     }
 
-    pub(crate) const fn substrate(&self) -> &Arc<S> {
-        &self.substrate
+    pub(crate) const fn pow(&self) -> &Arc<P> {
+        &self.pow
     }
 
     /// The pool, locked, for a read that does not wait on anything.
@@ -675,6 +753,20 @@ where
     /// Whether a pool is wired and its file has not faulted.
     pub(crate) fn pool_is_live(&self) -> bool {
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
+    }
+
+    /// The relay's hook for ids this reconcile took out of the pool.
+    pub(crate) fn note_departed(&self, ids: &[TxHash]) {
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(hook) = self
+            .pool
+            .as_ref()
+            .and_then(|wiring| wiring.departed.as_ref())
+        {
+            hook(ids);
+        }
     }
 
     /// The pool, when it is wired and live. A caller that also reads the
@@ -712,6 +804,15 @@ where
         self.pending_ready.notify_one();
     }
 
+    /// A shown-set change at this tip that did not come through the relay's
+    /// hook: a body a pop or a switch returned to the pool, admitted public.
+    /// Q9: the posted job is rebuilt on a shown-set change, not only on a
+    /// tip move; the wake is the attendant's one pending `Notify`, so a
+    /// batch of returns costs at most one rebuild in flight.
+    pub(crate) fn shown_changed(&self) {
+        self.pending_ready.notify_one();
+    }
+
     /// Park `bodies` without waking. The next tip, or the next handed
     /// batch, judges them. A tip that moved under this attempt must not
     /// notify itself.
@@ -735,18 +836,33 @@ where
         )
     }
 
-    /// The attendant waits on this beside the tip.
-    pub(crate) fn pending_ready(&self) -> &tokio::sync::Notify {
+    /// The attendant waits on this beside the tip: parked bodies, a
+    /// shown-set change at this tip (Q9), and a bundle the queue admits.
+    pub(crate) fn pending_ready(&self) -> &Notify {
         &self.pending_ready
     }
 
     /// Record `fault` if it is the first, and stop.
-    pub(crate) fn fail(&self, fault: ServiceFault<S::Fault>) {
+    ///
+    /// The first fault is logged at `error` here, in its own words, and
+    /// those words are published on [`Service::ended`] for the daemon's
+    /// exit line. A stopped service leaves the process up and the RPC
+    /// answering from the old tip, so the line cannot wait for the
+    /// process to exit (rule 82). A later fault is a consequence of the
+    /// first and is logged at `debug`.
+    pub(crate) fn fail(&self, fault: ServiceFault<P::Fault>) {
         let mut first = self
             .fault
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        first.get_or_insert(fault);
+        if first.is_none() {
+            let cause = fault.end();
+            tracing::error!("the ingest service stops on a fault: {cause}");
+            self.ended.send_replace(Some(cause));
+            *first = Some(fault);
+        } else {
+            tracing::debug!("the ingest service, already stopping, met: {fault}");
+        }
         drop(first);
         self.request_stop();
     }
@@ -819,9 +935,57 @@ pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<crate::room::Room>,
     admission: Arc<Admission>,
+    connector: ActorRef<Connector>,
+    filed: tokio::sync::broadcast::Sender<FiledBundle>,
+    /// The follower's postings: a block mined on one is given its bundle
+    /// section here ([`Door::offer_local`]).
+    postings: crate::follower::Postings,
 }
 
 impl Door {
+    /// Offer a bundle a peer relayed to the queue (§7.5). Admission is the
+    /// bundle rule against the tip, the same rule this node's own bundles
+    /// meet ([`OfferBundle`]); the verdict is the reply. Only an admitted
+    /// bundle's body is stored.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn offer_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        match self.connector.ask(OfferBundle { reference, body }).await {
+            Ok(offered) => Ok(offered),
+            Err(kameo::error::SendError::HandlerError(fault)) => Err(OfferFault::Connector(fault)),
+            Err(_) => Err(OfferFault::Stopped),
+        }
+    }
+
+    /// File a bundle this node produced (§7.5): the queue's admission, and
+    /// on admission the relay feed ([`Self::filed`]). The producer's task
+    /// files through the same path.
+    ///
+    /// # Errors
+    ///
+    /// [`OfferFault`] when the connector faulted or has stopped.
+    pub async fn file_bundle(
+        &self,
+        reference: shekyl_archival_retention::BundleRef,
+        body: shekyl_archival_retention::BundleBody,
+    ) -> Result<BundleOffered, OfferFault> {
+        crate::connector::file_bundle(&self.connector, &self.filed, reference, body).await
+    }
+
+    /// The bundles this node files and queues from now on, for the sync
+    /// owner to relay (`SCS-P25`). A receiver that falls more than
+    /// [`FILED_FEED_CAPACITY`] behind misses the oldest.
+    #[must_use]
+    pub fn filed(&self) -> tokio::sync::broadcast::Receiver<FiledBundle> {
+        self.filed.subscribe()
+    }
+
     /// Seats a sync caller can take now. Zero when the door is closed.
     #[must_use]
     pub fn room(&self) -> usize {
@@ -848,6 +1012,42 @@ impl Door {
         self.room.close();
     }
 
+    /// The bundle section of the posting `block` was mined on, as the block
+    /// carries it: references, and bodies (`SO-D12` 4b, C4). A local block
+    /// arrives as bytes — the built-in miner's and an outside miner's
+    /// `submit_block` alike — and its header commits the section's root, so
+    /// the posting with the same parent and the same root is the one it was
+    /// mined on. A block whose root is no posting's, or the empty section's,
+    /// carries none, and the validator judges its root against that.
+    fn posted_section(&self, block: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let Ok(block) = shekyl_wire::Block::from_bytes(block) else {
+            return (Vec::new(), Vec::new());
+        };
+        let header = &block.header;
+        let kept = self
+            .postings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.values()
+            .filter_map(|posting| {
+                let posted = &posting.job.block.header;
+                let section = posting.section.as_ref()?;
+                (posted.previous == header.previous && posted.section_root == header.section_root)
+                    .then(|| {
+                        (
+                            section.references.as_slice().to_vec(),
+                            section
+                                .bodies
+                                .iter()
+                                .map(|body| body.as_bytes().to_vec())
+                                .collect(),
+                        )
+                    })
+            })
+            .next()
+            .unwrap_or_default()
+    }
+
     /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
     /// node mined, was submitted, or is connecting at genesis. It waits for
     /// the local seat while the window is full, offers the block as
@@ -855,7 +1055,7 @@ impl Door {
     /// it waits answers [`Reply::Stopped`]: the service is stopping, and the
     /// block was not accepted.
     ///
-    /// The miner's sink, `submit_block`, `generateblocks` and the node's
+    /// The miner's sink, `block_submit`, `dev_block_generate` and the node's
     /// genesis connect all enter here, so a local block has one path in.
     ///
     /// # Errors
@@ -869,11 +1069,14 @@ impl Door {
         block: Vec<u8>,
         bodies: Vec<Vec<u8>>,
     ) -> Result<Tagged, Refusal> {
+        let (bundle_references, bundle_bodies) = self.posted_section(&block);
         let arrival = Arrival {
             tag,
             origin: Origin::Local,
             block,
             bodies,
+            bundle_references,
+            bundle_bodies,
         };
         loop {
             match self.offer(arrival.clone()) {
@@ -993,9 +1196,31 @@ pub struct Follow {
     pub pool: Option<PoolWiring>,
     /// The bundle producer, when the node mines and has a fetch path
     /// (`SO-D12` increment 4c). It files from the job seat's ring.
-    #[cfg(feature = "producer")]
-    pub producer: Option<crate::bundle_producer::ProducerSeat>,
+    pub producer: Option<crate::producer_seat::ProducerSeat>,
+    /// Wakes the tip follower when the pool's shown set changes at this
+    /// tip (`DRS_X_STORE_FLIP.md` Q9). The composition root hands the same
+    /// [`Notify`] the pool door's fluff hook fires. The connector fires it
+    /// too, when the bundle queue admits a bundle at the tip. `None` is a
+    /// private notify: tests that admit through the pool lock wake it
+    /// themselves.
+    pub shown: Option<Arc<Notify>>,
+    /// The measurement sink the live phases are timed into: each
+    /// `form_judged`, and each run the connector applies
+    /// (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-5, the per-block profile). The
+    /// composition root hands the proof-of-work boundary's own sink. `None`
+    /// times nothing.
+    pub metrics: Option<Arc<crate::metrics::Metrics>>,
+    /// Chain sync's header frontier, for the ranked list (module docs,
+    /// *The ranked list*). The node creates the channel before either
+    /// service starts, and chain sync's owner holds the sender. `None`,
+    /// and a sender that has closed, both rank without a frontier: the
+    /// owner's own end reaches the node as its own, so a closed sender is
+    /// not a fault here.
+    pub frontier: Option<tokio::sync::watch::Receiver<Option<Frontier>>>,
 }
+
+/// Told the ids that left the pool on a reconcile.
+pub type Departed = Arc<dyn Fn(&[TxHash]) + Send + Sync>;
 
 /// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
 /// the brief's c6): reconciled by the tip follower after every committed
@@ -1011,21 +1236,20 @@ pub struct PoolWiring {
     pub policy: AdmissionPolicy,
     /// The wall clock its door stamps arrivals with.
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
+    /// Told the ids that left on this reconcile: evicted to make room, and
+    /// removed because the chain took them or the door now refuses them.
+    /// The relay releases its responsibility for each (`DRS_X_STORE_FLIP.md`
+    /// §2). Absent in a test that does not track responsibilities.
+    pub departed: Option<Departed>,
 }
 
-/// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
+/// Pops blocks for `dev_chain_pop` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
 /// apart from the service ([`Service::rewinder`]).
-pub struct Rewinder<S: Substrate>
-where
-    S::Fault: core::fmt::Debug,
-{
-    shared: Arc<Shared<S>>,
+pub struct Rewinder<P: Pow> {
+    shared: Arc<Shared<P>>,
 }
 
-impl<S: Substrate> Clone for Rewinder<S>
-where
-    S::Fault: core::fmt::Debug,
-{
+impl<P: Pow> Clone for Rewinder<P> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
@@ -1033,10 +1257,9 @@ where
     }
 }
 
-impl<S> Rewinder<S>
+impl<P> Rewinder<P>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     /// Pop `count` blocks from the tip ([`PopBlocks`]). A count that would
     /// pop genesis or a retired block is refused before any pop, and the
@@ -1047,7 +1270,7 @@ where
     ///
     /// [`ServiceFault::Connector`] for a store fault; [`ServiceFault::Mailbox`]
     /// when the connector is gone.
-    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<S::Fault>> {
+    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<P::Fault>> {
         let rewound = self
             .shared
             .connector
@@ -1109,22 +1332,18 @@ impl PoolHealth {
 }
 
 /// The running service (module docs).
-pub struct Service<S: Substrate>
-where
-    S::Fault: core::fmt::Debug,
-{
+pub struct Service<P: Pow> {
     door: Door,
-    shared: Arc<Shared<S>>,
+    shared: Arc<Shared<P>>,
     task: tokio::task::JoinHandle<()>,
     connector_task: tokio::task::JoinHandle<
         Result<(Connector, kameo::error::ActorStopReason), kameo::error::PanicError>,
     >,
 }
 
-impl<S> Service<S>
+impl<P> Service<P>
 where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
+    P: Pow,
 {
     /// Start the service over `store`: the connector actor that alone writes
     /// it, and the loop that works each accepted span.
@@ -1132,18 +1351,16 @@ where
     pub fn start(
         store: Arc<ChainStore>,
         rules: ChainRules,
-        substrate: Arc<S>,
+        pow: Arc<P>,
         config: ServiceConfig,
-        budget: Budget,
         follow: Follow,
     ) -> Self {
         let started = std::time::Instant::now();
         Self::start_with_clock(
             store,
             rules,
-            substrate,
+            pow,
             config,
-            budget,
             follow,
             Arc::new(move || started.elapsed()),
         )
@@ -1155,9 +1372,8 @@ where
     pub fn start_with_clock(
         store: Arc<ChainStore>,
         rules: ChainRules,
-        substrate: Arc<S>,
+        pow: Arc<P>,
         config: ServiceConfig,
-        budget: Budget,
         follow: Follow,
         clock: Clock,
     ) -> Self {
@@ -1170,29 +1386,38 @@ where
             #[cfg(test)]
             refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
+        // The follower's one wake: a shown pool transaction and a bundle
+        // the queue admits both rebuild the posted job through it.
+        let pending_ready = follow.shown.unwrap_or_else(|| Arc::new(Notify::new()));
+        let ranked = Arc::new(Notify::new());
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
         let connector_task = prepared.spawn(ConnectorArgs {
             store: Arc::clone(&store),
             rules,
+            bundle_queued: Some(Arc::clone(&pending_ready)),
+            ranked: Some(Arc::clone(&ranked)),
         });
         let shared = Arc::new(Shared {
             store,
             rules,
-            substrate,
+            pow,
             connector,
-            budget,
+            filed: tokio::sync::broadcast::Sender::new(FILED_FEED_CAPACITY),
             stop_flag: Arc::new(AtomicBool::new(false)),
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
-            pin_lock: Arc::new(Mutex::new(())),
-            branch_gate: tokio::sync::Mutex::new(()),
-            seeds: tokio::sync::watch::Sender::new(None),
+            ended: tokio::sync::watch::Sender::new(None),
+            ranked,
+            rank_asked: std::sync::atomic::AtomicU64::new(0),
+            rank_served: tokio::sync::watch::Sender::new(0),
             followed: tokio::sync::watch::Sender::new(0),
+            metrics: follow.metrics,
+            kept: crate::follower::Postings::default(),
             pool: follow.pool,
             pool_live: Arc::new(AtomicBool::new(true)),
             pending: Mutex::new(Vec::new()),
-            pending_ready: Arc::new(tokio::sync::Notify::new()),
+            pending_ready,
             #[cfg(test)]
             between_locks: Mutex::new(None),
         });
@@ -1202,20 +1427,19 @@ where
                 window::record_store_read(&shared, read);
             }));
         }
-        // The first pair is pinned before any span can hash. Later tips
-        // reinstall from the attendant.
-        if let Err(read) = window::install_blocking(&shared) {
-            window::record_store_read(&shared, read);
-        }
         let (spans_tx, mut incoming) = mpsc::unbounded_channel::<Vec<Accepted>>();
         let door = Door {
             spans: spans_tx,
             room: crate::room::Room::new(config.room.get()),
             admission,
+            connector: shared.connector.clone(),
+            filed: shared.filed.clone(),
+            postings: shared.postings(),
         };
         let loop_shared = Arc::clone(&shared);
         let loop_door = door.clone();
         let mut stopped = shared.stop.subscribe();
+        let ranker = tokio::spawn(window::rank(Arc::clone(&shared), follow.frontier));
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
         let job = follow.job;
@@ -1223,6 +1447,7 @@ where
         let producing = follow.producer.map(|seat| {
             let parts = crate::bundle_producer::ProducerParts {
                 connector: shared.connector.clone(),
+                filed: shared.filed.clone(),
                 store: Arc::clone(&shared.store),
                 rules: shared.rules,
             };
@@ -1281,6 +1506,10 @@ where
                 drop(span);
             }
             while spans.join_next().await.is_some() {}
+            if let Err(join) = ranker.await {
+                tracing::error!("the ranker ended on a panic: {join}");
+                loop_shared.fail(ServiceFault::RankerEnded);
+            }
             #[cfg(feature = "producer")]
             if let Some(producing) = producing {
                 if let Err(join) = producing.await {
@@ -1315,7 +1544,7 @@ where
     /// The connector is gone.
     pub async fn watch_tip(
         &self,
-    ) -> Result<tokio::sync::watch::Receiver<crate::connector::TipChanged>, ServiceFault<S::Fault>>
+    ) -> Result<tokio::sync::watch::Receiver<crate::connector::TipChanged>, ServiceFault<P::Fault>>
     {
         self.shared
             .connector
@@ -1334,7 +1563,7 @@ where
         &self,
     ) -> Result<
         tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
-        ServiceFault<S::Fault>,
+        ServiceFault<P::Fault>,
     > {
         self.shared
             .connector
@@ -1353,7 +1582,7 @@ where
     pub async fn raise_alarm(
         &self,
         evidence: shekyl_chain_store::codec::FollowingDegraded,
-    ) -> Result<bool, ServiceFault<S::Fault>> {
+    ) -> Result<bool, ServiceFault<P::Fault>> {
         self.alarm()
             .raise(evidence)
             .await
@@ -1372,6 +1601,15 @@ where
         }
     }
 
+    /// Why the service ended on its own, once it has: `None` while it
+    /// runs, and after a stop that met no fault. The value is the fault's
+    /// own words, published when the fault is recorded. The node forwards
+    /// them to its end watch, and the daemon's exit line quotes them.
+    #[must_use]
+    pub fn ended(&self) -> tokio::sync::watch::Receiver<Option<ServiceEnd>> {
+        self.shared.ended.subscribe()
+    }
+
     /// The last `TipChanged` publication the tip follower acted on: what a
     /// caller waits on to know the pool and the miner's job are the tip's.
     #[must_use]
@@ -1381,15 +1619,15 @@ where
 
     /// Whether the pool file faulted and the pool was retired: no relay,
     /// no compact-block resolution and no transactions in a template until
-    /// a restart. What `get_info` and `mining_status` report (PR 3b).
+    /// a restart. What `daemon_status` and `mine_status` report (PR 3b).
     #[must_use]
     pub fn pool_retired(&self) -> bool {
         self.shared.pool_retired()
     }
 
-    /// What pops blocks for `pop_blocks`, held apart from the service.
+    /// What pops blocks for `dev_chain_pop`, held apart from the service.
     #[must_use]
-    pub fn rewinder(&self) -> Rewinder<S> {
+    pub fn rewinder(&self) -> Rewinder<P> {
         Rewinder {
             shared: Arc::clone(&self.shared),
         }
@@ -1403,6 +1641,20 @@ where
             wired: self.shared.pool.is_some(),
             live: Arc::clone(&self.shared.pool_live),
         }
+    }
+
+    /// Wait until the ranker has sent a list computed after this call
+    /// ([`Shared::ranked_now`]): a test reads what the hasher holds for
+    /// the store as it is now. `false` when the service stopped first.
+    #[cfg(test)]
+    pub(crate) async fn ranked(&self) -> bool {
+        self.shared.ranked_now().await
+    }
+
+    /// The store this service writes, for a test's own snapshot.
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &Arc<ChainStore> {
+        self.shared.store()
     }
 
     /// The door.
@@ -1424,7 +1676,7 @@ where
     /// # Errors
     ///
     /// The fault that ended the service, if one did before the stop.
-    pub async fn stop(self) -> Result<(), ServiceFault<S::Fault>> {
+    pub async fn stop(self) -> Result<(), ServiceFault<P::Fault>> {
         self.door.close();
         self.shared.request_stop();
         let _joined = self.task.await;
@@ -1448,10 +1700,13 @@ mod span;
 mod window;
 
 pub use window::Reservation;
-pub(crate) use window::{
-    divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
-    PoolDivision,
-};
+
+pub use crate::cache_window::{ranked_on, Frontier};
+pub(crate) use window::{divide_pool_faults, record_store_read, with_pool, PoolDivision};
+
+#[cfg(test)]
+#[path = "log_capture.rs"]
+mod log_capture;
 
 #[cfg(test)]
 #[path = "service_tests.rs"]

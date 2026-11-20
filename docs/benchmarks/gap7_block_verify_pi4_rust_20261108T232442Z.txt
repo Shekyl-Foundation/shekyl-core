@@ -1,0 +1,115 @@
+# GAP-7 floor capture — worst-case cold-block connect verification
+# phase=rust
+# captured_utc=20261108T232442Z
+# host=<floor-device>  uname=Linux <floor-device> 7.0.0-1020-raspi #20-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep 11 16:02:28 UTC 2026 aarch64 GNU/Linux
+# device_row: Raspberry Pi 4 Model B, 4 GB, active cooling, USB3 SSD (PERFORMANCE_BASELINE.md §8.2)
+# git_rev=78de6a14e2ac732fc3298f4d77db7aae43136db8
+# rustc=rustc 1.94.0 (4a4ef493e 2026-03-02)
+# RUSTFLAGS=<unset> (unset = the shipping generic-aarch64 regime; cortex-a72 flags SIGILL RandomX on BCM2711)
+# filter=bp_lone/in1_out2_|bp_lone/in8_out2_|bp_lone/in1_out16_|bp_batch46 (criterion's: only the benches the regex names run)
+# randomx_mode=light/cache BY CONSTRUCTION — not a configuration that can drift between runs: shekyl-pow-randomx is a cache+VM substrate with no dataset arm (rust/shekyl-pow-randomx/src/lib.rs:46-72)
+# storage_deviation: run from SD (mmcblk0p2); §8.2 row's USB3 SSD present but unmounted — not mounted deliberately; measured path is CPU-bound and in-memory, so the deviation does not enter verify_floor
+# storage_as_run: the USB3 SSD (/dev/sda1); the storage_deviation line above is the script's fixed text, written for the 2026-09-05 run, which ran from the SD card
+# ram_as_found: 8 GB (Rev 1.4 board) vs the June row's 4 GB — rule 76 names the MODEL and Model B matches; RandomX is light/cache (~256 MB) and the FCMP terms are CPU-bound, so 8 vs 4 GB cannot bind HERE — a future floor measurement that IS memory-sensitive must not inherit this row's device as 'the floor'
+# load_as_found: loadavg 3.80 3.89 4.06; busiest: shekyld 187%; ps 100%; bash 7.1%; 
+# thermal_start: temp_mC=73523 clock_kHz=1800000
+# thermal 23:24:42 temp_mC=74010 clock_kHz=1800000
+warning: variant `InconsistentWitness` is never constructed
+   --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:106:5
+    |
+ 98 | pub(crate) enum IpProveError {
+    |                 ------------ variant in this enum
+...
+106 |     InconsistentWitness,
+    |     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `IpProveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `generalized-bulletproofs` (lib) generated 1 warning
+warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:35:38
+   |
+35 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `blake2::digest::generic_array::GenericArray::<T, N>::as_slice`: please upgrade to generic-array 1.x
+  --> shekyl-oxide/crypto/helioselene/src/ciphersuite.rs:74:38
+   |
+74 |         uniform.copy_from_slice(hash.as_slice());
+   |                                      ^^^^^^^^
+
+warning: `helioselene` (lib) generated 2 warnings
+warning: `helioselene` (lib) generated 2 warnings (2 duplicates)
+    Finished `bench` profile [optimized] target(s) in 0.73s
+     Running benches/block_connect_verify.rs (target/release/deps/block_connect_verify-c4a37a301c78f118)
+Gnuplot not found, using plotters backend
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Warming up for 3.0000 s
+# thermal 23:24:57 temp_mC=72062 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Collecting 10 samples in estimated 5.1938 s (275 iterations)
+Benchmarking block_connect_terms/bp_lone/in1_out2_w13198: Analyzing
+block_connect_terms/bp_lone/in1_out2_w13198
+                        time:   [18.827 ms 18.838 ms 18.860 ms]
+                        thrpt:  [683.38 KiB/s 684.18 KiB/s 684.59 KiB/s]
+                 change:
+                        time:   [-45.904% -45.800% -45.689%] (p = 0.00 < 0.05)
+                        thrpt:  [+84.126% +84.500% +84.855%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+# thermal 23:25:13 temp_mC=74010 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_lone/in8_out2_w58782
+Benchmarking block_connect_terms/bp_lone/in8_out2_w58782: Warming up for 3.0000 s
+# thermal 23:25:28 temp_mC=72549 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_lone/in8_out2_w58782: Collecting 10 samples in estimated 5.1902 s (275 iterations)
+Benchmarking block_connect_terms/bp_lone/in8_out2_w58782: Analyzing
+block_connect_terms/bp_lone/in8_out2_w58782
+                        time:   [18.861 ms 18.882 ms 18.914 ms]
+                        thrpt:  [2.9639 MiB/s 2.9688 MiB/s 2.9722 MiB/s]
+                 change:
+                        time:   [-45.508% -45.441% -45.371%] (p = 0.00 < 0.05)
+                        thrpt:  [+83.054% +83.288% +83.512%]
+                        Performance has improved.
+# thermal 23:25:43 temp_mC=75471 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_lone/in1_out16_w34588
+Benchmarking block_connect_terms/bp_lone/in1_out16_w34588: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.9s or enable flat sampling.
+Benchmarking block_connect_terms/bp_lone/in1_out16_w34588: Collecting 10 samples in estimated 5.9100 s (55 iterations)
+# thermal 23:25:58 temp_mC=72549 clock_kHz=1800000
+Benchmarking block_connect_terms/bp_lone/in1_out16_w34588: Analyzing
+block_connect_terms/bp_lone/in1_out16_w34588
+                        time:   [107.22 ms 107.28 ms 107.35 ms]
+                        thrpt:  [314.66 KiB/s 314.84 KiB/s 315.03 KiB/s]
+                 change:
+                        time:   [-45.711% -45.312% -44.973%] (p = 0.00 < 0.05)
+                        thrpt:  [+81.728% +82.855% +84.199%]
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+# thermal 23:26:13 temp_mC=73523 clock_kHz=1800000
+# thermal 23:26:28 temp_mC=73523 clock_kHz=1800000
+
+Benchmarking block_connect_bp_batch/bp_batch46/out2
+Benchmarking block_connect_bp_batch/bp_batch46/out2: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 9.2s or enable flat sampling.
+Benchmarking block_connect_bp_batch/bp_batch46/out2: Collecting 10 samples in estimated 9.2363 s (55 iterations)
+# thermal 23:26:43 temp_mC=72062 clock_kHz=1800000
+Benchmarking block_connect_bp_batch/bp_batch46/out2: Analyzing
+block_connect_bp_batch/bp_batch46/out2
+                        time:   [168.20 ms 168.31 ms 168.38 ms]
+                        thrpt:  [273.19  elem/s 273.31  elem/s 273.48  elem/s]
+                 change:
+                        time:   [-81.391% -81.374% -81.357%] (p = 0.00 < 0.05)
+                        thrpt:  [+436.40% +436.89% +437.38%]
+                        Performance has improved.
+
+# thermal 23:26:58 temp_mC=74984 clock_kHz=1800000
+# thermal 23:27:13 temp_mC=73036 clock_kHz=1800000
+# thermal_end: temp_mC=72549 clock_kHz=1800000
+# done_utc=20261108T232728Z

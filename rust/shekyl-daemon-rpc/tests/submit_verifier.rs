@@ -39,6 +39,7 @@ use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
+use shekyl_crypto_pq::TxKey;
 use shekyl_curve_tree::{
     AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
     Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
@@ -50,7 +51,7 @@ use shekyl_daemon_rpc::submit::{
 };
 use shekyl_fcmp::tree::SELENE_CHUNK_WIDTH;
 use shekyl_fcmp::MAX_TREE_DEPTH;
-use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_rpc_types::wire::tx::{Rejection, Verdict};
 use shekyl_tx_builder::{
     encode_final_tx, phase1_payload_hashes, sign_pqc_auths, sign_transaction,
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
@@ -60,7 +61,7 @@ use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
-use submit_fixtures::{hexify, serve_credit_tx, MockShim};
+use submit_fixtures::{tx_bytes, MockShim};
 
 /// Coinbase lock window: the genesis coinbase drains into the tree at
 /// reference heights `>= COINBASE_LOCK_WINDOW + 1` (fcmp_spend_e2e's
@@ -87,8 +88,9 @@ const FEE: u64 = 1_000_000;
 /// The one-time expensive fixture: a consensus-valid spend and the tree
 /// facts it verifies against.
 struct SpendFixture {
-    /// The canonical submit hex (what a wallet would POST).
-    hex: String,
+    /// The canonical submit bytes (what a wallet posts as `tx_submit`'s
+    /// body).
+    body: Vec<u8>,
     /// Its Phase-A parse — the verifier's input.
     parsed: ParsedSubmission,
     /// Curve-tree root at the reference height (the proof's real anchor).
@@ -120,11 +122,10 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         key_image_conflicts: vec![KeyImageConflict::Free; fx.parsed.key_images.len()],
         reference: Some(ReferenceFacts {
             height: BlockHeight::from_raw(fx.reference_height),
-            root: fx.tree_root,
+            root: shekyl_types::CurveTreeRoot::from_bytes(fx.tree_root),
             tree_depth: fx.lmdb_depth,
         }),
-        fee_per_byte: 1,
-        fee_floor_window: None,
+        fee_floor_window: Some(vec![1]),
         pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         // Reference age 6: ≥ FCMP_REFERENCE_BLOCK_MIN_AGE (5), well under
@@ -135,12 +136,17 @@ fn admitting_facts(fx: &SpendFixture) -> SubmitFacts {
         release: None,
         emission: None,
         emission_claim_conflict: None,
+        origin_publication: None,
     }
 }
 
+/// The network these fixtures are signed and verified on: any id, the
+/// same on both sides (`NETWORK_IDENTITY.md` NI-Q4).
+const NETWORK: shekyl_network::NetworkId = shekyl_network::HARNESS_NETWORK_ID;
+
 fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFailure> {
     DaemonTxVerifier
-        .verify(parsed, facts)
+        .verify(parsed, facts, &NETWORK)
         .map_err(|e| e.cause())
 }
 
@@ -148,7 +154,7 @@ fn verify(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(), VerifyFa
 /// must clear Phase A — the arm under test is the Phase-C battery, and a
 /// mutant that already fails structural admission would test nothing.
 fn reparse(tx: &Transaction) -> ParsedSubmission {
-    parse_submission(&hexify(tx))
+    parse_submission(&tx_bytes(tx))
         .expect("mutant must clear Phase A (the arm under test is Phase C)")
 }
 
@@ -220,7 +226,7 @@ fn pack_output_info(out: &OutputData, amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: out.output_key,
         amount: AtomicUnits::from_raw(amount),
-        commitment_mask: out.z,
+        commitment_mask: out.commitment_mask(),
         enc_amount: out.enc_amount_wire(),
         enc_label: out.enc_label_wire(),
     }
@@ -255,7 +261,7 @@ fn build_funding_setup() -> FundingSetup {
     let wallet = random_wallet(&mut rng);
     let spent_index: u64 = 0;
 
-    let tx_secret = Scalar::random(&mut rng).to_bytes();
+    let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
         &tx_secret,
         &wallet.x25519_pk,
@@ -376,12 +382,15 @@ fn build_funding_setup() -> FundingSetup {
     client
         .sync_owned(&[(target.gindex, target.output_key)])
         .expect("register the spent output");
-    let path = client
-        .assemble_path(&target, &reference)
+    let paths = client
+        .assemble_paths(std::slice::from_ref(&target), &reference)
         .expect("assemble membership path");
+    let tree = paths.tree();
+    let (_, path) = paths.into_paths().next().expect("one input, one path");
+    let path = path.into_parts();
     assert_eq!(
         path.c1_layers.len() + path.c2_layers.len() + 1,
-        usize::from(path.tree.tree_depth),
+        usize::from(tree.tree_depth),
         "C3 invariant: c1 + c2 + 1 (leaf) == tree_depth"
     );
 
@@ -405,16 +414,16 @@ fn build_funding_setup() -> FundingSetup {
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
-        c1_layers: path.c1_layers.clone(),
-        c2_layers: path.c2_layers.clone(),
+        c1_layers: path.c1_layers,
+        c2_layers: path.c2_layers,
     };
 
     let pqc_pk =
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
-        tree_depth: path.tree.tree_depth,
+        reference_block: tree.reference_block,
+        tree_root: tree.tree_root,
+        tree_depth: tree.tree_depth,
     };
 
     FundingSetup {
@@ -440,7 +449,7 @@ fn build_fixture() -> SpendFixture {
 
     // ── Two destinations (payment + change; §12 requires ≥ 2 outputs) ───
     let recipient = random_wallet(&mut rng);
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let output_amount = INPUT_AMOUNT - FEE;
     let payment_amount = output_amount / 2;
     let change_amount = output_amount - payment_amount;
@@ -482,6 +491,7 @@ fn build_fixture() -> SpendFixture {
         &submit_fixtures::conforming_pqc_extra(2),
     );
     let signed = sign_transaction(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -517,21 +527,22 @@ fn build_fixture() -> SpendFixture {
         reference_block: signed.reference_block,
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![BuilderPqcAuth {
-            auth_version: 1,
+            auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+            scheme: shekyl_tx_builder::PqcScheme::Single,
             signature: Vec::new(),
             public_key: su.pqc_pk.clone(),
         }],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let pqc_auths = sign_pqc_auths(&payload_hashes, std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing");
     wire_input.pqc_auths = pqc_auths;
 
     // ── Encode and clear Phase A ────────────────────────────────────────
     let bytes = encode_final_tx(&wire_input).expect("encode the final spend");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built spend clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built spend clears Phase A");
     assert_eq!(parsed.kind, SubmitTxKind::Spend, "fixture is a spend");
     assert_eq!(
         parsed.tx.prefix_hash(),
@@ -540,7 +551,7 @@ fn build_fixture() -> SpendFixture {
     );
 
     SpendFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
         tree_root: su.tree_root,
         other_root: su.other_root,
@@ -558,7 +569,7 @@ fn build_fixture() -> SpendFixture {
 /// pqc_auths slot signed by P's identity key — the same assembly order as
 /// the StakeEngine's `AssembleBond` handler (stake_engine/bond.rs steps 7–16).
 struct BondFixture {
-    hex: String,
+    body: Vec<u8>,
     parsed: ParsedSubmission,
 }
 
@@ -592,7 +603,7 @@ fn bond_mutated(f: impl FnOnce(&mut Transaction)) -> ParsedSubmission {
 fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -> BondFixture {
     use shekyl_archival_bond_builder::{build_join_market_vin, verify_credit_funding};
     use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -606,8 +617,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
     // ── P identity + holdings (CompleteTree: floor = the flat constant) ──
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");
@@ -615,7 +625,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         kind: HoldingsKind::CompleteTree,
         shard_ids: ShardSet::empty(),
     };
-    let floor = bond_floor(&holdings);
+    let floor = bond_floor(&holdings, shekyl_archival_retention::archival_params());
     assert!(
         floor > 0 && INPUT_AMOUNT > floor + FEE,
         "fixture funding covers the bond"
@@ -623,7 +633,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Two change outputs (≥ 2 outputs is prunable-coupled for the
     // bond-post shape too); funding = change + fee + credit ──────────────
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let change_total = INPUT_AMOUNT - FEE - floor;
     let change_a_amount = change_total / 2;
     let change_b_amount = change_total - change_a_amount;
@@ -704,6 +714,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Prove: the bond credit rides as the sole output-side term ────────
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -735,19 +746,22 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: p_pubkey.clone(),
             },
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     assert_eq!(payload_hashes.len(), 2, "one hash per pqc_auths slot");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
@@ -759,7 +773,8 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
-        auth_version: 1,
+        auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+        scheme: shekyl_tx_builder::PqcScheme::Single,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),
@@ -769,8 +784,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
 
     // ── Encode and clear Phase A ────────────────────────────────────────
     let bytes = encode_final_tx(&wire_input).expect("encode the final bond-post");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built bond-post clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built bond-post clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
@@ -783,7 +797,7 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
     );
 
     BondFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
     }
 }
@@ -810,9 +824,9 @@ fn engine_accepts_the_spend_end_to_end_with_the_production_verifier() {
     let shim = MockShim::new(admitting_facts(fx), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 }
@@ -835,7 +849,7 @@ fn a_malformed_reject_names_its_leg() {
         base.commitments[0] = identity;
     });
     let err = DaemonTxVerifier
-        .verify(&parsed, &admitting_facts(fixture()))
+        .verify(&parsed, &admitting_facts(fixture()), &NETWORK)
         .expect_err("a trivial output commitment must be refused");
     assert_eq!(err.cause(), VerifyFailure::Malformed);
     assert!(
@@ -936,7 +950,7 @@ fn proof_against_a_different_root_is_rejected_deterministically() {
     let mut facts = admitting_facts(fx);
     facts.reference = Some(ReferenceFacts {
         height: BlockHeight::from_raw(fx.reference_height),
-        root: fx.other_root,
+        root: shekyl_types::CurveTreeRoot::from_bytes(fx.other_root),
         tree_depth: fx.lmdb_depth,
     });
     assert_eq!(
@@ -1044,42 +1058,6 @@ fn pqc_header_statics_reject_unknown_versions_flags_and_schemes() {
     }
 }
 
-// ─── Reachability honesty: the non-Spend arms ───────────────────────────
-
-#[test]
-fn non_spend_kinds_refuse_loudly() {
-    // The serve-credit arm is unreachable through the engine today (the
-    // SP-T4a fee-floor contradiction rejects it in Phase C before the
-    // verifier), but the seam is public: the unimplemented battery must
-    // refuse as Malformed, never pass or panic (rule 21 reopening criteria
-    // live in the verifier's module docs).
-    let parsed =
-        parse_submission(&hexify(&serve_credit_tx(0))).expect("serve-credit clears Phase A");
-    assert_eq!(parsed.kind, SubmitTxKind::ServeCreditOnly);
-    let facts = SubmitFacts {
-        in_pool: false,
-        in_pool_broadcast: false,
-        in_chain: None,
-        key_image_conflicts: Vec::new(),
-        reference: None,
-        fee_per_byte: 1,
-        fee_floor_window: None,
-        pool_refuses_for_room: None,
-        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
-        chain_height: ChainCount::from_raw(200),
-        bond_record_exists: None,
-        bond_record_bonded_total: None,
-        release: None,
-        emission: None,
-        emission_claim_conflict: None,
-    };
-    assert_eq!(
-        verify(&parsed, &facts),
-        Err(VerifyFailure::Malformed),
-        "the unimplemented serve-credit battery must refuse loudly"
-    );
-}
-
 // ─── The bond-post battery (§8.7.1 BP rows + funding-arm K) ─────────────
 //
 // Every negative case is a single-field mutation of the valid bond-post,
@@ -1105,9 +1083,9 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
     let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 
@@ -1123,47 +1101,6 @@ fn engine_accepts_the_bond_post_end_to_end_with_the_production_verifier() {
         !snapshots[0].bond_probe_is_release,
         "a JoinMarket post must ask the credit arm's question (BP3 absence), \
          not the debit arm's"
-    );
-}
-
-#[test]
-fn a_backend_that_cannot_hold_a_join_market_answers_a_definite_rejection() {
-    // The engine classifies an injected `CommitOutcome::JoinMarketUnsupported`
-    // as a definite rejection, relays nothing, and names the JoinMarket to
-    // the backend on `TxMeta::carries_join_market`. The production shim's
-    // return, ahead of `shekyl_submit_commit_tx`, is the live tripwire's
-    // subject (`e2e_the_cxx_daemon_answers_join_market_unsupported`).
-    let fx = bond_fixture();
-    let shim = MockShim::new(bond_admitting_facts(), CommitOutcome::JoinMarketUnsupported);
-    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-    assert_eq!(
-        engine
-            .submit(&fx.hex, SubmitCaller::Owner)
-            .expect("a definite answer, not an engine fault"),
-        SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::JoinMarketUnsupported
-        },
-    );
-    assert_eq!(
-        shim.relay_count(),
-        0,
-        "nothing was admitted, so nothing relays"
-    );
-    assert!(
-        shim.commits.lock().unwrap()[0].meta.carries_join_market,
-        "the engine names a JoinMarket to the backend"
-    );
-
-    // And names nothing else one: a plain spend commits with the flag down.
-    let spend = fixture();
-    let shim = MockShim::new(admitting_facts(spend), CommitOutcome::Committed);
-    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
-    engine
-        .submit(&spend.hex, SubmitCaller::Owner)
-        .expect("no engine fault");
-    assert!(
-        !shim.commits.lock().unwrap()[0].meta.carries_join_market,
-        "a spend is not a JoinMarket"
     );
 }
 
@@ -1196,10 +1133,10 @@ fn bond_race_at_commit_classifies_double_spend_conflict() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: shekyl_rpc_types::RejectCause::DoubleSpendConflict
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a bond-post block landing during Phase C must classify DoubleSpendConflict"
     );
@@ -1217,7 +1154,7 @@ fn missing_bond_record_fact_is_a_shim_contract_fault() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert!(
         matches!(
-            engine.submit(&fx.hex, SubmitCaller::Owner),
+            engine.submit(&fx.body, SubmitCaller::Owner),
             Err(shekyl_daemon_rpc::submit::EngineFault::ShimContract(_))
         ),
         "a bond-post snapshot without the BP3 fact must fault loudly"
@@ -1325,7 +1262,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     // the key-swap-at-join foreclosure (GENESIS_TX_WIRE_FORMAT.md, security-
     // critical) would rest on no test at all.
     let fx = bond_fixture();
-    let baseline = fx.parsed.tx.pqc_signing_payload_hashes();
+    let baseline = fx.parsed.tx.pqc_signing_payload_hashes(&NETWORK);
     let mut swapped = fx.parsed.tx.clone();
     for input in &mut swapped.prefix.inputs {
         if let shekyl_wire::transaction::Input::BondPost(bp) = input {
@@ -1337,7 +1274,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
             bond_spend_pk[0] ^= 0x01;
         }
     }
-    let moved = swapped.pqc_signing_payload_hashes();
+    let moved = swapped.pqc_signing_payload_hashes(&NETWORK);
     assert_eq!(baseline.len(), moved.len(), "slot count unchanged");
     assert_ne!(
         baseline[1], moved[1],
@@ -1463,7 +1400,7 @@ fn producerless_bond_post_kinds_refuse_loudly() {
 /// slot signed by **`bond_spend_sk`** — the cold debit authorizer, not the
 /// identity key. `AssembleRelease` assembles it the same way.
 struct ReleaseFixture {
-    hex: String,
+    body: Vec<u8>,
     parsed: ParsedSubmission,
     /// The record's committed authorizer, i.e. what a correct record holds.
     bond_spend_pk: Vec<u8>,
@@ -1550,7 +1487,7 @@ fn release_admitting_facts() -> SubmitFacts {
     facts.chain_height = ChainCount::from_raw(release_chain_height());
     facts.reference = Some(ReferenceFacts {
         height: BlockHeight::from_raw(release_chain_height() - 50),
-        root: fixture().tree_root,
+        root: shekyl_types::CurveTreeRoot::from_bytes(fixture().tree_root),
         tree_depth: fixture().lmdb_depth,
     });
     facts.release = Some(ReleaseFacts {
@@ -1562,7 +1499,7 @@ fn release_admitting_facts() -> SubmitFacts {
 
 fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     use shekyl_archival_bond_builder::{build_release_vin, verify_debit_funding};
-    use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
+    use shekyl_crypto_pq::account::Network;
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme};
     use shekyl_tx_builder::{sign_transaction_with_terms, tx_prefix_hash_from_parts_with_extra};
@@ -1575,18 +1512,19 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
 
     let p_keys = derive_archival_p_keys(
         &[0x5B; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
-        DerivationNetwork::Fakechain,
-        SeedFormat::Raw32,
+        Network::Regtest,
         0,
     )
     .expect("derive archival P keys");
 
     // The record being exited holds the flat CompleteTree floor.
-    let record_bonded_total =
-        shekyl_archival_retention::bond_floor(&shekyl_archival_retention::HoldingsDescriptor {
+    let record_bonded_total = shekyl_archival_retention::bond_floor(
+        &shekyl_archival_retention::HoldingsDescriptor {
             kind: shekyl_archival_retention::HoldingsKind::CompleteTree,
             shard_ids: shekyl_archival_retention::ShardSet::empty(),
-        });
+        },
+        shekyl_archival_retention::archival_params(),
+    );
     assert!(record_bonded_total > 0, "the exited record is funded");
 
     let built = build_release_vin(p_keys.bond_post_keys(), record_bonded_total)
@@ -1595,7 +1533,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     // Debit funding rule: funding + debit == outputs + fee. The released
     // collateral is a SOURCE, so it enlarges the output side.
     let out_total = INPUT_AMOUNT + record_bonded_total - FEE;
-    let dest_secret = Scalar::random(&mut rng).to_bytes();
+    let dest_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let change_a_amount = out_total / 2;
     let change_b_amount = out_total - change_a_amount;
     let change_a = construct_output(
@@ -1666,6 +1604,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     .expect("prefix hash with the release input");
 
     let signed = sign_transaction_with_terms(
+        &NETWORK,
         tx_prefix_hash,
         std::slice::from_ref(&spend_input),
         &outputs,
@@ -1704,19 +1643,22 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         fcmp_proof: signed.fcmp_proof.clone(),
         pqc_auths: vec![
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: su.pqc_pk.clone(),
             },
             BuilderPqcAuth {
-                auth_version: 1,
+                auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+                scheme: shekyl_tx_builder::PqcScheme::Single,
                 signature: Vec::new(),
                 public_key: slot_pk.clone(),
             },
         ],
         fcmp_layers: signed.tree_depth,
     };
-    let payload_hashes = phase1_payload_hashes(&wire_input).expect("phase-1 payload hashes");
+    let payload_hashes =
+        phase1_payload_hashes(&wire_input, &NETWORK).expect("phase-1 payload hashes");
     let mut pqc_auths = sign_pqc_auths(&payload_hashes[..1], std::slice::from_ref(&spend_input))
         .expect("phase-2 PQC auth signing (funding slot)");
     let slot_sk = match auth_key {
@@ -1739,7 +1681,8 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
         )
         .expect("sign the bond slot payload hash");
     pqc_auths.push(BuilderPqcAuth {
-        auth_version: 1,
+        auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
+        scheme: shekyl_tx_builder::PqcScheme::Single,
         signature: bond_sig
             .to_canonical_bytes()
             .expect("encode bond auth signature"),
@@ -1755,8 +1698,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     wire_input.pqc_auths = pqc_auths;
 
     let bytes = encode_final_tx(&wire_input).expect("encode the final release");
-    let hex_blob = hex::encode(&bytes);
-    let parsed = parse_submission(&hex_blob).expect("the built release clears Phase A");
+    let parsed = parse_submission(&bytes).expect("the built release clears Phase A");
     assert_eq!(
         parsed.kind,
         SubmitTxKind::BondPost,
@@ -1768,7 +1710,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     );
 
     ReleaseFixture {
-        hex: hex_blob,
+        body: bytes,
         parsed,
         bond_spend_pk,
         identity_pk,
@@ -2060,9 +2002,9 @@ fn the_engine_asks_the_debit_arms_question_for_an_release() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
-    assert_eq!(verdict, SubmitVerdict::Accepted);
+    assert_eq!(verdict, Verdict::Accepted);
     assert_eq!(shim.commit_count(), 1, "exactly one commit");
     assert_eq!(shim.relay_count(), 1, "accepted ⇒ relay nudged");
 
@@ -2124,12 +2066,12 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&forged.hex, SubmitCaller::Owner)
+        .submit(&forged.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "a bond slot whose signature does not verify is malformed"
     );
@@ -2275,12 +2217,12 @@ fn a_malleated_funding_signature_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&malleated.hex, SubmitCaller::Owner)
+        .submit(&malleated.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "a slot whose signature does not verify is malformed"
     );
@@ -2311,12 +2253,12 @@ fn a_vin_the_static_guards_doom_never_reaches_the_fact_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&doomed.hex, SubmitCaller::Owner)
+        .submit(&doomed.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "UB9's static guards refuse a nonzero bond_credit on a Release"
     );
@@ -2348,12 +2290,12 @@ fn a_valid_signature_by_the_wrong_key_still_reaches_the_gather() {
     let shim = MockShim::new(release_admitting_facts(), CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&forged.hex, SubmitCaller::Owner)
+        .submit(&forged.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::Malformed
+        Verdict::Rejected {
+            cause: Rejection::Malformed,
         },
         "UB3 refuses an identity-key debit"
     );
@@ -2376,7 +2318,7 @@ fn a_missing_release_bundle_faults_the_engine_rather_than_rejecting() {
     let shim = MockShim::new(facts, CommitOutcome::Committed);
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let err = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect_err("a skipped probe is an engine fault");
     assert!(
         matches!(err, EngineFault::ShimContract(_)),
@@ -2405,12 +2347,12 @@ fn a_competing_release_that_exits_the_record_is_a_terminal_conflict() {
     );
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     let verdict = engine
-        .submit(&fx.hex, SubmitCaller::Owner)
+        .submit(&fx.body, SubmitCaller::Owner)
         .expect("no engine fault");
     assert_eq!(
         verdict,
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "an exit that consumed the balance is terminal for these bytes"
     );
@@ -2433,10 +2375,10 @@ fn a_balance_that_moved_under_the_debit_is_also_terminal() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("no engine fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a debit that no longer matches the record's total is unconnectable"
     );
@@ -2460,10 +2402,10 @@ fn an_release_against_a_vanished_record_is_terminal_not_a_fault() {
     let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
     assert_eq!(
         engine
-            .submit(&fx.hex, SubmitCaller::Owner)
+            .submit(&fx.body, SubmitCaller::Owner)
             .expect("absence must classify, not fault"),
-        SubmitVerdict::Rejected {
-            cause: RejectCause::DoubleSpendConflict
+        Verdict::Rejected {
+            cause: Rejection::DoubleSpendConflict,
         },
         "a vanished record is a moved slot"
     );

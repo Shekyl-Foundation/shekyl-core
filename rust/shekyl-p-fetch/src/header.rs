@@ -10,15 +10,20 @@
 //! // HEIGHT_SEMANTICS.md C9: request-header height is ordinal, not a count.
 //! use shekyl_p_fetch::RequestHeader;
 //! use shekyl_types::ChainCount;
-//! let _ = RequestHeader::with_nonce([0u8; 32], ChainCount::from_raw(1), [0u8; 32]);
+//! let _ = RequestHeader::with_nonce(
+//!     [0u8; 32],
+//!     ChainCount::from_raw(1),
+//!     shekyl_types::BlockHash::from_bytes([0u8; 32]),
+//! );
 //! ```
 
 use shekyl_archival_retention::pass_anchor::{
-    PassRequestHeader, PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
+    PassRequestHeader, PassTranscript, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
+    PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYTES};
 use shekyl_socks::SocksUsername;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// The SOCKS password every read presents. The username is what tells two
 /// reads apart; see [`RequestHeader::socks_credentials`].
@@ -61,7 +66,7 @@ impl RequestHeader {
     /// predictable nonce is a pass record an adversary can pre-compute.
     pub fn fresh(
         anchor_height: BlockHeight,
-        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+        anchor_hash: BlockHash,
     ) -> Result<Self, getrandom::Error> {
         let mut nonce = [0u8; PASS_NONCE_LEN];
         getrandom::getrandom(&mut nonce)?;
@@ -79,7 +84,7 @@ impl RequestHeader {
     pub const fn with_nonce(
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
-        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+        anchor_hash: BlockHash,
     ) -> Self {
         Self::on_stream(
             shekyl_archival_retention::PassStream::Economy,
@@ -102,7 +107,7 @@ impl RequestHeader {
         stream: shekyl_archival_retention::PassStream,
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
-        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+        anchor_hash: BlockHash,
     ) -> Self {
         Self(PassRequestHeader::from_parts(
             stream,
@@ -132,7 +137,7 @@ impl RequestHeader {
 
     /// The requester's block hash at [`Self::anchor_height`].
     #[must_use]
-    pub const fn anchor_hash(&self) -> &[u8; PASS_ANCHOR_HASH_LEN] {
+    pub const fn anchor_hash(&self) -> &BlockHash {
         self.0.anchor_hash()
     }
 
@@ -178,11 +183,11 @@ impl RequestHeader {
     /// The transcript `P` countersigns for `shard_id` and the digest of the
     /// bytes it delivered under this header's nonce.
     #[must_use]
-    pub fn transcript(
+    pub const fn transcript(
         &self,
         shard_id: u64,
-        delivery_digest: &[u8; shekyl_archival_retention::pass_anchor::PASS_DELIVERY_DIGEST_LEN],
-    ) -> [u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        delivery_digest: [u8; PASS_DELIVERY_DIGEST_LEN],
+    ) -> PassTranscript {
         self.0.transcript(shard_id, delivery_digest)
     }
 }
@@ -211,7 +216,7 @@ mod tests {
         let h = RequestHeader::with_nonce(
             [7; 32],
             BlockHeight::from_raw(0x0102_0304_0506_0708),
-            [9; 32],
+            shekyl_types::BlockHash::from_bytes([9; 32]),
         );
         let bytes = h.to_bytes();
         assert_eq!(bytes[0], 0, "an organic read is an economy draw");
@@ -227,8 +232,12 @@ mod tests {
 
     #[test]
     fn the_transcript_is_the_header_the_shard_id_then_the_delivery_digest() {
-        let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(5), [2; 32]);
-        let t = h.transcript(0x0a0b, &[3; 32]);
+        let h = RequestHeader::with_nonce(
+            [1; 32],
+            BlockHeight::from_raw(5),
+            shekyl_types::BlockHash::from_bytes([2; 32]),
+        );
+        let t = h.transcript(0x0a0b, [3; 32]).message();
         assert_eq!(&t[..73], &h.to_bytes());
         assert_eq!(&t[73..81], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
         assert_eq!(&t[81..], &[3; 32]);
@@ -236,10 +245,21 @@ mod tests {
 
     #[test]
     fn fresh_headers_do_not_share_a_nonce() {
-        let a = RequestHeader::fresh(BlockHeight::from_raw(1), [0; 32]).expect("entropy");
-        let b = RequestHeader::fresh(BlockHeight::from_raw(1), [0; 32]).expect("entropy");
+        let a = RequestHeader::fresh(
+            BlockHeight::from_raw(1),
+            shekyl_types::BlockHash::from_bytes([0; 32]),
+        )
+        .expect("entropy");
+        let b = RequestHeader::fresh(
+            BlockHeight::from_raw(1),
+            shekyl_types::BlockHash::from_bytes([0; 32]),
+        )
+        .expect("entropy");
         assert_ne!(a.nonce(), b.nonce());
         assert_eq!(a.anchor_height(), BlockHeight::from_raw(1));
-        assert_eq!(a.anchor_hash(), &[0; 32]);
+        assert_eq!(
+            a.anchor_hash(),
+            &shekyl_types::BlockHash::from_bytes([0; 32])
+        );
     }
 }

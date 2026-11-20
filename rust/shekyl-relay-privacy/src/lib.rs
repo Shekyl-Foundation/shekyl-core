@@ -26,8 +26,8 @@
 //!
 //! **Boundary as of RP-2a.** Timing/measurement helpers and the feature-gated
 //! conformance suite remain library-side instruments. [`StemMap`] is
-//! production-linked: `shekyl-ffi` exposes it to C++ `net::dandelionpp::connection_map`,
-//! and the daemon's live stem routing executes this map. Epoch/fluff schedule
+//! production-linked: `shekyl-relay`'s epoch map holds it, and the daemon's
+//! live stem routing executes this map. Epoch/fluff schedule
 //! and embargo cuts are RP-3/RP-4. Do not treat a `stem_map` change as
 //! measurement-only.
 //!
@@ -50,10 +50,10 @@
 //!    means is nearly deterministic (`CV ≈ 0.16` at λ = 39). Measured, the
 //!    backstop **never fires**: full-travel 1.0000 at both 39 s and a
 //!    corrected 17 s, against a stem completing in ~700 ms.
-//! 3. **The closed form under-provisions.** [`derive`] has the detail. It
+//! 3. **The closed form under-provisions.** [`mod@derive`] has the detail. It
 //!    substitutes `E[K]` into an expression in `K(K-1)`, and stem length is
 //!    geometric, where `E[K(K-1)] = 2·E[K](E[K]-1)` exactly. No constant
-//!    correction factor recovers it; the exact solve in [`derive`] does. On an
+//!    correction factor recovers it; the exact solve in [`mod@derive`] does. On an
 //!    emission-terminated model that gives 31 s — see finding 5 (the return
 //!    trip) and RD-4 (the origin always stems) for why the adopted value is
 //!    190 s (144 s before F-7 corrected `fluff_return_ms`).
@@ -66,7 +66,7 @@
 //!    fixed offset pins receipt time to within ±0.5 s 42% of the time — and
 //!    for a transaction arriving *late* in a flush window, 93%.
 //! 5. **The fluff flood is ~7x slower than it needs to be**, as a direct
-//!    consequence of (4). [`conformance::simulate_fluff_return`] measures first
+//!    consequence of (4). `conformance::simulate_fluff_return` measures first
 //!    passage to an arbitrary node at 13.75 s (p90) under the inherited draw
 //!    versus 2.25 s memoryless. First passage is a minimum over parallel paths,
 //!    and a minimum only helps when the paths differ.
@@ -77,7 +77,7 @@
 //!
 //! Finding 5 feeds straight back into the embargo: a stem node's embargo is
 //! disarmed when the fluff *reaches* it, so the flood's return time is part of
-//! every node's exposure window. [`derive`] counts it, which is why the adopted
+//! every node's exposure window. [`mod@derive`] counts it, which is why the adopted
 //! embargo is 190 s (RD-4-corrected, then F-7-corrected) rather than the 31 s an
 //! emission-terminated,
 //! origin-may-fluff model gives.
@@ -90,7 +90,7 @@
 //! golden vector is possible and two nodes on different standard libraries
 //! already draw different sequences. A port therefore cannot be validated by
 //! differential replay the way the consensus port is; only a statistical grade
-//! is available, and [`conformance`] is that grade. See [`poisson`] for how the
+//! is available, and `conformance` is that grade. See [`poisson`] for how the
 //! draw is made reviewable and reproducible instead.
 //!
 //! # Relationship to Cuprate
@@ -145,6 +145,13 @@
 //! now — and doing it before the removal would buy the seam and pay for it until
 //! the C++ leaves.
 //!
+//! **2026-11-05: the removal happened.** The C++ relay path and its asio
+//! strand left with the C++ p2p host (`P2P_3_REMNANT_CUTOVER_BRIEF.md`). The
+//! relay owner, `shekyl-relay::owner`, is a tokio actor over this crate's
+//! `&mut self` state machines, so the p2p path has one reactor again —
+//! tokio's — and this crate is still a library the owner calls, which is the
+//! shape reason 2 prescribed.
+//!
 //! Cuprate's `net/levin` and `net/epee-encoding` were a genuinely different
 //! question. The levin half is LV-1 (`shekyl-levin`). The epee half is LV-2
 //! (`docs/design/LV2_PORTABLE_STORAGE.md`): first-party `shekyl-portable-storage`,
@@ -159,6 +166,7 @@
 //! The grading instruments live behind the `conformance` feature, which pulls
 //! `shekyl-stats` and the float-bearing goodness-of-fit machinery. The default
 //! build is the draws and the state machines only.
+#![deny(unsafe_code)]
 
 pub mod basis;
 pub mod derive;

@@ -29,7 +29,7 @@
 //! next byte arrives, and the tail waits for the flush in the smallest
 //! class that holds it. A submission does not stream: its bytes stay
 //! buffered until the flush, and the flush seals the padding records
-//! first. The HTTP body is then a suffix of the five records, so it is
+//! first. The HTTP body is then a suffix of the submission's records, so it is
 //! not complete — and a peer cannot answer — until the last record
 //! arrives. Sealing the payload first would let that answer start while
 //! the padding was still unsent, and the wait would publish the size.
@@ -48,17 +48,17 @@ pub const CLASS_LENGTHS: [usize; 3] = [512, 16_384, MAX_RECORD_PLAINTEXT];
 /// The most payload one record carries: a record of the largest class.
 pub const MAX_PAYLOAD: usize = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN;
 
-/// The records every `submit_transaction` upload takes, whatever the
-/// transaction's size (RT-O28).
+/// The records every `tx_submit` upload takes, whatever the transaction's
+/// size (RT-O28).
 ///
 /// The largest admissible transaction is `shekyl-wire`'s `TX_WEIGHT_LIMIT`
 /// (weight is size plus the Bp+ clawback). Its request body is that many
-/// bytes, hex-encoded, inside the JSON envelope. Five records of the
-/// largest class hold it and leave room for the request head. A test pins
-/// the count against the wire constant.
-pub const SUBMISSION_RECORDS: usize = 5;
+/// bytes, base64-encoded, inside the JSON-RPC envelope. Four records of the
+/// largest class hold it and leave room for the request head; three do
+/// not hold it. A test pins the count against the wire constant.
+pub const SUBMISSION_RECORDS: usize = 4;
 
-/// The most bytes one submission holds. Five largest-class payloads.
+/// The most bytes one submission holds. Four largest-class payloads.
 /// Past this the submission is discarded unsealed and refused.
 pub const SUBMISSION_CAP: usize = SUBMISSION_RECORDS * MAX_PAYLOAD;
 
@@ -151,7 +151,7 @@ enum Phase {
     /// A flush has begun: the message takes no more bytes. What is left is
     /// sealed, then the message closes. For a submission `payload_at` is
     /// the sealed-count at which the HTTP bytes begin, so those bytes are a
-    /// suffix of the five records; an ordinary message has none, and its
+    /// suffix of the submission's records; an ordinary message has none, and its
     /// tail goes in the smallest class that holds it.
     Ending { cut: Cut, payload_at: Option<usize> },
 }

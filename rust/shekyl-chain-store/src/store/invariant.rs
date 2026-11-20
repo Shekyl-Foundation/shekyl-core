@@ -39,7 +39,7 @@ pub enum StoreInvariant {
     ///
     /// Armed by the parent-is-tip pre-check in `connect` and by the
     /// insert-once handles on `blocks` / `block_heights` / `block_info` /
-    /// `hf_versions` / `block_burn`.
+    /// `rule_set_in_force` / `block_burn`.
     TipMismatch,
     /// **SI-3** — `tx_indices` is keyed by tx hash: inserting a hash already
     /// present is fatal (CEN-G1's belt; CEN-F5's corollary for the miner
@@ -137,7 +137,7 @@ pub enum StoreInvariant {
     /// **SI-10** — recorded cumulative work strictly increases with height:
     /// `block_info[h].cumulative_difficulty > block_info[h−1].cumulative_difficulty`
     /// for every recorded `h ≥ 1`, because every block's target is at least
-    /// one (CEN-D6, `Target` is `NonZeroU128`).
+    /// one (CEN-D6: `Difficulty` is non-zero and LWMA-1 floors at one).
     ///
     /// The belt beneath CEN-D4. Unlike the rows above it is **not armed by a
     /// store write site** — the store records the work the verdict carries
@@ -198,17 +198,6 @@ pub enum StoreInvariant {
     /// root beneath the seal's row is a corrupt roots table that CEN-B5
     /// would otherwise judge the honest next header against).
     SummaryRootDiverged,
-    /// **SI-15** — every `archival_serve_credit` row belongs to a persona
-    /// with a bond record. The connect hook that writes a pass bit refuses
-    /// one for an unknown persona (CEN-L7's fatal backstop), so a row whose
-    /// `PCanonicalId` prefix has no `archival_bond` row is a write that
-    /// bypassed the writer. Observed by the serve-credit reads (A3, A4,
-    /// A5), which have the persona in hand; the read that found it names
-    /// it.
-    ServeCreditWithoutBond {
-        /// The persona the orphaned rows name.
-        persona: shekyl_types::PCanonicalId,
-    },
     /// **SI-16** — a pool entry is one entry: `pool_meta[h]` exists iff
     /// `pool_blob[h]` exists. `insert` writes both, `remove` deletes both,
     /// `update` touches only the meta row, and no other writer exists; a
@@ -304,10 +293,10 @@ pub enum StoreInvariant {
     /// plus the `txs_archival_len` rows (absent ⇔ `0`) of the storage ids
     /// `h` issued (`SHT-Q2`). `connect` writes both from one measurement of
     /// the segments, so they cannot disagree at the write; a disagreement
-    /// is a row or a cell changed under the store. Armed by the prune's
-    /// descent (`prune.rs` `walk_block`), which checks every block it
-    /// passes and would otherwise place a shard boundary by a cell the rows
-    /// do not support.
+    /// is a row or a cell changed under the store. Armed by
+    /// `archival_fold::block_span`, which the prune descent and the shard
+    /// read both call. Either would otherwise place a shard boundary by a
+    /// cell the rows do not support.
     ArchivalLengthsDisagree {
         /// The height whose rows were summed.
         height: u64,
@@ -410,25 +399,9 @@ pub enum StoreInvariant {
         /// What was observed.
         observed: DrawableFault,
     },
-    /// **SI-31** — a settled epoch's market membership is frozen with its
-    /// `Σwork` (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
-    /// `archival_complete_trees[E]` is in the slash pass's write set beside
-    /// `archival_sigma_work[E]` (SI-21): written whole by the block that
-    /// settles `E`, the empty set included, insert-once
-    /// ([`FrozenFault::Rewritten`]), and present wherever `Σwork(E)` is —
-    /// a claim's re-gather that finds `Σwork(E)` without it
-    /// ([`FrozenFault::Absent`]) would have to read the record's
-    /// complete-tree flag, which a later slash or release can change.
-    /// Undone with the block through the journal.
-    CompleteTreesNotFrozen {
-        /// The settled epoch.
-        epoch: shekyl_types::SettlementEpoch,
-        /// Which half failed.
-        observed: FrozenFault,
-    },
     /// **SI-32** — a per-epoch table is read only where it is kept
     /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`). Each read of
-    /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
+    /// `archival_sigma_work`, `archival_budget`,
     /// `archival_settlement`, `archival_issued_draw`,
     /// `archival_issued_digest`, `archival_drawable_digest`,
     /// `archival_slash_applied` and `archival_r_market` takes its family's
@@ -470,10 +443,11 @@ pub enum StoreInvariant {
         /// The first height still retained.
         floor: shekyl_types::BlockHeight,
     },
-    /// **SI-35** — the admission view reads `D` from the count phase's memo,
+    /// **SI-35** — the admission view reads `D` from the connect's memo,
     /// under the opening block's hash. A miss is not a rebuild and not an
-    /// absent set: the count phase of this block already filed every epoch a
-    /// section inside `W₂` can name. Fatal, never a verdict on the block.
+    /// absent set: admission's filing step (`remember_window_epochs`) filed
+    /// every epoch a section inside `W₂` can name before the verdict. Fatal,
+    /// never a verdict on the block.
     DrawableMemoMiss {
         /// The epoch the view was asked for.
         epoch: shekyl_types::SettlementEpoch,
@@ -515,26 +489,71 @@ pub enum StoreInvariant {
         /// The height the reduction was counted below.
         height: shekyl_types::BlockHeight,
     },
-    /// **SI-40** — `archival_support_block` holds one row per connected
-    /// height. A second insert is a rewrite. The count is how many support
-    /// draws the block issued. While the support schedule is not on the
-    /// transition the row is [`shekyl_types::archival::SupportCount::NONE`]:
-    /// the block issued none. A missing row is a height the writer did not
-    /// run for, and that absence is not the zero. The row retires with the
-    /// draw rows (SI-34). Fatal, never a verdict on the block.
+    /// **SI-40** — `archival_support_block` holds one seat row per
+    /// connected height. A second insert is a rewrite. The row is the
+    /// complete trees the block seated, in persona order; its length is how
+    /// many support draws the block issued. A block that seated nobody has
+    /// the empty row, [`shekyl_types::archival::SupportSeats::EMPTY`]. A
+    /// missing row is a height the writer did not run for, and that absence
+    /// is not the empty row. The row retires with the draw rows (SI-34).
+    /// Fatal, never a verdict on the block.
     SupportBlockNotSingular {
         /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
     },
     /// **SI-41** — every stored bundle body has a holder, and every queue
-    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). In
-    /// `SO-D12` increment 4c the bundle queue is the only holder kind; an
-    /// alternative block and a main-chain block not past `D_max` are 4b's.
-    /// The open reconciles the two tables and reports what it dropped;
-    /// after it, a read of the queue that finds them apart is this halt.
-    /// Not chain state, so it poisons the batch and leaves the writer
-    /// live. Never a verdict on a block.
+    /// entry's body is stored (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §7.5). The
+    /// holders are the queue, a main-chain block within the undo retention
+    /// and an alternative block, derived from their rows
+    /// (`bundle_holders.rs`). The open reconciles and reports what it
+    /// dropped; after it, an entry without its body, an entry whose
+    /// reference is for another block, or a rewrite of a height the queue
+    /// does not hold is this halt. Not chain state, so it poisons the batch
+    /// and leaves the writer live. Never a verdict on a block.
     BundleBodyHolder(BodyHolderFault),
+    /// **SI-42** — the archival good is one unit (`PDM-Q6` item 1; `SB-Q2`).
+    /// A 4-part transaction's prunable region (`txs_prunable[id]`) and its
+    /// `pqc_auths` region (`txs_pqc_auths[id]`) are written together by
+    /// `connect` and discarded together by the retention prune, which
+    /// deletes both tables over one id range (`prune.rs`). A read that finds
+    /// one held and the other not is this halt: it is neither §7.7 leg
+    /// (iii)'s discarded state nor a recorded body, and no path writes it.
+    /// Fatal, never a verdict on a block.
+    ArchivalGoodHalfHeld {
+        /// The storage id whose two regions disagree.
+        id: crate::ids::TxStorageId,
+        /// Which region is held; the other is not.
+        held: HeldRegion,
+    },
+    /// **SI-43.** A block's support row is one step of the carry from the
+    /// row before it: its seats and its `carry_after` both equal
+    /// [`shekyl_chain_rules::support_step`] over the epoch snapshot, from
+    /// the `carry_after` of `h − 1` (empty at an epoch's open) and the row
+    /// and `revealed` of the block whose window closes at `h` (`SO-D12` S1,
+    /// the switch's C5). The store's bundle view checks it when admission
+    /// reads a roster, in three reads. A persona on only one side of the
+    /// seats, or carried on only one side or owed a different count, is
+    /// this halt. A carry at `h − 1` owing past `c` is this halt at
+    /// `h − 1`. Raised before any write. Fatal, never a verdict on the
+    /// block.
+    SupportRowNotOneStep {
+        /// The height whose row is not the step.
+        height: shekyl_types::BlockHeight,
+        /// The first persona, in persona order, the row and the step
+        /// disagree on.
+        persona: shekyl_types::PCanonicalId,
+    },
+}
+
+/// Which half of a half-held archival good is present (payload of
+/// [`StoreInvariant::ArchivalGoodHalfHeld`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldRegion {
+    /// `txs_prunable[id]` is present and `txs_pqc_auths[id]` is not, under
+    /// a `txs_pqc_auth_hash` row that says the txid is 4-part.
+    Prunable,
+    /// `txs_pqc_auths[id]` is present and `txs_prunable[id]` is not.
+    PqcAuths,
 }
 
 /// What an SI-41 check observed (payload of
@@ -546,8 +565,6 @@ pub enum BodyHolderFault {
         /// The entry's block.
         h: shekyl_types::BlockHeight,
     },
-    /// A stored body no queue entry names.
-    BodyWithoutHolder,
     /// A queue entry's reference is for another block than its key.
     EntryNotItsHeight {
         /// The key the entry is stored under.
@@ -613,15 +630,6 @@ pub enum DrawableFault {
     /// post-state, or at settlement, by the walk back. The reason is the
     /// validator's.
     NotBuilt(shekyl_chain_rules::DrawableEpochFault),
-}
-
-/// What SI-31 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrozenFault {
-    /// The pass's write found a set already recorded for the epoch.
-    Rewritten,
-    /// A reader found `Σwork(E)` and no set: the write set is not whole.
-    Absent,
 }
 
 /// What an SI-25 check observed (payload of
@@ -775,7 +783,6 @@ impl StoreInvariant {
             Self::FoldOverflow { .. } => 8,
             Self::FoldNotMonotone { .. } => 13,
             Self::IdNotFresh => 9,
-            Self::ServeCreditWithoutBond { .. } => 15,
             Self::PoolEntryUnpaired { .. } => 16,
             Self::PositionMapsNotBijective => 17,
             Self::LeafCountNotAdvanced { .. } => 18,
@@ -790,7 +797,6 @@ impl StoreInvariant {
             Self::ReleaseJournalReadBelowFloor { .. } => 28,
             Self::DrawableDigestNotSingular { .. } => 29,
             Self::DrawableSetNotSound { .. } => 30,
-            Self::CompleteTreesNotFrozen { .. } => 31,
             Self::EpochReadBelowFloor { .. } => 32,
             Self::BlockDrawsNotSingular { .. } => 33,
             Self::BlockDrawsReadBelowFloor { .. } => 34,
@@ -801,6 +807,8 @@ impl StoreInvariant {
             Self::VisibleDrawCountPastWidth { .. } => 39,
             Self::SupportBlockNotSingular { .. } => 40,
             Self::BundleBodyHolder(_) => 41,
+            Self::ArchivalGoodHalfHeld { .. } => 42,
+            Self::SupportRowNotOneStep { .. } => 43,
         }
     }
 }
@@ -892,11 +900,6 @@ impl core::fmt::Display for StoreInvariant {
             Self::SummaryRootDiverged => f.write_str(
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
                  the summary and the recorded root disagree, rebuild from the block corpus",
-            ),
-            Self::ServeCreditWithoutBond { persona } => write!(
-                f,
-                "archival_serve_credit holds rows for persona {persona} but archival_bond has no \
-                 record for it; a pass bit was written past the connect hook's refusal"
             ),
             Self::PoolEntryUnpaired { txid } => write!(
                 f,
@@ -1037,18 +1040,6 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
-            Self::CompleteTreesNotFrozen { epoch, observed } => match observed {
-                FrozenFault::Rewritten => write!(
-                    f,
-                    "archival_complete_trees already holds settlement epoch {epoch}; the slash \
-                     pass freezes an epoch's complete trees once"
-                ),
-                FrozenFault::Absent => write!(
-                    f,
-                    "settlement epoch {epoch} has a frozen Σwork and no frozen complete-tree \
-                     set; the slash pass writes the two together"
-                ),
-            },
             Self::EpochReadBelowFloor {
                 table,
                 asked,
@@ -1109,15 +1100,12 @@ impl core::fmt::Display for StoreInvariant {
             Self::SupportBlockNotSingular { height } => write!(
                 f,
                 "archival_support_block already holds height {height}; a block records its \
-                 support count once"
+                 support seats once"
             ),
             Self::BundleBodyHolder(BodyHolderFault::EntryWithoutBody { h }) => write!(
                 f,
                 "the bundle queue's entry for height {h} names a body the body store does not \
-                 hold; an entry and its body are written and removed together"
-            ),
-            Self::BundleBodyHolder(BodyHolderFault::BodyWithoutHolder) => f.write_str(
-                "the body store holds a bundle body no holder names; every body has a holder",
+                 hold; an entry and its body are written together"
             ),
             Self::BundleBodyHolder(BodyHolderFault::EntryNotItsHeight { h }) => write!(
                 f,
@@ -1127,10 +1115,26 @@ impl core::fmt::Display for StoreInvariant {
                 f,
                 "the bundle queue has no entry at height {h}; a rewrite names a row the table does not hold"
             ),
+            Self::ArchivalGoodHalfHeld { id, held } => {
+                let (held, missing) = match held {
+                    HeldRegion::Prunable => ("txs_prunable", "txs_pqc_auths"),
+                    HeldRegion::PqcAuths => ("txs_pqc_auths", "txs_prunable"),
+                };
+                write!(
+                    f,
+                    "transaction {id} holds its {held} region and not its {missing} region; the \
+                     archival good is one unit, held or discarded together"
+                )
+            }
+            Self::SupportRowNotOneStep { height, persona } => write!(
+                f,
+                "the support row at height {height} is not one step of the carry: the row and \
+                 the step disagree on {persona:?}"
+            ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
-                 block's hash; the count phase files that set before admission reads it"
+                 block's hash; admission files that set before it judges a bundle"
             ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,
@@ -1170,7 +1174,6 @@ impl core::error::Error for StoreInvariant {
             | Self::SummaryRootDiverged
             | Self::RightEdgeDiverged { .. }
             | Self::DemotedBlockRefused { .. }
-            | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
             | Self::LeafCountNotAdvanced { .. }
@@ -1185,7 +1188,6 @@ impl core::error::Error for StoreInvariant {
             | Self::ReleaseJournalReadBelowFloor { .. }
             | Self::DrawableDigestNotSingular { .. }
             | Self::DrawableSetNotSound { .. }
-            | Self::CompleteTreesNotFrozen { .. }
             | Self::EpochReadBelowFloor { .. }
             | Self::BlockDrawsNotSingular { .. }
             | Self::BlockDrawsReadBelowFloor { .. }
@@ -1196,6 +1198,8 @@ impl core::error::Error for StoreInvariant {
             | Self::VisibleDrawCountPastWidth { .. }
             | Self::SupportBlockNotSingular { .. }
             | Self::BundleBodyHolder(_)
+            | Self::ArchivalGoodHalfHeld { .. }
+            | Self::SupportRowNotOneStep { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

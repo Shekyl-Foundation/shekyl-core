@@ -270,10 +270,15 @@ For the protocol specification of these properties, see
 
 ### In-Scope
 
-1. **KDF domain separation** (`shekyl-crypto-pq/src/multisig_receiving.rs`)
-   - 8 distinct HKDF-Expand labels for key/nonce derivation
+1. **KDF domain separation** (`shekyl-crypto-pq/src/multisig_output.rs`,
+   `derivation.rs`)
+   - The member signing seed (`shekyl-v31-hybrid-sign`), the key-hash AEAD key
+     (`shekyl-output-multisig-key-hashes`), the key-hash domain
+     (`shekyl/multisig-key-hash-v1`) and the transport secret
+     (`shekyl/multisig-transport-v1`)
    - No label collision across single-signer and multisig paths
-   - Correct ikm/info binding for all derivation contexts
+   - Each member's encapsulation randomness is distinct (`derive_kem_seed`
+     binds the recipient's keys)
 
 2. **HKDF-derived Ed25519 scalar for FCMP++ prover**
    - `derive_multisig_signing_key` produces a valid Ed25519 scalar
@@ -293,7 +298,7 @@ For the protocol specification of these properties, see
    - ~~Cost to grind a favorable assignment exceeds feasibility threshold~~
    - ~~Output-index binding prevents per-output grinding~~
 
-5. **SpendIntent validation pipeline** (14 checks, SS9.2–SS9.4)
+5. **SpendIntent validation pipeline** (13 checks, `PQC_MULTISIG.md` §9.2–§9.6)
    - Structural, temporal, chain-state, and balance validation
    - No bypass via malformed fields or edge-case timing
 
@@ -301,14 +306,13 @@ For the protocol specification of these properties, see
    - All 7 invariants correctly enforced at their specified points
    - Assembly consensus (I6) rejects mixed commitments
 
-7. **AEAD message encryption** (`encryption.rs`)
-   - ChaCha20-Poly1305 with HKDF-derived per-message keys and nonces
-   - Key zeroization after use
-   - No nonce reuse across message types, senders, or counters
+7. **Ceremony files** (`shekyl-crypto-pq/src/multisig_blob.rs`, `multisig_envelope.rs`; `shekyl-multisig/src/envelope.rs`)
+   - XChaCha20-Poly1305 under one HKDF-SHA-512 key per group, from the group transport secret; only the format version is in the clear (R-10)
+   - A random 24-byte nonce per file, so a restored wallet cannot repeat one
+   - The sender signature under the member's envelope key (R-6), and the import check order: version and length before any key, then parse, fingerprint, sender index, signature, type
+   - The group key, the plaintext working buffer and the signing frame's input zeroize on drop, including a seal the cipher refuses
 
-8. **CounterProof verification** (SS13.4)
-   - 8-rule verification pipeline prevents forged advancement
-   - Rescan-required state prevents advancement on stale local state
+8. **CounterProof verification** — **OUT OF SCOPE (deleted with the intent's `tx_counter`, ruled 2026-11-13):** replay is the reference block's age, the held nonce bound to one intent hash, and consensus key images; a member commits to at most one live intent per input (`PQC_MULTISIG.md` §9.2)
 
 9. **Griefing defense** (`GriefingTracker`)
    - Per-output cost is bounded
@@ -316,9 +320,8 @@ For the protocol specification of these properties, see
 
 ### Out-of-Scope
 
-- DKG ceremony (uses `dkg-pedpop`, covered by its own audit)
 - GUI components (presentation layer, no crypto)
-- Relay transport (network layer, no crypto)
+- Moving ceremony files between members (the wallet moves no bytes; the files themselves are item 7)
 
 ### Deliverables
 

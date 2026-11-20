@@ -7,40 +7,18 @@
 //! kind, default and help text. Development, rejected and reserved rows
 //! are not shown.
 
-use shekyl_options::{Default, Kind, Surface, Table, Visibility};
+use shekyl_options::Table;
 
-/// The help text.
+/// The daemon's help text: the table's, after the one line the daemon adds.
 #[must_use]
 pub fn render(table: &Table, program: &str, release_name: &str, version_full: &str) -> String {
-    let mut out = format!(
-        "Shekyl '{release_name}' (v{version_full})\n\nUsage: {program} [options] [command...]\n\n"
-    );
-    for row in table
-        .rows
-        .iter()
-        .filter(|r| matches!(r.visibility, Visibility::Public))
-    {
-        let value = match row.kind {
-            Kind::Switch => String::new(),
-            _ => " <value>".to_owned(),
-        };
-        let default = match row.default {
-            Default::Unset => String::new(),
-            Default::Value(v) => format!(" [default: {v}]"),
-            Default::Derived(d) => format!(" [default: {d}]"),
-        };
-        let surface = match row.surface {
-            Surface::Cli => " (command line only)",
-            Surface::File => " (configuration file only)",
-            Surface::Both => "",
-        };
-        out.push_str(&format!(
-            "  --{name}{value}\n      {help}{default}{surface}\n",
-            name = row.name,
-            help = row.help,
-        ));
-    }
-    out
+    shekyl_options::help(
+        table,
+        program,
+        release_name,
+        version_full,
+        "Daemon commands are shekyl-cli words.",
+    )
 }
 
 #[cfg(test)]
@@ -54,8 +32,22 @@ mod tests {
         assert!(text.contains("--log-level <value>"));
         assert!(text.contains("[default: warn]"));
         assert!(text.contains("--network <value>") && text.contains("(command line only)"));
+        assert!(text.contains("Daemon commands are shekyl-cli words."));
+        assert!(!text.contains("[command...]"));
         assert!(!text.contains("dev-difficulty"), "levers are hidden");
         assert!(!text.contains("in-peers"), "rejected rows are hidden");
-        assert!(!text.contains("rpc-listen"), "reserved rows are hidden");
+        for row in TABLE.rows {
+            if matches!(row.visibility, shekyl_options::Visibility::Reserved { .. }) {
+                assert!(
+                    !text.contains(row.name),
+                    "reserved rows are hidden: {}",
+                    row.name
+                );
+            }
+        }
+        assert!(
+            text.contains("--rpc-listen"),
+            "the channel listener is public"
+        );
     }
 }

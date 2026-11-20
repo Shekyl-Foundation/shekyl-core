@@ -10,7 +10,7 @@
 //! orchestrator binds against for daemon-bound calls. It is a
 //! supertrait extension of [`shekyl_rpc_client::Rpc`] (the
 //! upstream-vendored RPC trait that covers the transport primitives —
-//! `get_height` / `get_block` / `get_transactions` / `get_o_indexes` /
+//! `get_height` / `block_show` / `tx_list` / `get_o_indexes` /
 //! etc.), adding the wallet-specific methods that have no place on
 //! `Rpc`: [`DaemonEngine::fetch_scannable_block`] — which composes
 //! those transport primitives into a `shekyl-wire`-parsed
@@ -47,16 +47,11 @@ use shekyl_scanner::ScannableBlock;
 use crate::engine::error::IoError;
 use crate::engine::pending::TxHash;
 
-/// Multi-priority fee snapshot returned by
-/// [`DaemonEngine::get_fee_estimates`].
-///
-/// Carries the daemon's fee-rate estimate at each of the three
-/// non-`Custom` [`FeePriority`](super::super::FeePriority) tiers
-/// captured atomically at the call instant. The wallet's
-/// [`FeePriority::Custom`](super::super::FeePriority::Custom) variant
-/// bypasses the daemon estimate entirely (per
-/// [`docs/V3_WALLET_DECISION_LOG.md`]'s cross-cutting lock 8) and
-/// therefore has no field on this struct.
+/// The daemon's fee snapshot returned by
+/// [`DaemonEngine::get_fee_estimates`]: its rate at each of the three
+/// [`FeePriority`](shekyl_economics::FeePriority) tiers, captured at one
+/// call instant. A payer's rate is always one of the three; there is no
+/// per-wallet rate (`FEE_LADDER_DERIVATION.md` W3).
 ///
 /// # `#[non_exhaustive]`
 ///
@@ -70,17 +65,14 @@ use crate::engine::pending::TxHash;
 ///
 /// `FeeRate` is the `shekyl_rpc_client::FeeRate` (a per-weight cost; the
 /// fee lattice it is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`,
-/// a constant) returned by [`Rpc::get_fee_rate`]. The three tier fields on
-/// this struct correspond one-to-one with the three non-`Custom`
-/// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
-/// is a structural projection rather than a fresh daemon call.
+/// a constant). Resolving a tier to its rate is a projection of this one
+/// snapshot, never a fresh daemon call.
 ///
 /// # Atomic single-RPC snapshot (§3.3)
 ///
 /// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
-/// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
-/// `get_fee_rate` calls): the response's fee array maps to the three
-/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`2`). This
+/// **one** `fee` JSON-RPC call, not one call per tier: the reply's
+/// `economy`, `standard` and `high` fields are the three tiers. This
 /// guarantees the tier band derives from one daemon view, with no
 /// tier-vs-tier skew from interleaved calls.
 ///
@@ -89,34 +81,34 @@ use crate::engine::pending::TxHash;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimates {
     /// Fee rate corresponding to
-    /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
+    /// [`FeePriority::Economy`](shekyl_economics::FeePriority::Economy):
     /// the slowest, cheapest tier targeting confirmation within a
     /// few blocks.
     pub economy: FeeRate,
 
     /// Fee rate corresponding to
-    /// [`FeePriority::Standard`](super::super::FeePriority::Standard):
+    /// [`FeePriority::Standard`](shekyl_economics::FeePriority::Standard):
     /// the default tier balancing cost vs. confirmation time.
     pub standard: FeeRate,
 
     /// Fee rate corresponding to
-    /// [`FeePriority::Priority`](super::super::FeePriority::Priority):
-    /// the fastest tier short of fee-spiking, targeting next-block
-    /// inclusion under normal mempool conditions.
-    pub priority: FeeRate,
+    /// [`FeePriority::High`](shekyl_economics::FeePriority::High): the
+    /// top rung, targeting next-block inclusion under normal mempool
+    /// conditions.
+    pub high: FeeRate,
 }
 
 /// Outcome of a daemon transaction submission via
 /// [`DaemonEngine::submit_transaction`].
 ///
 /// The wallet-side projection of the daemon's atomic
-/// [`SubmitVerdict`](shekyl_rpc_client::SubmitVerdict)
+/// [`Verdict`](shekyl_rpc_client::Verdict)
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.1), plus the locally
 /// computed [`TxHash`] on the identity-bearing variants. The verdict is
 /// computed by the daemon's Rust admission engine with every mutable
 /// premise re-checked under one lock scope, so the variants are mutually
 /// consistent facts — never the racy multi-flag snapshot the deleted
-/// `send_raw_transaction` reply carried. Per-cause wallet dispositions
+/// `tx_submit` reply carried. Per-cause wallet dispositions
 /// are specified in §2.5 and applied by the orchestrator
 /// (`LocalPendingTx`), not here.
 ///
@@ -124,7 +116,7 @@ pub struct FeeEstimates {
 /// generic rejection as a dedup hit via a local hash record) is retired:
 /// [`Self::AlreadyInPool`] / [`Self::AlreadyInChain`] are daemon-attested
 /// identity facts. The formerly-deferred `ProofStale` detection is now
-/// constructible as [`RejectCause::StaleRoot`], closing the
+/// constructible as [`Rejection::StaleRoot`](shekyl_rpc_client::Rejection::StaleRoot), closing the
 /// `fcmp_root_stale` FOLLOWUPS reopening criterion (its named reopen was
 /// exactly "a daemon-side stale-root signal").
 ///
@@ -151,11 +143,11 @@ pub struct FeeEstimates {
 /// resubmitting held bytes yields a definite verdict for every stable
 /// state (mined → [`Self::AlreadyInChain`]; pool-resident →
 /// [`Self::AlreadyInPool`], with **no** relay pulse per F31; competing
-/// spend → [`RejectCause::DoubleSpendConflict`]; dead → re-offered
+/// spend → [`Rejection::DoubleSpendConflict`](shekyl_rpc_client::Rejection::DoubleSpendConflict); dead → re-offered
 /// through full admission). Callers MAY retry on transient transport
 /// failures.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TxSubmitOutcome {
     /// Admitted to the daemon's pool at commit-check time; relay is
     /// daemon-owned from here. The pending-tx enters awaiting
@@ -174,6 +166,10 @@ pub(crate) enum TxSubmitOutcome {
     AlreadyInPool {
         /// Locally computed hash, equal to the pool-resident txid.
         hash: TxHash,
+        /// The daemon's relay state. `held_overdue` is judged when the
+        /// state is read, on the daemon's clock. A missing origin row
+        /// is `untracked`. This outcome does not carry a duration.
+        relay: shekyl_rpc_client::Publication,
     },
 
     /// Identity fact: this txid is in the main chain. Confirmation
@@ -195,12 +191,43 @@ pub(crate) enum TxSubmitOutcome {
     /// is safe where the §2.5 disposition calls for it.
     Rejected {
         /// Why the daemon refused the transaction. Dispositions per
-        /// §2.5 are applied by the orchestrator.
-        cause: shekyl_rpc_client::RejectCause,
+        /// §2.5 are applied by the orchestrator. A consensus refusal
+        /// carries its row inside the cause (IG-Q76).
+        cause: shekyl_rpc_client::Rejection,
     },
 }
 
-/// Daemon health facts the wallet reads from `get_info`.
+/// Whether the daemon runs P2P, and when it does, whether it has a peer:
+/// `daemon_status`' `offline` and `peered`, read together. An offline
+/// daemon is a state of its own, not a daemon with no peers (Rick,
+/// 2026-10-14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DaemonP2p {
+    /// P2P is off by configuration.
+    Offline,
+    /// P2P runs.
+    Running {
+        /// At least one handshaken session.
+        has_peers: bool,
+    },
+}
+
+impl DaemonP2p {
+    /// P2P is off by configuration.
+    pub(crate) const fn is_offline(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+
+    /// Whether the daemon has a peer; `None` while P2P is off.
+    pub(crate) const fn has_peers(self) -> Option<bool> {
+        match self {
+            Self::Offline => None,
+            Self::Running { has_peers } => Some(has_peers),
+        }
+    }
+}
+
+/// Daemon health facts the wallet reads from `daemon_status`.
 ///
 /// Whether the daemon has a peer it can relay through, its chain height,
 /// and whether it is synchronized. No new RPC
@@ -221,15 +248,15 @@ pub(crate) enum TxSubmitOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DaemonHealth {
     /// Whether the daemon runs P2P, and when it does, whether it has a peer
-    /// it can relay through: `get_info`'s Health (`offline`, `has_peers`).
+    /// it can relay through: `daemon_status`'s Health (`offline`, `has_peers`).
     /// Not a count, and not derived from one: the counts are Status, which
     /// a daemon may withhold. An offline daemon is a state of its own, not
     /// a daemon with no peers (Rick, 2026-10-14).
-    pub p2p: shekyl_rpc_types::HealthP2p,
+    pub p2p: DaemonP2p,
     /// The daemon's current chain height.
     pub height: u64,
     /// The daemon's own `synchronized` flag: the protocol's predicate, as
-    /// `get_info` reports it, and the wallet's one source for whether the
+    /// `daemon_status` reports it, and the wallet's one source for whether the
     /// daemon has caught up.
     ///
     /// The daemon's target height is deliberately not here. It comes from
@@ -273,7 +300,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ///
     /// This is the engine-native replacement for the legacy
     /// `shekyl_rpc_client::Rpc::get_scannable_block_by_number`. The transport is the
-    /// inherited [`Rpc`] surface (`get_block` / `get_transactions` /
+    /// inherited [`Rpc`] surface (`block_show` / `tx_list` /
     /// `get_o_indexes`), but parsing is `shekyl_wire`, which reads the coinbase
     /// `Null` committed base correctly (`GENESIS_TX_WIRE_FORMAT.md` §9.6/§9.9)
     /// where the legacy parse dropped it and rejected live coinbase blocks as
@@ -297,52 +324,26 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     ///
     /// # Default implementation
     ///
-    /// The **single override point** for scannable-block fetching: the two
-    /// body-form wrappers below are provided methods that delegate here, so
-    /// an implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route,
-    /// the test `TestDaemon`'s synthetic chains) overrides ONE method and
-    /// both forms follow — the override-both-in-lockstep hazard of two
-    /// independent defaults is unrepresentable. The default delegates to
-    /// the in-crate native fetch (`engine::block_fetch`). Trait method
-    /// signatures do not change across the swap-in (§7).
-    fn fetch_scannable_block_in_form(
-        &self,
-        number: usize,
-        form: crate::engine::block_fetch::TxBodyForm,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        crate::engine::block_fetch::fetch_scannable_block_with_form(self, number, form)
-    }
-
-    /// [`Self::fetch_scannable_block_in_form`] in the **pruned** body form —
-    /// the refresh path (no per-body hash gate; the pruned form is the
-    /// bandwidth-cheap one). Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
+    /// The **single override point** for scannable-block fetching, and the
+    /// one body form (`SB-Q2`): every non-miner transaction arrives as a
+    /// skeleton bound to its txid (`shekyl_wire::BoundTx`), which refresh,
+    /// the proofs workflow and the P-scan all consume — the P-scan's SP-6
+    /// exhaustiveness gate (`pscan::exhaustiveness`) reads each body's
+    /// bound identity, so no whole-body form exists for it to need. An
+    /// implementor (the Stage-4 `ActorRef<DaemonActor>` mailbox route, the
+    /// test `TestDaemon`'s synthetic chains) overrides this one method. The
+    /// default delegates to the in-crate native fetch
+    /// (`engine::block_fetch`). Trait method signatures do not change across
+    /// the swap-in (§7).
     fn fetch_scannable_block(
         &self,
         number: usize,
     ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Pruned)
+        crate::engine::block_fetch::default_fetch_scannable_block(self, number)
     }
 
-    /// [`Self::fetch_scannable_block_in_form`] in the **full** (unpruned)
-    /// body form, so each transaction re-hashes to its committed hash.
-    ///
-    /// This is the form the P-scan's SP-6 exhaustiveness gate consumes
-    /// (`pscan::exhaustiveness`): the gate recomputes every body's hash from
-    /// received material, and a storage-pruned FCMP++ spend hashes with the
-    /// null prunable component — so a pruned fetch can never satisfy the gate
-    /// on a spend-bearing block, and the scan would halt there as a
-    /// forged-absence refusal. Provided; override
-    /// [`Self::fetch_scannable_block_in_form`] instead.
-    fn fetch_scannable_block_full(
-        &self,
-        number: usize,
-    ) -> impl std::future::Future<Output = Result<ScannableBlock, RpcError>> + Send {
-        self.fetch_scannable_block_in_form(number, crate::engine::block_fetch::TxBodyForm::Full)
-    }
-
-    /// Atomically snapshot the daemon's fee-rate estimate at each
-    /// non-`Custom` priority tier.
+    /// Atomically snapshot the daemon's fee-rate estimate at each of the
+    /// three tiers.
     ///
     /// # Cancellation
     ///
@@ -404,7 +405,7 @@ pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync + 'static {
     /// Snapshot the daemon's health facts for the §5.3 watchdog escape
     /// ladder (§5.2 item 3): whether the daemon has peers and its sync
     /// position, which distinguish "tx stuck" from "daemon has no
-    /// peers to relay to" and "daemon is behind." One `get_info` read;
+    /// peers to relay to" and "daemon is behind." One `daemon_status` read;
     /// **no new RPC method** — the fields already exist on the info
     /// surface the wallet queries for network verification.
     ///

@@ -3,11 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Shared lifecycle helpers: network mapping, error translation, and
+//! Shared lifecycle helpers: error translation and
 //! the sync-over-async persistence drive.
 
 use shekyl_address::Network;
-use shekyl_crypto_pq::account::DerivationNetwork;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
 use shekyl_engine_file::{SafetyOverrides, WalletFileError};
 
@@ -16,23 +15,6 @@ use crate::engine::error::{IoError, OpenError};
 use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 #[cfg(test)]
 use crate::engine::{Engine, EngineSignerKind};
-
-/// Map an address-layer [`Network`] into the derivation-layer
-/// [`DerivationNetwork`].
-///
-/// The address layer has three networks; the derivation layer has
-/// four. `Fakechain` is a derivation-only construct (Testnet
-/// addresses with distinct derivation salts) and is not reachable
-/// from a wallet file's network byte. Wallets that need Fakechain
-/// keys must construct their `AllKeysBlob` outside the lifecycle
-/// methods.
-pub(crate) fn network_to_derivation(network: Network) -> DerivationNetwork {
-    match network {
-        Network::Mainnet => DerivationNetwork::Mainnet,
-        Network::Testnet => DerivationNetwork::Testnet,
-        Network::Stagenet => DerivationNetwork::Stagenet,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Error mapping
@@ -58,25 +40,25 @@ pub(super) fn map_wallet_file_error(err: WalletFileError, expected: Network) -> 
     }
 }
 
-/// Run a [`PersistenceEngine`] future from sync lifecycle entry points
-/// ([`Engine::close`](super::Engine::close), [`Engine::change_password`](super::Engine::change_password)).
+/// Run a [`PersistenceEngine`](crate::engine::traits::persistence::PersistenceEngine) future from sync lifecycle steps
+/// ([`Engine::persist_for_close`](crate::engine::Engine::persist_for_close), which
+/// [`Engine::close`](crate::engine::Engine::close) runs, and
+/// [`Engine::change_password`](crate::engine::Engine::change_password)).
 ///
 /// # Tokio embedding
 ///
 /// Callers may invoke these sync methods from a thread that already runs a
-/// Tokio runtime (typical wallet-RPC path). A naïve [`Handle::block_on`] on a
-/// worker thread panics (nested `block_on`). This helper:
+/// Tokio runtime (typical wallet-RPC path). A naïve
+/// [`Handle::block_on`](tokio::runtime::Handle::block_on) on a worker thread
+/// panics (nested `block_on`). This helper:
 ///
 /// - On a **multi-thread** runtime: [`tokio::task::block_in_place`] then
 ///   `block_on` on the active handle (same class of fix as JSON-RPC handlers
-///   driving [`Engine::refresh`](super::Engine::refresh) via `spawn_blocking`).
+///   driving [`Engine::refresh`](crate::engine::Engine::refresh) via `spawn_blocking`).
 /// - Otherwise (no runtime, or **current-thread** runtime): runs the future on
 ///   a short-lived current-thread runtime in a [`std::thread::scope`] thread so
 ///   nested-runtime panics are avoided.
 ///
-/// Dedicated async lifecycle entry points remain a V3.1 follow-up when an
-/// embedder needs cooperative cancellation across close/rotate; see
-/// `docs/FOLLOWUPS.md` (V3.1 — sync close / `change_password` vs Tokio).
 pub(crate) fn drive_persistence<Fut, T>(fut: Fut) -> T
 where
     Fut: std::future::Future<Output = T> + Send,
@@ -102,18 +84,15 @@ where
 }
 
 /// Render a `shekyl-crypto-pq::CryptoError` into the static-string
-/// detail expected by [`KeyError::Primitive`]. The message shape is
+/// detail expected by [`KeyError::Primitive`](crate::engine::error::KeyError::Primitive). The message shape is
 /// stable across the `shekyl-crypto-pq` API; we list the primitives
 /// the lifecycle paths can plausibly hit.
 pub(super) fn rederivation_failure_detail(_err: &shekyl_crypto_pq::CryptoError) -> &'static str {
     // The crypto-pq error is `Display` and carries a String detail,
     // but `KeyError::Primitive` is keyed on `&'static str` per the
     // closed-error contract. The lifecycle path can hit ML-KEM seed
-    // expansion, X25519 birational mapping, or the
-    // permitted-seed-format check; we collapse them to a single
-    // category here because the typed branches that distinguish the
-    // permitted-seed-format failure are already separate variants
-    // (`UnsupportedDerivationPair`).
+    // expansion or X25519 birational mapping; we collapse them to a
+    // single category here.
     "rederive_account failed (HKDF / scalar / ML-KEM / X25519)"
 }
 

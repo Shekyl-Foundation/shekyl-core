@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Strict readers over a [`Resolved`](crate::resolve::Resolved).
+//! Strict readers over a [`Resolved`].
 //!
 //! A row the table fills is present after resolve, and a derived default
 //! the process uses is present after materialize. Absence of such a row,
@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
+use shekyl_options::{Bearing, Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
 
 use crate::resolve::Resolved;
 
@@ -88,13 +88,18 @@ impl<'a> Reader<'a> {
             .unwrap_or(Source::Default)
     }
 
-    pub(super) fn positional(&self) -> &[String] {
-        &self.resolved.positional
-    }
-
     /// The operator set the row: not absent, and not the table's default.
     pub(super) fn given(&self, name: &str) -> bool {
         !matches!(self.resolved.source(name), None | Some(Source::Default))
+    }
+
+    /// How a row the operator set stands beside a parent that refuses it.
+    /// `None` when the operator did not set the row.
+    pub(super) fn bearing(&self, name: &str) -> Option<Bearing> {
+        if !self.given(name) {
+            return None;
+        }
+        self.resolved.get(name).map(Value::bearing)
     }
 
     pub(super) fn conflict(&mut self, name: &str, conflict: &str) {
@@ -102,6 +107,15 @@ impl<'a> Reader<'a> {
             Diagnostic::new(Code::ValueConflict, self.source(name))
                 .option(name)
                 .param("conflict", conflict),
+        );
+    }
+
+    /// The row is not available on this platform (`config.socket-dir.platform`).
+    pub(super) fn platform_refusal(&mut self, name: &str, reason: &str) {
+        self.faults.push(
+            Diagnostic::new(Code::SocketDirPlatform, self.source(name))
+                .option(name)
+                .param("reason", reason),
         );
     }
 
@@ -212,9 +226,10 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A development lever's integer. Absence is the lever left unset,
-    /// including a lever the network gate skipped. Another arm is a fault.
-    pub(super) fn dev_integer(&mut self, name: &str) -> Option<u64> {
+    /// An integer the table leaves unset by default. Absence is the row left
+    /// unset, including a development lever the network gate skipped.
+    /// Another arm is a fault.
+    pub(super) fn optional_integer(&mut self, name: &str) -> Option<u64> {
         match self.take(name).cloned() {
             None => None,
             Some(Value::Integer(n)) => Some(n),
@@ -433,6 +448,17 @@ impl<'a> Reader<'a> {
             Some(Value::Address(text)) => Read::Present(text),
             Some(other) => {
                 self.syntax(name, &other.render(), "an address");
+                Read::Unreadable
+            }
+        }
+    }
+
+    pub(super) fn name(&mut self, name: &str) -> Read<String> {
+        match self.take(name).cloned() {
+            None => Read::Absent,
+            Some(Value::Name(text)) => Read::Present(text),
+            Some(other) => {
+                self.syntax(name, &other.render(), "a name");
                 Read::Unreadable
             }
         }

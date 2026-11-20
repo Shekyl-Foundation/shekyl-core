@@ -52,8 +52,8 @@ pub enum NetworkAddress {
 /// is known by whatever port it names.
 ///
 /// Two addresses with one host are the same peer on two ports. The dialer
-/// holds one outbound session per host and draws a host no more often for
-/// advertising many ports.
+/// dials no host it already holds a session with, in either direction, and
+/// draws a host no more often for advertising many ports.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Host {
     /// An IPv4 or IPv6 address.

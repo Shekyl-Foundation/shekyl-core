@@ -44,6 +44,7 @@ impl Message<AssembleDrain> for StakeEngine {
             msg.tree_ctx,
             msg.payment_amount,
             msg.fee,
+            &self.network,
         )
         .await
     }

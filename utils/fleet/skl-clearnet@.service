@@ -25,7 +25,12 @@ PartOf=skl-fleet.target
 Type=simple
 User=shekyl
 Group=shekyl
-ExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/shekyl-fleet/node-%i.toml
+# A fleet node is a test host: it is given a private directory for the
+# owner's socket, which systemd makes for this instance alone and removes
+# when it stops (RPC_CHANNEL.md §7.1, INPUT_GRAMMAR.md IG-Q104).
+ExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/shekyl-fleet/node-%i.toml --rpc-socket-dir /run/shekyl-fleet/%i
+RuntimeDirectory=shekyl-fleet/%i
+RuntimeDirectoryMode=0700
 Restart=on-failure
 RestartSec=10
 StateDirectory=shekyl-fleet/%i

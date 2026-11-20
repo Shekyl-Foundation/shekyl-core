@@ -46,6 +46,11 @@ pub enum Event<K> {
         /// Whether the latch is set.
         set: bool,
     },
+    /// The latch write a [`Command::RaiseAlarm`] asked for was refused.
+    /// The model retries it after [`ALARM_RETRY`](crate::ALARM_RETRY).
+    AlarmRefused,
+    /// The retry deadline [`Command::ArmAlarmRetry`] armed has passed.
+    AlarmRetry,
     /// PDM-Q5's backward-fill frontier.
     Fill {
         /// The descending frontier.
@@ -90,8 +95,35 @@ pub enum Event<K> {
     Announce {
         /// The session.
         session: K,
-        /// The block, its transactions, and its attestation witness.
+        /// The block, its transactions, and its bundle references.
         body: BlockBody,
+    },
+    /// A session's 2017: its answer to a 2016 the owner sent it for a block
+    /// awaiting bundle bodies ([`Command::RequestBundleBodies`]). Each body
+    /// is already held to the reference it answers (length and hash, §7.5).
+    /// Empty when the session answered with nothing.
+    BundleBodies {
+        /// The session that answered.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies, encoded.
+        bodies: Vec<Vec<u8>>,
+    },
+    /// What this node's body store held of a
+    /// [`Command::RequestBundleBodies`], read when the owner took it. Not
+    /// the session's answer: that is [`Event::BundleBodies`], and follows
+    /// only when `asked`.
+    HeldBundleBodies {
+        /// The session the command named.
+        session: K,
+        /// The block awaiting them.
+        block: BlockHash,
+        /// The bodies the store held, encoded. May be empty.
+        bodies: Vec<Vec<u8>>,
+        /// Whether the rest went to `session` as a 2016. `false` when the
+        /// store held every body, or the session was gone.
+        asked: bool,
     },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
@@ -128,14 +160,6 @@ pub enum Proved {
     Formed(Box<FormedHeader>),
     /// `form_header` refused it. The run layer closes the supplier.
     Refused(InvalidBlock),
-    /// A [`CachePlan::Main`] seed is not in either cache slot. The executor
-    /// looks a main seed up and never derives it (B2), so the header cannot
-    /// be proven against this window. Not the peer's fault: the run is
-    /// dropped and the session kept. A later header request fetches it
-    /// again, against the window the tip has moved to by then. Dropping the
-    /// run, not only the proof, is what stops the same plan being issued
-    /// again on the same event.
-    NotHeld,
 }
 
 /// What the model asks the executor to do.
@@ -157,6 +181,33 @@ pub enum Command<K> {
         /// When the response is late.
         deadline: Instant,
     },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }`: the opening's bound, the first session's header deadline
+    /// (CS-Q2 step 8). It fires whether or not `session` is still open.
+    ArmOpening {
+        /// The session the opening started with.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// The first session's header deadline.
+        deadline: Instant,
+    },
+    /// Wake the model at `deadline` with `Event::Deadline { session, request:
+    /// id }` for the evidence draw. A header response records a candidate
+    /// and does not draw, so responses arriving together are drawn over as
+    /// a set; the wake is the draw's bound when nothing else arrives (the
+    /// §10 partition regtest: a node whose one peer served its heavier chain
+    /// and then went quiet never began the check). One is armed at a time.
+    ArmDraw {
+        /// The session whose response recorded the candidate.
+        session: K,
+        /// The id `Deadline` carries back.
+        id: u64,
+        /// That session's declared transit from the response: a response
+        /// another session is sending to a request of the same round is
+        /// about that far away.
+        deadline: Instant,
+    },
     /// Bodies along `H*`.
     RequestBodies {
         /// The session.
@@ -174,8 +225,11 @@ pub enum Command<K> {
         job: Job,
         /// Which hasher class.
         class: HashClass,
-        /// Which cache the seed is hashed under.
-        cache: CachePlan,
+        /// The seed every item hashes under. The executor borrows this
+        /// seed's cache for the job, and the hasher builds it when it is
+        /// not warm. The model names a seed only once it is earned
+        /// (`peer::seed_for`).
+        seed: BlockHash,
         /// The preimages, in chain order.
         items: Vec<ProveItem>,
     },
@@ -191,7 +245,15 @@ pub enum Command<K> {
         /// The rule.
         cause: CloseCause,
     },
+    /// Wake the model at `deadline` with [`Event::AlarmRetry`]: the retry of
+    /// a refused latch write.
+    ArmAlarmRetry {
+        /// When to retry.
+        deadline: Instant,
+    },
     /// A heavier chain forks past the cap. The connector writes the latch.
+    /// A refused write comes back as [`Event::AlarmRefused`]; the written
+    /// latch comes back as [`Event::Latch`].
     RaiseAlarm {
         /// The fork point.
         fork_at: BlockHeight,
@@ -211,8 +273,22 @@ pub enum Command<K> {
     Relay {
         /// The block.
         hash: BlockHash,
-        /// The session that supplied it.
-        from: K,
+        /// The session that supplied it. `None` is a tip no session
+        /// supplied, such as a block this node mined: it goes to every
+        /// established session.
+        from: Option<K>,
+    },
+    /// A block's section names bundle bodies this node was not sent (2016).
+    /// The owner answers what its body store holds
+    /// ([`Event::HeldBundleBodies`]) and asks `session` for the rest, whose
+    /// answer is [`Event::BundleBodies`].
+    RequestBundleBodies {
+        /// The session that sent the block.
+        session: K,
+        /// The block awaiting the bodies.
+        block: BlockHash,
+        /// The references whose bodies were not sent, undecoded.
+        references: Vec<Vec<u8>>,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {
@@ -223,6 +299,32 @@ pub enum Command<K> {
         /// The missing indices.
         indices: Vec<u64>,
     },
+    /// This session's headers from `H*` yielded nothing, and it is not
+    /// drawn to extend `H*` again until its claim or `H*` changes. A
+    /// record: the owner logs it, and nothing is sent.
+    HeadersSpent {
+        /// The session.
+        session: K,
+        /// What the response, or its proof, came to.
+        cause: Spent,
+    },
+}
+
+/// Why a session's headers from `H*` yielded nothing
+/// ([`Command::HeadersSpent`]). Each is an answer that asking again, from
+/// the same `H*`, would repeat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spent {
+    /// The response named no header `T` lacked, and the peer said its
+    /// chain ends there.
+    Exhausted,
+    /// The run ended, at the peer's word, without beating `H*`.
+    BelowStar,
+    /// The headers could not be judged where they were placed: the view
+    /// moved under them, or the run's own record did not line up.
+    Stale,
+    /// The run's headers were gone when the proof answered.
+    Gone,
 }
 
 /// Which hasher class a [`Command::Prove`] runs under. The executor maps
@@ -236,17 +338,6 @@ pub enum HashClass {
     Unsolicited,
     /// The past-cap evidence check.
     Evidence,
-}
-
-/// Which cache one prove item's seed is hashed under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CachePlan {
-    /// On the main chain. The executor looks it up and never derives it.
-    Main(BlockHash),
-    /// Earned on the run's own branch. One branch seed at a time.
-    Branch(BlockHash),
-    /// The evidence check's first seed.
-    Evidence(BlockHash),
 }
 
 /// One preimage the executor proves.
@@ -275,8 +366,12 @@ pub struct OfferedBody {
     pub block: Vec<u8>,
     /// Listed transactions, whole encodings, in the block's order.
     pub txs: Vec<Vec<u8>>,
-    /// The witness beside the block. Empty when the set is empty.
-    pub attestation_witness: Vec<u8>,
+    /// The bundle references beside the block, undecoded. Empty when the
+    /// block admits no bundle.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those bundles the sender carried, unverified and in no
+    /// set order. Assembly matches each to its reference by hash.
+    pub bundle_bodies: Vec<Vec<u8>>,
 }
 
 impl OfferedBody {
@@ -293,7 +388,8 @@ impl OfferedBody {
         Some(Self {
             block: body.block.clone(),
             txs,
-            attestation_witness: body.attestation_witness.clone(),
+            bundle_references: body.bundle_references.clone(),
+            bundle_bodies: body.bundle_bodies.clone(),
         })
     }
 }
@@ -356,7 +452,11 @@ pub enum Outcome {
     },
     /// Want the block again. The service cancelled or stopped.
     Again,
-    /// The door had no room.
+    /// The door had no room. The model holds the body and spends nothing
+    /// until the next [`Event::Room`], which the owner owes after every
+    /// `NoRoom` whether or not the door's count moved (2026-11-02: a count
+    /// the owner thought unchanged was never re-reported, and a node sat
+    /// `behind` for good with its seats frozen).
     NoRoom,
     /// The entry could not read the store that bounds an arrival. The
     /// body is not held and not asked for again. The peer did not fail.
@@ -369,6 +469,30 @@ pub enum Outcome {
     Noted,
 }
 
+/// Which form rule a decoded header page failed. A page is a chain of
+/// headers hanging off one hash the request located; each variant is a
+/// way it can fail to be that. The close names the rule so a page that
+/// comes back the same way on every retry says why (2026-11-03: the
+/// three-miner rehearsal closed 47 sessions at `HeadersForm` and the
+/// log could not say which rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeadersFormFault {
+    /// No headers, and the peer says more follow.
+    EmptyWithMore,
+    /// A header blob did not read as a proof-of-work blob.
+    BlobUnreadable,
+    /// The first header's parent is not a hash this session's open
+    /// request located.
+    ParentUnrequested,
+    /// A header's parent is not the header before it.
+    Linkage,
+    /// The first header's parent is located and `T` does not place it.
+    ParentUnplaced,
+    /// A header this node holds follows one it does not: a chain
+    /// rejoining what it left.
+    HeldAfterNew,
+}
+
 /// Why a session is closed. Each variant is a universal rule the input
 /// failed. A missed deadline is not one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -376,7 +500,7 @@ pub enum CloseCause {
     /// The header payload did not decode.
     HeadersUndecodable,
     /// The header payload decoded and failed its form.
-    HeadersForm,
+    HeadersForm(HeadersFormFault),
     /// A cheap check or a proof refused the header.
     HeaderRefused(shekyl_chain_rules::CenRow),
     /// The header descends from one already marked invalid.
@@ -393,4 +517,8 @@ pub enum CloseCause {
     BlockRefused(InvalidBlock),
     /// The body is larger than any valid block.
     Oversize,
+    /// The session announced a block and answered the 2016 for its bundle
+    /// bodies with nothing. A relayer serves the bodies of the blocks it
+    /// relays (`SCS-P27`), so the session is withholding them.
+    BundleBodiesWithheld,
 }

@@ -21,7 +21,7 @@ use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
 use shekyl_wallet_rpc::auth::AuthConfig;
 use shekyl_wallet_rpc::server::{build_router, AppState};
-use shekyl_wallet_rpc::tenant::{DaemonEndpoint, TenantState};
+use shekyl_wallet_rpc::tenant::{DaemonTarget, TenantState};
 use tokio::sync::Notify;
 use tower::ServiceExt;
 
@@ -39,14 +39,15 @@ fn test_state() -> Arc<AppState> {
         tenants: tokio::sync::Mutex::new(TenantState::new(
             std::env::temp_dir(),
             Network::Stagenet,
-            DaemonEndpoint {
-                address: "http://127.0.0.1:1".into(),
+            DaemonTarget::Address {
+                url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
         shutdown: Arc::new(Notify::new()),
+        closed: Arc::new(Notify::new()),
     })
 }
 
@@ -54,7 +55,7 @@ async fn post_json(body: Value) -> (StatusCode, Value) {
     let app = build_router(test_state());
     let req = Request::builder()
         .method("POST")
-        .uri("/")
+        .uri("/json_rpc")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_vec(&body).unwrap()))

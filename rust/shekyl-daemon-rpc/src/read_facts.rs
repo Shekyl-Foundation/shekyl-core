@@ -5,16 +5,12 @@
 
 //! [`ChainReadFacts`]: the chain reads behind the eight methods the store
 //! flip moves off the C++ table (`DRS_X_STORE_FLIP.md` DX-Q3, PR 3) —
-//! `get_alt_blocks_hashes`, `get_alternate_chains`, `get_coinbase_tx_sum`,
-//! `calc_pow`, `get_curve_tree_info`, `get_curve_tree_checkpoint`,
-//! `get_archival_emission_claim_source` and `get_archival_shard_coverage`.
+//! `chain_alt`, `chain_coinbase_sum`, `pow`, `curve_show`,
+//! `archival_claim_show` and `shard_coverage`.
 //!
-//! **Staged.** One implementor, [`StoreFacts`](crate::store_facts::StoreFacts),
-//! over the Rust chain store; the handlers in [`crate::read_methods`] are
-//! built and tested and not routed. The server answers these methods from
-//! the C++ table until the flip connects the store (PR 2's router, then the
-//! flip), and no FFI implementor is written: the C++ side is deleted at the
-//! flip, so a second implementor here would be built only to be removed.
+//! [`StoreFacts`](crate::store_facts::StoreFacts) implements it over the
+//! Rust chain store, and the handlers in [`crate::reads`] serve these
+//! methods from it.
 //!
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
@@ -73,7 +69,7 @@ pub struct CoinbaseSum {
     pub fees: u128,
 }
 
-/// A range `get_coinbase_tx_sum` sums, or the refusal it answers with.
+/// A range `chain_coinbase_sum` sums, or the refusal it answers with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoinbaseRange {
     /// The range is inside the chain; here is its sum.
@@ -82,7 +78,7 @@ pub enum CoinbaseRange {
     TooLarge,
 }
 
-/// The seed a `calc_pow` hash is computed under.
+/// The seed a `pow` hash is computed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowSeed {
     /// The caller named it.
@@ -91,11 +87,9 @@ pub enum PowSeed {
     AtHeight(BlockHeight),
 }
 
-/// A `calc_pow` answer.
+/// Why `pow` will not hash. Neither variant spends a hash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowAt {
-    /// RandomX over the bytes under the seed.
-    Hashed(PowHash),
+pub enum PowDecline {
     /// The seed height is above the tip: the chain has no block there, so
     /// there is no seed to hash under.
     SeedAboveTip {
@@ -104,15 +98,29 @@ pub enum PowAt {
         /// The tip the snapshot holds.
         tip: BlockHeight,
     },
-    /// The daemon's cache store does not hold this seed's cache.
-    /// `calc_pow` hashes only under a held cache and never derives one
-    /// (ruled 2026-10-17): a derivation is a 256 MiB fill that would
-    /// evict the validator's spare cache, and an RPC caller names the
-    /// seed.
-    SeedNotHeld {
+    /// This seed's cache is not warm: not built, not on the node's ranked
+    /// list, or lent and then cancelled when the seed left the list.
+    /// `pow` hashes only under a warm cache and never builds one (ruled
+    /// 2026-10-17): a build is a 256 MiB fill, and an RPC caller names
+    /// the seed.
+    SeedNotWarm {
         /// The seed asked for, given or named by the height.
         seed: BlockHash,
     },
+}
+
+/// What one `pow` request came to ([`ChainReadFacts::pow`]).
+#[derive(Debug)]
+pub enum PowAnswer {
+    /// RandomX ran: the hash.
+    Hashed(PowHash),
+    /// The chain has no seed there, or its cache is not warm. Nothing was
+    /// hashed. A loan cancelled after the caller paid leaves the payment
+    /// spent.
+    Declined(PowDecline),
+    /// The loan was granted and the caller's payment was refused, so
+    /// nothing was hashed.
+    Unpaid,
 }
 
 /// A claimant's bond record, as the claim source reports it: what the
@@ -127,8 +135,9 @@ pub struct ClaimantBond {
     pub bonded_total: AtomicUnits,
     pub bad_interval_count: usize,
     /// The record's last-served epoch, folded over its shards by the
-    /// release verify's own fold (`whole_record_last_served`); `None` for
-    /// a record that never served.
+    /// release verify's own fold (`whole_record_last_served`) over the
+    /// cooldown's window (`release_last_served`); `None` for a record with
+    /// no pass inside it.
     pub last_served: Option<u64>,
     /// The slash scheduler's watermark; `None` before any slash epoch
     /// settled.
@@ -140,6 +149,9 @@ pub struct ClaimantBond {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimSource {
     pub chain_height: ChainCount,
+    /// The hash of the block the record was gathered at, the tip of the
+    /// same snapshot (IG-Q84).
+    pub tip_hash: BlockHash,
     pub current_settled_epoch: SettlementEpoch,
     pub bond: Option<ClaimantBond>,
     /// Every epoch of the claim window, ascending, as the claim verify's
@@ -168,40 +180,60 @@ pub struct ShardCoverage {
     pub shards: Vec<ShardCoverageIn>,
 }
 
-/// One block of `get_blocks_by_height.bin`: its bytes and its listed
-/// transactions' whole bytes, in list order.
+/// One listed transaction of a block: its hash as the block lists it, and
+/// its body as the store holds it. The skeleton is always present. Good the
+/// record carries is held or discarded with its shard; a record that
+/// carries none has neither.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlockBlobs {
+pub struct ListedTx {
+    pub hash: TxHash,
+    pub body: crate::core::TxBody,
+}
+
+/// One block of `block_list`: its bytes and its listed
+/// transactions, in list order. The projection chooses each body's form
+/// from the request (`SB-Q2`); a discarded good is a slot state there,
+/// never a reason this read fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockRead {
     /// The block, serialized.
     pub block: Vec<u8>,
-    /// Each listed transaction, serialized whole.
-    pub txs: Vec<Vec<u8>>,
+    /// Each listed transaction.
+    pub txs: Vec<ListedTx>,
+    /// The block's bundle references, undecoded; empty when it admits none.
+    pub bundle_references: Vec<Vec<u8>>,
+    /// The bodies of those references this node holds.
+    pub bundle_bodies: Vec<Vec<u8>>,
+    /// `count(h)`, while this node holds the row (as
+    /// [`crate::chain_facts::BlockFacts::draws`]).
+    pub draws: Option<u32>,
 }
 
 /// What [`ChainReadFacts::blocks_by_height`] read: the blocks up to the
-/// first height it could not answer, and that height.
+/// first height above the tip, and that height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlocksAt {
     /// The blocks read, in request order.
-    pub blocks: Vec<BlockBlobs>,
-    /// The first height above the tip, or whose listed bodies this node
-    /// no longer holds whole; `None` when every height was read.
+    pub blocks: Vec<BlockRead>,
+    /// The first height above the tip; `None` when every height was read.
+    /// Nothing else fails a height: a body this node discarded is carried
+    /// as its slot's state (`PDM-Q10`).
     pub failed: Option<BlockHeight>,
 }
 
-/// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
+/// What [`ChainReadFacts::transactions`] gathered for `tx_list`:
 /// one slot per id asked, and the chain height confirmations count from,
-/// both read off one snapshot.
+/// both read off one snapshot. A body this node has discarded is a slot
+/// like any other — [`crate::core::ArchivalGood::Discarded`] when it carries
+/// good, [`crate::core::ArchivalGood::CarriesNone`] when it does not — and
+/// the projection decides, per the request's form, whether a discarded good
+/// is an entry or an `archived` state (`PDM-Q10`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransactionsAt {
     /// One slot per id, in request order.
     pub slots: Vec<crate::core::TxSlot>,
     /// The chain's height: the tip's plus one.
     pub chain_height: u64,
-    /// The first id whose body this node has pruned — its prunable region
-    /// and `pqc_auths` go together — so the wire cannot recompose it; the
-    /// slots stop before it.
-    pub pruned_here: Option<TxHash>,
 }
 
 /// Where a key image is spent.
@@ -218,8 +250,8 @@ pub enum SpentAt {
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
-    /// The blocks at `heights`, each with its listed transactions whole
-    /// (`get_blocks_by_height.bin`).
+    /// The blocks at `heights`, each with its listed transactions as the
+    /// store holds them (`block_list`).
     ///
     /// # Errors
     ///
@@ -229,7 +261,7 @@ pub trait ChainReadFacts: Send + Sync {
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault>;
 
     /// Each of `ids` from the chain, or else from the pool as `scope` may
-    /// see it, or missed (`get_transactions`). The pool is read before the
+    /// see it, or missed (`tx_list`). The pool is read before the
     /// chain's snapshot is begun, so a transaction mined between the two is
     /// found in the chain.
     ///
@@ -251,7 +283,7 @@ pub trait ChainReadFacts: Send + Sync {
     /// The store's faults.
     fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault>;
 
-    /// Where each of `key_images` is spent, in order (`is_key_image_spent`).
+    /// Where each of `key_images` is spent, in order (`chain_spent`).
     ///
     /// # Errors
     ///
@@ -295,15 +327,27 @@ pub trait ChainReadFacts: Send + Sync {
     /// when a listed transaction or a block in range is missing.
     fn coinbase_sum(&self, start: BlockHeight, count: u64) -> Result<CoinbaseRange, FactsFault>;
 
-    /// RandomX over `pow_blob` under `seed`, under a cache the daemon's
-    /// cache store already holds; [`PowAt::SeedNotHeld`] for any other.
-    /// Never derives a cache.
+    /// RandomX over `pow_blob` under `seed`, on a warm loan from the
+    /// node's hasher (`Class::CalcPow`).
+    ///
+    /// The seed is resolved first; a height reads that block. The loan
+    /// builds nothing and is declined unless the seed's cache is warm.
+    /// **Inside the loan**, `pay` is called once, then the hash runs under
+    /// one permit. So a caller pays only for a seed that was granted, and
+    /// before the hash; `pay` returning `false` is [`PowAnswer::Unpaid`]
+    /// and nothing is hashed.
     ///
     /// # Errors
     ///
-    /// As [`curve_tree`](Self::curve_tree) when the seed is read off the
-    /// chain.
-    fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault>;
+    /// [`FactsFault::NotReady`] when this handle is not open, or the node
+    /// is stopping. The store's faults when the seed is a height read off
+    /// the chain.
+    fn pow(
+        &self,
+        seed: PowSeed,
+        pow_blob: &[u8],
+        pay: &mut dyn FnMut() -> bool,
+    ) -> Result<PowAnswer, FactsFault>;
 
     /// What `persona`'s emission claim is built from (`ClaimSource`).
     ///
