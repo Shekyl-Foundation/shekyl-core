@@ -63,6 +63,43 @@ pub struct Fill<'a> {
     reward: u64,
 }
 
+/// Why [`Fill::admit`] refuses a body. The variants are its checks, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The body does not fit in the block: the weight overflows, it passes
+    /// twice the median, or the penalty's own bound refuses the weight.
+    Limit,
+    /// The penalised reward cannot be priced at the weight the body would make.
+    Unpriced,
+    /// The fee, or the gross coinbase, does not fit in `u64`.
+    Overflow,
+    /// The fee is under the penalty the body adds: the gross coinbase would fall.
+    Penalty,
+}
+
+/// What one offer of identical bodies did ([`Fill::admit_up_to`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Admission {
+    /// Bodies listed. At most the number offered.
+    pub taken: u64,
+    /// The prefix of [`Self::taken`] whose place ends at or before
+    /// [`Fill::penalty_free_bodies`]. A body of weight zero stays in the
+    /// prefix: it does not move the block.
+    pub within_free: u64,
+    /// Why the next body was refused. `None` when every offered body was listed.
+    pub refusal: Option<Refusal>,
+}
+
+/// [`Fill::admit`]'s decision for one body.
+enum Decision {
+    Place {
+        block_weight: u64,
+        fees: u64,
+        reward: u64,
+    },
+    Refuse(Refusal),
+}
+
 impl<'a> Fill<'a> {
     /// A template with no bodies, at the effective median `median_weight`
     /// (CEN-G6), priced at `coinbase_weight`, the parent's
@@ -179,39 +216,75 @@ impl<'a> Fill<'a> {
     /// the body does not lower the gross coinbase; otherwise refused and nothing changes, so
     /// a producer goes on to the next body.
     pub fn admit(&mut self, weight: u64, fee: u64) -> bool {
+        match self.decide(weight, fee) {
+            Decision::Place {
+                block_weight,
+                fees,
+                reward,
+            } => {
+                self.block_weight = block_weight;
+                self.fees = fees;
+                self.reward = reward;
+                true
+            }
+            Decision::Refuse(_) => false,
+        }
+    }
+
+    /// Why [`Self::admit`] would refuse a body of `weight` paying `fee`.
+    /// `None` when it would list the body. The checks are [`Self::decide`]'s,
+    /// in `admit`'s order.
+    #[must_use]
+    pub fn refusal(&self, weight: u64, fee: u64) -> Option<Refusal> {
+        match self.decide(weight, fee) {
+            Decision::Place { .. } => None,
+            Decision::Refuse(refusal) => Some(refusal),
+        }
+    }
+
+    /// [`Self::admit`]'s decision, without changing the fill.
+    fn decide(&self, weight: u64, fee: u64) -> Decision {
         let Some(block_weight) = self.block_weight.checked_add(weight) else {
-            return false;
+            return Decision::Refuse(Refusal::Limit);
         };
         if block_weight > self.block_limit() {
-            return false;
+            return Decision::Refuse(Refusal::Limit);
         }
-        let Ok(reward) = self
+        let reward = match self
             .emission
             .penalised(self.median_weight, block_weight, self.params)
-        else {
-            return false;
+        {
+            Ok(reward) => reward,
+            // The penalty's own bound. At the shipped multiple it is the
+            // fill's limit; a tighter multiple refuses here first.
+            Err(EmissionError::BlockTooBig) => return Decision::Refuse(Refusal::Limit),
+            Err(EmissionError::Overflow) => return Decision::Refuse(Refusal::Unpriced),
         };
         let Some(fees) = self.fees.checked_add(fee) else {
-            return false;
+            return Decision::Refuse(Refusal::Overflow);
         };
         let Some(coinbase) = reward.checked_add(fees) else {
-            return false;
+            return Decision::Refuse(Refusal::Overflow);
         };
         if coinbase < self.coinbase() {
-            return false;
+            return Decision::Refuse(Refusal::Penalty);
         }
-        self.block_weight = block_weight;
-        self.fees = fees;
-        self.reward = reward;
-        true
+        Decision::Place {
+            block_weight,
+            fees,
+            reward,
+        }
     }
 
     /// Offer `count` identical bodies, each of `weight` paying `fee`, one
-    /// after another; the number admitted. Exactly what `count` calls of
-    /// [`Self::admit`] admit, stopping at the first refusal — identical
-    /// bodies refused once are refused again, since a refusal changes
-    /// nothing. It costs a bounded number of reward pricings, not one per
-    /// body (`ECONOMY_UMBRELLA_PLAN.md` §3.2 b).
+    /// after another. Exactly what `count` calls of [`Self::admit`] admit,
+    /// stopping at the first refusal — identical bodies refused once are
+    /// refused again, since a refusal changes nothing. [`Admission::taken`]
+    /// is how many were listed, [`Admission::within_free`] how many of those
+    /// end at or before [`Self::penalty_free_bodies`], and
+    /// [`Admission::refusal`] why the next one was not. It costs a bounded
+    /// number of reward pricings, not one per body
+    /// (`ECONOMY_UMBRELLA_PLAN.md` §3.2 b).
     ///
     /// 1. **The reward does not move.** Bodies that keep the block within
     ///    [`penalty_free_weight`] and the bound, or that weigh nothing, add
@@ -258,26 +331,59 @@ impl<'a> Fill<'a> {
     /// Where the economics helper cannot count the root (its products leave
     /// `u128`, past the penalty's own arithmetic), the bodies are offered
     /// one at a time, as before.
-    pub fn admit_up_to(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
-        let mut admitted = self.admit_unpenalised(weight, fee, count);
+    pub fn admit_up_to(&mut self, weight: u64, fee: u64, count: u64) -> Admission {
+        let start = self.bodies_weight();
+        let free = self.penalty_free_bodies();
+        let mut taken = self.admit_unpenalised(weight, fee, count);
         if weight > 0 {
             let free_weight = penalty_free_weight(self.median_weight, self.params);
-            while admitted < count && self.block_weight <= free_weight {
+            while taken < count && self.block_weight <= free_weight {
                 if !self.admit(weight, fee) {
-                    return admitted;
+                    return self.admission(start, free, weight, fee, count, taken);
                 }
-                admitted += 1;
+                taken += 1;
             }
-            if admitted < count {
-                admitted += self.admit_penalised(weight, fee, count - admitted);
+            if taken < count {
+                taken += self.admit_penalised(weight, fee, count - taken);
             }
         }
         // After the closed form this offer is refused, or `count` is met.
         // Where the helper could not count the root it is the whole walk.
-        while admitted < count && self.admit(weight, fee) {
-            admitted += 1;
+        while taken < count && self.admit(weight, fee) {
+            taken += 1;
         }
-        admitted
+        self.admission(start, free, weight, fee, count, taken)
+    }
+
+    /// [`Self::admit_up_to`]'s result: the free prefix of a uniform run, and
+    /// the refusal of the body it did not list.
+    fn admission(
+        &self,
+        start: u64,
+        free: u64,
+        weight: u64,
+        fee: u64,
+        count: u64,
+        taken: u64,
+    ) -> Admission {
+        // A zero-weight body does not move the block, so it never leaves the
+        // free prefix. A weighted one ends inside while its place fits in
+        // the room the run started with; the rest of `taken` ends past it.
+        let within_free = if weight == 0 {
+            taken
+        } else {
+            free.saturating_sub(start) / weight
+        }
+        .min(taken);
+        let refusal = (taken < count).then(|| {
+            self.refusal(weight, fee)
+                .expect("a short offer is a body admit refuses")
+        });
+        Admission {
+            taken,
+            within_free,
+            refusal,
+        }
     }
 
     /// Step 1 of [`Self::admit_up_to`]: the bodies that leave the reward
@@ -467,6 +573,54 @@ mod tests {
         out
     }
 
+    /// `within_free` is the prefix whose place ends at or before the
+    /// penalty-free weight, and `refusal` is the fill's own next check.
+    fn assert_admission(
+        before: &Fill<'_>,
+        after: &Fill<'_>,
+        weight: u64,
+        fee: u64,
+        count: u64,
+        admission: Admission,
+        at: &str,
+    ) {
+        let start = before.bodies_weight();
+        let free = before.penalty_free_bodies();
+        let within = admission.within_free;
+        assert!(within <= admission.taken, "the free prefix, {at}");
+        let ends_inside = |n: u64| -> bool {
+            if weight == 0 {
+                return true;
+            }
+            n.checked_mul(weight)
+                .and_then(|span| start.checked_add(span))
+                .is_some_and(|end| end <= free)
+        };
+        if weight == 0 {
+            assert_eq!(within, admission.taken, "weightless, {at}");
+        } else if within > 0 {
+            assert!(ends_inside(within), "the last free body ends inside, {at}");
+        }
+        if within < admission.taken {
+            assert!(
+                !ends_inside(within + 1),
+                "the next body ends past the free weight, {at}"
+            );
+        }
+        let refusal = (admission.taken < count).then(|| {
+            after
+                .refusal(weight, fee)
+                .expect("a short offer is a body admit refuses")
+        });
+        assert_eq!(admission.refusal, refusal, "the next body's refusal, {at}");
+        let mut clone = *after;
+        assert_eq!(
+            after.refusal(weight, fee).is_none(),
+            clone.admit(weight, fee),
+            "refusal and admit agree, {at}"
+        );
+    }
+
     /// `admit_up_to` from `base` equals the walk for every count the walk
     /// settles: the admitted number and the fill after, field by field.
     /// True when every count was checked.
@@ -475,12 +629,13 @@ mod tests {
         let all = walked.len() == counts.len();
         for (&count, (walk, after)) in counts.iter().zip(walked) {
             let mut batched = base;
-            let batch = batched.admit_up_to(weight, fee, count);
+            let admission = batched.admit_up_to(weight, fee, count);
             let at = format!("{at} weight {weight} fee {fee} count {count}");
-            assert_eq!(batch, walk, "admitted, {at}");
+            assert_eq!(admission.taken, walk, "admitted, {at}");
             assert_eq!(batched.block_weight(), after.block_weight(), "weight, {at}");
             assert_eq!(batched.fees(), after.fees(), "fees, {at}");
             assert_eq!(batched.reward(), after.reward(), "reward, {at}");
+            assert_admission(&base, &batched, weight, fee, count, admission, &at);
         }
         all
     }
@@ -706,7 +861,10 @@ mod tests {
         let empty = Fill::empty(zone, cb, 0, v, &p).expect("priced");
         for weight in [u64::MAX, u64::MAX - cb + 1, 2 * zone - cb + 1] {
             let mut tried = empty;
-            assert_eq!(tried.admit_up_to(weight, u64::MAX / 2, u64::MAX), 0);
+            let admission = tried.admit_up_to(weight, u64::MAX / 2, u64::MAX);
+            assert_eq!(admission.taken, 0);
+            assert_eq!(admission.within_free, 0);
+            assert_eq!(admission.refusal, Some(Refusal::Limit));
             assert!(parity(empty, weight, u64::MAX / 2, &counts, "overflow"));
         }
 
@@ -715,8 +873,10 @@ mod tests {
         let p15 = params_at(15 * SCALE / 10);
         let empty = Fill::empty(zone, cb, 0, v, &p15).expect("priced");
         let mut run = empty;
-        let admitted = run.admit_up_to(1_000, 1_000_000_000_000_000, u64::MAX);
-        assert!(admitted > 0);
+        let admission = run.admit_up_to(1_000, 1_000_000_000_000_000, u64::MAX);
+        assert!(admission.taken > 0);
+        assert!(admission.within_free < admission.taken);
+        assert_eq!(admission.refusal, Some(Refusal::Limit));
         assert!(run.block_weight() <= zone * 3 / 2);
         assert!(
             run.block_weight() + 1_000 > zone * 3 / 2,
@@ -740,8 +900,9 @@ mod tests {
         let huge = 1u64 << 50;
         let empty = Fill::empty(huge, cb, 0, v, &p).expect("priced");
         let mut run = empty;
-        let admitted = run.admit_up_to(1 << 33, 0, u64::MAX);
-        assert_eq!(run.block_weight(), cb + admitted * (1 << 33));
+        let admission = run.admit_up_to(1 << 33, 0, u64::MAX);
+        assert_eq!(admission.refusal, Some(Refusal::Unpriced));
+        assert_eq!(run.block_weight(), cb + admission.taken * (1 << 33));
         assert!(run.block_weight() <= huge);
         assert_eq!(
             run.reward_at(run.bodies_weight() + (1 << 33)),
@@ -889,7 +1050,7 @@ mod tests {
         let median = p.full_reward_zone;
         for (weight, fee, count) in [(2_000u64, 0u64, 40u64), (20_000, 50_000_000_000, 12)] {
             let mut offered = Fill::empty(median, coinbase_weight(), 0, v, &p).expect("priced");
-            let admitted = offered.admit_up_to(weight, fee, count);
+            let admitted = offered.admit_up_to(weight, fee, count).taken;
             assert!(admitted > 0, "the case lists something");
             let listed = Fill::listed(
                 median,

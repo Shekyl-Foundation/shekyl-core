@@ -21,6 +21,7 @@ mod fee_ladder;
 mod fee_model;
 mod fee_signal;
 mod growth_gate;
+mod growth_trace;
 mod honest_step;
 mod jg_grid;
 mod median_window;
@@ -112,6 +113,45 @@ fn refuse(reason: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Modes and modifiers that name a run `--growth-trace` does not perform.
+/// A mode added in `main` is added here: the trace returns before it.
+const GROWTH_TRACE_CONFLICTS: &[&str] = &[
+    "--stage2",
+    "--esr10",
+    "--eup4",
+    "--jg-grid",
+    "--fb1c-c2",
+    "--fee-ladder",
+    "--fee-floor",
+    "--secret-draw",
+    "--secret-draw-production",
+    "--gate7",
+    "--seed-spread",
+    "--control-flat-fee",
+    "--control-steady-traffic",
+];
+
+/// The other flag `--growth-trace` refuses, when `args` asks for the trace
+/// and for another mode, a control flag, or `--seed-spread`. `None` when
+/// the trace is absent or is the only one.
+fn growth_trace_conflict<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+    let args: Vec<&str> = args.into_iter().collect();
+    if !args.contains(&"--growth-trace") {
+        return None;
+    }
+    if let Some(flag) = GROWTH_TRACE_CONFLICTS
+        .iter()
+        .copied()
+        .find(|flag| args.contains(flag))
+    {
+        return Some(flag);
+    }
+    eup4::Instrument::ALL
+        .into_iter()
+        .map(eup4::Instrument::flag)
+        .find(|flag| args.contains(flag))
+}
+
 fn main() {
     let control = std::env::args().any(|a| a == "--control-flat-fee");
     let steady = std::env::args().any(|a| a == "--control-steady-traffic");
@@ -152,6 +192,24 @@ fn main() {
             "overrides are read by --stage2, --esr10 and each instrument's own mode only: each \
              prints a cell beside its baseline",
         );
+    }
+    // §5.36: the growth under standard traffic, traced. It names its own
+    // four runs (both zones, on standard traffic and on steady), so it
+    // takes no other mode, no control flag and no spread.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(flag) = growth_trace_conflict(argv.iter().map(String::as_str)) {
+        refuse(&format!(
+            "--growth-trace runs its own four folds (both zones, on standard traffic and on \
+             steady): it takes no other mode, no control flag and no --seed-spread; \
+             refusing {flag}"
+        ));
+    }
+    if argv.iter().any(|arg| arg == "--growth-trace") {
+        let mut narration = String::new();
+        growth_trace::run(&mut narration, &SimParams::default())
+            .expect("String sink is infallible");
+        eprint!("{narration}");
+        return;
     }
     if esr10 && control {
         refuse("--esr10 runs the production ladder: the flat control fee has no rungs to mix");
@@ -511,4 +569,96 @@ fn run_fb1c_c2(params: &SimParams) {
     stdout.write_all(json.as_bytes()).expect("write failed");
     stdout.write_all(b"\n").expect("write failed");
     eprintln!("\nF-B1c-c2 scenario set complete. Per-epoch JSON written to stdout.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{growth_trace_conflict, GROWTH_TRACE_CONFLICTS};
+
+    #[test]
+    fn growth_trace_runs_alone() {
+        assert_eq!(growth_trace_conflict(["shekyl-economics-sim"]), None);
+        assert_eq!(growth_trace_conflict(["--growth-trace"]), None);
+        assert_eq!(
+            growth_trace_conflict(["--fee-floor", "--growth-trace"]),
+            Some("--fee-floor")
+        );
+    }
+
+    /// Every named mode, control flag and instrument. A mode `main` grows
+    /// is one of these, or the trace will run it and return.
+    #[test]
+    fn growth_trace_refuses_every_other_named_mode() {
+        assert_eq!(
+            GROWTH_TRACE_CONFLICTS,
+            [
+                "--stage2",
+                "--esr10",
+                "--eup4",
+                "--jg-grid",
+                "--fb1c-c2",
+                "--fee-ladder",
+                "--fee-floor",
+                "--secret-draw",
+                "--secret-draw-production",
+                "--gate7",
+                "--seed-spread",
+                "--control-flat-fee",
+                "--control-steady-traffic",
+            ]
+        );
+        for flag in GROWTH_TRACE_CONFLICTS {
+            assert_eq!(
+                growth_trace_conflict(["--growth-trace", flag]),
+                Some(*flag),
+                "{flag}"
+            );
+        }
+        for instrument in crate::eup4::Instrument::ALL {
+            let flag = instrument.flag();
+            assert_eq!(
+                growth_trace_conflict(["--growth-trace", flag]),
+                Some(flag),
+                "{flag}"
+            );
+        }
+    }
+
+    /// Every flag `main` reads is the trace's own, `--set` (whose overrides
+    /// `main` refuses outside the sweep modes, before the trace), or one the
+    /// trace refuses. Read from this file's source, so a mode added to
+    /// `main` and not to [`GROWTH_TRACE_CONFLICTS`] fails here. The
+    /// instruments' flags are `eup4`'s and are refused through
+    /// `Instrument::ALL`.
+    #[test]
+    fn every_flag_main_reads_is_refused_beside_the_trace() {
+        // Cut at this module's own header: a comment above `mod record`
+        // names the attribute too.
+        let (code, _) = include_str!("main.rs")
+            .split_once("#[cfg(test)]\nmod tests {")
+            .expect("main's code precedes its tests");
+        let flags: Vec<&str> = code
+            .match_indices("\"--")
+            .filter_map(|(at, _)| {
+                let rest = &code[at + 1..];
+                rest.find('"').map(|end| &rest[..end])
+            })
+            .filter(|flag| {
+                flag[2..]
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            })
+            .collect();
+        assert!(
+            flags.contains(&"--growth-trace") && flags.contains(&"--stage2"),
+            "the scan reads main's flags: {flags:?}"
+        );
+        for flag in flags {
+            assert!(
+                matches!(flag, "--growth-trace" | "--set")
+                    || GROWTH_TRACE_CONFLICTS.contains(&flag),
+                "{flag} is read by main and not refused beside --growth-trace"
+            );
+        }
+    }
 }
