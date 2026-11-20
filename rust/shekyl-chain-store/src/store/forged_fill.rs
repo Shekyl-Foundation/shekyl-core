@@ -251,7 +251,7 @@ fn regrown(blocks: usize) -> Grown {
 /// (`CHAIN_FORGE.md`: nothing trusts a store it did not verify).
 ///
 /// **Built once.** The first process to need a prefix builds it while it
-/// holds the schedule's lock file, and marks it verified
+/// holds the schedule's lock file, a rung at a time, and marks it verified
 /// (`<file>.verified`, written after the store closes) once every block has
 /// connected; a process that waited on the lock finds the mark. A file
 /// without its mark is a build that panicked, and is built again. Every
@@ -275,7 +275,6 @@ fn verified_prefix(rules: RuleSet, horizons: Horizons, blocks: usize) -> std::pa
         .write(true)
         .open(dir.join(format!("{schedule}.lock")))
         .expect("open the schedule's lock file");
-    lock.lock().expect("take the schedule's lock");
     let name = |n: usize| dir.join(format!("{schedule}-{n}.redb"));
     let rungs: Vec<usize> = forged()
         .closes
@@ -284,8 +283,12 @@ fn verified_prefix(rules: RuleSet, horizons: Horizons, blocks: usize) -> std::pa
         .filter(|&rung| rung < blocks)
         .chain([blocks])
         .collect();
+    // The lock is held a rung at a time, so a process that needs a short
+    // rung takes it as soon as it is built, not when a longer prefix is.
     for rung in rungs {
+        lock.lock().expect("take the schedule's lock");
         build_prefix(&name(rung), rung, &name, rules, horizons);
+        lock.unlock().expect("release the schedule's lock");
     }
     name(blocks)
 }
@@ -293,7 +296,7 @@ fn verified_prefix(rules: RuleSet, horizons: Horizons, blocks: usize) -> std::pa
 /// Build the prefix of `blocks` blocks at `file` under `rules` and
 /// `horizons`, from the longest shorter prefix `name` finds verified, and
 /// mark it verified; nothing if it is marked already. The caller holds the
-/// schedule's lock.
+/// schedule's lock for this rung.
 fn build_prefix(
     file: &std::path::Path,
     blocks: usize,
