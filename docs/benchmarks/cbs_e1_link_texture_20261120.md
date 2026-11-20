@@ -1,9 +1,9 @@
 # `CBS-E1` link texture: what does a node's link look like to a watcher, and does a transaction stand out on it? Registration, 2026-11-20
 
 **State of this record: REGISTERED 2026-11-20, not started, WITH ONE
-PART PROPOSED AND NOT YET CONFIRMED: the load steps of the loaded hours
-(their times and rates, below). Rick's confirmation, or his change, is
-recorded here with its date before any figure is read. Nothing has been collected. The run is approved (Rick, 2026-11-20)
+PART OPEN: the low and typical rates of the load cycle and its 120-minute
+segment length (below) stand as proposed until Rick confirms or changes
+them; that is recorded here with its date before any figure is read. Nothing has been collected. The run is approved (Rick, 2026-11-20)
 and starts after `v3.1.0-alpha.12` is deployed to the fleet.** Everything under "Registered before the run" is fixed from the
 moment this record is pushed. A change after that is a dated amendment
 that says what had been read by then. Results are added below.
@@ -96,31 +96,32 @@ send.** What is captured before that is the `resync` segment.
 each send's times, started once mined coins mature and the sending
 wallets are funded. The record states which nodes ran a loop.
 
-**The loaded hours — PROPOSED 2026-11-20, not yet confirmed.** The load
-is the stressnet transaction generator (`shekyl-dev` `stressnet/`,
-`config/cbs_e1_load.yaml`), one instance on each load host, against that
-host's own daemon. The measuring hosts do not run it.
+**The load (Rick, 2026-11-20).** The stressnet transaction generator
+(`shekyl-dev` `stressnet/`, `config/cbs_e1_load.yaml`, transfers only),
+one instance on each load host, against that host's own daemon. The
+measuring hosts do not run it; the measured transactors keep TRC-1's send
+loop.
 
-- **When.** Hours 24 to 48 of the 72. Hours 0 to 24 and 48 to 72 are
-  `ordinary`: the only generated sends are the measured transactors' own
-  loops.
-- **Steps.** Three cycles of eight hours. Each cycle is three steps, and
-  every load host changes step at the same moment:
+- **The cycle.** Eight hours, nine times in the 72, starting at the first
+  accepted logged send. Every load host changes segment at the same moment:
 
-  | Step | Segment name | Length | Rate, per load host |
-  | --- | --- | --- | --- |
-  | 1 | `load_low` | 180 min | 6 transactions an hour |
-  | 2 | `load_typical` | 180 min | 30 transactions an hour |
-  | 3 | `load_high` | 120 min | 120 transactions an hour |
+  | Segment | Length | Planned rate |
+  | --- | --- | --- |
+  | `idle` | 120 min | none: only the measured transactors send |
+  | `low` | 120 min | 6 transactions an hour per load host |
+  | `typical` | 120 min | 30 an hour per load host |
+  | `high` | 120 min | 716 an hour over the whole network, shared between the load hosts |
 
-- **Arrivals.** A Poisson process at the step's rate.
+- **`idle` is captured on purpose:** the quiet network is the hardest case
+  for the design.
+- **`high` is the design load:** `DESIGN_NETWORK_MILLI_TX_PER_SEC` = 199.
+- **OPEN (Rick):** the low and typical rates, and the 120-minute length.
+- **Arrivals.** A Poisson process at the segment's rate.
 - **Mix.** 70 % payments, 15 % multi-output (3 to 8 recipients), 10 %
   consolidations, 5 % stakes.
-- **Reported with the results:** the number of load hosts, so the
-  network's total rate in each step is known, and the generator's own
-  count of submitted, skipped and failed attempts per step.
-- The three cycles' windows are pooled by step name. Each accepted send's serialized size is read from the daemon
-afterwards, as TRC-1 did.
+- **If the pool keeps growing in the first `high` segment,** the blocks
+  cannot carry the rate: the step is lowered, and the record says when and
+  to what.
 
 **The reduction.** `shekyl-dev` `scripts/texture/reduce.py`, run on each
 host. Its definitions:
@@ -150,8 +151,8 @@ host. Its definitions:
 - **Segments.** Named from what was happening, fixed before reading:
   - `resync`: from the capture's start until the first accepted logged
     send;
-  - `ordinary`: the 72 hours outside the load steps;
-  - `load_low`, `load_typical` and `load_high`: the load steps.
+  - `idle`, `low`, `typical` and `high`: the generator's four, read from
+    its own segment log, each pooled over the nine cycles.
   A window belongs to the segment its first slot is in.
 - **Median split (secondary).** A clock hour is busy when its sent bytes
   on that connector are at or above the median hour's, else quiet. The
@@ -184,7 +185,10 @@ host. Its definitions:
    each link and for the connector's sum.
 3. Burst sizes and gaps at both thresholds.
 4. The send groups, and the candidate runs per matched send.
-5. The watcher's test at 0.1 s, 1 s and 10 s, in the layout of TRC-1's
+5. For each segment: the number of load hosts, the planned network rate,
+   and the achieved one from the generator's own record of attempts
+   (submitted, failed, skipped for want of funds).
+6. The watcher's test at 0.1 s, 1 s and 10 s, in the layout of TRC-1's
    table, pooled over links and on the connector's sum. On the Tor nodes,
    TRC-1's own test on the guard connections for the same hours, beside
    it.
