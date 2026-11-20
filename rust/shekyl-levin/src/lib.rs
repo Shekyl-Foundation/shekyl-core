@@ -129,10 +129,12 @@
 //! 8. **train overrun** (PWD-B12, 2026-11-20) — once the inner header is
 //!    known, a fragment that does not end the train must leave the inner
 //!    message incomplete ([`Error::FragmentOverrun`]), checked before its
-//!    body is copied. An unfinished train therefore holds fewer bytes than
-//!    its inner message, and a finished one holds the inner message and
-//!    less than its last fragment's body of padding. The inherited reader
-//!    appended every fragment up to the packet limit. Unreachable for a conforming
+//!    body is copied, and the fragment that ends the train is copied only
+//!    as far as the inner message's end. An unfinished train therefore
+//!    holds fewer bytes than its inner message, and the reassembly buffer
+//!    never holds more than that inner message: the last fragment's
+//!    padding stays in the receive buffer. The inherited reader
+//!    appended every fragment, padding included, up to the packet limit. Unreachable for a conforming
 //!    sender: [`fragmented_notify`] cuts the inner message into equal
 //!    bodies and pads only the last, so every earlier fragment ends short
 //!    of the inner message's end. What this does **not** bound is one

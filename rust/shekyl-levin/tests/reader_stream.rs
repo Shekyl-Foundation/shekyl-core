@@ -770,6 +770,33 @@ fn a_train_that_fills_its_fragments_exactly_is_delivered() {
     );
 }
 
+/// PWD-B12, fragments: the last fragment's padding is not copied into the
+/// reassembly buffer. The buffer becomes the delivered payload, so its
+/// capacity is what the train made it hold: here a 100-byte payload behind
+/// 64 KiB of padding in the one fragment.
+///
+/// Red edit: copy the whole body of the fragment that ends the train (drop
+/// the `lacking` cut in `absorb_noise_or_fragment`). The payload's
+/// allocation is then the padding's size, sixty-four times this bound.
+#[test]
+fn the_last_fragments_padding_is_not_buffered() {
+    let padding = 64 * 1024;
+    let mut body = notify(2002, &[0x5A; 100]);
+    body.extend_from_slice(&vec![0u8; padding]);
+
+    let Received::Notification { command, payload } = only_message(&fragment(Flags::END, &body))
+    else {
+        panic!("a notification");
+    };
+    assert_eq!(command, 2002);
+    assert_eq!(payload, vec![0x5A; 100], "trimmed to the inner length");
+    assert!(
+        payload.capacity() < 1024,
+        "the payload's allocation is {} bytes: the padding was buffered",
+        payload.capacity()
+    );
+}
+
 /// PWD-B12, fragments: a train carries a request or a response. An inner
 /// header of the noise / fragment class (neither `Q` nor `S`) is refused
 /// when its last byte arrives: it would take no command's cap, and a

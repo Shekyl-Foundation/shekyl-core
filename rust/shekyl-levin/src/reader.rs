@@ -58,10 +58,14 @@
 //! The inner header is read when its last byte arrives in the reassembly
 //! buffer, whichever fragment carries it, and judged there: its signature,
 //! its flags, its command's cap. From then on a fragment that does not end
-//! the train must leave the inner message incomplete. So an unfinished
-//! train holds fewer bytes than one inner message its command admits, and
-//! a finished one holds the inner message and the padding of its last
-//! fragment, which is less than that fragment's own body. These checks are
+//! the train must leave the inner message incomplete, and the fragment
+//! that ends it is copied only as far as the inner message's end: its
+//! padding, which is less than that fragment's own body, is never copied.
+//! So an unfinished train holds fewer bytes than one inner message its
+//! command admits, and the reassembly buffer never holds more than that
+//! inner message. What a train does not bound is the bucket in front of
+//! it: one fragment's body waits in the receive buffer, up to the packet
+//! limit, until the bucket is complete. These checks are
 //! stricter than the oracle's, which judged the inner header only when the
 //! train ended (crate docs, "inner header judged on arrival", "train
 //! overrun", "inner dispatch class").
@@ -401,17 +405,26 @@ impl BucketReader {
             }
         }
 
-        // Divergence "train overrun": a fragment that does not end the
-        // train must leave the inner message incomplete.
-        if let (Some(inner), false) = (self.inner, ends) {
+        if let Some(inner) = self.inner {
             let inner_len = HEADER_SIZE
                 + usize::try_from(inner.payload_len).expect("bounded by max_packet_size");
-            let held = self.fragment.len() + body.len();
-            if held >= inner_len {
-                return Err(Error::FragmentOverrun {
-                    inner: u64::try_from(inner_len).expect("buffer length fits in u64"),
-                    held: u64::try_from(held).expect("buffer length fits in u64"),
-                });
+            if ends {
+                // The last fragment is the padded one: copy what the inner
+                // message still lacks and leave the padding where it is, so
+                // the buffer never holds more than the inner message. A
+                // body short of that is copied whole and refused below.
+                let lacking = inner_len.saturating_sub(self.fragment.len());
+                body.end = body.start + lacking.min(body.len());
+            } else {
+                // Divergence "train overrun": a fragment that does not end
+                // the train must leave the inner message incomplete.
+                let held = self.fragment.len() + body.len();
+                if held >= inner_len {
+                    return Err(Error::FragmentOverrun {
+                        inner: u64::try_from(inner_len).expect("buffer length fits in u64"),
+                        held: u64::try_from(held).expect("buffer length fits in u64"),
+                    });
+                }
             }
         }
 
@@ -460,7 +473,9 @@ impl BucketReader {
 }
 
 /// Cut the logical message out of a completed fragment train whose inner
-/// header was already judged.
+/// header was already judged. `assembled` is the inner header and as much
+/// of its payload as the train carried, and never more than the inner
+/// message: the last fragment's padding was not copied.
 ///
 /// Divergence "inner-length trim" (crate docs).
 fn take_reassembled_inner(
@@ -470,18 +485,19 @@ fn take_reassembled_inner(
     let available =
         u64::try_from(assembled.len() - HEADER_SIZE).expect("buffer length fits in u64");
     // Divergence "inner-length trim": the inner length must fit, and the
-    // payload is trimmed to it (C++ forwards the zero padding).
+    // payload is exactly it (C++ forwards the zero padding).
     if inner.payload_len > available {
         return Err(Error::InnerLengthTruncated {
             claimed: inner.payload_len,
             available,
         });
     }
-    let end = HEADER_SIZE + usize::try_from(inner.payload_len).expect("bounded by the buffer");
-    // Reuse the reassembly buffer as the payload: drop the trailing
-    // padding, then shift the inner header off the front. One memmove,
-    // no second allocation.
-    assembled.truncate(end);
+    debug_assert_eq!(
+        available, inner.payload_len,
+        "the reassembly buffer never holds more than its inner message"
+    );
+    // Reuse the reassembly buffer as the payload: shift the inner header
+    // off the front. One memmove, no second allocation.
     assembled.drain(..HEADER_SIZE);
     Ok((inner, assembled))
 }
