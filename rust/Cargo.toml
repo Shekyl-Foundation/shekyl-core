@@ -734,6 +734,22 @@ tempfile = "3.27"
 # as 4.4.
 redb = "4.6"
 
+# The TOML reader of every configuration and prefs file (shekyl-options,
+# shekyl-daemon-config, shekyl-engine-prefs) and of the chain forge's plans
+# and pins; shekyl-chain-store reads manifests with it in a test. Files are
+# TOML 1.1 (INPUT_GRAMMAR.md R2): over TOML 1.0 that adds newlines and
+# trailing commas in inline tables, the `\e` and `\xHH` escapes, and times
+# without seconds; the key grammar is unchanged. Verified at source
+# (1.2.1+spec-1.1.0, rule 17): `std`, `serde` and `parse` give `from_str`,
+# `Table`, `Value`, `Spanned` (re-exported unconditionally, `lib.rs`) and
+# `de::Error::{message, span}` (`de/error.rs`); `display` (engine-prefs only)
+# gives `to_string`/`to_string_pretty`. Unlike 0.8, `str::parse::<Value>()`
+# parses one value, not a document: a document is a `Table`. Already in
+# Cargo.lock at this version (through trybuild), and the GUI wallet's graph
+# carries the same line through tauri, so core's config parser is never
+# chosen by the GTK3 compile-time chain's toml 0.8.
+toml = { version = "1.2", default-features = false, features = ["std", "serde", "parse"] }
+
 # `kameo` actor framework — pinned per the 2026-04-27 *Engine binary
 # boundary* decision in
 # `docs/V3_WALLET_DECISION_LOG.md`. Verified at source via the

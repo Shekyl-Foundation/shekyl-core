@@ -20,7 +20,7 @@ shekyl-options = { path = "../shekyl-options" }
 shekyl-logging = { path = "../shekyl-logging" }
 # The network marker is two TOML keys; parsed with the reader the
 # workspace already pins (DAEMON_CONFIG_CUTOVER_AUDIT.md §4).
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+toml = { workspace = true }
 # A mining address is checked against the network at construction.
 shekyl-address = { path = "../shekyl-address" }
 # The network row (`network.rs`).
