@@ -61,8 +61,12 @@
 #   --selftest    the check on planted trees.
 #
 # --matrix reads `RUST_TESTS` (change_scope.py's `rust_tests`: `all`, `none`
-# or the members a change reaches through the reverse closure) and
-# `CHANGED` (the changed paths, one per line). A fuzz crate is in the matrix
+# or the members a change reaches through the reverse closure) and the file
+# `CHANGED_FILE` names (the changed paths, one per line; unset, none). A
+# file, not the paths themselves in the environment: Linux refuses to start
+# a program one of whose environment strings passes 128 KiB, and a release
+# pull request's diff against `main` lists over 200 KiB of paths (#1474's
+# fuzz scope step exited 126 before Python ran). A fuzz crate is in the matrix
 # when any crate it depends on by path is in `rust_tests`, when its own
 # files changed, or when the change touches what every harness builds
 # against (the workspace lockfile, the toolchain pin, this script, the
@@ -82,6 +86,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ".github/workflows/fuzz-harness.yml"
+# The environment variable naming the file of changed paths `--matrix` reads.
+CHANGED_FILE = "CHANGED_FILE"
 # The fuzz lanes. Their own workflow, so nightly.yml keeps one cron.
 FUZZ_WORKFLOW = ".github/workflows/fuzz-nightly.yml"
 # Twelve hours from nightly.yml's 03:00 cron, and off the hour, where
@@ -294,6 +300,11 @@ def check(root: Path, weekly: tuple[str, ...] = WEEKLY) -> tuple[list[str], list
             fails.append(
                 f"{WORKFLOW} does not build its matrix from `check_fuzz_inventory.py --matrix`, "
                 "so a fuzz crate can exist that it does not compile"
+            )
+        elif f"{CHANGED_FILE}=" not in workflow_text or 'CHANGED="' in workflow_text:
+            fails.append(
+                f"{WORKFLOW} does not hand `--matrix` its changed paths in the file `{CHANGED_FILE}` "
+                "names: paths in the environment stop the step at 128 KiB, before the script runs"
             )
         if "check_fuzz_inventory.py --floors" not in workflow_text:
             fails.append(
@@ -565,6 +576,19 @@ def run(root: Path, weekly: tuple[str, ...] = WEEKLY) -> int:
     return 0
 
 
+def changed_paths(path: str | None) -> list[str]:
+    """The changed paths in the file `path` names, one per line; none when
+    no file is named (a push or a dispatch, which compiles every harness).
+    A named file that cannot be read is an error, not an empty change."""
+    if not path:
+        return []
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise GateError(f"{CHANGED_FILE}={path} cannot be read: {exc}") from exc
+    return [line for line in text.splitlines() if line]
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args == ["--selftest"]:
@@ -572,8 +596,8 @@ def main() -> int:
 
         return test_check_fuzz_inventory.selftest()
     if args == ["--matrix"]:
-        changed = [line for line in os.environ.get("CHANGED", "").splitlines() if line]
         try:
+            changed = changed_paths(os.environ.get(CHANGED_FILE))
             print(json.dumps(matrix(ROOT, os.environ.get("RUST_TESTS", "all"), changed)))
         except GateError as exc:
             print(f"FAIL: {exc}", file=sys.stderr)

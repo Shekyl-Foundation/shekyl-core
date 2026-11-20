@@ -1,0 +1,231 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# One labelled pull request's `merge-ready` re-test against the newest
+# `dev` (ruled 2026-11-19; scripts/ci/merge_ready.py has the status).
+# Called by merge-ready.yml when the label passes its check, and by
+# merge-ready-dev.yml for each labelled pull request a merge reaches.
+#
+#   re-test  checks out the pull request's head, fetches the newest `dev`
+#            and merges it in locally (the branch is never changed), then
+#            runs the tests the pull request shares with everything merged
+#            since its head was last ready (merge_ready_overlap.py --scope,
+#            against the `dev` it merged) with the Rust job's commands
+#            (scripts/ci/rust_scoped_tests.sh), inside a time budget.
+#            Read-only: it runs the pull request's code and holds no write
+#            token.
+#   report   posts `merge-ready` on the head: `ready`, or `red` with the
+#            label taken off and a comment naming the merges and the
+#            failing tests (a conflict with `dev`, the time budget, a setup
+#            step that failed). Posts nothing when a newer re-test cancelled
+#            this one, the head moved, or the label came off.
+#
+# A red re-test is the pull request's, not the run's (ruled 2026-11-19): a
+# push run on `dev` that turned red for it would mark the `dev` commit red
+# when `dev` is not. So the merge and the tests steps end green and hand
+# their verdict to the report as job outputs (`conflict`, `tests_failed`,
+# `timed_out`); only a fault of the jobs themselves fails the run. Outputs,
+# not log text: the log carries each step's script, so text a step can
+# print is already in it before the step runs.
+#
+# One re-test per pull request at a time, the newest: a re-test entering
+# the group cancels the one running, whichever workflow started either.
+# The newest fetches the newest `dev`, and its scope runs from the last
+# `ready`, so it covers whatever the cancelled one would have. The group
+# sits on the job, not on the callers: merge-ready-dev.yml runs on pushes to
+# `dev`, where no job may cancel its own workflow's runs
+# (scripts/ci/check_dev_push_runs_finish.py), and this file is no such
+# workflow.
+
+name: merge-ready-retest
+
+on:
+  workflow_call:
+    inputs:
+      pr:
+        type: number
+        required: true
+      head:
+        type: string
+        required: true
+      base:
+        description: the branch the pull request merges into, fetched when the re-test starts
+        type: string
+        required: true
+      dev:
+        description: the `dev` the plan spoke for; the report's fallback when the re-test never fetched one
+        type: string
+        required: true
+      since:
+        description: the `dev` the head was last ready against (merge_ready.py)
+        type: string
+        required: true
+      merged:
+        description: the merges the plan named, `#N` each; the report's fallback
+        type: string
+        required: true
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  APT_SET_CONF: |
+    tee -a /etc/apt/apt.conf.d/80-custom << EOF
+    Acquire::Retries "3";
+    Acquire::http::Timeout "120";
+    Acquire::ftp::Timeout "120";
+    EOF
+
+jobs:
+  retest:
+    name: re-test
+    runs-on: ubuntu-latest
+    outputs:
+      dev: ${{ steps.merge.outputs.dev }}
+      merged: ${{ steps.scope.outputs.merged }}
+      crates: ${{ steps.scope.outputs.crates }}
+      conflict: ${{ steps.merge.outputs.conflict }}
+      tests_failed: ${{ steps.tests.outputs.tests_failed }}
+      timed_out: ${{ steps.tests.outputs.timed_out }}
+    concurrency:
+      group: merge-ready-retest-${{ inputs.pr }}
+      cancel-in-progress: true
+    # The tests' own budget is TEST_BUDGET_MINUTES below; this bounds the
+    # setup around them. The Rust job's setup steps took 2 to 39 minutes
+    # over 18 green runs (2026-11-19), the 39 an apt mirror at 81 kB/s.
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    container:
+      image: ubuntu:24.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      # The Rust job's container setup (rust-audit-test.yml), for the
+      # same toolchain and the same cache, and python3 for the scope.
+      - name: set apt conf
+        run: ${{ env.APT_SET_CONF }}
+      - name: update apt
+        run: apt update
+      - name: install dependencies
+        run: apt -y install build-essential git curl pkg-config libssl-dev valgrind libclang-dev clang python3
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.head }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - name: merge the newest dev into the head
+        # Locally: the pull request's branch is never changed. `dev` is
+        # fetched now, not taken from the plan, so a re-test that started
+        # later never tests an older `dev`. A conflict is the pull
+        # request's red result ("does not merge with dev"), handed to the
+        # report; the steps after it are skipped.
+        id: merge
+        shell: bash
+        env:
+          BASE: ${{ inputs.base }}
+        run: |
+          git fetch --no-tags origin "$BASE"
+          dev=$(git rev-parse FETCH_HEAD)
+          echo "dev=$dev" >> "$GITHUB_OUTPUT"
+          if ! git -c user.name=merge-ready -c user.email=merge-ready@invalid merge --no-edit --no-ff "$dev"; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::error::#${{ inputs.pr }} does not merge with $BASE at ${dev:0:10}:"
+            git diff --name-only --diff-filter=U
+            exit 0
+          fi
+          git submodule update --init --recursive
+          echo "re-testing $(git rev-parse --short=10 HEAD^1) (the head) merged with ${dev:0:10}"
+      - name: install Rust
+        if: steps.merge.outputs.conflict != 'true'
+        uses: ./.github/actions/install-rust
+      - if: steps.merge.outputs.conflict != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The Rust job's cache: its key is the job id `rust-audit-and-test`
+          # plus the toolchain and the lockfiles, and `shared-key` puts the
+          # same name in this job's key. The workspaces are the Rust job's,
+          # so the lockfile hash matches too. Read-only: only `dev`'s push
+          # runs of the Rust job save it.
+          shared-key: rust-audit-and-test
+          workspaces: |
+            rust -> target
+            docs/formal/checkct/dynamic -> target
+          save-if: false
+      - name: the tests both changes reach
+        if: steps.merge.outputs.conflict != 'true'
+        id: scope
+        env:
+          HEAD_SHA: ${{ inputs.head }}
+          DEV: ${{ steps.merge.outputs.dev }}
+          SINCE: ${{ inputs.since }}
+        run: python3 scripts/ci/merge_ready_overlap.py --scope --head "$HEAD_SHA" --dev "$DEV" --since "$SINCE"
+      - name: install cargo-nextest
+        if: steps.merge.outputs.conflict != 'true' && steps.scope.outputs.rust_tests != 'none'
+        run: bash scripts/ci/rust_scoped_tests.sh install-nextest
+      - name: the shared tests against the newest dev
+        if: steps.merge.outputs.conflict != 'true'
+        id: tests
+        working-directory: rust
+        shell: bash
+        env:
+          RUST_TESTS: ${{ steps.scope.outputs.rust_tests }}
+          RUST_DOC_PKGS: ${{ steps.scope.outputs.rust_doc_pkgs }}
+          # A full-workspace re-test took 103 minutes at the median and 140
+          # at most over 13 green Rust jobs (2026-11-19, setup included);
+          # this is about twice the slowest test phase seen (125 + 2.5).
+          TEST_BUDGET_MINUTES: 240
+        run: |
+          if [ "$RUST_TESTS" = none ]; then
+            echo "scope: no shared Rust test"
+            exit 0
+          fi
+          rc=0
+          timeout --kill-after=60 "${TEST_BUDGET_MINUTES}m" sh -c \
+            'bash ../scripts/ci/rust_scoped_tests.sh nextest && bash ../scripts/ci/rust_scoped_tests.sh doctests' || rc=$?
+          if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+            echo "timed_out=true" >> "$GITHUB_OUTPUT"
+            echo "::error::the tests passed the re-test's time budget (${TEST_BUDGET_MINUTES} min)"
+          elif [ "$rc" -ne 0 ]; then
+            echo "tests_failed=true" >> "$GITHUB_OUTPUT"
+            echo "::error::the shared tests failed against the newest dev (exit $rc); the report posts it on the pull request"
+          fi
+
+  report:
+    name: report
+    needs: retest
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5  # API calls and one log read
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      # The run's own commit: the pushed `dev`, or on the label the pull
+      # request's merge with `dev`, whose workflow this already is.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/merge_ready.py
+            scripts/ci/failed_tests.py
+            scripts/ci/workflow_pass.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEV: ${{ needs.retest.outputs.dev || inputs.dev }}
+          SINCE: ${{ inputs.since }}
+          MERGED: ${{ needs.retest.outputs.merged || inputs.merged }}
+          CRATES: ${{ needs.retest.outputs.crates }}
+          CONFLICT: ${{ needs.retest.outputs.conflict }}
+          TESTS_FAILED: ${{ needs.retest.outputs.tests_failed }}
+          TIMED_OUT: ${{ needs.retest.outputs.timed_out }}
+        run: python3 scripts/ci/merge_ready.py report "${{ inputs.pr }}" "${{ inputs.head }}" "${{ needs.retest.result }}"
