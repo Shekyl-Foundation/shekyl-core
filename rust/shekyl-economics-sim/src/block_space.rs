@@ -42,6 +42,7 @@ use shekyl_mempool::policy::{make_room, template_order, trim_to, FeeRate, Limits
 use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
 
+use crate::economy::TemplateRule;
 use crate::fee_model::{FeePoint, OrdinaryTx};
 use crate::median_window::MedianWindow;
 use crate::rung_mix::{FeePriority, PerRung, RungTraffic};
@@ -216,6 +217,10 @@ struct PoolOffer {
     marginal: Option<FillStop>,
     past_bodies: u64,
     past_fees_atomic: u64,
+    /// The fees the fill was offered for the bodies it listed: the bodies'
+    /// own under the gross rule, each scaled under the miner's net
+    /// ([`TemplateRule::offered_fee`]).
+    offered_fees_atomic: u64,
 }
 
 impl Filled {
@@ -552,6 +557,7 @@ impl BlockSpace {
         fill: &mut Fill<'_>,
         height: u64,
         rungs: &mut PerRung<RungTraffic<u64>>,
+        offered_fee: &impl Fn(u64) -> u64,
     ) -> PoolOffer {
         let mut record = PoolOffer::default();
         self.listed.clear();
@@ -567,12 +573,16 @@ impl BlockSpace {
             if closed.contains(&head.weight) {
                 continue;
             }
-            let offered = self.group_count(&group);
-            if offered == 0 {
+            let count = self.group_count(&group);
+            if count == 0 {
                 continue;
             }
-            let admission = fill.admit_up_to(head.weight, head.fee, offered);
+            let admission = fill.admit_up_to(head.weight, offered_fee(head.fee), count);
             let taken = admission.taken;
+            record.offered_fees_atomic = taken
+                .checked_mul(offered_fee(head.fee))
+                .and_then(|fees| record.offered_fees_atomic.checked_add(fees))
+                .expect("the offered fees of a listing fit the fill's u64 fees");
             if let Some(refusal) = admission.refusal {
                 closed.push(head.weight);
                 // A later weight can still be listed. The last refusal is
@@ -684,6 +694,7 @@ impl BlockSpace {
 
     /// [`Self::fill`], then the producer's `own` bodies, when it lists any,
     /// in the penalty-free room the pool's listing leaves.
+    #[cfg(test)]
     pub(crate) fn fill_with_own(
         &mut self,
         height: u64,
@@ -692,6 +703,25 @@ impl BlockSpace {
         at: &FeePoint<'_>,
         own: Option<OwnBodies>,
     ) -> Filled {
+        self.fill_ruled(height, medians, arrivals, at, own, TemplateRule::Gross)
+    }
+
+    /// [`Self::fill_with_own`] under the template `rule`
+    /// (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37). Production's fill is
+    /// offered each body at [`TemplateRule::offered_fee`] at this block's
+    /// σ and burn: its own fee under the gross rule, the scaled fee that
+    /// makes the gross test the miner's-net test under the other. The
+    /// bodies' own fees are what the block records and pays.
+    pub(crate) fn fill_ruled(
+        &mut self,
+        height: u64,
+        medians: EffectiveMedian,
+        arrivals: &[Arrival],
+        at: &FeePoint<'_>,
+        own: Option<OwnBodies>,
+        rule: TemplateRule,
+    ) -> Filled {
+        let offered = |fee: u64| rule.offered_fee(fee, at.sigma_scaled, at.burn_pct_scaled);
         let limit = Limits::of_block_limit(medians.limit(at.params).to_raw()).max_weight;
         let expired = self.expire(height);
         let mut evicted = PerRung::<u64>::default();
@@ -718,13 +748,14 @@ impl BlockSpace {
             at.params,
         )
         .expect("sim trajectory stays within the reward's arithmetic domain");
-        let pool = self.offer(&mut fill, height, &mut rungs);
+        let pool = self.offer(&mut fill, height, &mut rungs, &offered);
         self.trim(limit, &mut evicted);
         self.drop_empty();
+        let own_offered_fee = own.map_or(0, |own| offered(own.tx.fee_atomic));
         let own = own.map_or_else(OwnListing::default, |own| {
             let room = fill.penalty_free_body_room() / own.tx.weight.max(1);
             let txs = fill
-                .admit_up_to(own.tx.weight, own.tx.fee_atomic, room)
+                .admit_up_to(own.tx.weight, offered(own.tx.fee_atomic), room)
                 .taken;
             OwnListing {
                 txs,
@@ -762,11 +793,23 @@ impl BlockSpace {
                 penalty_atomic,
             },
         };
+        let own_offered = filled
+            .own
+            .txs
+            .checked_mul(own_offered_fee)
+            .expect("the own bodies' offered fees fit");
         assert_eq!(
-            filled.fees_atomic(),
+            pool.offered_fees_atomic + own_offered,
             fill.fees(),
-            "every listed fee is some rung's"
+            "every fee the fill was offered is a listed body's"
         );
+        if rule == TemplateRule::Gross {
+            assert_eq!(
+                filled.fees_atomic(),
+                fill.fees(),
+                "every listed fee is some rung's"
+            );
+        }
         filled
     }
 }

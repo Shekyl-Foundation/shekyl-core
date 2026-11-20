@@ -230,7 +230,7 @@ fn the_cohort_walk_is_the_templates_walk_over_every_transaction() {
         let mut space = space_of(pool);
         let mut cohort_fill = empty();
         let mut rungs = PerRung::default();
-        space.offer(&mut cohort_fill, 1_000, &mut rungs);
+        space.offer(&mut cohort_fill, 1_000, &mut rungs, &|fee| fee);
         let included: u64 = rungs.sum(|r| r.carried_txs);
 
         let mut every = every_transaction(pool);
@@ -597,7 +597,7 @@ fn the_three_rung_walk_is_the_templates_walk_rung_by_rung() {
         let mut space = space_of(pool);
         let mut cohort_fill = empty();
         let mut rungs = PerRung::<RungTraffic<u64>>::default();
-        space.offer(&mut cohort_fill, 1_000, &mut rungs);
+        space.offer(&mut cohort_fill, 1_000, &mut rungs, &|fee| fee);
 
         let mut every = every_transaction(pool);
         every.sort_by(|a, b| a.0.template(b.0));

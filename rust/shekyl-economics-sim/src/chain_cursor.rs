@@ -23,6 +23,7 @@ use shekyl_economics::{
 };
 
 use crate::block_space::{Arrival, BlockSpace, Filled, OwnBodies};
+use crate::economy::{fee_units_scaled, fees_paid_burn_pct, with_burn_pct, BurnSignal};
 use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx, MILLI};
 use crate::rung_mix::{FeePriority, PerRung, RungMix, RungSplit, ADMISSION};
@@ -34,6 +35,10 @@ use crate::volume_window::VolumeWindow;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChainCursor {
     window: VolumeWindow,
+    /// C2's window: each block's fees in units of its own Standard fee
+    /// ([`crate::economy::fee_units_scaled`]), over the count's span. Read
+    /// only on [`crate::economy::BurnSignal::FeesPaid`].
+    fee_units: VolumeWindow,
     space: BlockSpace,
     split: RungSplit,
     /// High's fee at the fold's first block, which an elastic mix's
@@ -212,7 +217,10 @@ impl ChainCursor {
         let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = economic.emission_schedule().share_at(step.chain_height);
-        let burn_pct = calc_burn_pct_at(volume, supply, economic);
+        let burn_pct = match params.economy.burn {
+            BurnSignal::Count => calc_burn_pct_at(volume, supply, economic),
+            BurnSignal::FeesPaid => fees_paid_burn_pct(self.fee_units.operand(), supply, economic),
+        };
         let generated = u64::try_from(step.already_generated.min(u128::from(u64::MAX)))
             .expect("clamped to the chain's u64 supply rail");
         let fee_point = FeePoint {
@@ -261,10 +269,17 @@ impl ChainCursor {
                 },
             }
         });
-        let filled =
-            self.space
-                .fill_with_own(step.chain_height, medians, &arrivals, &fee_point, own);
+        let filled = self.space.fill_ruled(
+            step.chain_height,
+            medians,
+            &arrivals,
+            &fee_point,
+            own,
+            params.economy.template,
+        );
         self.window.push(filled.carried_txs());
+        self.fee_units
+            .push(fee_units_scaled(filled.fees_atomic(), tx.fee_atomic));
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,
             median_weight: medians.effective_median.to_raw(),
@@ -277,6 +292,18 @@ impl ChainCursor {
             params: economic,
         })
         .expect("the fill priced this block at this weight");
+        // C2 splits the fees at its own burn; the count's arms split them at
+        // the burn the composition derived, which is `burn_pct`.
+        let paid = match params.economy.burn {
+            BurnSignal::Count => paid,
+            BurnSignal::FeesPaid => with_burn_pct(
+                paid,
+                filled.fees_atomic(),
+                burn_pct,
+                step.closed_shards,
+                economic,
+            ),
+        };
         assert_eq!(
             paid.paid.to_raw(),
             filled.paid_reward,

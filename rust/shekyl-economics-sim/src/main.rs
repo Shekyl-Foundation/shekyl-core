@@ -10,6 +10,7 @@ mod cartel;
 mod chain_cursor;
 mod committed_fixture;
 mod distribution;
+mod economy;
 mod engine;
 mod escalation;
 mod esr10;
@@ -41,6 +42,7 @@ mod step_response;
 mod stranding;
 mod swing;
 mod volume_window;
+mod whole_economy;
 mod window_stuffer;
 // The `RecordedChainFixture` recorder is test-substrate only: it
 // generates / verifies `docs/test_vectors/economics/*.json` for the
@@ -129,6 +131,8 @@ const GROWTH_TRACE_CONFLICTS: &[&str] = &[
     "--seed-spread",
     "--control-flat-fee",
     "--control-steady-traffic",
+    "--economies",
+    "--economies-slice",
 ];
 
 /// The other flag `--growth-trace` refuses, when `args` asks for the trace
@@ -203,6 +207,42 @@ fn main() {
              steady): it takes no other mode, no control flag and no --seed-spread; \
              refusing {flag}"
         ));
+    }
+    // §5.37: the three economies graded whole. It names its own cells
+    // (every economy, rule, scenario, zone and seed), so it takes no
+    // control flag and no spread; overrides are refused above.
+    let economies_slice = argv.iter().any(|arg| arg == "--economies-slice");
+    if economies_slice || argv.iter().any(|arg| arg == "--economies") {
+        if control || steady || argv.iter().any(|arg| arg == "--seed-spread") {
+            refuse(
+                "--economies runs its own cells on standard traffic at every declared seed: it \
+                 takes no control flag and no --seed-spread",
+            );
+        }
+        let started = std::time::Instant::now();
+        let mut narration = String::new();
+        let scope = if economies_slice {
+            whole_economy::Scope::Nightly
+        } else {
+            whole_economy::Scope::Full
+        };
+        let summary = whole_economy::run(&mut narration, &SimParams::default(), scope)
+            .expect("String sink is infallible");
+        eprint!("{narration}");
+        let json = serde_json::to_string(&summary).expect("JSON serialization failed");
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(json.as_bytes()).expect("write failed");
+        stdout.write_all(b"\n").expect("write failed");
+        eprintln!(
+            "{} wall time: {:.0} s",
+            if economies_slice {
+                "--economies-slice"
+            } else {
+                "--economies"
+            },
+            started.elapsed().as_secs_f64()
+        );
+        return;
     }
     if argv.iter().any(|arg| arg == "--growth-trace") {
         let mut narration = String::new();

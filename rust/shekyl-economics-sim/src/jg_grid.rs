@@ -66,7 +66,7 @@ const RAILS_AT_ONE: u64 = 1_000_000;
 
 /// The design load, in 2-in/2-out spends a block
 /// (`DAEMON_REDB_STORE.md` §1.3a.6, ruling 1).
-const DESIGN_LOAD_SPENDS: u64 = 30;
+pub(crate) const DESIGN_LOAD_SPENDS: u64 = 30;
 
 /// The design load as ordinary transactions a block: its spends' weight
 /// over the ordinary 1-in/2-out's, rounded up, both at genesis depth and

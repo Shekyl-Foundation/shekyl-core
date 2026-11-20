@@ -460,6 +460,26 @@ pub(crate) trait FoldProbe {
 
     /// The block just priced.
     fn seen(&mut self, _seen: &BlockSeen<'_, '_>) {}
+
+    /// Whether the fold stops, instead of refusing, when its burn has
+    /// passed everything emitted: the supply break a schedule whose fees
+    /// are exogenous reaches (§5.28.1). The fold ends at the last whole
+    /// year before it. Every fold but the whole-economy table refuses.
+    fn stops_at_supply_break(&self) -> bool {
+        false
+    }
+}
+
+/// The stakers' part of the penalty `priced`'s weight withheld, on the
+/// run's destination (C1, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37): zero
+/// on production's. The fold mints it at the block; a reader of the stakers'
+/// income calls this for the same figure.
+pub(crate) fn penalty_to_stakers(priced: &PricedBlock<'_>, params: &SimParams) -> u64 {
+    params.economy.penalty.stakers_part(
+        priced.filled.past_free.penalty_atomic,
+        priced.filled.block_weight,
+        priced.medians.effective_median.to_raw(),
+    )
 }
 
 /// The probe that asks nothing.
@@ -492,6 +512,9 @@ pub(crate) fn a1_year_aggs_probed(
     let mut chain = ChainCursor::default();
 
     for block in 0..total_blocks {
+        if total_burned > already_generated && probe.stops_at_supply_break() {
+            break;
+        }
         let abs_height = block + config.genesis_height_offset;
         // The block is built against the tree as it stands. The fee prices
         // that count; archival bytes inside `add_block` read it too, and the
@@ -545,7 +568,10 @@ pub(crate) fn a1_year_aggs_probed(
         year_total_emission_atomic += u128::from(paid_reward);
         year_rungs += priced.filled.rungs;
         let waiting = priced.filled.waiting;
-        already_generated += u128::from(paid_reward);
+        // C1 pays the stakers' part of the penalty at this block; production
+        // pays none of it. Either way the rest stays unminted.
+        already_generated +=
+            u128::from(paid_reward) + u128::from(penalty_to_stakers(&priced, params));
         probe.seen(&BlockSeen {
             block,
             priced: &priced,
