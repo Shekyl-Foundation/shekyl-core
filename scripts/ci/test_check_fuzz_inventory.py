@@ -50,7 +50,8 @@ version = "0.1.0"
 """
 
 WORKFLOW = (
-    "jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+    "jobs:\n  scope:\n    steps:\n"
+    '      - run: CHANGED_FILE="$changed_file" python3 scripts/ci/check_fuzz_inventory.py --matrix\n'
     "      - run: python3 scripts/ci/check_fuzz_inventory.py --floors\n"
 )
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
@@ -237,7 +238,13 @@ def selftest() -> int:
     )
     r.expect(
         "a compile workflow that does not check the floors", 1, "does not check the coverage floors",
-        workflow="jobs:\n  scope:\n    steps:\n      - run: python3 scripts/ci/check_fuzz_inventory.py --matrix\n",
+        workflow="jobs:\n  scope:\n    steps:\n"
+        '      - run: CHANGED_FILE="$changed_file" python3 scripts/ci/check_fuzz_inventory.py --matrix\n',
+    )
+    r.expect(
+        "a compile workflow that hands the changed paths over in the environment", 1,
+        "does not hand `--matrix` its changed paths in the file",
+        workflow=WORKFLOW.replace('CHANGED_FILE="$changed_file"', 'CHANGED="$changed"'),
     )
     row = "shekyl-a/fuzz_one\t{cov}\t{run}\t{commit}\t{second}\t{second_run}\t{tolerance}\n"
 
@@ -361,6 +368,27 @@ def selftest() -> int:
     r.expect_matrix("the workspace lockfile reaches every harness", "none", ["rust/Cargo.lock"], ["shekyl-a"])
     r.expect_matrix("the workflow reaches every harness", "none", [gate.WORKFLOW], ["shekyl-a"])
     r.expect_matrix("a classifier that says all", "all", [], ["shekyl-a"])
+    # The changed paths come from a file of any size: a release pull
+    # request's diff against `main` listed 216,208 bytes of paths, past the
+    # 128 KiB Linux allows one environment string.
+    with tempfile.TemporaryDirectory() as raw:
+        listed_paths = [f"rust/shekyl-a/src/module_{i:05}/file_with_a_long_name.rs" for i in range(6000)]
+        big = Path(raw) / "changed"
+        big.write_text("\n".join(listed_paths) + "\n", encoding="utf-8")
+        got = gate.changed_paths(str(big))
+        if big.stat().st_size <= 128 * 1024 or got != listed_paths:
+            r.failures.append(f"changed_paths over {big.stat().st_size} bytes: {len(got)} of {len(listed_paths)}")
+        else:
+            r.passed += 1
+        if gate.changed_paths(None) != [] or gate.changed_paths("") != []:
+            r.failures.append("changed_paths with no file named is not the empty change")
+        else:
+            r.passed += 1
+        try:
+            gate.changed_paths(str(Path(raw) / "absent"))
+            r.failures.append("changed_paths read a file that is not there as the empty change")
+        except gate.GateError:
+            r.passed += 1
     if r.failures:
         print("SELFTEST FAIL:")
         for failure in r.failures:
