@@ -70,7 +70,8 @@ jobs:
           sync-time: true
           disable-cache: true
           prepare: |
-            pkg install -y bash curl git python3
+            # ca_root_nss: cargo's TLS finds no CA bundle in the base image.
+            pkg install -y bash ca_root_nss curl git python3
           run: |
             # The action runs this under `sh -e`: each phase's status is
             # captured with `|| rc=$?`, so a failure is recorded, not fatal.
