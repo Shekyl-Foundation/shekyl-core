@@ -237,6 +237,11 @@ ARMED=(
   # Observed red 2026-11-13 against a wallet server rebuilt without the
   # close at shutdown: panicked at "SIGTERM: the close is logged".
   engine::regtest_e2e::send_durable::each_stop_signal_closes_the_wallet
+  # The dependency round (redb 4.6, whose close waits for the reads in
+  # progress): SIGTERM while a refresh is scanning 1,500 blocks closes the
+  # wallet, the next server finds what was scanned, and the daemon's
+  # SIGTERM stops it. Prints both closes' durations.
+  engine::regtest_e2e::send_durable::a_stop_during_a_scan_closes_the_wallet_and_the_daemon_stops
   # Observed red 2026-11-13 against a wallet server rebuilt to mint the
   # hand-off when the dispatch save failed: the submit answered ACCEPTED
   # (verdict_saved false) where it must refuse -29131 SAVE_IO_FAILED (the
