@@ -333,6 +333,27 @@ impl RpcSession {
         })
     }
 
+    /// Makes the directory a self-hosted session's server keeps its wallets in.
+    ///
+    /// Called immediately before a wallet is created or restored there. The
+    /// server refuses a missing directory (`-29009 WALLET_DIR_MISSING`). A
+    /// command that makes no wallet makes no folder. An external server
+    /// keeps its own directory, and this call makes nothing for it.
+    ///
+    /// # Errors
+    /// A local refusal naming the directory and the system's cause.
+    pub fn make_wallet_dir(&self) -> Result<(), crate::outcome::CommandFailed> {
+        let Some(hosted) = &self.hosted else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(&hosted.wallet_dir).map_err(|e| {
+            crate::outcome::refusal(format!(
+                "cannot create wallet dir {}: {e}",
+                hosted.wallet_dir.display()
+            ))
+        })
+    }
+
     /// Connect to an externally managed `shekyl-wallet-rpc` **server** (not the
     /// node daemon — cf. [`crate::daemon::DaemonClient`]).
     ///
@@ -520,27 +541,6 @@ impl RpcSession {
     /// value is what the caller puts in `Err`, so a script stops. Dropping
     /// it is a warning.
     #[must_use = "reporting an RPC error fails the command"]
-    /// Makes the directory a self-hosted session's server keeps its wallets
-    /// in, right before a wallet is created or restored there: the server
-    /// refuses a missing one (`-29009 WALLET_DIR_MISSING`), and nothing
-    /// else a session does needs it, so a command that makes no wallet (an
-    /// `rpc` enrollment word, an open) makes no folder. An external
-    /// server's directory is its own, and nothing is made for it here.
-    ///
-    /// # Errors
-    /// A local refusal naming the directory and the system's cause.
-    pub fn make_wallet_dir(&self) -> Result<(), crate::outcome::CommandFailed> {
-        let Some(hosted) = &self.hosted else {
-            return Ok(());
-        };
-        std::fs::create_dir_all(&hosted.wallet_dir).map_err(|e| {
-            crate::outcome::refusal(format!(
-                "cannot create wallet dir {}: {e}",
-                hosted.wallet_dir.display()
-            ))
-        })
-    }
-
     pub fn report(&self, context: &str, err: &RpcError) -> crate::outcome::CommandFailed {
         let code = err.code().unwrap_or(crate::outcome::TRANSPORT);
         let data = match err {
