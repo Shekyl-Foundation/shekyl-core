@@ -327,11 +327,13 @@ ARMED_SLOW=(
   # a CompleteTree bond filled, posted, served, its next shard pulled,
   # a corrupt body and a deleted store repaired, and the fill refused past
   # the discard boundary; and a market bond refused on a shard that is not
-  # final, then filled, posted and served. Green 2026-11-19, local debug
-  # build, the two side by side: CompleteTree 12 644 s (shards close at
-  # 405 and 1 328, the pull in epoch 1 with SEB 1 500); market 7 706 s.
-  # Red before the freeze-epoch pull: shard 1 closed in epoch 1 and the
-  # horizon wait timed out, "pscan did not observe the finality horizon".
+  # final, then filled, posted and served. Green 2026-11-20, local debug
+  # build, the two side by side: CompleteTree 12 888 s (shard 1 closes at
+  # 1 328 and is pulled in its close epoch, before its freeze epoch opens
+  # at 1 500 with SEB 1 500); market 7 950 s (shard 0 closes at 405, is
+  # filled before the discard block 3 000, priced by pass 0 at 2 999).
+  # Red 2026-11-19, before the walk pulled in the close epoch: the horizon
+  # wait timed out, "pscan did not observe the finality horizon".
   engine::regtest_e2e::body_fill::e2e_complete_tree_bond_fills_serves_pulls_and_reconciles
   engine::regtest_e2e::body_fill::e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves
 )
