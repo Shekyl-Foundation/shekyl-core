@@ -483,6 +483,14 @@ case "$GATE_LANE" in
     ;;
 esac
 
+# A lane that lists no gate would run nothing and exit green (rule 47).
+# The nightly workflow's lane probe trusts a lane's case arm above to mean
+# the lane has gates; this is what makes that true.
+[ "${#LANE_GATES[@]}" -gt 0 ] || {
+  echo "FATAL: GATE_LANE '$GATE_LANE' lists no gate: an empty lane would pass having run nothing" >&2
+  exit 1
+}
+
 for t in "${LANE_GATES[@]}"; do
   set +e
   cargo test -p shekyl-engine-core --lib "$t" \
