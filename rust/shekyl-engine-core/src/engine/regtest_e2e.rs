@@ -4860,8 +4860,15 @@ async fn e2e_emission_claim_accepted_and_applied() {
     /// serving host is up before the epoch it serves begins.
     const BOND_ROOM: u64 = 48;
     /// How long the daemon's managed Tor may take to become usable, and the
-    /// persona's serving host to pin its serve set.
+    /// persona's serving host to pin its serve set once it starts.
     const TOR_READY: Duration = Duration::from_secs(300);
+    /// How long the persona's serving host may take to pin its serve set
+    /// from `start_serving_if_staker`: the production launch standoff the
+    /// serving task draws first, `U[0, DEFAULT_SERVING_LAUNCH_WINDOW]`
+    /// (`stake_timing.rs`), then its own start inside `TOR_READY`. The walk
+    /// runs the production start, standoff included, so it waits it out.
+    const SERVING_PINNED: Duration =
+        super::stake_timing::DEFAULT_SERVING_LAUNCH_WINDOW.saturating_add(TOR_READY);
     /// Wall-clock time for the persona's onion descriptor to reach the
     /// directories before the first read of the served epoch.
     const DESCRIPTOR_SETTLE: Duration = Duration::from_secs(60);
@@ -5031,11 +5038,12 @@ async fn e2e_emission_claim_accepted_and_applied() {
         .await
         .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
         .expect("a staker with a confirmed bond starts a serving host");
-    let serving_up = Instant::now() + TOR_READY;
+    let serving_up = Instant::now() + SERVING_PINNED;
     while serving.posture().is_none() {
         assert!(
             Instant::now() < serving_up,
-            "the persona's serving host did not pin its serve set within {TOR_READY:?}"
+            "the persona's serving host did not pin its serve set within {SERVING_PINNED:?} \
+             (its launch standoff and its start)"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
