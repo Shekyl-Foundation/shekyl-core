@@ -213,8 +213,11 @@ def parse(status: dict | None) -> dict | None:
 
 
 def statuses(sha: str) -> list[dict]:
-    """The head's newest status per context."""
-    return json.loads(gh(f"repos/{repo()}/commits/{sha}/status"))["statuses"]
+    """The head's newest status per context, every page of them."""
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/commits/{sha}/status?per_page=100", "--jq", ".statuses[]"],
+        check=True, capture_output=True, text=True).stdout
+    return [json.loads(x) for x in out.splitlines() if x]
 
 
 def newest(sts: list[dict]) -> dict | None:
@@ -373,12 +376,16 @@ def with_suite_times(runs: list[dict]) -> list[dict]:
 
 
 def open_threads(pr: int) -> int:
+    """The review threads still open, over every page of them."""
     owner, name = repo().split("/")
-    query = ("query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){"
-             "reviewThreads(first:100){nodes{isResolved}}}}}")
-    data = json.loads(gh("graphql", "-f", f"query={query}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"p={pr}"))
-    nodes = data["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
-    return sum(1 for n in nodes if not n["isResolved"])
+    query = ("query($o:String!,$n:String!,$p:Int!,$endCursor:String){repository(owner:$o,name:$n){"
+             "pullRequest(number:$p){reviewThreads(first:100,after:$endCursor){nodes{isResolved}"
+             "pageInfo{hasNextPage endCursor}}}}}")
+    out = subprocess.run(
+        ["gh", "api", "graphql", "--paginate", "-f", f"query={query}", "-f", f"o={owner}", "-f", f"n={name}",
+         "-F", f"p={pr}", "--jq", ".data.repository.pullRequest.reviewThreads.nodes[].isResolved"],
+        check=True, capture_output=True, text=True).stdout
+    return sum(1 for x in out.split() if x == "false")
 
 
 def output(key: str, value: str) -> None:
