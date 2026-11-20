@@ -1,8 +1,10 @@
 # `CBS-E1` link texture: what does a node's link look like to a watcher, and does a transaction stand out on it? Registration, 2026-11-20
 
-**State of this record: REGISTERED 2026-11-20, not started. Nothing has
-been collected. The run starts on Rick's go, after `v3.1.0-alpha.12`
-ships.** Everything under "Registered before the run" is fixed from the
+**State of this record: REGISTERED 2026-11-20, not started, WITH ONE
+PART OPEN: the load steps of the loaded hours (their times and rates) are
+not yet fixed, and are added as a dated amendment before any figure is
+read. Nothing has been collected. The run is approved (Rick, 2026-11-20)
+and starts after `v3.1.0-alpha.12` is deployed to the fleet.** Everything under "Registered before the run" is fixed from the
 moment this record is pushed. A change after that is a dated amendment
 that says what had been read by then. Results are added below.
 
@@ -43,10 +45,20 @@ It does not decide piece size, pace, or any of `CBS-E2`–`CBS-E7`.
 
 ## Registered before the run
 
-**Subject.** Three `v3.1.0-alpha.12` release nodes of the test fleet, none
-running a Tor relay: one clearnet only, under the record layer; one Tor
-only; one both. Rick names the hosts; their identities stay in
-`shekyl-dev`. The build is the release build: no measurement feature.
+**Subject.** Four `v3.1.0-alpha.12` release nodes of the test fleet, none
+running a Tor relay during the run:
+
+- one clearnet only, under the record layer;
+- one Tor only;
+- one on both connectors. Its Tor relay is stopped for the run and stays
+  stopped until Rick says otherwise;
+- one floor device (a Raspberry Pi 4), a measured transactor: it runs a
+  send loop of its own and is captured like the others. **It is reported
+  on its own line and is not pooled with the other three.**
+
+The hosts' identities stay in `shekyl-dev`. The build is the release
+build: no measurement feature. Other fleet hosts supply load and are not
+captured.
 
 **Instrument.** `shekyl-dev` `infrastructure/texture/capture.py`.
 
@@ -74,13 +86,20 @@ only; one both. Rick names the hosts; their identities stay in
 - **No contact with the daemon.** Nothing connects to it beyond the
   hourly status read, signals it or changes its configuration.
 
-**The run.** 72 hours from Rick's go. Capture starts with the run, and the
-record notes when the fleet reports synced.
+**The run.** The captures and the guard sampler start as early in the
+resync after the deploy as possible, and the record notes when the fleet
+reports synced. **The 72 hours count from the first accepted logged
+send.** What is captured before that is the `resync` segment.
 
 **The sends.** TRC-1's wallet send loop
-(`infrastructure/trc1/send_loop.py`) on one node, logging each send's
-times, with some hours at a higher rate. The record states which node and
-which hours. Each accepted send's serialized size is read from the daemon
+(`infrastructure/trc1/send_loop.py`) on the measured transactors, logging
+each send's times, started once mined coins mature and the sending
+wallets are funded. The record states which nodes ran a loop.
+
+**The loaded hours.** Inside the 72 hours, load steps run at registered
+times and rates. **OPEN: the steps, their times and their rates are not
+yet in this record.** They are added as an amendment, dated, before any
+figure is read. Each accepted send's serialized size is read from the daemon
 afterwards, as TRC-1 did.
 
 **The reduction.** `shekyl-dev` `scripts/texture/reduce.py`, run on each
@@ -109,9 +128,10 @@ host. Its definitions:
   bursts is the next burst's first packet time minus this burst's last.
   Reported at thresholds of **0.1 s and 1 s**.
 - **Segments.** Named from what was happening, fixed before reading:
-  - `resync`: from the start until the fleet reports synced;
-  - `ordinary`: the rest, outside the higher-rate hours;
-  - `high_rate`: the hours the send loop ran faster.
+  - `resync`: from the capture's start until the first accepted logged
+    send;
+  - `ordinary`: the 72 hours outside the load steps;
+  - one segment per load step of the loaded hours.
   A window belongs to the segment its first slot is in.
 - **Median split (secondary).** A clock hour is busy when its sent bytes
   on that connector are at or above the median hour's, else quiet. The
@@ -121,6 +141,11 @@ host. Its definitions:
   non-empty slots that starts within 10 s of the send's submit and whose
   total reaches the transaction's serialized size. Matched on each link's
   own series, and on the connector's summed series.
+- **Candidate runs.** For each matched send, the count of runs in the
+  10 s after its submit that reach its size. In the loaded hours sends are
+  close together and one run can be a candidate for several. Reported per
+  segment: the share of matched sends with exactly one candidate, and the
+  median, 90th percentile and maximum count.
 - **Send groups (TRC-1's).** Matched; not seen (accepted, no run reached
   its size); rejected by the daemon; failed before submit.
 - **The watcher's test.** Send windows against other windows, scored by
@@ -138,7 +163,7 @@ host. Its definitions:
    windows, the median, 90th and 99th percentiles and the maximum, for
    each link and for the connector's sum.
 3. Burst sizes and gaps at both thresholds.
-4. The send groups.
+4. The send groups, and the candidate runs per matched send.
 5. The watcher's test at 0.1 s, 1 s and 10 s, in the layout of TRC-1's
    table, pooled over links and on the connector's sum. On the Tor nodes,
    TRC-1's own test on the guard connections for the same hours, beside
