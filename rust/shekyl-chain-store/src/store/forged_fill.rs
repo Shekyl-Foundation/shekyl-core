@@ -187,6 +187,13 @@ pub(super) fn forged() -> &'static ForgedChain {
 /// chain's first `blocks` blocks, each judged as forged, and the chain
 /// record over them, carrying regtest's identity.
 ///
+/// The store is a copy of the prefix this test run verified
+/// ([`verified_prefix`]): judging the forged blocks is most of what these
+/// tests cost, and every test needs one of a few prefixes, so a run judges
+/// each once. The copy's tip is held to the corpus's block, and the chain
+/// record is rebuilt over the same blocks ([`regrown`]), which holds the
+/// wallet-side tree to every header's root.
+///
 /// # Panics
 ///
 /// If a block does not connect under `rules`, or connects as a block other
@@ -197,15 +204,162 @@ pub(super) fn store_with_prefix(
     horizons: Horizons,
     blocks: usize,
 ) -> (ChainStore, Grown) {
-    let store = ChainStore::with_horizons(
-        path.as_ref(),
-        crate::apply_policy::ApplyPolicy::default(),
-        horizons,
-    )
-    .expect("create the prefix store");
+    let path = path.as_ref();
+    let verified = verified_prefix(rules, horizons, blocks);
+    std::fs::copy(&verified, path).expect("copy the verified prefix");
+    let store =
+        ChainStore::with_horizons(path, crate::apply_policy::ApplyPolicy::default(), horizons)
+            .expect("open the copied prefix");
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded
+        .expect("a prefix has a tip");
+    assert_eq!(
+        (tip.height.to_raw(), tip.hash),
+        (
+            u64::try_from(blocks).expect("small") - 1,
+            forged().blocks[blocks - 1].block.hash()
+        ),
+        "the copied prefix ends at the forged chain's block"
+    );
+    (store, regrown(blocks))
+}
+
+/// The chain record over the forged chain's first `blocks` blocks, as
+/// connected: each block recorded on the wallet-side tree, which asserts
+/// the header's root at every one ([`Grown::record`]), nothing judged.
+fn regrown(blocks: usize) -> Grown {
     let mut grown = Grown::carrying(Identity::Regtest);
+    for forged in &forged().blocks[..blocks] {
+        grown.record(&forged.block, &forged.transactions);
+    }
+    grown
+}
+
+/// The store file holding the forged chain's first `blocks` blocks under
+/// `rules` and `horizons`, every block judged as forged by a process of
+/// this test run.
+///
+/// **One run, one binary.** The files live in a directory of this run
+/// alone ([`run_dir`]): nextest runs each test in a process of its own and
+/// names the run in `NEXTEST_RUN_ID`, so every process of one run shares
+/// it and no other run reads it; a `cargo test` run is one process, named
+/// by its id. A store is never trusted that this run did not verify
+/// (`CHAIN_FORGE.md`: nothing trusts a store it did not verify).
+///
+/// **Built once.** The first process to need a prefix builds it while it
+/// holds the schedule's lock file, and marks it verified
+/// (`<file>.verified`, written after the store closes) once every block has
+/// connected; a process that waited on the lock finds the mark. A file
+/// without its mark is a build that panicked, and is built again. Every
+/// shard close below the prefix is a rung built on the way, in height
+/// order, each from the one before, so a prefix is never judged from
+/// genesis twice whichever length a run asks for first. Two schedules build
+/// at once.
+fn verified_prefix(rules: RuleSet, horizons: Horizons, blocks: usize) -> std::path::PathBuf {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let dir = run_dir();
+    // The schedule: the rule set and the horizons, as their debug forms
+    // spell every lever (the difficulty, the epoch, the cap, the
+    // retention). Hashed within one binary, so a stable hash is not asked.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{rules:?} {horizons:?}").hash(&mut hasher);
+    let schedule = format!("{:016x}", hasher.finish());
+    let lock = std::fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{schedule}.lock")))
+        .expect("open the schedule's lock file");
+    lock.lock().expect("take the schedule's lock");
+    let name = |n: usize| dir.join(format!("{schedule}-{n}.redb"));
+    let rungs: Vec<usize> = forged()
+        .closes
+        .iter()
+        .map(|close| usize::try_from(close.to_raw()).expect("small") + 1)
+        .filter(|&rung| rung < blocks)
+        .chain([blocks])
+        .collect();
+    for rung in rungs {
+        build_prefix(&name(rung), rung, &name, rules, horizons);
+    }
+    name(blocks)
+}
+
+/// Build the prefix of `blocks` blocks at `file` under `rules` and
+/// `horizons`, from the longest shorter prefix `name` finds verified, and
+/// mark it verified; nothing if it is marked already. The caller holds the
+/// schedule's lock.
+fn build_prefix(
+    file: &std::path::Path,
+    blocks: usize,
+    name: &dyn Fn(usize) -> std::path::PathBuf,
+    rules: RuleSet,
+    horizons: Horizons,
+) {
+    let mark = |file: &std::path::Path| file.with_extension("verified");
+    if mark(file).is_file() {
+        return;
+    }
+    if file.exists() {
+        // A process of this run that panicked while it built.
+        std::fs::remove_file(file).expect("remove an unfinished prefix");
+    }
+    // The longest shorter prefix this run verified under the schedule.
+    let shorter = (1..blocks)
+        .rev()
+        .map(|n| (n, name(n)))
+        .find(|(_, f)| mark(f).is_file());
+    let mut grown = match shorter {
+        Some((n, from)) => {
+            std::fs::copy(from, file).expect("copy the shorter prefix");
+            regrown(n)
+        }
+        None => Grown::carrying(Identity::Regtest),
+    };
+    let store =
+        ChainStore::with_horizons(file, crate::apply_policy::ApplyPolicy::default(), horizons)
+            .expect("open the prefix being built");
     connect_forged(&store, &mut grown, rules, blocks);
-    (store, grown)
+    drop(store);
+    std::fs::File::create(mark(file)).expect("mark the prefix verified");
+}
+
+/// This test run's directory of verified prefixes, under the system's
+/// temporary directory. Directories of runs older than a day are removed
+/// when a run makes its own: a run ends with no hook to remove its own.
+fn run_dir() -> &'static std::path::Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let root = std::env::temp_dir().join("shekyl-chain-store-forged-fill");
+        let run = std::env::var("NEXTEST_RUN_ID")
+            .unwrap_or_else(|_| format!("process-{}", std::process::id()));
+        let dir = root.join(run);
+        std::fs::create_dir_all(&dir).expect("create the run's prefix directory");
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for entry in std::fs::read_dir(&root).expect("read the prefix root") {
+            let entry = entry.expect("a directory entry");
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|at| at.elapsed().ok())
+                .is_some_and(|age| age > day);
+            if old && entry.path() != dir {
+                if let Err(fault) = std::fs::remove_dir_all(entry.path()) {
+                    eprintln!(
+                        "a stale prefix directory stays: {}: {fault}",
+                        entry.path().display()
+                    );
+                }
+            }
+        }
+        dir
+    })
 }
 
 /// Connect the forged blocks from `grown`'s next height through the first
