@@ -59,7 +59,7 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 
 - **Problem.** "Ordinary size" and "ordinary pace" are not known numbers.
 - **Ruling.** The texture is read the way the watcher reads it: bytes on each connection over time, captured on the host, with no daemon change. Nothing for this is built in `shekyl-core`, and nothing lands in alpha.12's tree.
-- **Universality.** "Ordinary" is defined by Shekyl's own message set, which is the same on every connector, not by one transport's traffic.
+- **Universality.** The capture reads each connector's wire, so the texture is measured per connector. The rule derived from it is still one rule in the relay (`CBS-R3`), set by the connector where a transaction stands out most.
 - **Not in scope:** piece size, pace, or any of `CBS-E2`–`CBS-E7`.
 
 #### The capture
