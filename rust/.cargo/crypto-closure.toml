@@ -1,0 +1,631 @@
+# The crypto closure: every registry package on a proving, signing, wiping,
+# RNG or seed path, at the version core's test vectors, KATs and
+# constant-time harness ran against, with the reason it is here.
+#
+# Checked by scripts/ci/check_crypto_closure.py:
+#   - every lock (rust/Cargo.lock, each rust/*/fuzz/Cargo.lock, and the GUI
+#     wallet's src-tauri/Cargo.lock) carries each package below on its
+#     compatibility line at exactly this version, or not at all;
+#   - `--complete`: this list is the closure, no more and no less: the
+#     registry packages a local crate reaches through a normal edge from a
+#     package named in `roots`, walking normal edges, a derive recorded and
+#     its compiler toolchain not walked.
+#
+# Moving a version here is a review, not a refresh: read the change at
+# source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
+# and run the KATs, the pinned FCMP++ vectors and the checkct rows on it
+# (rule 17). A new primitive dependency adds its name to `roots` in the
+# change that adds it.
+
+roots = [
+    "aes",
+    "argon2",
+    "bip39",
+    "blake2",
+    "chacha20",
+    "chacha20poly1305",
+    "cipher",
+    "ciphersuite",
+    "crypto-bigint",
+    "curve25519-dalek",
+    "dalek-ff-group",
+    "dkg-dealer",
+    "ed25519-dalek",
+    "ff",
+    "fips203",
+    "fips204",
+    "fips205",
+    "flexible-transcript",
+    "fn-dsa",
+    "fn-dsa-comm",
+    "fn-dsa-kgen",
+    "fn-dsa-sign",
+    "fn-dsa-vrfy",
+    "generic-array",
+    "getrandom",
+    "group",
+    "hkdf",
+    "hmac",
+    "modular-frost",
+    "multiexp",
+    "poly1305",
+    "rand",
+    "rand_chacha",
+    "rand_core",
+    "sha2",
+    "sha3",
+    "std-shims",
+    "subtle",
+    "x25519-dalek",
+    "zeroize",
+]
+
+[[package]]
+name = "aead"
+version = "0.5.2"
+reason = "AEAD trait under chacha20poly1305 (shekyl-crypto-pq, shekyl-chacha, and Noise for the P2P and RPC transports)."
+
+[[package]]
+name = "aes"
+version = "0.9.1"
+reason = "RandomX's AES rounds (shekyl-pow-randomx): consensus proof-of-work, every node must hash identically."
+
+[[package]]
+name = "argon2"
+version = "0.5.3"
+reason = "Wallet envelope key derivation (shekyl-crypto-pq wallet_envelope.rs) and RandomX's cache initialisation (shekyl-pow-randomx)."
+
+[[package]]
+name = "arrayvec"
+version = "0.7.6"
+reason = "Fixed-capacity buffers under hex-conservative, on bip39's checksum path."
+
+[[package]]
+name = "base16ct"
+version = "0.2.0"
+reason = "Constant-time hex for SEC1 and serdect encodings of curve points and scalars."
+
+[[package]]
+name = "base64ct"
+version = "1.8.3"
+reason = "Constant-time base64 for argon2's PHC strings and SPKI/PKCS#8 encodings."
+
+[[package]]
+name = "bip39"
+version = "2.2.2"
+reason = "Seed mnemonic: 24 English words decode to the 32-byte seed through parse_in and to_entropy_array (shekyl-crypto-pq/src/bip39.rs)."
+
+[[package]]
+name = "bitcoin_hashes"
+version = "0.14.1"
+reason = "SHA-256 for bip39's mnemonic checksum word."
+
+[[package]]
+name = "bitvec"
+version = "1.0.1"
+reason = "Bit views under ff: scalar bit decomposition (PrimeFieldBits) in proofs and multiexp."
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+reason = "Hash-to-field and transcript hashing in FCMP++, generalized Bulletproofs and helioselene; RandomX's Blake2b."
+
+[[package]]
+name = "block-buffer"
+version = "0.10.4"
+reason = "Block buffering inside every RustCrypto digest (SHA-2, SHA-3, Blake2)."
+
+[[package]]
+name = "borsh"
+version = "1.6.1"
+reason = "Serialization of DKG and FROST messages (dkg, modular-frost) on the multisig path."
+
+[[package]]
+name = "borsh-derive"
+version = "1.6.1"
+reason = "Derives borsh encodings of DKG and FROST messages."
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+reason = "Little/big-endian reads inside merlin's transcript."
+
+[[package]]
+name = "bytes"
+version = "1.11.1"
+reason = "Byte buffers under borsh's DKG and FROST encodings."
+
+[[package]]
+name = "cfg-if"
+version = "1.0.4"
+reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2."
+
+[[package]]
+name = "chacha20"
+version = "0.9.1"
+reason = "Stream cipher of wallet encryption (shekyl-chacha, XChaCha20), shekyl-crypto-pq, and Noise for the P2P and RPC transports."
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+reason = "AEAD of shekyl-crypto-pq, shekyl-chacha, and Noise for the P2P and RPC transports."
+
+[[package]]
+name = "cipher"
+version = "0.4.4"
+reason = "Stream-cipher traits under chacha20 0.9 (shekyl-chacha)."
+
+[[package]]
+name = "cipher"
+version = "0.5.2"
+reason = "Block-cipher traits under aes 0.9 (RandomX)."
+
+[[package]]
+name = "ciphersuite"
+version = "0.4.2"
+reason = "Curve abstraction under FCMP++, generalized Bulletproofs and FROST."
+
+[[package]]
+name = "const-oid"
+version = "0.9.6"
+reason = "OID constants in DER encodings of keys (pkcs8, spki)."
+
+[[package]]
+name = "cpubits"
+version = "0.1.1"
+reason = "Target word-size selection inside aes 0.9 (RandomX)."
+
+[[package]]
+name = "cpufeatures"
+version = "0.2.17"
+reason = "Runtime CPU detection choosing the SIMD backends of chacha20, curve25519-dalek, keccak, poly1305, sha2, argon2 and fn-dsa."
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.0"
+reason = "Runtime AES-NI / ARMv8 crypto detection inside aes 0.9 (RandomX)."
+
+[[package]]
+name = "crypto-bigint"
+version = "0.5.5"
+reason = "Field and wide arithmetic of helioselene, ec-divisors and the curve generators; CA-1 holds its timing (RUSTSEC-2026-0387)."
+
+[[package]]
+name = "crypto-common"
+version = "0.1.6"
+reason = "Key/nonce/output size types of the RustCrypto 0.10 family (digests, AEAD, ciphers)."
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+reason = "Key/block size types of the RustCrypto 0.5 family under aes 0.9 (RandomX)."
+
+[[package]]
+name = "curve25519-dalek"
+version = "4.1.3"
+reason = "Ed25519 group arithmetic: output keys, key images, Bulletproofs+, the curve tree's Ed25519 layer."
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+reason = "Generates curve25519-dalek's SIMD backend entry points."
+
+[[package]]
+name = "dalek-ff-group"
+version = "0.4.6"
+reason = "Ed25519 as a ff/group field under ciphersuite 0.4 (FROST's Ed25519 suite)."
+
+[[package]]
+name = "dalek-ff-group"
+version = "0.5.0"
+reason = "Ed25519 field under helioselene, ec-divisors and the curve generators; Field25519 carries the prover's secret witness."
+
+[[package]]
+name = "der"
+version = "0.7.10"
+reason = "DER encodings of keys under pkcs8, sec1, spki and ecdsa."
+
+[[package]]
+name = "digest"
+version = "0.10.7"
+reason = "Hash traits under every digest, the FCMP++ transcripts and hash-to-curve."
+
+[[package]]
+name = "dkg"
+version = "0.6.1"
+reason = "Multisig distributed key generation (shekyl-fcmp)."
+
+[[package]]
+name = "dkg-dealer"
+version = "0.6.0"
+reason = "Trusted-dealer key generation for multisig (shekyl-fcmp)."
+
+[[package]]
+name = "dkg-recovery"
+version = "0.6.0"
+reason = "Multisig key recovery under modular-frost."
+
+[[package]]
+name = "ecdsa"
+version = "0.16.9"
+reason = "ECDSA under k256/p256, carried by ciphersuite's other suites."
+
+[[package]]
+name = "ed25519"
+version = "2.2.3"
+reason = "Ed25519 signature types under ed25519-dalek."
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+reason = "Ed25519 signatures in the hybrid scheme and transaction proofs (shekyl-crypto-pq, shekyl-proofs, shekyl-tx-builder)."
+
+[[package]]
+name = "elliptic-curve"
+version = "0.13.8"
+reason = "Curve traits under ciphersuite, k256 and p256."
+
+[[package]]
+name = "ff"
+version = "0.13.1"
+reason = "Prime-field traits of every FCMP++ curve and proof."
+
+[[package]]
+name = "fiat-crypto"
+version = "0.2.9"
+reason = "Formally generated field arithmetic backend of curve25519-dalek."
+
+[[package]]
+name = "fips203"
+version = "0.4.3"
+reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, shekyl-p2p-transport, shekyl-rpc-channel). 0.5.0 is PR 2's review."
+
+[[package]]
+name = "fips204"
+version = "0.4.6"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 is PR 2's review."
+
+[[package]]
+name = "fips205"
+version = "0.4.1"
+reason = "SLH-DSA-SHA2-192s: the inner signature of wallet message signing (shekyl-crypto-pq message_signing.rs). 0.5.0 is PR 2's review."
+
+[[package]]
+name = "flexible-transcript"
+version = "0.3.4"
+reason = "Fiat-Shamir transcripts of FCMP++ and generalized Bulletproofs."
+
+[[package]]
+name = "fn-dsa"
+version = "0.4.0"
+reason = "FN-DSA-1024: the post-quantum half of the scheme-3 hybrid signature (shekyl-crypto-pq fn_dsa_hybrid.rs)."
+
+[[package]]
+name = "fn-dsa-comm"
+version = "0.4.0"
+reason = "FN-DSA shared arithmetic and encodings."
+
+[[package]]
+name = "fn-dsa-kgen"
+version = "0.4.0"
+reason = "FN-DSA key generation."
+
+[[package]]
+name = "fn-dsa-sign"
+version = "0.4.0"
+reason = "FN-DSA signing."
+
+[[package]]
+name = "fn-dsa-vrfy"
+version = "0.4.0"
+reason = "FN-DSA verification."
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+reason = "Hasher of hashbrown under std-shims, inside the proof crates."
+
+[[package]]
+name = "funty"
+version = "2.0.0"
+reason = "Integer traits under bitvec (scalar bit decomposition)."
+
+[[package]]
+name = "generic-array"
+version = "0.14.9"
+reason = "Fixed-size arrays of the RustCrypto 0.10 family: digest outputs, keys, nonces."
+
+[[package]]
+name = "generic-array"
+version = "1.3.5"
+reason = "Fixed-size arrays sizing FCMP++ layers and the EC gadgets (full-chain-membership-proofs, shekyl-fcmp-proofs)."
+
+[[package]]
+name = "getrandom"
+version = "0.2.17"
+reason = "The OS RNG every key, nonce and seed draws from (through rand_core's OsRng)."
+
+[[package]]
+name = "group"
+version = "0.13.0"
+reason = "Group traits of every FCMP++ curve and proof."
+
+[[package]]
+name = "hashbrown"
+version = "0.16.1"
+reason = "Hash maps under std-shims, inside the proof crates."
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+reason = "Hex under modular-frost's encodings."
+
+[[package]]
+name = "hex-conservative"
+version = "0.2.2"
+reason = "Hex under bitcoin_hashes, on bip39's checksum path."
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs); the prefs HMAC key (shekyl-engine-prefs hmac_key.rs)."
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+reason = "HMAC under hkdf; the prefs file's MAC (shekyl-engine-prefs); Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.12"
+reason = "Sized arrays of the RustCrypto 0.5 family under aes 0.9 (RandomX)."
+
+[[package]]
+name = "inout"
+version = "0.1.4"
+reason = "In-place buffers under cipher 0.4 (chacha20)."
+
+[[package]]
+name = "inout"
+version = "0.2.2"
+reason = "In-place buffers under cipher 0.5 (aes 0.9, RandomX)."
+
+[[package]]
+name = "k256"
+version = "0.13.4"
+reason = "secp256k1, carried by ciphersuite."
+
+[[package]]
+name = "keccak"
+version = "0.1.6"
+reason = "Keccak-f permutation under sha3 and merlin: Shekyl's Keccak hashes, hash-to-point, transcripts."
+
+[[package]]
+name = "libc"
+version = "0.2.184"
+reason = "The getrandom syscall and CPU-feature probes under getrandom, cpufeatures and rand."
+
+[[package]]
+name = "merlin"
+version = "3.0.0"
+reason = "STROBE transcripts under flexible-transcript."
+
+[[package]]
+name = "minimal-ed448"
+version = "0.4.2"
+reason = "Ed448, carried by ciphersuite."
+
+[[package]]
+name = "modular-frost"
+version = "0.11.0"
+reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 is not admitted: its manifest moves it to multiexp 0.5, so its review is multiexp 0.5's batch verifier on the multisig FROST path, not its 2-line diff."
+
+[[package]]
+name = "multiexp"
+version = "0.4.2"
+reason = "Multi-scalar multiplication and batch verification in FCMP++, generalized Bulletproofs and FROST."
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+reason = "Lazy statics inside k256."
+
+[[package]]
+name = "opaque-debug"
+version = "0.3.1"
+reason = "Redacted Debug of poly1305's state."
+
+[[package]]
+name = "p256"
+version = "0.13.2"
+reason = "P-256, carried by ciphersuite."
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+reason = "PHC string handling under argon2."
+
+[[package]]
+name = "pkcs8"
+version = "0.10.2"
+reason = "PKCS#8 key encodings under ed25519 and elliptic-curve."
+
+[[package]]
+name = "poly1305"
+version = "0.8.0"
+reason = "The MAC of ChaCha20-Poly1305 (shekyl-noise)."
+
+[[package]]
+name = "ppv-lite86"
+version = "0.2.21"
+reason = "SIMD lanes of rand_chacha's ChaCha core."
+
+[[package]]
+name = "primeorder"
+version = "0.13.6"
+reason = "Prime-order curve formulas under p256."
+
+[[package]]
+name = "radium"
+version = "0.7.0"
+reason = "Atomic bit storage under bitvec."
+
+[[package]]
+name = "rand"
+version = "0.8.6"
+reason = "RNG front end of key generation and transaction building; 0.8.8 is not reviewed."
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+reason = "Seeded ChaCha RNG of proofs, Bulletproofs+ and transaction building."
+
+[[package]]
+name = "rand_core"
+version = "0.6.4"
+reason = "RNG traits every key generation and proof draws through (OsRng)."
+
+[[package]]
+name = "rustversion"
+version = "1.0.22"
+reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims."
+
+[[package]]
+name = "schnorr-signatures"
+version = "0.5.2"
+reason = "Schnorr signatures inside FROST's DKG (modular-frost)."
+
+[[package]]
+name = "sec1"
+version = "0.7.3"
+reason = "SEC1 point encodings under elliptic-curve."
+
+[[package]]
+name = "serde"
+version = "1.0.228"
+reason = "Serialization of keys and signatures (bip39, ed25519-dalek, x25519-dalek, serdect)."
+
+[[package]]
+name = "serde_core"
+version = "1.0.228"
+reason = "serde's core traits."
+
+[[package]]
+name = "serde_derive"
+version = "1.0.228"
+reason = "Derives serde encodings of key and signature types."
+
+[[package]]
+name = "serdect"
+version = "0.2.0"
+reason = "Constant-time serde encodings of crypto-bigint values."
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+reason = "SHA-256/512: Ed25519, SLH-DSA-SHA2, HKDF-SHA512, the prefs HMAC, onion keys."
+
+[[package]]
+name = "sha3"
+version = "0.10.9"
+reason = "SHA-3/Keccak: Shekyl's Keccak hashes, hash-to-point, key derivation."
+
+[[package]]
+name = "signature"
+version = "2.2.0"
+reason = "Signature traits under ed25519 and ecdsa."
+
+[[package]]
+name = "spin"
+version = "0.10.1"
+reason = "Spin locks under std-shims, inside the proof crates."
+
+[[package]]
+name = "spki"
+version = "0.7.3"
+reason = "SubjectPublicKeyInfo encodings under pkcs8 and ecdsa."
+
+[[package]]
+name = "std-shims"
+version = "0.1.5"
+reason = "std/no-std shims of the FCMP++ and Bulletproofs crates."
+
+[[package]]
+name = "subtle"
+version = "2.6.1"
+reason = "Constant-time comparison and selection across every primitive."
+
+[[package]]
+name = "tap"
+version = "1.0.1"
+reason = "Helper traits under bitvec, elliptic-curve and wyz."
+
+[[package]]
+name = "thiserror"
+version = "2.0.18"
+reason = "Error types of dkg, dkg-recovery and modular-frost."
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.18"
+reason = "Derives thiserror's error types."
+
+[[package]]
+name = "tinyvec"
+version = "1.11.0"
+reason = "Small vectors inside unicode-normalization, on bip39's NFKD path."
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+reason = "tinyvec's macros."
+
+[[package]]
+name = "typenum"
+version = "1.20.0"
+reason = "Type-level sizes under generic-array and hybrid-array."
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and no PBKDF2 step (shekyl-crypto-pq/src/bip39.rs): parse_in(English, ...) normalizes the input, then matches ASCII words, and the entropy comes from word indices. Unicode 17 to 18 (0.1.26) can change which odd spellings of the words are accepted, never the derived key."
+
+[[package]]
+name = "universal-hash"
+version = "0.5.1"
+reason = "Universal-hash traits under poly1305."
+
+[[package]]
+name = "wasi"
+version = "0.11.1+wasi-snapshot-preview1"
+reason = "getrandom's WASI backend (not built for a shipped target; recorded because the resolve carries it)."
+
+[[package]]
+name = "wyz"
+version = "0.5.1"
+reason = "Helpers under bitvec."
+
+[[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+reason = "X25519: the classical half of the hybrid KEM (shekyl-crypto-pq, shekyl-noise, shekyl-p2p-transport, shekyl-rpc-channel)."
+
+[[package]]
+name = "zerocopy"
+version = "0.8.48"
+reason = "Byte casts inside ppv-lite86, under rand_chacha."
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.48"
+reason = "Derives zerocopy's casts."
+
+[[package]]
+name = "zeroize"
+version = "1.8.2"
+reason = "Wipes every secret buffer (rule 35). 1.9.x rewrites slice zeroization; not reviewed."
+
+[[package]]
+name = "zeroize_derive"
+version = "1.4.3"
+reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types."

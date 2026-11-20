@@ -307,6 +307,19 @@ jobs:
           done
           echo "cargo audit failed after 3 attempts" >&2
           exit 1
+      - name: crypto closure record (every lock, and the record is the closure)
+        # rust/.cargo/crypto-closure.toml holds every package on a proving,
+        # signing, wiping, RNG or seed path at its reviewed version. The
+        # first call parses the workspace lock and every fuzz lock (no
+        # cargo) and names each package a lock moved off the record; the
+        # second runs `cargo metadata --locked` (a resolve, no compile) and
+        # fails on a package the closure gained or lost without a record
+        # change. Three separate calls, so each verdict is its own exit
+        # (46-shell-gate-exits.mdc).
+        run: |
+          python3 scripts/ci/check_crypto_closure.py --selftest
+          python3 scripts/ci/check_crypto_closure.py
+          python3 scripts/ci/check_crypto_closure.py --complete
       - name: cargo fmt --check (workspace)
         working-directory: rust
         # Fails CI on any unformatted Rust file. Pairs with the clippy
