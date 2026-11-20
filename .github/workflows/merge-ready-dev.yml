@@ -30,7 +30,8 @@ name: ci/merge-ready-dev
 
 on:
   push:
-    branches: [dev]
+    # DEMO BASE ONLY: the scratch base stands in for dev.
+    branches: [dev, ci-scratch/merge-ready-demo-base]
 
 permissions: {}
 

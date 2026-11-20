@@ -373,3 +373,6 @@ mod tests {
         ));
     }
 }
+
+/// DEMO BASE ONLY (merge-ready): the value the demo's pull requests disagree on.
+pub const MERGE_READY_DEMO: u32 = 1;
