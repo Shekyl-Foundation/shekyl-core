@@ -4941,6 +4941,378 @@ beside its testnet node.
   15.28 KB, in both inherited runs. It is 15.28 KB from y18 in the
   re-derived zone. The bytes step there, and the count does not.
 
+### 5.37 EUP-4 prep 3, three economies graded whole, predicted before they are built (2026-11-20)
+
+Written against `dev` at `d86ef32fbd`, before any code. The brief is EUP-4
+prep 3, Rick's of 2026-11-17, revised 2026-11-19. It sets up the
+whole-system comparison that J, G, F and I are ruled on together, after
+EUP-4's table ([`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3).
+Rick held the decoupling ruling of 2026-11-16 until this comparison has
+run. Its direction is to pull numbers, not rebuild: every arm below
+reuses a fold, a signal or a stuffer that #1375, #1387, #1416, #1424 or
+#1450 built, and the new code is the arms' operands, the readers and the
+table. Nothing below is a result. The family is `WE-1`…`WE-12`.
+
+A prediction that restates a recorded run says so and names it. Every
+other one is blind: the arithmetic of the mechanism it names, written
+without running anything. Each fee and miner-income prediction names its
+cell's regime, as #1450 measured it (§5.36.1): **growing**, where the
+template admits a body past the median and standard traffic ratchets the
+long-term median up, so the fee per byte falls with the square of its
+rise (0.60× `steady`'s at y20, 0.54× at y30 on the inherited zone); or
+**flat**, where the long-term median stays on the zone's floor.
+
+#### What is built
+
+**The economies.** Production stays the default arm of every fold, and
+every committed narration must pass unregenerated. Each other economy is
+a named arm, set on the run's parameters and read nowhere else.
+
+- **A-honest:** production; no miner lists its own bodies.
+- **A-stuffed:** production, with every miner filling the room left under
+  the penalty-free weight with its own lightest valid bodies (the Economy
+  rung's 1-in/2-out shape, at the relay floor) at every block of the fold.
+  It is the window stuffer's every-miner share (§5.33) run for the whole
+  fold instead of a campaign of windows: the fold's own-body hook
+  (`stage2::FoldProbe::own_bodies`) answers at every block. Own bodies
+  enter the count, the fees, the medians and the burn as they do today.
+- **B, decoupled:** #1416's `VolumeSignal::Fixed`. Release, burn and `C`
+  read the baseline (50) instead of the window's count.
+- **C, paid-demand:** B's fixed release, plus demand reaching stakers only
+  through what was paid. Reported separately and together.
+  - **C1, the penalty to stakers.** At each block the penalty is the
+    reward the block's weight withheld: the pre-penalty emission less the
+    paid reward, both production's. A share `d` of it is paid to the
+    staker pool at that block, and the rest stays unminted as production
+    leaves it. `already_generated` advances by the paid reward plus the
+    stakers' part, so the paid part is pulled forward from the curve and
+    total supply is unchanged. `d` depends on the block's excess
+    `x = (W − M)/M`, `W` its weight and `M` its effective median,
+    `0 ≤ x ≤ 1`:
+    - **deferred** (production, the control): `d = 0`;
+    - **all**: `d = 1`;
+    - **graduated up**: `d = x`, nothing at the median and all of it at
+      twice the median;
+    - **graduated down**: `d = 1 − x`, all of it just past the median,
+      tapering to nothing at twice the median;
+    - **flat 50 %**: `d = 1/2`.
+
+    The pool's part is paid by credited work: in the purse below it is
+    one more source beside the emission share and the fee pool, and an
+    adversary's share of it is its share of credited work, taken as its
+    share of stake.
+  - **C2, the burn keyed to fees paid.** The burn's operand is the
+    trailing window's fees paid per block, in units of each block's own
+    Standard fee for the reference transaction, instead of its count. The
+    window is the count's (the 720 blocks before the block, so a block's
+    own fees never set its own burn). **The baseline is 50 units:** the
+    count's baseline of 50 transactions, each paying the default rung.
+    Units of the block's own Standard fee keep the operand dimensionless
+    as the reward decays; a fixed SKL baseline would make the burn fall
+    with the reward whatever demand did. Standard traffic's rung mix pays
+    other rungs too, so honest demand at the baseline need not read
+    exactly 50; the run prints what it reads. `C` reads the same burn.
+  - **C3, the escalation on.** The D2 escalation (`escalation.rs`) at the
+    band's middle asymptote, 75 % of the burn to the pool at saturation,
+    at each of the three knees in `KNEE_BAND` (500 000, 2 250 000 and
+    10 000 000 closed shards). The steepest member (90 % at 500 000) stays
+    excluded until BA-T10 sets S (Rick, 2026-11-13).
+  - **C together:** C1 at each destination, with C2 and C3 at the middle
+    knee.
+
+**The template rule.** Production's `Fill::admit` compares the gross
+coinbase: the penalised reward plus every fee, before the staker split
+and the burn. Its header leaves the net case to the fee design.
+
+- **Gross** (production, the default): unchanged. On C1 the stakers' part
+  of the penalty is paid outside the coinbase, so the gross coinbase is
+  the same on every destination and the rule is production's on each.
+- **Miner's net** (a named arm, on every economy): a body is listed only
+  while the miner's own coinbase does not fall: the miner's leg of the
+  penalised reward (`EmissionSplit`'s miner leg) plus the miner's fee
+  income (`BurnSplit::miner_fee_income`), both from production's split at
+  that height, with the cell's own burn (the count's, `Fixed`'s or
+  C2's). Below the penalty-free weight the reward does not move, so both
+  rules list every body and the arm uses production's fill there. Past
+  it, the arm's cohort form bisects on the miner's net coinbase, as
+  `admit_up_to` does on the gross one (§3.2 b of the umbrella plan,
+  §5.28), and is held to a single-offer walk of the same rule on drawn
+  cases. On C1 the stakers' part of the penalty is never the miner's, so
+  the net rule is the same on every destination too: what changes on C1
+  is what a miner that also stakes recovers, which is the adversary's
+  measure, not the template's.
+
+**Why the two rules differ, in one line.** The relay floor is
+`F = R·C·w_ref/M²` with `C = (1−σ)·M_r/(1−b)` and `R` the release-neutral
+base reward (`shekyl-economics` `fee/correction.rs`, `fee/floor.rs`); the
+penalty a body adds is proportional to the paid reward, `M_r·R`. So the
+gross test of fee against penalty carries the factor `(1−σ)/(1−b)`, and
+the miner's-net test multiplies it by `(1−b)/(1−σ)`: σ, `b` and `M_r` all
+cancel, and what is left is the block's geometry. Under the gross rule a
+body past the median becomes admissible as the burn rises past the
+staker share; under the miner's net it never changes with them.
+
+**Scenarios.** Baseline, boom and bust, sustained growth, and a new one,
+**slow adoption**: demand at a tenth of the baseline (5 transactions a
+block) for the first five years, then the baseline's path (50 a block).
+It is the table's own and is not added to `all_scenarios`, so no committed
+narration moves.
+
+**Axes.**
+- **Zones:** inherited (300 KB), re-derived, N = 90 and N = 150 (the
+  grid's 2-in/2-out spends at the reference weight plus the coinbase
+  reserve, §5.33), each at both `w_ref` levels (3 000 and the re-derived
+  12 595).
+- **Seeds:** the declared set, 1, 2 and 3 (`rng::HONEST_SEEDS`); each
+  figure prints as its median and [range].
+- **Horizon:** the ratified structural horizon, 135 years (§4.1 of the
+  umbrella plan). **Sustained growth stops at its supply break**, the
+  year its cumulative fee burn passes everything emitted and the fold's
+  supply invariant refuses it (§5.28.1: y114 on production on `steady`).
+  The break's year depends on each economy's burn. The table prints the
+  year each economy's growth fold stops and reads nothing past it. What
+  the schedule does past the break is Rick's (umbrella plan §3).
+
+**The columns** (measures, never verdicts). One row per economy, template
+rule and scenario; every reader takes what it prints from the fold and
+changes nothing.
+
+1. **Security.** Miner income per block by year (EI-1's reader:
+   production's `PaidEmission::owed`) and its fee part.
+2. **The release multiplier and the burn**, each as its mean over every
+   block of the year, in the narration and the JSON summary. STD-5 could
+   not be graded because no report carried them.
+3. **The tail.**
+   - Per-block fee revenue, gross (the block's fees) and the miner's net
+     (`BurnSplit::miner_fee_income`), at the median, the 95th and the
+     99th percentile of the year's blocks, with its variance.
+   - The tail per block, gross (`tail_subsidy_per_block`) and the
+     miner's share after the stakers' cut at that height.
+   - The measure: the miner's-net tail over the miner's-net fee revenue
+     at each of the three percentiles, by year. The years whose
+     effective emission is the tail are marked.
+   - For y60, y100 and y135: the deciles of per-block miner's-net fee
+     revenue, with the 95th and 99th.
+   - Every economy, both template rules, the structural arms to the
+     horizon.
+4. **Inclusion.** For a floor-fee Standard transaction: its fee to the
+   miner against the reward at risk from carrying its bytes. The orphan
+   model is one stated parameter, the extra propagation delay per byte,
+   `τ`, over the block interval `T` (120 s): carrying `w` bytes adds
+   `τ·w/T` to the chance the block is orphaned. A transaction pays its way
+   while `fee_to_miner ≥ coinbase_to_miner · τ · w / T`, so it holds for
+   every `τ` up to `τ* = fee_to_miner · T / (coinbase_to_miner · w)`. The
+   column prints `τ*` in milliseconds per kilobyte, by year, under both
+   template rules (gross: the fee and the coinbase; miner's net: each
+   after the burn and the staker split), against the declared sweep of
+   0.01 to 10 ms/KB (from a transaction its peers already hold, near
+   zero, up to a cold relay over a 1 Mbit/s Tor circuit). No verdict.
+5. **Bloat.** Bytes and outputs a day, by year; cumulative archival bytes
+   by year; the year each cell first writes 1 GB a day, at the design load
+   (30 spends a block, `DESIGN_LOAD_SPENDS`) and at the cell's own load.
+6. **Distribution.** On slow adoption, the share of the asymptote emitted
+   before the carried count's trailing mean first reaches the baseline.
+7. **Archival.** Stakers' income per block by source, the emission share,
+   the fee pool and (C1) the penalty, against the bytes held, by age band
+   (bytes written in the last 10 years, 10–40 years before, and older),
+   with production's bond. **The purse is the economics sim's yearly
+   staker budget**, the emission leg plus the pool's share of the burn
+   (`stage2.rs`, `A1YearAgg`), the one EUP-3's coupling half will run the
+   staking sim on (§6). C1's penalty enters it as a third source, at the
+   block it is paid.
+8. **Beside them:** the emitted fraction by year against the restated
+   predictability row (inside the rails' envelope, total supply
+   unchanged), and the Standard fee by year.
+
+**The C arms' adversaries.**
+- **The miner-staker's ratchet.** A miner holding stake share `f` (0, 5,
+  20 and 33 %) and the hashrate to do it raises the long-term median by
+  25 %: it mines blocks at 1.25 times the median for one more than half
+  the long-term window, listing its own bodies to fill them. Its cost is
+  the penalty it pays less the part that returns to it as a staker
+  (`f·d` of it on C1), plus the burn on its own bodies' fees. Priced at
+  the fold's state at y5, y20 and y40, on each C1 destination and on
+  production.
+- **The staker-inducer.** A staker with share `s` (0.5, 5 and 20 %) pays a
+  miner's whole penalty, as a fee, to list a block at 1.25 times the
+  median. Its net is the fee paid less what returns to it: `s·d` of the
+  penalty and `s` of the pool's share of the fee's burn.
+- **The shard-advance stuffer.** It pays floor fees to write a year's
+  worth of archival bytes early, advancing the closed-shard count by a
+  year. Its cost is those fees (less what it recovers if it mines); its
+  gain is the escalation's extra pool share over the year, on C3.
+
+**Cost.** Thirteen economies (A-honest, A-stuffed, B, C1 at four
+destinations, C2, C3, and C together at four), two template rules, four
+scenarios, eight zone points and three seeds: 2 496 folds to 135 years,
+growth to its break. A 135-year production fold took 62–130 s on
+`steady` (§5.28.1). Standard traffic and the readers cost more, so take
+100 s: about 69 CPU-hours, near nine hours on a fleet host's eight
+threads. The draw's cost does not grow with demand (#1424's transformed
+rejection). One timed fold per new arm on a claimed fleet host replaces
+this estimate before the table runs, and the table runs on demand. **The
+nightly slice:** the baseline at N = 90 and the inherited zone, `w_ref`
+3 000, seed 1, every economy and both rules: 52 folds, about 90
+CPU-minutes.
+
+#### The predictions
+
+Per economy, on the baseline at N = 90 and `w_ref` 3 000 (gross rule,
+seed 1's median across the seeds), unless named. **That cell is flat:**
+honest demand's 50 spends sit under the zone's 90, so the long-term
+median stays on the zone and no economy grows it. Its fees are a fraction
+of a percent of the reward (JG-3: 0.0462 SKL the year-1 Standard fee), so
+miner income is the miner's leg of the reward to within that.
+
+**WE-1. Miner income, as a ratio to A-honest (blind).** The paid reward is
+`M_r` times the curve on what remains, and the remainder decays at a rate
+proportional to `M_r` (§5.32, EI-2). A-honest's `M_r` rests at 1.0 at
+N = 90 (§5.35.1: the honest SMA straddles 1.000).
+- **A-stuffed:** every miner reaches the cap within half a window (JG-1,
+  361 blocks), so `M_r` is 1.3 from about block 361. Year 1:
+  1.3 × 2^(−0.3·0.5/11.06) ≈ **1.29**. Year 10:
+  1.3 × 2^(−0.3·9.5/11.06) ≈ **1.09**. Year 30: 1.3 × 2^(−0.3·29.5/11.06)
+  ≈ **0.75**: it pulls emission forward and pays for it later.
+- **B, C1 (every destination), C2, C3, C together:** within 1 % of
+  A-honest at y1, y10 and y30. `M_r` is 1.0 on both, the penalty at N = 90
+  is a few blocks' overflow (§5.35.1: 8.4 % of blocks), C2's burn tracks
+  B's (WE-3), and C3 moves only the burn's split, not the miner's part.
+
+**WE-2. The year half the supply is out (blind).** A-honest, B and every
+C: y11.06 (± 0.1; the honest `M_r`'s noise). A-stuffed: 11.06/1.3 ≈ y8.51,
+the rails' fast edge (the restated row's envelope, about y8.5 to y13.8).
+
+**WE-3. The yearly means of `M_r` and the burn in y1, y10 and y30
+(blind).** The burn is `0.5·√(V/50)` times the supply ratio, capped at
+90 % (`burn.rs`). At `M_r` = 1 the year's mean emitted fraction is
+3.1 %, 44.9 % and 84.2 % in y1, y10 and y30.
+- **B, C1, C3:** `M_r` exactly 1.000. Burn 1.5 %, 22.4 %, 42.1 %.
+- **A-honest:** `M_r` 1.00 [0.97, 1.02] each year. Burn within 2 % of B's.
+- **C2:** `M_r` exactly 1.000. Burn within 10 % of B's: the honest rung
+  mix's mean against the Standard fee sets how far from 50 units honest
+  demand reads.
+- **A-stuffed:** `M_r` 1.30 (y1's mean 1.298 for the first 361 blocks).
+  If every block carries the zone's room in its own 1-in/2-out bodies,
+  about 125 to 130 a block (the cap §5.35.1 STD-8 reads at N = 90), the
+  burn's volume factor is √2.5 ≈ 1.58, and the emitted fraction runs at
+  1.3 times the rate: about 3.2 %, 43 % and 72 %. §5.33.1 read 11.1–17.3 %
+  with every miner stuffing at N = 90 from y5 on `steady`, under the 23 %
+  this derivation gives there, so the stuffed count may be lower than the
+  cap. The prediction is the derivation's, with that recorded beside it.
+
+**WE-4. Stakers' income against bytes held in y10, as a ratio to A-honest
+(blind).** The fee pool is under 1 % of stakers' income at N = 90: the
+emission share at y10 is 0.15 × 0.9^9.5 ≈ 5.5 % of a reward near 550 SKL,
+about 30 SKL a block, against a pool of a quarter of a 22 % burn of about
+1.8 SKL of fees, about 0.1 SKL.
+- **B, C1, C2:** 1.00 (± 1 %).
+- **C3:** 1.00 to 1.01. The closed-shard count at y10 is about 520 000
+  (the baseline carrying its 50: `escalation.rs` records 523 841 from the
+  sweep of 2026-10-01), so the pool's share is
+  75 % at the 500 000 knee, about 37 % at 2 250 000 and 28 % at
+  10 000 000, and the pool is under 1 % of the income.
+- **A-stuffed:** about **0.6**. Income is 1.09 times (WE-1's reward ratio);
+  bytes are the zone's from block 361, about 90 spends' weight against
+  honest demand's 50.
+
+**WE-5. The C arms' adversaries (blind).**
+- **The ratchet's cost, as a ratio to production's,** is `1 − f·d(0.25)`
+  to within 1 %. The penalty at 1.25 times the median is a sixteenth of
+  the reward a block, and the burn on own floor-fee bodies is under 1 % of
+  it. At `f` = 33 %: **all 0.67, graduated up 0.92, graduated down 0.75,
+  flat 50 % 0.84**; at 20 %: 0.80, 0.95, 0.85, 0.90; at 5 %: 0.95, 0.99,
+  0.96, 0.98; at 0: 1.00 on every destination. The miner's discount is
+  largest on the destinations that pay most just past the median, where
+  the brake must bite.
+- **The staker-inducer loses at every share tested:** its net is
+  `−P·(1 − s·d)` less the burn's share, negative for every `s` under
+  `1/d`. Its loss is smallest on "all" at 20 %: 80 % of the penalty.
+- **The shard-advance stuffer loses by orders of magnitude.** A year of
+  archival bytes at N = 90 is about 260 GB (honest demand writes about
+  0.72 GB a day; §5.33's "an honestly full 90-spend zone writes about
+  1.3 GB a day"). At y1's Economy floor of about 0.012 SKL for a
+  14.6 KB body, that is about 2 × 10⁵ SKL. Its gain on C3 is the pool's
+  extra share for a year, under 1 % of stakers' income.
+
+**WE-6. Slow adoption: the supply emitted in years 1–5, and the
+distribution column (blind).** Demand at 5 a block holds the honest
+count's `M_r` at its 0.8 floor.
+- **A-honest:** 1 − 2^(−0.8·5/11.06) ≈ **22.2 %** of the asymptote.
+- **B and every C:** `M_r` 1.0, ≈ **26.9 %**: 21 % more before adoption.
+- **A-stuffed:** stuffing has free room from block 1, so `M_r` 1.3,
+  ≈ **33.5 %**: 51 % more.
+
+The distribution column reads these plus the 360 or so blocks the
+trailing mean takes to reach the baseline after y5.
+
+**WE-7. The template rule on the inherited baseline (blind).** #1450
+measured the gross rule's growth: the growth gate admits a body past the
+median in y19, when `(1−σ)/(1−b)` has risen to about 1.22 (σ ≈ 2.1 %,
+`b` ≈ 20 % at y19, carrying 22 a block). That is this geometry's
+threshold, since the test carries nothing else that moves (above).
+Under the miner's net the factor is exactly 1 at every height, under the
+threshold, so:
+- **The miner's-net inherited baseline never grows.** The long-term median
+  stays on the zone's floor (about 324 K) for the horizon, the blocks
+  carry 22 of 50, and `M_r` stays at 0.8. **The resting median is about
+  0.32 of the gross rule's 68–69 bodies** (22 against 68.5).
+- **The fee per byte at y30 is about 7.6 times the gross rule's** [5, 10]:
+  the median's square (1 041 K against 324 K, ×10.3), `C` (0.8/0.744
+  against 1.0/0.6, ×0.65: less demand in the window and a smaller burn),
+  and a larger base reward (more of the curve remains at `M_r` 0.8,
+  ×1.14). Regime: growing (gross) against flat (net).
+- **The penalty paid** under the net rule is nil after the zone's free
+  room: no body past it is admitted.
+- **Miner income** under the net rule tracks `M_r` 0.8 for the whole
+  horizon: about 0.8 of the gross rule's from y20, passing it near y37 as
+  more of the curve remains (the same shape as WE-1's, inverted).
+- **Corollary on B (not asked; recorded so it can be graded).** B's burn
+  reads the baseline, so `(1−σ)/(1−b)` reaches 1.22 near y10. B's
+  inherited zone grows from about y10 under the gross rule and never under
+  the net one.
+
+**WE-8. Inclusion (blind).** At N = 90, y1: a Standard transaction pays
+0.0462 SKL against a block reward near 992 SKL, for about 15 KB, so
+`τ*` ≈ 0.0462/992 × 120 s / 14.6 KB ≈ 0.38 ms/KB gross. Under the gross rule
+`τ*` grows with `C`: 1.4 times by y10 and 2.0 times by y30. Under the
+miner's net it is the same at every year: `C`'s `(1−σ)/(1−b)` cancels
+against the miner's legs, leaving about 0.44 ms/KB. Both sit at the low
+end of the declared sweep. A transaction its peers already hold relays at
+near zero cost per byte, so inclusion holds there. A cold relay over a
+slow Tor circuit, at the sweep's high end, does not pay its way on any
+economy.
+
+**WE-9. Bloat (blind).** At N = 90 honest demand writes about 0.72 GB a
+day and the design load about 0.43 GB, so neither crosses 1 GB a day on
+the baseline in any economy but A-stuffed, which writes the zone's
+1.3 GB a day from block 361: year 1. Sustained growth crosses 1 GB a day
+in the year its demand passes about 70 spends a block (1.2^y × 50, about
+y2) wherever the zone lets it.
+
+**WE-10. The tail (blind).** In the tail era the base reward is the tail
+itself, so the relay floor, and with it every rung's fee, is proportional
+to the tail. The ratio of the tail to a block's fees is then a constant
+of the block's geometry, `M² / (n·r̄·C·w_ref·w̄)`, whatever the tail's
+size. At N = 90 on the baseline, with `C` near 2 (the burn near 50 %), it
+is in the hundreds at the median block. The miner's-net ratio is about
+twice that, since the miner keeps half the fees and nearly all the tail.
+- **At the 95th percentile, the miner's-net ratio is above 30** on the
+  baseline in every economy and both rules. The provisional `k` = 1 does
+  not bind there.
+- **The grown inherited median lowers it** (its square, about a third)
+  but leaves it above 10.
+- **Sustained growth stops before the tail era** and prints no tail
+  ratio.
+
+**WE-11. The arms move nothing they do not name (blind).** Every committed
+narration passes unregenerated, and production's arm of the table equals
+the existing folds' figures where both read them (EI-1's and EI-2's rows
+on the baseline).
+
+**WE-12. The full table's runtime.** It is the estimate above, replaced by
+a measured fold per new arm before the table runs: about 69 CPU-hours,
+the nightly slice about 90 CPU-minutes.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
