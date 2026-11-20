@@ -1319,7 +1319,9 @@ during the freeze epoch, before the post is admissible (§6.5.2).
   one pass at a time, on its own task. A newly final shard is pulled at the
   first pass after the scan's fold shows it final, so a shard final in its
   close epoch is held before its freeze epoch opens. The one-block residual
-  is §6.5.9's.
+  is §6.5.9's. Closing the wallet stops a pass in flight: the leg's teardown
+  aborts it and waits until it has dropped the engine and the store handles
+  it holds.
 - **The market posture** still refuses before any fill (`-29505`) until
   shard selection exists. `fill_market` is test-built, used by the emission
   walk's market-bond fixture. That fixture fills in the close epoch, before

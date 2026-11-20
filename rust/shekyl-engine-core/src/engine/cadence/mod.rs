@@ -421,7 +421,7 @@ where
             daemon: daemon.clone(),
             alarms: shard_alarms.clone(),
             state: Arc::default(),
-            running: Arc::default(),
+            pass: Arc::default(),
         }),
     ]
 }
