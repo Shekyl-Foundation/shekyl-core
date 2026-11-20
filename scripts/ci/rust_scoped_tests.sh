@@ -44,6 +44,14 @@ fi
 
 case "${1:-}" in
   nextest)
+    # The forged shard-fill chain the store's prune and slash tests start
+    # from (CHAIN_FORGE.md CF-4a): an OCI artifact on GHCR, public, pulled
+    # by its pinned digest and checked layer by layer before any test reads
+    # it. A pull needs no credential, so a fork's pull request fetches it
+    # too. Fetched whatever the scope: about 13 MB and a few seconds, and a
+    # failed fetch stops the step here, by name, before a test reports it
+    # as a missing file.
+    python3 ../scripts/ci/fetch_test_chain.py shard-fill
     if [ "$RUST_TESTS" = all ]; then
       echo "scope: every workspace test"
       cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential

@@ -12,15 +12,13 @@
 # named on both branches' copies until this script). Each branch now judges
 # itself, and the `workflow_dispatch` `ref` input proves a branch's own set.
 #
-# The set: the shard-boundary deletion test over real multi-input spends
-# (`prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends`,
-# minutes of proving — the unit lane runs its padded-record twin), the
-# two benches (`weights_read_bench`, `slash_scan_bench`) and the RT-W10
-# floor-device harness (`rt_w10_coinbase_span_cost`), which here writes into
-# a temporary directory it removes: the run proves the harness still runs,
-# and its timings off the floor device are not a measurement. An
-# `#[ignore]`d test no scheduled lane runs is a deleted test with a comment
-# on it.
+# The set: the two benches (`weights_read_bench`, `slash_scan_bench`) and
+# the RT-W10 floor-device harness (`rt_w10_coinbase_span_cost`), which here
+# writes into a temporary directory it removes: the run proves the harness
+# still runs, and its timings off the floor device are not a measurement.
+# The slash bench starts from the forged shard-fill chain (CHAIN_FORGE.md
+# CF-4a), fetched by its pin before anything runs. An `#[ignore]`d test no
+# scheduled lane runs is a deleted test with a comment on it.
 #
 # Rule 47: the lane asserts every subject it owns is in the set before
 # running it — a renamed, deleted or un-ignored member fails here by name,
@@ -43,7 +41,6 @@ branch="${BRANCH:-the checked-out ref}"
 
 list=$(cargo test --locked "${ignored_set_profile[@]}" -p shekyl-chain-store --lib -- --list --ignored)
 for subject in \
-  'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
   'store::rt_w10_cost::rt_w10_coinbase_span_cost' \
   'store::slash_scan_bench_tests::slash_scan_bench' \
   'store::weights_read_bench_tests::weights_read_bench'
@@ -54,32 +51,16 @@ do
     exit 1
   fi
 done
-# Deliberately never run here, with the reason recorded (rule 23: a
-# decided disposition leaves a grep surface). Each must still be in the
-# ignored listing, so a rename or deletion fails the judgement by name.
-#   store::shard_fill::capture_the_shard_fill_chain — the armed
-#     regenerator of the checked-in shard-fill chain. Not a pass/fail
-#     proposition: it refuses without SHEKYL_PINNED_REGEN_DECISION and,
-#     with one, rewrites the vector, which CHAIN_FORGE.md CF-R17 freezes.
-#     Run by hand under an approved re-capture (CF-R20) only. It ran here
-#     as a test from 2026-11-14 and failed every night (#1381).
-decided_dark=(
-  'store::shard_fill::capture_the_shard_fill_chain'
-)
-skips=()
-for subject in "${decided_dark[@]}"; do
-  matches=$(printf '%s\n' "$list" | grep -cxF -- "${subject}: test" || true)
-  if [ "${matches}" -eq 0 ]; then
-    echo "::error::${subject} is decided dark here but is not in shekyl-chain-store's ignored set"
-    exit 1
-  fi
-  skips+=(--skip "${subject}")
-done
 count=$(printf '%s\n' "$list" | grep -c ': test$')
-echo "shekyl-chain-store ignored set: ${count} test(s), ${#decided_dark[@]} decided dark"
+echo "shekyl-chain-store ignored set: ${count} test(s)"
 ignored_set_stop_after_judgement
 
+# The forged shard-fill chain the slash bench starts from (CHAIN_FORGE.md
+# CF-4a), pulled by its pin and checked layer by layer before anything
+# reads it. A missing or damaged copy stops the lane here, by name.
+python3 ../scripts/ci/fetch_test_chain.py shard-fill
+
 START=$(date +%s)
-cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture --exact "${skips[@]}"
+cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture --exact
 END=$(date +%s)
 echo "::notice::Chain store ignored set completed on ${branch} in $((END - START))s (budget 120m)"
