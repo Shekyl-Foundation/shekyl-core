@@ -40,7 +40,12 @@ use shekyl_units::AtomicUnits;
 use crate::error::WalletLedgerError;
 use crate::pscan_cursor::PScanCursor;
 
-/// Schema version of the durable P-scan state. **v11** records that a
+/// Schema version of the durable P-scan state. **v12** tracks the nested
+/// [`PScanCursor`] gaining its [`ArchivalFold`](crate::pscan_cursor::ArchivalFold)
+/// (cursor v3, `WSS-Q16`): the checked cumulative archival length at the
+/// frontier and each passed shard's close height. A v11 file is refused and the
+/// P-scan re-runs from genesis, which re-derives the fold.
+/// **v11** records that a
 /// JoinMarket's `post_kind` is `5`
 /// (`shekyl_wire::transaction::is_join_market_post_kind`). A version-10
 /// file holds its joins as `0`, the retired keyless byte, and loading it
@@ -83,7 +88,7 @@ use crate::pscan_cursor::PScanCursor;
 /// migration at any step: pre-genesis, a version mismatch means re-scan (rule 15).
 /// Distinct from the inner [`PScanCursor`]'s own version (nested, like the wallet
 /// ledger over its sub-blocks).
-pub const PSCAN_STATE_VERSION: u32 = 11;
+pub const PSCAN_STATE_VERSION: u32 = 12;
 
 /// Diagnostic name of this block. `crate::version_gate::gate_leading_version`
 /// stamps it on [`WalletLedgerError::UnsupportedBlockVersion`] when the outer
@@ -613,7 +618,11 @@ mod tests {
     #[test]
     fn round_trips_cursor_accruals_pending_matches_and_funding() {
         let state = PScanState::new(
-            PScanCursor::at(BlockHeight::from_raw(40_000), [0x9C; 32]),
+            PScanCursor::at(
+                BlockHeight::from_raw(40_000),
+                [0x9C; 32],
+                crate::pscan_cursor::ArchivalFold::genesis(),
+            ),
             accruals(&[(2, 100), (3, 250)]),
             pending(&[(0xAB, 7)]),
             bond_posts(&[(12_345, 0xAB, 0), (39_000, 0xCD, 2)]),

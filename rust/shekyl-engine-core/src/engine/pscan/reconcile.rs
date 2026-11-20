@@ -212,6 +212,7 @@ mod tests {
         verify_exhaustive(
             BlockHeight::from_raw(first),
             shekyl_types::BlockHash::NULL,
+            &shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
             &blocks,
         )
         .expect("a correctly chained synthetic batch verifies")

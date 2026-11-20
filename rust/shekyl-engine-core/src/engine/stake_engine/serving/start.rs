@@ -146,7 +146,7 @@ where
         // outside this lock — `tor_service_config` creates and chmods a
         // directory, and holding the engine `RwLock` across that would stall
         // every other reader on disk.
-        let (stake, curve_tree, base_path, device) = {
+        let (stake, curve_tree, base_path, device, synced_height) = {
             let g = self_arc.read().await;
             let stake = match g.stake_handle() {
                 Some(stake) => stake,
@@ -155,11 +155,15 @@ where
                 }
                 None => return Ok(None),
             };
+            let ledger = std::sync::Arc::clone(&g.ledger);
+            let synced_height: super::task::SyncedHeight =
+                std::sync::Arc::new(move || ledger.synced_height());
             (
                 stake,
                 g.curve_tree.clone(),
                 g.persistence().base_path().to_path_buf(),
                 g.prefs().device.clone(),
+                synced_height,
             )
         };
 
@@ -275,7 +279,13 @@ where
             // store grows on. Tor's data dir is deliberately not used:
             // it can be a different mount, and the disk that matters
             // is the one the corpus lands on.
-            base_path.clone(),
+            super::task::ServingSite {
+                store_fs_path: base_path.clone(),
+                // `caught_up` compares the bond record's height with how far
+                // this wallet has synced (`WSS-Q18`), read from the engine's
+                // ledger without holding the engine.
+                synced_height,
+            },
             slot_guard,
         )))
     }

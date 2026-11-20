@@ -5,9 +5,9 @@
 
 //! Session totals for one persona's loopback serve.
 //!
-//! Six aggregate monotone counters, and no per-request structure: served,
-//! refused, lookup failures, sign failures, late sign failures, and accept
-//! errors. Two handles share one set of slots.
+//! Seven aggregate monotone counters, and no per-request structure: served,
+//! refused, not held, lookup failures, sign failures, late sign failures,
+//! and accept errors. Two handles share one set of slots.
 //!
 //! [`ServeCounterReader`] is the public read side. The endpoint stores one
 //! and [`PServeEndpoint::counters`](crate::PServeEndpoint::counters) hands
@@ -19,12 +19,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-/// The six slots. Private so the only way to move a total is a writer
+/// The seven slots. Private so the only way to move a total is a writer
 /// method, and the only way to read one is a reader method.
 #[derive(Clone, Debug)]
 struct Slots {
     served: Arc<AtomicU64>,
     refused: Arc<AtomicU64>,
+    not_held: Arc<AtomicU64>,
     lookup_failures: Arc<AtomicU64>,
     sign_failures: Arc<AtomicU64>,
     late_sign_failures: Arc<AtomicU64>,
@@ -36,6 +37,7 @@ impl Slots {
         Self {
             served: Arc::new(AtomicU64::new(0)),
             refused: Arc::new(AtomicU64::new(0)),
+            not_held: Arc::new(AtomicU64::new(0)),
             lookup_failures: Arc::new(AtomicU64::new(0)),
             sign_failures: Arc::new(AtomicU64::new(0)),
             late_sign_failures: Arc::new(AtomicU64::new(0)),
@@ -48,7 +50,7 @@ fn bump(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-/// The read side of an endpoint's six session totals, detached from the
+/// The read side of an endpoint's seven session totals, detached from the
 /// endpoint.
 ///
 /// The accept loop and every connection task increment these; this handle
@@ -97,6 +99,20 @@ impl ServeCounterReader {
     #[must_use]
     pub fn refused_count(&self) -> u64 {
         self.slots.refused.load(Ordering::Relaxed)
+    }
+
+    /// Valid requests for a shard this persona does not hold: the 404
+    /// (`WSS-Q17`).
+    ///
+    /// Noisy by design, and a backstop rather than an alarm: anyone can ask
+    /// for an id the persona does not hold, so most of what moves this is
+    /// probing. The serving path stays blind to what the persona owes, so it
+    /// cannot tell a probe from a draw on a bonded shard the store has lost;
+    /// the reconcile, which compares what the bond owes with what the store
+    /// holds, is the alarm. An invalid request (the 400) is not counted.
+    #[must_use]
+    pub fn not_held_count(&self) -> u64 {
+        self.slots.not_held.load(Ordering::Relaxed)
     }
 
     /// Store faults while answering a parsed shard read.
@@ -175,6 +191,10 @@ impl ServeCounterWriter {
 
     pub(crate) fn record_refused(&self) {
         bump(&self.slots.refused);
+    }
+
+    pub(crate) fn record_not_held(&self) {
+        bump(&self.slots.not_held);
     }
 
     pub(crate) fn record_lookup_failure(&self) {

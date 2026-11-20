@@ -15,7 +15,7 @@ use crate::read_facts::{
     TransactionsAt,
 };
 use serde_json::json;
-use shekyl_types::{CurveTreeRoot, ShardId};
+use shekyl_types::{ArchivalLength, CurveTreeRoot, ShardId};
 use shekyl_wire::Transaction;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
@@ -848,6 +848,7 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
                 bundle_references: vec![vec![0xaa, 0x01], vec![0xaa, 0x02]],
                 bundle_bodies: vec![vec![0xbb]],
                 draws: Some(2),
+                archival_cumulative: ArchivalLength::from_raw(40_000),
             },
             BlockRead {
                 block: vec![2],
@@ -858,6 +859,7 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
                 bundle_references: Vec::new(),
                 bundle_bodies: Vec::new(),
                 draws: None,
+                archival_cumulative: ArchivalLength::from_raw(52_100),
             },
         ],
         output_indices: Some(vec![7]),
@@ -888,12 +890,16 @@ fn block_list_answers_each_height_and_a_height_above_the_tip_is_missing() {
     // The block's draw count rides with it; a block whose row this node
     // does not hold says `null`, never zero.
     assert_eq!(first.draws.0, Some(Count(2)));
+    // The chain's cumulative archival length through the block rides with
+    // it, the offset a wallet places a shard's transactions from (WSS-Q16).
+    assert_eq!(first.archival_cumulative.0, Some(Size(40_000)));
     let shared::Slot::Item(second) = &out[1] else {
         panic!("height 2 is held")
     };
     assert_eq!(second.tx.len(), 1);
     assert!(second.section.is_empty() && second.section_body.is_empty());
     assert_eq!(second.draws.0, None);
+    assert_eq!(second.archival_cumulative.0, Some(Size(52_100)));
     assert_eq!(second.output_index, Integer(7));
     assert_eq!(
         out[2],

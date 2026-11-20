@@ -68,7 +68,9 @@ fn funding_block_with_key(recipient: &ArchivalPKeys, tx_key: &TxKey) -> Scannabl
 /// of its predecessor (anchored at the genesis `[0; 32]`). Linking is
 /// deterministic, so an identical prefix in two `chain(..)` calls produces an
 /// identical frontier hash — which is what lets the resume test carry an anchor
-/// across a rebuilt chain.
+/// across a rebuilt chain. Each block also reports the running archival total
+/// its bound lengths add up to from genesis, which the sweep's archival step
+/// checks (`WSS-Q16`).
 fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<ScannableBlock> {
     let mut c: Vec<ScannableBlock> = (0..len)
         .map(|h| make_synthetic_block(h as u64, shekyl_types::BlockHash::NULL))
@@ -77,6 +79,7 @@ fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<Scanna
         c[*i] = b.clone();
     }
     let mut prev = shekyl_types::BlockHash::NULL;
+    let mut archival = shekyl_types::ArchivalLength::ZERO;
     for (h, sb) in c.iter_mut().enumerate() {
         // The coinbase claims its own height. The bench fixture hard-codes `Gen(0)`,
         // so set it to the position — both to keep the F5 fetch-loop tripwire honest
@@ -92,6 +95,11 @@ fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<Scanna
             .collect();
         sb.block.header.previous = prev;
         prev = sb.block.hash();
+        archival = sb
+            .archival_increment()
+            .and_then(|step| archival.checked_add(step))
+            .expect("a fixture's archival total fits u64");
+        sb.archival_cumulative = archival;
     }
     c
 }
@@ -286,7 +294,11 @@ async fn sweep_halts_and_surfaces_on_a_boundary_mismatch_without_rewinding() {
 
     let wrong_anchor = [0xEE; 32];
     let seeded = PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(1), wrong_anchor),
+        PScanCursor::at(
+            BlockHeight::from_raw(1),
+            wrong_anchor,
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         BTreeMap::new(),
         Vec::new(),
@@ -382,7 +394,11 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
     pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
     let state = PScanState::new(
         // Built for `dispatch_retires` (no sweep), so the frontier hash is inert.
-        PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(cursor_height),
+            [0u8; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending,
         Vec::new(),
@@ -461,7 +477,11 @@ async fn dispatch_defers_retire_while_the_slot_holds_unspent_funding() {
         shekyl_engine_state::pscan_state::MintLineageOutput::EmissionReward,
     )];
     let mut accrual = PScanAccrual::from_state(&PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(cursor_height),
+            [0u8; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending,
         Vec::new(),
@@ -513,7 +533,11 @@ async fn durable_prune_defers_when_the_claimed_tip_does_not_corroborate() {
     let mut pending = BTreeMap::new();
     pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
     let mut accrual = PScanAccrual::from_state(&PScanState::new(
-        PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(cursor_height),
+            [0u8; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending,
         Vec::new(),
@@ -557,7 +581,11 @@ async fn dispatch_does_not_retire_before_the_window_closes() {
     pending.insert(canonical_id(&p), SettlementEpoch::from_raw(0));
     let mut accrual = PScanAccrual::from_state(&PScanState::new(
         // Built for `dispatch_retires` (no sweep), so the frontier hash is inert.
-        PScanCursor::at(BlockHeight::from_raw(cursor_height), [0u8; 32]),
+        PScanCursor::at(
+            BlockHeight::from_raw(cursor_height),
+            [0u8; 32],
+            shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+        ),
         BTreeMap::new(),
         pending,
         Vec::new(),

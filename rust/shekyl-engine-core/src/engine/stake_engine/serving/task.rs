@@ -38,7 +38,13 @@ use crate::engine::stake_timing::{
 /// false alarm is how a tripwire gets ignored.
 pub(crate) const STALENESS_BOUND_REFRESHES: u64 = 10;
 
-/// How far the wallet's ingest may trail the chain and still count as caught up.
+/// Reads the wallet's synced height: the principal scan's frontier, the
+/// height `caught_up` compares the bond record's height with (`WSS-Q18`).
+/// A closure over the engine's ledger, built where the task is started, so
+/// the task holds no engine.
+pub(crate) type SyncedHeight = Arc<dyn Fn() -> shekyl_types::BlockHeight + Send + Sync>;
+
+/// How far the wallet's sync may trail the chain and still count as caught up.
 ///
 /// Not zero: the wallet is always a little behind a live chain, and requiring
 /// exact equality would leave the tripwire disarmed forever. One archival reorg
@@ -301,7 +307,7 @@ pub(crate) fn spawn_serving_task<P>(
     pinner: P,
     alarms: Arc<OperatorAlarms>,
     config: ServingConfig,
-    store_fs_path: PathBuf,
+    site: ServingSite,
     slot_guard: SlotGuard,
 ) -> ServingHandle
 where
@@ -326,8 +332,9 @@ where
         },
         ServingSetup {
             config,
-            store_fs_path,
+            store_fs_path: site.store_fs_path,
             priority_failures: priority_failures.clone(),
+            synced_height: site.synced_height,
         },
         cancel_token.clone(),
         slot_guard,
@@ -339,6 +346,18 @@ where
         alarms,
         priority_failures,
     }
+}
+
+/// Facts about where the wallet was opened, which only
+/// `start_serving_if_staker` knows: the volume the disk probe measures, and
+/// how far the wallet has synced. Bundled so the spawn keeps a readable
+/// arity without a lint suppression.
+pub(crate) struct ServingSite {
+    /// The wallet's own directory — the volume the curve-tree store grows
+    /// on.
+    pub(crate) store_fs_path: PathBuf,
+    /// The wallet's synced height, for `caught_up` (`WSS-Q18`).
+    pub(crate) synced_height: SyncedHeight,
 }
 
 /// Everything the task publishes *to*, bundled.
@@ -373,6 +392,8 @@ struct ServingSetup {
     /// The handle's counter of serving threads the platform would not
     /// lower, handed to the host at start (SH-3).
     priority_failures: PriorityFailures,
+    /// The wallet's synced height, for `caught_up`.
+    synced_height: SyncedHeight,
 }
 
 async fn run_serving_task<P>(
@@ -394,6 +415,7 @@ async fn run_serving_task<P>(
         config,
         store_fs_path,
         priority_failures,
+        synced_height,
     } = setup;
     // All three conditions are watched from the moment the task exists, so
     // a wallet sitting in the launch standoff reads "not serving yet"
@@ -461,7 +483,7 @@ async fn run_serving_task<P>(
     tokio::select! {
         biased;
         () = cancel.cancelled() => {}
-        observation = read(&host, bound) => {
+        observation = read(&host, bound, &synced_height) => {
             report(&alarms, observation);
 
             // TJ-D's operator surface (`SF-D6`): the host's serve counters, windowed
@@ -514,7 +536,7 @@ async fn run_serving_task<P>(
                 let observation = tokio::select! {
                     biased;
                     () = cancel.cancelled() => break,
-                    observation = observe(&host, bound) => observation,
+                    observation = observe(&host, bound, &synced_height) => observation,
                 };
                 report(&alarms, observation);
                 // Re-read after every refresh so a host whose obligation *arm*
@@ -586,7 +608,11 @@ fn publish_posture<P>(
 /// board consumes. Every arm is a reading, never a decision — the mapping from
 /// readings to alarms is `shekyl-operator-alarm`'s, so this function cannot
 /// disagree with the tor producer about what an alarm means.
-async fn observe<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+async fn observe<P>(
+    host: &PersonaServingHost<P>,
+    bound: StalenessBound,
+    synced: &SyncedHeight,
+) -> ServeSetObservation
 where
     P: ServeSetPinner,
 {
@@ -598,7 +624,7 @@ where
             },
         };
     }
-    read(host, bound).await
+    read(host, bound, synced).await
 }
 
 /// Read the current witness without refreshing.
@@ -608,21 +634,17 @@ where
 /// separate is also what stops "report the current state" from silently
 /// acquiring a network round trip later. Its reads are of the local store,
 /// through the curve-tree actor.
-async fn read<P>(host: &PersonaServingHost<P>, bound: StalenessBound) -> ServeSetObservation
+async fn read<P>(
+    host: &PersonaServingHost<P>,
+    bound: StalenessBound,
+    synced: &SyncedHeight,
+) -> ServeSetObservation
 where
     P: ServeSetPinner,
 {
     let pinned = host.pinned_serve_set();
-    match caught_up(host, &pinned).await {
-        Some(false) => return ServeSetObservation::CatchingUp,
-        // The store could not be read at all. That is a refresh-side fault, not
-        // a reason to report health.
-        None => {
-            return ServeSetObservation::RefreshFailed {
-                already_pruned: None,
-            }
-        }
-        Some(true) => {}
+    if !caught_up(&pinned, synced()) {
+        return ServeSetObservation::CatchingUp;
     }
 
     match host.staleness(bound).await {
@@ -729,19 +751,16 @@ where
     }
 }
 
-/// Whether the wallet has ingested close enough to the chain for the staleness
-/// bound to mean anything. `None` when the store could not be read.
+/// Whether the wallet has synced close enough to the chain for the staleness
+/// bound to mean anything (`WSS-Q18`).
 ///
 /// `as_of_height` is the chain height the bond record was read at, off the
-/// witness; the ingest tip is what this wallet has ingested, read from the
-/// served store through the host's pinner.
-async fn caught_up<P: ServeSetPinner>(
-    host: &PersonaServingHost<P>,
-    pinned: &PinnedServeSet,
-) -> Option<bool> {
+/// witness; `synced` is how far this wallet has scanned. The body store holds
+/// no chain position, and whether it holds the bonded shards is the
+/// reconcile's question (`WSS-Q17`), so the store is not read here.
+fn caught_up(pinned: &PinnedServeSet, synced: shekyl_types::BlockHeight) -> bool {
     let chain = pinned.serve_set().as_of_height().to_raw();
-    let ingested = host.ingested_tip().await.ok()?.to_raw();
-    Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
+    chain.saturating_sub(synced.to_raw()) <= CAUGHT_UP_SLACK_BLOCKS
 }
 
 #[cfg(test)]

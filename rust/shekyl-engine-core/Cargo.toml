@@ -292,6 +292,9 @@ shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
 # (TEST_ONLY, check_test_only_features.py). Dev edge only: the
 # `test-helpers` lib surface binds through the scanner's `bound` instead.
 shekyl-wire = { path = "../shekyl-wire", features = ["test-fixtures"] }
+# `BodyStore::test_tamper_chunk` (TEST_ONLY): the body-fill walk damages a
+# stored chunk to serve a fault and see its reconcile.
+shekyl-p-store = { path = "../shekyl-p-store", features = ["test-tamper"] }
 # The serving-task lifecycle tests bind a host to `RefusingKey` (a key that
 # says no), which lives on `shekyl-p-host`'s dev-only `test-signer` edge with
 # `TestReceiptKeySigner`; `check_p_fetch_dep_cut.py` holds that edge off every
@@ -311,6 +314,11 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils", "se
 # `SF-D4` forbids the client on a wallet production graph, and
 # `check_p_fetch_dep_cut.py` does not follow this edge.
 shekyl-p-loopback = { path = "../shekyl-p-loopback" }
+# The body fill's live suite (`engine::regtest_e2e_body_fill`): a draw on a
+# filled shard answered through the production provider over the persona
+# body store (`StoreShardProvider`), as the serving host builds it. Dev-only;
+# the serving side is already on the wallet graph through `shekyl-p-host`.
+shekyl-p-serve = { path = "../shekyl-p-serve" }
 # Slice 7 commit 5's live-lane parity test (`engine::regtest_e2e`): the
 # Rust producer builds a block at exactly the consensus weight bound and
 # the C++ daemon judges it (CEN-F14), so the producer crate and the rules

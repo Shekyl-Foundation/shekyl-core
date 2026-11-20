@@ -507,7 +507,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | list | tx, request, shard, peer, ban, txpool | *verb* — print the entries | tx:verb, request:verb, shard:verb, peer:verb, ban:verb, txpool:verb |
 | note | tx | *view* — a transaction's local note | tx:view |
 | abandon | tx | *verb* — give up on a dispatched send | tx:verb |
-| alarm | tx | *view* — the held sends that need the user's decision, each with why (A19) | tx:view |
+| alarm | tx, shard | *view* — the held sends that need the user's decision, each with why (A19); under `shard`, the shards a bond owes that the body store did not hold or could not verify, each with its refill (WSS-Q17) | tx:view, shard:view |
 | resend | tx | *verb* — offer a held send's saved bytes to the daemon again, by the user's decision (A19) | tx:verb |
 | decode | tx | *verb* — decode a transaction blob | tx:verb |
 | make | uri | *verb* — compose | uri:verb |
@@ -608,6 +608,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `shard list`, `shard list all`, `shard list mine` | `shard list`, `shard list all`, `shard list held` | | | R (IG-Q22) |
 | `shard show <id>` | same | integer | | K |
 | `shard fetch <id> [--png p] [--size n]` | same | integer | `--png-file <path>`; `--png-pixels` integer | R (IG-Q22) |
+| — | `shard alarm` | | | N (WSS-Q17, 2026-11-19): the shards this wallet's bond owes that its body store did not hold or could not verify this session, what each refill did, and the last check that completed (its height and how many shards it read) — `shard_alarm`'s reply |
 | `mine start [threads\|auto]`, `mine stop`, `mine status` | same | integer or `auto` | | K (IG-Q21) |
 | `prove payment <txid> <address> [message...]`, `prove reserve [amount] [message...]` | same | hash, address, text; amount, text | | K; views (IG-Q34) |
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
@@ -786,6 +787,16 @@ The refusals added are `-29123 TOO_MANY_INPUTS` and `-29124 TOO_MANY_OUTPUTS` (`
 
 The balance's terms (§19 rows): `spendable`, `incoming` and `outgoing` are new. The wallet has no user-set hold on outputs (Rick, 2026-11-15), so the balance has no third leg and no name for the part a send cannot use now: that part is `incoming`. `held` keeps its one meaning, the shards a wallet holds (`shard list held`). The method registry rejects `freeze`, `thaw` and `frozen`, and so does the CLI's table (§12.3).
 
+### 16.3 The wallet RPC's names added for the persona body-store fill
+
+The body-store fill (`WALLET_SIDE_STORE.md` `WSS-Q4`, `WSS-Q17`; Rick, 2026-11-18) adds one read, and takes Part C's rules as §16.1 did.
+
+| Method | Path | Parameters | Reply | Notes |
+|---|---|---|---|---|
+| `shard_alarm` | `shard alarm` (§12.3) | — | `{last_check, alarms}`: `last_check` is `{height, shards}`, absent until a check completes; `alarms` a list (IG-Q53) of `{shard, alarm, refill}` | a view, in `tx_alarm`'s shape: re-derived each open, nothing stored; `last_check` is the last pass that read every owed shard (the chain height it ran at, how many shards), so an empty `alarms` before the first check is not read as a clean store (WSS-Q17, 2026-11-20); `shard` is the shard's id (integer), `alarm` one keyword (IG-Q86): `missing`, `corrupt`; `refill` one keyword: `pending`, `refilled`, `discarded`, `failed` |
+
+`stake` gains seven refusals, each W1-clean: `-29538 STAKE_SCAN_BEHIND` (`data`: `scanned`, `needed`, heights), `-29539 STAKE_SHARD_DISCARDED` (`data`: `shard`), `-29540 STAKE_DAEMON_MISMATCH` (`data`: `shard`, `detail`), `-29541 STAKE_LOCAL_NODE_REQUIRED` (`data`: `detail`), `-29542 STAKE_BODY_STORE_FAILED` (`data`: `shard`, `detail`), `-29543 STAKE_DAEMON_SYNCING`, and `-29544 STAKE_DAEMON_UNREACHABLE` (`data`: `detail`). Value keywords added: `missing`, `corrupt` (shard alarm); `pending`, `refilled`, `discarded`, `failed` (refill). `refill` joins the glossary under `shard`.
+
 ## 17. The method census
 
 Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 REST paths, aliases counted) over 54 methods, which become 42; RT-W10 step 4 adds IG-Q87's five (§25.3), 47 in all. The grant is `RPC_CHANNEL.md` §6.1's. A parameter's kind is IG-6's or RW-Q4's.
@@ -866,7 +877,7 @@ Each shape's fields today, and their names under this Part. The names the types 
 
 `get_block_header_by_hash`'s slot (`hash`, `block_header`) goes: a list reply is in selector order, and a slot that does not hold the item is `{"missing": null}` (IG-Q53, IG-Q73).
 
-**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle); the draws the count rule issued at the block, `count(h)` → `draws`, a count, `null` where this node holds no row (4.5, IG-Q107). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
+**Block** (`block_show`, `block_list`): `block_header` → `header`; `blob` → `body` (bytes); `tx_hashes` → `tx`, a list of `{id, body}` (`block_list` carries each body, as `get_blocks_by_height.bin` does today; `block_show` the same element; each `body` is the skeleton when `prune` is set — the pruned form with `prunable_hash`, `pqc_auth_hash` and `archival_size` beside it, IG-Q55 as SB-Q2 amends it); a transaction whose body this node discarded at the archival horizon answers its slot as `archived`, `{id, shard}`, instead of a body (`archived` → `archived`, the slot state; `DRS_SB_BELOW_HORIZON.md` SB-Q2); the first output's global index → `output_index` (RW-Q5); the block's bundle section → `section`, a list of bytes in section order, and the bodies this node holds for it → `section_body`, a list of bytes in no set order (4.3, IG-Q102; both empty for a block that admits no bundle); the draws the count rule issued at the block, `count(h)` → `draws`, a count, `null` where this node holds no row (4.5, IG-Q107); the chain's cumulative archival length through the block → `archival_cumulative`, a size, `null` for an alternative block (4.8, IG-Q112). `miner_tx_hash` repeats the header's and goes; `json`, epee's rendering, goes (RW-Q4).
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's; `writer`, the chain store's writer, `{"live": null}` or `{"halted": {"height": h, "invariant": n}}` (IG-Q92).
 
@@ -988,7 +999,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | nonce | block, header, template | the header's nonce; under `template`, with `offset`, where its bytes sit | |
 | orphan | block, header | not on the main chain | |
 | reward | block, mine, header, template | the block's reward, an amount | |
-| cumulative | difficulty | summed over the chain to this block | |
+| cumulative | difficulty, archival | summed over the chain to this block; under `archival`, the archival length in bytes (IG-Q112) | |
 | longterm | weight | the long-term weight | |
 | median | weight, size | the median | |
 | total | fee, weight, burn, bond | a sum | |
@@ -1091,6 +1102,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | flagged | tor | the consensus does not recommend this Tor; independent of the state and of the cause (IG-Q70) | |
 | fix | tor | a fix the operator may apply; the list is empty except for an install cause | |
 | missing | tx | a slot state: the node was asked and holds no such item (IG-Q73) | |
+| refill | shard | what a lost shard's refill from the wallet's own node did (WSS-Q17) | |
 | retired | txpool | the pool's file faulted and the node holds no pool until it restarts (IG-Q74) | |
 | publication | tx | where the caller's own transaction stands with the relay: one-of `held`, `overdue`, `public`, `untracked` (IG-Q75) | |
 | session | sync | a peer session chain sync holds (IG-Q80) | |
@@ -1717,3 +1729,11 @@ CEILING.", `RPC_CHANNEL.md` §4.5), and ends naming a revocation.
 **The tunnel's grant row is `rpc-grant`** (Rick, 2026-11-16): the grants
 the tunnel's sessions ask for. `request` keeps its one meaning; `grant`
 gains the parent `rpc`.
+
+---
+
+## 33. Part L — a block's cumulative archival length
+
+**RULED 2026-11-18 (Rick), for the body-store fill (`WALLET_SIDE_STORE.md` `WSS-Q16`).**
+
+**IG-Q112 — a block's cumulative archival length on the wire — RULED 2026-11-18 (Rick).** A wallet that fills a persona's body store places shard `k`'s transactions by the chain's cumulative archival length (`SHT-Q2`: shard `k` holds the transactions whose running total before them falls in `[k·W, (k+1)·W)`), and no read carried it. Each transaction's archival length is already on the block read under `prune`, bound by its txid; the running total is the one number the wallet cannot bind. *Ruled:* `block_show` and `block_list` carry each block's `archival_cumulative`, a size: the running total through the block, the coinbase included, read from the node's `block_info` row; `null` for an alternative block. It rides the block read every wallet makes while syncing, so no shard-specific query tells a daemon which shards a wallet means to bond. The wallet checks each block's increment against the txid-bound lengths the same read carries, so only the base at its restore height is taken on trust. `cumulative` gains the parent `archival`. 4.8.

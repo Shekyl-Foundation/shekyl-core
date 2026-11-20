@@ -461,7 +461,11 @@ count_pattern() {
 # executor a test-kind target; the site is under src/ and so counted.
 # The producer receipt's message-bound seed (`seed_for_message`) is a
 # second call of the same customization: 73 -> 74.
-MECH1_EXPECTED=74
+# WSS-Q16 (the body-store fill): 74 -> 75. One production site in
+# rust/shekyl-wire/src/shard_frame.rs (`rows_digest_step`, under
+# shekyl/shard-rows-digest-v1). Its tests call the step, not cSHAKE, so they
+# add no site.
+MECH1_EXPECTED=75
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

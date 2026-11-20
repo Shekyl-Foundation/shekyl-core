@@ -93,6 +93,11 @@ pub async fn run(
     // host is closed: accepting it would hold a socket and a body with no
     // session to carry it.
     let local = Arc::new(Semaphore::new(SESSIONS_PER_CLIENT));
+    // Armed before the listener exists: from "Listening on" a stop signal
+    // is a clean stop that removes the socket, never the signal's default
+    // death.
+    let mut stop =
+        Stop::arm().map_err(|e| format!("the stop signals could not be registered: {e}"))?;
     let result = match &config.listen {
         Listen::Tcp(addr) => {
             listen_check(*addr)?;
@@ -107,6 +112,7 @@ pub async fn run(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
                 &local,
+                &mut stop,
                 ended_tx,
                 ended_rx,
             )
@@ -120,6 +126,7 @@ pub async fn run(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
                 &local,
+                &mut stop,
                 ended_tx,
                 ended_rx,
             )
@@ -136,6 +143,7 @@ async fn accept_loop<F, Fut, S>(
     mut accept: F,
     pool: &Arc<Pool>,
     local: &Arc<Semaphore>,
+    stop: &mut Stop,
     ended_tx: watch::Sender<Option<ChannelFault>>,
     mut ended_rx: watch::Receiver<Option<ChannelFault>>,
 ) -> Result<(), String>
@@ -183,7 +191,7 @@ where
                 let fault = ended.ok().and_then(|value| value.clone());
                 break Err(fault.map_or_else(String::new, |fault| fault.to_string()));
             }
-            () = stop_signal() => break Ok(()),
+            () = stop.next() => break Ok(()),
             Some(_) = serving.join_next(), if !serving.is_empty() => {}
         }
     };
@@ -198,27 +206,56 @@ where
     ended
 }
 
-/// A clean stop: Ctrl-C, or on Unix the SIGTERM a service manager sends
-/// (systemd's stop, the rc.d supervisor's).
-async fn stop_signal() {
+/// The stop signals, registered once: Ctrl-C, and on Unix the SIGTERM a
+/// service manager sends (systemd's stop, the rc.d supervisor's).
+///
+/// Registering replaces the signal's default action, so a signal that
+/// arrives once this is armed is a clean stop, whenever it arrives. The
+/// streams live as long as the tunnel: a stream made after a signal does
+/// not see it, so one made per wait would lose a signal that came between
+/// two waits.
+struct Stop {
     #[cfg(unix)]
-    {
-        let terminate = async {
-            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                Ok(mut stream) => {
-                    stream.recv().await;
-                }
-                Err(_) => std::future::pending::<()>().await,
-            }
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            () = terminate => {}
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    ctrl_c: tokio::signal::windows::CtrlC,
+}
+
+impl Stop {
+    /// Register the stop signals now, before anything this process holds
+    /// needs a clean stop to be released.
+    fn arm() -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            Ok(Self {
+                terminate: signal(SignalKind::terminate())?,
+                interrupt: signal(SignalKind::interrupt())?,
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                ctrl_c: tokio::signal::windows::ctrl_c()?,
+            })
         }
     }
-    #[cfg(not(unix))]
-    {
-        drop(tokio::signal::ctrl_c().await);
+
+    /// The next stop signal, including one that arrived before this wait.
+    async fn next(&mut self) {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = self.terminate.recv() => {}
+                _ = self.interrupt.recv() => {}
+            }
+        }
+        #[cfg(windows)]
+        {
+            self.ctrl_c.recv().await;
+        }
     }
 }
 
@@ -455,5 +492,25 @@ mod tests {
         for bad in ["0.0.0.0:1", "[::]:1", "192.0.2.7:1"] {
             assert!(listen_check(bad.parse().unwrap()).is_err(), "{bad}");
         }
+    }
+
+    /// A SIGTERM that arrives once the stop is armed, before anything waits
+    /// on it, is still the stop the next wait returns. Red edits: register
+    /// the streams inside `next` (the test process dies by signal 15), or
+    /// make a fresh stream per wait (the wait never returns).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sigterm_before_the_first_wait_is_a_clean_stop() {
+        let mut stop = Stop::arm().expect("the stop signals");
+        let sent = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .expect("kill");
+        assert!(sent.success());
+        // Nothing waits on the stop while the signal lands.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::timeout(Duration::from_secs(10), stop.next())
+            .await
+            .expect("the SIGTERM sent before the wait is the stop it returns");
     }
 }

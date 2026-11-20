@@ -23,19 +23,20 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 pub use engine::MultisigSignerV2;
 pub use engine::{
     AcknowledgeOutcomeError, Capability, CapabilityInput, ChangePasswordError, CollectOutcome,
-    CollectUnstakedError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
-    DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
-    EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote, FirstStakeError,
-    FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError, KeyError, LocalRefresh,
-    MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
-    SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput,
-    StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome,
-    SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
-    DAEMON_METHODS,
+    CollectUnstakedError, CompleteTreeFillError, Credentials, CurveTreeIngestFault, DaemonClient,
+    DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome,
+    DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote,
+    FillFailure, FirstStakeError, FirstStakeOutcome, InFlightRecord, InFlightState, InputCount,
+    IoError, KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError,
+    OpenedEngine, OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError,
+    PersistenceError, ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle,
+    RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+    ReportedOutcome, ReservationId, ScannableBlock, SendError, ShardAlarm, ShardAlarmCause,
+    ShardAlarmReport, ShardCheck, ShardRefill, SignerFault, SoloSigner, StakeInError, StakePosture,
+    StakedBalance, StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView,
+    StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass, TracingDiagnosticSink,
+    TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate,
+    UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The signing pass's fault, bounded, that [`SendError::Sign`] carries, and
@@ -306,6 +307,11 @@ pub mod __test_helpers {
     /// batch and the error are `pub(crate)`; the verdict is flattened to a
     /// `String` so neither leaks.
     ///
+    /// The archival fold the check starts from is the genesis fold (no
+    /// archival good, no shard closed), so the range must start before the
+    /// chain's first archival good. Each block's reported running total in
+    /// the range is then checked against its bound lengths (`WSS-Q16`).
+    ///
     /// Test-only (feature-gated); never compiled into a default production
     /// build.
     pub fn verify_exhaustive_for_test(
@@ -313,9 +319,14 @@ pub mod __test_helpers {
         anchor: shekyl_types::BlockHash,
         blocks: &[crate::engine::ScannableBlock],
     ) -> Result<(), String> {
-        crate::engine::pscan::exhaustiveness::verify_exhaustive(first_height, anchor, blocks)
-            .map(|_batch| ())
-            .map_err(|e| e.to_string())
+        crate::engine::pscan::exhaustiveness::verify_exhaustive(
+            first_height,
+            anchor,
+            &shekyl_engine_state::pscan_cursor::ArchivalFold::genesis(),
+            blocks,
+        )
+        .map(|_batch| ())
+        .map_err(|e| e.to_string())
     }
 
     /// The proof paths' transaction fetch (`engine/proofs_chain_facts.rs`):

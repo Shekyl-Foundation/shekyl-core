@@ -80,6 +80,7 @@ mod bond_post_assemble;
 mod claim;
 pub(crate) mod departure_ledger;
 mod drain;
+pub(crate) mod fill;
 mod handle;
 mod helpers;
 mod persona;
