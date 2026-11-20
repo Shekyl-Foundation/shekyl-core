@@ -1,0 +1,330 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# The fuzz lanes (the CI lane's fuzz brief, Part B). Their own workflow,
+# not jobs of nightly.yml: that file has one cron and every job means the
+# 03:00 run. A second cron there would run those jobs too, unless each one
+# grew a schedule predicate.
+#
+# Two crons, twelve hours from 03:00 and off the hour, where GitHub's
+# start delay is worst. `check_fuzz_inventory.py --plan` is the one place
+# a cron becomes the nightly run (every target, five minutes) or the
+# weekly run (the long targets, thirty minutes). The workflow declares
+# exactly the crons that planner knows.
+#
+# `fuzz-targets` checks out the branch and records the commit. Every later
+# job checks out that commit, so a dev that moves between jobs cannot
+# build one tree and judge it with the next one's seeds, floors and
+# verdict. The branch name stays the label on the corpus cache and the
+# issue.
+#
+# The run itself is `.github/actions/fuzz-one-target`. `fuzz` and
+# `fuzz-weekly` differ in the list, the seconds and the hang bound.
+
+name: nightly/fuzz
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # libFuzzer and the address sanitizer need nightly. The rest of the tree
+  # builds on the stable pin (rust/rust-toolchain.toml) alone. Move this in
+  # its own commit, with a dispatch of the nightly plan green on the new
+  # value. cargo-fuzz is pinned beside it and installed with `--locked`,
+  # from source: a prebuilt musl cargo-fuzz builds the harness for musl,
+  # where the address sanitizer is refused.
+  FUZZ_TOOLCHAIN: nightly-2026-04-01
+  CARGO_FUZZ_VERSION: 0.13.1
+
+jobs:
+  fuzz-targets:
+    # The run this event owes, read from the tree under test. The inventory
+    # check and both scripts' selftests run first. A dispatch naming
+    # `fuzz_target` narrows the list to it.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # reads the tree and runs two selftests; no build
+    strategy:
+      matrix:
+        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["dev"]') }}
+    outputs:
+      nightly: ${{ steps.lists.outputs.nightly }}
+      weekly: ${{ steps.lists.outputs.weekly }}
+      crates: ${{ steps.lists.outputs.crates }}
+      nightly_seconds: ${{ steps.lists.outputs.nightly_seconds }}
+      weekly_seconds: ${{ steps.lists.outputs.weekly_seconds }}
+      commit: ${{ steps.lists.outputs.commit }}
+      branches: ${{ steps.lists.outputs.branches }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          persist-credentials: false
+
+      - name: The inventory and the run's verdict, checked
+        run: |
+          set -eu
+          python3 scripts/ci/check_fuzz_inventory.py --selftest
+          python3 scripts/ci/fuzz_run.py --selftest
+          python3 scripts/ci/check_fuzz_inventory.py
+
+      - id: lists
+        name: The targets, their crates and this commit
+        env:
+          FUZZ_SCHEDULE: ${{ github.event.schedule || '' }}
+          FUZZ_PLAN: ${{ inputs.plan || '' }}
+          FUZZ_TARGET: ${{ inputs.fuzz_target || '' }}
+          FUZZ_BRANCH: ${{ matrix.branch }}
+        run: |
+          set -eu
+          FUZZ_COMMIT=$(git rev-parse HEAD) python3 scripts/ci/check_fuzz_inventory.py --plan --emit
+
+  fuzz-build:
+    needs: fuzz-targets
+    if: ${{ needs.fuzz-targets.outputs.crates != '[]' }}
+    # Each fuzz crate the plan reaches, built once. Red when the build
+    # fails, a target's binary is missing, or the build rewrote the
+    # committed fuzz/Cargo.lock.
+    runs-on: ubuntu-latest
+    # cargo-fuzz from source (about two minutes) and the crate's sanitized
+    # release build from cold.
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.fuzz-targets.outputs.branches) }}
+        crate: ${{ fromJSON(needs.fuzz-targets.outputs.crates) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fuzz-targets.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install the fuzzing toolchain
+        uses: ./.github/actions/install-rust
+        with:
+          toolchain: ${{ env.FUZZ_TOOLCHAIN }}
+          components: ''
+
+      - name: Install cargo-fuzz
+        working-directory: ${{ runner.temp }}
+        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+
+      - id: names
+        name: The artifact's name
+        env:
+          BRANCH: ${{ matrix.branch }}
+          CRATE: ${{ matrix.crate }}
+        run: |
+          set -eu
+          name=$(python3 scripts/ci/fuzz_run.py --build-name "$BRANCH" "$CRATE")
+          echo "bin=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Build every target of the crate
+        env:
+          CRATE: ${{ matrix.crate }}
+        run: python3 scripts/ci/fuzz_run.py --build "$CRATE" "$RUNNER_TEMP/bin"
+
+      - name: Hand the binaries to the crate's legs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.bin }}
+          path: ${{ runner.temp }}/bin
+          if-no-files-found: error
+          retention-days: 1
+
+  fuzz:
+    needs: [fuzz-targets, fuzz-build]
+    # A crate whose build failed leaves its own legs without binaries; the
+    # other crates' legs still run.
+    if: ${{ !cancelled() && needs.fuzz-targets.result == 'success' && needs.fuzz-targets.outputs.nightly != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20  # the five-minute run, a checkout and one download
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.fuzz-targets.outputs.branches) }}
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.nightly) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fuzz-targets.outputs.commit }}
+          persist-credentials: false
+
+      - name: Fuzz
+        uses: ./.github/actions/fuzz-one-target
+        with:
+          target: ${{ matrix.target }}
+          branch: ${{ matrix.branch }}
+          seconds: ${{ needs.fuzz-targets.outputs.nightly_seconds }}
+          lane: fuzz
+
+  fuzz-weekly:
+    needs: [fuzz-targets, fuzz-build]
+    if: ${{ !cancelled() && needs.fuzz-targets.result == 'success' && needs.fuzz-targets.outputs.weekly != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # the thirty-minute run, a checkout and one download
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: ${{ fromJSON(needs.fuzz-targets.outputs.branches) }}
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.weekly) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fuzz-targets.outputs.commit }}
+          persist-credentials: false
+
+      - name: Fuzz
+        uses: ./.github/actions/fuzz-one-target
+        with:
+          target: ${{ matrix.target }}
+          branch: ${{ matrix.branch }}
+          seconds: ${{ needs.fuzz-targets.outputs.weekly_seconds }}
+          lane: fuzz-weekly
+
+  fuzz-summary:
+    needs: [fuzz-targets, fuzz, fuzz-weekly]
+    if: ${{ always() && needs.fuzz-targets.result == 'success' }}
+    # One table of every leg, and the check that every leg the plan named
+    # reported (rule 47). A leg that died before its run uploads no figures.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # downloads a line per leg; no build
+    strategy:
+      matrix:
+        branch: ${{ fromJSON(needs.fuzz-targets.outputs.branches) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fuzz-targets.outputs.commit }}
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fuzz-stats-*
+          path: ${{ runner.temp }}/stats
+
+      - name: Every leg's figures
+        env:
+          NIGHTLY: ${{ needs.fuzz-targets.outputs.nightly }}
+          WEEKLY: ${{ needs.fuzz-targets.outputs.weekly }}
+        run: python3 scripts/ci/fuzz_run.py --summary "$RUNNER_TEMP/stats"
+
+  report-red:
+    # The lanes above run the code of the commit they check out, and no
+    # job that does that holds a token that can write. This job checks
+    # out nothing. Scheduled runs report. A dispatched run reports only
+    # when asked (`report`).
+    needs: [fuzz-targets, fuzz-build, fuzz, fuzz-weekly, fuzz-summary]
+    if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            // A lane marked `perTarget` names its legs `<job> (<branch>, <target>)`.
+            // `crashArtifact` uploads `fuzz-crash-<job>-<branch>-<target>` with each
+            // `/` read as `_`, the name `fuzz_run.leg_names` builds.
+            const fuzzLines = [
+              'Reproduce a crash in `rust/<crate>` with `cargo +nightly fuzz run <target> <input>`, the input being the crash artifact linked above. The fix lands with the input added to the crate\'s `fuzz/seeds/<target>/`, the committed regression corpus every run reads.',
+              'A red with no crash is a run that did not prove it fuzzed (under 1,000 executions, no final line, an empty corpus, or coverage under the floor) or a target whose crate did not build (its `fuzz-build` leg is red too); the job summary says which (`scripts/ci/fuzz_run.py`).',
+            ];
+            const lanes = {
+              'fuzz': {
+                title: 'nightly fuzz RED',
+                perTarget: 'Target',
+                crashArtifact: true,
+                lines: ['The `fuzz` job (every fuzz target, five minutes each) failed for the target named above.', ...fuzzLines],
+              },
+              'fuzz-weekly': {
+                title: 'weekly fuzz RED',
+                perTarget: 'Target',
+                crashArtifact: true,
+                lines: ['The `fuzz-weekly` job (the weekly targets, thirty minutes each) failed for the target named above.', ...fuzzLines],
+              },
+              'fuzz-build': {
+                title: 'nightly fuzz build RED',
+                perTarget: 'Crate',
+                lines: [
+                  'The `fuzz-build` job failed for the fuzz crate named above (`scripts/ci/fuzz_run.py --build`): `cargo fuzz build` failed, a target\'s binary was not written, or the build rewrote the committed `fuzz/Cargo.lock` (regenerate it: `scripts/ci/check_fuzz_inventory.py --regenerate`). Every target of the crate is red tonight with it.',
+                ],
+              },
+              'fuzz-targets': {
+                title: 'nightly fuzz target list RED',
+                lines: [
+                  'The `fuzz-targets` job failed: the fuzz inventory disagrees with the tree, or a selftest of `check_fuzz_inventory.py` or `fuzz_run.py` failed. No target ran. The job log names the finding.',
+                ],
+              },
+              'fuzz-summary': {
+                title: 'nightly fuzz summary RED',
+                lines: [
+                  'The `fuzz-summary` job failed: a leg the target lists named uploaded no figures (it died before its run), or a leg was red. The table in the run\'s summary names each.',
+                ],
+              },
+            };
+            const flat = (part) => part.replaceAll('/', '_');
+            const { owner, repo } = context.repo;
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const red = jobs
+              .filter((job) => job.conclusion === 'failure')
+              .map((job) => /^(\S+) \((.+)\)$/.exec(job.name))
+              .filter((m) => m && lanes[m[1]]);
+            if (red.length === 0) {
+              core.setFailed('report-red ran and found no red leg of a lane it reports: a job was renamed, or the run failed somewhere this job does not read.');
+              return;
+            }
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            for (const [, lane, leg] of red) {
+              const parts = lanes[lane].perTarget ? leg.split(', ') : [leg];
+              const branch = parts[0];
+              const target = parts.slice(1).join(', ');
+              const title = `${lanes[lane].title} (${leg})`;
+              const crash = [];
+              if (lanes[lane].crashArtifact) {
+                const name = `fuzz-crash-${lane}-${flat(branch)}-${flat(target)}`;
+                const found = artifacts.find((a) => a.name === name);
+                crash.push(found
+                  ? `Crash input: [${name}](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${found.id})`
+                  : 'Crash input: none uploaded (the leg was red without a crash).');
+              }
+              const body = [
+                `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+                `Branch: ${branch}`,
+                ...(target ? [`${lanes[lane].perTarget}: ${target}`] : []),
+                ...crash,
+                ...lanes[lane].lines,
+              ].join('\n');
+              const existing = open.find((i) => !i.pull_request && i.title === title);
+              if (existing) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({ owner, repo, title, body });
+              }
+            }

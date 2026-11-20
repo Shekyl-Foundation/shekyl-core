@@ -1,0 +1,423 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Bundled grep / source-scan gates. Each script is unchanged and still
+# fail-closed on its own subject. They used to be one workflow + one
+# runner + one `apt install ripgrep` each, which stacked eight cheap
+# jobs behind the OS matrix and the 95-minute rust job. One checkout,
+# one apt, every script.
+#
+# Carriers (scripts stay; these workflow files were deleted):
+#   domain-registry, consensus-invariants, pending-post-write-path,
+#   unbounded-device-read, multisig-doc-literals, zeroize-check,
+#   engine-decomposition, levin-constant-parity.
+#
+# Also the C++ residue greps that used to ride the rust-audit-test job
+# (they do not need a Rust toolchain). The vacuous `combined_shared_secret`
+# step is deleted, not moved — see docs/FOLLOWUPS.md.
+#
+# No path filter on purpose: an armed gate with no trigger is how a
+# second write path / unbounded /dev read / cap fossil merges. The job
+# is seconds of rg after one apt; skipping it to save a runner is the
+# wrong economy.
+#
+# That same unfiltered trigger is why the workflow-validity gate lives
+# here rather than beside the doc gates it protects: a workflow whose own
+# YAML is broken cannot start its own run, so the check on it has to ride
+# a job that is always started by something else. It cannot validate the
+# file hosting it — nothing can — so a vanished grep-gates run is what
+# the repository's required-check list is for.
+
+name: ci/grep-gates
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: grep-gates-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  grep-gates:
+    name: "Grep gates (bundled)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ripgrep and PyYAML
+        run: |
+          # GitHub's ubuntu image ships a Chrome apt source. A hash-sum
+          # mismatch there is not this job's subject (ripgrep + PyYAML)
+          # and has already failed the gate before any script ran
+          # (2026-09-09, PR #671 — same class as the 2026-08-18 apt-get
+          # update stalls recorded in cmake-gate-test.yml). Naming
+          # google-chrome.list and .list.save left .sources / google.list
+          # live; the drop script deletes every chrome source and asserts
+          # the URI is gone.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ripgrep python3-yaml
+          rg --version
+          # Declared, not assumed: the workflow-validity gate fails closed on
+          # an unimportable parser, so the dependency is installed rather
+          # than inherited from whatever the runner image happens to ship.
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+
+      # Collect every failure rather than stopping at the first, so a
+      # PR that trips two invariants shows both in one log.
+      - name: Run bundled gates
+        shell: bash
+        run: |
+          set -u
+          failed=0
+          run_one() {
+            local label="$1"
+            local rc
+            shift
+            echo "::group::${label}"
+            # `shell: bash` is `bash -eo pipefail`. `"$@"` as a bare
+            # statement would abort the step on the first red gate;
+            # `&& / ||` is the set -e exemption that lets us collect.
+            "$@" && rc=0 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "PASS: ${label}"
+            else
+              echo "FAIL: ${label} (rc=${rc})"
+              failed=1
+            fi
+            echo "::endgroup::"
+          }
+          # grep exit 1 = no match = the residue is gone. Any other
+          # status (0 = hit, 2 = error) fails the gate. Same capture
+          # shape the rust-audit-test.yml steps used (rule 46).
+          grep_absent() {
+            local label="$1"
+            local rc
+            shift
+            echo "::group::${label}"
+            "$@" && rc=0 || rc=$?
+            if [ "$rc" -eq 1 ]; then
+              echo "PASS: ${label}"
+            else
+              echo "FAIL: ${label} (grep rc=${rc})"
+              failed=1
+            fi
+            echo "::endgroup::"
+          }
+
+          # First: a workflow file GitHub cannot parse runs zero jobs and
+          # fails no named check, so it disarms its own gates silently.
+          # This job has no path filter, so it is the one that sees every
+          # workflow edit.
+          run_one "Workflow files parse and are well-formed" \
+            python3 scripts/ci/check_workflows_parse.py
+          # A pull_request trigger filtered on branches does not run while a
+          # PR's base is another branch. That is how #1254 and #1259 merged
+          # with CodeQL and the doc gates never started. The `edited` type
+          # is refused too: it ran every workflow on each PR body edit with
+          # every job skipped, and the newest check run per name is the one
+          # the PR reports (#1264, #1267). This job has no path filter, so a
+          # workflow edit cannot hide from it.
+          run_one "pull_request triggers run on every base and only on code" \
+            python3 scripts/ci/check_pr_event_triggers.py
+          # A setup step that fetches with a depth would make a developer's
+          # shared clone shallow when the steps are run locally; it carries
+          # the GITHUB_ACTIONS guard, and this holds every such step to it.
+          # A job with no timeout-minutes holds its runner for the platform's
+          # 360 min when it hangs. `--selftest` first, so a gate that grades
+          # nothing cannot pass (rule 47).
+          run_one "Every step job carries its own timeout (selftest)" \
+            python3 scripts/ci/check_job_timeouts.py --selftest
+          run_one "Every step job carries its own timeout" \
+            python3 scripts/ci/check_job_timeouts.py
+          # A merge to dev must not cancel the dev run before it in the
+          # workflows whose runs outlast the gap between merges; only a
+          # pull request's newer push cancels its older run.
+          run_one "A started dev run finishes (selftest)" \
+            python3 scripts/ci/check_dev_push_runs_finish.py --selftest
+          run_one "A started dev run finishes" \
+            python3 scripts/ci/check_dev_push_runs_finish.py
+          # A red push run on dev reaches report-dev-red.yml only from the
+          # jobs its caller `needs`; a job added and left out of that list
+          # could go red on dev with no issue.
+          run_one "The dev-red reporter needs every job (selftest)" \
+            python3 scripts/ci/check_dev_red_reporter.py --selftest
+          run_one "The dev-red reporter needs every job" \
+            python3 scripts/ci/check_dev_red_reporter.py
+          # The dev-red reporter and the merge-ready re-test name failing
+          # tests from a job's log; the re-test decides which labelled pull
+          # requests a merge reaches and keeps the `merge-ready` status.
+          # Each script's selftest: the log formats, the shared-test rules,
+          # the label check, the status grammar and who may post, and the
+          # names the scripts read from the merge-ready workflows (rule 47).
+          run_one "Failing tests are named from a job's log (selftest)" \
+            python3 scripts/ci/failed_tests.py --selftest
+          run_one "A merge re-tests the labelled pull requests it reaches (selftest)" \
+            python3 scripts/ci/merge_ready_overlap.py --selftest
+          run_one "merge-ready: an early label refused, a push clears it, the newest dev's re-test stands (selftest)" \
+            python3 scripts/ci/merge_ready.py --selftest
+          run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
+            python3 scripts/ci/check_workflow_fetch_guard.py --selftest
+          run_one "A depth-changing fetch runs only under GitHub Actions" \
+            python3 scripts/ci/check_workflow_fetch_guard.py
+
+          # The production-shape clippy step in rust-audit-test.yml must name
+          # exactly the TEST_ONLY owners. It parses that workflow, so it lives
+          # here beside the workflow parser: this job installs PyYAML, and the
+          # rust-audit container does not. The features script stays a
+          # cargo-metadata gate. `--selftest` first, so a renamed step with no
+          # fixture cannot pass as nothing to grade (rule 47).
+          run_one "Production-lint lane names every TEST_ONLY owner (selftest)" \
+            python3 scripts/ci/check_production_lint_lane.py --selftest
+          run_one "Production-lint lane names every TEST_ONLY owner" \
+            python3 scripts/ci/check_production_lint_lane.py
+
+          # Each connector declares its dial numbers in one profile
+          # (shekyl_transport_layer::dial_profile); the dialer and the peer
+          # list read it and hold no per-connector arms. `--selftest` plants
+          # an arm and requires a failure, and the gate fails when it cannot
+          # find the dialer's or the peer list's source (rule 47).
+          run_one "No per-connector arms in the dialer or the peer list (selftest)" \
+            python3 scripts/ci/check_connector_profile_arms.py --selftest
+          run_one "No per-connector arms in the dialer or the peer list" \
+            python3 scripts/ci/check_connector_profile_arms.py
+
+          # build.yml and rust-audit-test.yml each end in a pass job, the one
+          # check protection requires of each (`cli-pass`, `rust-pass`). It
+          # must need every job, run whatever they did, and change its name on
+          # a draft, or a skipped job satisfies the requirement. Rides here
+          # for the same reason the workflow-validity check does: no path
+          # filter, so it sees every workflow edit. `--selftest` first: each
+          # verdict, and each planted defect refused (rule 47).
+          run_one "Each pass job stands for every job (selftest)" \
+            python3 scripts/ci/workflow_pass.py --selftest
+          run_one "Each pass job stands for every job" \
+            python3 scripts/ci/workflow_pass.py --check
+
+          run_one "SA-3b: domain-registry" \
+            scripts/ci/domain_registry_gate.sh
+          # RT-O22 (RT-W9 step 6): the toolchain, the decapsulation closure
+          # of fips203, and every recognised code-generation setting agree
+          # with what RT-P4 was measured on. Anything unrecognised fails on
+          # its own and is not also a re-run. Its self-test first, so a
+          # broken reader cannot pass the real check.
+          run_one "RT-P4 standing check: self-test" \
+            python3 scripts/ci/check_rt_p4_standing.py --selftest
+          run_one "RT-P4 standing check" \
+            python3 scripts/ci/check_rt_p4_standing.py
+          run_one "Consensus-invariants" \
+            scripts/ci/check_consensus_invariants.sh
+          # PDM-Q7: the stripe engine and its pruning_seed wire field are
+          # deleted; a codec port carries a wire field by default (LV-2 did),
+          # so this is the only thing that keeps either from coming back.
+          run_one "PDM-Q7: no stripe engine, no pruning_seed on the wire" \
+            scripts/ci/check_no_stripe_engine.sh
+          run_one "Pending-post single-write-path" \
+            scripts/ci/check_pending_post_write_path.sh
+          run_one "Unbounded /dev read" \
+            scripts/ci/check_unbounded_device_read.sh
+          run_one "P0-n: multisig doc-literals" \
+            scripts/ci/check_multisig_doc_literals.sh
+          run_one "Zeroizing-field grep + allowlist" \
+            scripts/ci/check_zeroize.sh
+          run_one "Engine decomposition ratchet" \
+            scripts/ci/check_engine_decomposition.sh
+          run_one "Debit-auth pin: single-sourced" \
+            scripts/ci/check_debit_auth_single_source.sh
+          # SF-D4: the shard-fetch client is cut from the serving/wallet side,
+          # the SOCKS dial is out of consensus/store/server, and p-serve's
+          # `test-signer` resolves off in every graph BuildRust.cmake ships.
+          # Read from manifests (this job has no toolchain): shipped roots
+          # are parsed out of BuildRust.cmake itself, and features are
+          # unified Cargo-style (aliases, defaults, optional and weak deps),
+          # not grepped. The selftest first: it plants each forwarding path
+          # on synthetic manifests and proves the resolver sees it (rule 47).
+          run_one "SF-D4: dependency-cut resolver selftest" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py --selftest
+          run_one "SF-D4: shard-fetch dependency cut" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py
+          # ARW-Q16 (c): a block index and a block count are both `u64` and
+          # differ by one everywhere they meet; HEIGHT_SEMANTICS.md C2/C7
+          # was review-borne on the daemon-store and archival surface, and
+          # three one-apart defects landed there in three days. Exact-hit
+          # grandfather of the sites that exist, ceiling that only lowers,
+          # so the next instance is CI's finding. Selftest first (rule 47).
+          run_one "ARW-Q16: inland height gate selftest" \
+            python3 scripts/ci/check_inland_height_u64.py --selftest
+          run_one "ARW-Q16: no new bare-u64 height on the archival surface" \
+            python3 scripts/ci/check_inland_height_u64.py
+          run_one "Rule 71: the network selects data, not control flow (selftest)" \
+            python3 scripts/ci/check_network_uniformity.py --selftest
+          run_one "Rule 71: the network selects data, not control flow" \
+            python3 scripts/ci/check_network_uniformity.py
+          run_one "Ignored tests carry their reason in the attribute" \
+            scripts/ci/check_ignore_reasons.sh
+          run_one "PoW test-seam containment (CEN-D2)" \
+            scripts/ci/check_pow_test_seam.sh
+          # RANDOMX_CACHE_ACTOR.md: one crate builds, holds and frees a
+          # RandomX cache, so the hasher's cap of three is the memory. The
+          # gate holds the identifier PreparedCache to that crate, the
+          # verifier, the differential harness and the cost benches, requires
+          # each allowed path to still use it, and refuses CacheStore anywhere.
+          run_one "One owner of every RandomX cache (HA-R1)" \
+            scripts/ci/check_randomx_cache_owner.sh
+          # DX-Q3 Q4: the node's template draws its coinbase secret and its
+          # draw commitment from the OS (the commitment through the witness
+          # ring); the scenario's reproducible values stay in test code.
+          run_one "The template's secrets are the OS's (DX-Q3 Q4)" \
+            scripts/ci/check_template_secrets.sh
+          # SO-D12 increment 4c: the witness ring's seeds and keys, and the
+          # challenge nonces, reach no log and no derived Debug. The
+          # selftest first, so a scan that reads nothing cannot pass.
+          run_one "The bundle producer's secrets reach no log (selftest)" \
+            python3 scripts/ci/check_bundle_producer_secrets.py --selftest
+          run_one "The bundle producer's secrets reach no log" \
+            python3 scripts/ci/check_bundle_producer_secrets.py
+          # CHAIN_FORGE.md CF-R17: the shard-fill chain is frozen until
+          # CF-4a (its bytes do not regenerate; a re-capture is 11.5 MB of
+          # history for good), and nothing new consumes it. Selftest first.
+          # CHAIN_FORGE.md §5.5 (CF-R9, CF-R12, CF-R26): a seedable generator
+          # built in production code, the crates the shipped binaries build
+          # (shipped_graph.py: this repository's release and the GUI
+          # wallet's pinned edges), is red unless its site is listed with its
+          # group (G0..G3). Crates headed for production are read too, and a
+          # provisional listing is red once its increment has landed.
+          # CHAIN_FORGE.md §11.1 item 2: no shipped build's resolved graph
+          # activates a harness or forge crate or turns a TEST_ONLY feature
+          # on. Both read the same set; the selftests hold the set itself.
+          run_one "No harness crate or test-only feature in a shipped graph (selftest)" \
+            python3 scripts/ci/check_production_graph.py --selftest
+          run_one "No harness crate or test-only feature in a shipped graph" \
+            python3 scripts/ci/check_production_graph.py
+          run_one "No unlisted seedable generator in production code (selftest)" \
+            python3 scripts/ci/check_seedable_rng.py --selftest
+          run_one "No unlisted seedable generator in production code" \
+            python3 scripts/ci/check_seedable_rng.py
+          run_one "The shard-fill chain is frozen, with no new consumer (selftest)" \
+            python3 scripts/ci/check_shard_fill_frozen.py --selftest
+          run_one "The shard-fill chain is frozen, with no new consumer" \
+            python3 scripts/ci/check_shard_fill_frozen.py
+          run_one "Depends fetches from the Foundation mirror, the package's path, then its alternates, and keeps only pinned bytes (selftest)" \
+            python3 scripts/ci/check_depends_fetch.py
+          run_one "A feature never changes a public type's shape (selftest)" \
+            python3 scripts/ci/check_feature_gated_members.py --selftest
+          run_one "A feature never changes a public type's shape (rule 25)" \
+            python3 scripts/ci/check_feature_gated_members.py
+          run_one "RandomX symbol-isolation negatives (rule 50)" \
+            scripts/ci/test_check_randomx_symbol_isolation.sh
+          run_one "§94: transit provenance marker outlives its constant" \
+            scripts/ci/check_transit_marker.sh
+          # FN-DSA is pre-standard: the five `fn-dsa*` crates are pinned exact
+          # and locked at one version, and a genesis release (a tag with no
+          # pre-release suffix) is refused on a pre-1.0 lock. Here the gate
+          # asserts its subject and reports; the refusal is armed in the
+          # tag-triggered release workflow.
+          run_one "fn-dsa is pinned exact, at one version (genesis gate)" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py
+          run_one "fn-dsa genesis gate self-test" \
+            python3 scripts/ci/check_fn_dsa_genesis_gate.py --selftest
+          # TB-4/TB-9: every host a gitian descriptor builds has one Tor
+          # disposition in config/tor_pins.json, and the records that restate
+          # the pin (the tor-pin-verify default, the release checklist) agree
+          # with it. build.rs refuses a target with no row, but only on a
+          # target somebody compiles; this moves that to the pull request.
+          run_one "Tor pin: every built host has one disposition" \
+            python3 scripts/ci/check_tor_pin_targets.py
+          # The packaging job's own refusals, each bitten red: an edited
+          # tarball digest, an edited file digest, a planted file, a planted
+          # glibc-hwcaps directory, a full extracted bundle.
+          run_one "Tor pin gates self-test" \
+            python3 scripts/ci/test_tor_pin_gates.py
+          # tor-pin-verify retries a live step once, and only when every
+          # failure in it is a Tor bootstrap timeout. The cases that must
+          # not retry (a pin mismatch, any other failure) are held here.
+          run_one "Tor live-test retry rule self-test" \
+            scripts/ci/test_run_live_tor_tests.sh
+          # The release-time frozen-tuple gate refuses a cut whose consensus
+          # surface moved with the testnet genesis unchanged. It runs against
+          # a previous tag at a cut, so this lane holds its rule instead.
+          run_one "Frozen-tuple gate self-test" \
+            python3 scripts/ci/test_check_frozen_tuple.py
+          # A staging flag names a deadline release; the release-time gate
+          # refuses a cut at or past it while the flag exists (NI-R9 as
+          # amended 2026-11-04). It runs at a cut, so this lane holds its
+          # rule: precedence, refusal and an unreadable table failing.
+          run_one "Staging-deadline gate self-test" \
+            python3 scripts/release/check_staging_deadlines.py --selftest
+          # The same gate over the real table, at a tag below every
+          # deadline: a table it can no longer read fails here, per pull
+          # request, not first at a cut.
+          run_one "Staging-deadline gate reads the table" \
+            python3 scripts/release/check_staging_deadlines.py v0.0.1
+          # The domain-binding ratchet must be empty at v3.1.0 (the signing
+          # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
+          # a cut at or past it with rows left. Its rule and its read of
+          # the real file run here, per pull request.
+          run_one "Binding-ratchet gate self-test" \
+            python3 scripts/release/check_binding_ratchet.py --selftest
+          run_one "Binding-ratchet gate reads the ratchet" \
+            python3 scripts/release/check_binding_ratchet.py v0.0.1
+          # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
+          # control socket inside a window the spawn lock keeps private.
+          # Every Rust spawn in a crate whose image launches a managed tor
+          # takes the lock. A crate that merely links the client does not:
+          # the socket is not in its address space. A build script is its
+          # own process. `--selftest` first (rule 47).
+          run_one "Spawn sites take the spawn lock (selftest)" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py --selftest
+          run_one "Spawn sites take the spawn lock" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py
+          # DAEMON_CONFIG_CUTOVER.md §2.10: a child of the daemon's image
+          # inherits stdio and nothing else. C++ in that process opens
+          # descriptors without close-on-exec, so every production spawn in
+          # the same watched crates marks the rest in its pre_exec
+          # (shekyl-tor-control-client's `inherit`). `--selftest` first.
+          run_one "Spawn children inherit stdio only (selftest)" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
+          run_one "Spawn children inherit stdio only" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
+          # DRS-X: a regtest spawn that calls generateblocks or pop_blocks
+          # arms dev-rpc and checks this spawn's announcement. The sentence
+          # has three owners and they agree. `--selftest` first (rule 47).
+          run_one "Armed lever: log check" \
+            python3 scripts/test_armed_lever.py
+          run_one "Armed lever: launcher gate selftest" \
+            python3 scripts/ci/check_armed_lever_launchers.py --selftest
+          run_one "Armed lever: every regtest lever spawn arms the row" \
+            python3 scripts/ci/check_armed_lever_launchers.py
+          # RT-W10 step 3 (RPC_CHANNEL.md §7.1, IG-Q104): every regtest
+          # shekyld spawn names a private directory for the owner's socket,
+          # or it refuses on a runner with no session directory and meets
+          # another test's daemon on one that has one. `--selftest` first.
+          run_one "Owner socket: launcher gate selftest" \
+            python3 scripts/ci/check_owner_socket_launchers.py --selftest
+          run_one "Owner socket: every regtest shekyld spawn names a socket directory" \
+            python3 scripts/ci/check_owner_socket_launchers.py
+
+          # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
+          # sim's fold files form chain quantities in production's integers
+          # (DQ-2G); a float-to-integer cast in one of them is a float that
+          # reached a chain quantity. `--selftest` first, so a reader that
+          # misses a pattern cannot pass as nothing found (rule 47).
+          run_one "Economics sim: no float reaches an integer in a fold file (selftest)" \
+            python3 scripts/ci/check_sim_integer_seams.py --selftest
+          run_one "Economics sim: no float reaches an integer in a fold file" \
+            python3 scripts/ci/check_sim_integer_seams.py
+
+          # The end state of the C++ removal (Rick, 2026-11-06): no
+          # first-party C or C++ is tracked outside external/, and no CMake
+          # target compiles any. The tree half here; the build job adds the
+          # half that reads the linked daemon. Selftest first (rule 47).
+          run_one "No first-party C or C++ (selftest)" \
+            python3 scripts/ci/check_no_first_party_c.py --selftest
+          run_one "No first-party C or C++ tracked, and no CMake target compiling any" \
+            python3 scripts/ci/check_no_first_party_c.py --tree
+
+          exit "${failed}"

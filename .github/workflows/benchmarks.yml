@@ -1,0 +1,615 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Per-PR benchmark gate + rolling baseline updater — commit 3 of the
+# mid-rewire hardening pass (`docs/MID_REWIRE_HARDENING.md` §3.3).
+#
+# Two triggers, three jobs:
+#
+#   pull_request (any base)
+#     - capture-pr:       runs the Rust gungraun harness on the PR
+#                         head, uploads `shekyl_rust_v0.json` as an
+#                         artifact.
+#     - compare:          fetches `bench-baseline/baseline.json`, runs
+#                         `scripts/bench/compare.py`, renders a Markdown
+#                         comment via `scripts/bench/post_comment.py`,
+#                         upserts it on the PR, and fails the job if
+#                         any entry trips the `crypto_bench_*` /
+#                         `hot_path_bench_*` threshold (§3.3 table).
+#                         If `bench-baseline` does not exist yet
+#                         (first-time bootstrap), posts a
+#                         "baseline not yet seeded" comment and passes.
+#     - profile-on-fail:  on any fail verdict, re-runs the tripped
+#                         bench under `samply` and uploads the
+#                         resulting `profile.json` as a PR artifact
+#                         (linked from the comment on the next
+#                         `compare` run after seeding lands).
+#
+#   push → dev
+#     - update-baseline:  runs the pull-request set (every row of it,
+#                         not the nightly full-weight rows), writes
+#                         the result to `bench-baseline/baseline.json`,
+#                         commits as the CI bot. Creates the branch
+#                         (orphan) if it does not yet exist. Never
+#                         merges into `dev` or `main`. After the push,
+#                         compares that capture with the baseline it
+#                         replaced: a fail or a missing row is red, a
+#                         warn is not.
+#     - report-dev-red:   a failed or timed-out job of that push opens
+#                         the tracking issue.
+#
+# Implementation scope: **Rust + gungraun only** (Tier 1).
+# C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
+# deferred per `docs/MID_REWIRE_HARDENING.md` §3.3 implementation
+# notes / §6.1 upgrade path. Criterion numbers are still captured
+# into the same envelope (by `scripts/bench/capture_rust_baseline.sh`)
+# and rendered as informational rows in the PR comment, but the gate
+# only trips on iai `instructions`.
+#
+# Mid-rewire warning window (2k.c): when the sentinel file
+# `docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` is present, the
+# final merge-block step is downgraded to a `::warning::` annotation
+# and the job exits 0. Everything upstream of that step still runs —
+# `compare`, PR comment, samply profile-on-fail — so reviewers see
+# the full delta table and the profile artifact. Policy rationale
+# and closure criterion: `docs/MID_REWIRE_HARDENING.md` §3.3.1.
+
+name: ci/benchmarks
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Which rows a pull request's capture runs: the gated rows whose path
+  # sets the change can reach (`scripts/ci/change_scope.py`, `bench_rows`;
+  # the path sets are the measurement ledger's). A wallet change runs the
+  # wallet rows and not the block path's, whose setup is half an hour of
+  # callgrind. The classifier fails closed: on any error it says `all`.
+  # The push to `dev` does not consult this job; it captures every row
+  # of the pull-request set. The full-weight rows are the nightly capture.
+  scope:
+    name: bench scope
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      bench_rows: ${{ steps.scope.outputs.bench_rows }}
+    steps:
+      # The full fetch takes 18-37 s (the 25 pull-request runs before
+      # 2026-11-18); one stalled for the job's whole 10 minutes (#1424,
+      # job 134465704085). A stall now fails here in two.
+      - uses: actions/checkout@v5
+        timeout-minutes: 2
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          python3 scripts/ci/change_scope.py \
+            --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" \
+            || printf '%s\n' bench_rows=all >> "$GITHUB_OUTPUT"
+
+  capture-pr:
+    name: capture shekyl_rust_v0 (PR head)
+    # `workflow_dispatch` is the (iii) capture mechanism for
+    # frozen baselines per `docs/design/STAGE_0_HARNESS.md` §5: the
+    # PR-2 author manually triggers a one-shot capture against the
+    # PR branch on a fresh `ubuntu-latest` runner, downloads the
+    # `shekyl_rust_v0-pr` artifact, and transcribes the numbers
+    # into `PERFORMANCE_BASELINE.md` before opening review. The
+    # downstream `compare` / `profile-on-fail` jobs are still
+    # gated on `pull_request` (no baseline diff is meaningful for
+    # a manual capture), so dispatch only runs `capture-pr`.
+    #
+    # `scope` is skipped on a dispatch, so its result is not required to be
+    # success; a pull request whose scope is `none` skips this job, and the
+    # `compare` job with it. A skipped job is not a failed one. A draft pull
+    # request skips it too (ruled 2026-11-16): the capture runs when the
+    # draft is marked ready, and on every push to a ready one.
+    needs: scope
+    if: >-
+      !cancelled() && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'pull_request' && !github.event.pull_request.draft
+          && needs.scope.result == 'success'
+          && needs.scope.outputs.bench_rows != 'none')
+      )
+    runs-on: ubuntu-latest
+    # About twice the measured capture (ruled 2026-11-12). The capture job's
+    # own time on this runner, queue excluded:
+    #   every row, block-path rows in:        62 min 48 s (run 43360223481)
+    #   every row, network and sync rows in:  73 min 0 s  (run 43368858900)
+    #                                         75 min 28 s (run 43530910488)
+    #   four engine-core rows (a scoped PR):   9 min 51 s (run 43361888340)
+    # The limit is sized from the every-row capture, the longest a pull
+    # request can be scoped to. No pull request has yet been scoped to the
+    # block-path rows alone; its figure lies between the two.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          # See scripts/ci/drop_runner_chrome_apt_source.sh.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: install Rust toolchain
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
+
+      - name: restore cargo registry + target
+        # Restore only: the update-baseline job's push run saves this key.
+        # A cache a pull request saves is readable by that pull request
+        # alone, and saving it evicts the `dev` caches every other pull
+        # request restores from (rust-audit-test.yml's cache step).
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install gungraun-runner
+        run: |
+          # EXACT-pin the runner to the lib version in `rust/Cargo.lock`.
+          # gungraun refuses to run when the runner is *newer* than the
+          # `gungraun` library ("runner X is newer than gungraun Y"), so a
+          # `^0.19` install silently drifts ahead the moment a new patch
+          # publishes (0.19.3 did exactly that) and breaks every bench run.
+          # Keep this `=` pin in lockstep with the lock: bump both together.
+          # Migrated from `iai-callgrind-runner ^0.16` per
+          # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+          cargo install gungraun-runner --version '=0.19.3' --locked
+
+      - name: capture baseline
+        # The rows in scope on a pull request, every row on a dispatch.
+        env:
+          BENCH_ROWS: ${{ github.event_name == 'pull_request' && needs.scope.outputs.bench_rows || 'all' }}
+        run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: upload PR baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: shekyl_rust_v0-pr
+          path: |
+            docs/benchmarks/shekyl_rust_v0.json
+            docs/benchmarks/shekyl_rust_v0.iai.snapshot
+          retention-days: 14
+
+  compare:
+    name: compare & post PR comment
+    if: github.event_name == 'pull_request'
+    needs: capture-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    outputs:
+      has_fail: ${{ steps.compare.outputs.has_fail }}
+      fail_full_id: ${{ steps.compare.outputs.fail_full_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: download PR baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: shekyl_rust_v0-pr
+          path: pr-baseline/
+
+      - name: fetch bench-baseline branch
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Exit 2 is the only "no such branch" (origin_branch.sh).
+          # A failed lookup must not post bootstrap-pending and pass.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh . bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
+            git fetch origin bench-baseline:bench-baseline
+            git show bench-baseline:baseline.json > /tmp/baseline.json
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "${presence}" = "absent" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
+          fi
+
+      - name: bootstrap-pending comment (no baseline yet)
+        if: steps.baseline.outputs.present == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Keep the same `<!-- shekyl-benchmarks-comment -->` marker
+          # as post_comment.py so the first real compare-run upserts
+          # (replaces) this bootstrap message instead of stacking.
+          BODY=$(cat <<'MD'
+          <!-- shekyl-benchmarks-comment -->
+          ## shekyl benchmarks — `bootstrap-pending`
+
+          The `bench-baseline` branch does not yet exist on this
+          repository, so there are no prior numbers to diff against.
+          This PR's captured `shekyl_rust_v0.json` was uploaded as
+          the `shekyl_rust_v0-pr` artifact and can be inspected
+          manually.
+
+          The first push to `dev` that this workflow sees will seed
+          `bench-baseline/baseline.json` from the `ubuntu-latest`
+          runner; subsequent PRs will see a real threshold gate. See
+          [`docs/benchmarks/README.md`](../../blob/dev/docs/benchmarks/README.md)
+          "Bootstrap" subsection for details.
+          MD
+          )
+          # Upsert: match by marker, replace if found, else create.
+          EXISTING=$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            | jq -r --arg marker "<!-- shekyl-benchmarks-comment -->" \
+                '.[] | select((.body // "") | startswith($marker)) | .id' \
+            | head -n1)
+          if [[ -n "${EXISTING}" ]]; then
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method PATCH "repos/${REPO}/issues/comments/${EXISTING}" --input -
+          else
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method POST "repos/${REPO}/issues/${PR}/comments" --input -
+          fi
+          # Deliberately exit 0: bootstrap-pending is a transitional
+          # condition, not a regression.
+
+      - name: run compare.py
+        id: compare
+        if: steps.baseline.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/bench/compare.py \
+            --baseline /tmp/baseline.json \
+            --pr pr-baseline/shekyl_rust_v0.json \
+            --out /tmp/report.json \
+            || COMPARE_RC=$?
+          COMPARE_RC=${COMPARE_RC:-0}
+          if [[ "${COMPARE_RC}" == "1" ]]; then
+            echo "has_fail=true" >> "$GITHUB_OUTPUT"
+            # Surface the first fail's full_id so the profile job
+            # can target it without re-parsing the whole report.
+            FAIL_ID=$(jq -r '[.entries[] | select(.verdict=="fail") | .full_id][0] // ""' /tmp/report.json)
+            echo "fail_full_id=${FAIL_ID}" >> "$GITHUB_OUTPUT"
+          elif [[ "${COMPARE_RC}" != "0" ]]; then
+            echo "[compare] unexpected exit ${COMPARE_RC}"
+            exit "${COMPARE_RC}"
+          fi
+          # Upload the report so profile-on-fail can read it without
+          # re-running compare.py.
+          mkdir -p /tmp/report-artifact
+          cp /tmp/report.json /tmp/report-artifact/
+
+      - name: upload compare report
+        if: steps.baseline.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shekyl_rust_v0-report
+          path: /tmp/report-artifact/report.json
+          retention-days: 14
+
+      - name: post PR comment
+        if: steps.baseline.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/bench/post_comment.py \
+            --report /tmp/report.json \
+            --repo "$REPO" --pr "$PR"
+
+      - name: fail job on threshold trip
+        if: steps.baseline.outputs.present == 'true' && steps.compare.outputs.has_fail == 'true'
+        run: |
+          # Mid-rewire warning window: when the sentinel file
+          # docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active is
+          # present, convert the would-be fail into a GitHub
+          # ::warning:: annotation and exit 0. The samply profile
+          # artifact and the full PR comment are still produced —
+          # reviewers see every delta, just without the merge
+          # block. Policy: MID_REWIRE_HARDENING.md §3.3.1. The
+          # sentinel file is removed in the 2m-cache commit, at
+          # which point the merge-blocking gate auto-restores
+          # on the next PR.
+          if [[ -f docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active ]]; then
+            echo "::warning::One or more benchmarks tripped the §3.3 fail threshold."
+            echo "::warning::Mid-rewire warning window is ACTIVE (docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active)."
+            echo "::warning::Merge-block is waived for the duration of the 2k.a → 2m-cache window."
+            echo "::warning::Review the PR comment for the full delta table and the samply profile artifact."
+            echo "::warning::Policy: docs/MID_REWIRE_HARDENING.md §3.3.1"
+            exit 0
+          fi
+          echo "::error::One or more benchmarks tripped the §3.3 fail threshold."
+          exit 1
+
+  profile-on-fail:
+    name: samply profile (fail only)
+    # A missing bench has no binary to sample. fail_full_id is empty
+    # when the only gating failure is a deleted row; the compare log
+    # names that row.
+    if: github.event_name == 'pull_request' && needs.compare.outputs.has_fail == 'true' && needs.compare.outputs.fail_full_id != ''
+    needs: compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev
+
+      - name: install Rust toolchain
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
+
+      - name: restore cargo registry + target
+        # Restore only, as in capture-pr.
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install samply
+        run: cargo install samply --locked
+
+      - name: profile the tripped bench
+        env:
+          FAIL_FULL_ID: ${{ needs.compare.outputs.fail_full_id }}
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          # full_id shape: <crate>/<bench_target>/<group>/<function>/<run_id>
+          CRATE=$(echo "$FAIL_FULL_ID" | cut -d/ -f1)
+          TARGET=$(echo "$FAIL_FULL_ID" | cut -d/ -f2)
+          # Build the bench binary as an ordinary `--release` binary
+          # (not under valgrind) so samply can sample it. The bench
+          # harness defines `#[library_benchmark]` entry points; the
+          # resulting binary, when run without the gungraun
+          # protocol env, exits after a trivial handshake. That's
+          # enough for samply to attach; for deeper profiles we
+          # invoke it with cargo criterion instead.
+          cargo bench --no-run -p "$CRATE" --bench "${TARGET%_iai}" 2>&1 | tail -5
+          BENCH_BIN=$(ls -t target/release/deps/${TARGET%_iai}-* \
+                      | grep -v '\.d$' | head -1)
+          # `--profile-time 10` is per BENCHMARK, not per binary, so the run
+          # scales with the target's cell count: `relay_admission_verify`
+          # sweeps 64 cells and builds an FCMP++ proof for each, which would
+          # outrun this job's 15-minute budget and turn a diagnostic into a
+          # second red check beside the gate that actually tripped. Bound the
+          # sampling itself so the profile is best-effort and the job's
+          # runtime does not depend on which bench regressed.
+          timeout 600 samply record --output /tmp/profile.json --no-open \
+            "$BENCH_BIN" --bench --profile-time 10 || true
+          ls -la /tmp/profile.json || echo "samply produced no profile"
+
+      - name: upload samply profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: samply-profile-${{ github.event.pull_request.number }}
+          path: /tmp/profile.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  update-baseline:
+    name: update bench-baseline branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    # The same capture as `capture-pr` at every row, and its sizing: 62 min
+    # on the push that merged the block-path rows (run 43357162994), before
+    # the network and sync rows.
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: install apt deps
+        run: |
+          # See scripts/ci/drop_runner_chrome_apt_source.sh.
+          bash scripts/ci/drop_runner_chrome_apt_source.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: install Rust toolchain
+        # Composite action (.github/actions/install-rust): the one
+        # hardened download-then-run recipe, installing the
+        # rust-toolchain.toml pin up front (the inline `-y` form
+        # installed a floating stable that rust-toolchain.toml then
+        # overrode per cargo invocation anyway).
+        uses: ./.github/actions/install-rust
+
+      - name: cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-rust-${{ runner.os }}-
+
+      - name: install gungraun-runner
+        # EXACT-pin in lockstep with `rust/Cargo.lock` (see the install step in
+        # the capture-pr job above for why `^0.19` drifts and breaks the run).
+        run: cargo install gungraun-runner --version '=0.19.3' --locked
+
+      - name: capture baseline
+        run: ./scripts/bench/capture_rust_baseline.sh
+
+      - name: keep the baseline this capture replaces
+        id: previous
+        run: |
+          set -euo pipefail
+          # Read before the push moves the branch. A failed lookup is
+          # not an absent branch: that would skip the alarm and let
+          # the push replace a baseline this run never read.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh . bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
+            git fetch origin bench-baseline
+            git show FETCH_HEAD:baseline.json > /tmp/previous-baseline.json
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "${presence}" = "absent" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
+          fi
+
+      - name: push updated baseline to bench-baseline branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CAPTURE_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Stage-out the envelope + snapshot from the dev checkout
+          # so we do not drag any other tree state into bench-baseline.
+          mkdir -p /tmp/baseline-out
+          cp docs/benchmarks/shekyl_rust_v0.json /tmp/baseline-out/baseline.json
+          cp docs/benchmarks/shekyl_rust_v0.iai.snapshot /tmp/baseline-out/baseline.iai.snapshot
+          cat > /tmp/baseline-out/README.md <<MD
+          # bench-baseline branch
+
+          **Do not merge this branch.** It is a rolling data branch
+          holding the current CI benchmark baseline — one file at tip,
+          updated by the \`ci/benchmarks\` workflow on every push to
+          \`dev\`. See
+          [\`docs/benchmarks/README.md\`](../dev/docs/benchmarks/README.md)
+          "CI integration" section for the full protocol.
+
+          **Tip file:**
+          - \`baseline.json\` — \`shekyl_rust_v0\`-schema envelope
+            captured on a GitHub-hosted \`ubuntu-latest\` runner.
+          - \`baseline.iai.snapshot\` — raw gungraun stdout
+            corresponding to the same capture.
+
+          Current source commit: \`${CAPTURE_SOURCE_SHA}\`.
+          MD
+
+          # Work in a clean worktree so the main tree is not disturbed.
+          WORK=$(mktemp -d)
+          git -C "$WORK" init -q
+          git -C "$WORK" config user.name "shekyl-ci-bot"
+          git -C "$WORK" config user.email "ci-bot@shekyl.foundation"
+          git -C "$WORK" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # A failed lookup must not orphan-seed a second history.
+          remote_status=0
+          presence=$(./scripts/bench/origin_branch.sh "$WORK" bench-baseline) || remote_status=$?
+          if [ "${remote_status}" -ne 0 ]; then
+            exit "${remote_status}"
+          fi
+          if [ "${presence}" = "present" ]; then
+            git -C "$WORK" fetch origin bench-baseline
+            git -C "$WORK" checkout -b bench-baseline FETCH_HEAD
+          elif [ "${presence}" = "absent" ]; then
+            git -C "$WORK" checkout --orphan bench-baseline
+            git -C "$WORK" rm -rf . >/dev/null 2>&1 || true
+          else
+            echo "::error::origin_branch.sh printed '${presence}'"
+            exit 2
+          fi
+
+          cp /tmp/baseline-out/* "$WORK/"
+          git -C "$WORK" add baseline.json baseline.iai.snapshot README.md
+
+          if git -C "$WORK" diff --cached --quiet; then
+            echo "[update-baseline] no change since previous tip; skipping commit."
+            exit 0
+          fi
+
+          git -C "$WORK" commit -m "bench-baseline: refresh from ${CAPTURE_SOURCE_SHA:0:12}"
+          git -C "$WORK" push origin bench-baseline
+
+      - name: drift alarm
+        # This capture is the pull-request set, every row of it. The
+        # full-weight rows are nightly.yml bench-full-drift, which calls
+        # the same script on that set. compare.py: a fail or a missing
+        # row is red, and the log names it. A warn is not red. The
+        # baseline has already moved, so the next push is held to this
+        # capture and a warn does not accumulate into a later fail.
+        if: steps.previous.outputs.present == 'true'
+        run: |
+          ./scripts/bench/drift_report.sh "dev baseline" \
+            /tmp/previous-baseline.json docs/benchmarks/shekyl_rust_v0.json \
+            "the baseline this push replaced"
+
+  # Every push run on `dev` reports to `report-dev-red.yml`: a red job
+  # opens or threads its own tracking issue, and a job green again closes
+  # its issue. `needs` lists every other job in this file, so a red in any
+  # of them reports; scripts/ci/check_dev_red_reporter.py holds the list
+  # and this condition to the file. Only a push run on `dev` reports: a
+  # pull request's red is read on the pull request. A job past its
+  # `timeout-minutes` is cancelled, not failed, and the reporter counts it
+  # red. A run cancelled as a whole (a newer merge superseded it) reports
+  # nothing, which `!cancelled()` leaves out.
+  report-dev-red:
+    needs: [scope, capture-pr, compare, profile-on-fail, update-baseline]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml

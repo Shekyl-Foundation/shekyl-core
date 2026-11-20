@@ -1,0 +1,459 @@
+name: ci/gh-actions/gitian
+
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GITIAN_REPO_URL: ${{ inputs.repo_url || format('https://github.com/{0}', github.repository) }}
+  GITIAN_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # No genesis on a pre-standard FN-DSA (ARCHIVAL_SERVE_CREDIT_SPEC.md §11).
+  # Any tag that is not a recognised pre-release is the genesis release
+  # (RELEASE_PROMOTION.md); on such a tag this fails while `fn-dsa` is locked
+  # below 1.0, and the build waits on it. It reads the tree of the tag being
+  # built, which on a dispatch is not the ref the workflow runs from.
+  fn-dsa-genesis-gate:
+    name: fn-dsa genesis gate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10  # p90 0.2 min over 10 runs; the floor
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        ref: ${{ env.GITIAN_TAG }}
+    - name: Refuse a genesis release on a pre-1.0 fn-dsa
+      run: |
+        gate=scripts/ci/check_fn_dsa_genesis_gate.py
+        # A dry run is dispatched with a full commit id, as
+        # RELEASE_PROMOTION.md §4 requires (gitian refuses a ref with a slash
+        # in it). A commit id is not a tag of any shape, so it is not a
+        # release and there is nothing to refuse: the gate runs with no tag,
+        # which still checks the lock and reports what a genesis build would
+        # be told. Read as a tag, the id fails the pre-release shape and the
+        # gate stopped every dry run before the build. Nothing is waved
+        # through by this: a dispatch cannot publish (the publish step runs
+        # on a tag ref only), and a tag push never takes this branch.
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && grep -Eq '^[0-9a-f]{40}$' <<<"$GITIAN_TAG"; then
+          echo "::notice::dry run of commit $GITIAN_TAG: not a release tag, the genesis refusal does not apply"
+          if [ -f "$gate" ]; then
+            python3 "$gate"
+          fi
+          exit 0
+        fi
+        if [ ! -f "$gate" ]; then
+          # A tag cut before the gate existed. The same rule as the script,
+          # in the same expression, which the script checks is here verbatim:
+          # a recognised pre-release passes, and any other shape is refused,
+          # not waved on. The tag reaches grep on a here-string, so the
+          # verdict is grep's own exit status and not a pipeline's.
+          if grep -Eiq '^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
+            echo "::notice::$GITIAN_TAG predates the fn-dsa genesis gate and is a pre-release: nothing to refuse"
+            exit 0
+          fi
+          echo "::error::$GITIAN_TAG is not a recognised pre-release and its tree has no fn-dsa genesis gate"
+          exit 1
+        fi
+        python3 "$gate" --release-tag "$GITIAN_TAG"
+
+  build-gitian:
+    needs: fn-dsa-genesis-gate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150  # p90 65.3 min over 22 runs (the macOS leg)
+    strategy:
+      fail-fast: false
+      matrix:
+        operating-system:
+          - name: "Linux"
+            option: "l"
+          - name: "Windows"
+            option: "w"
+          - name: "FreeBSD"
+            option: "f"
+          - name: "macOS"
+            option: "m"
+    name: ${{ matrix.operating-system.name }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+    - name: prepare
+      run: |
+        sudo apt update
+        chmod +x contrib/gitian/gitian-build.py
+    - name: setup
+      run: |
+        for attempt in 1 2 3; do
+          echo "=== Setup attempt $attempt ==="
+          if ./contrib/gitian/gitian-build.py --setup --docker --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"; then
+            break
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "Setup failed after 3 attempts"
+            exit 1
+          fi
+          echo "Setup failed (likely apt proxy 503), retrying in 30s..."
+          docker rmi -f base-jammy-amd64 2>/dev/null || true
+          sleep 30
+        done
+    - name: build
+      run: |
+        ./contrib/gitian/gitian-build.py --docker --detach-sign --no-commit --build -j 3 -o ${{ matrix.operating-system.option }} --url "$GITIAN_REPO_URL" github-actions "$GITIAN_TAG"
+    - name: post build
+      run: |
+        cd "out/$GITIAN_TAG"
+        shasum -a256 *
+        echo \`\`\` >> $GITHUB_STEP_SUMMARY
+        shasum -a256 * >> $GITHUB_STEP_SUMMARY
+        echo \`\`\` >> $GITHUB_STEP_SUMMARY
+    - uses: actions/upload-artifact@v6
+      with:
+        name: gitian-${{ matrix.operating-system.name }}
+        path: |
+          out/${{ env.GITIAN_TAG }}/*
+
+  package-and-publish:
+    name: Package & Publish Release
+    needs: [build-gitian]
+    # 24.04, not the build jobs' 22.04: the installer check unpacks the NSIS
+    # installer with 7-Zip, and 22.04's p7zip 16.02 cannot decode it. On an
+    # installer built here it reports "Data Error" for shekyld.exe and, asked
+    # for tor/ alone, exits 0 with a tor.exe that is not the one packed.
+    # 24.04's p7zip-full is 7-Zip 23.01, which reads it byte-exact.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10  # p90 3.3 min over 12 runs; the floor
+    # On a tag this packages and publishes. Dispatched with package_dry_run
+    # it packages and stops: the .deb/.rpm staging, the post-pack checks and
+    # the installer run on a branch, so the first time they run is not the
+    # release. The publish step below stays tag-only.
+    if: startsWith(github.ref, 'refs/tags/') || inputs.package_dry_run
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Download all Gitian artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: gitian-out
+          pattern: gitian-*
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems rpm rpm2cpio cpio nsis p7zip-full pipx
+          sudo gem install --no-document fpm
+          # 24.04 refuses a pip install into the system Python (PEP 668);
+          # pipx gives the tool its own environment and puts it on PATH.
+          pipx install git-archive-all
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          TAG="${GITIAN_TAG}"
+          VERSION="${TAG#v}"
+          # A dry run is not on a tag. Whatever was typed into the dispatch
+          # (a commit, or a branch name with a slash in it) is not fit to be
+          # a file name or a package version, so a dry run names everything
+          # from the commit the workflow ran at.
+          if [ "${GITHUB_REF#refs/tags/}" = "${GITHUB_REF}" ]; then
+            TAG="dryrun-${GITHUB_SHA:0:9}"
+            VERSION="0.0.0.dryrun.${GITHUB_SHA:0:9}"
+          fi
+          RELEASE="release-assets"
+          mkdir -p "$RELEASE"
+
+          # What the Linux packages declare as their licence. Shekyl is
+          # BSD-3-Clause. The packaged tor reports itself as covered by the
+          # GPL, version 3 (`tor --version`), its libevent is BSD-3-Clause and
+          # its OpenSSL is Apache-2.0. The texts travel in
+          # /usr/share/doc/shekyl/tor/ (TB-13); this is the field a
+          # distribution's tooling reads.
+          PKG_LICENSE="BSD-3-Clause AND GPL-3.0-only AND Apache-2.0"
+
+          # The pinned Tor bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-9). A
+          # gitian archive carries it in tor/ beside the binaries; a system
+          # package installs it under /opt/shekyl/<bundle>-<target>/, the
+          # directory the daemon composes from the pin compiled into it, and
+          # never in /usr/local/bin where it would shadow a distribution's
+          # tor. Both paths come from config/tor_pins.json through
+          # scripts/release/tor_bundle.py; nothing here restates a version
+          # or a digest. The bundle does not ship zlib (TOR_BUNDLE_DISTRIBUTION.md
+          # §5a); the packages depend on the distribution's zlib so a fresh
+          # install has libz.so.1 before the first launch.
+          #
+          # stage_tor <gitian-host> <archive-bin-dir> <package-root>
+          stage_tor() {
+            local host="$1" bin="$2" root="$3" install_dir
+            install_dir="$(python3 scripts/release/tor_bundle.py install-dir --host "$host")"
+            mkdir -p "$root$install_dir" "$root/usr/share/doc/shekyl/tor"
+            cp "$bin"/tor/* "$root$install_dir/"
+            cp "$bin"/tor-licenses/* "$root/usr/share/doc/shekyl/tor/"
+            # The files about to be packed, against the pin file: exactly
+            # the pinned files, each with its digest.
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$root$install_dir"
+          }
+          # The daemon's service, the same in both packages
+          # (INPUT_GRAMMAR.md IG-Q64): its template unit shekyld@.service
+          # and slice (ruled 2026-10-12); the account and /etc/shekyl it runs
+          # with, declared for systemd-sysusers and systemd-tmpfiles; and a
+          # settings file per public network, every option commented out,
+          # which post-install.sh copies into /etc/shekyl when none is there.
+          # The scripts, not fpm's systemd hook, carry the unit: that hook
+          # takes one plain unit and cannot stop a template's instances.
+          #
+          # stage_service <stage-root>
+          stage_service() {
+            local root="$1"
+            mkdir -p "$root/lib/systemd/system" "$root/usr/lib/sysusers.d" \
+              "$root/usr/lib/tmpfiles.d" "$root/usr/share/shekyl"
+            cp contrib/packaging/linux/shekyld@.service contrib/packaging/linux/shekyl.slice \
+              "$root/lib/systemd/system/"
+            cp contrib/packaging/linux/shekyl.sysusers "$root/usr/lib/sysusers.d/shekyl.conf"
+            cp contrib/packaging/linux/shekyl.tmpfiles "$root/usr/lib/tmpfiles.d/shekyl.conf"
+            cp contrib/packaging/linux/shekyld-*.toml "$root/usr/share/shekyl/"
+          }
+          # The .deb, built by dpkg-deb from the staged tree. Its maintainer
+          # scripts dispatch on dpkg's own action and run the bodies the
+          # .rpm runs (contrib/packaging/linux/*.sh): fpm's deb templates
+          # never run a purge script (fpm 1.18 defines --deb-after-purge and
+          # does not wire it), and IG-Q64's purge is one. xz, which every
+          # supported dpkg reads (Ubuntu's dpkg defaults to zstd).
+          #
+          # deb_script <stage-root> <dpkg script> <actions, a case pattern> <body>
+          deb_script() {
+            local root="$1" name="$2" actions="$3" body="$4"
+            {
+              printf '#!/bin/sh\n# dpkg %s: runs %s on %s.\nset -e\n' "$name" "${body##*/}" "$actions"
+              printf 'case "$1" in\n%s) ;;\n*) exit 0 ;;\nesac\n' "$actions"
+              sed '1{/^#!/d}' "$body"
+            } > "$root/DEBIAN/$name"
+            chmod 0755 "$root/DEBIAN/$name"
+          }
+          # build_deb <stage-root> <deb architecture> <output>
+          build_deb() {
+            local root="$1" arch="$2" out="$3"
+            mkdir -p "$root/DEBIAN"
+            {
+              echo "Package: shekyl"
+              echo "Version: $VERSION"
+              echo "Architecture: $arch"
+              echo "Maintainer: Shekyl Foundation <info@shekyl.org>"
+              echo "Depends: zlib1g, systemd"
+              echo "Section: net"
+              echo "Priority: optional"
+              echo "Homepage: https://github.com/Shekyl-Foundation/shekyl-core"
+              echo "Description: Shekyl cryptocurrency daemon and wallet tools"
+            } > "$root/DEBIAN/control"
+            deb_script "$root" preinst "install|upgrade" contrib/packaging/linux/pre-install.sh
+            deb_script "$root" postinst "configure" contrib/packaging/linux/post-install.sh
+            deb_script "$root" prerm "remove|deconfigure" contrib/packaging/linux/pre-remove.sh
+            deb_script "$root" postrm "purge" contrib/packaging/linux/deb-after-purge.sh
+            dpkg-deb --root-owner-group -Zxz --build "$root" "$out"
+          }
+          # The RPC tunnel (RPC_CHANNEL.md §8; Rick, 2026-11-16): its binary
+          # beside shekyl-cli, and its unit installed but not enabled. Neither
+          # package enables, starts or restarts a unit. The tunnel needs a
+          # configuration, a key and its own account before its first start,
+          # so its unit is a plain file the operator enables.
+          #
+          # stage_tunnel <bin-dir> <stage-root>
+          stage_tunnel() {
+            local bin="$1" root="$2"
+            cp "$bin"/shekyl-rpc-tunnel "$root/usr/local/bin/"
+            mkdir -p "$root/lib/systemd/system"
+            cp contrib/packaging/linux/shekyl-rpc-tunnel.service "$root/lib/systemd/system/"
+          }
+          # And again on what the package tool actually produced, unpacked:
+          # a packager that strips or rewrites a binary ships a tor the
+          # daemon refuses at first launch.
+          #
+          # check_packed_tor <gitian-host> <package-file (absolute)>
+          check_packed_tor() {
+            local host="$1" pkg="$2" install_dir unpacked
+            install_dir="$(python3 scripts/release/tor_bundle.py install-dir --host "$host")"
+            unpacked="$(mktemp -d)"
+            case "$pkg" in
+              *.deb) dpkg-deb -x "$pkg" "$unpacked" ;;
+              *.rpm) rpm2cpio "$pkg" > "$unpacked.cpio"
+                     # rpm member names are absolute. Without this flag GNU cpio
+                     # writes them to the real filesystem and the check either
+                     # fails as the runner or inspects a directory it did not unpack.
+                     (cd "$unpacked" && cpio -idm --quiet --no-absolute-filenames < "$unpacked.cpio")
+                     rm -f "$unpacked.cpio" ;;
+              # The Windows installer lays the bundle in `tor\` beside
+              # shekyld.exe, where the daemon looks on Windows
+              # (shekyl-tor-control-client BESIDE_TOR_DIR), not under a system
+              # directory. 7-Zip reads an NSIS installer. Windows has no
+              # executable bit, so the extract is given one for the check.
+              *.exe) 7z x -y -o"$unpacked" "$pkg" >/dev/null || return 1
+                     install_dir=/tor
+                     chmod +x "$unpacked$install_dir"/*.exe || return 1 ;;
+              *) echo "check_packed_tor: unknown package type: $pkg" >&2; return 1 ;;
+            esac
+            python3 scripts/release/tor_bundle.py verify --host "$host" --dir "$unpacked$install_dir" \
+              || { rm -rf "$unpacked"; return 1; }
+            rm -rf "$unpacked"
+          }
+
+          # Copy all Gitian tarballs/zips into the release directory
+          find gitian-out -type f \( -name '*.tar.bz2' -o -name '*.zip' \) -exec cp {} "$RELEASE/" \;
+
+          echo "=== Gitian artifacts ==="
+          ls -lh "$RELEASE/"
+
+          # Both Linux archives must be here. The blocks below are written
+          # "if the archive exists", so a Linux build that produced nothing
+          # would otherwise package nothing and still succeed, on a tag as
+          # on a dry run.
+          for host in x86_64-linux-gnu aarch64-linux-gnu; do
+            found="$(find gitian-out -name "shekyl-${host}-*.tar.bz2")"
+            if [ -z "$found" ]; then
+              echo "FATAL: no gitian archive for ${host}; its .deb and .rpm cannot be built" >&2
+              exit 1
+            fi
+          done
+
+          # --- Linux x86_64: .deb and .rpm ---
+          LINUX_X86=$(find gitian-out -name "shekyl-x86_64-linux-gnu-*.tar.bz2" | head -1)
+          if [ -n "$LINUX_X86" ]; then
+            # The tunnel is a guaranteed product beside them (stage_tunnel).
+            # The three wallet binaries are guaranteed products since the
+            # C1/C2 install cutover (shekyld from C++, shekyl-cli and
+            # shekyl-wallet-rpc from cmake/BuildRust.cmake, staged into
+            # bin/ which is what gitian tars). These copies deliberately
+            # hard-fail: `|| true` here previously meant a release with no
+            # wallet-rpc and no CLI packaged successfully and silently.
+            echo "=== Packaging Linux x86_64 .deb/.rpm from $LINUX_X86 ==="
+            TMPDIR_X86=$(mktemp -d)
+            tar xjf "$LINUX_X86" -C "$TMPDIR_X86"
+            BIN_X86=$(find "$TMPDIR_X86" -name shekyld -printf '%h\n' | head -1)
+
+            STAGE="$(pwd)/stage-deb-amd64"
+            mkdir -p "$STAGE/usr/local/bin"
+            cp "$BIN_X86"/shekyld "$STAGE/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-cli "$STAGE/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
+            stage_tunnel "$BIN_X86" "$STAGE"
+            stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE"
+            stage_service "$STAGE"
+            build_deb "$STAGE" amd64 "$RELEASE/shekyl_${VERSION}_amd64.deb"
+            check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_amd64.deb"
+
+            STAGE_RPM="$(pwd)/stage-rpm-x86_64"
+            mkdir -p "$STAGE_RPM/usr/local/bin"
+            cp "$BIN_X86"/shekyld "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_X86"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
+            stage_tunnel "$BIN_X86" "$STAGE_RPM"
+            stage_tor x86_64-linux-gnu "$BIN_X86" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
+            fpm -s dir -t rpm \
+              -p "$RELEASE/shekyl-${VERSION}-1.x86_64.rpm" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "$PKG_LICENSE" --architecture x86_64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/pre-remove.sh \
+              -C "$STAGE_RPM" .
+            check_packed_tor x86_64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.x86_64.rpm"
+
+            rm -rf "$TMPDIR_X86"
+          fi
+
+          # --- Linux aarch64: .deb and .rpm ---
+          LINUX_ARM=$(find gitian-out -name "shekyl-aarch64-linux-gnu-*.tar.bz2" | head -1)
+          if [ -n "$LINUX_ARM" ]; then
+            echo "=== Packaging Linux aarch64 .deb/.rpm from $LINUX_ARM ==="
+            TMPDIR_ARM=$(mktemp -d)
+            tar xjf "$LINUX_ARM" -C "$TMPDIR_ARM"
+            BIN_ARM=$(find "$TMPDIR_ARM" -name shekyld -printf '%h\n' | head -1)
+
+            STAGE="$(pwd)/stage-deb-arm64"
+            mkdir -p "$STAGE/usr/local/bin"
+            cp "$BIN_ARM"/shekyld "$STAGE/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-cli "$STAGE/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE/usr/local/bin/"
+            stage_tunnel "$BIN_ARM" "$STAGE"
+            stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE"
+            stage_service "$STAGE"
+            build_deb "$STAGE" arm64 "$RELEASE/shekyl_${VERSION}_arm64.deb"
+            check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl_${VERSION}_arm64.deb"
+
+            STAGE_RPM="$(pwd)/stage-rpm-aarch64"
+            mkdir -p "$STAGE_RPM/usr/local/bin"
+            cp "$BIN_ARM"/shekyld "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-cli "$STAGE_RPM/usr/local/bin/"
+            cp "$BIN_ARM"/shekyl-wallet-rpc "$STAGE_RPM/usr/local/bin/"
+            stage_tunnel "$BIN_ARM" "$STAGE_RPM"
+            stage_tor aarch64-linux-gnu "$BIN_ARM" "$STAGE_RPM"
+            stage_service "$STAGE_RPM"
+            fpm -s dir -t rpm \
+              -p "$RELEASE/shekyl-${VERSION}-1.aarch64.rpm" \
+              --name shekyl --version "$VERSION" \
+              --description "Shekyl cryptocurrency daemon and wallet tools" \
+              --url "https://github.com/Shekyl-Foundation/shekyl-core" \
+              --license "$PKG_LICENSE" --architecture aarch64 \
+              --maintainer "Shekyl Foundation <info@shekyl.org>" \
+              --depends zlib \
+              --depends systemd \
+              --before-install contrib/packaging/linux/pre-install.sh \
+              --before-upgrade contrib/packaging/linux/pre-install.sh \
+              --after-install contrib/packaging/linux/post-install.sh \
+              --after-upgrade contrib/packaging/linux/post-install.sh \
+              --before-remove contrib/packaging/linux/pre-remove.sh \
+              -C "$STAGE_RPM" .
+            check_packed_tor aarch64-linux-gnu "$(pwd)/$RELEASE/shekyl-${VERSION}-1.aarch64.rpm"
+
+            rm -rf "$TMPDIR_ARM"
+          fi
+
+          # --- Windows NSIS installer ---
+          WIN_ZIP=$(find gitian-out -name "shekyl-x86_64-w64-mingw32-*.zip" | head -1)
+          if [ -n "$WIN_ZIP" ]; then
+            echo "=== Building NSIS installer from $WIN_ZIP ==="
+            TMPDIR_WIN=$(mktemp -d)
+            unzip -o "$WIN_ZIP" -d "$TMPDIR_WIN"
+            BIN_WIN=$(find "$TMPDIR_WIN" -name "shekyld.exe" -printf '%h\n' | head -1)
+            makensis \
+              -DVERSION="$VERSION" \
+              -DBIN_DIR="$BIN_WIN" \
+              -DLICENSE_FILE="$(pwd)/LICENSE" \
+              -DEXAMPLE_TOML="$(pwd)/docs/generated/shekyld.example.toml" \
+              -DOUTPUT_FILE="$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe" \
+              contrib/packaging/windows/shekyl.nsi
+            check_packed_tor x86_64-w64-mingw32 "$(pwd)/$RELEASE/shekyl-${TAG}-win-x64-setup.exe"
+            rm -rf "$TMPDIR_WIN"
+          fi
+
+          # --- Source archive ---
+          echo "=== Creating source archive ==="
+          git-archive-all --prefix="shekyl-${TAG}/" "$RELEASE/shekyl-${TAG}-source.tar.gz"
+
+          # --- SHA256SUMS ---
+          cd "$RELEASE"
+          sha256sum * > SHA256SUMS
+          echo "=== Release contents ==="
+          cat SHA256SUMS
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'RC') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
