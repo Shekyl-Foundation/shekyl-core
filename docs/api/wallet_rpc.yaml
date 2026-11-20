@@ -2563,8 +2563,9 @@ components:
           enum: [missing, corrupt]
           description: >
             missing: the body store did not hold it. corrupt: it held it,
-            and a chunk failed authentication or the frame's rows were not
-            the shard's.
+            and a chunk failed authentication, the chunks did not add up to
+            the length the store recorded, or the frame's rows were not the
+            shard's.
         refill:
           type: string
           enum: [pending, refilled, discarded, failed]

@@ -269,8 +269,9 @@ pub(crate) enum StoredFrame {
     NotHeld,
     /// The frame, every chunk authenticated.
     Frame(Vec<u8>),
-    /// The row is there and a chunk is missing or fails authentication:
-    /// the bytes on disk are not the ones written.
+    /// The row is there and a chunk is missing or fails authentication, or
+    /// the chunks do not add up to the row's length: the bytes on disk are
+    /// not the ones written.
     Unreadable,
 }
 
@@ -286,15 +287,11 @@ impl Message<ReadShardFrame> for BodyStoreActor {
         let Some(held) = store.open_shard(msg.shard_id)? else {
             return Ok(StoredFrame::NotHeld);
         };
-        let mut frame = Vec::with_capacity(usize::try_from(held.len()).unwrap_or(0));
-        for index in 0..held.chunk_count() {
-            match store.read_chunk(&held, index) {
-                Ok(chunk) => frame.extend_from_slice(&chunk),
-                Err(StoreError::Corrupt { .. }) => return Ok(StoredFrame::Unreadable),
-                Err(other) => return Err(other),
-            }
+        match store.read_frame(&held) {
+            Ok(frame) => Ok(StoredFrame::Frame(frame)),
+            Err(StoreError::Corrupt { .. }) => Ok(StoredFrame::Unreadable),
+            Err(other) => Err(other),
         }
-        Ok(StoredFrame::Frame(frame))
     }
 }
 

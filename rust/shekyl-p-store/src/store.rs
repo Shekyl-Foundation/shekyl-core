@@ -190,6 +190,33 @@ impl BodyStore {
         })
     }
 
+    /// The whole body of an opened shard, every chunk opened: what a
+    /// holder's own check of its store reads (`WSS-Q17`).
+    ///
+    /// The shard's row (its salt, length and chunk count) is not sealed, so
+    /// the buffer grows with the chunks as each authenticates rather than
+    /// being reserved from the row's length, and the chunks' total is checked
+    /// against that length: a row that disagrees with its body is as corrupt
+    /// as a chunk that fails authentication.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Corrupt`] if a chunk is missing or fails authentication,
+    /// or the opened chunks do not add up to the row's length;
+    /// [`StoreError::Backend`] on I/O.
+    pub fn read_frame(&self, held: &HeldShard) -> Result<Vec<u8>, StoreError> {
+        let mut frame = Vec::new();
+        for index in 0..held.meta.chunk_count {
+            frame.extend_from_slice(&self.read_chunk(held, index)?);
+        }
+        if u64::try_from(frame.len()).ok() != Some(held.meta.body_len) {
+            return Err(StoreError::Corrupt {
+                detail: "the opened chunks do not add up to the body's recorded length".to_owned(),
+            });
+        }
+        Ok(frame)
+    }
+
     /// Whether the slot is occupied.
     ///
     /// # Errors
@@ -311,6 +338,93 @@ impl BodyStore {
         }
         txn.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod read_frame_tests {
+    use super::*;
+
+    fn store_with(shard_id: ShardId, frame: &[u8]) -> BodyStore {
+        let store =
+            BodyStore::open_ephemeral(StoreKey::from_bytes([0x3c; KEY_SIZE])).expect("open");
+        store.put_shard(shard_id, frame).expect("put");
+        store
+    }
+
+    /// Rewrite the shard's unsealed row, as a corrupted file would hold it.
+    fn rewrite_row(store: &BodyStore, shard_id: ShardId, edit: impl FnOnce(&mut ShardMeta)) {
+        let slot = slot_key(store.key.as_bytes(), shard_id);
+        let txn = store.db.begin_write().expect("write");
+        {
+            let mut shards = txn.open_table(SHARDS).expect("shards");
+            let mut meta = decode_meta(shards.get(&slot).expect("get").expect("row").value());
+            edit(&mut meta);
+            shards
+                .insert(
+                    &slot,
+                    encode_meta(&meta.salt, meta.body_len, meta.chunk_count),
+                )
+                .expect("insert");
+        }
+        txn.commit().expect("commit");
+    }
+
+    fn read(store: &BodyStore, shard_id: ShardId) -> Result<Vec<u8>, StoreError> {
+        let held = store.open_shard(shard_id).expect("open").expect("held");
+        store.read_frame(&held)
+    }
+
+    fn multi_chunk() -> Vec<u8> {
+        (0..(2 * CHUNK_BYTES + 7))
+            .map(|i| u8::try_from(i % 251).expect("fits"))
+            .collect()
+    }
+
+    #[test]
+    fn a_whole_frame_reads_back_across_its_chunks() {
+        let shard_id = ShardId::from_raw(4);
+        let frame = multi_chunk();
+        let store = store_with(shard_id, &frame);
+        assert_eq!(read(&store, shard_id).expect("read"), frame);
+    }
+
+    #[test]
+    fn a_row_length_past_any_allocation_is_corrupt_not_a_panic() {
+        let shard_id = ShardId::from_raw(4);
+        let store = store_with(shard_id, &multi_chunk());
+        rewrite_row(&store, shard_id, |meta| meta.body_len = u64::MAX);
+        assert!(matches!(
+            read(&store, shard_id),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn a_row_length_that_disagrees_with_the_chunks_is_corrupt() {
+        let shard_id = ShardId::from_raw(4);
+        let store = store_with(shard_id, &multi_chunk());
+        rewrite_row(&store, shard_id, |meta| meta.body_len += 1);
+        assert!(matches!(
+            read(&store, shard_id),
+            Err(StoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn a_row_chunk_count_either_side_of_the_body_is_corrupt() {
+        let shard_id = ShardId::from_raw(4);
+        let store = store_with(shard_id, &multi_chunk());
+        rewrite_row(&store, shard_id, |meta| meta.chunk_count += 1);
+        assert!(
+            matches!(read(&store, shard_id), Err(StoreError::Corrupt { .. })),
+            "one chunk past the body is missing"
+        );
+        rewrite_row(&store, shard_id, |meta| meta.chunk_count -= 2);
+        assert!(
+            matches!(read(&store, shard_id), Err(StoreError::Corrupt { .. })),
+            "one chunk short falls short of the length"
+        );
     }
 }
 

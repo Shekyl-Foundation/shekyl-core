@@ -60,8 +60,9 @@ pub enum ShardAlarmCause {
     /// The store does not hold it.
     Missing,
     /// The store holds it, and its body does not verify: a chunk failed
-    /// authentication, or the frame's rows digest is not the one the persona
-    /// scan sealed.
+    /// authentication, the chunks do not add up to the length the store
+    /// recorded, or the frame's rows digest is not the one the persona scan
+    /// sealed.
     Corrupt,
 }
 
