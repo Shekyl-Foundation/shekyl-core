@@ -150,12 +150,10 @@ where
     )
 }
 
-/// [`sustained`] with an explicit wall budget.
+/// [`sustained`] with both limits explicit, so a test can reach either.
 ///
-/// The budget is a parameter rather than only a constant so the cap can be
-/// *exercised* — a limit that no test can reach is a limit nobody has seen
-/// work.
-/// [`sustained`] with both floors explicit, so a test can reach either.
+/// The budgets are parameters rather than only the constants so a limit can
+/// be exercised. A limit no test can reach is a limit nobody has seen work.
 pub fn sustained_within_conditioned<F>(
     warmup: usize,
     tolerance_pct: f64,
@@ -167,7 +165,7 @@ where
     F: FnMut(),
 {
     sustained_on(
-        &MonotonicClock::default(),
+        &InstantClock::new(),
         warmup,
         tolerance_pct,
         max_wall_seconds,
@@ -176,38 +174,70 @@ where
     )
 }
 
-/// Where a series reads time: a duration since the clock's own origin.
+/// A point on a [`SeriesClock`]: time since that clock's own origin.
 ///
-/// The loop's rules (the disjoint windows, the conditioning floor, the two
-/// caps) are arithmetic over the durations a clock returns, and a test of
-/// those rules needs durations it chose. Read from the monotonic clock around
-/// a sleeping workload, a sample is the sleep plus whatever the scheduler
-/// added: on a loaded machine the two windows of a workload slowing 6 % per
-/// sample came within the 5 % tolerance and the series read converged
-/// (`a_never_settling_workload_is_reported_unconverged_not_looped_forever`, at
-/// load average 7 to 9). The tests therefore drive a clock the workload
-/// advances by exact amounts; the shipped entry points read
-/// [`MonotonicClock`].
-trait Clock {
-    fn now(&self) -> Duration;
-}
+/// Spans go through [`Reading::seconds_since`]. There is no `Sub` impl, so
+/// two readings cannot be combined with the operator that panics when time
+/// runs backwards.
+#[derive(Clone, Copy, Debug)]
+struct Reading(Duration);
 
-/// The monotonic clock, from the moment it was made.
-struct MonotonicClock(Instant);
+impl Reading {
+    /// `elapsed` since this clock's origin.
+    fn since_origin(elapsed: Duration) -> Self {
+        Self(elapsed)
+    }
 
-impl Default for MonotonicClock {
-    fn default() -> Self {
-        Self(Instant::now())
+    /// Seconds from `earlier` to `self`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self` is earlier than `earlier`. Readings on one series
+    /// clock are non-decreasing. A backwards step is a broken clock.
+    fn seconds_since(self, earlier: Self) -> f64 {
+        let span = self
+            .0
+            .checked_sub(earlier.0)
+            .expect("series clock moved backwards");
+        duration_s(span)
     }
 }
 
-impl Clock for MonotonicClock {
-    fn now(&self) -> Duration {
-        self.0.elapsed()
+/// The bench stopwatch for one series.
+///
+/// `now` is the time since this clock's own origin. Readings are
+/// non-decreasing. The loop ends when `now` reaches the wall, or when the
+/// series converges after the conditioning floor. A clock that never reaches
+/// the wall and never converges does not end the loop.
+///
+/// This is not the process wake clock in `shekyl-timing-engine`. That clock
+/// has one origin for the process, and on Windows it reads the unbiased
+/// interrupt time. A series reads [`Instant`] on every platform, which is
+/// what these measurements have always read.
+trait SeriesClock {
+    fn now(&self) -> Reading;
+}
+
+/// [`Instant`], measured from [`InstantClock::new`].
+struct InstantClock {
+    origin: Instant,
+}
+
+impl InstantClock {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
     }
 }
 
-/// The loop itself, on any [`Clock`].
+impl SeriesClock for InstantClock {
+    fn now(&self) -> Reading {
+        Reading::since_origin(self.origin.elapsed())
+    }
+}
+
+/// The loop itself, on any [`SeriesClock`].
 fn sustained_on<C, F>(
     clock: &C,
     warmup: usize,
@@ -217,7 +247,7 @@ fn sustained_on<C, F>(
     mut f: F,
 ) -> Series
 where
-    C: Clock,
+    C: SeriesClock,
     F: FnMut(),
 {
     for _ in 0..warmup {
@@ -228,8 +258,8 @@ where
     // Names the NORMAL exit — the guard below going false with both limits
     // met. Every other exit assigns over it before breaking.
     let mut stopped_because = "limits met, unconverged";
-    let began = clock.now();
-    let elapsed_s = || duration_s(clock.now() - began);
+    let series_start = clock.now();
+    let elapsed_s = || clock.now().seconds_since(series_start);
     // The ITERATION cap must not preempt the CONDITIONING floor. A fast series
     // reaches 60 samples long before 60 seconds, and stopping there would mean
     // convergence could never be declared for it — the two limits would cancel
@@ -249,9 +279,9 @@ where
             stopped_because = "wall-clock cap";
             break;
         }
-        let start = clock.now();
+        let sample_start = clock.now();
         f();
-        samples.push(duration_s(clock.now() - start));
+        samples.push(clock.now().seconds_since(sample_start));
         if samples.len() < MIN_ITERATIONS || elapsed_s() < min_conditioning_seconds {
             continue;
         }

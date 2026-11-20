@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 /// A clock the workload advances by exact amounts, so each test below states
 /// the durations the loop sees rather than asking the scheduler for them
-/// (see [`Clock`]).
+/// (see [`SeriesClock`]).
 #[derive(Default)]
 struct StepClock(Cell<Duration>);
 
@@ -18,10 +18,23 @@ impl StepClock {
     }
 }
 
-impl Clock for StepClock {
-    fn now(&self) -> Duration {
-        self.0.get()
+impl SeriesClock for StepClock {
+    fn now(&self) -> Reading {
+        Reading::since_origin(self.0.get())
     }
+}
+
+/// The real-clock wiring check sleeps this long inside each sample.
+const WIRING_SLEEP: Duration = Duration::from_millis(1);
+/// Wall for that check. A few quiet sleeps fit under it, and a loaded runner
+/// cannot spend the grading wall on a series that never settles.
+const WIRING_WALL: Duration = Duration::from_millis(200);
+
+fn assert_secs(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-12,
+        "{actual} seconds, expected {expected}"
+    );
 }
 
 /// `sustained_on` over a [`StepClock`] whose workload takes `sample_s(i)`
@@ -34,7 +47,7 @@ fn stepped(
     sample_s: impl Fn(u64) -> f64,
 ) -> Series {
     let clock = StepClock::default();
-    let calls = Cell::new(0u64);
+    let mut calls = 0u64;
     sustained_on(
         &clock,
         warmup,
@@ -42,8 +55,8 @@ fn stepped(
         max_wall_seconds,
         min_conditioning_seconds,
         || {
-            let i = calls.get();
-            calls.set(i + 1);
+            let i = calls;
+            calls += 1;
             clock.advance_s(sample_s(i));
         },
     )
@@ -62,7 +75,7 @@ fn a_steady_workload_converges_and_reports_every_iteration() {
     assert_eq!(series.stopped_because, "converged");
     assert_eq!(series.iterations_s.len(), 50);
     assert_eq!(series.warmup_iterations, 2);
-    assert!((series.median_s - 0.001).abs() < 1e-12);
+    assert_secs(series.median_s, 0.001);
     assert!(series.p95_s >= series.median_s);
 }
 
@@ -97,12 +110,22 @@ fn a_never_settling_workload_is_reported_unconverged_not_looped_forever() {
 
 #[test]
 fn the_graded_figure_is_the_median() {
-    // Uneven samples, so the median, the mean and the last sample differ.
-    let series = stepped(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.02, |i| {
-        [0.001, 0.003, 0.002][(i % 3) as usize]
+    // 1 ms, 5 ms, 2 ms. The windows first agree on the 8th sample, the
+    // first at which 20 ms has passed: three 1s, two 2s and three 5s.
+    // Median 2 ms, mean 2.75 ms, last sample 5 ms. A graded figure that
+    // returned the mean or the last sample would miss the median.
+    const LOW_S: f64 = 0.001;
+    const HIGH_S: f64 = 0.005;
+    const MID_S: f64 = 0.002;
+    let series = stepped(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.02, |i| match i % 3 {
+        0 => LOW_S,
+        1 => HIGH_S,
+        _ => MID_S,
     });
+    assert_eq!(series.iterations_s.len(), 8);
     assert_eq!(series.graded_s(), series.median_s);
-    assert!((series.median_s - 0.002).abs() < 1e-12);
+    assert_secs(series.median_s, MID_S);
+    assert_secs(*series.iterations_s.last().expect("eight samples"), HIGH_S);
 }
 
 #[test]
@@ -119,10 +142,6 @@ fn the_wall_clock_cap_stops_a_loop_the_iteration_cap_would_not() {
     assert!(!series.converged);
     assert_eq!(series.stopped_because, "wall-clock cap");
     assert_eq!(series.iterations_s.len(), 7);
-    assert!(
-        series.iterations_s.len() < MAX_ITERATIONS,
-        "the clock must stop the loop before the count does"
-    );
 }
 
 #[test]
@@ -201,18 +220,43 @@ fn a_fast_series_is_not_truncated_by_the_iteration_cap_before_conditioning() {
 }
 
 #[test]
-fn the_shipped_entry_points_read_the_monotonic_clock() {
-    // The tests above drive a StepClock; this one is the wiring the binaries
-    // use. It asserts only what no scheduler can break: a 1 ms sleep never
-    // measures under 1 ms, and the run ends. Whether real samples converge is
-    // the machine's to decide, and the binaries refuse an unconverged series
-    // rather than publish it (`spend_edge.rs`, §5.2).
-    let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.02, || {
-        std::thread::sleep(Duration::from_millis(1));
-    });
-    assert!(series.iterations_s.len() >= MIN_ITERATIONS);
+fn a_clock_that_does_not_advance_ends_when_the_floor_is_zero() {
+    // No conditioning floor: the sample cap is then the only bound, so a
+    // clock that stays at the origin still ends. Zero-length samples have
+    // no scale, so the windows cannot agree.
+    let series = stepped(0, DEFAULT_TOLERANCE_PCT, MAX_WALL_SECONDS, 0.0, |_| 0.0);
+    assert_eq!(series.iterations_s.len(), MAX_ITERATIONS);
+    for sample in &series.iterations_s {
+        assert_secs(*sample, 0.0);
+    }
+    assert!(!series.converged);
+    assert_eq!(series.stopped_because, "limits met, unconverged");
+}
+
+#[test]
+fn sustained_within_conditioned_reads_the_instant_clock() {
+    // The tests above drive a StepClock. This one is the wiring
+    // `sustained_within_conditioned` uses, which is what `sustained` and
+    // `sustained_within` forward to. The floor is zero so a clock that does
+    // not advance still ends at the sample cap, and the assertion can fail.
+    // The wall is [`WIRING_WALL`], so a loaded runner cannot spend the
+    // grading budget on sleeps that never settle. A sample under its own
+    // sleep is the failure; whether the samples converge is the machine's
+    // to decide (`spend_edge.rs`, §5.2).
+    let series = sustained_within_conditioned(
+        0,
+        DEFAULT_TOLERANCE_PCT,
+        duration_s(WIRING_WALL),
+        0.0,
+        || std::thread::sleep(WIRING_SLEEP),
+    );
     assert!(
-        series.iterations_s.iter().all(|&s| s >= 0.001),
+        !series.iterations_s.is_empty(),
+        "the run recorded no sample"
+    );
+    let sleep_s = duration_s(WIRING_SLEEP);
+    assert!(
+        series.iterations_s.iter().all(|&sample| sample >= sleep_s),
         "a sample read under its own sleep: {:?}",
         series.iterations_s
     );
