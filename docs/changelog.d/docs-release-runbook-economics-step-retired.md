@@ -1,0 +1,1 @@
+- **The release runbook no longer dispatches an economics run.** `RELEASE_PROMOTION.md` §4 named `economics-c2a-prime.yml`, which compared the C++ and Rust economics and was deleted with the C++ on 2026-11-07. Its Rust tests run in the workspace Rust job, which "CI green on the SHA" already requires.
