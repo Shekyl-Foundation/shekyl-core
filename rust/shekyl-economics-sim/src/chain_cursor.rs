@@ -22,7 +22,7 @@ use shekyl_economics::{
     EmissionInputs, PaidEmission, TxVolume,
 };
 
-use crate::block_space::{Arrival, BlockSpace, Filled, OwnBodies};
+use crate::block_space::{penalty_zone_prices, Arrival, BlockSpace, Filled, OwnBodies};
 use crate::economy::{fee_units_scaled, fees_paid_burn_pct, with_burn_pct, BurnSignal};
 use crate::engine::{net_supply, SimParams};
 use crate::fee_model::{FeePoint, OrdinaryTx, MILLI};
@@ -188,6 +188,38 @@ impl ChainCursor {
         self.space.listed()
     }
 
+    /// The operands the block at `step` is priced at: the volume signal and
+    /// the medians of the blocks before it, and its generated coins on the
+    /// chain's `u64` rail.
+    fn operands(
+        &self,
+        step: &ChainStep,
+        params: &SimParams,
+        economic: &EconomicParams,
+    ) -> (TxVolume, EffectiveMedian, u64) {
+        let volume = self
+            .window
+            .signal_operand(params.volume_signal, economic.tx_volume_baseline);
+        let medians = self.space.medians(economic);
+        let generated = u64::try_from(step.already_generated.min(u128::from(u64::MAX)))
+            .expect("clamped to the chain's u64 supply rail");
+        (volume, medians, generated)
+    }
+
+    /// Whether the block at `step` can price a body past its penalty-free
+    /// weight ([`penalty_zone_prices`]). Where it cannot, the fill would
+    /// refuse such a body outside the reward's domain, which every fold but
+    /// the whole-economy table treats as a defect.
+    pub(crate) fn penalty_zone_prices(
+        &self,
+        step: &ChainStep,
+        params: &SimParams,
+        economic: &EconomicParams,
+    ) -> bool {
+        let (volume, medians, generated) = self.operands(step, params, economic);
+        penalty_zone_prices(medians, generated, volume, economic)
+    }
+
     /// Price `step` and record the block the fill listed.
     ///
     /// The volume window and the medians are the blocks before this one.
@@ -211,18 +243,13 @@ impl ChainCursor {
         params: &'a SimParams,
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
-        let volume = self
-            .window
-            .signal_operand(params.volume_signal, economic.tx_volume_baseline);
-        let medians = self.space.medians(economic);
+        let (volume, medians, generated) = self.operands(&step, params, economic);
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = economic.emission_schedule().share_at(step.chain_height);
         let burn_pct = match params.economy.burn {
             BurnSignal::Count => calc_burn_pct_at(volume, supply, economic),
             BurnSignal::FeesPaid => fees_paid_burn_pct(self.fee_units.operand(), supply, economic),
         };
-        let generated = u64::try_from(step.already_generated.min(u128::from(u64::MAX)))
-            .expect("clamped to the chain's u64 supply rail");
         let fee_point = FeePoint {
             already_generated: generated,
             volume,

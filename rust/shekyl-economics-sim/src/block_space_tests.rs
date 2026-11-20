@@ -1013,3 +1013,48 @@ fn the_fill_records_why_it_stopped_and_what_it_listed_past_the_free_weight() {
     assert!(mixed.past_free.bodies > 0);
     assert_past_is_the_listing(&mixed, space.listed(), free);
 }
+
+/// Medians where the short and the long term are both `median`.
+fn flat_medians(median: u64) -> EffectiveMedian {
+    EffectiveMedian {
+        long_term_effective_median: shekyl_types::LongTermWeight::from_raw(median),
+        effective_median: shekyl_types::BlockWeight::from_raw(median),
+    }
+}
+
+/// The reward's domain edge (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.1)
+/// is the first median at which production's fill refuses a body as
+/// unpriced. One byte of median below it, the same offer is priced and
+/// ends at the penalty. At genesis on the shipped set the edge lies between
+/// one and twenty terabytes, inside the bound `apply_weight_penalty` states
+/// (`e = 1` is safe below about 1.2·10¹³ bytes).
+#[test]
+fn the_reward_domain_edge_is_where_the_fill_first_refuses_unpriced() {
+    let run = SimParams::default();
+    let params = run.economic();
+    let volume = TxVolume::per_block(params.tx_volume_baseline);
+    let prices = |median: u64| penalty_zone_prices(flat_medians(median), 0, volume, params);
+    let (mut priced, mut unpriced) = (params.full_reward_zone, 1u64 << 62);
+    assert!(prices(priced));
+    assert!(!prices(unpriced));
+    while unpriced - priced > 1 {
+        let mid = priced + (unpriced - priced) / 2;
+        if prices(mid) {
+            priced = mid;
+        } else {
+            unpriced = mid;
+        }
+    }
+    assert!(
+        (1_000_000_000_000..20_000_000_000_000).contains(&unpriced),
+        "the edge at genesis is {unpriced} bytes"
+    );
+    // Bodies of one byte paying one atomic unit each: every one is listed
+    // up to the penalty-free weight, and the next crosses it by one byte.
+    let refusal = |median: u64| {
+        let mut fill = super::empty_fill(flat_medians(median), 0, volume, params);
+        fill.admit_up_to(1, 1, u64::MAX).refusal
+    };
+    assert_eq!(refusal(unpriced), Some(Refusal::Unpriced));
+    assert_eq!(refusal(priced), Some(Refusal::Penalty));
+}

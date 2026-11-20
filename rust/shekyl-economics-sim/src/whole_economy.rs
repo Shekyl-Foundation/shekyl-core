@@ -43,7 +43,9 @@ use crate::jg_grid::{reference_spend_weight, zones, DESIGN_LOAD_SPENDS};
 use crate::rng::HONEST_SEEDS;
 use crate::rung_mix::FeePriority;
 use crate::scenarios::{BASELINE_STEADY_STATE, BOOM_BUST_CYCLE, SUSTAINED_GROWTH};
-use crate::stage2::{a1_year_aggs_probed, penalty_to_stakers, A1YearAgg, BlockSeen, FoldProbe};
+use crate::stage2::{
+    a1_year_aggs_probed, penalty_to_stakers, A1YearAgg, BlockSeen, FoldEdge, FoldProbe,
+};
 use crate::volume_window::VolumeSignal;
 
 /// The ratified structural horizon (`ECONOMY_UMBRELLA_PLAN.md` §4.1, Rick
@@ -107,6 +109,8 @@ const TAU_SWEEP_MS_PER_KB: [f64; 2] = [0.01, 10.0];
 const SECONDS_PER_DAY: u64 = 86_400;
 /// Bytes in a (decimal) gigabyte: the floor device's 1 GB a day.
 const BYTES_PER_GB: u64 = 1_000_000_000;
+/// Bytes in a terabyte, for the reward domain's median.
+const BYTES_PER_TB: f64 = 1e12;
 /// Milliseconds in a second.
 const MS_PER_SECOND: f64 = 1_000.0;
 /// Bytes in a (decimal) kilobyte.
@@ -443,8 +447,8 @@ pub(crate) struct Adversaries {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Folded {
     pub(crate) years: Vec<YearFig>,
-    /// The year the fold stopped at its supply break, if it did.
-    pub(crate) stopped_at: Option<u64>,
+    /// Where the fold stopped before the horizon, if it did.
+    pub(crate) stop: Option<FoldStop>,
     /// The first year half the asymptote is out, fractional.
     pub(crate) half_year: Option<f64>,
     /// The emitted fraction when the honest carried count's trailing mean
@@ -455,6 +459,30 @@ pub(crate) struct Folded {
     pub(crate) design_load_bytes_a_day: f64,
     /// The bond production posts per held gigabyte, SKL.
     pub(crate) bond_per_gb: f64,
+}
+
+/// Where a fold stopped before the horizon: the edge, the year whose block
+/// reached it (the table reads only the whole years before), and the
+/// effective median there, bytes.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct FoldStop {
+    pub(crate) edge: FoldEdge,
+    pub(crate) year: u64,
+    pub(crate) median_bytes: u64,
+}
+
+impl FoldStop {
+    #[allow(clippy::cast_precision_loss)]
+    fn label(&self) -> String {
+        match self.edge {
+            FoldEdge::SupplyBreak => format!("break y{}", self.year),
+            FoldEdge::RewardDomain => format!(
+                "domain y{} at {:.1} TB",
+                self.year,
+                self.median_bytes as f64 / BYTES_PER_TB
+            ),
+        }
+    }
 }
 
 /// The state an adversary is priced at: a year's first block.
@@ -506,6 +534,7 @@ struct EconomyProbe<'p> {
     adoption: Option<(f64, f64)>,
     half_year: Option<f64>,
     snapshots: Vec<Snapshot>,
+    stop: Option<FoldStop>,
 }
 
 impl<'p> EconomyProbe<'p> {
@@ -522,6 +551,7 @@ impl<'p> EconomyProbe<'p> {
             adoption: None,
             half_year: None,
             snapshots: Vec::new(),
+            stop: None,
         }
     }
 
@@ -586,8 +616,16 @@ impl FoldProbe for EconomyProbe<'_> {
         self.stuffs.then_some(OwnFee::RelayFloor)
     }
 
-    fn stops_at_supply_break(&self) -> bool {
+    fn stops_at_edges(&self) -> bool {
         true
+    }
+
+    fn stopped(&mut self, edge: FoldEdge, block: u64, effective_median: u64) {
+        self.stop = Some(FoldStop {
+            edge,
+            year: block / self.blocks_per_year + 1,
+            median_bytes: effective_median,
+        });
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -792,7 +830,7 @@ fn fold(base: &SimParams, cell: &Cell) -> Folded {
     let mut years = probe.years;
     years.truncate(aggs.len());
     add_aggregates(&mut years, &aggs, &params);
-    let stopped_at = (aggs.len() < HORIZON_YEARS as usize).then_some(aggs.len() as u64 + 1);
+    let stop = probe.stop;
     let adversaries = adversaries(&probe.snapshots, &aggs, &params);
     let blocks_a_day = SECONDS_PER_DAY / params.economic().daa_target_seconds;
     let design_load_bytes_a_day =
@@ -801,7 +839,7 @@ fn fold(base: &SimParams, cell: &Cell) -> Folded {
         / SHARD_LENGTH.to_raw() as f64;
     Folded {
         years,
-        stopped_at,
+        stop,
         half_year: probe.half_year,
         adoption: probe.adoption,
         adversaries,
@@ -936,7 +974,7 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     let stops: Vec<String> = row
         .folds
         .iter()
-        .map(|f| f.stopped_at.map_or("-".into(), |y| format!("y{y}")))
+        .map(|f| f.stop.map_or("-".into(), |stop| stop.label()))
         .collect();
     writeln!(
         out,
@@ -1299,6 +1337,44 @@ mod tests {
         assert!(nightly
             .iter()
             .all(|c| c.scenario == BASELINE_STEADY_STATE && c.seed == HONEST_SEEDS[0]));
+    }
+
+    /// Sustained growth at seed 1, every economy, rule and place (240
+    /// folds), each to where it stops. No cell refuses a body outside the
+    /// reward's domain: each ends at the horizon or at a named edge, and
+    /// reads only the whole years before it (§5.37.1). It runs before the
+    /// full table, whose growth cells are these at three seeds.
+    #[test]
+    #[ignore = "--economies sustained growth at seed 1: 240 folds — on demand, before the full table; run with --release --ignored --nocapture"]
+    fn every_growth_cell_ends_at_the_horizon_or_a_named_edge() {
+        let base = SimParams::default();
+        let growth: Vec<Cell> = cells(&base, Scope::Full)
+            .into_iter()
+            .filter(|cell| cell.scenario == SUSTAINED_GROWTH && cell.seed == HONEST_SEEDS[0])
+            .collect();
+        assert_eq!(growth.len(), 15 * 2 * 8);
+        let folded = crate::parallel::map(&growth, |cell| fold(&base, cell));
+        for (cell, folded) in growth.iter().zip(&folded) {
+            let stop = folded
+                .stop
+                .map_or_else(|| format!("y{HORIZON_YEARS}"), |stop| stop.label());
+            eprintln!(
+                "{} | {} | {} at w_ref {} | {stop}",
+                cell.economy.name(),
+                cell.rule.name(),
+                cell.place.zone,
+                cell.place.w_ref
+            );
+            match folded.stop {
+                None => assert_eq!(folded.years.len() as u64, HORIZON_YEARS),
+                Some(stop) => {
+                    assert_eq!(folded.years.len() as u64 + 1, stop.year);
+                    if stop.edge == FoldEdge::RewardDomain {
+                        assert!(stop.median_bytes as f64 >= BYTES_PER_TB);
+                    }
+                }
+            }
+        }
     }
 
     /// The nightly slice against its committed copy.

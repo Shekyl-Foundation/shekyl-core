@@ -38,6 +38,7 @@ use core::cmp::Ordering;
 use shekyl_block_template::{Fill, Refusal};
 use shekyl_chain_rules::{admissible_references, EffectiveMedian};
 use shekyl_curve_tree::select_reference_height;
+use shekyl_economics::{EconomicParams, EmissionError, TxVolume};
 use shekyl_mempool::policy::{make_room, template_order, trim_to, FeeRate, Limits};
 use shekyl_types::BlockHeight;
 use shekyl_wire::transaction::COINBASE_RESERVE;
@@ -183,6 +184,42 @@ fn stop_of(refusal: Refusal) -> FillStop {
             panic!("the fill refused a body outside the reward's domain: {refusal:?}")
         }
     }
+}
+
+/// Production's empty fill for a block judged under `medians`: the coinbase
+/// reserve, its emission priced once ([`Fill::empty`]).
+fn empty_fill<'a>(
+    medians: EffectiveMedian,
+    already_generated: u64,
+    volume: TxVolume,
+    params: &'a EconomicParams,
+) -> Fill<'a> {
+    let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    Fill::empty(
+        medians.effective_median.to_raw(),
+        coinbase,
+        already_generated,
+        volume,
+        params,
+    )
+    .expect("sim trajectory stays within the reward's arithmetic domain")
+}
+
+/// Whether a block judged under `medians` can price a body past its
+/// penalty-free weight: production's penalty, one byte past it, stays
+/// inside `u128`. The penalty's product only falls as the excess grows, so
+/// one byte decides every weight. Where it does not, production's template
+/// refuses every body past the median as [`Refusal::Unpriced`]: the
+/// reward's domain edge (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.1),
+/// which only a median of terabytes reaches.
+pub(crate) fn penalty_zone_prices(
+    medians: EffectiveMedian,
+    already_generated: u64,
+    volume: TxVolume,
+    params: &EconomicParams,
+) -> bool {
+    let fill = empty_fill(medians, already_generated, volume, params);
+    fill.reward_at(fill.penalty_free_bodies().saturating_add(1)) != Err(EmissionError::Overflow)
 }
 
 /// The bodies a block lists past the penalty-free weight
@@ -738,16 +775,7 @@ impl BlockSpace {
             );
         }
 
-        let effective = medians.effective_median.to_raw();
-        let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
-        let mut fill = Fill::empty(
-            effective,
-            coinbase,
-            at.already_generated,
-            at.volume,
-            at.params,
-        )
-        .expect("sim trajectory stays within the reward's arithmetic domain");
+        let mut fill = empty_fill(medians, at.already_generated, at.volume, at.params);
         let pool = self.offer(&mut fill, height, &mut rungs, &offered);
         self.trim(limit, &mut evicted);
         self.drop_empty();

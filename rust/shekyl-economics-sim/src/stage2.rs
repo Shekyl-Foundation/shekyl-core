@@ -461,13 +461,32 @@ pub(crate) trait FoldProbe {
     /// The block just priced.
     fn seen(&mut self, _seen: &BlockSeen<'_, '_>) {}
 
-    /// Whether the fold stops, instead of refusing, when its burn has
-    /// passed everything emitted: the supply break a schedule whose fees
-    /// are exogenous reaches (§5.28.1). The fold ends at the last whole
-    /// year before it. Every fold but the whole-economy table refuses.
-    fn stops_at_supply_break(&self) -> bool {
+    /// Whether the fold stops, instead of refusing, at a [`FoldEdge`]. The
+    /// fold ends at the last whole year before it. Every fold but the
+    /// whole-economy table refuses.
+    fn stops_at_edges(&self) -> bool {
         false
     }
+
+    /// The edge the fold stopped at, before `block`, under an effective
+    /// median of `effective_median` bytes. Asked only when
+    /// [`Self::stops_at_edges`].
+    fn stopped(&mut self, _edge: FoldEdge, _block: u64, _effective_median: u64) {}
+}
+
+/// Where a fold stops when its probe asks it to
+/// ([`FoldProbe::stops_at_edges`]), instead of refusing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum FoldEdge {
+    /// The cumulative burn has passed everything emitted: the supply break
+    /// a schedule whose fees are exogenous reaches (§5.28.1), where the
+    /// fold's supply invariant refuses.
+    SupplyBreak,
+    /// The block cannot price a body past its penalty-free weight: the
+    /// penalty's product leaves `u128`, and production's template refuses
+    /// every such body as unpriced (`ChainCursor::penalty_zone_prices`,
+    /// §5.37.1). The fill treats that refusal as a defect.
+    RewardDomain,
 }
 
 /// The stakers' part of the penalty `priced`'s weight withheld, on the
@@ -512,9 +531,6 @@ pub(crate) fn a1_year_aggs_probed(
     let mut chain = ChainCursor::default();
 
     for block in 0..total_blocks {
-        if total_burned > already_generated && probe.stops_at_supply_break() {
-            break;
-        }
         let abs_height = block + config.genesis_height_offset;
         // The block is built against the tree as it stands. The fee prices
         // that count; archival bytes inside `add_block` read it too, and the
@@ -522,20 +538,30 @@ pub(crate) fn a1_year_aggs_probed(
         let leaves_priced = fold.leaves();
         let closed_before = fold.closed_shard_count();
         let demand = (config.volume.get_volume)(block, params.blocks_per_year());
+        let step = ChainStep {
+            chain_height: abs_height,
+            demand,
+            leaves: leaves_priced,
+            already_generated,
+            total_burned,
+            closed_shards: ClosedShardCount::new(closed_before),
+        };
+        if probe.stops_at_edges() {
+            let edge = if total_burned > already_generated {
+                Some(FoldEdge::SupplyBreak)
+            } else if !chain.penalty_zone_prices(&step, params, economic) {
+                Some(FoldEdge::RewardDomain)
+            } else {
+                None
+            };
+            if let Some(edge) = edge {
+                let median = chain.medians(economic).effective_median.to_raw();
+                probe.stopped(edge, block, median);
+                break;
+            }
+        }
         let own = probe.own_bodies(block);
-        let priced = chain.price_with_own(
-            ChainStep {
-                chain_height: abs_height,
-                demand,
-                leaves: leaves_priced,
-                already_generated,
-                total_burned,
-                closed_shards: ClosedShardCount::new(closed_before),
-            },
-            own,
-            params,
-            economic,
-        );
+        let priced = chain.price_with_own(step, own, params, economic);
         let last_block = LastBlock {
             chain_height: abs_height,
             supply: priced.supply,
