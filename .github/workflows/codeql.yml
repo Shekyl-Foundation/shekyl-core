@@ -1,0 +1,108 @@
+name: "CodeQL Analysis"
+
+# No pull request trigger (ruled 2026-11-16): a push to dev analyses what
+# merged, and the weekly schedule analyses the whole tree. A pull request's
+# alert arrives with its merge, on dev's push run.
+# DEMO BASE ONLY (merge-ready): kept for change_scope.py to read; never runs here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Change scope: see build.yml's `changes` job for why this is a job-level
+  # `if:` and not a `paths` filter (a skipped required check still reports;
+  # a filtered workflow never does). A documentation-only change does not
+  # rebuild the Rust workspace for analysis; scripts/ci/change_scope.py
+  # decides, and fails closed. The weekly schedule and a manual dispatch
+  # carry no base, so they always analyse.
+  changes:
+    name: 'Change scope (codeql)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        run: |
+          set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          fi
+          head="${{ github.sha }}"
+          if [ -z "$base" ]; then
+            echo "scope: ${{ github.event_name }} carries no base; analysing (fail-closed)"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
+            || echo "docs_only=false" >> "$GITHUB_OUTPUT"
+
+  analyze-rust:
+    name: Analyze Rust
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        # The extractor runs cargo for crate metadata. Pinned to
+        # rust/rust-toolchain.toml (channel 1.94.0). Bump both together.
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          # The Rust extractor indexes source at the analyse step. A cargo
+          # build in this job is untraced, and linking shekyld needs the
+          # C++ remnant's archives, which only the CMake build supplies
+          # (rust/shekyld/build.rs). build-mode: none is that choice,
+          # declared. The C/C++ job below uses the same mode.
+          build-mode: none
+          config-file: ./.github/codeql/config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:rust"
+
+  analyze-python:
+    name: Analyze Python
+    # Python on every PR scanned tests/ + contrib scripts that are not
+    # the consensus surface. Weekly + dispatch. Reopen onto PR if a
+    # production Python entry point grows (none today).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"
