@@ -535,7 +535,19 @@ struct EconomyProbe<'p> {
     half_year: Option<f64>,
     snapshots: Vec<Snapshot>,
     stop: Option<FoldStop>,
+    heartbeat: Option<Heartbeat>,
 }
+
+/// A fold's progress line every [`HEARTBEAT_YEARS`], to stderr, for a
+/// timed run that must name a slow cell before it ends. The table's own
+/// folds carry none.
+struct Heartbeat {
+    label: String,
+    started: std::time::Instant,
+}
+
+/// Years between two heartbeat lines.
+const HEARTBEAT_YEARS: u64 = 5;
 
 impl<'p> EconomyProbe<'p> {
     fn new(params: &'p SimParams, stuffs: bool) -> Self {
@@ -552,6 +564,7 @@ impl<'p> EconomyProbe<'p> {
             half_year: None,
             snapshots: Vec::new(),
             stop: None,
+            heartbeat: None,
         }
     }
 
@@ -696,6 +709,18 @@ impl FoldProbe for EconomyProbe<'_> {
         }
         if (seen.block + 1).is_multiple_of(self.blocks_per_year) {
             self.close_year(year, seen.already_generated);
+            if let Some(beat) = &self.heartbeat {
+                if year.is_multiple_of(HEARTBEAT_YEARS) {
+                    eprintln!(
+                        "beat | {} | y{year} | median {} B | waiting {} | cohorts {} | {:.0} s",
+                        beat.label,
+                        priced.medians.effective_median.to_raw(),
+                        filled.waiting,
+                        filled.cohorts_waiting,
+                        beat.started.elapsed().as_secs_f64()
+                    );
+                }
+            }
         }
     }
 }
@@ -822,10 +847,19 @@ fn adversaries(snapshots: &[Snapshot], aggs: &[A1YearAgg], params: &SimParams) -
 /// One cell's fold.
 #[allow(clippy::cast_precision_loss)]
 fn fold(base: &SimParams, cell: &Cell) -> Folded {
+    fold_beating(base, cell, None)
+}
+
+/// [`fold`], printing a [`Heartbeat`] labelled `label` when given one.
+fn fold_beating(base: &SimParams, cell: &Cell, label: Option<String>) -> Folded {
     let placed = at_place(base, &cell.place, cell.seed);
     let params = cell.economy.params(&placed, cell.rule);
     let config = scenario(&params, cell.scenario);
     let mut probe = EconomyProbe::new(&params, cell.economy.stuffs());
+    probe.heartbeat = label.map(|label| Heartbeat {
+        label,
+        started: std::time::Instant::now(),
+    });
     let aggs = a1_year_aggs_probed(&params, &config, &mut probe);
     let mut years = probe.years;
     years.truncate(aggs.len());
@@ -1339,32 +1373,47 @@ mod tests {
             .all(|c| c.scenario == BASELINE_STEADY_STATE && c.seed == HONEST_SEEDS[0]));
     }
 
-    /// Sustained growth at seed 1, every economy, rule and place (240
-    /// folds), each to where it stops. No cell refuses a body outside the
-    /// reward's domain: each ends at the horizon or at a named edge, and
-    /// reads only the whole years before it (§5.37.1). It runs before the
-    /// full table, whose growth cells are these at three seeds.
+    /// The pre-flight: every scenario but the baseline (which the nightly
+    /// slice folds) at seed 1, every economy, rule and place (720 folds),
+    /// each to where it stops. No cell refuses a body outside the reward's
+    /// domain: each ends at the horizon or at a named edge, and reads only
+    /// the whole years before it (§5.37.1). Each fold prints a heartbeat
+    /// every five years and a line when it ends, with its wall time, so a
+    /// slow cell is named while the run goes on. It runs before the full
+    /// table, whose cells these are at one seed of three.
     #[test]
-    #[ignore = "--economies sustained growth at seed 1: 240 folds — on demand, before the full table; run with --release --ignored --nocapture"]
-    fn every_growth_cell_ends_at_the_horizon_or_a_named_edge() {
+    #[ignore = "--economies pre-flight: 720 folds at seed 1 — on demand, before the full table; run with --release --ignored --nocapture"]
+    fn every_preflight_cell_ends_at_the_horizon_or_a_named_edge() {
         let base = SimParams::default();
-        let growth: Vec<Cell> = cells(&base, Scope::Full)
+        let preflight: Vec<Cell> = cells(&base, Scope::Full)
             .into_iter()
-            .filter(|cell| cell.scenario == SUSTAINED_GROWTH && cell.seed == HONEST_SEEDS[0])
+            .filter(|cell| cell.scenario != BASELINE_STEADY_STATE && cell.seed == HONEST_SEEDS[0])
             .collect();
-        assert_eq!(growth.len(), 15 * 2 * 8);
-        let folded = crate::parallel::map(&growth, |cell| fold(&base, cell));
-        for (cell, folded) in growth.iter().zip(&folded) {
-            let stop = folded
-                .stop
-                .map_or_else(|| format!("y{HORIZON_YEARS}"), |stop| stop.label());
-            eprintln!(
-                "{} | {} | {} at w_ref {} | {stop}",
+        assert_eq!(preflight.len(), 15 * 2 * 8 * (SCENARIOS.len() - 1));
+        let label = |cell: &Cell| {
+            format!(
+                "{} | {} | {} | {} at w_ref {}",
+                cell.scenario,
                 cell.economy.name(),
                 cell.rule.name(),
                 cell.place.zone,
                 cell.place.w_ref
+            )
+        };
+        let folded = crate::parallel::map(&preflight, |cell| {
+            let started = std::time::Instant::now();
+            let folded = fold_beating(&base, cell, Some(label(cell)));
+            let stop = folded
+                .stop
+                .map_or_else(|| format!("y{HORIZON_YEARS}"), |stop| stop.label());
+            eprintln!(
+                "done | {} | {stop} | {:.0} s",
+                label(cell),
+                started.elapsed().as_secs_f64()
             );
+            folded
+        });
+        for folded in &folded {
             match folded.stop {
                 None => assert_eq!(folded.years.len() as u64, HORIZON_YEARS),
                 Some(stop) => {

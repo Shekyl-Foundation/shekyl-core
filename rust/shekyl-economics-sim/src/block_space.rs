@@ -138,6 +138,8 @@ pub(crate) struct Filled {
     pub(crate) rungs: PerRung<RungTraffic<u64>>,
     /// Transactions waiting after the block.
     pub(crate) waiting: u64,
+    /// Cohorts waiting after the block: what the pool's walks cost in.
+    pub(crate) cohorts_waiting: usize,
     /// The penalised gross reward at the block's weight
     /// ([`Fill::reward`]), before the split.
     pub(crate) paid_reward: u64,
@@ -810,6 +812,7 @@ impl BlockSpace {
         let filled = Filled {
             rungs,
             waiting: self.waiting_total,
+            cohorts_waiting: self.waiting.len(),
             paid_reward: fill.reward(),
             block_weight: weight,
             bodies_weight: fill.bodies_weight(),

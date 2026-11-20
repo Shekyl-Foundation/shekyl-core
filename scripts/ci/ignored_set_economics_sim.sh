@@ -32,8 +32,8 @@
 # (`--jg-grid`, §5.33 and §5.34): the full grid, about 160 000 fold-years,
 # on demand on a fleet host; its nightly slice here. So is EUP-4 prep 3's
 # whole-economy table (`--economies`, §5.37): the full table, 2 880 folds
-# to year 135, on demand on a fleet host, after its growth cells at seed 1
-# have folded to their stops; its nightly slice (`--economies-slice`) here.
+# to year 135, on demand on a fleet host, after its pre-flight (every
+# scenario but the baseline, at seed 1) has folded to its stops; its nightly slice (`--economies-slice`) here.
 #
 # Rule 47: the lane asserts its subject before running it. The crate's
 # ignored set must be EXACTLY the tests run here, the helpers and the
@@ -113,7 +113,7 @@ eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
 growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
 whole_economy::tests::economies_narration_matches_the_committed_fixture
-whole_economy::tests::every_growth_cell_ends_at_the_horizon_or_a_named_edge'
+whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
