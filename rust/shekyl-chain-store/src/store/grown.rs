@@ -21,12 +21,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet, Trust};
+use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet};
 use shekyl_crypto_pq::held_key_image::HeldKeyImage;
 use shekyl_crypto_pq::CryptoError;
-use shekyl_harness_spender::{
-    complete_tree, first_spending_height, Linked, MinerWallet, Persona, PostedBond, Spender,
-};
+use shekyl_harness_spender::{complete_tree, first_spending_height, Linked, PostedBond, Spender};
 use shekyl_harness_wallet::coinbase::repay;
 use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_units::AtomicUnits;
@@ -34,7 +32,9 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 
 use super::super::store_tests::TestErr;
 use super::super::*;
-use super::{batch_root_going_into, candidate_over, judge_or_corrupt, root_going_into};
+use super::{
+    batch_root_going_into, candidate_carrying, judge_or_corrupt_as, root_going_into, Identity,
+};
 
 /// What a fixture block lists. A chain is a `&[Vec<Listed>]`, one entry
 /// per height from genesis; `connect_chain*` realises each block's entries
@@ -249,6 +249,9 @@ impl HeldCoinbases {
 /// images its listed inputs carry), so [`Self::spend`] names a coinbase
 /// CEN-I7 has not seen spent and two spends built for one block name two.
 pub(in super::super) struct Grown {
+    /// The identity the chain carries: what its spends sign under, the
+    /// miner its coinbases pay, and the genesis its judge pins.
+    identity: Identity,
     /// Each connected block's hash — the priced block's identity
     /// (`judge_under` docs), what a body anchors on.
     pub(in super::super) hashes: Vec<BlockHash>,
@@ -275,9 +278,9 @@ pub(in super::super) struct Grown {
     /// listed image looked up in `held_coinbases`, whether or not this
     /// chain built the spend.
     building: BTreeMap<[u8; 32], u64>,
-    /// Coinbases the harness miner holds, by key image. A replayed capture
-    /// ([`super::super::shard_fill::regrown`]) built none of its spends;
-    /// the listed image is how that capture names the coinbase it took.
+    /// Coinbases the miner holds, by key image. A replayed forged chain
+    /// ([`super::super::forged_fill`]) built none of its spends; the
+    /// listed image is how that chain names the coinbase it took.
     held_coinbases: HeldCoinbases,
 }
 
@@ -285,9 +288,17 @@ impl Grown {
     /// An empty chain — for a test that connects its blocks by hand
     /// ([`Self::realise`], [`Self::record`]).
     pub(in super::super) fn new() -> Self {
+        Self::carrying(Identity::Harness)
+    }
+
+    /// An empty chain carrying `identity`: [`Identity::Regtest`] for a
+    /// forged chain replayed into the store ([`Self::judge_as_built`]) and
+    /// the blocks a test builds on top of it.
+    pub(in super::super) fn carrying(identity: Identity) -> Self {
         Self {
+            identity,
             hashes: Vec::new(),
-            spender: Spender::on::<Linked<'_>>(Trust::UNPINNED.network_id(), &[]),
+            spender: Spender::on::<Linked<'_>>(identity.network_id(), &[]),
             blocks: Vec::new(),
             spent: BTreeSet::new(),
             spent_at: Vec::new(),
@@ -313,14 +324,23 @@ impl Grown {
         &self.images[at(height)]
     }
 
+    /// The identity the chain carries.
+    pub(in super::super) const fn identity(&self) -> Identity {
+        self.identity
+    }
+
     /// The coinbases matured for the block connecting next and spent by no
-    /// block on this chain, lowest first — `0 ..= height −
-    /// FIRST_SPEND_HEIGHT` less [`Self::spent`] ([`height_maturing`]).
+    /// block on this chain, lowest first — `first ..= height −
+    /// FIRST_SPEND_HEIGHT` less [`Self::spent`] ([`height_maturing`]),
+    /// where `first` is the lowest coinbase the miner holds
+    /// ([`Identity::first_held_coinbase`]).
     pub(in super::super) fn matured(&self) -> Vec<u64> {
         let Some(newest) = self.height().to_raw().checked_sub(FIRST_SPEND_HEIGHT) else {
             return Vec::new();
         };
-        (0..=newest).filter(|h| !self.spent.contains(h)).collect()
+        (self.identity.first_held_coinbase()..=newest)
+            .filter(|h| !self.spent.contains(h))
+            .collect()
     }
 
     /// A real spend for the block connecting next, paying `fee`, of the
@@ -343,7 +363,7 @@ impl Grown {
     /// bond floor over the fee — every fixture coinbase does.
     pub(in super::super) fn join(&mut self, slot: u32) -> Transaction {
         let coinbase = self.next_coinbase();
-        let persona = Persona::at(slot);
+        let persona = self.identity.persona(slot);
         let bond = persona.join(complete_tree(), JOIN_ENDPOINT);
         self.spend_posting(coinbase, 0, Some(&bond))
     }
@@ -353,7 +373,7 @@ impl Grown {
     /// holding `shards` in place of the complete tree.
     pub(in super::super) fn join_shards(&mut self, slot: u32, shards: &[u64]) -> Transaction {
         let coinbase = self.next_coinbase();
-        let persona = Persona::at(slot);
+        let persona = self.identity.persona(slot);
         let bond = persona.join(
             shekyl_harness_spender::shard_set(shards.to_vec()),
             JOIN_ENDPOINT,
@@ -367,7 +387,7 @@ impl Grown {
     /// matured unspent coinbase, as [`Self::join`]'s post does.
     pub(in super::super) fn release(&mut self, slot: u32, bonded_total: u64) -> Transaction {
         let coinbase = self.next_coinbase();
-        let persona = Persona::at(slot);
+        let persona = self.identity.persona(slot);
         let bond = persona.release(bonded_total);
         self.spend_posting(coinbase, 0, Some(&bond))
     }
@@ -403,30 +423,6 @@ impl Grown {
     /// the process by what determines it ([`Self::spend_posting`]).
     pub(in super::super) fn spend_of(&mut self, coinbase: u64, fee: u64) -> Transaction {
         self.spend_posting(coinbase, fee, None)
-    }
-
-    /// Watch `output_key`: when a block this chain records lists it, the
-    /// spender registers it ([`Spender::own`]) and
-    /// [`Self::spend_watched`] can spend it. Call before the block that
-    /// lists it is recorded.
-    pub(in super::super) fn watch(&mut self, output_key: [u8; 32]) {
-        self.spender.own(output_key);
-    }
-
-    /// One real spend of the watched outputs `keys` ([`Self::watch`]), all
-    /// the miner's, for the block connecting next, paying `fee` and the
-    /// rest back to the miner in two outputs ([`Spender::spend_owned`]).
-    /// Panics when a key was not listed by a recorded block.
-    pub(in super::super) fn spend_watched(&mut self, keys: &[[u8; 32]], fee: u64) -> Transaction {
-        let wallet = MinerWallet::harness();
-        let owner = shekyl_harness_spender::Owner::miner(wallet);
-        let connecting = self.height();
-        let sourced = keys
-            .iter()
-            .map(|key| self.spender.owned_input(&owner, *key, connecting))
-            .collect();
-        self.spender
-            .spend_owned(sourced, connecting, fee, wallet.recipient())
     }
 
     /// [`Self::spend_of`] with a bond post riding the spend
@@ -472,7 +468,7 @@ impl Grown {
             .entry(key)
             .or_insert_with(|| {
                 self.spender.spend_coinbase_posting(
-                    MinerWallet::harness(),
+                    self.identity.miner(),
                     BlockHeight::from_raw(coinbase),
                     BlockHeight::from_raw(connecting),
                     fee,
@@ -504,11 +500,36 @@ impl Grown {
     /// `store`, listing `listed` realised ([`Self::realise`]) and carrying
     /// the root the store recorded going into its height
     /// ([`root_going_into`]) — for a test that connects a block by hand
-    /// after [`connect_chain`] committed the chain.
+    /// after [`connect_chain`] committed the chain. Stamped under the
+    /// genesis rules; a chain whose rules are levered uses
+    /// [`Self::next_under`].
     pub(in super::super) fn next(&mut self, store: &ChainStore, listed: &[Listed]) -> Candidate {
-        let height = self.height().to_raw();
+        self.next_under(store, listed, &RuleSet::GENESIS)
+    }
+
+    /// [`Self::next`] stamped under `rules`: the header version and the
+    /// coinbase unlock window are that set's, and the block is judged
+    /// under the same set. A harness chain's genesis is not endowed here;
+    /// [`Self::next_candidate`] endows it.
+    pub(in super::super) fn next_under(
+        &mut self,
+        store: &ChainStore,
+        listed: &[Listed],
+        rules: &RuleSet,
+    ) -> Candidate {
+        let height = self.height();
         let txs = self.realise(listed);
-        candidate_over(root_going_into(store, height), height, self.tip(), txs)
+        let root = root_going_into(store, height.to_raw());
+        let (previous, parent_timestamp) = self.parent_link();
+        candidate_carrying(
+            self.identity,
+            rules,
+            root,
+            height,
+            previous,
+            parent_timestamp,
+            txs,
+        )
     }
 
     /// Judge the block connecting next under `rules`, listing `txs`
@@ -533,10 +554,100 @@ impl Grown {
         txs: &[Transaction],
         memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-        let cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
-        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
+        let cand = self.next_candidate(view, rules, txs.to_vec())?;
+        let judged =
+            super::connect_fixtures::judge_with_memo_as(self.identity, view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
+    }
+
+    /// Judge `candidate`, a forged block, exactly as it was forged: nothing
+    /// priced, nothing rebuilt, so the block the store connects is the one
+    /// in the corpus or none. Records it. The chain carries regtest's
+    /// identity, which every forged chain does. `forged_at` is the commit
+    /// the corpus was forged at, named when a rule refuses the block.
+    pub(in super::super) fn judge_as_built<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        candidate: Candidate,
+        forged_at: &str,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        assert_eq!(
+            self.identity,
+            Identity::Regtest,
+            "a forged chain carries regtest's identity"
+        );
+        let height = self.height();
+        let hash = candidate.block.hash();
+        let listed = candidate.transactions.clone();
+        let judged = match super::connect_fixtures::judge_as_built(
+            self.identity,
+            view,
+            candidate,
+            rules,
+            None,
+        )? {
+            Ok(valid) => valid,
+            Err(refused) => panic!(
+                "forged block {} ({hash}), forged at {forged_at}, was refused: {refused}",
+                height.to_raw()
+            ),
+        };
+        self.record(judged.block().block(), &listed);
+        Ok(judged)
+    }
+
+    /// The block on top: what a regtest candidate stamps its time after.
+    fn parent(&self) -> &Block {
+        &self
+            .blocks
+            .last()
+            .expect("a regtest chain starts from its replayed genesis")
+            .0
+    }
+
+    /// The previous hash a block built on this chain carries, and the
+    /// parent timestamp a regtest stamp reads. A harness chain's stamp is
+    /// absolute, so it has no parent clock; its empty tip is
+    /// [`BlockHash::NULL`].
+    fn parent_link(&self) -> (BlockHash, Option<u64>) {
+        match self.identity {
+            Identity::Harness => (self.tip(), None),
+            Identity::Regtest => {
+                let parent = self.parent();
+                (parent.hash(), Some(parent.header.timestamp))
+            }
+        }
+    }
+
+    /// The candidate connecting next on this chain, listing `txs` and
+    /// carrying the batch's root going into its height, unpriced (the
+    /// judge prices it), stamped by [`candidate_carrying`] under `rules`.
+    /// A harness chain's genesis is endowed ([`endow_genesis`]). For a
+    /// test that edits the candidate before it judges it.
+    pub(in super::super) fn next_candidate<'b, 'id>(
+        &self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: Vec<Transaction>,
+    ) -> Result<Candidate, StoreError> {
+        let height = self.height();
+        let root = batch_root_going_into(view, height.to_raw())?;
+        let (previous, parent_timestamp) = self.parent_link();
+        let mut cand = candidate_carrying(
+            self.identity,
+            rules,
+            root,
+            height,
+            previous,
+            parent_timestamp,
+            txs,
+        );
+        if self.identity == Identity::Harness && height == BlockHeight::ZERO {
+            endow_genesis(&mut cand);
+        }
+        Ok(cand)
     }
 
     /// [`Self::judge_listing_with_memo`] for a block carrying a bundle
@@ -552,7 +663,7 @@ impl Grown {
         refs: &[shekyl_archival_retention::BundleRef],
         bodies: Vec<shekyl_archival_retention::BundleBody>,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-        let mut cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
+        let mut cand = self.next_candidate(view, rules, txs.to_vec())?;
         let root = shekyl_archival_retention::section_root(refs).expect("a countable section");
         cand.block.header.section_root = shekyl_types::SectionRoot::from_bytes(root);
         let section = shekyl_types::archival::BundleReferences::new(
@@ -564,7 +675,8 @@ impl Grown {
         let cand = cand
             .with_bundle_references(Some(section))
             .with_bundle_bodies(bodies);
-        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
+        let judged =
+            super::connect_fixtures::judge_with_memo_as(self.identity, view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
     }
@@ -577,8 +689,8 @@ impl Grown {
         view: &BatchView<'b, 'id>,
         rules: &RuleSet,
     ) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
-        let cand = candidate_at(view, self.height(), self.tip(), Vec::new())?;
-        judge_or_corrupt(view, cand, rules)
+        let cand = self.next_candidate(view, rules, Vec::new())?;
+        judge_or_corrupt_as(self.identity, view, cand, rules)
     }
 
     /// Record `block`, connected listing `listed`, on both trees — holding
@@ -586,8 +698,8 @@ impl Grown {
     ///
     /// Every listed image is looked up in the held-coinbase map. The
     /// reservation in `building` is not a second way to decide what the
-    /// block spent: a replayed capture built no spend here, and its listed
-    /// image is the same fact.
+    /// block spent: a replayed forged block built no spend here, and its
+    /// listed image is the same fact.
     pub(in super::super) fn record(&mut self, block: &Block, listed: &[Transaction]) {
         self.spender
             .push_agreeing(&Linked::new(block, listed), block.header.curve_tree_root);
@@ -626,7 +738,7 @@ impl Grown {
             return;
         };
         let through = BlockHeight::from_raw(through);
-        let wallet = MinerWallet::harness();
+        let wallet = self.identity.miner();
         while self.held_coinbases.next() <= through {
             let height = self.held_coinbases.next();
             let opened = self.spender.coinbase_key_image(wallet, height);
@@ -663,40 +775,26 @@ impl Grown {
             .iter()
             .map(|(block, listed)| Linked::new(block, listed))
             .collect();
-        self.spender = Spender::on(Trust::UNPINNED.network_id(), &linked);
+        self.spender = Spender::on(self.identity.network_id(), &linked);
     }
 }
 
 /// Price a genesis candidate's coinbase at [`genesis_endowment`] with the
 /// wallet's [`repay`] — amount, commitment and ciphertext together — so it
 /// is a coinbase the miner's scan recovers and a spend can be built over.
+///
+/// Pays the harness miner. Only a harness chain endows genesis; a regtest
+/// chain's block 0 is the table genesis, already priced.
 pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
     assert_eq!(genesis.block.number(), Some(0), "only genesis is endowed");
     assert!(
         repay(
             &mut genesis.block.miner_transaction,
-            MinerWallet::harness().recipient(),
+            Identity::Harness.miner().recipient(),
             genesis_endowment(),
         ),
         "the fixture's genesis coinbase is one `repay` prices"
     );
-}
-
-/// The candidate connecting at `height` over `previous`, listing `txs`,
-/// carrying the batch's root going into that height. Genesis is endowed.
-fn candidate_at<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    height: BlockHeight,
-    previous: BlockHash,
-    txs: Vec<Transaction>,
-) -> Result<Candidate, StoreError> {
-    let raw = height.to_raw();
-    let root = batch_root_going_into(view, raw)?;
-    let mut cand = candidate_over(root, raw, previous, txs);
-    if height == BlockHeight::ZERO {
-        endow_genesis(&mut cand);
-    }
-    Ok(cand)
 }
 
 /// The chain record over blocks a test connected by hand — each **as

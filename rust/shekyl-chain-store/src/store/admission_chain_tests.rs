@@ -11,7 +11,7 @@
 //!
 //! Every epoch numbered in this file's prose is counted from the personas'
 //! join epoch: "epoch 2" is `shifted(2)` ([`shifted`]), because the chain
-//! loads the captured shard-fill prefix first and the personas join after it.
+//! loads the forged shard-fill prefix first and the personas join after it.
 
 use shekyl_archival_retention::{
     challenge_nonce, draw_commit, section_root, select_draw, BundleBody, BundleRef, DrawableEpoch,
@@ -33,9 +33,7 @@ use shekyl_wire::Transaction;
 use crate::codec::Canonical;
 use crate::ids::IssuedDrawKey;
 
-use super::super::super::connect_fixtures::{
-    batch_root_going_into, candidate_over, judge_with_memo,
-};
+use super::super::super::connect_fixtures::judge_with_memo_as;
 use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
 use super::super::{shifted, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, join_witness_shard_set, no_draws, witness_shard_slots};
@@ -87,7 +85,8 @@ fn prepare(label: &str) -> Prepared {
         }
         anchor_hash = linked.hash;
     }
-    let world = BundleWorld::with(drawing_height(), BundleWorld::SEED, 1, &RULES);
+    let world = BundleWorld::with(drawing_height(), BundleWorld::SEED, 1, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     let linked = connect_committed(&mut chain, &mut memo, commitment);
@@ -137,16 +136,16 @@ pub(super) fn connect_committed(
     memo: &mut DrawableMemo,
     commitment: DrawCommitment,
 ) -> Linked {
-    let height = chain.grown.height();
-    let previous = chain.grown.tip();
+    let identity = chain.grown.identity();
     let mut linked = None;
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
-        let root = batch_root_going_into(&view, height.to_raw())?;
-        let mut candidate = candidate_over(root, height.to_raw(), previous, Vec::new());
+        let mut candidate = chain
+            .grown
+            .next_candidate(&view, &chain.rules, Vec::new())?;
         candidate.block.miner_transaction =
             with_commitment(candidate.block.miner_transaction, commitment);
-        let judged = judge_with_memo(&view, candidate, &chain.rules, Some(memo))?;
+        let judged = judge_with_memo_as(identity, &view, candidate, &chain.rules, Some(memo))?;
         linked = Some(Linked {
             draws: judged.block().archival().draws(),
             hash: judged.block().block().hash(),
@@ -186,7 +185,8 @@ fn drawable(prepared: &Prepared) -> &DrawableEpoch {
 fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
     let h = drawing_height();
     let anchor = h - BlockCount::ONE;
-    let mut world = BundleWorld::with(h, BundleWorld::SEED, prepared.count, &RULES);
+    let mut world = BundleWorld::with(h, BundleWorld::SEED, prepared.count, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     world.view.hashes.insert(h, prepared.hash);
     world.view.hashes.insert(anchor, prepared.anchor_hash);
     let drawable = drawable(prepared);
@@ -196,7 +196,7 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
     .expect("a short read does not fail")
     .expect("the planted set selects");
     let pair = drawable.pair(selected.index).expect("the index is in D");
-    let signers: Vec<Persona> = witness_shard_slots().map(Persona::at).collect();
+    let signers: Vec<Persona> = witness_shard_slots().map(super::super::persona).collect();
     let signer = signers
         .iter()
         .find(|persona| {
@@ -533,18 +533,38 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
 /// bundle is judged at, `2`, by admission's own filing step
 /// (`remember_window_epochs`): genesis's epoch, whatever epoch the chain's
 /// tip is in.
+///
+/// The store is the forged chain through the end of epoch 1. Genesis's
+/// drawable digest is a settling row, which the boundary at `(k + 2)·SEB`
+/// retires (the settling family reaches `k` epochs back): a tip past it,
+/// such as the slash chain's after the forged prefix, no longer holds the
+/// digest this reads.
 #[test]
 fn a_bundle_for_genesis_is_refused_at_j33() {
-    let chain = SlashedChain::build_with(
-        "admit-genesis",
-        WITNESS_PERSONAS,
-        h_open(shifted(1)) - 2,
-        no_draws,
+    let seb = super::super::SEB;
+    let tip = 2 * seb - 2;
+    assert!(
+        tip < (shekyl_archival_retention::SLASH_GRACE_EPOCHS + 2) * seb,
+        "the tip at {tip} is below the boundary that retires genesis's settling rows"
+    );
+    let path = super::super::tmp("admit-genesis");
+    let horizons = super::super::super::Horizons::new(
+        RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(super::super::RETENTION),
+        RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let (store, _) = super::super::super::forged_fill::store_with_prefix(
+        &path,
+        RULES,
+        horizons,
+        usize::try_from(tip + 1).expect("small"),
     );
     let mut memo = DrawableMemo::new();
-    let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES);
+    let world = BundleWorld::with(BlockHeight::ZERO, BundleWorld::SEED, 0, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let (reference, body) = world.bundle(&[]);
-    let out: Result<(), TestErr> = chain.store.write(|batch| {
+    let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         shekyl_chain_rules::remember_window_epochs(
             &view,
@@ -569,7 +589,7 @@ fn a_bundle_for_genesis_is_refused_at_j33() {
             BlockHeight::from_raw(2),
             &bundle_view,
             &RULES,
-            &shekyl_network::HARNESS_NETWORK_ID,
+            &super::super::IDENTITY.network_id(),
         )
         .expect_err("genesis does not open");
         assert!(
@@ -718,7 +738,8 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
     while chain.grown.height() < h {
         connect_plain(&mut chain, Some(&mut warm));
     }
-    let world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES);
+    let world = BundleWorld::with(h, BundleWorld::SEED, 0, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     connect_committed(&mut chain, &mut warm, commitment);
@@ -740,7 +761,8 @@ fn a_cold_memo_admits_a_previous_epoch_bundle_inside_the_window() {
     )
     .expect("a block seats fewer than 2^32 trees");
     drop(read);
-    let world = BundleWorld::with(h, BundleWorld::SEED, count, &RULES);
+    let world = BundleWorld::with(h, BundleWorld::SEED, count, &RULES)
+        .on_network(super::super::IDENTITY.network_id());
     let (reference, body) = world.assemble_support(
         PassBitmap::from_passes(count, []).expect("no pass"),
         PassBitmap::from_passes(support, []).expect("no support pass"),

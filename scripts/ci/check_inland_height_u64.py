@@ -161,7 +161,7 @@ SCOPE = (
 # `shekyl-corpus` (CF-4a, 2026-11-18): the record encoder's height was
 # typed as `BlockHeight` there rather than re-recorded, and the codec
 # joined `SCOPE` so the move took none of its sites out of the scan.
-GRANDFATHER_CEILING = 122
+GRANDFATHER_CEILING = 120
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few sites.
 GRANDFATHER_SLACK = 5

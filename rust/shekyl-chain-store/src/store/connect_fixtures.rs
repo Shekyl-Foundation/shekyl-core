@@ -22,10 +22,14 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
-    DrawableMemo, Fault, FormAttempt, FormClaims, HeaderView, PaidEmission, ReferenceClaims,
-    RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
+    DrawableMemo, Fault, FormAttempt, FormClaims, GenesisPin, HeaderView, PaidEmission,
+    ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target, Trust, Verdict, ViewRead,
+    Weights,
 };
+use shekyl_harness_spender::{MinerWallet, Persona};
+use shekyl_network::{Network, NetworkId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, SectionRoot, Timestamp};
+use shekyl_wire::block::HEADER_MINOR_VERSION;
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
 
 use super::store_tests::TestErr;
@@ -43,15 +47,121 @@ pub(super) use grown::{
     spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 
-/// The coinbase for `height`: the rules harness's, which satisfies every
-/// landed 4.F row (a sole `Input::Gen(height)`, `Null` ct, one output with
-/// a canonical key and a non-trivial mask, `unlock_time = height + 60`).
-/// One definition of "a valid coinbase" for every crate that judges one —
-/// a private copy here drifted from the rules the moment slice 4 landed
-/// F9/F10 (its keys were not points).
-pub(super) fn coinbase(height: u64) -> Transaction {
-    fixture::coinbase(height)
+/// The identity a fixture chain carries (`CHAIN_FORGE.md` §6, `CF-R15`):
+/// what its spends and posts sign under, which miner its coinbases pay,
+/// and the genesis `validate` holds height 0 to. One chain carries one;
+/// [`Grown`] holds it and every block it builds or judges uses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Identity {
+    /// A chain that mines its own genesis, under the harness id
+    /// (`Trust::UNPINNED`): every chain a test builds from nothing. The
+    /// harness id ends in `CF-5` (`CF-R15`).
+    Harness,
+    /// A chain over regtest's table genesis, under regtest's id: a forged
+    /// chain a test starts from ([`super::forged_fill`]), and the blocks the
+    /// test connects on top of it.
+    Regtest,
 }
+
+impl Identity {
+    /// What `validate` takes on the release's word: no pin for a chain
+    /// that mines its own genesis, regtest's table genesis otherwise.
+    pub(super) const fn trust(self) -> Trust {
+        match self {
+            Self::Harness => Trust::UNPINNED,
+            Self::Regtest => Trust::full(GenesisPin::for_network(Network::Regtest)),
+        }
+    }
+
+    /// The id every spend and post on the chain signs under: the one its
+    /// [`trust`](Self::trust) derives (`NI-R10`).
+    pub(super) fn network_id(self) -> NetworkId {
+        self.trust().network_id()
+    }
+
+    /// The miner every coinbase the fixtures build pays, and the wallet a
+    /// spend of one is made from.
+    pub(super) fn miner(self) -> &'static MinerWallet {
+        match self {
+            Self::Harness => MinerWallet::harness(),
+            Self::Regtest => MinerWallet::harness_regtest(),
+        }
+    }
+
+    /// The persona at `slot`, derived under the chain's network name.
+    pub(super) fn persona(self, slot: u32) -> Persona {
+        match self {
+            Self::Harness => Persona::at(slot),
+            Self::Regtest => Persona::on(Network::Regtest, slot),
+        }
+    }
+
+    /// The lowest height whose coinbase the miner holds: genesis's on a
+    /// harness chain ([`endow_genesis`] pays it), block 1's on regtest's,
+    /// whose genesis is the table's.
+    pub(super) const fn first_held_coinbase(self) -> u64 {
+        match self {
+            Self::Harness => 0,
+            Self::Regtest => 1,
+        }
+    }
+
+    /// The timestamp a block at `height` carries.
+    ///
+    /// A harness chain stamps from [`HARNESS_GENESIS_STAMP`] and does not
+    /// read `parent_timestamp`. A regtest chain is [`FIXTURE_SPACING`] past
+    /// its parent, which is how a block built on the forged chain stays on
+    /// the forged chain's clock.
+    ///
+    /// # Panics
+    ///
+    /// When `self` is [`Self::Regtest`] and `parent_timestamp` is [`None`]:
+    /// a regtest chain starts from its replayed genesis, so the parent is
+    /// known.
+    pub(super) fn timestamp(self, height: BlockHeight, parent_timestamp: Option<u64>) -> u64 {
+        match self {
+            Self::Harness => HARNESS_GENESIS_STAMP + height.to_raw() * FIXTURE_SPACING,
+            Self::Regtest => {
+                parent_timestamp.expect("a regtest block stamps its time after its parent")
+                    + FIXTURE_SPACING
+            }
+        }
+    }
+
+    /// The substrate clock blocks on this chain are judged against: past
+    /// every stamp the chain and the blocks a test adds on top of it carry.
+    pub(super) const fn clock(self) -> Timestamp {
+        match self {
+            Self::Harness => FixtureSubstrate::CLOCK,
+            Self::Regtest => Timestamp::from_raw(
+                Network::Regtest.genesis().timestamp().get() + REGTEST_CLOCK_PAST_MINT,
+            ),
+        }
+    }
+
+    /// The world `form` judges a block on this chain in: [`Self::clock`] and
+    /// a longhash of zeros.
+    pub(super) const fn substrate(self) -> FixtureSubstrate {
+        FixtureSubstrate::at(self.clock())
+    }
+}
+
+/// Seconds between the blocks a fixture chain builds. A harness block at
+/// height `h` is stamped [`HARNESS_GENESIS_STAMP`] plus this many times `h`.
+/// A block built on a regtest chain is this many past its parent.
+const FIXTURE_SPACING: u64 = 60;
+
+/// The timestamp of height 0 on a harness chain.
+const HARNESS_GENESIS_STAMP: u64 = 1_000;
+
+/// How far past regtest's mint [`Identity::Regtest`]'s clock sits: a forged
+/// chain stamped one second apart, then a hundred thousand blocks at
+/// [`FIXTURE_SPACING`] on top of it.
+const REGTEST_CLOCK_PAST_MINT: u64 = 10_000_000;
+
+/// The nonce every fixture header carries. No rule reads it; the longhash
+/// is the substrate's.
+const FIXTURE_NONCE: u32 = 7;
 
 /// A candidate for a height **nothing has drained into**: its header carries
 /// the empty tree, which is what CEN-B5 requires while `root_at(height)` is
@@ -67,26 +177,69 @@ pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transactio
 }
 
 /// [`candidate`] whose header carries `root` — the tree state going into
-/// `height` as the store recorded it.
+/// `height` as the store recorded it. A harness chain under the genesis
+/// rules ([`candidate_carrying`]).
 pub(super) fn candidate_over(
     root: CurveTreeRoot,
     height: u64,
     previous: BlockHash,
     listed: Vec<Transaction>,
 ) -> Candidate {
+    candidate_carrying(
+        Identity::Harness,
+        &RuleSet::GENESIS,
+        root,
+        BlockHeight::from_raw(height),
+        previous,
+        None,
+        listed,
+    )
+}
+
+/// The block connecting at `height` on a chain carrying `identity`, judged
+/// under `rules`.
+///
+/// One constructor. `rules` names the header version and the coinbase's
+/// unlock window. `identity` names the miner the coinbase pays and the
+/// timestamp ([`Identity::timestamp`]). The coinbase amount is zero:
+/// [`priced_as`] writes what CEN-F18 owes, and a harness genesis is endowed
+/// afterwards ([`endow_genesis`]). The unlock saturates, as the harness
+/// coinbase does, so a record built at `u64::MAX` is bytes rather than a
+/// panic — the rules refuse it, and the store tests that exercise the
+/// height want the bytes.
+///
+/// `parent_timestamp` is the parent block's stamp. A harness chain does
+/// not read it. A regtest chain requires it.
+pub(super) fn candidate_carrying(
+    identity: Identity,
+    rules: &RuleSet,
+    root: CurveTreeRoot,
+    height: BlockHeight,
+    previous: BlockHash,
+    parent_timestamp: Option<u64>,
+    listed: Vec<Transaction>,
+) -> Candidate {
+    let timestamp = identity.timestamp(height, parent_timestamp);
+    let height = height.to_raw();
+    let unlock_time = height.saturating_add(rules.mined_money_unlock_window().to_raw());
     let block = Block {
         header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
+            major_version: rules.header_major_version(),
+            minor_version: HEADER_MINOR_VERSION,
+            timestamp,
             previous,
-            nonce: 7,
+            nonce: FIXTURE_NONCE,
             curve_tree_root: root,
             // The empty section's root: a candidate carrying no references is
             // judged against it (CEN-J29).
             section_root: SectionRoot::from_bytes(shekyl_archival_retention::empty_section_root()),
         },
-        miner_transaction: coinbase(height),
+        miner_transaction: shekyl_harness_wallet::coinbase::paying(
+            identity.miner().recipient(),
+            height,
+            unlock_time,
+            0,
+        ),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
     };
     Candidate::new(block, listed)
@@ -121,22 +274,39 @@ pub(super) fn batch_root_going_into(
     recorded_root(view.root_at(BlockHeight::from_raw(height)), height)
 }
 
-/// The world the fixtures are judged in: a clock after every fixture
-/// timestamp (`candidate` stamps `1_000 + 60·h`), and a longhash of zeros,
-/// which satisfies every target. The store's tests are about the store;
-/// the substrate is the validation crate's subject and is mocked here as
-/// plainly as possible.
-pub(super) struct FixtureSubstrate;
+/// The world a fixture block is judged in: a clock, and a longhash of
+/// zeros, which satisfies every target. The store's tests are about the
+/// store; the substrate is the validation crate's subject and is mocked
+/// here as plainly as possible.
+///
+/// The clock is the chain's ([`Identity::clock`]). [`Self::CLOCK`] is the
+/// harness chain's, past every stamp [`HARNESS_GENESIS_STAMP`] +
+/// [`FIXTURE_SPACING`] · h that a unit test builds. [`Self::HARNESS`] is
+/// that clock for a caller that judges a harness candidate without a
+/// [`Grown`] chain.
+#[derive(Clone, Copy)]
+pub(super) struct FixtureSubstrate {
+    clock: Timestamp,
+}
 
 impl FixtureSubstrate {
+    /// The harness chain's clock.
     pub(super) const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
+
+    /// [`Self::CLOCK`] as a substrate.
+    pub(super) const HARNESS: Self = Self { clock: Self::CLOCK };
+
+    /// A substrate whose clock is `clock`.
+    pub(super) const fn at(clock: Timestamp) -> Self {
+        Self { clock }
+    }
 }
 
 impl Substrate for FixtureSubstrate {
     type Fault = Infallible;
 
     fn local_clock(&self) -> Result<Timestamp, Infallible> {
-        Ok(Self::CLOCK)
+        Ok(self.clock)
     }
 
     fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Infallible> {
@@ -191,6 +361,19 @@ pub(super) fn priced<'b, 'id>(
     }
 }
 
+/// [`priced`] paying `identity`'s miner.
+pub(super) fn priced_as<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+) -> Result<Candidate, StoreError> {
+    match fixture::priced_paying(view, candidate, identity.miner()) {
+        Ok(candidate) => Ok(candidate),
+        Err(ViewRead::View(fault)) => Err(fault),
+        Err(ViewRead::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt:?}"),
+    }
+}
+
 /// [`priced`] against the **committed** store — for a test that needs a
 /// block's identity (to build its child, to read it back) before the batch
 /// that connects it. Opens a batch that only reads.
@@ -220,27 +403,37 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<StructurallyValid, V::Fault> {
+    match formed_as(Identity::Harness, view, candidate, rules)? {
+        Ok(formed) => Ok(formed),
+        Err(refused) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+    }
+}
+
+/// [`formed_under`] claiming `identity`'s network, judged on its clock
+/// ([`Identity::substrate`]). A stateless refusal is the [`Err`] of the
+/// verdict: a fixture door panics on it, and a forged block's door names
+/// the block.
+pub(super) fn formed_as<'id, V: HeaderView<'id>>(
+    identity: Identity,
+    view: &V,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<Verdict<StructurallyValid>, V::Fault> {
     let seed = expected_seed(view)?;
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     let references = ReferenceClaims::from_headers(view, connecting, &candidate)?;
-    Ok(
-        match form(
-            candidate,
-            &FormClaims {
-                rule_set: rules,
-                seed,
-                target: expected_target(view, rules)?,
-                references: &references,
-                network: shekyl_chain_rules::HARNESS_NETWORK_ID,
-            },
-            &FixtureSubstrate,
-            FormAttempt::FIRST,
-        ) {
-            Ok(Ok(formed)) => formed,
-            Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
-            Err(never) => match never {},
-        },
-    )
+    let claims = FormClaims {
+        rule_set: rules,
+        seed,
+        target: expected_target(view, rules)?,
+        references: &references,
+        network: identity.network_id(),
+    };
+    let substrate = identity.substrate();
+    match form(candidate, &claims, &substrate, FormAttempt::FIRST) {
+        Ok(verdict) => Ok(verdict),
+        Err(never) => match never {},
+    }
 }
 
 /// Both stages; the store's own fault is the only one the fixtures expect
@@ -284,13 +477,22 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
-    let candidate = priced(view, candidate)?;
-    match validate(
-        formed_under(view, candidate, rules)?,
-        view,
-        rules,
-        &Trust::UNPINNED,
-    ) {
+    judge_or_corrupt_as(Identity::Harness, view, candidate, rules)
+}
+
+/// [`judge_or_corrupt`] on a chain carrying `identity`.
+pub(super) fn judge_or_corrupt_as<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+) -> Result<Result<ChainValid<'id, BatchView<'b, 'id>>, Corrupt>, StoreError> {
+    let candidate = priced_as(identity, view, candidate)?;
+    let formed = match formed_as(identity, view, candidate, rules)? {
+        Ok(formed) => formed,
+        Err(refused) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+    };
+    match validate(formed, view, rules, &identity.trust()) {
         Ok(verdict) => Ok(Ok(verdict.expect("the fixtures satisfy every landed rule"))),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
@@ -298,23 +500,44 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
     }
 }
 
-/// [`judge_under`] with the connect loop's drawable memo. A [`Corrupt`]
-/// still panics: this door is for a block the rules accept.
-pub(super) fn judge_with_memo<'b, 'id>(
+/// [`judge_under`] with the connect loop's drawable memo, on a chain
+/// carrying `identity`: the coinbase priced to its miner, the network
+/// claimed and the genesis pinned as it says. A [`Corrupt`] still panics:
+/// this door is for a block the rules accept.
+pub(super) fn judge_with_memo_as<'b, 'id>(
+    identity: Identity,
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
     rules: &RuleSet,
     memo: Option<&mut DrawableMemo>,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    let candidate = priced(view, candidate)?;
-    match validate_with_memo(
-        formed_under(view, candidate, rules)?,
-        view,
-        rules,
-        &Trust::UNPINNED,
-        memo,
-    ) {
-        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+    let candidate = priced_as(identity, view, candidate)?;
+    match judge_as_built(identity, view, candidate, rules, memo)? {
+        Ok(valid) => Ok(valid),
+        Err(refused) => panic!("the fixtures satisfy every landed rule: {refused}"),
+    }
+}
+
+/// Both stages over `candidate` exactly as it came: nothing priced, nothing
+/// rebuilt. A forged block is judged this way, so the block connected is
+/// the one the forge wrote, or the verdict is the row that refused it.
+///
+/// A refusal is returned, not panicked: the fixture door
+/// ([`judge_with_memo_as`]) treats one as a fixture bug, and the forged
+/// door names the block and the commit it was forged at.
+pub(super) fn judge_as_built<'b, 'id>(
+    identity: Identity,
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+    memo: Option<&mut DrawableMemo>,
+) -> Result<Verdict<ChainValid<'id, BatchView<'b, 'id>>>, StoreError> {
+    let formed = match formed_as(identity, view, candidate, rules)? {
+        Ok(formed) => formed,
+        Err(refused) => return Ok(Err(refused)),
+    };
+    match validate_with_memo(formed, view, rules, &identity.trust(), memo) {
+        Ok(verdict) => Ok(verdict),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
         Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
