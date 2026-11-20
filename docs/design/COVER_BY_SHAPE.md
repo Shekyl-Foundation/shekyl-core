@@ -2,7 +2,7 @@
 
 **Status: OPEN — Round 0 (Rick, 2026-11-19). The direction in §2 is ruled; the decisions in §6 are open.** Nothing here is built. Read at PR #1431 head `88864d06` and dev `d86ef32f`; the file and line citations in §3 are at those trees. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held unmerged (`CBS-E4`).
 
-**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E6` are the open decisions of §6.
+**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the open decisions of §6.
 
 ## 1. The idea (Rick)
 
@@ -61,6 +61,41 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 - **Recommendation.** Before any build, record per session, by message type, each send's size and time, on the test fleet, on every connector in use. The daemon knows its own messages, so this needs no packet capture. Piece size and pace are derived from it.
 - **Universality.** "Ordinary" is defined by Shekyl's own message set, which is the same on every connector, not by one transport's traffic.
 
+#### The measurement proposal — DRAFT 2026-11-20, not ruled
+
+**What exists** (read at dev `ac63d95d`):
+
+- A message-size record on clearnet sessions only (`shekyl-clearnet`, `sizes.rs`), in a measurement build (`measurement-spans`, held out of release builds by `scripts/ci/check_measurement_spans.py`).
+- It writes one line per Levin message: size, direction, session number, and the command's class (control, transaction relay, block relay, bundle relay, sync). It keeps no command name on purpose.
+- Its one time stamp for a sent message is taken when the writer takes the message off the session's queue (`shekyl-capped-stream`, `copy.rs`, the `encode` call). That is neither the time its sender queued it nor the time the write returned.
+- Tor sessions have no such record.
+
+**What is proposed.**
+
+1. **One line per message, both directions, on every connector.** The record moves from `shekyl-clearnet` to where both connector drives can use it, and the Tor drive feeds it as the clearnet drive does. A line carries: connector, session number, direction, message type, size in bytes (header and payload), and its times.
+2. **Three times for a sent message:** queued by its sender, taken off the queue by the writer, and written (the write of its last byte returned). The first needs a stamp carried with the queue item in a measurement build. **One time for a received message:** when its last byte arrived.
+3. **Message type, not class.** The line names the command. This reverses the existing record's choice to keep the class only, and it is needed: piece size is derived from the sizes of particular message types.
+4. **Nothing that identifies a transaction or a peer.** No transaction identifier, no address, no content. The session number is local to the node and to the run.
+5. **Fragments are recorded as they are sent,** one line per fragment, typed as a fragment, so a later run with pieces on reads the same way.
+6. **Where it runs.** Nodes with no Tor relay, on every connector in use: clearnet under the record layer, and Tor. Each run's host load is recorded beside it.
+7. **Output.** A reducer turns the lines into, per connector and per link:
+   - bytes per window at 0.1 s, 1 s and 10 s, by the written time, in the layout of TRC-1's table (`trc1_guard_connection_20261112.md` §5), so the two line up;
+   - the size distribution by message type;
+   - the distribution of gaps between sends, by type and overall;
+   - the lag from queued to written.
+8. **It stays a measurement build.** The feature gate and its CI check are extended to the new owner; a release build's record stays zero-sized.
+
+**Limits, stated before measuring.**
+
+- "Written" is when the operating system accepted the bytes, not when they left the host. On Tor it is when the local Tor client accepted them; what a watcher sees on the guard connections is later and is Tor's to schedule. TRC-1's guard-connection counters stay the watcher's view on Tor.
+- A test network's traffic is thinner than a live network's. The texture read here is a lower bound on how busy a link is.
+
+**For Rick to rule with the proposal.**
+
+- Whether the line may name the command (item 3).
+- Whether a transaction message's line says stem or broadcast. Recommended: no. The record reads message headers only, and that flag is in the payload; this design also treats both alike.
+- The run length, and which test-fleet nodes carry the measurement build.
+
 ### `CBS-E2` — does a relay wait for the whole transaction? — OPEN
 
 - **Problem.** If each hop collects all pieces before forwarding, a hop adds about the spread (roughly a second), and the embargo grows by roughly four minutes a fire.
@@ -83,6 +118,12 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 ### `CBS-E6` — large transactions — OPEN
 
 - A 97 KB transaction is about six times the modal one. Under this design it is simply more pieces over a longer spread. Whether that spread is itself a mark depends on `CBS-E1`'s numbers.
+
+### `CBS-E7` — one fragmented message at a time per session — OPEN
+
+- **Problem.** Two fragmented messages cannot interleave on a session (§3 item 12). If every transaction is spread over about a second, a link carries about one transaction a second each way. That is about five times the design load, but it is a ceiling, and `CBS-R4` rules against slowing the network.
+- **Options.** (a) Fragments carry a message identifier, so trains interleave. (b) The pace shortens as the queue grows: a busy link does not need the spread, because its own traffic is the cover.
+- **Not yet recommended.** (a) changes the fragment header and the reader's one buffer, and makes the bound on incomplete messages per peer a count as well as a size. (b) changes no wire format, but makes the spread depend on load; whether that dependence is itself readable is a `CBS-E1` question.
 
 ## 7. Wargame
 
