@@ -25,8 +25,9 @@
 //!   (rule 83 IG-13). The one owner of that name: the daemon's
 //!   configuration, the rendezvous and the wallets read it here.
 //!   [`ensure_per_account_root`] makes it as the daemon does, which a
-//!   wallet binary does at its start, before it makes anything in it, and
-//!   [`wallet_dir_in`] names the wallet directory in it.
+//!   wallet binary does at its start, before it makes anything in it.
+//!   The wallet directory in it is the wallet file crate's
+//!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is
@@ -110,16 +111,6 @@ pub fn per_account_root_in(home: &Path) -> PathBuf {
 #[must_use]
 pub fn per_account_root() -> Option<PathBuf> {
     account_home().map(|home| per_account_root_in(&home))
-}
-
-/// The wallet directory's name inside the per-account root (rule 83 IG-13).
-pub const WALLET_DIR_NAME: &str = "wallets";
-
-/// The wallet directory inside the per-account root `root`: where a wallet
-/// binary keeps its wallet files when the person names no other place.
-#[must_use]
-pub fn wallet_dir_in(root: &Path) -> PathBuf {
-    root.join(WALLET_DIR_NAME)
 }
 
 /// Creates the per-account root `root` where it does not exist, as the
@@ -377,10 +368,6 @@ mod per_account_root_tests {
         let home = Path::new("home");
         let expected = if cfg!(windows) { "Shekyl" } else { ".shekyl" };
         assert_eq!(per_account_root_in(home), home.join(expected));
-        assert_eq!(
-            wallet_dir_in(&per_account_root_in(home)),
-            home.join(expected).join("wallets")
-        );
     }
 
     /// The root is made where it is missing, and an existing one is left as

@@ -218,20 +218,22 @@ impl ReplArgs {
         }))
     }
 
-    /// The wallet-file directory: `--wallet-dir` as given, else the
-    /// per-network default `wallets/<network>/` in this account's
+    /// The wallet-file directory: `--wallet-dir` as given, else
+    /// `network`'s default `wallets/<network>/` in this account's
     /// per-account root (CU-1; rule 83 IG-13: `~/.shekyl`, or
     /// `%LOCALAPPDATA%\Shekyl` on Windows, read from the account interface,
-    /// never `HOME`) — so a testnet wallet file can never collide with a
-    /// mainnet one, the Electrum isolation shape. Only consulted for a
-    /// self-hosted session (`--rpc-url` stores wallets server-side).
-    fn resolved_wallet_dir(&self) -> Result<std::path::PathBuf, String> {
+    /// never `HOME`; `shekyl_engine_file::paths::wallet_dir_in` names it) —
+    /// so a testnet wallet file can never collide with a mainnet one, the
+    /// Electrum isolation shape. Only consulted for a self-hosted session
+    /// (`--rpc-url` stores wallets server-side). The network is the parsed
+    /// one, not the flag's text.
+    fn resolved_wallet_dir(&self, network: Network) -> Result<std::path::PathBuf, String> {
         if let Some(dir) = &self.wallet_dir {
             return Ok(std::path::PathBuf::from(dir));
         }
         let root = shekyl_os_account::per_account_root()
             .ok_or("this account has no home folder; pass --wallet-dir explicitly")?;
-        Ok(shekyl_os_account::wallet_dir_in(&root).join(self.network_name()))
+        Ok(shekyl_engine_file::paths::wallet_dir_in(&root, network))
     }
 }
 
@@ -509,7 +511,7 @@ fn build_session(
             cli.debug,
         )?),
         Endpoints::SelfHosted { network, daemon } => {
-            let wallet_dir = cli.resolved_wallet_dir()?;
+            let wallet_dir = cli.resolved_wallet_dir(*network)?;
             // The per-account root is made first, as the daemon makes it,
             // so whatever is made in it after has the root's protections.
             // The per-network default is created on demand; an explicit
@@ -893,26 +895,32 @@ mod tests {
     /// The default wallet dir is per-network (`wallets/<network>/`, CU-1)
     /// in the per-account root (rule 83 IG-13), pinned as the rule states
     /// it, so wallets on different networks never share a directory; an
-    /// explicit `--wallet-dir` is taken as given. Red edit: the old
-    /// `dirs::home_dir()` plus `.shekyl` fails on Windows, and under a moved
-    /// `HOME`.
+    /// explicit `--wallet-dir` is taken as given. The directory follows the
+    /// network the flags parse to. Red edit: the old `dirs::home_dir()` plus
+    /// `.shekyl` fails on Windows, and under a moved `HOME`.
     #[test]
     fn the_default_wallet_dir_is_per_network() {
         let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
+        let dir_of = |argv: &[&str]| {
+            let cli = args(argv);
+            let network = parse_network(cli.network_name()).expect("a network");
+            cli.resolved_wallet_dir(network).unwrap()
+        };
         let home = shekyl_os_account::account_home().expect("the test account has a home");
         let wallets = home
             .join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
             .join("wallets");
-        let dir = args(&["shekyl-cli", "--testnet"])
-            .resolved_wallet_dir()
-            .unwrap();
-        assert_eq!(dir, wallets.join("testnet"));
-        let mainnet = args(&["shekyl-cli"]).resolved_wallet_dir().unwrap();
-        assert_eq!(mainnet, wallets.join("mainnet"));
         assert_eq!(
-            args(&["shekyl-cli", "--engine-dir", "/tmp/wallets"])
-                .resolved_wallet_dir()
-                .unwrap(),
+            dir_of(&["shekyl-cli", "--testnet"]),
+            wallets.join("testnet")
+        );
+        assert_eq!(dir_of(&["shekyl-cli"]), wallets.join("mainnet"));
+        assert_eq!(
+            dir_of(&["shekyl-cli", "--network", "stagenet"]),
+            wallets.join("stagenet")
+        );
+        assert_eq!(
+            dir_of(&["shekyl-cli", "--engine-dir", "/tmp/wallets"]),
             std::path::PathBuf::from("/tmp/wallets")
         );
     }
