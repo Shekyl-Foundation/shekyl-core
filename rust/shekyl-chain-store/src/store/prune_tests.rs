@@ -246,7 +246,7 @@ impl Builder {
     fn try_connect_empty(&mut self, store: &ChainStore) -> Result<Connected, TestErr> {
         let identity = self.grown.identity();
         let rules = self.rules;
-        let cand = self.grown.next(store, &[]);
+        let cand = self.grown.next_under(store, &[], &rules);
         store.write(|batch| {
             let view = batch.chain_view();
             Ok(batch.connect(

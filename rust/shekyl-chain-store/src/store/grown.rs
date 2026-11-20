@@ -24,9 +24,7 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{Candidate, ChainValid, Corrupt, RuleSet};
 use shekyl_crypto_pq::held_key_image::HeldKeyImage;
 use shekyl_crypto_pq::CryptoError;
-use shekyl_harness_spender::{
-    complete_tree, first_spending_height, Linked, MinerWallet, PostedBond, Spender,
-};
+use shekyl_harness_spender::{complete_tree, first_spending_height, Linked, PostedBond, Spender};
 use shekyl_harness_wallet::coinbase::repay;
 use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 use shekyl_units::AtomicUnits;
@@ -35,8 +33,7 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 use super::super::store_tests::TestErr;
 use super::super::*;
 use super::{
-    batch_root_going_into, candidate_over, judge_or_corrupt_as, regtest_candidate_over,
-    root_going_into, Identity,
+    batch_root_going_into, candidate_carrying, judge_or_corrupt_as, root_going_into, Identity,
 };
 
 /// What a fixture block lists. A chain is a `&[Vec<Listed>]`, one entry
@@ -503,17 +500,36 @@ impl Grown {
     /// `store`, listing `listed` realised ([`Self::realise`]) and carrying
     /// the root the store recorded going into its height
     /// ([`root_going_into`]) — for a test that connects a block by hand
-    /// after [`connect_chain`] committed the chain.
+    /// after [`connect_chain`] committed the chain. Stamped under the
+    /// genesis rules; a chain whose rules are levered uses
+    /// [`Self::next_under`].
     pub(in super::super) fn next(&mut self, store: &ChainStore, listed: &[Listed]) -> Candidate {
-        let height = self.height().to_raw();
+        self.next_under(store, listed, &RuleSet::GENESIS)
+    }
+
+    /// [`Self::next`] stamped under `rules`: the header version and the
+    /// coinbase unlock window are that set's, and the block is judged
+    /// under the same set. A harness chain's genesis is not endowed here;
+    /// [`Self::next_candidate`] endows it.
+    pub(in super::super) fn next_under(
+        &mut self,
+        store: &ChainStore,
+        listed: &[Listed],
+        rules: &RuleSet,
+    ) -> Candidate {
+        let height = self.height();
         let txs = self.realise(listed);
-        let root = root_going_into(store, height);
-        match self.identity {
-            Identity::Harness => candidate_over(root, height, self.tip(), txs),
-            Identity::Regtest => {
-                regtest_candidate_over(root, self.height(), self.parent(), txs, &RuleSet::GENESIS)
-            }
-        }
+        let root = root_going_into(store, height.to_raw());
+        let (previous, parent_timestamp) = self.parent_link();
+        candidate_carrying(
+            self.identity,
+            rules,
+            root,
+            height,
+            previous,
+            parent_timestamp,
+            txs,
+        )
     }
 
     /// Judge the block connecting next under `rules`, listing `txs`
@@ -548,21 +564,36 @@ impl Grown {
     /// Judge `candidate`, a forged block, exactly as it was forged: nothing
     /// priced, nothing rebuilt, so the block the store connects is the one
     /// in the corpus or none. Records it. The chain carries regtest's
-    /// identity, which every forged chain does.
+    /// identity, which every forged chain does. `forged_at` is the commit
+    /// the corpus was forged at, named when a rule refuses the block.
     pub(in super::super) fn judge_as_built<'b, 'id>(
         &mut self,
         view: &BatchView<'b, 'id>,
         rules: &RuleSet,
         candidate: Candidate,
+        forged_at: &str,
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
         assert_eq!(
             self.identity,
             Identity::Regtest,
             "a forged chain carries regtest's identity"
         );
+        let height = self.height();
+        let hash = candidate.block.hash();
         let listed = candidate.transactions.clone();
-        let judged =
-            super::connect_fixtures::judge_as_built(self.identity, view, candidate, rules, None)?;
+        let judged = match super::connect_fixtures::judge_as_built(
+            self.identity,
+            view,
+            candidate,
+            rules,
+            None,
+        )? {
+            Ok(valid) => valid,
+            Err(refused) => panic!(
+                "forged block {} ({hash}), forged at {forged_at}, was refused: {refused}",
+                height.to_raw()
+            ),
+        };
         self.record(judged.block().block(), &listed);
         Ok(judged)
     }
@@ -576,32 +607,47 @@ impl Grown {
             .0
     }
 
+    /// The previous hash a block built on this chain carries, and the
+    /// parent timestamp a regtest stamp reads. A harness chain's stamp is
+    /// absolute, so it has no parent clock; its empty tip is
+    /// [`BlockHash::NULL`].
+    fn parent_link(&self) -> (BlockHash, Option<u64>) {
+        match self.identity {
+            Identity::Harness => (self.tip(), None),
+            Identity::Regtest => {
+                let parent = self.parent();
+                (parent.hash(), Some(parent.header.timestamp))
+            }
+        }
+    }
+
     /// The candidate connecting next on this chain, listing `txs` and
     /// carrying the batch's root going into its height, unpriced (the
-    /// judge prices it). A harness chain's genesis is endowed
-    /// ([`endow_genesis`]); a regtest chain's blocks stamp their time after
-    /// the parent's and pay the regtest miner ([`regtest_candidate_over`]).
-    /// For a test that edits the candidate before it judges it.
+    /// judge prices it), stamped by [`candidate_carrying`] under `rules`.
+    /// A harness chain's genesis is endowed ([`endow_genesis`]). For a
+    /// test that edits the candidate before it judges it.
     pub(in super::super) fn next_candidate<'b, 'id>(
         &self,
         view: &BatchView<'b, 'id>,
         rules: &RuleSet,
         txs: Vec<Transaction>,
     ) -> Result<Candidate, StoreError> {
-        match self.identity {
-            Identity::Harness => candidate_at(view, self.height(), self.tip(), txs),
-            Identity::Regtest => {
-                let height = self.height().to_raw();
-                let root = batch_root_going_into(view, height)?;
-                Ok(regtest_candidate_over(
-                    root,
-                    self.height(),
-                    self.parent(),
-                    txs,
-                    rules,
-                ))
-            }
+        let height = self.height();
+        let root = batch_root_going_into(view, height.to_raw())?;
+        let (previous, parent_timestamp) = self.parent_link();
+        let mut cand = candidate_carrying(
+            self.identity,
+            rules,
+            root,
+            height,
+            previous,
+            parent_timestamp,
+            txs,
+        );
+        if self.identity == Identity::Harness && height == BlockHeight::ZERO {
+            endow_genesis(&mut cand);
         }
+        Ok(cand)
     }
 
     /// [`Self::judge_listing_with_memo`] for a block carrying a bundle
@@ -736,33 +782,19 @@ impl Grown {
 /// Price a genesis candidate's coinbase at [`genesis_endowment`] with the
 /// wallet's [`repay`] — amount, commitment and ciphertext together — so it
 /// is a coinbase the miner's scan recovers and a spend can be built over.
+///
+/// Pays the harness miner. Only a harness chain endows genesis; a regtest
+/// chain's block 0 is the table genesis, already priced.
 pub(in super::super) fn endow_genesis(genesis: &mut Candidate) {
     assert_eq!(genesis.block.number(), Some(0), "only genesis is endowed");
     assert!(
         repay(
             &mut genesis.block.miner_transaction,
-            MinerWallet::harness().recipient(),
+            Identity::Harness.miner().recipient(),
             genesis_endowment(),
         ),
         "the fixture's genesis coinbase is one `repay` prices"
     );
-}
-
-/// The candidate connecting at `height` over `previous`, listing `txs`,
-/// carrying the batch's root going into that height. Genesis is endowed.
-fn candidate_at<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    height: BlockHeight,
-    previous: BlockHash,
-    txs: Vec<Transaction>,
-) -> Result<Candidate, StoreError> {
-    let raw = height.to_raw();
-    let root = batch_root_going_into(view, raw)?;
-    let mut cand = candidate_over(root, raw, previous, txs);
-    if height == BlockHeight::ZERO {
-        endow_genesis(&mut cand);
-    }
-    Ok(cand)
 }
 
 /// The chain record over blocks a test connected by hand — each **as

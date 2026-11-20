@@ -246,9 +246,11 @@ fn regrown(blocks: usize) -> Grown {
 /// **One run, one binary.** The files live in a directory of this run
 /// alone ([`run_dir`]): nextest runs each test in a process of its own and
 /// names the run in `NEXTEST_RUN_ID`, so every process of one run shares
-/// it and no other run reads it; a `cargo test` run is one process, named
-/// by its id. A store is never trusted that this run did not verify
-/// (`CHAIN_FORGE.md`: nothing trusts a store it did not verify).
+/// it and no other run reads it. A `cargo test` run is one process and
+/// takes a directory that did not exist: a pid is recycled, and a recycled
+/// pid must not trust marks another binary wrote. A store is never trusted
+/// that this run did not verify (`CHAIN_FORGE.md`: nothing trusts a store
+/// it did not verify).
 ///
 /// **Built once.** The first process to need a prefix builds it while it
 /// holds the schedule's lock file, a rung at a time, and marks it verified
@@ -332,18 +334,19 @@ fn build_prefix(
     std::fs::File::create(mark(file)).expect("mark the prefix verified");
 }
 
+/// A day. A run ends with no hook to remove its directory; the next run
+/// removes ones older than this.
+const STALE_RUN_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
 /// This test run's directory of verified prefixes, under the system's
-/// temporary directory. Directories of runs older than a day are removed
-/// when a run makes its own: a run ends with no hook to remove its own.
+/// temporary directory. Directories of runs older than [`STALE_RUN_AFTER`]
+/// are removed when a run makes its own.
 fn run_dir() -> &'static std::path::Path {
     static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         let root = std::env::temp_dir().join("shekyl-chain-store-forged-fill");
-        let run = std::env::var("NEXTEST_RUN_ID")
-            .unwrap_or_else(|_| format!("process-{}", std::process::id()));
-        let dir = root.join(run);
-        std::fs::create_dir_all(&dir).expect("create the run's prefix directory");
-        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        std::fs::create_dir_all(&root).expect("create the prefix root");
+        let dir = claim_run_dir(&root);
         for entry in std::fs::read_dir(&root).expect("read the prefix root") {
             let entry = entry.expect("a directory entry");
             let old = entry
@@ -351,7 +354,7 @@ fn run_dir() -> &'static std::path::Path {
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|at| at.elapsed().ok())
-                .is_some_and(|age| age > day);
+                .is_some_and(|age| age > STALE_RUN_AFTER);
             if old && entry.path() != dir {
                 if let Err(fault) = std::fs::remove_dir_all(entry.path()) {
                     eprintln!(
@@ -363,6 +366,35 @@ fn run_dir() -> &'static std::path::Path {
         }
         dir
     })
+}
+
+/// The directory this process reads and writes verified prefixes in.
+///
+/// Nextest names the run in `NEXTEST_RUN_ID`, and every process of that
+/// run shares the directory. A `cargo test` process creates a directory
+/// that did not exist. The name is not the pid: a later process can be
+/// given the same pid, and `create_dir` is what makes the claim atomic.
+fn claim_run_dir(root: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(id) = std::env::var("NEXTEST_RUN_ID") {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).expect("create the run's prefix directory");
+        return dir;
+    }
+    let pid = std::process::id();
+    let mut salt = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|age| age.as_nanos())
+        .unwrap_or(0);
+    loop {
+        let dir = root.join(format!("cargo-{pid}-{salt}"));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(fault) if fault.kind() == std::io::ErrorKind::AlreadyExists => {
+                salt = salt.wrapping_add(1);
+            }
+            Err(fault) => panic!("create the run's prefix directory: {fault}"),
+        }
+    }
 }
 
 /// Connect the forged blocks from `grown`'s next height through the first
@@ -380,7 +412,7 @@ pub(super) fn connect_forged(
         let view = batch.chain_view();
         let mut out = Vec::new();
         for forged in &chain.blocks[from..blocks] {
-            let judged = grown.judge_as_built(&view, &rules, forged.clone())?;
+            let judged = grown.judge_as_built(&view, &rules, forged.clone(), &chain.commit)?;
             out.push(batch.connect(judged, rules)?);
             assert_eq!(
                 grown.tip(),

@@ -13,7 +13,7 @@
 //! — one more epoch of grace. The cost of a slash is `M + 1` epochs, plus
 //! one, whatever the epoch is.
 //!
-//! The chain, under `RuleSet::GENESIS.with_levers(fixed 7, SEB 100 / cap 50)`:
+//! The chain, under `RuleSet::GENESIS.with_levers(FORGED_DIFFICULTY, SEB 100 / cap 50)`:
 //! the forged shard-fill chain's prefix closes shard 0 with real spends
 //! (`store/forged_fill.rs`, at the manifest's close height), so the scan's
 //! universe is one shard; then `P` complete-tree personas join in the same
@@ -123,7 +123,6 @@
 // prints its figures, which is its job, not a debug leftover.
 #![cfg(test)]
 
-use core::num::NonZeroU128;
 use std::time::{Duration, Instant};
 
 use shekyl_archival_retention::settlement_select::issued_draw_term;
@@ -140,7 +139,7 @@ use shekyl_units::AtomicUnits;
 use super::connect_fixtures::{
     connect_chain_anchored, spend, spendable_prefix, Grown, Identity, Listed, FIRST_SPEND_HEIGHT,
 };
-use super::forged_fill::{self, forged};
+use super::forged_fill::{self, forged, FORGED_DIFFICULTY};
 use super::store_tests::{tmp, TestErr, EPOCH};
 use super::*;
 use crate::archival_snapshot::{hex, ArchivalSnapshot, SnapshotFamily};
@@ -150,10 +149,11 @@ use shekyl_chain_rules::EpochFloor;
 
 const SEB: u64 = 100;
 const RETENTION: u64 = 50;
-/// Fixed difficulty: over a thousand blocks at the fixture's constant
-/// spacing LWMA would floor the difficulty, and the fixture's zero longhash
-/// passes any fixed target.
-const RULES: RuleSet = RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, RETENTION));
+/// The forged chain's own difficulty ([`FORGED_DIFFICULTY`]). Its blocks are
+/// a second apart, and LWMA over that spacing overflows the cumulative
+/// work; the same fixed target the prune readers use, so a run judges this
+/// prefix once. The fixture longhash is zeros and passes any fixed target.
+const RULES: RuleSet = RuleSet::GENESIS.with_levers(FORGED_DIFFICULTY, pair(SEB, RETENTION));
 /// The rule set and undo retention a bench chain is built under.
 #[derive(Clone, Copy)]
 struct Under {
@@ -175,7 +175,7 @@ impl Under {
     /// still width 0 runs here, and asserts that pattern from the
     /// manifest's close.
     const LATE_FINAL: Self = Self {
-        rules: RuleSet::GENESIS.with_levers(NonZeroU128::new(7), pair(SEB, 90)),
+        rules: RuleSet::GENESIS.with_levers(FORGED_DIFFICULTY, pair(SEB, 90)),
         retention: 90,
     };
 }
