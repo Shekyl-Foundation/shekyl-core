@@ -187,8 +187,8 @@ mod tests {
             .await
         );
 
-        let ran = Arc::new(AtomicBool::new(false));
-        let second = Arc::clone(&ran);
+        let turned_away = Arc::new(AtomicBool::new(false));
+        let second = Arc::clone(&turned_away);
         assert!(
             !slot
                 .start(async move { second.store(true, Ordering::SeqCst) })
@@ -197,24 +197,34 @@ mod tests {
         );
 
         release.send(()).expect("the first pass is waiting");
-        while slot
-            .0
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|p| !p.is_finished())
-        {
+        let finished = |slot: &PassSlot| {
+            slot.0
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(JoinHandle::is_finished)
+        };
+        while !finished(&slot) {
             tokio::task::yield_now().await;
         }
+        let ran = Arc::new(AtomicBool::new(false));
         let third = Arc::clone(&ran);
         assert!(
             slot.start(async move { third.store(true, Ordering::SeqCst) })
                 .await
         );
-        slot.stop().await;
+        // Wait for the third pass to finish, not stop it: `stop` aborts a
+        // pass that has not been polled yet.
+        while !finished(&slot) {
+            tokio::task::yield_now().await;
+        }
         assert!(
             ran.load(Ordering::SeqCst),
-            "the pass after the first ran; the turned-away one never did"
+            "the pass after the first one finished runs"
+        );
+        assert!(
+            !turned_away.load(Ordering::SeqCst),
+            "the pass turned away while the first ran never runs"
         );
     }
 
