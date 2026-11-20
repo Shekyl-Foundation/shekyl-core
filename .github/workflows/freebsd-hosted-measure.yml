@@ -72,6 +72,8 @@ jobs:
           prepare: |
             pkg install -y bash curl git python3
           run: |
+            # The action runs this under `sh -e`: each phase's status is
+            # captured with `|| rc=$?`, so a failure is recorded, not fatal.
             set -u
             W=$(pwd)
             R="$W/fbsd-results"
@@ -95,8 +97,8 @@ jobs:
 
             stamp toolchain-start
             curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-all-errors -o /tmp/rustup-init.sh https://sh.rustup.rs
-            sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --no-modify-path > "$R/toolchain.log" 2>&1
-            tc_rc=$?
+            tc_rc=0
+            sh /tmp/rustup-init.sh -y --default-toolchain 1.94.0 --profile minimal --no-modify-path > "$R/toolchain.log" 2>&1 || tc_rc=$?
             nx=cargo-nextest-0.9.138-x86_64-unknown-freebsd.tar.gz
             curl -sSfL --retry 3 --retry-all-errors -o "/tmp/$nx" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/$nx"
             if [ "$(sha256 -q "/tmp/$nx")" != 406f4372a1dce83774c47970687c06556781c078cd7c69c193bb617b265e7daf ]; then
@@ -110,11 +112,12 @@ jobs:
 
             cd "$W/rust"
             stamp build-start
-            cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential > "$R/build.log" 2>&1
-            build_rc=$?
+            build_rc=0
+            cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential > "$R/build.log" 2>&1 || build_rc=$?
             stamp build-end
             echo "build rc=$build_rc" >> "$R/timings.txt"
-            du -sk "$CARGO_TARGET_DIR" >> "$R/vm-facts.txt" 2>&1
+            echo "--- build.log tail"; tail -n 40 "$R/build.log"
+            du -sk "$CARGO_TARGET_DIR" >> "$R/vm-facts.txt" 2>&1 || true
 
             test_rc=skipped
             doc_rc=skipped
@@ -122,17 +125,19 @@ jobs:
               stamp test-start
               # rust_scoped_tests.sh's `nextest` with RUST_TESTS=all, minus
               # its chain fetch (done on the runner, above).
-              cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1
-              test_rc=$?
+              test_rc=0
+              cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1 || test_rc=$?
               stamp test-end
-              cp "$CARGO_TARGET_DIR/nextest/ci/junit.xml" "$R/junit.xml" 2>> "$R/vm-facts.txt"
+              echo "--- test.log tail"; tail -n 60 "$R/test.log"
+              cp "$CARGO_TARGET_DIR/nextest/ci/junit.xml" "$R/junit.xml" 2>> "$R/vm-facts.txt" || true
               stamp doctest-start
-              RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1
-              doc_rc=$?
+              doc_rc=0
+              RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1 || doc_rc=$?
+              echo "--- doctest.log tail"; tail -n 20 "$R/doctest.log"
               stamp doctest-end
             fi
             echo "test rc=$test_rc doctest rc=$doc_rc" >> "$R/timings.txt"
-            kill "$sampler"
+            kill "$sampler" || true
             cat "$R/timings.txt"
             [ "$build_rc" -eq 0 ] && [ "$test_rc" = 0 ] && [ "$doc_rc" = 0 ]
 
