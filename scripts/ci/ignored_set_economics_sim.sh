@@ -96,10 +96,12 @@ helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures
 esr10::tests::regen_esr10_narration_fixtures
 eup4::tests::regen_eup4_narration_fixtures
-jg_grid::tests::regen_jg_grid_narration_fixtures'
+jg_grid::tests::regen_jg_grid_narration_fixtures
+growth_trace::tests::regen_growth_trace_narration_fixture'
 on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
-jg_grid::tests::jg_grid_narration_matches_the_committed_fixture'
+jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
+growth_trace::tests::growth_trace_narration_matches_the_committed_fixture'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`
