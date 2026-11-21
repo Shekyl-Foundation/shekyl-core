@@ -683,6 +683,24 @@ impl Core {
         if arrived.is_some() && verdict == DirectoryVerdict::Held {
             actions.extend(self.path_fact(OnionPath::Working, now));
         }
+        // A newer copy this node did not publish is decided at once, probe
+        // or not, first miss or not. A named clock or a standing refused
+        // round explains it, and stays the cause: a clock that went back
+        // leaves this node's own earlier copy above its counter, and its
+        // uploads are refused (Rick, 2026-11-21: the new cause never
+        // swallows the clock case). Otherwise another Tor holds this onion's
+        // key. No refetch and no republish: either would only race it.
+        if verdict == DirectoryVerdict::Contested {
+            self.probe_confirms = false;
+            if self.republish_is_judging() {
+                self.republish_failed(now);
+            }
+            if !self.clock_is_behind() && !self.any_refused() && !self.published_elsewhere() {
+                self.inbound_unreachable(now, InboundCause::PublishedElsewhere);
+                actions.extend(self.say(now, Cadence::Due));
+            }
+            return actions;
+        }
         match (arrived, verdict) {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
                 let recovered = matches!(self.inbound, Inbound::Unreachable { .. });

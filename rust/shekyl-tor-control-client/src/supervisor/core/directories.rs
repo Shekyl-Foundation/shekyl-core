@@ -101,6 +101,13 @@ pub enum Counted {
     /// confirmed, any answer but a matching copy; and no answer within the
     /// window, when the fetch path was shown working ([`Exclusion::Silent`]).
     Missing,
+    /// It holds a copy of the descriptor ours names at a counter above
+    /// ours. Tor returns only a copy it decoded, which the onion's key
+    /// signed, so another holder of that key published it, or this node did
+    /// before its clock went back; the judge tells them apart by whether the
+    /// clock or a refused round is named (Rick, 2026-11-21). Neither found
+    /// nor missing.
+    NewerCopy,
     /// Not counted.
     Excluded(Exclusion),
 }
@@ -282,6 +289,9 @@ pub(super) enum DirectoryVerdict {
     /// descriptor Tor's client asks for, or none answered about it. The
     /// probe alone decides, and the driver says so once.
     Unmatched,
+    /// A directory holds a newer copy this node did not publish
+    /// ([`Counted::NewerCopy`]): one is proof, whatever the others hold.
+    Contested,
 }
 
 /// The fetches of one probe's check.
@@ -472,8 +482,8 @@ impl DirectoryCheck {
     /// descriptor, the copy says nothing. When ours names a different
     /// descriptor, a stored copy counts by being there (`desc_next`). When
     /// this is the descriptor ours names, the counters decide: equal is
-    /// found, any other counter is missing, and an unreadable counter says
-    /// nothing.
+    /// found, a higher counter is a newer copy this node did not publish, a
+    /// lower one is missing, and an unreadable counter says nothing.
     fn copy_held(&self, uploaded: &str, revision_counter: Option<u64>) -> Counted {
         let Some(ours) = &self.ours else {
             return Counted::Excluded(Exclusion::SaidNothing);
@@ -483,6 +493,7 @@ impl DirectoryCheck {
         }
         match revision_counter {
             Some(theirs) if theirs == ours.revision_counter => Counted::Found,
+            Some(theirs) if theirs > ours.revision_counter => Counted::NewerCopy,
             Some(_) => Counted::Missing,
             None => Counted::Excluded(Exclusion::SaidNothing),
         }
@@ -510,6 +521,9 @@ impl DirectoryCheck {
     }
 
     pub(super) fn verdict(&self) -> DirectoryVerdict {
+        if self.count(Counted::NewerCopy) > 0 {
+            return DirectoryVerdict::Contested;
+        }
         let found = self.count(Counted::Found);
         let counted = found + self.count(Counted::Missing);
         if counted == 0 {

@@ -344,6 +344,9 @@ impl Core {
         if self.clock_is_behind() || !newly {
             return actions;
         }
+        // A refusal names itself over another publisher: the refused-upload
+        // path is the one that names a clock run, and a newer copy is never
+        // let swallow it (Rick, 2026-11-21).
         self.inbound_unreachable(now, InboundCause::UploadsRefused);
         actions.extend(self.say(now, Cadence::Due));
         actions
@@ -392,10 +395,21 @@ impl Core {
         self.refusals.any()
     }
 
-    /// While the clock is named, or either descriptor's latest round was
-    /// refused, a republish cannot help.
+    /// While the clock is named, another publisher is, or either
+    /// descriptor's latest round was refused, a republish cannot help.
     pub(super) fn republish_cannot_help(&self) -> bool {
-        self.clock_is_behind() || self.any_refused()
+        self.clock_is_behind() || self.published_elsewhere() || self.any_refused()
+    }
+
+    /// Another Tor holding this onion's key is named as publishing it.
+    pub(super) fn published_elsewhere(&self) -> bool {
+        matches!(
+            self.inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::PublishedElsewhere,
+                ..
+            }
+        )
     }
 
     /// The republish is waiting on its own round's probe.
@@ -560,7 +574,7 @@ impl Core {
         self.queued_send = None;
     }
 
-    fn inbound_unreachable(&mut self, now: u64, cause: InboundCause) {
+    pub(super) fn inbound_unreachable(&mut self, now: u64, cause: InboundCause) {
         let since = match self.inbound {
             Inbound::Unreachable { since, .. } => since,
             _ => now,
