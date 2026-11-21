@@ -46,6 +46,17 @@ const IGNORED_HOLDS: Duration = Duration::from_secs(1);
 const IGNORED_LINE: &str = "shekyl-wallet-rpc: Ctrl-C is off because the program that started \
      shekyl-wallet-rpc asked for it. Stop it with SIGTERM or the service stop.";
 
+/// A temporary directory only this account can enter. The wallet RPC binds
+/// its socket only in such a directory, and tempfile makes its directories
+/// with the umask's default mode (0755 under umask 022).
+fn owner_only_tempdir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .expect("an owner-only temporary directory")
+}
+
 /// A short socket name: a socket path must fit `sun_path` (104 bytes on
 /// macOS and FreeBSD).
 fn socket_in(dir: &Path) -> PathBuf {
@@ -161,7 +172,7 @@ fn a_sigterm_in_the_bind_window_stops_cleanly_and_leaves_no_socket() {
         return;
     }
     use std::os::unix::process::ExitStatusExt;
-    let control = tempfile::tempdir().expect("tempdir");
+    let control = owner_only_tempdir();
     let before = child_run(TEST, BEFORE_THE_ARM, control.path());
     assert_eq!(
         before.status.signal(),
@@ -170,7 +181,7 @@ fn a_sigterm_in_the_bind_window_stops_cleanly_and_leaves_no_socket() {
         before.status
     );
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = owner_only_tempdir();
     let out = child_run(TEST, IN_THE_WINDOW, dir.path());
     let said = &out.stdout;
     assert!(
@@ -317,7 +328,7 @@ impl Drop for Server {
 /// disposition (the server stops on it), or drop the line.
 #[test]
 fn started_with_sigint_ignored_it_ignores_ctrl_c_says_so_and_stops_cleanly_on_sigterm() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = owner_only_tempdir();
     let socket = socket_in(dir.path());
 
     let mut control = Server::start(dir.path(), &socket, "control", false);
@@ -364,7 +375,7 @@ fn started_with_sigint_ignored_it_ignores_ctrl_c_says_so_and_stops_cleanly_on_si
 /// (the second start takes over the live socket, and the file is gone).
 #[test]
 fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = owner_only_tempdir();
     let socket = socket_in(dir.path());
 
     let mut first = Server::start(dir.path(), &socket, "first", false);
@@ -428,7 +439,7 @@ fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
 fn with_umask_002_only_the_owner_can_reach_the_socket_during_startup() {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = owner_only_tempdir();
     let control = dir.path().join("control");
     let control_c = std::ffi::CString::new(control.as_os_str().as_bytes()).expect("a path");
     let socket_dir = dir.path().join("made");
@@ -497,7 +508,7 @@ fn with_umask_002_only_the_owner_can_reach_the_socket_during_startup() {
 #[test]
 fn a_group_writable_socket_directory_is_refused_naming_it() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = owner_only_tempdir();
 
     let private = dir.path().join("private");
     std::fs::create_dir(&private).expect("a directory");

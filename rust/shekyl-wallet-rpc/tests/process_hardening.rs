@@ -37,7 +37,15 @@ fn a_running_wallet_rpc_is_hardened() {
     }
     from_outside::assert_the_control_shows_the_subject(NAME);
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // Owner-only: the wallet RPC binds its socket only in a directory this
+    // account alone can enter, and tempfile's default mode is the umask's.
+    let dir = {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .expect("tempdir")
+    };
     let wallets = dir.path().join("wallets");
     std::fs::create_dir(&wallets).expect("wallet dir");
     // A short name: a socket path must fit `sun_path` (104 bytes on macOS
