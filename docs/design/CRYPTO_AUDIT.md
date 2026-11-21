@@ -5,7 +5,8 @@ birth in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2). `CA-1` is
 ignored in `cargo audit` by ruling (Rick, 2026-10-24); its long-term fix is
 not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
 operand-dependent timing in the vendored `HelioseleneField` on x86_64,
-mechanism open (§2).
+mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
+constant-time evidence covers any of Shekyl's post-quantum signing (§3).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -19,6 +20,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — unmeasured (§3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -394,3 +396,40 @@ blinded operands, as `Field25519`'s flat rows suggest) fixed in the
 vendored crate or upstream and re-measured flat with this harness on the
 direct path on both x86_64 hosts, with a note in the wallet's threat model
 for the release that predates it.
+
+## 3. `CA-3` — no constant-time evidence for post-quantum signing
+
+**Opened 2026-11-21 by Rick's ruling**, from shekyl-core #1494's review of
+fips203/204/205 0.5.0. Owner: the crypto-audit lane. It is not part of
+#1494: that pull request did not create the gap, and the 0.4 crates had it.
+
+**The question.** Is each post-quantum signer's signing constant-time with
+respect to its secret key, on the floor device (Raspberry Pi 4, rule 76)
+and on x86?
+
+**What covers post-quantum code today.** checkct's drivers and its dynamic
+harness (`docs/formal/checkct/`) cover crypto-bigint 0.5.5,
+`dalek_ff_group::FieldElement` and `HelioseleneField`, and nothing in
+fips203, fips204, fips205 or fn-dsa. RT-P4
+([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §9) times ML-KEM-768 decapsulation
+only. No registered run covers any signing.
+
+**The signers, by exposure.**
+
+| Signing | Code path | Who can trigger it | Exposure |
+| --- | --- | --- | --- |
+| FN-DSA hybrid receipt countersignature (`fn-dsa` 0.4.0) | The host's `PassKey::sign_pass` (`shekyl-p-host/src/signer.rs:155`, `HostSigner`) → the persona's `ResidentReceiptKey::sign_pass` (`shekyl-engine-core/src/engine/stake_engine/serving/receipt_key.rs:152`) → `persona.rs:229` → `types.rs:166` → `sign_receipt_transcript` (`shekyl-p-serve/src/countersign.rs:184`); signing in `shekyl-crypto-pq/src/fn_dsa_hybrid.rs:416` (`sign`), `:382` (`sign_with_rng`) and `:513` (`sign_decoded_key`) | Anyone fetching a shard from a persona's public onion: each served pass is signed with the persona's long-lived receipt key | Remote and repeatable, rate-limited only by the onion's proof-of-work. FN-DSA is also the scheme whose timing is hardest to get right, because of its Gaussian sampling |
+| ML-DSA-65, transaction signing (`fips204` 0.5.0) | `shekyl-tx-builder/src/sign.rs:418` (`sign_pqc_auths`) → `shekyl-crypto-pq/src/output.rs:1182` (`sign_pqc_auth_for_output`) → `shekyl-crypto-pq/src/signature.rs:450` (`HybridEd25519MlDsa::sign`, `try_sign` at `:458`) | The wallet's own user, or an enrolled wallet-RPC client | Local or already-authorised callers |
+| SLH-DSA-SHA2-192s, message signing (`fips205` 0.5.0) | `shekyl-crypto-pq/src/message_signing.rs:385` (`sign_message_pq_half`, `try_sign` at `:399`), reached from `sign_message` (`:436`) | The same | Local or already-authorised callers |
+
+**Method.** Per signer, one or both of: classes in the checkct dynamic
+harness, or an RT-P4-style timing run (dudect's method, a planted control,
+null comparisons), each registered before any run with its classes, lines
+and devices; and a source read of each signing path for branches, memory
+accesses or divisions that depend on the secret key. The registered runs
+share the floor device's quiet-claim schedule with RT-P4.
+
+**Reopen / close.** Open while any of the three signers has no passing
+registered run. Each signer's row closes on its own passing run on both
+devices, with its source read recorded here.
+
