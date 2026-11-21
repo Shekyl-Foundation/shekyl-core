@@ -6,10 +6,9 @@
 //! The wallet's safety constants: one set, on every network.
 //!
 //! These are the consensus-adjacent defaults a wallet applies when it has
-//! no user override in play. They are the "hardcoded" layer of the
-//! three-layer preference model pinned in
-//! [`docs/WALLET_PREFS.md`](../../../../docs/WALLET_PREFS.md) (§2.1, §3.1,
-//! §3.3).
+//! no user override in play. They are the hardcoded layer of
+//! [`docs/WALLET_SETTINGS.md`](../../../../docs/WALLET_SETTINGS.md) (§2,
+//! with the session overrides of §3).
 //!
 //! Policy, restated briefly:
 //!
@@ -57,8 +56,8 @@ pub const MIN_REORG_DEPTH: BlockCount =
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WalletSafetyConstants {
     /// Minimum number of confirmations before the wallet treats a
-    /// transfer as final: [`MIN_REORG_DEPTH`]. See `docs/WALLET_PREFS.md`
-    /// §3.3 — a session may raise it ([`ReorgDepthOverride`]) but it is
+    /// transfer as final: [`MIN_REORG_DEPTH`]. See `docs/WALLET_SETTINGS.md`
+    /// §3 — a session may raise it ([`ReorgDepthOverride`]) but it is
     /// never persisted.
     pub max_reorg_depth: BlockCount,
 
@@ -66,7 +65,7 @@ pub struct WalletSafetyConstants {
     /// wallet against view-key-reuse linkability attacks). Invariant:
     /// always `true`. No CLI override exists; research use cases build
     /// a debug binary with the constant flipped at source level. See
-    /// `docs/WALLET_PREFS.md` §3.1.
+    /// `docs/WALLET_SETTINGS.md` §2.
     pub key_reuse_mitigation2: bool,
 
     /// Default starting height when the wallet first scans a chain.

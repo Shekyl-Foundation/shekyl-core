@@ -556,6 +556,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | `json` | `json` | switch | off | CLI | | K |
 | `script` | `script-file` | path | unset | CLI | | R |
 | — | `log-file`, `log-level`, `log-category`, `log-size-max` | as §5 | as §5, the file `shekyl-cli-<network>.log` | both | | N; the daemon's rows apply |
+| (`device.tor_binary_path`, the deleted prefs file) | `tor-file` | path | unset: discovery, as the daemon's `tor-file` | both | | N (Rick, 2026-11-21): the Tor binary the self-hosted server runs when the wallet serves. A path naming a file is taken and must pass the pin, never replaced by discovery; unlike the daemon's row, a path naming no file falls back to discovery with one warning. Unconstructible with `wallet-rpc-endpoint` or `wallet-rpc-socket-file`: no server is started (`WALLET_SETTINGS.md` §4) |
 
 ### 12.2 `shekyl-cli` — the scripted subcommands' options
 
@@ -614,6 +615,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `check payment <txid> <address> <proof> [message...]`, `check reserve <address> <proof> [message...]` | same | hash, address, text; address, text | | K; views (IG-Q34) |
 | `sign <message...>`, `verify <address> <signature> <message...>` | same | text; address, text | | K |
 | `freeze`, `thaw`, `frozen` | — | | | X (Rick, 2026-11-15): the wallet has no user-set hold on outputs. FCMP++ hides which outputs a spend uses, and the wallet's own reservations keep built and staking-held outputs out of selection. The refusal states this and names the decision log entry; the wallet RPC's method registry rejects the same three names |
+| `set` with `min-outputs-count`, `min-outputs-value`, `ignore-outputs-above`, `ignore-outputs-below`, `merge-destinations` (and the deleted prefs file's `min_output_count`, `min_output_value`, `ignore_outputs_above`, `ignore_outputs_below`, `merge_destinations`) | — | | | X (Rick, 2026-11-21): the coin-selection settings. A human choice on a visible transaction parameter becomes a pattern, while deterministic selection gives every wallet the same shapes (the user freeze's reason, 2026-11-15). The refusal names the setting, states the reason and names the decision log entry; any other `set` is an unknown command. They reopen only on a named user job the wallet's own selection does not cover |
 | the `RETIRED` table (`transfer`, `transfers`, `show_transfer`, `get_tx_note`, `set_tx_note`, `abandon`, `stake_in`, `drain`, `drain_balance`, `unstake`, `stake exit`, `collect_unstaked`, `get_tx_proof`, `check_tx_proof`, `get_reserve_proof`, `check_reserve_proof`, `start_mining`, `stop_mining`, `mining_status`, `chain_health`, …) | — | | | – (IG-Q30) |
 
 ### 12.4 `shekyl-wallet-rpc` — options
@@ -631,6 +633,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | unset: "this computer" (RT-15); unset | both | | R (IG-Q31; default amended by RT-W10 step 5, Rick 2026-11-17, as `shekyl-cli`'s row) |
 | `proxy` | `daemon-socks` | endpoint | unset | both | | R |
 | `log-file` | `log-file`, with `log-level`, `log-category`, `log-size-max` | as §5 | the file `shekyl-wallet-rpc-<network>.log` | both | | K; the daemon's rows apply |
+| (`device.tor_binary_path`, the deleted prefs file) | `tor-file` | path | unset: discovery, as the daemon's `tor-file` | both | | N (Rick, 2026-11-21): the Tor binary a serving wallet runs; as `shekyl-cli`'s row (`WALLET_SETTINGS.md` §4) |
 
 ## 13. The daemon console
 
@@ -740,7 +743,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q40 — the inbound cap — RULED 2026-10-14** (Rick; the same ruling is in [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1). `p2p-inbound-max` is deleted, and `in-peers` is an X row (§5) whose reopener is a byte quota for metered links. The descriptor safety bound (`InboundCeiling`, [`P2P_TRANSPORT_LAYER.md`](P2P_TRANSPORT_LAYER.md) D4 and D8) is the only inbound bound and is unchanged; the daemon does not raise its own descriptor limit. What an operator pays is bytes, which the rate rows bound; which peers keep a slot is eviction (PWD-I8); handshake cost follows the accept rate (`P2P_TRANSPORT_LAYER.md` D10.3) and the onion proof-of-work. The unbounded cases (Windows, an unlimited or unreadable limit, an unreadable count) behave as today and are PWD-B1's, and their warnings name nothing the operator can set. The runtime set is four rows: `p2p-upload-max`, `p2p-download-max`, `log-level` and `log-category`.
 
-**IG-Q41 — the Tor binary — RULED 2026-10-15** (Rick, on TSR-F8; the same ruling is in [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1). `SHEKYL_TOR_BINARY` was an environment input, which IG-13 refuses. It becomes the config key `tor-file`, accepted only with `tor = managed`, whose default is today's location: `tor/tor` beside the running executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix. A set value changes where the binary is looked for, never whether it is verified: it passes the same pin gate, and its failure never falls through to discovery. The environment tier leaves the shared discovery function, so the wallet binaries lose it too; their override is the wallet's settings file.
+**IG-Q41 — the Tor binary — RULED 2026-10-15** (Rick, on TSR-F8; the same ruling is in [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §1.1). `SHEKYL_TOR_BINARY` was an environment input, which IG-13 refuses. It becomes the config key `tor-file`, accepted only with `tor = managed`, whose default is today's location: `tor/tor` beside the running executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix. A set value changes where the binary is looked for, never whether it is verified: it passes the same pin gate, and its failure never falls through to discovery. The environment tier leaves the shared discovery function, so the wallet binaries lose it too; their override is their own `tor-file` option (§12.1, §12.4; Rick, 2026-11-21, with the wallet settings file deleted), which differs from the daemon's in one respect: a path naming no file falls back to discovery with one warning.
 
 ---
 

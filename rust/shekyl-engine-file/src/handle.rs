@@ -461,8 +461,8 @@ impl WalletFile {
     ///
     /// # Safety overrides
     ///
-    /// `overrides` supplies the CLI-ephemeral layer of the three-layer
-    /// preference model (see `docs/WALLET_PREFS.md` §2.3). The struct
+    /// `overrides` supplies the session-override layer (see
+    /// `docs/WALLET_SETTINGS.md` §3). The struct
     /// is `Copy` and stored on the handle for the session. GUI callers
     /// pass [`SafetyOverrides::none`]. CLI callers may pass a
     /// non-empty struct; on open, every active field produces a
@@ -1052,7 +1052,7 @@ impl WalletFile {
     /// Starting height for a from-scratch scan. Applies only on paths
     /// that do not have a persisted `SyncStateBlock` to anchor them
     /// (fresh wallet, lost-`.wallet` recovery, explicit rescan).
-    /// See `docs/WALLET_PREFS.md` §3.3.
+    /// See `docs/WALLET_SETTINGS.md` §3.
     pub fn effective_skip_to_height(&self) -> BlockHeight {
         self.overrides.effective_skip_to_height()
     }
@@ -2048,7 +2048,7 @@ mod tests {
     /// `effective_*` accessors without affecting any other field, and
     /// must survive beyond the `open` call on the handle. This pins
     /// the "request-scoped but handle-lifetimed" policy documented in
-    /// `docs/WALLET_PREFS.md` §3.3 and in the `overrides` module
+    /// `docs/WALLET_SETTINGS.md` §3 and in the `overrides` module
     /// header.
     #[test]
     fn open_with_overrides_propagates_to_effective_accessors() {

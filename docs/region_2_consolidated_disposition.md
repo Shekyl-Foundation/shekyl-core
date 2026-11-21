@@ -123,7 +123,7 @@ identity → region-1 AAD. The `2k` work routed around the `2a` module without e
 
 This is the model that resolves both the region-2 question and the earlier staking (tier-4)
 decision. It is the durable output of this thread, now named in
-[`WALLET_PREFS.md` §2](./WALLET_PREFS.md).
+[`WALLET_PREFS.md` §2](./completed/WALLET_PREFS.md).
 
 | Tier | Where | Who writes | Integrity | Failure mode | Reset-to-default safe? |
 |------|-------|-----------|-----------|--------------|------------------------|

@@ -1350,6 +1350,40 @@ mod tests {
         }
     }
 
+    /// The coin-selection settings a Monero user would `set` are REJECTED
+    /// (2026-11-21): each, in Monero's spelling and the deleted prefs
+    /// file's, is refused with its reason and the decision, never sent to
+    /// the server. Any other `set` stays an unknown command.
+    #[test]
+    fn the_coin_selection_settings_are_refused_with_their_reason() {
+        for name in [
+            "min-outputs-count",
+            "min-outputs-value",
+            "ignore-outputs-above",
+            "ignore-outputs-below",
+            "merge-destinations",
+            "min_output_count",
+            "min_output_value",
+            "ignore_outputs_above",
+            "ignore_outputs_below",
+            "merge_destinations",
+        ] {
+            let line = format!("set {name} 1");
+            match parse(&line) {
+                ResolvedCommand::Diagnostic { message } => {
+                    assert!(message.contains(name), "{line}: {message}");
+                    assert!(message.contains("becomes a pattern"), "{line}: {message}");
+                    assert!(message.contains("2026-11-21"), "{line}: {message}");
+                }
+                other => panic!("{line}: {other:?}"),
+            }
+        }
+        assert!(
+            matches!(parse("set ask-password 0"), ResolvedCommand::Unknown { .. }),
+            "another set is no REJECTED name"
+        );
+    }
+
     #[test]
     fn sign_keeps_internal_spaces() {
         match parse("sign hello   world") {

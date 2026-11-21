@@ -19,7 +19,7 @@ operational properties the envelope guarantees.
    written exactly twice over the wallet's life: once at creation, and
    again only if the user rotates the wrapping password. Every other
    persistent wallet mutation (refresh progress, transfers cache,
-   subaddresses, UI prefs, …) lives in a second file that is overwritten
+   …) lives in a second file that is overwritten
    on every auto-save. An attacker who has a write window on one file
    therefore cannot corrupt the other; a fsck/backup tool cannot destroy
    seed material while racing with a save; and cold-backup tooling can
@@ -235,13 +235,10 @@ fallback.
 Each AEAD-encrypted region uses a 32-byte wrap key derived from `file_kek`
 via HKDF-SHA-256 in **expand-only** mode with `file_kek` as the PRK
 (`HKDF-Expand`; no Extract step; no salt). Implementations MUST NOT use
-extract-then-expand with a separate salt. The derivation matches the prefs HMAC
-pattern in [`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2: domain-separated `info`
-strings with a version suffix. The region labels' suffix follows
+extract-then-expand with a separate salt. The `info` strings are
+domain-separated with a version suffix. The region labels' suffix follows
 `file_version`: format `0x02` uses `-v2`, and a later format bump mints new
 labels again; a region info string is never reused across file formats.
-The prefs HMAC label follows the prefs format, not `file_version`, and
-stays `-v1`.
 
 **`file_kek` provenance (normative).** `file_kek` MUST be generated from a
 cryptographically secure random source at wallet creation (see §2.1). It MUST
@@ -259,8 +256,8 @@ properties of per-region HKDF labels.
 Let `addr` be the 65-byte `expected_classical_address` inside region 1 plaintext
 (§2.2). Region 1 uses **label-only** HKDF so open can derive the decrypt key
 before reading `addr` from ciphertext (Minimum-Leak: `addr` is not duplicated
-outside region 1). Region 2 and prefs HMAC read `addr` from decrypted region 1
-before deriving their keys.
+outside region 1). Region 2 reads `addr` from decrypted region 1
+before deriving its key.
 
 ```
 wrap_key_region_1 = HKDF-Expand(
@@ -283,9 +280,9 @@ AAD prevents ciphertext swapping between regions; it does not prevent decryption
 when the attacker holds the key. Per-region HKDF labels deliver load-bearing
 separation; address binding on region 1 was redundant under CSPRNG-random
 per-wallet `file_kek` and is omitted so bootstrap ordering stays clean.
-Region 2 and prefs retain `\|\| addr` binding. Steady-state session code may
-cache only `wrap_key_region_2` (and other derived subkeys such as
-`prefs_hmac_key`) while zeroizing `file_kek` and `wrap_key_region_1` after open.
+Region 2 retains `\|\| addr` binding. Steady-state session code may
+cache only `wrap_key_region_2` while zeroizing `file_kek` and
+`wrap_key_region_1` after open.
 
 **Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced
 under a pre-amendment implementation that keyed region AEAD with raw `file_kek`
@@ -363,7 +360,7 @@ guarantees : .wallet.keys bytes on disk are untouched by auto-save
 Each auto-save re-runs the Argon2id wrap derivation. The design accepts
 this per-save latency in exchange for the invariant that `file_kek` is
 transient at open: derived from the password, used to HKDF the region wrap
-keys (§2.6) and prefs integrity key, then zeroized. Steady-state auto-save
+keys (§2.6), then zeroized. Steady-state auto-save
 may cache `wrap_key_region_2` (not `file_kek`, not `wrap_key_region_1`) for
 the unlocked session; see
 [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
