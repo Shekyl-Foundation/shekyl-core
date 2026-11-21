@@ -103,7 +103,6 @@ shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # `tx show`'s regtest: a wallet that holds a coinbase, against a real daemon.
 shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-address = { path = "../shekyl-address" }
-shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 
 [lints]
 workspace = true

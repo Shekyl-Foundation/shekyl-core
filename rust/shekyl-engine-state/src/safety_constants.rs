@@ -21,9 +21,10 @@
 //!   `SafetyOverrides` struct overlays on at wallet open. An override is
 //!   ephemeral; it lives only for the current process.
 //! - Fields that do not appear here are, by construction, not
-//!   consensus-relevant. Cosmetic and operational preferences live in
-//!   the plaintext-with-HMAC TOML layer owned by the `shekyl-engine-prefs`
-//!   crate (added in commit 2k.3).
+//!   consensus-relevant. A wallet keeps no preferences file (the prefs
+//!   layer was deleted, Rick 2026-11-21): what is not a constant here is
+//!   sealed wallet state, an option of the process that runs the wallet,
+//!   or a front end's own setting.
 //!
 //! Rule cross-references: `60-no-monero-legacy.mdc` — segregation forks
 //! and pre-fork output sets are Monero-lineage concepts that do not apply

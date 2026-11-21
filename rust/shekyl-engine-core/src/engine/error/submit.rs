@@ -430,10 +430,9 @@ mod reservation_after_tests {
             (
                 SubmitError::DispatchNotSaved {
                     reservation_id: rid,
-                    source: PersistenceError::Prefs(
-                        shekyl_engine_prefs::PrefsError::UnsupportedSchemaVersion {
-                            file: 9,
-                            binary: 1,
+                    source: PersistenceError::WalletFile(
+                        shekyl_engine_file::WalletFileError::ReadOnly {
+                            target: std::path::PathBuf::from("w.wallet"),
                         },
                     ),
                 },

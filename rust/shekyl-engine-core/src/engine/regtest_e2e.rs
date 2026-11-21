@@ -2458,7 +2458,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_prefs::WalletPrefs;
 
     let seed = [0x11u8; SEED_BYTES];
     let mine_address = mine_address_from_seed(&seed, Network::Regtest);
@@ -2489,7 +2488,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
             p: 1,
         },
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
     let wallet = Engine::<SoloSigner>::create(params, daemon_client).expect("create wallet");
     let address = wallet
@@ -2630,7 +2628,6 @@ async fn e2e_refresh_scans_coinbase_balance() {
             p: 1,
         },
         overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
     };
     let wallet =
         Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
@@ -3071,7 +3068,6 @@ fn regtest_params<'a>(
             p: 1,
         },
         overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
     }
 }
 

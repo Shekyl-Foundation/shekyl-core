@@ -112,11 +112,11 @@ pub(crate) enum StakeSelfCertFailure {
 // --- Persistence -----------------------------------------------------------
 
 /// Failures from [`crate::engine::traits::persistence::PersistenceEngine`] steady-state
-/// save / rotate paths (`save_state`, `save_prefs`, `rotate_password`).
+/// save / rotate paths (`save_state`, `rotate_password`).
 ///
 /// Mapped at the lifecycle boundary: [`OpenError::Persistence`] on
-/// [`crate::engine::Engine::close`](crate::engine::Engine::close);
-/// [`ChangePasswordError`] on [`crate::engine::Engine::change_password`](crate::engine::Engine::change_password).
+/// [`crate::engine::Engine::close`](crate::engine::Engine::close); returned
+/// as is from [`crate::engine::Engine::change_password`](crate::engine::Engine::change_password).
 #[derive(Debug, thiserror::Error)]
 pub enum PersistenceError {
     /// On-disk wallet envelope / atomic-write failure. The target was not
@@ -132,22 +132,4 @@ pub enum PersistenceError {
     /// file system and a move to an NTFS volume (Rick, 2026-11-18).
     #[error("the wallet save was applied but not confirmed on disk: {0}")]
     DurabilityUnconfirmed(shekyl_engine_file::Unconfirmed),
-
-    /// Prefs sidecar load/save/HMAC failure.
-    #[error("prefs error: {0}")]
-    Prefs(#[from] shekyl_engine_prefs::PrefsError),
-}
-
-/// Failures from [`crate::engine::Engine::change_password`](crate::engine::Engine::change_password)
-/// when rotation and prefs flush are separate steps (PR 6 §5.10 / segment 2b).
-#[derive(Debug, thiserror::Error)]
-pub enum ChangePasswordError {
-    /// Password rotation (keys-file rewrap) failed before prefs were touched.
-    #[error("password rotation failed: {0}")]
-    RotateFailed(#[from] PersistenceError),
-
-    /// Keys-file rotation succeeded but prefs flush failed — on-disk password
-    /// and prefs may be inconsistent until the user retries or restores.
-    #[error("password rotated but prefs flush failed: {0}")]
-    RotatedButPrefsFlushFailed(PersistenceError),
 }

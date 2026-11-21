@@ -603,7 +603,6 @@ impl Regtest {
                 p: 1,
             },
             overrides: shekyl_engine_file::SafetyOverrides::none(),
-            prefs: shekyl_engine_prefs::WalletPrefs::default(),
         };
         let wallet = shekyl_engine_core::Engine::<shekyl_engine_core::SoloSigner>::create(
             params,

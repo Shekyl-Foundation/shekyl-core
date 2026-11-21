@@ -480,7 +480,6 @@ members = [
     "shekyl-engine-file",
 
     # Plaintext-with-HMAC user preferences (layer 2 of WALLET_PREFS.md)
-    "shekyl-engine-prefs",
 
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
@@ -640,7 +639,7 @@ blake2 = { version = "0.10", default-features = false }
 # `shekyl-randomx-differential`'s `Cargo.toml`). All three are
 # already widely-used direct deps across the workspace with
 # independent per-crate pins (`sha2` in `shekyl-engine-core`,
-# `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
+# `shekyl-crypto-pq`, `shekyl-proofs`;
 # `rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
 # `shekyl-fcmp`, `shekyl-fcmp-proofs`; `serde_json` across
 # ~14 crates). This section adds them to `[workspace.dependencies]`
@@ -734,8 +733,8 @@ tempfile = "3.27"
 # as 4.4.
 redb = "4.6"
 
-# The TOML reader of every configuration and prefs file (shekyl-options,
-# shekyl-daemon-config, shekyl-engine-prefs) and of the chain forge's plans
+# The TOML reader of every configuration file (shekyl-options,
+# shekyl-daemon-config) and of the chain forge's plans
 # and pins; shekyl-chain-store reads manifests with it in a test. Files are
 # TOML 1.1 (INPUT_GRAMMAR.md R2): over TOML 1.0 that adds newlines and
 # trailing commas in inline tables, the `\e` and `\xHH` escapes, and times

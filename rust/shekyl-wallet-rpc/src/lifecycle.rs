@@ -24,7 +24,6 @@ use shekyl_engine_core::{
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_engine_prefs::WalletPrefs;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
@@ -169,7 +168,6 @@ async fn create_wallet_engine(
         restore_height_hint: 0,
         kdf,
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
 
     // Engine::create is sync and may run Argon2; keep the async runtime
@@ -299,7 +297,6 @@ async fn restore_wallet_engine(
         restore_height_hint: restore_height,
         kdf,
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
 
     let engine =
