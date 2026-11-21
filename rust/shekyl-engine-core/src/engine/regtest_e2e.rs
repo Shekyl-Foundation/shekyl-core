@@ -2206,8 +2206,11 @@ async fn a_stops_last_line_reaches_the_log_file() {
 async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
     use super::refresh::{RefreshOptions, RefreshPhase};
     /// Blocks the wallet scans: the scan reports its first block long
-    /// before it reaches the last.
-    const CHAIN: u64 = 150;
+    /// before it reaches the last, and the close is taken at that report.
+    const CHAIN: u64 = 60;
+    /// A close a held read or write keeps from finishing fails here rather
+    /// than hanging the lane.
+    const CLOSE_WITHIN: Duration = Duration::from_secs(60);
     const PASSWORD: &[u8] = b"close-mid-scan";
     let seed = [0x6c; shekyl_crypto_pq::account::SEED_BYTES];
     let mut daemon = RegtestDaemon::start_for_seed(&seed).await;
@@ -2253,9 +2256,9 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
     );
     let lock = Arc::try_unwrap(arc)
         .unwrap_or_else(|_| panic!("the cancelled scan still holds the engine"));
-    lock.into_inner()
-        .close(&creds)
+    tokio::time::timeout(CLOSE_WITHIN, lock.into_inner().close(&creds))
         .await
+        .unwrap_or_else(|_| panic!("the wallet's close did not finish within {CLOSE_WITHIN:?}"))
         .expect("a wallet closed mid-scan closes");
     let wallet_close = asked.elapsed();
 
