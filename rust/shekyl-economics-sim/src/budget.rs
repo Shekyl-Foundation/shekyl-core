@@ -139,6 +139,11 @@ pub struct BudgetScenarioResult {
 /// year-snapshot engine does not carry.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
+    assert_eq!(
+        params.economy.penalty,
+        crate::economy::PenaltyDestination::Deferred,
+        "this fold pays no part of the penalty: C1 runs on stage2::a1_year_aggs_probed"
+    );
     let economic = params.economic();
 
     let mut already_generated = emitted_at_start(

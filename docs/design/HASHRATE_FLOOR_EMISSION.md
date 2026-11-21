@@ -105,4 +105,4 @@ Predictions are committed before the first run, as for every instrument.
 2. Testnet measurement for §6 (the mining and CI lanes).
 3. The model and its runs (the economics-sim lane, after EUP-4 prep).
 4. Rick rules on the variant and the threshold, together with J, G, F and I.
-5. If adopted: a consensus change after alpha.12, with the reward rule in `shekyl-economics` and a params digest bump (rule 42).
+5. If adopted: a consensus change after alpha.12, with the reward rule in `shekyl-economics`. A per-network `D*` moves `CONSENSUS_CONSTANTS_DIGEST` (built in `shekyl-rpc-types`); it is not a persisted-schema change.
