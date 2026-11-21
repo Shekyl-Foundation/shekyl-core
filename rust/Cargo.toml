@@ -620,10 +620,11 @@ zeroize = { version = "1.5", features = ["derive"] }
 # `aes` provides the `hazmat::cipher_round` / `equiv_inv_cipher_round`
 # round primitives for AesGenerator1R/4R and AesHash1R per `specs.md`
 # §§3.2-3.4. The `hazmat` feature gates the single-round API per
-# `aes-0.9.0/Cargo.toml:43-44`; without it the API is unreachable.
-# Soft fallback is constant-time fixslicing per `aes-0.9.0/src/lib.rs:20-22`
+# `aes-0.9.4/Cargo.toml:43`; without it the API is unreachable.
+# Soft fallback is constant-time fixslicing per `aes-0.9.4/src/lib.rs:20-22`
 # (not load-bearing for RandomX since the "keys" are public, but
-# strictly better than `soft_aes.cpp`'s LUT path).
+# strictly better than `soft_aes.cpp`'s LUT path). The locked release is
+# the crypto-closure record's (`.cargo/crypto-closure.toml`).
 aes = { version = "0.9", default-features = false, features = ["hazmat"] }
 #
 # `blake2` provides `Blake2b512` for the §3.5 BlakeGenerator's
