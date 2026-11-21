@@ -64,7 +64,15 @@ fn a_newer_copy_names_another_publisher_and_sends_nothing() {
         // Hours on, every deadline served, still nothing sent: no overdue
         // republish, and the check itself stays hidden. The anchor the first
         // upload set is the one a later recovery still counts from.
+        // `checking` feeds the round's end, not its first upload, which is
+        // what sets the overdue anchor. Without one the check could never
+        // come due, and the assertions below would hold whatever the hold
+        // does (rule 47). This is the anchor that first upload would set;
+        // within the four hours the check comes due and only the hold
+        // keeps it hidden.
+        core.lifetime_from = Some(secs(15));
         let anchor = core.lifetime_from;
+        assert!(core.overdue_due().is_none() && anchor.is_some());
         let later = drive(&mut core, secs(4 * 3_600), &mut None, &ours());
         assert_eq!(republishes(&later), 0, "probe in: {probe_in}");
         assert_eq!(
