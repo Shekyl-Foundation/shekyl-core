@@ -7225,7 +7225,7 @@ async fn maybe_capture_chain_vector(
              CorpusWriter (RD-F15). trace.e2: the Rust baseline \
              (shekyl-chain-replay baseline): the corpus replayed against a \
              fresh store, then each height's facts and the tip's digest and \
-             archival rows read off it, pinned at built_at_dev_sha. A \
+             archival rows read off it, pinned at baseline_built_at_dev_sha. A \
              regression gate, not a conformance oracle. Consumed by replay: \
              shekyl-chain-ingest connects the chain against a real store, so \
              the state the 4.I rules read is derived, not asserted. \

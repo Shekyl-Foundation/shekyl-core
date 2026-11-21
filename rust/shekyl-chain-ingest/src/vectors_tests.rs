@@ -102,10 +102,19 @@ pub(crate) struct Manifest {
     regen_decision: String,
     /// The `shekyl-chain-replay` commit that wrote `trace.e2`, when the
     /// capture recorded one. Empty on a manifest written before the field
-    /// existed. When present it is the same commit as `built_at_dev_sha`:
-    /// one tree built the daemon and the baseline.
+    /// existed. A capture writes it as `built_at_dev_sha`: one tree built
+    /// the daemon and the baseline. A trace re-baselined later over the
+    /// same corpus (a trace-format change, which moves no block) names the
+    /// commit that re-baselined it, and `trace_rebaseline_decision` says
+    /// why.
     #[serde(default)]
     baseline_built_at_dev_sha: String,
+    /// The decision that authorized re-baselining `trace.e2` over the
+    /// captured corpus at `baseline_built_at_dev_sha`, as
+    /// `YYYY-MM-DD <rationale>`. Empty when the trace is the capture's own;
+    /// `regen_decision` stays the capture's citation either way.
+    #[serde(default)]
+    trace_rebaseline_decision: String,
 }
 
 /// `YYYY-MM-DD <rationale>`, the shape rule 50 requires of a recorded
@@ -148,12 +157,24 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 p.display(),
                 manifest.format_version
             );
-            if !manifest.baseline_built_at_dev_sha.is_empty() {
-                assert_eq!(
-                    manifest.baseline_built_at_dev_sha,
-                    manifest.built_at_dev_sha,
-                    "{}: the baseline and the daemon name different commits",
-                    p.display()
+            let rebaselined = !manifest.baseline_built_at_dev_sha.is_empty()
+                && manifest.baseline_built_at_dev_sha != manifest.built_at_dev_sha;
+            assert_eq!(
+                rebaselined,
+                !manifest.trace_rebaseline_decision.is_empty(),
+                "{}: the baseline ({}) names another commit than the daemon ({}) exactly when \
+                 trace_rebaseline_decision says why ({:?})",
+                p.display(),
+                manifest.baseline_built_at_dev_sha,
+                manifest.built_at_dev_sha,
+                manifest.trace_rebaseline_decision
+            );
+            if rebaselined {
+                assert!(
+                    cited_regen_decision(&manifest.trace_rebaseline_decision),
+                    "{}: trace_rebaseline_decision is not YYYY-MM-DD <rationale> ({:?})",
+                    p.display(),
+                    manifest.trace_rebaseline_decision
                 );
             }
             if !manifest.regen_decision.is_empty() {
