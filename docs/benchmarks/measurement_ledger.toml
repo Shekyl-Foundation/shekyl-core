@@ -849,6 +849,7 @@ stale_through = [
   { through = "3c8dbefcb2c763483248a26c8a15470666b2d615", note = "Each connector says whether its path works (Rick, 2026-11-15): this crate gains the connector interface (path.rs) and CLEARNET_READING_WAIT_NANOS, the judge's wait for a reading, not a span; the clearnet dial, handshake and gap constants and their I/O are unchanged. Not re-measured." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", note = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered. Not re-measured." },
   { through = "0af605d95b25ea346c67830f5fbd12b7e4c5666f", note = "PWD-B12: cause.rs gains three close kinds the session layer closes a refused fragment train with (InnerMessageOversize, FragmentTrainOverrun, InnerMessageNotDispatch) and the predicate that classes them with SessionRefused. An enum table only; the connectors' dial, handshake and gap are unchanged. Not re-measured; the rows stay stale." },
+  { through = "d9238096a2e1e7cbd38b3ace9a351d467e13aa15", note = "PWD-B12: cause.rs gains a fourth close kind of the same class (InnerMessageNotTransactionNotice, 23), which the session layer closes a train with when its inner message is not the transaction notice. An enum table only; the connectors' dial, handshake and gap are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -995,6 +996,7 @@ cleared = [
   { through = "3c8dbefcb2c763483248a26c8a15470666b2d615", reason = "Each connector says whether its path works (Rick, 2026-11-15): this crate gains the connector interface (path.rs, PathSource and PathReading), the dial profile drops the corroboration declaration and the bracket and carries outage_retry on the row, and two build-time checks hold the outage retries. No deadline or span constant moved and no span gained I/O, so the 2026-10-14 capture still prices this tree." },
   { through = "12bd06df77dadaad90ee68e61d503e1197dd67a4", reason = "Rustdoc only: the workspace rustdoc gate's link fixes (#1445, this commit and its parent a5e9d05d66) change doc and plain comment lines and no code; nothing the measurement ran is added, removed or reordered." },
   { through = "0af605d95b25ea346c67830f5fbd12b7e4c5666f", reason = "PWD-B12: cause.rs gains three close kinds the session layer closes a refused fragment train with (InnerMessageOversize, FragmentTrainOverrun, InnerMessageNotDispatch) and the predicate that classes them with SessionRefused. An enum table only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged, so the 2026-10-14 capture still prices this tree." },
+  { through = "d9238096a2e1e7cbd38b3ace9a351d467e13aa15", reason = "PWD-B12: cause.rs gains a fourth close kind of the same class (InnerMessageNotTransactionNotice, 23), which the session layer closes a train with when its inner message is not the transaction notice. An enum table only; the Tor dial, the gap, the shutdown wait and their I/O are unchanged." },
 ]
 
 [[constant]]
