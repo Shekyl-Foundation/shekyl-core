@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA registered (§3.1); ML-DSA-65 and SLH-DSA-192s unmeasured (§3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA registered (§3.1); ML-DSA-65 and SLH-DSA-192s harness built, unregistered (§3.2, §3.3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -609,3 +609,107 @@ above. None is chosen before then.
   fork.
 - **Blinding the key's Gram matrix**, or **a different implementation**.
 - **Accepting the result within bounds**, given the severity above.
+
+### 3.2 ML-DSA-65, transaction authorisation
+
+**Status: harness built, registration not yet made.** The harness is
+`rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`, mode `ml-dsa`. It
+times `sign_pqc_auth_for_output` (`shekyl-crypto-pq/src/output.rs:1182`)
+through its seeded twin (`:1206`).
+
+**Threat model.**
+- **Adversary.** A co-resident process on the wallet's host, or an
+  enrolled wallet-RPC client.
+- **Capability: about one sample per key.** Each output's hybrid key is
+  derived from the transaction's combined shared secret and the output
+  index. It signs when that output is spent, and is wiped
+  (`sign_derived_output_auth`, `output.rs:1229`). So a timing observer
+  sees about one signature per key, more only if the user rebuilds the
+  same spend. An enrolled RPC client can request signatures, but it can
+  already spend.
+- **Harm.** Recovering the ML-DSA half forges nothing alone: the hybrid is
+  nested, so an attacker also needs the Ed25519 half. What leaking the
+  ML-DSA half costs is that spend's protection against a future quantum
+  adversary, who could then break Ed25519 too. The key signs one spend, so
+  the exposure ends when the output is spent.
+- **Severity.** Very low. The measurement is owed by `CA-3`'s ruling.
+
+**Source read** (`fips204` 0.5.0).
+1. **The signing loop.** It is bounded at 814 attempts
+   (`ml_dsa.rs:24`). An attempt rejected by the `z` or `r0` check
+   (`ml_dsa.rs:309`) skips the `c·t0` product and the hint (steps 25 to
+   28) that an attempt rejected by the hint check (`:341`) computes. So
+   the attempt count and the check that rejected are both visible in the
+   time, by construction.
+2. **The crate's own constant-time harness bypasses its rejection
+   samplers.** Its `CTEST` parameter replaces them with fixed work, "used
+   only for `dudect` measurements": `coeff_from_three_bytes`
+   (`conversion.rs:40-46`, under ExpandA), `coeff_from_half_byte`
+   (`:80-87`, under ExpandS), `sample_in_ball` (`hashing.rs:85`, `:105`)
+   and `hint_bit_pack` (`conversion.rs:277-307`). The crate's
+   constant-time claim therefore excludes those loops.
+3. **Shekyl derives the key on every call, so key generation's ExpandS is
+   in the timed operation.**
+   - ExpandS rejection-samples the secret coefficients from the secret seed
+     ρ′. The number of rejected nibbles varies per key. Rejected nibbles are
+     discarded, so the count carries no information about the coefficients
+     kept.
+   - ExpandA runs in every signature (`ml_dsa.rs:212`) on the public ρ.
+   - `infinity_norm` takes a `max` the crate says "might be non-CT on some
+     targets" (`helpers.rs:139-147`). The crate's comment covers the
+     accepted `z`, which the signature reveals; `r0` and a rejected `z` are
+     not revealed.
+4. **The harness's development run.** It used a seed that is not
+   registered, 20,000 samples per comparison, on the development machine.
+   It is not a result.
+   - `fixed-a-vs-varied` read `|t|` 8.16 at the lowest cut-off: the fixed
+     key was 4.1 µs faster among mostly single-attempt signatures.
+   - `fixed-a-vs-fixed-b` read 1.67, the nulls 1.76 and 1.83, and the
+     control 22.49.
+   - Fixed-against-fresh differing while the fixed pair does not is the
+     familiarity pattern `CA-2` met: a key derived and used again and again
+     trains the branch predictor on its own rejection pattern.
+   - It is also why the registration's lines must separate three things
+     before any registered run: variation by design (the rejection counts,
+     ExpandA on ρ), familiarity, and a time that depends on the secret.
+
+### 3.3 SLH-DSA-SHA2-192s, message signing
+
+**Status: harness built, registration not yet made.** The harness is the
+same example, mode `slh-dsa`. It times `sign_message_pq_half`
+(`shekyl-crypto-pq/src/message_signing.rs:385`) as the wallet calls it:
+hedged with the OS's randomness (`try_sign(..., true)`), on one fixed
+message.
+
+**Threat model.**
+- **Adversary.** The same callers as §3.2.
+- **Capability.** The key is one per wallet and network, re-derived from
+  the master seed on every call. It is long-lived, but each signature
+  costs about 0.59 s on the development machine and 4.3 s on the floor
+  device, and the user or an enrolled client must ask for each one.
+- **Harm.** Recovering the SLH-DSA key does not reveal the master seed,
+  because the derivation is one-way (HKDF). Forging a message signature
+  also needs the spend key's outer Schnorr half
+  (`sign_outer_with_spend_scalar`).
+- **Severity.** Very low.
+
+**Source read** (`fips205` 0.5.0, against 0.4.1).
+1. **0.5.0 makes every signature's hash count the same.**
+   - In 0.4.1, the hypertree signer skipped `xmss_pk_from_sig` on its top
+     layer (`hypertree.rs:76`, `if j < (d32 - 1)`).
+   - That layer's WOTS chains then run for as many steps as the digits of
+     the message they sign, which is the root of the layer below at the
+     signature's tree index.
+   - In 0.5.0 the top layer is completed as well (`hypertree.rs:90`), so a
+     signature's WOTS chains and their completions sum to a constant.
+2. **What 0.4.1's variation leaked: nothing the signature does not
+   disclose.** The varying count was a function of that root and of the
+   tree index. The tree index comes from the message digest over `R`, and
+   `R` is in the signature. Every verifier recomputes the root from the
+   signature.
+3. **Addresses and indices.** FORS indices and the tree and leaf
+   addresses come from the same digest, so every secret-indexed access
+   pattern in signing is a function of values the signature reveals.
+4. **The harness's development run.** 100 samples per comparison, seed not
+   registered; not a result. Every signature verified. The lines read 0.77
+   and 1.68, and the first null 1.52.
