@@ -1,14 +1,14 @@
 # `RT-P4`: both devices re-run on fips203 0.5.0, registered 2026-11-21
 
-**State of this record: the laptop's registered run is in, and it FAILS;
-the floor device's is not yet made.** On the laptop `fixed-vs-invalid`
-(`|t|` = 20.38) is over the fail line of 10 and `valid-vs-invalid` (9.64)
-is inconclusive; the control was detected and both nulls are clean, so
-the run is not void. A fail is not re-run: it goes to the maintainer, and
-the laptop's attestation entry is not changed. The floor device is under
-another lane's quiet claim until 2026-11-25 00:00Z. Results are added
-below "Registered before the run", and that section is not edited
-afterwards.
+**State of this record: superseded, and not a verdict on RT-P4** (the
+maintainer, 2026-11-21; see "Correction" under the results). This
+registration took the 2026-10-11 lines unchanged, but the ruling of
+2026-10-25 had already changed the pass line for this run. The laptop's run
+under it is kept, with its captures, as information. The run that decides
+RT-P4 is registered in
+[`rt_p4_mlkem_decaps_timing_20261121_message.md`](rt_p4_mlkem_decaps_timing_20261121_message.md).
+Results are added below "Registered before the run", and that section is
+not edited afterwards.
 
 ## Why this run
 
@@ -119,6 +119,45 @@ was made on that build's run; a fail here goes to the maintainer again.
 
 ## Results
 
+### Correction, 2026-11-21 (the maintainer): this run is information, not a verdict
+
+This registration said its lines were "the 2026-10-11 registration's,
+unchanged". They were not the lines in force. The maintainer's ruling of
+2026-10-25, the last bullet of "The ruling" in
+[`rt_p4_mlkem_decaps_timing_20261023.md`](rt_p4_mlkem_decaps_timing_20261023.md),
+reads: "At RT-P4's next required run, the pass line becomes
+invalid-vs-invalid differing only in the decrypted message, with
+valid-vs-invalid reported as information." This was that next required
+run, and the registration cited the 2026-10-25 ruling only for its
+platform-property point. So the comparison that decides the verdict was
+never run, and the comparison over the old fail line, `fixed-vs-invalid`,
+is the valid-against-invalid kind that ruling made information.
+
+The maintainer ruled the run **neither a fail nor a platform property**:
+it is information under superseded lines. Its captures and `SHA256SUMS`
+stay as committed, and the run's own section below stays as written. Read
+as information:
+
+- `fixed-vs-bitflip`, 2.97: clean.
+- `fixed-vs-invalid`, 20.38: a difference of 13 to 14 ns, the invalid
+  class slower, at the low cut-offs. The 0.4.3 build's run on 2026-10-23
+  showed the same comparisons with the same sign, by 16 to 18 ns, so 0.5.0
+  did not introduce it.
+- `valid-vs-invalid`, 9.64.
+
+A source read of `fips203` 0.5.0's decapsulation, recorded with the
+correction:
+
+- K̄ = J(z ‖ c) is computed unconditionally (`ml_kem.rs:128`), before
+  re-encryption, whether or not the ciphertext is valid.
+- The ciphertext comparison is `subtle`'s `ct_ne`, and the key is selected
+  with `conditional_assign` (`ml_kem.rs:144`). Nothing branches on
+  validity.
+- `compress_vector` multiplies by a precomputed reciprocal of q and shifts
+  (`helpers.rs:254`); there is no division by q, so no division whose
+  timing depends on the operand (the KyberSlash class).
+- `decompress_vector` is a multiply and a shift (`helpers.rs:274`).
+
 ### The laptop — FAIL
 
 One attempt, 2026-11-21 15:14:06.91Z to 15:23:22.60Z (556 s), on the
@@ -221,8 +260,9 @@ committed byte for byte as it left the machine, with `SHA256SUMS`:
 in `rt_p4_attestation.toml` is unchanged, so RT-P4's standing check stays
 red for the laptop until the maintainer rules.
 
-### The floor device — not yet made
+### The floor device — not made
 
-The Raspberry Pi 4 is under another lane's quiet claim (a 72-hour capture)
-until 2026-11-25 00:00Z. The run is made after that claim ends, or earlier
-if the maintainer clears a slot.
+Not run under this registration. The floor device's run is registered,
+with the 2026-10-25 lines, in
+[`rt_p4_mlkem_decaps_timing_20261121_message.md`](rt_p4_mlkem_decaps_timing_20261121_message.md),
+on a second Raspberry Pi 4.
