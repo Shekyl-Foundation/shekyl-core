@@ -2129,11 +2129,16 @@ async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
     const STOP_WITHIN: Duration = Duration::from_secs(60);
     let pid = Pid::from_child(&daemon.child);
     kill_process(pid, Signal::TERM).expect("SIGTERM delivered");
+    // The thread hands back only whether the wait succeeded: the status
+    // waitid returns wraps the platform's siginfo_t, which on macOS and
+    // FreeBSD holds a raw pointer and so is not Send. `try_wait` below reads
+    // the exit status.
     let exited = tokio::task::spawn_blocking(move || {
         waitid(
             WaitId::Pid(pid),
             WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
         )
+        .map(|_| ())
     });
     match tokio::time::timeout(STOP_WITHIN, exited).await {
         Ok(waited) => {
