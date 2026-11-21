@@ -122,7 +122,7 @@ pub async fn run(
         }
         #[cfg(unix)]
         Listen::Socket(path) => {
-            let listener = bind_socket(path)?;
+            let listener = bind_socket(path).await?;
             say(&format!("Listening on {}.", path.display()));
             let served = accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
@@ -264,10 +264,12 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 }
 
 /// A socket at `path`, in a directory only this account can enter (R0
-/// §1.1's construction). A socket there that a tunnel answers on is not
-/// taken over; one left by a stopped tunnel is replaced.
+/// §1.1's construction). A socket there that a tunnel answers on, or one
+/// whose server cannot be shown gone, is not taken over; one left by a
+/// stopped tunnel (the connection refused) is replaced.
 #[cfg(unix)]
-fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+    use shekyl_rpc_transport::listen::{socket_owner, SocketOwner};
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
     let dir = path
         .parent()
@@ -282,12 +284,21 @@ fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, Strin
         ));
     }
     match std::fs::symlink_metadata(path) {
-        Ok(existing) if existing.file_type().is_socket() => {
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        Ok(existing) if existing.file_type().is_socket() => match socket_owner(path).await {
+            SocketOwner::Gone => {
+                std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+            SocketOwner::Answers => {
                 return Err(format!("another tunnel answers on {}", path.display()));
             }
-            std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        }
+            SocketOwner::Unknown(why) => {
+                return Err(format!(
+                    "{}: whether a tunnel still holds this socket is not known ({why}); \
+                     it is not replaced",
+                    path.display()
+                ));
+            }
+        },
         Ok(_) => {
             return Err(format!(
                 "{} is not a socket; it is not replaced",

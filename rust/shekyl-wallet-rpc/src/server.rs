@@ -692,7 +692,7 @@ impl BoundListener {
             ListenAddr::Tcp(addr) => Ok(Self::Tcp(TcpListener::bind(addr).await?)),
             #[cfg(unix)]
             ListenAddr::Uds(path) => {
-                prepare_uds_path(path)?;
+                prepare_uds_path(path).await?;
                 let listener = UnixListener::bind(path)?;
                 // Own the socket path for cleanup BEFORE restrict_socket_perms
                 // so a chmod failure still unlinks the bound socket.
@@ -819,7 +819,8 @@ impl axum::serve::Listener for PipeListener {
 }
 
 #[cfg(unix)]
-fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
+async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
+    use shekyl_rpc_transport::listen::{socket_owner, SocketOwner};
     use std::os::unix::fs::FileTypeExt;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -830,12 +831,20 @@ fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
     // or killed server left is replaced. Anything else at the path is not
     // this server's to remove.
     match std::fs::symlink_metadata(path) {
-        Ok(existing) if existing.file_type().is_socket() => {
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        Ok(existing) if existing.file_type().is_socket() => match socket_owner(path).await {
+            SocketOwner::Gone => std::fs::remove_file(path)?,
+            SocketOwner::Answers => {
                 return Err(format!("another server answers on {}", path.display()).into());
             }
-            std::fs::remove_file(path)?;
-        }
+            SocketOwner::Unknown(why) => {
+                return Err(format!(
+                    "{}: whether a server still holds this socket is not known ({why}); \
+                     it is not replaced",
+                    path.display()
+                )
+                .into());
+            }
+        },
         Ok(_) => {
             return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
         }

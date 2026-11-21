@@ -26,6 +26,43 @@
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
+/// How long a start waits for the server at a socket file to accept its
+/// probe ([`socket_owner`]).
+#[cfg(unix)]
+pub const SOCKET_PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What a probe of a socket file found out about the server behind it,
+/// for a listener deciding whether it may replace the file: only
+/// [`SocketOwner::Gone`] lets it (the wallet RPC's and the tunnel's socket
+/// listeners).
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketOwner {
+    /// The connection was refused: no server listens there any more.
+    Gone,
+    /// A server accepted the connection.
+    Answers,
+    /// Anything else: another account's socket (permission denied), a
+    /// server whose accept queue is full, or no answer within
+    /// [`SOCKET_PROBE_BOUND`]. Not a proof that the server is gone.
+    Unknown(String),
+}
+
+/// Probe the server at `path` without blocking: a connection refused is
+/// the one answer that proves it gone.
+#[cfg(unix)]
+pub async fn socket_owner(path: &std::path::Path) -> SocketOwner {
+    match tokio::time::timeout(SOCKET_PROBE_BOUND, tokio::net::UnixStream::connect(path)).await {
+        Ok(Ok(_)) => SocketOwner::Answers,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => SocketOwner::Gone,
+        Ok(Err(e)) => SocketOwner::Unknown(e.to_string()),
+        Err(_) => SocketOwner::Unknown(format!(
+            "no answer within {} s",
+            SOCKET_PROBE_BOUND.as_secs()
+        )),
+    }
+}
+
 /// What a TCP listen address is, under RT-1/RT-2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListenClass {
@@ -167,6 +204,42 @@ pub fn parse_listen_addr(s: &str) -> Result<SocketAddr, ListenParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Only a refused connection proves a socket's server gone**: a
+    /// socket left by a server that closed answers "refused" (`Gone`); a
+    /// listening one answers (`Answers`); one this account may not connect
+    /// to is `Unknown`, never `Gone`, so a listener does not replace
+    /// another account's live socket (Copilot's review of #1490). Red
+    /// edit: treat every connect error as `Gone`. Skipped under root, which
+    /// connects to a mode-000 socket.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_a_refused_connection_proves_a_socket_s_server_gone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a directory");
+        let left = dir.path().join("left");
+        drop(std::os::unix::net::UnixListener::bind(&left).expect("bind"));
+        assert!(
+            left.exists(),
+            "the control: a closed listener leaves its file"
+        );
+        assert_eq!(socket_owner(&left).await, SocketOwner::Gone);
+
+        let live = dir.path().join("live");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
+        assert_eq!(socket_owner(&live).await, SocketOwner::Answers);
+
+        if shekyl_os_account::effective_uid() == 0 {
+            eprintln!("skipped the permission arm: root connects to a mode-000 socket");
+            return;
+        }
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+        let unknown = socket_owner(&live).await;
+        assert!(
+            matches!(unknown, SocketOwner::Unknown(_)),
+            "a socket this account may not open is not proven gone: {unknown:?}"
+        );
+    }
 
     /// Every spelling of the wildcard and of loopback classifies the same
     /// way, IPv4-mapped forms included; an addressed bind is neither.
