@@ -61,6 +61,7 @@ use tokio::task::JoinHandle;
 mod inbox;
 #[cfg(all(test, unix))]
 mod loop_tests;
+pub(crate) mod onion_key;
 mod probe;
 mod requests;
 
@@ -112,6 +113,8 @@ fn sample_keys(reads_network: bool) -> Vec<String> {
 pub struct Prepared {
     owner: Owner,
     inbox: Inbox,
+    /// The managed Tor's persistent onion, until [`begin`] takes it.
+    persistent_onion: Option<OnionIdentity>,
 }
 
 impl Prepared {
@@ -151,11 +154,21 @@ async fn answered<T>(answer: Option<tokio::sync::oneshot::Receiver<T>>) -> Resul
 
 /// The supervisor's inbox, and the feeds the network publishes into, under
 /// every `tor` setting: the supervisor answers the node's status whether
-/// or not it runs the Tor (Rick, 2026-11-10).
+/// or not it runs the Tor (Rick, 2026-11-10). `persistent_onion` is the
+/// managed Tor's key the walk loaded (`tor-onion-key-file`), held here
+/// until [`begin`] hands it to the supervisor; `None`, the onion is new at
+/// that boot.
 #[must_use]
-pub fn prepare() -> (Prepared, SupervisorFeeds) {
+pub fn prepare(persistent_onion: Option<OnionIdentity>) -> (Prepared, SupervisorFeeds) {
     let (owner, inbox, feeds) = inbox();
-    (Prepared { owner, inbox }, feeds)
+    (
+        Prepared {
+            owner,
+            inbox,
+            persistent_onion,
+        },
+        feeds,
+    )
 }
 
 /// The running supervisor. Dropping it stops the loop, as
@@ -300,10 +313,11 @@ impl PinCheck {
 /// supervisor runs nothing and answers the status from what the network
 /// publishes. `network` is where the route, the onion and the inbound facet
 /// are published, and whose timing engine the supervisor's waits are owned
-/// by.
+/// by. The managed Tor's onion is the one `prepared` carries, or new at
+/// this boot.
 #[must_use]
 pub fn begin(
-    prepared: Prepared,
+    mut prepared: Prepared,
     tor: &Tor,
     clearnet_on: bool,
     virtual_port: u16,
@@ -312,12 +326,18 @@ pub fn begin(
     network: Network,
 ) -> Supervisor {
     let supervises = match tor {
-        Tor::Managed { binary } => Supervises::Managed(PinSource::Discover(binary.clone())),
+        Tor::Managed { binary, .. } => Supervises::Managed {
+            pin: PinSource::Discover(binary.clone()),
+            onion: prepared
+                .persistent_onion
+                .take()
+                .map_or(OnionSource::PerBoot, OnionSource::Persistent),
+        },
         Tor::Operator { .. } => Supervises::Unmanaged(TorSetting::Operator),
         Tor::Off => Supervises::Unmanaged(TorSetting::Off),
     };
-    let managed = matches!(supervises, Supervises::Managed(_));
-    let Prepared { owner, inbox } = prepared;
+    let managed = matches!(supervises, Supervises::Managed { .. });
+    let Prepared { owner, inbox, .. } = prepared;
     let data_dir = data_dir.to_path_buf();
     let task = handle.spawn(async move {
         drive(
@@ -458,10 +478,24 @@ fn sessions_input(held: PerConnector<u32>) -> Input {
 
 /// What the supervisor supervises.
 enum Supervises {
-    /// A Tor this daemon launches, from this binary.
-    Managed(PinSource),
+    /// A Tor this daemon launches, from this binary, publishing this onion.
+    Managed {
+        /// Where the binary comes from.
+        pin: PinSource,
+        /// Where the onion's key comes from.
+        onion: OnionSource,
+    },
     /// A Tor this node does not run: `off`, or an operator's.
     Unmanaged(TorSetting),
+}
+
+/// Where the managed Tor's onion key comes from.
+enum OnionSource {
+    /// A new key at this boot (PWD-E7), held for the boot.
+    PerBoot,
+    /// The operator's key (`tor-onion-key-file`), loaded by the walk: the
+    /// same onion at every boot.
+    Persistent(OnionIdentity),
 }
 
 /// Where the binary a launch runs comes from.
@@ -517,12 +551,19 @@ impl Drive {
                 return None;
             }
         };
-        let onion = match DaemonTorControl::mint_identity() {
-            Ok(onion) => onion,
-            Err(error) => {
-                tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
-                return None;
-            }
+        let (tor, binary, onion) = match supervises {
+            Supervises::Managed { pin, onion } => (TorSetting::Managed, Some(pin), onion),
+            Supervises::Unmanaged(setting) => (setting, None, OnionSource::PerBoot),
+        };
+        let onion = match onion {
+            OnionSource::Persistent(onion) => onion,
+            OnionSource::PerBoot => match DaemonTorControl::mint_identity() {
+                Ok(onion) => onion,
+                Err(error) => {
+                    tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
+                    return None;
+                }
+            },
         };
         // The probe's isolation pair, minted beside the onion and held with it
         // for the boot (§4.5): the probe's circuits are its own.
@@ -532,10 +573,6 @@ impl Drive {
                 tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
                 return None;
             }
-        };
-        let (tor, binary) = match supervises {
-            Supervises::Managed(source) => (TorSetting::Managed, Some(source)),
-            Supervises::Unmanaged(setting) => (setting, None),
         };
         let connectors = Connectors { tor, clearnet_on };
         let clock = owner.clock().clone();

@@ -168,7 +168,7 @@ fn a_stop_request_runs_the_one_stop_path() {
         &pool,
         Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
         node,
-        crate::tor::prepare().0,
+        crate::tor::prepare(None).0,
         shekyl_daemon_rpc::run::prepare(None, None).expect("the RPC's runtime"),
         None,
     );

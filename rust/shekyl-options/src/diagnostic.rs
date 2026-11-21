@@ -126,6 +126,16 @@ pub enum Code {
     /// The number given as the owning connection is not an open, connected
     /// stream socket (`INPUT_GRAMMAR.md` IG-Q106).
     OwningConnectionUnusable,
+    /// `tor-onion-key-file` names no file. The start does not fall back to a
+    /// new onion: this node's onion is that key.
+    OnionKeyMissing,
+    /// `tor-onion-key-file` cannot be opened or read.
+    OnionKeyUnreadable,
+    /// An account other than this one and the superuser can read or write
+    /// `tor-onion-key-file`, or it is a link or not a regular file.
+    OnionKeyExposed,
+    /// `tor-onion-key-file` is not Tor's own `hs_ed25519_secret_key`.
+    OnionKeyNotAKey,
 }
 
 impl Code {
@@ -178,6 +188,10 @@ impl Code {
             Self::SocketRunning => "config.socket.running",
             Self::SocketImpostor => "config.socket.impostor",
             Self::OwningConnectionUnusable => "config.owning-connection.unusable",
+            Self::OnionKeyMissing => "config.onion-key.missing",
+            Self::OnionKeyUnreadable => "config.onion-key.unreadable",
+            Self::OnionKeyExposed => "config.onion-key.exposed",
+            Self::OnionKeyNotAKey => "config.onion-key.not-a-key",
         }
     }
 }
@@ -468,6 +482,25 @@ impl Diagnostic {
                 p("value"),
                 p("found")
             ),
+            Code::OnionKeyMissing => format!(
+                "`{opt}` {} does not exist; this node's onion is that key, so the start does not fall back to a new onion",
+                p("path")
+            ),
+            Code::OnionKeyUnreadable => format!(
+                "`{opt}` {} cannot be read: {}",
+                p("path"),
+                p("error")
+            ),
+            Code::OnionKeyExposed => format!(
+                "`{opt}` {} {}; only this account and the superuser may reach it, so it is refused, not repaired",
+                p("path"),
+                p("why")
+            ),
+            Code::OnionKeyNotAKey => format!(
+                "`{opt}` {} {}; it must be Tor's own hs_ed25519_secret_key",
+                p("path"),
+                p("why")
+            ),
         };
         format!("{what} [{} from {}]", self.code, self.source)
     }
@@ -575,6 +608,10 @@ mod tests {
             Code::SocketRunning,
             Code::SocketImpostor,
             Code::OwningConnectionUnusable,
+            Code::OnionKeyMissing,
+            Code::OnionKeyUnreadable,
+            Code::OnionKeyExposed,
+            Code::OnionKeyNotAKey,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for code in all {

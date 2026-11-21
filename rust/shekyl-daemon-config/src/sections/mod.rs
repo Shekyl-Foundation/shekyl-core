@@ -117,6 +117,11 @@ pub enum Tor {
     Managed {
         /// The binary, when the operator names one; otherwise discovered.
         binary: Option<PathBuf>,
+        /// Tor's own `hs_ed25519_secret_key` for this node's onion, which
+        /// then persists across boots (`tor-onion-key-file`); `None`, a new
+        /// onion every boot. The start refuses a key it cannot use rather
+        /// than fall back to a new onion.
+        onion_key: Option<PathBuf>,
     },
     /// The operator's own Tor.
     Operator {

@@ -205,7 +205,10 @@ fn supervise(dir: &Path, tor: VerifiedTorBinary, policy: super::Policy) -> Super
     let (owner, inbox, feeds) = inbox();
     let network = network(dir, feeds);
     let task = tokio::spawn(drive(
-        Supervises::Managed(PinSource::Unchecked(tor)),
+        Supervises::Managed {
+            pin: PinSource::Unchecked(tor),
+            onion: super::OnionSource::PerBoot,
+        },
         policy,
         true,
         18_021,
@@ -380,7 +383,10 @@ async fn an_upload_before_the_add_onion_reply_is_read() {
     let network = network(dir.path(), feeds);
     let events = inbox.poster().events();
     let mut drive = Drive::start(
-        Supervises::Managed(PinSource::Unchecked(tor.clone())),
+        Supervises::Managed {
+            pin: PinSource::Unchecked(tor.clone()),
+            onion: super::OnionSource::PerBoot,
+        },
         super::policy(),
         true,
         18_021,
