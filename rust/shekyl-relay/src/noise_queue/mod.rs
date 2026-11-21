@@ -89,10 +89,9 @@ pub struct CarrierToken(pub u64);
 /// up, and it is why discard reports too.
 ///
 /// The consumer must treat [`Self::Discarded`] as **not relayed** rather than
-/// as silence: the pool's `relayed` bit drives an origin's backoff, and an
-/// origin given the long wait for a message that was discarded waits out
-/// [`crate::origin_retry_secs`] for a transaction that was never sent and
-/// will not be.
+/// as silence: a transaction recorded as stemmed waits out its embargo, and
+/// an origin recorded for a message that was discarded would wait out an
+/// embargo for a transaction that was never sent and will not be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CarrierOutcome {
     /// Every window was accepted by the transport for `peer` — see the type
