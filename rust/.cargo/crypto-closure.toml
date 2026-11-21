@@ -479,8 +479,8 @@ reason = "Atomic bit storage under bitvec."
 
 [[package]]
 name = "rand"
-version = "0.8.6"
-reason = "RNG front end of key generation and transaction building; 0.8.8 is not reviewed."
+version = "0.8.8"
+reason = "RNG front end of key generation and transaction building. 0.8.8 admitted after reading the 0.8.7-0.8.8 CHANGELOG and diffing src: UniformChar's serde deserialization now checks its range (a memory-safety fix behind serde1, which Shekyl does not enable) and a serde1-only build fix; no sampling or RNG code changes."
 
 [[package]]
 name = "rand_chacha"
@@ -634,13 +634,13 @@ reason = "X25519: the classical half of the hybrid KEM (shekyl-crypto-pq, shekyl
 
 [[package]]
 name = "zerocopy"
-version = "0.8.48"
-reason = "Byte casts inside ppv-lite86, under rand_chacha."
+version = "0.8.64"
+reason = "Byte casts inside ppv-lite86, under rand_chacha. 0.8.64 admitted after diffing the three surfaces ppv-lite86 0.2.21 uses (src/soft.rs, generic.rs, x86_64/): cryptocorrosion_derive_traits! changes only its hidden TryFromBytes hook's name (is_bit_valid to is_safe), transmute! changes only doc examples, and impls.rs renames the internal pointer invariant Valid to Safe and adds tests; the rest of the 0.8.49-0.8.64 diff is the pointer/transmute machinery behind that rename and new DST-layout support. Release notes live on GitHub Releases, not in the crate."
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.48"
-reason = "Derives zerocopy's casts."
+version = "0.8.64"
+reason = "Derives zerocopy's casts. Moves with zerocopy, which pins it exactly (=0.8.64); only half (under ciborium) enables the derive, and nothing on the rand_chacha path invokes it."
 
 [[package]]
 name = "zeroize"
