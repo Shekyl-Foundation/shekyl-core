@@ -645,9 +645,9 @@ reason = "Derives zerocopy's casts."
 [[package]]
 name = "zeroize"
 version = "1.8.2"
-reason = "Wipes every secret buffer (rule 35). 1.9.x rewrites slice zeroization; not reviewed."
+reason = "Wipes every secret buffer (rule 35). Kept at 1.8.2 after reading 1.9.2's CHANGELOG (1.9.0-1.9.2), src/bulk.rs, src/barrier.rs and lib.rs's Vec impl: on asm-capable targets (x86_64 and aarch64 among them) 1.9 wipes with ptr::write_bytes followed by an empty asm! block that takes the buffer's address (readonly, nostack) as the barrier against dead-store elimination, replacing 1.8's per-element volatile writes and compiler_fence(SeqCst); volatile writes remain only where stable asm! is absent. The Vec wipe still covers spare capacity, then the elements. 1.9.1 makes Zeroizing's Debug opaque: nothing in the tree prints it (shekyl-engine-core key.rs's redaction tests assert absence). Reopen: a ruling that the asm barrier meets rule 35's not-elided guarantee."
 
 [[package]]
 name = "zeroize_derive"
-version = "1.4.3"
-reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types."
+version = "1.5.0"
+reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types. 1.5.0 admitted after diffing src/lib.rs against 1.4.3: edition 2024, inline panic formats, two panics turned into asserts, and the generated wipe gains allow(unused_assignments); the emitted zeroize calls are unchanged. zeroize 1.8.2 accepts it (zeroize_derive ^1.3)."
