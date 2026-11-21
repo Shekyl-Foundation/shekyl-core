@@ -52,7 +52,16 @@ slot (118,640 bytes each, 30 MB a class), and each entry signs from a slot
 drawn uniformly. In a fixed class every slot holds the same key; in the
 varied class each slot holds its own key. Both classes touch the same amount
 of memory in the same pattern, so neither has its key warmer in the cache
-than the other. Every entry draws a fresh pass transcript (every field
+than the other. The 512 slots are decoded in a shuffled order, drawn
+from a stream of its own, so which addresses each class gets is random, as
+which class each entry belongs to is random in time. On the development
+machine's AVX2 path, placement alone moved a null:
+- decoded one class after the other, the second class was slower by about
+  0.15 % of a signature at every quantile (`|t|` 11.94 at 200,000
+  samples);
+- decoded alternately, each class took a fixed alignment (a slot is 128
+  bytes short of 29 pages), and the second class was slower by about 0.3 %
+  (`|t|` 37.69). Every entry draws a fresh pass transcript (every field
 drawn, the stream byte economy or support) and a fresh 32-byte RNG seed, the
 same way in both classes.
 
@@ -99,24 +108,39 @@ is read.**
    nonce_unmatched=…`. Anything other than 0, 0 and 0 voids the run.
 
 **Shake-down.** Before this registration the harness ran on the
-development machine, with a seed that is not the registered one and
-200,000 samples per comparison, on a shared and loaded machine (load
-average 2.5 at the start). Every check held, with `nonce_unmatched=0`
-against 203 to 252 restarts per class. The nulls read 2.16 and 2.47. The
-control's planted 2.09 µs read `|t|` 16.01, detected. This shows that the
-harness can see a planted 0.5 % leak at 200,000 samples on a noisy x86
-machine. It is not a result, and its pass-line figures are not reported
-as one.
+development machine (the maintainer's x86_64 Linux workstation, shared,
+load average 1 to 3). It used seeds that are not the registered one and
+200,000 samples per comparison. These runs are not results, and their
+pass-line figures are not reported as one.
+- **Three placements.** The first two crossed a null on placement alone
+  (above, *The classes*). With the shuffled placement this registration
+  fixes, both builds pass every check, and every null is flat:
+
+  | Build | Nulls | Control (planted ≈ 2.05 µs) | Restarts |
+  | --- | --- | --- | --- |
+  | AVX2 | 2.26, 1.76 | 33.83, detected | 0.39 to 2.92 |
+  | SSE2 (`fn-dsa-sign/no_avx2`) | 2.34, 1.73 | 49.32, detected | 0.39 to 2.92 |
+
+  The restart counts agree between the two builds entry for entry: the two
+  paths sign the same bytes, and the nonce check recovers the same counts.
+- **The SSE2 binary has no AVX2 signing code.** It carries no
+  `fn_dsa_sign::sign_avx2` symbol; the AVX2 build carries 17.
+- **Not yet shaken down:** the Windows (MSVC) build and the aarch64 build.
+  Each is shaken down on its own device before its registered run (below).
 
 **The control and the nulls.**
-- The control plants extra work of 0.5 % of one signature's median time
-  inside the timed region, for one class of a `fixed-vs-varied` comparison.
-  A pass excludes a key dependence of that size or more, and nothing
-  smaller.
 - The nulls:
   - `fixed-a-vs-fixed-a-other-slots`: key A in two disjoint sets of slots,
     which tests whether slot placement alone crosses;
-  - `varied-vs-other-varied`: two disjoint sets of 256 keys.
+  - `varied-vs-varied-other-slots`: the varied class's own 256 keys in two
+    disjoint sets of slots. The keys are the same on both sides. Two
+    different key sets would not be a null: under the key dependence being
+    tested they would differ too, and the run would read void where it
+    should read fail.
+- The control plants extra work of 0.5 % of one signature's median time
+  inside the timed region, for one class of the first null. It sits on a
+  null so that no real key dependence adds to or cancels it. A pass
+  excludes a key dependence of that size or more, and nothing smaller.
 
 **The lines, read in this order.**
 
@@ -129,8 +153,12 @@ as one.
 
 **The inputs.** The harness's registered seed, with no seed argument. It
 prints `inputs=registered`. No run before this registration drew from it.
-Every device draws the same inputs, and the key generation is integer-only,
-so every device signs with the same keys.
+- Every key (key A, key B and the varied class's 256) is drawn from the
+  seed before any comparison, and key generation is integer-only, so every
+  device signs with the same keys.
+- The per-entry transcripts and RNG seeds follow in the same stream. So
+  they are the same on the laptop's two runs, and differ on the floor
+  device, which runs fewer samples.
 
 **Three registered runs**, each with its own verdict, from fresh clones of
 the commit that carries this record:
@@ -193,6 +221,18 @@ records them
   1.5 hours together.
 - **The Pi run:** about 2 hours (five comparisons of 510,000 signatures at
   2.24 ms, plus verification at 0.57 ms each) and 0.8 GB.
+
+**A shake-down on each device first.** Before each registered run, its
+own binary runs once on its own device:
+- with a seed that is not the registered one and 50,000 samples per
+  comparison;
+- to show that it builds, runs, holds its checks and detects its control
+  there.
+
+A shake-down is not an attempt. Its output is kept with the captures,
+marked as a shake-down. On the floor device, it also shows whether the
+0.5 % control is within reach at 500,000 samples. If it is not, the floor
+run is not made: the gap goes to the maintainer before an attempt is spent.
 
 **Attempts.**
 - A fail or an inconclusive is not re-run.

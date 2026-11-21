@@ -151,6 +151,9 @@ const SLOTS: usize = 256;
 /// The input seed of the registered run. No run before the registration
 /// drew from it.
 const REGISTERED_SEED: u64 = 0x4341_335f_464e_4453;
+/// XORed into the seed for the slot-placement stream, so placement draws
+/// nothing from the stream the keys and entries come from.
+const PLACEMENT_STREAM: u64 = 0x504c_4143_454d_454e;
 
 /// FN-DSA's per-signature seed, drawn from the caller's RNG and hedged
 /// (`fn-dsa-sign` 0.4.0, `lib.rs`, `SigningKey::sign`).
@@ -324,19 +327,40 @@ impl Class {
     }
 }
 
-/// Decode both classes' slots alternately: slot 0 of class 0, slot 0 of
-/// class 1, slot 1 of class 0, and so on. Decoded one class after the
-/// other, the second class's 30 MB lands in a region of its own, and the
-/// development runs measured that placement alone at about 0.15 % of a
-/// signature (a null of one key set in two slot sets read `|t|` 11.94 at
-/// 200,000 samples). Interleaved, neither class owns a region.
-fn decode_interleaved(classes: &mut [Class; 2]) {
-    for slot in 0..SLOTS {
-        for class in classes.iter_mut() {
-            let key = class.key_index(slot);
-            let signer = FnDsaHybridSigner::new(&class.keys[key].secret).expect("decodes");
-            class.slots.push((signer, key));
-        }
+/// Decode both classes' slots in a shuffled order, so that which addresses
+/// each class's slots get is random, as which class each entry belongs to is
+/// random in time.
+///
+/// The allocator places blocks in the order they are asked for. Decoded one
+/// class after the other, the second class's 30 MB had a region of its own;
+/// decoded alternately, each class had a fixed alignment pattern (118,640
+/// bytes is 128 short of 29 pages, so the classes took the even and the odd
+/// 128-byte offsets). The development runs measured both: a null of one key
+/// set in two slot sets read `|t|` 11.94 and then 37.69 at 200,000 samples,
+/// with the second class slower by 0.15 % and 0.3 % of a signature at every
+/// quantile. `placement` is a stream of its own, so the keys and the entries
+/// are what they would be without it.
+fn decode_shuffled(classes: &mut [Class; 2], placement: &mut Inputs) {
+    let mut order: Vec<(usize, usize)> =
+        (0..SLOTS).flat_map(|slot| [(0, slot), (1, slot)]).collect();
+    for i in (1..order.len()).rev() {
+        let j = (placement.next() % (i as u64 + 1)) as usize;
+        order.swap(i, j);
+    }
+    let mut decoded: [Vec<Option<(FnDsaHybridSigner, usize)>>; 2] = [
+        (0..SLOTS).map(|_| None).collect(),
+        (0..SLOTS).map(|_| None).collect(),
+    ];
+    for (class, slot) in order {
+        let key = classes[class].key_index(slot);
+        let signer = FnDsaHybridSigner::new(&classes[class].keys[key].secret).expect("decodes");
+        decoded[class][slot] = Some((signer, key));
+    }
+    for (class, slots) in classes.iter_mut().zip(decoded) {
+        class.slots = slots
+            .into_iter()
+            .map(|slot| slot.expect("every slot is decoded once"))
+            .collect();
     }
 }
 
@@ -710,12 +734,14 @@ fn main() {
         .map(|_| (inputs.array(), inputs.array()))
         .collect();
 
+    // Slot placement draws from its own stream (see `decode_shuffled`).
+    let mut placement = Inputs(seed ^ PLACEMENT_STREAM);
     let mut replicated = true;
     let mut checked = true;
     let mut run = |label: &str, classes: [Class; 2], inputs: &mut Inputs, planted: Option<u64>| {
         replicated &= classes.iter().all(Class::replicates);
         let mut classes = classes;
-        decode_interleaved(&mut classes);
+        decode_shuffled(&mut classes, &mut placement);
         let outcome = compare(&mut classes, samples, inputs, planted);
         checked &= outcome.checks.hold();
         let word = if planted.is_some() {
