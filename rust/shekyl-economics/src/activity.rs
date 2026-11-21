@@ -18,7 +18,7 @@
 //! chain state). It cannot validate that the four fields were sampled
 //! from **one** chain view at `as_of_height` — that **coherence**
 //! contract (§6.3 G4) is the producer's responsibility: assemble the
-//! bundle from one LMDB read transaction or one atomic daemon endpoint,
+//! bundle from one chain-store read transaction or one atomic daemon endpoint,
 //! never from three sequential RPCs. A coherent-but-stale bundle is
 //! accepted; the consumer applies its own staleness policy against
 //! `as_of_height` (the failure mode at V3.0 is wrong advisory display,

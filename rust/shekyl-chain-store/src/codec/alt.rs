@@ -6,9 +6,9 @@
 //! The alternative-chain store's record (DRS-E1 S-ALT, `DRS_E1_SALT.md`
 //! §3.4): `alt_blocks[hash] → Coded<AltBlock>`.
 //!
-//! The C++ `alt_block_data_t` (`blockchain_db.h:206`) was five `u64` words
-//! followed by the block blob in one LMDB value, with the block's sidecar in
-//! a **second** table keyed by the same hash. This record re-specifies that
+//! The C++ `alt_block_data_t` was five `u64` words followed by the block
+//! blob in one value, with the block's sidecar in a **second** table keyed
+//! by the same hash. This record re-specifies that
 //! along its seams rather than porting it, and the alt block's bundle
 //! references are a field of it (the family `archival_alt_section_references`,
 //! folded into `alt_blocks`):

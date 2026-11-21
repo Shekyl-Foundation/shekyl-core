@@ -6,21 +6,18 @@
 //! Canonical codecs for the connect write set's table values (S-CHAIN-W
 //! commit 2; `DRS_E1_SCHAIN_W.md` §3.7, §4).
 //!
-//! The layouts here **start from** the LMDB structs the C++ store writes
-//! (`LMDB_SCHEMA.md`, `db_lmdb.cpp`), minus the field that became the redb
-//! key under the zerokval collapse (`schema` module docs): `block_info`
-//! drops `bi_height`, `tx_indices` drops the tx hash, `output_txs` drops
-//! `output_id`. Carrying the key inside the value as well would let the two
-//! disagree; the row's digest element is `key ‖ value`, assembled at fold
-//! time. Starting from LMDB is a port convenience, **not a constraint**:
-//! byte parity with LMDB rows was never what the comparator compares (DRS
-//! §7.6 — consensus-visible bytes are hash preimages and the digest fold
-//! input, nothing else), so a record grows where the read surface needs it
-//! to (`BlockInfo`'s two FL-R3 fields, `DRS_E1_SCHAIN_R.md` §3.6 Q4) and
-//! shrinks where a field only duplicated its key (`OutKey` dropped LMDB's
-//! `amount_index` prefix when `output_amounts` became a keyed
-//! `(amount, amount_index)` table — S-OUT-KI SOK-1, layout v6; the amount
-//! dimension itself is carried, not chosen, while R8b-2 is open).
+//! No record here carries the field that is its redb key under the
+//! zerokval collapse (`schema` module docs): `block_info` has no height,
+//! `tx_indices` no tx hash, `output_txs` no `output_id`. Carrying the key
+//! inside the value as well would let the two disagree; the row's digest
+//! element is `key ‖ value`, assembled at fold time. Byte parity with the
+//! C++ store's rows is **not a constraint** (DRS §7.6 — consensus-visible
+//! bytes are hash preimages and the digest fold input, nothing else), so a
+//! record grows where the read surface needs it to (`BlockInfo`'s two FL-R3
+//! fields, `DRS_E1_SCHAIN_R.md` §3.6 Q4) and carries no field that only
+//! duplicates its key (`OutKey` has no `amount_index`: `output_amounts` is
+//! a keyed `(amount, amount_index)` table — S-OUT-KI SOK-1, layout v6; the
+//! amount dimension itself is carried, not chosen, while R8b-2 is open).
 //!
 //! Integers are little-endian `u64` (`primitives`), hashes are the raw 32
 //! bytes. Fixed-width codecs refuse any other length; the one variable-width
@@ -54,8 +51,9 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
     }
 }
 
-/// `block_info[height]` — the per-height record, 112 bytes: LMDB
-/// `mdb_block_info_4`'s fields minus `bi_height` (88 bytes, in LMDB's order)
+/// `block_info[height]` — the per-height record, 112 bytes: an 88-byte core
+/// (timestamp, coins generated, weight, cumulative difficulty, hash, RCT
+/// output count, long-term weight, in that order; the `bi_*` names below)
 /// followed by the two per-block fold fields FL-R3-STORE routes here
 /// (`DRS_E1_SCHAIN_R.md` §3.6, Q4 ruled: widen the record, no second table),
 /// then `SHT-Q2`'s cumulative archival length, widened under the same
@@ -65,10 +63,9 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
 /// consensus-visible value the store records and never derives (C2-R8 Q4;
 /// `ConnectFacts`). The two counts are storage counts the store does
 /// maintain. `rct_outputs` is **this block's** RCT output count, not a
-/// running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
-/// (`db_lmdb.cpp:1019`) and nothing adds the parent's value. The Monero-v4
-/// arm that would have is deleted from the C++ and was never ported
-/// (CEN-L15); the field name follows what the bytes hold.
+/// running total: `connect` writes the block's own count and nothing adds
+/// the parent's value (CEN-L15); the field name follows what the bytes
+/// hold.
 /// `cumulative_tx_count` **is** a running total — the parent's plus this
 /// block's listed transactions, `checked_add` under SI-8 — because that is
 /// the read `get_tx_volume_window` needs in O(1). `cumulative_archival_len`
@@ -86,8 +83,8 @@ pub struct BlockInfo {
     pub cumulative_difficulty: CumulativeDifficulty,
     /// `bi_hash` — the block's identity (CEN-B6).
     pub hash: BlockHash,
-    /// `bi_cum_rct` — **this block's** RCT output count (per-block at this
-    /// pin, CEN-L15; the LMDB field name is a misnomer).
+    /// `bi_cum_rct` — **this block's** RCT output count (per-block,
+    /// CEN-L15; the `bi_cum_rct` name is a misnomer).
     pub rct_outputs: u64,
     /// `bi_long_term_block_weight`.
     pub long_term_weight: LongTermWeight,
@@ -199,7 +196,7 @@ impl Canonical for RecordedPow {
     }
 }
 
-/// `tx_indices[tx_hash]` — LMDB `txindex` minus the hash (`tx_data_t`), 24 bytes.
+/// `tx_indices[tx_hash]` — storage id, unlock time and height, 24 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxIndex {
     /// The storage id: the transaction's position in the `txs_*` tables.
@@ -230,7 +227,7 @@ impl Canonical for TxIndex {
     }
 }
 
-/// `output_txs[output_id]` — LMDB `outtx` minus `output_id`, 40 bytes.
+/// `output_txs[output_id]` — creating tx hash and index in it, 40 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutTx {
     /// The transaction that created the output.
@@ -260,12 +257,10 @@ impl Canonical for OutTx {
 /// `output_amounts[(amount, amount_index)]` — the stored output record,
 /// 88 bytes (S-OUT-KI layout v6, SOK-1).
 ///
-/// LMDB's `outkey` carried `amount_index` as its first 8 bytes because that
-/// was the `DUPSORT` member order (`compare_uint64` on the prefix). Under
-/// the keyed table the pair `(amount, amount_index)` **is the key**, so the
-/// record carries neither: a field that duplicates its own key is the
-/// accretion `CURVE_TREE_STORE_SHAPES.md` CTS-2 names. `output_id` stays —
-/// it is the join to `output_txs`, not the key. LMDB keys every
+/// The pair `(amount, amount_index)` **is the key**, so the record carries
+/// neither: a field that duplicates its own key is the accretion
+/// `CURVE_TREE_STORE_SHAPES.md` CTS-2 names. `output_id` stays — it is the
+/// join to `output_txs`, not the key. `connect` keys every
 /// confidential output under `amount = 0` with a dense per-amount
 /// `amount_index` (SCW-8); the amount dimension is **carried, not chosen**
 /// while R8b-2 is open (`DRS_E1_SOUT_KI.md` §3.4).
@@ -473,12 +468,12 @@ mod tests {
         };
         let bytes = info.encode();
         assert_eq!(bytes.len(), 112);
-        // The two FL-R3 fields follow LMDB's 88 bytes (§3.6, Q4), then
+        // The two FL-R3 fields follow the 88-byte core (§3.6, Q4), then
         // SHT-Q2's cumulative archival length.
         assert_eq!(&bytes[88..96], &8u64.to_le_bytes());
         assert_eq!(&bytes[96..104], &9u64.to_le_bytes());
         assert_eq!(&bytes[104..112], &10u64.to_le_bytes());
-        // LMDB offsets shifted left by the 8 dropped height bytes.
+        // The core's offsets: no height field leads it.
         assert_eq!(&bytes[0..8], &1u64.to_le_bytes());
         assert_eq!(&bytes[16..24], &3u64.to_le_bytes());
         assert_eq!(&bytes[24..32], &4u64.to_le_bytes(), "bi_diff_lo");
@@ -530,8 +525,8 @@ mod tests {
         };
         let bytes = ok.encode();
         assert_eq!(bytes.len(), 88);
-        // LMDB's outkey carried amount_index in [0..8); the keyed table's
-        // key carries it now, so the record opens on output_id.
+        // The table key carries amount_index, so the record opens on
+        // output_id.
         assert_eq!(&bytes[0..8], &[8, 7, 6, 5, 4, 3, 2, 1]);
         assert_eq!(&bytes[8..40], &[0x11; 32]);
         assert_eq!(&bytes[40..48], &2u64.to_le_bytes());

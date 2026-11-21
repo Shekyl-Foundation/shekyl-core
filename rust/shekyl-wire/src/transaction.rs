@@ -1474,11 +1474,9 @@ pub use signing_preimage::{tx_signable, PqcSigningPreimage, FCMP_SPEND_SIGNING, 
 /// A transaction's bytes as the chain store's three segments.
 ///
 /// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
-/// output; the cuts are the two offsets the C++ store takes as
-/// `pqc_auths_offset` and `unprunable_size` (`db_lmdb.cpp`
-/// `add_transaction_data`), so `txs_pruned` / `txs_pqc_auths` /
-/// `txs_prunable` hold byte-identical rows on both engines. Layout, not
-/// consensus: nothing here changes what [`Transaction::write`] emits.
+/// output. The chain store writes the three segments as `txs_pruned`,
+/// `txs_pqc_auths` and `txs_prunable`. Layout, not consensus: nothing here
+/// changes what [`Transaction::write`] emits.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TxSegments {
     /// Version, prefix, ct type byte, fee / reference block (FCMP) and the
@@ -1486,10 +1484,10 @@ pub struct TxSegments {
     pub pruned: Vec<u8>,
     /// The tx-level `pqc_auths` — `txs_pqc_auths`. Empty for a coinbase,
     /// for the serve-credit form, and for a spend with no inputs; the
-    /// store writes no row for an empty segment (LMDB parity).
+    /// store writes no row for an empty segment.
     pub pqc_auths: Vec<u8>,
     /// The prunable region — `txs_prunable`. Empty when absent; the store
-    /// writes the (empty) row regardless (LMDB parity).
+    /// writes the (empty) row regardless.
     pub prunable: Vec<u8>,
 }
 

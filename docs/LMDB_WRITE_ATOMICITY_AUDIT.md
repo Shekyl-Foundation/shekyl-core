@@ -25,12 +25,15 @@ code they did not describe (fixed 2026-09-08, and the reason this line now
 names shas per row-set rather than one).
 **Scope:** every `BlockchainLMDB` write path at the pin: block connect, block
 pop, the transaction pool, alt blocks, the three prunes, and the store
-lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry. Counts here
-are **gate-checked, not free-standing**: where a figure is stated (§10's
-row count) the schema-coverage gate compares it against the macro's
-length in the same run that checks the rows both ways, so a drifted
-literal fails CI rather than misleading a reader. Derived figures that
-no gate can check are written as descriptions rather than numbers.
+lifecycle (`open()`, `reset()`, `migrate()`). One coverage row per `SHEKYL_LMDB_TABLES` entry at the pin.
+The schema-coverage gate that checked §10's row count against the macro
+is retired with the C++ store (`DAEMON_REDB_STORE.md` §12.1), so the
+figures here are the record at their pins. Two readers still bind the
+document: the `accumulator/class.rs` tests hold every table that survives
+in the Rust store to its §10 class and read §12's falsifier table, and
+`check_drs_p0d_digest_coverage.py` requires §6's "Digest v0 read set" to
+name the three v0 families. Derived figures that no gate can check are
+written as descriptions rather than numbers.
 **Goal:** confirm each logical mutation is fully contained in a single LMDB
 transaction with no partial-commit risk — and record, for the redb store's
 specification, every convention this layer keeps only in code (DRS-P0b

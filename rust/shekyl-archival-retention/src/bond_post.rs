@@ -8,8 +8,8 @@
 //! Structural bounds (hybrid pubkey length) and `P_canonical_id` hint checks stay
 //! in C++ consensus glue; this module covers post-kind, the JoinMarket's endpoint,
 //! holdings, term rigidity, floor equality, and record-existence
-//! (via `record_exists` from LMDB). The receipt key is not this module's:
-//! CEN-J28 and the pool's credit arm both call
+//! (via `record_exists`, the caller's chain-store read). The receipt key is
+//! not this module's: CEN-J28 and the pool's credit arm both call
 //! `FnDsaHybridPublicKey::from_receipt_sign_pk`, and this verifier does not
 //! read the key.
 //!
@@ -221,7 +221,8 @@ pub fn verify_reinstate_bond_post(
     Ok(())
 }
 
-/// Verify JoinMarket bond-post semantics after wire decode and LMDB substrate read.
+/// Verify JoinMarket bond-post semantics after wire decode and the caller's
+/// bond-record read.
 ///
 /// `record_exists` is `true` when `get_archival_bond_hybrid_pubkey` would succeed.
 ///
@@ -367,7 +368,8 @@ pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostErro
 /// Verify `Release` bond-post semantics — a full record release (gate-4 §3.2/§3.4/
 /// §3.5/§4.3; `PHASE_2B_FSM_RETOOL.md` P2B-8).
 ///
-/// Marshaled facts from LMDB (C++ reads, Rust decides — same split as
+/// Facts the caller reads from the chain store (the caller reads, this
+/// function decides — same split as
 /// [`verify_join_market_bond_post`]): `record_bonded_total` is `None` when no bond
 /// record exists for `P_canonical_id`; `last_served_epoch` is the derived
 /// whole-record release-cooldown anchor

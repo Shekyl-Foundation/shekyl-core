@@ -178,7 +178,7 @@ impl<K: BlobKind> SegmentBytes<K> {
     }
 
     /// Whether the segment is empty. `connect` writes an empty `prunable`
-    /// row for a transaction with no prunable region (LMDB parity), so an
+    /// row for a transaction with no prunable region, so an
     /// empty retained region ([`ArchivalGood::Retained`]) is a real state,
     /// distinct from [`ArchivalGood::Discarded`].
     #[must_use]
@@ -251,8 +251,8 @@ pub struct TxRecord {
 
 impl TxRecord {
     /// The whole transaction as the wire carries it, given its archival
-    /// good: `pruned ‖ pqc_auths ‖ prunable`, the order `db_lmdb.cpp`'s
-    /// `get_tx_blob` assembled and `connect` split (STX-8). One line, so it
+    /// good: `pruned ‖ pqc_auths ‖ prunable`, the order `connect` split
+    /// (STX-8). One line, so it
     /// is written once; a third read for it would be the identity hop.
     ///
     /// Borrows the good's **retained** regions. The caller has already
@@ -314,7 +314,7 @@ pub enum ArchivalGood {
     /// `txs_pqc_auths[id]` where the txid is 4-part.
     Retained {
         /// The prunable region. May be empty — a transaction with no
-        /// prunable region has an empty row (LMDB parity).
+        /// prunable region has an empty row.
         prunable: SegmentBytes<TxPrunableSegment>,
         /// The tx-level `pqc_auths` region — `Some` iff the txid is 4-part
         /// (`PDM-Q-F26`), i.e. iff the record's `pqc_auth_hash` is.

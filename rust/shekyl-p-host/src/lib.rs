@@ -34,8 +34,8 @@
 //! # Where this runs, and what it holds
 //!
 //! In-process with the wallet. The store it reads is the wallet's redb
-//! `LeafStore` (the daemon's LMDB curve tree is the consensus copy and is
-//! not involved), and the tor it publishes through is the wallet's own
+//! `LeafStore` (the daemon's chain-store curve tree is the consensus copy and
+//! is not involved), and the tor it publishes through is the wallet's own
 //! instance. Nothing in this path crosses the FFI boundary.
 //!
 //! What the host can hold is deliberately narrow — an expanded
