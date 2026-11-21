@@ -20,10 +20,17 @@
 //! - **Linux.** `/proc/<pid>/limits`, the core row: the control reads
 //!   non-zero, the binary `0`/`0`.
 //! - **FreeBSD.** `procstat -l <pid>`, the `coredumpsize` row, read the same
-//!   way; and `truss -p <pid>` from the same account, which attaches to the
-//!   control and is refused for the binary (`procctl(PROC_TRACE_CTL)`). The
-//!   control's attach needs `security.bsd.unprivileged_proc_debug=1`; with it
-//!   off, the refusal would be the system's, so the control fails first.
+//!   way. The trace control (`procctl(PROC_TRACE_CTL)`) twice:
+//!   `proccontrol -m trace -q -p <pid>` reads `enabled, …` for the control
+//!   and `disabled` for the binary, from any account; and `truss -p <pid>`
+//!   from the same account attaches to the control and is refused for the
+//!   binary. The control's attach needs
+//!   `security.bsd.unprivileged_proc_debug=1`; with it off, the refusal
+//!   would be the system's, so the control fails first. **Run as root**
+//!   the `truss` half has no subject: root holds `PRIV_DEBUG_DENIED`, which
+//!   overrides the trace control (`p_candebug`), so `truss` attaches to the
+//!   binary too. As root the arm reads the trace control alone, and
+//!   `truss` is not run.
 //! - **macOS.** No tool reads another process's limit, so the arm observes
 //!   the effect: `SIGABRT` to the control writes the core `kern.corefile`
 //!   names, and `SIGABRT` to the binary writes none. The kernel writes a
@@ -111,8 +118,9 @@ pub fn assert_the_control_shows_the_subject(test: &str) {
     os::assert_unhardened(control);
 }
 
-/// The binary, observed: no core limit (Linux, FreeBSD), no tracer
-/// (FreeBSD), no core on `SIGABRT` (macOS). On macOS this ends `child`.
+/// The binary, observed: no core limit (Linux, FreeBSD), its trace control
+/// off and, unless run as root, no tracer (FreeBSD), no core on `SIGABRT`
+/// (macOS). On macOS this ends `child`.
 pub fn assert_hardened(child: &mut Child) {
     os::assert_hardened(child);
 }
@@ -230,13 +238,42 @@ mod os {
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
     }
 
+    /// `proccontrol -m trace -q -p <pid>`'s line: `disabled`,
+    /// `enabled, no debugger` or `enabled, traced by <pid>`. A query that
+    /// fails is refused by name, so neither side can pass on a tool error.
+    fn trace_control(pid: u32) -> String {
+        let out = Command::new("proccontrol")
+            .args(["-m", "trace", "-q", "-p", &pid.to_string()])
+            .output()
+            .expect("run proccontrol");
+        assert!(
+            out.status.success(),
+            "proccontrol -m trace -q -p {pid} failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// Whether this test runs as root, for whom `truss` attaches to the
+    /// binary whatever its trace control (module doc).
+    fn as_root() -> bool {
+        let out = Command::new("id").arg("-u").output().expect("run id -u");
+        assert!(out.status.success(), "id -u failed ({})", out.status);
+        String::from_utf8_lossy(&out.stdout).trim() == "0"
+    }
+
     pub fn assert_unhardened(control: Child) {
         let limit = core_limit(control.id());
-        let (mut truss, attached) = truss_attaches(control.id(), Duration::from_secs(2));
-        // truss first: ended by SIGKILL it detaches. A tracee killed under
-        // an attached truss makes truss abort and leave a core.
-        drop(truss.kill());
-        truss.wait().expect("reap truss");
+        let trace = trace_control(control.id());
+        let attached = (!as_root()).then(|| {
+            let (mut truss, attached) = truss_attaches(control.id(), Duration::from_secs(2));
+            // truss first: ended by SIGKILL it detaches. A tracee killed
+            // under an attached truss makes truss abort and leave a core.
+            drop(truss.kill());
+            truss.wait().expect("reap truss");
+            attached
+        });
         end(control);
         assert!(
             !limit.0.starts_with("0 ") && !limit.1.starts_with("0 "),
@@ -244,29 +281,45 @@ mod os {
              limit to remove, so the check would pass for nothing"
         );
         assert!(
-            attached.is_ok(),
-            "truss could not attach to the unhardened control ({attached:?}; \
-             security.bsd.unprivileged_proc_debug = {}): a refusal of the \
-             binary would be the system's, not its own",
-            sysctl("security.bsd.unprivileged_proc_debug")
+            trace.starts_with("enabled"),
+            "the control's trace control reads {trace:?}: a `disabled` of the \
+             binary would not be its own"
         );
+        if let Some(attached) = attached {
+            assert!(
+                attached.is_ok(),
+                "truss could not attach to the unhardened control ({attached:?}; \
+                 security.bsd.unprivileged_proc_debug = {}): a refusal of the \
+                 binary would be the system's, not its own",
+                sysctl("security.bsd.unprivileged_proc_debug")
+            );
+        }
     }
 
     pub fn assert_hardened(child: &mut Child) {
         let limit = core_limit(child.id());
-        let (mut truss, attached) = truss_attaches(child.id(), Duration::from_secs(5));
-        if attached.is_ok() {
-            drop(truss.kill());
-        }
-        truss.wait().expect("reap truss");
+        let trace = trace_control(child.id());
+        let attached = (!as_root()).then(|| {
+            let (mut truss, attached) = truss_attaches(child.id(), Duration::from_secs(5));
+            if attached.is_ok() {
+                drop(truss.kill());
+            }
+            truss.wait().expect("reap truss");
+            attached
+        });
         assert_eq!(
             limit,
             ("0 B".to_owned(), "0 B".to_owned()),
             "the binary runs with a core limit"
         );
+        assert_eq!(
+            trace, "disabled",
+            "the binary runs with its trace control on"
+        );
         match attached {
-            Ok(()) => panic!("truss attached to the hardened binary"),
-            Err(why) => assert!(
+            None => {}
+            Some(Ok(())) => panic!("truss attached to the hardened binary"),
+            Some(Err(why)) => assert!(
                 why.contains("Operation not permitted"),
                 "truss ended for another reason than a refusal: {why}"
             ),

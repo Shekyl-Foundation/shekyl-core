@@ -6,8 +6,9 @@
 //! The wallet RPC server hardens its process before it reads an argument
 //! (rule 35, `DAEMON_CONFIG_CUTOVER.md` DC-Q21), observed from outside the
 //! running binary against an unhardened control: on Linux and FreeBSD the
-//! core limit reads `0` on both bounds, on FreeBSD a same-account `truss -p`
-//! is refused too, and on macOS `SIGABRT` writes no core. Which OS proves
+//! core limit reads `0` on both bounds, on FreeBSD the trace control reads
+//! `disabled` and a same-account `truss -p` is refused too (not run as
+//! root), and on macOS `SIGABRT` writes no core. Which OS proves
 //! what, and what each arm needs of the host, is `shekyl-process`'s
 //! `tests/support/from_outside.rs`. Windows is not covered here.
 //!
