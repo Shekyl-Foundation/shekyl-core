@@ -11,11 +11,17 @@
 mod support;
 
 use std::thread;
+use std::time::Duration;
 
+use shekyl_p2p_session::harness::Wire;
 use shekyl_p2p_session::CloseKind;
 use shekyl_relay::owner::Admit;
-use shekyl_relay::NodeSync;
-use support::{blob, id_of, new_transactions, txpool_complement, Asked, Build, Rig, SETTLE};
+use shekyl_relay::{transit_ms, ConnectorId, NodeSync};
+use shekyl_relay_privacy::params::DandelionParams;
+use shekyl_relay_privacy::schedule::EmbargoTimer;
+use support::{
+    blob, id_of, new_transactions, txpool_complement, Asked, Build, Draws, FixedDraw, Rig, SETTLE,
+};
 
 #[test]
 fn a_batch_before_sync_is_ignored_and_the_session_stays() {
@@ -249,6 +255,123 @@ fn a_node_with_no_connector_shows_its_own_transaction_at_once() {
         rig.relay.snapshot().stem_in_flight == 0,
         "nothing was stemmed: there is nowhere to send it"
     );
+}
+
+/// The word the embargo tests fix every draw at: a quarter of the way up
+/// the range, so the deadline it draws is well inside the first epoch and
+/// far from zero. Its remainder by 100 is 54, above the epoch's fluff
+/// percentage, so the epoch this node draws is a stem epoch and a relayed
+/// stem is forwarded as one.
+const FIXED_WORD: u64 = (1 << 62) + 50;
+
+/// How long after a stem's write the clearnet embargo drawn from
+/// [`FIXED_WORD`] fires: the production timer's own draw, from time zero.
+fn fixed_embargo() -> Duration {
+    let transit = transit_ms(ConnectorId::Clearnet).expect("clearnet is a stem path");
+    let timer = EmbargoTimer::adopted(&DandelionParams::adopted_for_transit_ms(transit));
+    Duration::from_millis(timer.deadline(0, &mut FixedDraw(FIXED_WORD)))
+}
+
+/// One transaction through the running owner, its clock moved by the test
+/// alone: stemmed once, held unseen until its embargo's deadline, re-stemmed
+/// to the alternate when the deadline passes. `own` submits it as this
+/// node's own; otherwise it arrives as a stem from an inbound peer.
+fn a_stem_is_held_to_its_deadline_then_re_stemmed(own: bool) {
+    let rig = Rig::build(Build {
+        draws: Draws::Fixed(FIXED_WORD),
+        ..Build::default()
+    });
+    let mut one = rig.outbound(1);
+    let mut two = rig.outbound(2);
+    let mut sender = rig.inbound(1);
+    let embargo = fixed_embargo();
+    assert!(
+        embargo > Duration::from_secs(1),
+        "the fixed draw is a real wait: {embargo:?}"
+    );
+    let tx = id_of(&blob(6));
+    if own {
+        assert!(rig.relay.relay_local(tx, blob(6)), "the owner took it");
+    } else {
+        sender.inject_blocking(new_transactions(vec![blob(6)], false));
+        support::wait_until("the blob was admitted", || rig.pool.admits().len() == 1);
+    }
+
+    // The clock has not moved: stemmed once, to one successor.
+    support::wait_until("the stem was recorded", || {
+        rig.relay.snapshot().stem_in_flight == 1
+    });
+    let (first, second) = (rig.batches(&mut one), rig.batches(&mut two));
+    let (mut first_took, mut alternate) = match (first.len(), second.len()) {
+        (1, 0) => (first, two),
+        (0, 1) => (second, one),
+        other => panic!("one stem to one successor, read {other:?}"),
+    };
+    let stem = first_took.pop().expect("one batch");
+    assert!(!stem.dandelionpp_fluff, "the first send is a stem");
+    assert_eq!(stem.txs, vec![blob(6)]);
+
+    // Still frozen, then one millisecond short of the deadline: nothing more
+    // leaves, and the pool does not show it.
+    let unseen = |when: &str, alternate: &mut Wire, sender: &mut Wire| {
+        assert!(
+            rig.quiet(alternate),
+            "{when}: nothing reaches the alternate"
+        );
+        assert!(rig.quiet(sender), "{when}: nothing reaches the other peer");
+        assert!(
+            rig.pool.shown().is_empty(),
+            "{when}: the pool shows nothing"
+        );
+        assert_eq!(
+            rig.relay.snapshot().stem_in_flight,
+            1,
+            "{when}: still in flight"
+        );
+    };
+    unseen("with the clock frozen", &mut alternate, &mut sender);
+    let short = embargo
+        .checked_sub(Duration::from_millis(1))
+        .expect("the embargo is longer than a millisecond");
+    rig.advance(short);
+    unseen(
+        "a millisecond before the deadline",
+        &mut alternate,
+        &mut sender,
+    );
+
+    // At the deadline: one re-stem to the alternate, and still not shown.
+    rig.advance(Duration::from_millis(1));
+    let again = rig.read_batch(&mut alternate);
+    assert!(!again.dandelionpp_fluff, "the first fire re-stems");
+    assert_eq!(again.txs, vec![blob(6)]);
+    assert!(rig.quiet(&mut sender), "the first fire broadcasts nothing");
+    assert!(
+        rig.pool.shown().is_empty(),
+        "a re-stemmed transaction is still not shown"
+    );
+}
+
+/// **The running owner holds this node's own transaction for the embargo it
+/// drew.** The graph's tests prove the draw and the live walks prove the
+/// order (stem, then broadcast); this proves the owner arms the engine with
+/// that draw, on its own clock. The draw is fixed, so the deadline is known
+/// to the millisecond and the test never waits on chance.
+///
+/// What edit reds this: in the owner, pass a clock value other than the
+/// write's where a stem is recorded (`record_stem`, `commit_stem`). With `0`
+/// for `now` the deadline is one millisecond early, and this test and the
+/// relayed one both fail at "a millisecond before the deadline".
+#[test]
+fn an_own_transaction_is_held_to_its_embargo_deadline_then_re_stemmed() {
+    a_stem_is_held_to_its_deadline_then_re_stemmed(true);
+}
+
+/// The same steps for a stem this node relays: through the running owner an
+/// own transaction and a relayed one are held alike and re-stemmed alike.
+#[test]
+fn a_relayed_stem_is_held_to_its_embargo_deadline_then_re_stemmed() {
+    a_stem_is_held_to_its_deadline_then_re_stemmed(false);
 }
 
 #[test]

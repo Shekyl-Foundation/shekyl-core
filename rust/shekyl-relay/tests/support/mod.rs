@@ -16,7 +16,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use shekyl_draw_rng::SplitMix64;
+use shekyl_draw_rng::{RelayRng, SplitMix64};
 use shekyl_levin::{
     notify, GetTxpoolComplement, NewTransactions, PeerlistEntry, PortableMap, Received,
     NOTIFY_NEW_TRANSACTIONS,
@@ -288,6 +288,28 @@ impl ProbeSink for Others {
     fn probe_arrived(&self, _arrival: ProbeArrival) {}
 }
 
+/// A draw source that returns one word for ever, so a test can state what
+/// the owner drew: a deadline drawn from it is the same number whichever
+/// draw of the owner's it was. The word must lie under 2^63, where every
+/// bounded draw accepts it at the first try.
+#[derive(Clone, Copy, Debug)]
+pub struct FixedDraw(pub u64);
+
+impl RelayRng for FixedDraw {
+    fn next_u64(&mut self) -> u64 {
+        self.0
+    }
+}
+
+/// What the relay owner draws from.
+#[derive(Clone, Copy)]
+pub enum Draws {
+    /// The rig's seeded generator.
+    Seeded,
+    /// [`FixedDraw`] of this word.
+    Fixed(u64),
+}
+
 #[derive(Clone, Copy)]
 pub struct Build {
     pub noise: bool,
@@ -297,6 +319,8 @@ pub struct Build {
     /// Each channel's send-queue cap. A message larger than this closes
     /// the session it is sent on.
     pub send_cap: usize,
+    /// The relay owner's draw source.
+    pub draws: Draws,
 }
 
 impl Default for Build {
@@ -306,6 +330,7 @@ impl Default for Build {
             node_sync: NodeSync::Synchronised,
             offline: false,
             send_cap: SEND_CAP,
+            draws: Draws::Seeded,
         }
     }
 }
@@ -363,7 +388,10 @@ impl Rig {
             node_sync: node_sync_rx,
             timing: timing.clone(),
             runtime: runtime.handle().clone(),
-            rng: Box::new(SplitMix64::new(0x5eed)),
+            rng: match build.draws {
+                Draws::Seeded => Box::new(SplitMix64::new(0x5eed)),
+                Draws::Fixed(word) => Box::new(FixedDraw(word)),
+            },
             verdict: None,
         })
         .expect("the relay owner starts");
