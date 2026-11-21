@@ -8,9 +8,9 @@
 //!
 //! - the first stop of any kind ends the child's wait, and one that came
 //!   before the wait is kept;
-//! - a second stop of any kind exits at once with
+//! - a second stop exits at once with
 //!   [`EXIT_SECOND_STOP`](shekyl_process::stop::EXIT_SECOND_STOP), while the
-//!   child is still in its stop;
+//!   child is still in its stop, and a `SIGHUP` never counts as one;
 //! - an inherited ignore of `SIGINT` is kept and said; one of `SIGHUP` is
 //!   kept and not said.
 //!
@@ -215,15 +215,16 @@ fn name(signal: libc::c_int) -> &'static str {
     }
 }
 
-/// **A second stop of any kind exits at once with 130**, while the first
-/// stop is still running (Rick, 2026-10-14, restated 2026-11-20). The child
+/// **A second stop exits at once with 130**, while the first stop is still
+/// running (Rick, 2026-10-14, restated 2026-11-20): `SIGINT` or `SIGTERM`
+/// after a first stop of any kind, `SIGHUP` included. The child
 /// holds after its first stop as a program's clean stop does; the second
 /// ends it with the ruled status, not the hold's end. Red edit: `deliver`
 /// sends the second trigger instead of exiting (the child holds and the
 /// wait times out).
 #[test]
-fn a_second_stop_of_any_kind_exits_at_once_with_130() {
-    const TEST: &str = "a_second_stop_of_any_kind_exits_at_once_with_130";
+fn a_second_stop_exits_at_once_with_130() {
+    const TEST: &str = "a_second_stop_exits_at_once_with_130";
     if run_child_if_asked() {
         return;
     }
@@ -232,7 +233,7 @@ fn a_second_stop_of_any_kind_exits_at_once_with_130() {
         (libc::SIGINT, libc::SIGTERM),
         (libc::SIGTERM, libc::SIGINT),
         (libc::SIGHUP, libc::SIGTERM),
-        (libc::SIGTERM, libc::SIGHUP),
+        (libc::SIGHUP, libc::SIGINT),
     ] {
         let mut child = StopChild::start(TEST, HOLDING, &[]);
         child.signal(first);
@@ -249,6 +250,44 @@ fn a_second_stop_of_any_kind_exits_at_once_with_130() {
         assert!(
             !child.said().iter().any(|line| line == "held"),
             "the second stop waited for the first to finish"
+        );
+    }
+}
+
+/// **A `SIGHUP` never counts as the second stop** (Rick, 2026-11-21): a
+/// closing terminal under bash sends two hangups, the kernel's and the
+/// shell's, and the escape-at-once is for a person pressing Ctrl-C again.
+/// After a first `SIGTERM` or `SIGHUP`, two more hangups leave the child in
+/// its stop; a `SIGINT` then still exits at once with 130, so the hold is
+/// the hangups' doing, not a stop that cannot be ended. Red edit: let
+/// `SIGHUP` count (`counts_as_a_second_stop` true for it; the child exits
+/// 130 on the first hangup).
+#[test]
+fn a_sighup_never_counts_as_the_second_stop() {
+    const TEST: &str = "a_sighup_never_counts_as_the_second_stop";
+    if run_child_if_asked() {
+        return;
+    }
+    for first in [libc::SIGTERM, libc::SIGHUP] {
+        let mut child = StopChild::start(TEST, HOLDING, &[]);
+        child.signal(first);
+        child.expect_line(&format!("first: {}", name(first)));
+        child.signal(libc::SIGHUP);
+        child.signal(libc::SIGHUP);
+        std::thread::sleep(IGNORED_HOLDS);
+        assert!(
+            child.still_waiting(),
+            "{} then two SIGHUPs ended it: {:?}",
+            name(first),
+            child.said()
+        );
+        child.signal(libc::SIGINT);
+        assert_eq!(
+            child.exit_code(),
+            EXIT_SECOND_STOP,
+            "{} then SIGHUP twice then SIGINT: {:?}",
+            name(first),
+            child.said()
         );
     }
 }
