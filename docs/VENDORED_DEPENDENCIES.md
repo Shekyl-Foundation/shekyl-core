@@ -8,7 +8,10 @@ This document tracks vendored C/C++ dependencies in the `external/` tree. For Ru
 
 ### Location
 
-`external/db_drivers/liblmdb/`
+None. `external/db_drivers/liblmdb/` is deleted with the C++ tree, and no
+LMDB is vendored, built or linked. The daemon's store is
+`shekyl-chain-store` (redb, a Cargo dependency). The rest of this section
+is the record of the last vendored copy.
 
 ### Version
 
@@ -93,4 +96,4 @@ not to re-enable 32-bit builds.
 
 ### Compilation
 
-The daemon build does not compile this tree (DEL-004, 2026-10-28). `external/CMakeLists.txt` does not add `db_drivers`, and no target links `lmdb`. The sources stay here as the vendored copy.
+No build compiles LMDB. `external/CMakeLists.txt` does not add `db_drivers`, no target links `lmdb` (DEL-004), and the sources are deleted.

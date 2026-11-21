@@ -7,10 +7,8 @@
 //! snapshot's rows (`DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2, RD-F18;
 //! `DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`).
 //!
-//! The C++ LMDB exporter and the FFI it wrote through are gone with the
-//! daemon store (the harvest shim, §1.3). [`TraceWriter`] is the format
-//! the replay still reads. Rust-minted and versioned (RD-F9), fixed
-//! layout, little-endian.
+//! [`TraceWriter`] is the format the replay reads. Rust-minted and
+//! versioned (RD-F9), fixed layout, little-endian.
 //!
 //! ```text
 //! header      magic "SHKTRAC\0" ‖ version u8 ‖ reserved[7] = 0

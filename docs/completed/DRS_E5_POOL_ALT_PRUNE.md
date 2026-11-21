@@ -1,25 +1,6 @@
 # DRS-E5 — pool, alt chain, prune: the store's consuming increment (`E5-`)
 
-**Status:** OPEN — **Round 1 ruled in full 2026-10-10; `E5-Q4` ruled β
-2026-10-11** (no CEN-B4 at the cheap tier, promotion does the check: the
-cheap tier makes no chain-state read, and a check whose operand is chain
-state — a persona's bonded key — is promotion-tier on the ground §2.1
-already gives CEN-B5's root, an unexecuted alt chain cannot answer it; §8);
-**PR #1026 (a1–a4: the header partition, the cheap tier, AL1, the census
-arms, and the Slice C transport-handoff docs, §2.2/§2.3) merged
-2026-10-12. The switch PR's reorg half — a5's closure, a6's refusals,
-fixtures and Rust self-differential, a8's docs — merged 2026-10-16
-(#1082); a7's C++ capture is withdrawn
-(`E5-Q9`); the bundle legs (the alt row's bundle references, B10; the
-body resolved before the closure; the bundle view on the chain view; the bundle verifier inside `validate` at the
-switch) are built by SO-D12's 4b switch (PR #1327), which puts the bundle
-section on the block wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3). PR-b (b1–b7),
-DRS-X's PR 1 (`DRS_X_STORE_FLIP.md` DX-Q7, ruled 2026-10-16), merged
-2026-10-18 (#1102): the Rust pool, staged for the DRS-X flip and wired by
-it — the door is the validator's own judgement at `TxSlot::Lone`, the pool
-record knows one relay fact (DX-F6), reorg retention is deleted (CEN-K10),
-the bundle work is SO-D12's (§2.2, §5). This file stays open for the
-residue §9 names for its owners.** Round 0 posed
+**Status:** CLOSED-as-record (2026-11-21). Every increment this file owned has merged: PR-a (a1–a4, #1026, 2026-10-12), the switch's reorg half (a5, a6, a8, #1082, 2026-10-16; a7's C++ capture withdrawn, `E5-Q9`), PR-b (b1–b7, the Rust pool, #1102, 2026-10-18), and the bundle legs SO-D12's 4b switch built (#1327, 2026-11-13). The pool's reconcile at open (`E5-8`) is built in `shekyl-mempool`. §9 is notes for other owners, not residue of this file. Rulings: Round 1 in full 2026-10-10, `E5-Q4` β 2026-10-11 (§8). Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
@@ -31,20 +12,20 @@ its landed order and names no attestation step for the Rust tier; CEN-B4's
 site pin re-pinned) landed in a4's census-arms commit, 2026-10-11. **The
 "prune" in this file's name is not an increment of this lane:** the
 retention prune is DRS-E1's and landed 2026-09-25 (S-PRUNE,
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3's surface table;
-[`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) §14), and the C++ pruning engine
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §3's surface table;
+[`DRS_E1_SPRUNE.md`](../design/DRS_E1_SPRUNE.md) §14), and the C++ pruning engine
 was deleted 2026-09-21 (`DRS_E1_SPRUNE.md` §1); E5 owns only the
 **reorg × floor interaction** (§4: `PopBelowFloor` as a local refusal, the
 pruned-row asymmetry `E5-9`). Identifier families **`E5-`** (findings) and **`E5-Q`**
 (questions), registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 with this file (rule
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 with this file (rule
 94 §1; `check_index_prefix_uniqueness.py` branch (a): `E5` and `E5-Q`
 distinct, clear of the 126 registered families). Parent plan:
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) (`E5[DRS-E5 pool alt prune]`
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) (`E5[DRS-E5 pool alt prune]`
 in the §7 graph, `E2 --> E3 --> E4 --> E5`, `E5 --> X`; table 3's "4.K …
 slice 9" and "4.M … slice 10 with E5" rows). Inherits from
-[`DRS_E1_SALT.md`](DRS_E1_SALT.md) §2.3 (SAL-7, SAL-13, SAL-14) and
-[`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md) §2.3 (SPL-7…SPL-10, `SPL-Q5`); the
+[`DRS_E1_SALT.md`](../design/DRS_E1_SALT.md) §2.3 (SAL-7, SAL-13, SAL-14) and
+[`DRS_E1_SPOOL.md`](../design/DRS_E1_SPOOL.md) §2.3 (SPL-7…SPL-10, `SPL-Q5`); the
 reorg rulings it builds under are
 [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) §4b
 (Q1a–Q1c) and §5.5 (Q1a–Q3b), closed as record. Owns no FOLLOWUPS row at
@@ -1613,7 +1594,7 @@ Not E5's; found while reading the census at the pin.
   rows at all is a census question.
 - **CEN-J1** may be satisfied by a landed slice-8 row; worth a re-read.
 - **CEN-H19's verification half is a block fold, not a `tx_form` row**
-  (landed 2026-10-15, [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6).
+  (landed 2026-10-15, [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §4.6).
   `tx_form` judges only the proof's layout. The pool door does not call
   the bulletproof verifier itself: it calls `judge_slot_stateless` at
   `TxSlot::Lone`, which verifies a lone transaction's proof as a batch of

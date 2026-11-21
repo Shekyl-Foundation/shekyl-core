@@ -11,8 +11,9 @@
 //!
 //! # The value side gets the key side's discipline
 //!
-//! Keys were typed from the first increment: `lmdb_order` carries LMDB's
-//! orderings into redb, and redb refuses at `open_table` to open a table
+//! Keys were typed from the first increment: `lmdb_order`'s key types carry
+//! the orders LMDB used (kept until S2 moves these tables to redb's native
+//! order), and redb refuses at `open_table` to open a table
 //! whose stored key `TypeName` disagrees with the definition's — so a
 //! height and a hash cannot index each other's tables. Values were `&[u8]`,
 //! and `&[u8]` is what every table inherits when nothing states otherwise:

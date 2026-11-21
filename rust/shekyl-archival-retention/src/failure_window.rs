@@ -427,7 +427,7 @@ pub const FAILURE_WINDOW_N: u32 = ARCHIVAL_FAILURE_WINDOW_N;
 /// Passed baselines the window tolerates before the threshold becomes
 /// unreachable (`n − m`).
 ///
-/// The gathering caller uses this to stop reading LMDB early: the window holds
+/// A gathering caller can use this to stop reading early: the window holds
 /// at most `n` observations, so once more than `n − m` of them have passed,
 /// fewer than `m` misses remain possible no matter what the rest of the history
 /// says. Exposed as a computed constant rather than left to the caller so the

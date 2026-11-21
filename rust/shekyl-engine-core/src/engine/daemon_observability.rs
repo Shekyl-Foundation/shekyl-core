@@ -356,7 +356,7 @@ async fn coupling_sweep(port: u16, path: ReadPath, tip: u64) -> Vec<(usize, u64,
     const SAMPLES: usize = 200;
 
     let probe = open_client(port).await;
-    // Warm the LMDB page cache so we measure lock coupling, not cold I/O.
+    // Warm the daemon's read path so we measure lock coupling, not cold I/O.
     let _ = probe_latencies(&probe, path, tip, 64).await;
 
     let mut rows = Vec::new();
@@ -473,7 +473,7 @@ async fn measure_timing(port: u16, tip: u64) {
 ///   must return identical bytes (a decode/soundness check, not the window test).
 /// - **forced-window single-height validity (the rung-1 mechanism):** tip reads
 ///   on the lock-free path — each block whole and at the height asked for, even
-///   when it raced a commit. Single-height LMDB reads are atomic, so this is
+///   when it raced a commit. Single-height store reads are atomic, so this is
 ///   *expected* to hold; the point is to hold it under a proven-open window.
 /// - **multi-height straddle probe (the AVOIDED hazard, finding-b):** a `.bin`
 ///   batch spanning the churn zone must be an internally-linked chain segment

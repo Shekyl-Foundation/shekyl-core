@@ -61,26 +61,26 @@ macro_rules! store_id {
 }
 
 store_id! {
-    /// Position of a transaction in the `txs_*` tables (LMDB `tx_id`).
+    /// Position of a transaction in the `txs_*` tables (`tx_id`).
     TxStorageId
 }
 
 store_id! {
-    /// Global output id — the `output_txs` primary key (LMDB `output_id`).
+    /// Global output id — the `output_txs` primary key (`output_id`).
     OutputStorageId
 }
 
 store_id! {
-    /// Dense member index within one `output_amounts` bucket (LMDB
-    /// `amount_index`).
+    /// Dense member index within one `output_amounts` bucket
+    /// (`amount_index`).
     AmountIndex
 }
 
 /// A slot in `output_amounts`: the **bucket** (an amount) and the dense
 /// position within it (an [`AmountIndex`]). The table's redb key is the
-/// tuple `(amount, amount_index)` — LMDB's `DUPSORT` pair as a key
-/// (S-OUT-KI SOK-1, layout v6) — and every place that builds or bounds one
-/// goes through this type, so the tuple's field order is written once.
+/// tuple `(amount, amount_index)` (S-OUT-KI SOK-1, layout v6) — and every
+/// place that builds or bounds one goes through this type, so the tuple's
+/// field order is written once.
 ///
 /// Shekyl has **one bucket**: every miner and emission vout is stored under
 /// [`Self::CONFIDENTIAL_AMOUNT`] with its ct-base commitment, and CEN-H14
@@ -216,10 +216,9 @@ impl ChunkIndex {
 
 /// `curve_tree_layers`'s key: which chunk of which layer (S-CURVE `SCU-Q3`).
 ///
-/// The table's redb key is the tuple `(layer, chunk)`. The C++ packed that
-/// pair into one `u64` because LMDB needs one integer; redb orders the tuple
-/// layer-major, which is the order the shift produced, with no 56-bit chunk
-/// ceiling. Fields are private: the tuple is assembled only through
+/// The table's redb key is the tuple `(layer, chunk)`. redb orders the
+/// tuple layer-major, with no shift and no 56-bit chunk ceiling as a packed
+/// `u64` would have. Fields are private: the tuple is assembled only through
 /// [`Self::key`] / [`Self::from_key`], and a layer's scan is only
 /// [`Self::layer_range`], the same discipline as [`OutputSlot`].
 ///
@@ -281,9 +280,9 @@ impl LayerChunk {
 /// The key of one applied slash: `archival_slash_applied[(P, shard, E)]`
 /// (DRS-E4; `DRS_E4_ARCHIVAL_WRITER.md` §3.3).
 ///
-/// The C++ packed it as `P_id ‖ BE64(shard) ‖ BE64(epoch)` under LMDB's
-/// default byte comparator; the tuple `([u8; 32], u64, u64)` orders
-/// component-wise, the same order, with nothing to pin. Fields are private:
+/// The tuple `([u8; 32], u64, u64)` orders component-wise, the same order
+/// as the packed bytes `P_id ‖ BE64(shard) ‖ BE64(epoch)` under a byte
+/// comparator, with nothing to pin. Fields are private:
 /// the tuple is assembled only through [`Self::key`] / [`Self::from_key`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct SlashAppliedKey {
@@ -677,8 +676,7 @@ impl SlashLogKey {
     }
 
     /// Every row at a height **strictly above** `h`: `(h + 1, 0) ..` — the
-    /// scan A2 `slash_log_after` takes (`db_lmdb.cpp:4804`, the C++ start
-    /// key `(at_height + 1, 0)`). `None` when `h` is the last height: no
+    /// scan A2 `slash_log_after` takes. `None` when `h` is the last height: no
     /// height lies above it, and a `RangeFrom` cannot say so — its start
     /// would have to be a height that does not exist. (A saturated start
     /// would name `h` itself and read the last height's own rows as
