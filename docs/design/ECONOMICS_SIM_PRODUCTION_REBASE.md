@@ -5322,6 +5322,112 @@ on the baseline).
 a measured fold per new arm before the table runs: about 80 CPU-hours,
 the nightly slice about an hour of CPU.
 
+#### 5.37.1 What ran before the table, and what it changed (2026-11-21)
+
+The predictions above are graded against the full table once it has
+run; this part records what the runs before it found and changed. All of
+them ran on a 16-vCPU build host.
+
+**The first full table did not finish.** It aborted after 8.4 hours:
+growth cells' medians passed about 10¹³ bytes, where
+`apply_weight_penalty`'s product leaves the reward's u128 domain, and the
+fill refused a body as `Unpriced`. The table's probe now stops a fold at
+two edges, not one: the supply break, and the first year the fill could
+not price one byte past the penalty-free weight
+(`FoldProbe::stops_at_edges`, `FoldEdge`; pinned by
+`the_reward_domain_edge_is_where_the_fill_first_refuses_unpriced`). The
+narration prints which edge, the year and the median. The horizon
+paragraph above named only the break.
+
+**Then twelve growth cells never ended.** The 720-fold pre-flight (every
+cell but the baseline's, at seed 1) ran out its three hours with 489
+folds ended. The twelve stalled folds were sustained growth under the
+miner's net at `w_ref` 3 000; each stalled after its heartbeat for a
+year between 95 and 120. A probe on one
+of them found the cost: the pool's admission asked `make_room` once per
+arriving transaction whenever the cheapest victim's weight differed from
+the arrival's. In year 98 that was 117 million calls, growing about
+fourteen-fold a year, and the trim listed every waiting transaction.
+
+**The admission and the trim now work group by group.** After `j`
+identical arrivals the pool's own walk has evicted the shortest
+cheapest-first run of strictly cheaper entries whose weight covers
+`total + j·weight − limit`. Each arrival extends the run before it by
+the fewest entries that cover its own excess, and nothing it admits is a
+victim. So the admitted count is a division, and the evictions are that
+run, group by group. The trim is `trim_to`'s walk group by group.
+Production stays the reference:
+- `admission_makes_room_as_the_pool_does` compares the evictions, the
+  refusals, the admitted count and what is left of each
+  `(fee, weight, hour)` class against `make_room` over every entry, one
+  arrival at a time. It runs five fixed cases and 400 random pools
+  (`random_admissions_make_room_as_the_pool_does`).
+- `the_trim_passes_over_the_listing_as_the_pool_does` compares the
+  evictions cohort by cohort against `trim_to` over every entry. It runs
+  one fixed case and 400 random pools and listings
+  (`random_trims_pass_over_the_listing_as_the_pool_does`).
+
+The random cases caught one defect in the first version. A batch whose
+every arrival was refused still evicted, to cover a pool already over a
+limit that fell (31 evicted against the walk's none). The walk refuses
+and leaves the pool as it was. It was fixed in its own commit, and a
+fixed case pins it.
+
+**One committed narration moved, and Rick ruled it regenerated
+(2026-11-21).** Inside one group (the same fee, weight and hour) the
+sim splits an eviction across cohorts that arrived at different heights.
+That split is the sim's own choice. Production's eviction order is the
+cheapest per weight, then the received hour, then the transaction hash
+(`AdmissionRank::eviction`, `rust/shekyl-mempool/src/policy.rs`), so
+within a group the hash decides, which is in effect a uniform draw. The
+old general path split each arrival's evictions on their own, one or a
+few at a time; for a single eviction that is the group's largest cohort.
+Its same-weight batch path already split pro rata. Every eviction is now
+split pro rata to the cohorts' counts, which is the draw's expectation.
+The `--esr10` nightly narration moved in one block, the stuffing attack
+at the inherited zone, ×1.25 all-Standard:
+
+| Figure | Before | After |
+|---|---|---|
+| Emission at the flat-25 onset (y27), SKL a year | 469 397.9 | 469 397.8 |
+| Closed shards y10 / y60 | 536 213 / 3 296 317 | 536 214 / 3 296 319 |
+| y1 Standard fees per block, SKL | 10.282 | 10.281 |
+
+The stage-2, flat-control, EUP-4 and J×G pins passed unregenerated. The
+`--esr10` fixtures are regenerated under this entry. Any other line they
+move is listed when they are committed.
+
+**What sustained growth is in this table (Rick, 2026-11-21).** At
+20 % a year, demand at year 60 is already about 2.8 million transactions
+a block, so no plateau there is more physical than the compounding.
+Growth is a stress of the mechanism. Each fold runs until the reward's
+arithmetic or the supply runs out, and the table labels the scenario so
+and prints where each fold stops. The tail is read from the baseline,
+boom-and-bust and slow-adoption cells, not from growth. This settles
+what the schedule does past its break: it runs until it stops, and the
+table reports where. A high-growth case that rises to a physical ceiling
+and then flattens would be a new scenario, left until this table has
+been read.
+
+**The pre-flight again, after the fix.** All 720 folds ended, in 3.17
+hours. Mean seconds a fold: boom and bust 242, growth 266, slow adoption
+253. The longest was 478 s. Growth's 240 folds stopped as follows:
+- 165 at the reward's edge, years 107 to 127, at medians of 312 to
+  753 TB;
+- 27 at the supply break, years 108 to 111;
+- 48 reached year 135, all under the miner's net at `w_ref` 3 000, where
+  the median does not follow demand.
+
+Another lane's long test shared the host for the run's last 1.5 hours,
+and the per-fold lines carried no clock then, so the two periods cannot
+be told apart. The heartbeat and end lines now carry the UTC time.
+
+**The runtime, stated before the table runs.** 2 880 folds at about
+254 s each is about 203 CPU-hours: about 12.7 hours on the 16-vCPU host,
+measured partly under that co-load. WE-12's 80 CPU-hours is a miss by
+2.5 times. The full table's regeneration also writes its JSON summary
+(every year of every cell), so one run gives both.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
