@@ -1068,8 +1068,9 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     writeln!(out, "{security}")?;
     // Every year in the nightly slice and in the JSON summary: STD-5 could
     // not be graded because no report carried these means (§5.35.1). The
-    // full table prints the sample years, which keeps its narration near
-    // 1.6 MB instead of 8 MB; every year of every cell is in its JSON.
+    // full table prints the sample years, which keeps its narration at
+    // 8.4 MB instead of about 15 MB; every year of every cell is in its
+    // JSON (§5.37.1).
     let years: Vec<u64> = match scope {
         Scope::Nightly => (1..=HORIZON_YEARS).collect(),
         Scope::Full => SAMPLE_YEARS.to_vec(),
