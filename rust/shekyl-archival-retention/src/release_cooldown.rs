@@ -9,16 +9,17 @@
 //!
 //! The cooldown anchor is a persona's **last-served settlement epoch**, and it is
 //! *derived*, never stored (P2B-8 Q1/Q2 — "derive from the landed source of truth,
-//! don't add a mutable field"). The serve-credit table is keyed
-//! `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖ BE64(block_height)` (`PC-D4`); byte-sort
-//! *is* `(P_id, shard, epoch, height)` ascending, so shard `s`'s last-served
-//! epoch is the predecessor of the ceiling probe
-//! `P ‖ BE64(s) ‖ BE64(u64::MAX) ‖ BE64(u64::MAX)` — MAX in the appended
-//! height too. The per-shard maxima arrive here as data from the caller
-//! (`shekyl-chain-rules`'s `release_last_served`), and this module owns the
-//! decisions on top: the whole-record anchor (max over
-//! shards, for `Release`), the cooldown predicate, and the slash-settlement
-//! predicate.
+//! don't add a mutable field"). The caller derives it
+//! (`shekyl-chain-rules`'s `release_last_served`) from the issued-draw index
+//! over the cooldown's window, the epochs `current − (RELEASE_COOLDOWN_EPOCHS −
+//! 1)` through `current`: for a compact holding, each held shard's latest epoch
+//! in that window with a passed economy draw; for a complete tree, the latest
+//! epoch with a passed support draw. A shard with no pass in the window is
+//! omitted, so an empty result means no pass **in the window**, not that the
+//! persona never served: an earlier pass has had its cooldown elapse and its
+//! epoch reach its slash deadline, so it changes neither predicate. This module
+//! owns the decisions on top: the whole-record anchor (max over shards, for
+//! `Release`), the cooldown predicate, and the slash-settlement predicate.
 //!
 //! ## The guarantee (ratified 2026-07-12, maintainer)
 //!
@@ -31,8 +32,8 @@
 //! window, unserved by definition, earning nothing) are **exit-forgiven by
 //! construction**: slashability ends at the `Release` connect, and the refund is
 //! never clawed back. The epoch-distance predicate alone is not sufficient — the
-//! connect dispatch runs *before* the per-block slash fold
-//! (`BlockchainDB::add_block` ordering), so in the first block past the anchor
+//! release is judged against the parent's state, *before* this block's slash
+//! fold (CEN-J16 reads the parent's watermark), so in the first block past the anchor
 //! epoch's slash deadline a `Release` would exit the record ahead of the fold that
 //! settles the anchor epoch; [`slashes_settled_through`] closes exactly that
 //! one-block race by requiring the scheduler's settled watermark to have reached
@@ -40,12 +41,12 @@
 
 /// The whole-record last-served settlement epoch: the max over the record's current
 /// shards of each shard's last-served epoch (P2B-8 Q2 — the `Release` cooldown
-/// anchor). `None` when the persona has never served any shard.
+/// anchor). `None` when no held shard has a pass in the cooldown's window.
 ///
-/// `per_shard_served` carries the reverse-cursor maximum of each **served** shard;
-/// never-served shards are omitted by the caller (they carry no serve-credit bit, so
-/// they cannot lower the max). An empty slice therefore means the persona has never
-/// served, folding to `None`.
+/// `per_shard_served` carries each held shard's latest passed epoch in the window;
+/// a shard with no pass there is omitted by the caller, so it cannot lower the max.
+/// An empty slice therefore means no pass in the window (module docs), folding to
+/// `None`.
 #[must_use]
 pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
     per_shard_served.iter().copied().max()
@@ -61,7 +62,7 @@ pub fn whole_record_last_served(per_shard_served: &[u64]) -> Option<u64> {
 /// `RELEASE_COOLDOWN_EPOCHS` covers the slash grace by construction
 /// (`ARCHIVAL_TIMING_CONSTANTS.md` §2.2 L16 pin: `RELEASE_COOLDOWN_EPOCHS >
 /// SLASH_GRACE_EPOCHS`, both in epochs, so it holds on every schedule). A
-/// persona that never served (`None`) has earned
+/// persona with no pass in the window (`None`) has earned
 /// nothing whose settlement the exit could outrun — every epoch it held without
 /// serving either was already slashed at its deadline while bonded or falls in the
 /// exit-forgiven tail (module docs) — so the cooldown is vacuously elapsed.
@@ -107,13 +108,13 @@ pub fn release_cooldown_elapsed(
 /// `<= S` has been scanned at its slash deadline; `None` means no epoch has
 /// been settled yet.
 ///
-/// Settled iff the anchor is `None` (never served — nothing the exit could outrun
-/// beyond the exit-forgiven tail) or `watermark >= anchor`. Without this predicate,
-/// a `Release` in the exact first block past the anchor epoch's slash deadline
-/// connects *before* that block's slash fold (`add_transaction` precedes
-/// `process_archival_slash_at_height` in `BlockchainDB::add_block`) and exits the
-/// record ahead of the fold that would have slashed a held-but-unserved shard at
-/// the anchor epoch — the one-block race the module docs name.
+/// Settled iff the anchor is `None` (no pass in the window — nothing the exit could
+/// outrun beyond the exit-forgiven tail) or `watermark >= anchor`. Without this
+/// predicate, a `Release` in the exact first block past the anchor epoch's slash
+/// deadline is judged against the parent's watermark, before that block's slash
+/// fold, and exits the record ahead of the fold that would have slashed a
+/// held-but-unserved shard at the anchor epoch — the one-block race the module
+/// docs name.
 #[must_use]
 pub fn slashes_settled_through(
     last_settled_slash_epoch: Option<u64>,
@@ -150,8 +151,8 @@ mod tests {
 
     #[test]
     fn whole_record_last_served_ignores_omitted_never_served_shards() {
-        // Never-served shards are omitted by the caller, so the fold sees only the
-        // served maxima and cannot be lowered by a shard that never served.
+        // Shards with no pass in the window are omitted by the caller, so the fold
+        // sees only the passed maxima and cannot be lowered by an omitted shard.
         assert_eq!(whole_record_last_served(&[9, 3]), Some(9));
     }
 
@@ -224,7 +225,8 @@ mod tests {
 
     #[test]
     fn settled_through_vacuous_for_never_served() {
-        // Never served: no anchor to settle through, with or without a watermark.
+        // No pass in the window: no anchor to settle through, with or without a
+        // watermark.
         assert!(slashes_settled_through(None, None));
         assert!(slashes_settled_through(Some(7), None));
     }

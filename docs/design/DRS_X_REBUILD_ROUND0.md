@@ -1,6 +1,6 @@
 # The store rebuild (DRS-D10's machinery) — Round 0
 
-**Status:** OPEN — Round 0, 2026-10-21. For Rick to rule; then its own brief.
+**Status:** OPEN — Round 0, 2026-10-21, posed and not ruled, and **stale against S-PRUNE**: the prune discards `txs_prunable` and `txs_pqc_auths` below the body horizon on every node (`rust/shekyl-chain-store/src/store/prune.rs`), so RB-Q1's corpus and RB-Q2's full replay cannot run on a pruned store. A Round 1 settles what a rebuild verifies below the horizon and redefines the corpus before Rick rules (`docs/FOLLOWUPS.md`, the S3 row).
 
 **For:** Rick to rule; then its own brief. **From:** design review, 2026-10-21.
 **Ground:** `dev` at `ba0b28379`. The trigger was #1147's S0 (the node opens `chain.db` at every start, and a layout mismatch refuses).
@@ -21,6 +21,8 @@
 
 ## RB-Q1. The corpus format is frozen, with its own version
 
+> **Stale (S-PRUNE):** `txs_pqc_auths` is discarded below the body horizon, and the set omits `txs_prunable` and four kept rows a rebuild needs. Round 1 redefines it.
+
 **Recommendation.**
 - The three corpus tables' keys and value codecs are frozen under a **corpus version**, separate from `schema_version`. Today's encodings are corpus version 1.
 - The store exposes a **read-only corpus reader** that opens a file of any past layout by those three tables alone and yields blocks and bodies in height order. It reads nothing else, so no other table's codec is pinned.
@@ -30,6 +32,8 @@
 **Wargame.** A table left out of the frozen set is the V10/V11 failure by construction, so the set is §11.2's and any change to it is a ruling. A frozen codec that later needs a field gets a corpus bump and a reader, never a silent reinterpretation.
 
 ## RB-Q2. The rebuild is the replay driver over the corpus reader
+
+> **Stale (S-PRUNE):** below the body horizon the bodies this replay validates are gone. Round 1 settles what it verifies there.
 
 **Recommendation.**
 - One path: open the old file read-only through the corpus reader, open a fresh file at `chain.db.rebuild`, replay every block through the production pipeline (`shekyl-chain-ingest`'s driver, `corpus.rs`, the same `form → validate → connect`), then swap: the old file becomes `chain.db.<layout>.replaced`, kept until the operator removes it. The pool file is moved aside and reopened empty (`SPL-Q8`; nothing is deleted).

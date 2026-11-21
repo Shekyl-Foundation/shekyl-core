@@ -60,10 +60,13 @@
 //! 4. **Timing is killed by the read-point** — see [`ParentStateHoldings`].
 //! 5. **Validator cost is bounded, and here is the actual number:** this
 //!    function does no I/O. The caller gathers two facts per held shard.
-//!    The caller is the validator's J15 row (`shekyl-chain-rules`): per
-//!    held shard it reads the closed-shard count, the `r_market` row, and
-//!    places the shard's close height by a binary search over the parent
-//!    (one recorded-row read per probe). One bond post is at most
+//!    The caller is the validator's J15 row (`shekyl-chain-rules`,
+//!    `holding_admissible`): per held shard it reads the closed-shard
+//!    count and the `r_market` row, and places the shard's close height
+//!    twice, once inside `closed_and_final` and once for the age operand.
+//!    Each placement is a binary search over the parent's
+//!    `cumulative_archival_len` fold (one recorded-row read per probe)
+//!    and one more read of the landing row. One bond post is at most
 //!    `MAX_HOLDINGS_SHARDS` of these per-shard gathers. Real, but
 //!    not a cheap DoS: every shard in the holding is priced at a full
 //!    `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
