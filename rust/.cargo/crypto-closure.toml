@@ -644,10 +644,10 @@ reason = "Derives zerocopy's casts. Moves with zerocopy, which pins it exactly (
 
 [[package]]
 name = "zeroize"
-version = "1.8.2"
-reason = "Wipes every secret buffer (rule 35). Kept at 1.8.2 after reading 1.9.2's CHANGELOG (1.9.0-1.9.2), src/bulk.rs, src/barrier.rs and lib.rs's Vec impl: on asm-capable targets (x86_64 and aarch64 among them) 1.9 wipes with ptr::write_bytes followed by an empty asm! block that takes the buffer's address (readonly, nostack) as the barrier against dead-store elimination, replacing 1.8's per-element volatile writes and compiler_fence(SeqCst); volatile writes remain only where stable asm! is absent. The Vec wipe still covers spare capacity, then the elements. 1.9.1 makes Zeroizing's Debug opaque: nothing in the tree prints it (shekyl-engine-core key.rs's redaction tests assert absence). Reopen: a ruling that the asm barrier meets rule 35's not-elided guarantee."
+version = "1.9.2"
+reason = "Wipes every secret buffer (rule 35). 1.9.2 admitted (Rick, 2026-11-21), reviewed against rule 35 after reading 1.9.2's CHANGELOG (1.9.0-1.9.2), src/bulk.rs, src/barrier.rs and lib.rs: elision is prevented by an ordinary fill plus an opaque readonly asm barrier on asm targets (asm!(\"# {}\", in(reg) ptr, options(readonly, preserves_flags, nostack)): not nomem, so the compiler must assume it reads the zeroed memory and cannot drop the stores; the memzero_explicit technique), and by per-element volatile writes elsewhere. The Vec wipe still covers spare capacity, then the elements. Zeroizing's Debug is opaque (1.9.1); no Shekyl test, log or panic message relied on the old output. The fallback barrier's possible uninitialised read is fixed (1.9.1)."
 
 [[package]]
 name = "zeroize_derive"
 version = "1.5.0"
-reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types. 1.5.0 admitted after diffing src/lib.rs against 1.4.3: edition 2024, inline panic formats, two panics turned into asserts, and the generated wipe gains allow(unused_assignments); the emitted zeroize calls are unchanged. zeroize 1.8.2 accepts it (zeroize_derive ^1.3)."
+reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types. 1.5.0 admitted after diffing src/lib.rs against 1.4.3: edition 2024, inline panic formats, two panics turned into asserts, and the generated wipe gains allow(unused_assignments); the emitted zeroize calls are unchanged. zeroize 1.9.2 requires it (zeroize_derive ^1.5)."
