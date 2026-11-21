@@ -417,6 +417,13 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         .expect("the death is heard")
         .expect("watcher");
     let kept = boot.stop_for_respawn().await;
+    // A crash writes nothing back: the previous cache stays (`TSR-Q8`), and
+    // only a clean reap of a Tor that bootstrapped is due.
+    assert!(
+        matches!(kept.saved.cache, crate::CacheSave::NotDue),
+        "a crashed Tor's cache is not written back: {:?}",
+        kept.saved.cache
+    );
     let mut boot = DaemonTorControl::spawn_into(
         kept.directory,
         binary,
