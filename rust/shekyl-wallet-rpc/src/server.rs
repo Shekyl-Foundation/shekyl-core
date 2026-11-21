@@ -386,13 +386,23 @@ async fn json_rpc_handler(
 }
 
 /// Removes a UDS path on drop so serve errors cannot leave a stale socket.
+/// A removal that fails for any reason but the path being gone is logged:
+/// it leaves a socket behind, and nothing else would say so (rule 82).
 #[cfg(unix)]
 struct UdsCleanup(PathBuf);
 
 #[cfg(unix)]
 impl Drop for UdsCleanup {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.0));
+        match std::fs::remove_file(&self.0) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %self.0.display(),
+                error = %e,
+                "the wallet RPC socket could not be removed"
+            ),
+        }
     }
 }
 
@@ -880,15 +890,23 @@ impl InProcessHandle {
     }
 
     /// Request graceful shutdown and wait for the serve task to finish; the
-    /// serve task closes the open wallet before it ends.
+    /// serve task closes the open wallet before it ends. Then the private
+    /// socket directory [`spawn_in_process`] made is removed, whatever the
+    /// serve task's end; a pipe leaves nothing behind.
+    ///
+    /// # Errors
+    ///
+    /// The serve task's failure, else the directory's removal failing, with
+    /// the path: a host prints it, so a directory left behind is said.
     pub async fn shutdown(self) -> Result<(), BoxErr> {
         self.state.shutdown.notify_one();
-        self.join.await??;
-        // The serve task's UdsCleanup already unlinked the socket; remove
-        // the private dir that held it. A pipe leaves nothing behind.
+        let served = self.join.await;
         #[cfg(unix)]
-        if let Some(dir) = &self.socket_dir {
-            drop(std::fs::remove_dir(dir));
+        let removed = self.socket_dir.as_deref().map(remove_private_socket_dir);
+        served??;
+        #[cfg(unix)]
+        if let Some(removed) = removed {
+            removed?;
         }
         Ok(())
     }
@@ -940,7 +958,7 @@ pub async fn spawn_in_process(
     #[cfg(unix)]
     {
         let socket_dir = private_socket_dir()?;
-        let listen = ListenAddr::Uds(socket_dir.join("wallet-rpc.sock"));
+        let listen = ListenAddr::Uds(socket_dir.join(PRIVATE_SOCKET_FILE));
         let mut handle =
             spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await?;
         handle.socket_dir = Some(socket_dir);
@@ -953,6 +971,30 @@ pub async fn spawn_in_process(
         let listen = ListenAddr::SelfHostedPipe(SelfHostedPipe { name });
         spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await
     }
+}
+
+/// The socket's name in the private directory [`spawn_in_process`] makes.
+#[cfg(unix)]
+const PRIVATE_SOCKET_FILE: &str = "wallet-rpc.sock";
+
+/// Removes the private directory [`spawn_in_process`] made. The serve task's
+/// [`UdsCleanup`] has already unlinked the socket; one still there means it
+/// did not, so it is removed here and said. Every failure names its path.
+#[cfg(unix)]
+fn remove_private_socket_dir(dir: &Path) -> std::io::Result<()> {
+    let named = |path: &Path, e: std::io::Error| {
+        std::io::Error::new(e.kind(), format!("cannot remove {}: {e}", path.display()))
+    };
+    let socket = dir.join(PRIVATE_SOCKET_FILE);
+    match std::fs::remove_file(&socket) {
+        Ok(()) => tracing::warn!(
+            path = %socket.display(),
+            "the wallet RPC socket was still there at shutdown; removed"
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(named(&socket, e)),
+    }
+    std::fs::remove_dir(dir).map_err(|e| named(dir, e))
 }
 
 /// The auth-less configuration [`spawn_in_process`] uses on every platform;
