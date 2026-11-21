@@ -1045,7 +1045,7 @@ impl<'a, S: Source> Mutated<'a, S> {
     }
 
     /// `u64::MAX` was yielded. Another event is [`MutationFault::HeightExhausted`],
-    /// except a `Rewind`, which is still the Extend-only fault.
+    /// except a `Rewind` or an `Offer`, which is still the Extend-only fault.
     fn pull_past_end(&mut self) -> Result<Option<Sequenced<IngestEvent>>, MutationFault<S::Fault>> {
         match self.inner.next() {
             Err(fault) => self.fail(MutationFault::Inner(fault)),
@@ -1054,6 +1054,10 @@ impl<'a, S: Source> Mutated<'a, S> {
                 event: IngestEvent::Rewind { to },
                 ..
             })) => self.fail(MutationFault::Rewind { to }),
+            Ok(Some(Sequenced {
+                event: IngestEvent::Offer(_),
+                ..
+            })) => self.fail(MutationFault::Offer),
             Ok(Some(_)) => self.fail(MutationFault::HeightExhausted {
                 after: BlockHeight::from_raw(u64::MAX),
             }),
@@ -1073,6 +1077,9 @@ pub enum MutationFault<F> {
         /// The rewind's target.
         to: BlockHeight,
     },
+    /// The inner source emitted an `Offer`; the family is Extend-only.
+    #[error("the inner source emitted an Offer; the mutation family is Extend-only")]
+    Offer,
     /// The candidate at `at` could not carry the mutation.
     #[error("{mutation} at height {at}: {cause}")]
     Unmutable {
@@ -1128,6 +1135,7 @@ impl<S: Source> Source for Mutated<'_, S> {
         let candidate = match event {
             IngestEvent::Extend(candidate) => candidate,
             IngestEvent::Rewind { to } => return self.fail(MutationFault::Rewind { to }),
+            IngestEvent::Offer(_) => return self.fail(MutationFault::Offer),
         };
         let produced = if height == self.at {
             match self

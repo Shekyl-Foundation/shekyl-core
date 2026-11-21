@@ -13,10 +13,11 @@
 
 use core::fmt;
 
-/// Which branch a block was written on. A layout-4 corpus writes every
-/// block as it extends the chain (a reorg is a rewind, then the new
-/// branch), so every line is [`Branch::Main`] until `CF-3` adds the
-/// `offer` record.
+/// Which branch a block was written on: [`Branch::Main`] for a block the
+/// corpus writes as an `extend`, [`Branch::Alt`] for one of a competing
+/// branch it writes as an `offer` (corpus layout 5). The line names the
+/// branch the block arrived on, not the chain the fork choice ends on: a
+/// branch the replay switches to keeps its `alt:<n>` lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Branch {
     /// The chain the corpus extends.
