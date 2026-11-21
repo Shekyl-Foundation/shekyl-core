@@ -51,7 +51,27 @@
 //!   is a dummy (discarded), `B` restarts reassembly, `E` completes it and
 //!   the reassembled bytes must open with an inner Levin header, which
 //!   becomes the message; reassembled inner messages are never recursively
-//!   reassembled;
+//!   reassembled.
+//!
+//! # A fragment train is bounded by its own inner header
+//!
+//! The inner header is read when its last byte arrives in the reassembly
+//! buffer, whichever fragment carries it, and judged there: its signature,
+//! its flags, its command's cap. From then on a fragment that does not end
+//! the train must leave the inner message incomplete, and the fragment
+//! that ends it is copied only as far as the inner message's end: its
+//! padding, which is less than that fragment's own body, is never copied.
+//! So an unfinished train holds fewer bytes than one inner message its
+//! command admits, and the reassembly buffer never holds more than that
+//! inner message. What a train does not bound is the bucket in front of
+//! it: one fragment's body waits in the receive buffer, up to the packet
+//! limit, until the bucket is complete. These checks are
+//! stricter than the oracle's, which judged the inner header only when the
+//! train ended (crate docs, "inner header judged on arrival", "train
+//! overrun", "inner dispatch class").
+//!
+//! Further:
+//!
 //! - classification: `S` + protocol version 1 → [`Received::Response`];
 //!   otherwise `Expect Response` non-zero → [`Received::Request`], zero →
 //!   [`Received::Notification`]. The version checked is the **logical
@@ -110,6 +130,10 @@ pub struct BucketReader {
     /// completed header/body instead of front-draining (see [`Self::compact`]).
     read_pos: usize,
     fragment: Vec<u8>,
+    /// The inner header of the train in [`Self::fragment`], read and
+    /// judged when its last byte arrived. `None` while the buffer holds
+    /// less than a header; reset wherever the buffer is cleared or taken.
+    inner: Option<BucketHead>,
     state: State,
     max_packet_size: u64,
     /// Set by the first [`Error`]. Every framing error is connection-fatal in
@@ -134,6 +158,7 @@ impl BucketReader {
             cache: Vec::new(),
             read_pos: 0,
             fragment: Vec::new(),
+            inner: None,
             state: State::Head,
             max_packet_size: INITIAL_MAX_PACKET_SIZE,
             failed: false,
@@ -348,6 +373,9 @@ impl BucketReader {
     /// Noise / fragment class handler. `None` = dummy or non-final fragment
     /// (nothing to deliver yet). `Some` = a complete logical message ready
     /// for classification.
+    ///
+    /// The train's bounds are applied here, before the fragment's body is
+    /// copied into the reassembly buffer (module docs).
     fn absorb_noise_or_fragment(
         &mut self,
         head: &BucketHead,
@@ -358,60 +386,120 @@ impl BucketReader {
         }
         if head.flags.contains(Flags::BEGIN) {
             self.fragment.clear();
+            self.inner = None;
         }
+        let ends = head.flags.contains(Flags::END);
+        let held_before = self.fragment.len();
+        let mut body = body;
+
+        // The inner header first: copy only the bytes that complete it, and
+        // judge it before anything behind it is copied.
+        if self.inner.is_none() {
+            let missing = HEADER_SIZE - held_before;
+            let take = missing.min(body.len());
+            self.fragment
+                .extend_from_slice(&self.cache[body.start..body.start + take]);
+            body.start += take;
+            if self.fragment.len() == HEADER_SIZE {
+                self.inner = Some(self.judge_inner_header()?);
+            }
+        }
+
+        if let Some(inner) = self.inner {
+            let inner_len = HEADER_SIZE
+                + usize::try_from(inner.payload_len).expect("bounded by max_packet_size");
+            if ends {
+                // The last fragment is the padded one: copy what the inner
+                // message still lacks and leave the padding where it is, so
+                // the buffer never holds more than the inner message. A
+                // body short of that is copied whole and refused below.
+                let lacking = inner_len.saturating_sub(self.fragment.len());
+                body.end = body.start + lacking.min(body.len());
+            } else {
+                // Divergence "train overrun": a fragment that does not end
+                // the train must leave the inner message incomplete.
+                let held = self.fragment.len() + body.len();
+                if held >= inner_len {
+                    return Err(Error::FragmentOverrun {
+                        inner: u64::try_from(inner_len).expect("buffer length fits in u64"),
+                        held: u64::try_from(held).expect("buffer length fits in u64"),
+                    });
+                }
+            }
+        }
+
         // Disjoint field borrows: append straight from the cursor window,
         // with no intermediate owned body.
         self.fragment.extend_from_slice(&self.cache[body]);
-        if !head.flags.contains(Flags::END) {
+        if !ends {
             return Ok(None); // more fragments to come
         }
 
         let assembled = std::mem::take(&mut self.fragment);
-        Ok(Some(self.take_reassembled_inner(assembled)?))
+        let inner = self.inner.take().ok_or(Error::FragmentTooSmall)?;
+        Ok(Some(take_reassembled_inner(inner, assembled)?))
     }
 
-    /// Parse the logical message out of a completed fragment train.
+    /// Read and judge the inner header a train's first [`HEADER_SIZE`]
+    /// bytes are, as soon as they are all here.
     ///
-    /// Two divergences live here — "inner-signature verify" and
-    /// "inner-length trim" (crate docs).
-    fn take_reassembled_inner(
-        &self,
-        mut assembled: Vec<u8>,
-    ) -> Result<(BucketHead, Vec<u8>), Error> {
-        if assembled.len() < HEADER_SIZE {
-            return Err(Error::FragmentTooSmall);
-        }
-        let header_bytes: &[u8; HEADER_SIZE] = assembled[..HEADER_SIZE]
+    /// Three divergences live here — "inner-signature verify", "inner
+    /// header judged on arrival" and "inner dispatch class" (crate docs).
+    fn judge_inner_header(&self) -> Result<BucketHead, Error> {
+        let header_bytes: &[u8; HEADER_SIZE] = self.fragment[..HEADER_SIZE]
             .try_into()
             .expect("static header slice");
         // Divergence "inner-signature verify" (C++ memcpys unchecked).
         let inner = BucketHead::read(header_bytes)?;
         let limit = self.limit_for(inner.command, inner.flags)?;
+        // Divergence "inner dispatch class": a train carries a request or a
+        // response. An inner dummy or fragment takes no command cap.
+        if !inner
+            .flags
+            .intersects(Flags::REQUEST.union(Flags::RESPONSE))
+        {
+            return Err(Error::InnerNotDispatch {
+                flags: inner.flags.bits(),
+            });
+        }
         if inner.payload_len > limit {
-            return Err(Error::OversizePacket {
+            return Err(Error::InnerOversize {
                 claimed: inner.payload_len,
                 limit,
             });
         }
-        let available =
-            u64::try_from(assembled.len() - HEADER_SIZE).expect("buffer length fits in u64");
-        // Divergence "inner-length trim": the inner length must fit, and the
-        // payload is trimmed to it (C++ forwards the zero padding).
-        if inner.payload_len > available {
-            return Err(Error::InnerLengthTruncated {
-                claimed: inner.payload_len,
-                available,
-            });
-        }
-        let end =
-            HEADER_SIZE + usize::try_from(inner.payload_len).expect("bounded by max_packet_size");
-        // Reuse the reassembly buffer as the payload: drop the trailing
-        // padding, then shift the inner header off the front. One memmove,
-        // no second allocation.
-        assembled.truncate(end);
-        assembled.drain(..HEADER_SIZE);
-        Ok((inner, assembled))
+        Ok(inner)
     }
+}
+
+/// Cut the logical message out of a completed fragment train whose inner
+/// header was already judged. `assembled` is the inner header and as much
+/// of its payload as the train carried, and never more than the inner
+/// message: the last fragment's padding was not copied.
+///
+/// Divergence "inner-length trim" (crate docs).
+fn take_reassembled_inner(
+    inner: BucketHead,
+    mut assembled: Vec<u8>,
+) -> Result<(BucketHead, Vec<u8>), Error> {
+    let available =
+        u64::try_from(assembled.len() - HEADER_SIZE).expect("buffer length fits in u64");
+    // Divergence "inner-length trim": the inner length must fit, and the
+    // payload is exactly it (C++ forwards the zero padding).
+    if inner.payload_len > available {
+        return Err(Error::InnerLengthTruncated {
+            claimed: inner.payload_len,
+            available,
+        });
+    }
+    debug_assert_eq!(
+        available, inner.payload_len,
+        "the reassembly buffer never holds more than its inner message"
+    );
+    // Reuse the reassembly buffer as the payload: shift the inner header
+    // off the front. One memmove, no second allocation.
+    assembled.drain(..HEADER_SIZE);
+    Ok((inner, assembled))
 }
 
 /// Classify a fully-parsed logical message.

@@ -239,7 +239,7 @@ impl Driver {
             effects.push(Effect::Published { txs: published });
         }
 
-        for (peer, blobs) in self.zone.flush_fluff(now, false) {
+        for (peer, blobs) in self.zone.flush_fluff(now, false, rng) {
             effects.push(Effect::Fluff { peer, blobs });
         }
 
@@ -273,13 +273,16 @@ impl Driver {
         effects
     }
 
-    /// Release every pending fluff batch regardless of deadline.
+    /// Release one notice from every pending fluff queue regardless of
+    /// deadline.
     ///
     /// What the daemon's `run_fluff()` hook drives. It runs the same release
-    /// path as [`Driver::poll`]; only which batches count as due differs.
-    pub fn force_fluff(&mut self, now: Millis) -> Vec<Effect> {
+    /// path as [`Driver::poll`]; only which batches count as due differs. A
+    /// queue over the release cap keeps its remainder and draws a deadline
+    /// for it, which is what `rng` is for.
+    pub fn force_fluff<R: RelayRng + ?Sized>(&mut self, now: Millis, rng: &mut R) -> Vec<Effect> {
         self.zone
-            .flush_fluff(now, true)
+            .flush_fluff(now, true, rng)
             .into_iter()
             .map(|(peer, blobs)| Effect::Fluff { peer, blobs })
             .collect()

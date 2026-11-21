@@ -18,7 +18,10 @@
 //!
 //! - Flags carry **neither** [`Flags::REQUEST`] nor [`Flags::RESPONSE`] →
 //!   noise / fragment class. The command field is filler (often 0). Bound
-//!   is the packet / framing limit. Do **not** reject on the id.
+//!   is the packet / framing limit. Do **not** reject on the id. That is
+//!   the class of a bucket on the wire. The inner message a fragment train
+//!   reassembles to is never of this class: [`crate::BucketReader`]
+//!   refuses one when it reads the inner header (PWD-B12).
 //! - Flags carry Q or S → dispatch. The command must convert to
 //!   [`Command`], and the payload is then bounded by that command's
 //!   cap.
@@ -34,10 +37,13 @@
 //! Each [`Command`] arm has a named cap. The handshake peerlist's
 //! derivation terminates on its length bound. 2008 / 2009 / 2010 keep their
 //! inherited envelopes until a tighter bound exists on this seam — they do
-//! **not** take the packet limit. 2002 (PWD-B12), the body response 2014,
-//! and the bundle relay and bundle-body response 2015 / 2017 sit at
-//! [`DEFAULT_MAX_PACKET_SIZE`]: a bundle's size grows with the drawable
-//! pairs `D`, which is chain state (`crate::CAP_NEW_BUNDLE`).
+//! **not** take the packet limit. 2002 is bounded by PWD-B12's release
+//! cap, [`CAP_NEW_TRANSACTIONS`]: a notice of one largest transaction,
+//! which is also what the relay's flush fills a notice to. The body
+//! response 2014 and the bundle relay and bundle-body response 2015 / 2017
+//! sit at [`DEFAULT_MAX_PACKET_SIZE`](crate::DEFAULT_MAX_PACKET_SIZE): a
+//! bundle's size grows with the drawable pairs `D`, which is chain state
+//! (`crate::CAP_NEW_BUNDLE`).
 //!
 //! # Retired
 //!
@@ -52,12 +58,12 @@
 
 use shekyl_peer_bounds::DISCLOSE_COUNT;
 
-use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
+use crate::header::Flags;
 use crate::{
-    Error, CAP_NEW_BUNDLE, CAP_REQUEST_BODIES, CAP_REQUEST_BUNDLE_BODIES, CAP_REQUEST_HEADERS,
-    CAP_RESPONSE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE,
-    COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_BUNDLE,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
+    Error, CAP_NEW_BUNDLE, CAP_NEW_TRANSACTIONS, CAP_REQUEST_BODIES, CAP_REQUEST_BUNDLE_BODIES,
+    CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, CAP_RESPONSE_HEADERS,
+    COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    NOTIFY_NEW_BUNDLE, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
     NOTIFY_REQUEST_BUNDLE_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS,
     NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_BUNDLE_BODIES, NOTIFY_RESPONSE_HEADERS,
 };
@@ -110,9 +116,6 @@ pub(crate) const fn hash_list_cap(count: u64) -> u64 {
 /// envelope the C++ reconstructed from 250 entries is gone with the C++.
 const CAP_HANDSHAKE: u64 =
     DISCLOSE_COUNT as u64 * PEERLIST_ENTRY_MAX_ENCODED_BYTES + HANDSHAKE_FIXED_MAX_BYTES;
-
-/// PWD-B12 has not bound the fluff batch.
-const CAP_NEW_TRANSACTIONS: u64 = DEFAULT_MAX_PACKET_SIZE;
 
 /// Inherited 4 MiB compact-announce envelope until `entry_max` can take
 /// consensus state. Not the packet limit — PWD-B3 refused that 25× jump.
@@ -393,7 +396,7 @@ mod tests {
             ingress_payload_cap(NOTIFY_NEW_COMPACT_BLOCK, Flags::REQUEST).unwrap(),
             CAP_NEW_COMPACT_BLOCK
         );
-        assert_ne!(CAP_NEW_COMPACT_BLOCK, DEFAULT_MAX_PACKET_SIZE);
+        assert_ne!(CAP_NEW_COMPACT_BLOCK, crate::DEFAULT_MAX_PACKET_SIZE);
     }
 
     /// The inherited block and chain requests are retired (CS-5): a peer

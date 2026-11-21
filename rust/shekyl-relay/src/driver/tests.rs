@@ -437,7 +437,7 @@ fn forcing_runs_the_same_paths_as_the_deadline() {
         assert!(d.poll(0, &mut rng).is_empty(), "not due at t=0");
     }
     assert_eq!(
-        d.force_fluff(0),
+        d.force_fluff(0, &mut rng),
         vec![Effect::Fluff {
             peer: id(1),
             blobs: vec![TxBlob::from([9u8].as_slice())]

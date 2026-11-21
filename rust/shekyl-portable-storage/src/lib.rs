@@ -46,6 +46,7 @@ mod varint;
 pub use error::Error;
 pub use limits::Limits;
 pub use value::{Array, Section, Value};
+pub use varint::varint_len;
 
 /// 9-byte header: `SIGNATUREA` `0x01011101`, `SIGNATUREB` `0x01020101`,
 /// version `1`. Little-endian on the wire: `01 11 01 01 01 01 02 01 01`.
