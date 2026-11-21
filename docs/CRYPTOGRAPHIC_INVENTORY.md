@@ -141,7 +141,7 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-17, counted from the TSV's production rows): 129 registered rows across the five mechanisms —
+**Census (dated snapshot, 2026-11-21, counted from the TSV's production rows): 129 registered rows across the five mechanisms —
 134 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
 sums to 134: the five mechanisms 129, plus the two micro-buckets, 1 + 4.) **This table is a
@@ -297,10 +297,16 @@ store check, never read by consensus. Its step is pinned by two vectors
 computed with a pure-Python cSHAKE256 checked against NIST SP 800-185
 sample 3, not regenerated from this crate's output. Mechanism 1 is 57.
 
+The 2026-11-21 refresh retires one mechanism-2 info, `shekyl-prefs-hmac-v1`:
+the wallet prefs file and its HMAC key are deleted (Rick, 2026-11-21;
+`V3_WALLET_DECISION_LOG.md`). The row stays in the registry as `retired`,
+so the binding gate refuses the label's reuse. Mechanism 2 is 46, and the
+total is back to 129 (134 with the two micro-buckets).
+
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
 | 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 57 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 40 infos | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 39 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
