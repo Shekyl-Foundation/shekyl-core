@@ -253,38 +253,65 @@ What crosses the FFI after the cutover, and nothing else:
    is released last, after both. `run` and `stop` are `noexcept` and catch every C++ exception;
    `run` returns its status to Rust, which becomes the exit status.
 
-   **An inherited ignore of the interrupt stays ignored, and the start
-   says so** (Rick, 2026-11-08). The observation is `shekyl-daemon`
-   `signals::InheritedInterrupt`, read once at start, before anything
-   installs a handler. On Unix the read is `shekyl-process`
-   `interrupt::sigint_is_ignored`.
-   - **Unix:** `SIGINT`'s disposition, read with `sigaction` and a null new
-     action. The request is `SIG_IGN`. A non-interactive shell sets that for
-     a background list (`sh -c 'shekyld &'`), and `trap "" INT` sets it too.
-     An interactive `&` does not: job control leaves the disposition alone,
-     and the terminal signals the foreground process group. `nohup` sets
-     `SIGHUP` to `SIG_IGN`, not `SIGINT`. When the disposition is `SIG_IGN`
-     the `SIGINT` stream is not opened, so it stays as the parent left it,
-     and the start announces "Ctrl-C is off because the program that started
-     this node asked for it. Stop it with SIGTERM or the service stop."
-     `SIGTERM` is unchanged. Tested by a daemon whose `SIGINT` is set to
-     `SIG_IGN` or `SIG_DFL` between fork and exec
-     (`tests/interrupt_inherited_ignore.rs`).
+   **The stop triggers are one module, `shekyl-process` `stop`, shared by
+   every Shekyl program**: `shekyld`, `shekyl-wallet-rpc`, `shekyl-cli` and
+   `shekyl-rpc-tunnel` (Rick, 2026-11-20). On Unix they are `SIGTERM`,
+   `SIGINT` and `SIGHUP`; on Windows, every console event. `Stops::arm`
+   opens the streams on a thread and runtime of their own, which live as
+   long as the process, so a program's runtime ending does not end them.
+   The first stop is a clean stop. In the daemon it reaches the one latch
+   (`shekyl-daemon` `stop`) beside the RPC's `daemon_stop`, the owner's
+   socket going, the owning connection closing and a fatal end. A signal
+   that arrives after a stop that was not a signal is a first stop.
+   - **A second stop of any kind exits at once with status 130 and no
+     cleanup** (Rick, 2026-10-14, restated 2026-11-20): `_exit` on Unix,
+     `TerminateProcess` on Windows, from the stops' own thread. Kill safety
+     is the guarantee: every program's next start takes over or clears what
+     a kill left (the rendezvous record, a socket file, the registry
+     value).
+   - **Each program arms where its stop starts to matter.** The daemon arms
+     at step 6, after the node opens; a stop before that is the signal's
+     default death. The wallet RPC arms before it binds its listener, so a
+     stop in the bind window is a clean stop that removes the socket. The
+     tunnel arms before its listener too. The CLI arms when it starts its
+     in-process wallet RPC server.
+
+   **An inherited ignore of a stop stays ignored** (Rick, 2026-11-08 for
+   the daemon; every program, 2026-11-20). The observation is
+   `shekyl-process` `stop::Inherited`, read once at start, before anything
+   installs a handler.
+   - **Unix:** the dispositions of `SIGINT` and `SIGHUP`, read with
+     `sigaction` and a null new action. The request is `SIG_IGN`. A
+     non-interactive shell sets it on `SIGINT` for a background list
+     (`sh -c 'shekyld &'`), and `trap "" INT` sets it too. An interactive
+     `&` does not: job control leaves the disposition alone, and the
+     terminal signals the foreground process group. `nohup` sets it on
+     `SIGHUP`. An ignored signal's stream is not opened, so it stays as the
+     parent left it. An ignored `SIGINT` is announced once (IG-14), naming
+     the program: "Ctrl-C is off because the program that started shekyld
+     asked for it. Stop it with SIGTERM or the service stop." An ignored
+     `SIGHUP` is not announced: keeping it is what `nohup` asks for.
+     `SIGTERM` is always taken. Tested by a child whose dispositions are
+     set between fork and exec (`rust/shekyl-process/tests/stop_triggers.rs`,
+     `tests/interrupt_inherited_ignore.rs`, and the wallet RPC's
+     `tests/stops.rs`).
    - **Windows:** the request is the inherited "ignore Ctrl-C" attribute
      (`SetConsoleCtrlHandler(NULL, TRUE)`). No documented call reads it, so
-     the observation is `Unreadable` and the node does not invent a value.
+     the observation is unreadable and no program invents a value.
      `start /b` does not set the attribute; it only shares the parent's
-     console. The daemon opens its console handlers either way. Opening them
-     does not clear the attribute, and Windows does not deliver Ctrl-C while
-     it is set. Every start announces the stops that work whatever it holds:
-     "Stop this node with Ctrl-Break or by closing its window. Ctrl-C stops
+     console. Every program opens its console handlers either way. Opening
+     them does not clear the attribute, and Windows does not deliver Ctrl-C
+     while it is set. The daemon, the wallet RPC and the tunnel announce on
+     every start the stops that work whatever it holds, naming the program:
+     "Stop shekyld with Ctrl-Break or by closing its window. Ctrl-C stops
      it too, unless the program that started it asked for Ctrl-C to be
-     ignored, which Windows does not let this node read." `shekyld` has no
-     service-control handler, so the line names no service stop. Measured on
-     Windows Server 2025, 2026-11-08: a daemon started from a process chain
-     that ignored Ctrl-C did not stop on it, and Tor, which shares its
-     console, did not either; with the attribute cleared before the start,
-     Ctrl-C stopped it in 1.5 s (`TOR_SUPERVISOR.md` §7).
+     ignored, which Windows does not let shekyld read." The CLI does not:
+     its console is the operator's own. `shekyld` has no service-control
+     handler, so the line names no service stop. Measured on Windows Server
+     2025, 2026-11-08: a daemon started from a process chain that ignored
+     Ctrl-C did not stop on it, and Tor, which shares its console, did not
+     either; with the attribute cleared before the start, Ctrl-C stopped it
+     in 1.5 s (`TOR_SUPERVISOR.md` §7).
 
 `tools::signal_handler::install` in `Daemon::run`
 (line 272 of `src/daemon/daemon.cpp` at `e8838b0095`) is deleted:
