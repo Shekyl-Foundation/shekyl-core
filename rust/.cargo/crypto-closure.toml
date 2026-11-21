@@ -119,13 +119,13 @@ reason = "Block buffering inside every RustCrypto digest (SHA-2, SHA-3, Blake2).
 
 [[package]]
 name = "borsh"
-version = "1.6.1"
-reason = "Serialization of DKG and FROST messages (dkg, modular-frost) on the multisig path."
+version = "1.8.1"
+reason = "Serialization of DKG and FROST messages (dkg, modular-frost) on the multisig path. 1.8.1 admitted after diffing src: optional uuid impls (not enabled), import order, sort_by_key in the hash-map serializer (same order)."
 
 [[package]]
 name = "borsh-derive"
-version = "1.6.1"
-reason = "Derives borsh encodings of DKG and FROST messages."
+version = "1.8.1"
+reason = "Derives borsh encodings of DKG and FROST messages. 1.8.1 admitted after diffing src: several #[borsh(...)] attributes on one item are merged instead of refused; a single attribute parses and expands as before."
 
 [[package]]
 name = "byteorder"
@@ -134,18 +134,18 @@ reason = "Little/big-endian reads inside merlin's transcript."
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
-reason = "Byte buffers under borsh's DKG and FROST encodings."
+version = "1.12.2"
+reason = "Byte buffers under borsh's DKG and FROST encodings. 1.12.2 admitted after reading the 1.12.0-1.12.2 CHANGELOG: fixes (sign extension in try_get_int, a panic in get_int with zero bytes, a panic-safe Box::new, a shared reference released on truncate to zero, chunk order in Chain::chunks_vectored), BufMut fast paths, extend_from_within and try_unsplit added."
 
 [[package]]
 name = "cfg-if"
-version = "1.0.4"
-reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2."
+version = "1.0.5"
+reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2. 1.0.5 admitted after diffing src: a doc note pointing at core's cfg_select!."
 
 [[package]]
 name = "cfg_aliases"
-version = "0.2.1"
-reason = "borsh 1.6's build.rs: the `hash_collections` cfg alias its DKG and FROST message encodings compile with."
+version = "0.2.2"
+reason = "borsh 1.6's build.rs: the `hash_collections` cfg alias its DKG and FROST message encodings compile with. 0.2.2 admitted after diffing src: trailing semicolons dropped from the macro's recursive calls and a doc example."
 
 [[package]]
 name = "chacha20"
@@ -409,8 +409,8 @@ reason = "Keccak-f permutation under sha3 and merlin: Shekyl's Keccak hashes, ha
 
 [[package]]
 name = "libc"
-version = "0.2.184"
-reason = "The getrandom syscall and CPU-feature probes under getrandom, cpufeatures and rand."
+version = "0.2.191"
+reason = "The getrandom syscall and CPU-feature probes under getrandom, cpufeatures and rand. 0.2.191 admitted after reading the 0.2.185-0.2.191 CHANGELOG and checking the diff for every libc item getrandom 0.2.17 and cpufeatures use (getrandom, SYS_getrandom, GRND_*, getentropy, getauxval, AT_HWCAP and the HWCAP bits, sysctl/sysctlbyname, KERN_ARND, errno locations, open/read/poll/close, pthread mutexes, dlsym): none changes value or signature on Linux, Android, macOS, FreeBSD or NetBSD; the GRND_* constants move with DragonFly's split from freebsdlike (DragonFly's own values, not a Shekyl target)."
 
 [[package]]
 name = "merlin"
@@ -504,8 +504,8 @@ reason = "curve25519-dalek 4.1.3's build.rs: reads the compiler's channel and ve
 
 [[package]]
 name = "rustversion"
-version = "1.0.22"
-reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims."
+version = "1.0.23"
+reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims. 1.0.23 admitted after diffing src: version string and a lint allowance."
 
 [[package]]
 name = "schnorr-signatures"
@@ -524,18 +524,18 @@ reason = "Parses the compiler version for rustc_version, in curve25519-dalek's b
 
 [[package]]
 name = "serde"
-version = "1.0.228"
-reason = "Serialization of keys and signatures (bip39, ed25519-dalek, x25519-dalek, serdect)."
+version = "1.0.229"
+reason = "Serialization of keys and signatures (bip39, ed25519-dalek, x25519-dalek, serdect). 1.0.229 admitted after diffing src: the in-place seq visitors reborrow through &mut *self.0, a lint renamed, never_type gated to docs."
 
 [[package]]
 name = "serde_core"
-version = "1.0.228"
-reason = "serde's core traits."
+version = "1.0.229"
+reason = "serde's core traits. 1.0.229: the same in-place seq visitor reborrow as serde."
 
 [[package]]
 name = "serde_derive"
-version = "1.0.228"
-reason = "Derives serde encodings of key and signature types."
+version = "1.0.229"
+reason = "Derives serde encodings of key and signature types. 1.0.229 admitted after diffing src: a port from syn 2 to syn 3 (already in the lock) with iterator chains written as loops; the expansion's field and bound logic is unchanged. Any change to generated encodings would show in the persisted-schema snapshots (rule 42) and the key/signature round-trip tests."
 
 [[package]]
 name = "serdect"
@@ -584,13 +584,13 @@ reason = "Helper traits under bitvec, elliptic-curve and wyz."
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
-reason = "Error types of dkg, dkg-recovery and modular-frost."
+version = "2.0.21"
+reason = "Error types of dkg, dkg-recovery and modular-frost. 2.0.21 admitted after diffing src: the version string only."
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
-reason = "Derives thiserror's error types."
+version = "2.0.21"
+reason = "Derives thiserror's error types. 2.0.21 admitted after diffing src: format-string parsing understands turbofish generics; clippy allowances; no change to the generated Display/Error impls otherwise."
 
 [[package]]
 name = "tinyvec"
