@@ -5151,6 +5151,7 @@ dependencies = [
  "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",
+ "tokio",
  "tracing",
  "windows-sys 0.61.2",
 ]

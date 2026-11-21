@@ -29,6 +29,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_process::stop::{Inherited, Stops};
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
@@ -553,16 +554,39 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     }
 }
 
-/// Run the server until a stop signal, then close the open wallet and
-/// return. Blocks the calling task.
+/// The program's name in the line its start says about its stops.
+const PROGRAM: &str = "shekyl-wallet-rpc";
+
+/// Run the server until a stop, then close the open wallet and return.
+/// Blocks the calling task. [`arm_server`], then [`ArmedServer::serve`].
 ///
-/// The stop signals are SIGTERM, SIGINT and SIGHUP on Unix, and on
-/// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
-/// events ([`crate::stop_signals`]). The first stops the listener, lets
-/// in-flight requests finish, and closes the wallet through the
-/// `close_wallet` choreography with the shutdown save; a second exits at
-/// once.
+/// The stops are `shekyl_process::stop`'s: `SIGTERM`, `SIGINT` and
+/// `SIGHUP` on Unix, every console event on Windows. The first stops the
+/// listener, lets in-flight requests finish, and closes the wallet through
+/// the `close_wallet` choreography with the shutdown save; a second exits
+/// at once with status 130 and no cleanup.
 pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
+    arm_server(config)?.serve().await
+}
+
+/// A checked configuration whose stops are armed, before anything that
+/// needs a clean stop to be released exists: a stop from here on, the bind
+/// included, is a clean stop that removes the socket.
+pub struct ArmedServer {
+    config: ServerConfig,
+    stops: Stops,
+}
+
+/// Check `config`, say what the start owes, and arm the stops.
+///
+/// An inherited ignore of `SIGINT` is kept and said once on standard
+/// error; on Windows every start names the stops that always work
+/// (IG-14; Rick, 2026-11-20).
+///
+/// # Errors
+/// The configuration is refused, or the stops could not be armed.
+pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
+    let inherited = Inherited::at_start();
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
     // The binary's own `--daemon-address`, said once at startup. The
@@ -571,14 +595,59 @@ pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     for warning in daemon_disclosures(&config) {
         warn!("{warning}");
     }
-    let bound = BoundListener::bind(&config.listen).await?;
-    let state = AppState::new(config);
-    let app = build_router(state.clone());
+    if let Some(line) = inherited.line(PROGRAM) {
+        eprintln!("{PROGRAM}: {line}");
+    }
+    let stops = Stops::arm(inherited)
+        .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
+    Ok(ArmedServer { config, stops })
+}
 
-    crate::stop_signals::watch(Arc::clone(&state), crate::stop_signals::AfterClose::Return)?;
-    bound.log_ready("shekyl-wallet-rpc listening")?;
-    serve_then_close(bound, app, state).await?;
-    Ok(())
+impl ArmedServer {
+    /// Bind, serve until the first stop, then close the open wallet.
+    ///
+    /// # Errors
+    /// The listener could not be bound or served.
+    pub async fn serve(self) -> Result<(), BoxErr> {
+        let Self { config, stops } = self;
+        let bound = BoundListener::bind(&config.listen).await?;
+        let state = AppState::new(config);
+        let app = build_router(state.clone());
+        watch_stops(stops, Arc::clone(&state), AfterClose::Return);
+        bound.log_ready("shekyl-wallet-rpc listening")?;
+        serve_then_close(bound, app, state).await?;
+        Ok(())
+    }
+}
+
+/// The status a host that ends on its stop exits with once the wallet is
+/// closed: 128 plus `SIGINT`, the status a shell gives a program its
+/// interrupt ended.
+const EXIT_STOPPED: i32 = 130;
+
+/// What the watcher does once the wallet is closed.
+#[derive(Clone, Copy)]
+enum AfterClose {
+    /// Nothing: the host's own serve call returns.
+    Return,
+    /// End the process with [`EXIT_STOPPED`]. For a host whose main thread
+    /// is not waiting on the server (`shekyl-cli`).
+    Exit,
+}
+
+/// The first stop asks `state`'s server to stop; the serve task closes
+/// the open wallet. A second stop is `shekyl_process::stop`'s: it exits at
+/// once.
+fn watch_stops(mut stops: Stops, state: Arc<AppState>, after: AfterClose) {
+    tokio::spawn(async move {
+        let first = stops.first().await;
+        info!("stop requested by {first}: closing the open wallet; a second stop exits at once");
+        state.shutdown.notify_one();
+        if let AfterClose::Exit = after {
+            state.closed.notified().await;
+            std::process::exit(EXIT_STOPPED);
+        }
+    });
 }
 
 /// Serve until shutdown is requested, then close the open wallet — the one
@@ -862,21 +931,20 @@ pub struct InProcessHandle {
 }
 
 impl InProcessHandle {
-    /// Make the process's stop signals (SIGTERM, SIGINT, SIGHUP; on
-    /// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and
-    /// shutdown events) stop this server, close the open wallet, and then
-    /// end the process with status 130; a second signal ends it at once.
-    /// For a host whose main thread is not waiting on the server
-    /// (`shekyl-cli`). Call from inside the host's runtime.
+    /// Make the process's stops (`shekyl_process::stop`: SIGTERM, SIGINT,
+    /// SIGHUP; on Windows every console event) stop this server, close the
+    /// open wallet, and then end the process with status 130; a second
+    /// stop ends it at once. For a host whose main thread is not waiting
+    /// on the server (`shekyl-cli`), which read `inherited` before
+    /// anything installed a handler. Call from inside the host's runtime.
     ///
     /// # Errors
     ///
-    /// The signal handlers could not be registered.
-    pub fn exit_on_stop_signal(&self) -> std::io::Result<()> {
-        crate::stop_signals::watch(
-            Arc::clone(&self.state),
-            crate::stop_signals::AfterClose::Exit,
-        )
+    /// The stops could not be armed.
+    pub fn exit_on_stop_signal(&self, inherited: Inherited) -> std::io::Result<()> {
+        let stops = Stops::arm(inherited)?;
+        watch_stops(stops, Arc::clone(&self.state), AfterClose::Exit);
+        Ok(())
     }
 
     /// Request graceful shutdown and wait for the serve task to finish; the
