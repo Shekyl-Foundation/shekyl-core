@@ -66,6 +66,9 @@ fn run_child_if_asked() -> bool {
     let Ok(mode) = std::env::var(CHILD_MARKER) else {
         return false;
     };
+    // The test harness has printed `test <name> ... ` with no newline: end
+    // that line, so `served` is a line of its own.
+    println!();
     let dir = PathBuf::from(std::env::var_os(CHILD_DIR).expect("the child's directory"));
     let wallets = dir.join("wallets");
     std::fs::create_dir_all(&wallets).expect("the wallet directory");

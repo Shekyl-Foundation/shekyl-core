@@ -60,6 +60,9 @@ fn run_child_if_asked() -> bool {
     let Ok(mode) = std::env::var(CHILD_MARKER) else {
         return false;
     };
+    // The test harness has printed `test <name> ... ` with no newline: end
+    // that line, so each line the child says is its own.
+    println!();
     let inherited = Inherited::at_start();
     if let Some(line) = inherited.line(PROGRAM) {
         println!("said: {line}");
