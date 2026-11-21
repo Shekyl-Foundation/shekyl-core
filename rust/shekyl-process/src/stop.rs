@@ -11,8 +11,11 @@
 //!   event (Ctrl-C, Ctrl-Break, the window's close, logoff and shutdown).
 //!   The first is a clean stop: the program closes what it holds and exits.
 //! - **A second stop exits at once** with [`EXIT_SECOND_STOP`] and no
-//!   cleanup, whichever trigger it is (Rick, 2026-10-14, restated
-//!   2026-11-20). Every program is safe to kill: its next start takes over
+//!   cleanup (Rick, 2026-10-14, restated 2026-11-20): `SIGINT`, `SIGTERM`
+//!   or any Windows console event after the first stop. **A `SIGHUP` never
+//!   counts as the second stop** (Rick, 2026-11-21): the escape exists for
+//!   a person pressing Ctrl-C again, and a closing terminal under bash
+//!   sends two hangups, the kernel's and the shell's, 0.1 ms apart. Every program is safe to kill: its next start takes over
 //!   or clears what a kill left.
 //! - **An inherited ignore is kept** ([`Inherited`], read before any handler
 //!   is installed). On Unix an ignored `SIGINT` is not taken and the start
@@ -89,6 +92,24 @@ impl Trigger {
             Self::Logoff => "logoff",
             #[cfg(windows)]
             Self::Shutdown => "shutdown",
+        }
+    }
+}
+
+impl Trigger {
+    /// Whether this trigger, arriving after the first stop, exits at once.
+    /// Every trigger but `SIGHUP` does (Rick, 2026-11-21).
+    #[must_use]
+    pub fn counts_as_a_second_stop(self) -> bool {
+        match self {
+            #[cfg(unix)]
+            Self::Hangup => false,
+            #[cfg(unix)]
+            Self::Interrupt | Self::Terminate => true,
+            #[cfg(windows)]
+            Self::CtrlC | Self::CtrlBreak | Self::WindowClose | Self::Logoff | Self::Shutdown => {
+                true
+            }
         }
     }
 }
@@ -269,7 +290,8 @@ impl Stops {
 }
 
 /// A trigger, from the owner's thread: the first stop of the current arm,
-/// or a second stop, which exits at once.
+/// or a second stop, which exits at once. A `SIGHUP` after the first stop
+/// is not a second stop: it is dropped.
 fn deliver(trigger: Trigger) {
     let arm = CURRENT
         .lock()
@@ -279,7 +301,10 @@ fn deliver(trigger: Trigger) {
         return;
     };
     if arm.borrow().is_some() {
-        exit_at_once();
+        if trigger.counts_as_a_second_stop() {
+            exit_at_once();
+        }
+        return;
     }
     arm.send_replace(Some(trigger));
 }

@@ -263,12 +263,18 @@ What crosses the FFI after the cutover, and nothing else:
    (`shekyl-daemon` `stop`) beside the RPC's `daemon_stop`, the owner's
    socket going, the owning connection closing and a fatal end. A signal
    that arrives after a stop that was not a signal is a first stop.
-   - **A second stop of any kind exits at once with status 130 and no
-     cleanup** (Rick, 2026-10-14, restated 2026-11-20): `_exit` on Unix,
-     `TerminateProcess` on Windows, from the stops' own thread. Kill safety
-     is the guarantee: every program's next start takes over or clears what
-     a kill left (the rendezvous record, a socket file, the registry
-     value).
+   - **A second stop exits at once with status 130 and no cleanup** (Rick,
+     2026-10-14, restated 2026-11-20): `SIGINT`, `SIGTERM` or any Windows
+     console event after the first stop, through `_exit` on Unix and
+     `TerminateProcess` on Windows, from the stops' own thread. **A `SIGHUP`
+     never counts as the second stop** (Rick, 2026-11-21): the escape is for
+     a person pressing Ctrl-C again, and a closing terminal under bash sends
+     two hangups 0.1 ms apart, the kernel's and the shell's. Kill safety is
+     the guarantee: every program's next start takes over or clears what a
+     kill left (the rendezvous record, a socket file, the registry value).
+     The systemd units count exit 130 as clean (`SuccessExitStatus=130`):
+     an operator forced the stop, so the unit does not restart it, as the
+     FreeBSD scripts already did not.
    - **Each program arms where its stop starts to matter.** The daemon arms
      at step 6, after the node opens; a stop before that is the signal's
      default death. The wallet RPC arms before it binds its listener, so a
