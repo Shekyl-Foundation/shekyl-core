@@ -23,13 +23,38 @@ pub(crate) mod support {
 
     /// Measure `sign_transaction` FCMP proof blob size for a KAT grid cell.
     pub(crate) fn measure_fcmp_proof_len(n_in: usize, tree_depth: u8) -> Result<usize, String> {
-        measure_kat_sign(n_in, tree_depth).map(|signed| signed.fcmp_proof.len())
+        kat_cell(n_in, tree_depth)?
+            .sign()
+            .map(|signed| signed.fcmp_proof.len())
     }
 
-    fn measure_kat_sign(
-        n_in: usize,
-        tree_depth: u8,
-    ) -> Result<shekyl_tx_builder::SignedProofs, String> {
+    /// One KAT grid cell, built and ready to sign: everything
+    /// `sign_transaction` reads, so a caller can time the signing alone.
+    pub(crate) struct KatCell {
+        spend_inputs: Vec<SpendInput>,
+        output: OutputInfo,
+        fee: AtomicUnits,
+        tree: TreeContext,
+        prefix_hash: shekyl_types::PrefixHash,
+    }
+
+    impl KatCell {
+        /// `sign_transaction` over this cell: the Bulletproofs+ range proof,
+        /// the hybrid PQC authorizations and the FCMP++ membership proof.
+        pub(crate) fn sign(&self) -> Result<shekyl_tx_builder::SignedProofs, String> {
+            sign_transaction(
+                &shekyl_network::Network::Testnet.network_id(),
+                self.prefix_hash,
+                &self.spend_inputs,
+                std::slice::from_ref(&self.output),
+                self.fee,
+                &self.tree,
+            )
+            .map_err(|e| format!("sign_transaction: {e}"))
+        }
+    }
+
+    pub(crate) fn kat_cell(n_in: usize, tree_depth: u8) -> Result<KatCell, String> {
         if n_in == 0 || n_in > 8 || tree_depth == 0 || tree_depth > 24 {
             return Err("grid cell out of bounds".into());
         }
@@ -172,14 +197,47 @@ pub(crate) mod support {
             &tx_extra,
         );
 
-        sign_transaction(
-            &shekyl_network::Network::Testnet.network_id(),
+        Ok(KatCell {
+            spend_inputs,
+            output,
+            fee: AtomicUnits::from_raw(fee),
+            tree,
             prefix_hash,
-            &spend_inputs,
-            &[output],
-            AtomicUnits::from_raw(fee),
-            &tree,
-        )
-        .map_err(|e| format!("sign_transaction: {e}"))
+        })
+    }
+
+    /// The signing cost a wallet pays per transfer, at the shapes a user
+    /// meets: wall time of `sign_transaction` alone (the cell is built
+    /// outside the timed region), median of `REPS` runs, in a release
+    /// build. The FCMP++ membership proof dominates it, and every
+    /// non-vartime multiexp in that prover takes secret scalars, so this
+    /// is the figure that prices a change to multiexp's constant-time
+    /// selection (rule 76: read it on the floor device). Diagnostic, not a
+    /// gate: it prints, and asserts only that every cell signs.
+    #[test]
+    #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
+    fn time_sign_transaction_by_shape() {
+        const REPS: usize = 5;
+        const SHAPES: [(usize, u8); 6] = [(1, 1), (2, 1), (8, 1), (1, 4), (2, 4), (8, 4)];
+        println!("sign_transaction wall time, median of {REPS} (ms):");
+        for (n_in, tree_depth) in SHAPES {
+            let cell =
+                kat_cell(n_in, tree_depth).unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+            let mut ms: Vec<f64> = (0..REPS)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    cell.sign()
+                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+                    start.elapsed().as_secs_f64() * 1e3
+                })
+                .collect();
+            ms.sort_by(f64::total_cmp);
+            println!(
+                "  inputs={n_in} depth={tree_depth}: median {:.1} min {:.1} max {:.1}",
+                ms[REPS / 2],
+                ms[0],
+                ms[REPS - 1]
+            );
+        }
     }
 }
