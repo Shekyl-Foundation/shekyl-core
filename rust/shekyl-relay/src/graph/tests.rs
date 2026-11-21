@@ -86,7 +86,7 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
         .get_mut(&id(1))
         .expect("peer present")
         .queued
-        .push(TxBlob::from([0xAAu8].as_slice()));
+        .push_back(TxBlob::from([0xAAu8].as_slice()));
 
     // The repeat arrives as inbound, so it must not merge again. `or_insert`
     // keeps the outbound direction and the queued batch.

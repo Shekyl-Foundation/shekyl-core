@@ -18,7 +18,7 @@
 //! A transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` criterion 4 and `TOR_COVER_POSTURE.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -182,7 +182,7 @@ pub struct PeerFluff {
     /// N full payload copies of every accepted batch. The deadline itself is
     /// **not** here — `FluffScheduler` owns pending deadlines, and a copy in
     /// this struct would be a second owner of the same fact (§18.5).
-    pub queued: Vec<TxBlob>,
+    pub queued: VecDeque<TxBlob>,
     /// Who dialed whom — the inherited code gives outbound peers half the
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
@@ -197,7 +197,7 @@ pub struct PeerFluff {
 impl PeerFluff {
     fn new(direction: PeerDirection, connector: ConnectorId) -> Self {
         Self {
-            queued: Vec::new(),
+            queued: VecDeque::new(),
             direction,
             connector,
             declaration: declaration(connector.column()),
@@ -229,7 +229,7 @@ impl PeerFluff {
 /// A repeat inside the taken run is counted twice here and removed by the
 /// caller, so the notice can be smaller than the count and never larger. A
 /// repeat that lies beyond this run goes on a later flush.
-fn take_one_notice(queued: &mut Vec<TxBlob>) -> Vec<TxBlob> {
+fn take_one_notice(queued: &mut VecDeque<TxBlob>) -> Vec<TxBlob> {
     // A fluff leaves the flag at its default.
     const FLUFF: bool = true;
     let mut size = NewTransactionsSize::EMPTY;
@@ -242,8 +242,9 @@ fn take_one_notice(queued: &mut Vec<TxBlob>) -> Vec<TxBlob> {
         size = with;
         taken += 1;
     }
-    let rest = queued.split_off(taken);
-    std::mem::replace(queued, rest)
+    // A queue with a front: what is taken leaves without the rest being
+    // copied, so draining a backlog costs its length once, not once a flush.
+    queued.drain(..taken).collect()
 }
 
 /// Whether this node has finished synchronizing its chain.
@@ -1337,7 +1338,7 @@ impl Relay {
         self.contexts.insert(
             id,
             PeerFluff {
-                queued: Vec::new(),
+                queued: VecDeque::new(),
                 direction,
                 connector,
                 declaration: column,
