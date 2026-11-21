@@ -122,7 +122,7 @@ pub(crate) trait BlockSource {
     /// **P-SH — single-height-per-call is a *correctness* precondition, not an
     /// ergonomics choice** (`ARCHIVAL_BOND_2D2_SP_T2_FETCH.md` DQ-T2.5). This
     /// method takes **one** `height`, and that is load-bearing: a single-height
-    /// read is atomic (LMDB/MVCC — no adversary needed), whereas a *multi*-height
+    /// read is atomic (store MVCC — no adversary needed), whereas a *multi*-height
     /// batch can straddle a reorg *between* its per-height reads (finding-b),
     /// returning an internally-inconsistent set the scanner would splice. The
     /// signature — one `height`, not a range/slice — makes that batch

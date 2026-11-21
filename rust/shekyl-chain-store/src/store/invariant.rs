@@ -167,10 +167,8 @@ pub enum StoreInvariant {
     /// **SI-11** — `curve_tree_leaves` is dense over `[0, leaf_count)`:
     /// the summary row's count (`curve_tree_meta`, `CurveTreeState`) is the
     /// leaf table's entry count, and every position below it has a row.
-    /// The C++ wrote the count and the leaves in one grow
-    /// (`db_lmdb.cpp:8936–8966`) and every reader took the count as the
-    /// bound; here the reads assert it instead of assuming it (DRS-E1
-    /// S-CURVE §3.3, SCU-3).
+    /// The reads assert it instead of assuming it (DRS-E1 S-CURVE §3.3,
+    /// SCU-3).
     ///
     /// Armed by the reads and by the writer (`grow.rs`, DRS-E3). The payload
     /// says which observation fired: [`LeafDensity::Length`] is the summary

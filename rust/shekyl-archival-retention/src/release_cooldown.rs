@@ -14,10 +14,11 @@
 //! *is* `(P_id, shard, epoch, height)` ascending, so shard `s`'s last-served
 //! epoch is the predecessor of the ceiling probe
 //! `P ‖ BE64(s) ‖ BE64(u64::MAX) ‖ BE64(u64::MAX)` — MAX in the appended
-//! height too. That LMDB cursor I/O stays C++-side; the derived per-shard
-//! maxima arrive here as data, and this module owns the decisions on top:
-//! the whole-record anchor (max over shards, for `Release`), the cooldown
-//! predicate, and the slash-settlement predicate.
+//! height too. The per-shard maxima arrive here as data from the caller
+//! (`shekyl-chain-rules`'s `release_last_served`), and this module owns the
+//! decisions on top: the whole-record anchor (max over
+//! shards, for `Release`), the cooldown predicate, and the slash-settlement
+//! predicate.
 //!
 //! ## The guarantee (ratified 2026-07-12, maintainer)
 //!
@@ -101,9 +102,10 @@ pub fn release_cooldown_elapsed(
 /// Whether the deterministic slash scheduler has settled every settlement epoch up
 /// to and including the record's last-served anchor.
 ///
-/// `last_settled_slash_epoch` is the scheduler's monotone watermark (the LMDB
-/// `archival_last_slash_epoch` scalar): `Some(S)` means every epoch `<= S` has been
-/// scanned at its slash deadline; `None` means no epoch has been settled yet.
+/// `last_settled_slash_epoch` is the scheduler's monotone watermark (the chain
+/// store's `archival_last_slash_epoch` cell): `Some(S)` means every epoch
+/// `<= S` has been scanned at its slash deadline; `None` means no epoch has
+/// been settled yet.
 ///
 /// Settled iff the anchor is `None` (never served — nothing the exit could outrun
 /// beyond the exit-forgiven tail) or `watermark >= anchor`. Without this predicate,

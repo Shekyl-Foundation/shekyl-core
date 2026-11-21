@@ -434,16 +434,16 @@ The corpus's layout is `shekyl-corpus`'s (`CORPUS_CODEC.md`; format 4: an
 `extend` record carries a block with its bundle section, a `rewind` record
 a pop target, and the reader refuses tag `0x03` as it refuses any other
 unknown tag); the ingest's `corpus.rs` reads it as the replay `Source`.
-The trace is the LMDB side's contribution, Rust-minted and versioned like
-the corpus; little-endian, fixed widths; every violation a `TraceFault`
+The trace is a store's chain as `shekyl-chain-replay baseline` writes it,
+Rust-minted and versioned like the corpus; little-endian, fixed widths; every violation a `TraceFault`
 naming what it found.
 
 | Field | Layout | Notes |
 | --- | --- | --- |
-| header | magic `"SHKTRACE"` ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
+| header | magic `"SHKTRAC\0"` (`TRACE_MAGIC`) ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
 | **facts** × n | tag `0x01` ‖ `height` u64 ‖ `weight` u64 ‖ `long_term_weight` u64 ‖ `coins_generated` u64 ‖ `burned` u64 ‖ `root_after`[32] ‖ `long_term_effective_median` u64 ‖ `cumulative_difficulty` u128 | one 88-byte row per height, consecutive from the first; the six passed-through `ConnectFacts` fields + the accumulator SI-10 reads; `Trace::borrow(h)` yields `Borrowed<Facts>`, convertible only into `ConnectFacts` with every origin `PassedThrough` |
-| **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the LMDB state at `height` — `TraceWriter::push_checkpoint_families` computes it from the three families with the function the redb read uses, so the C++ never hashes; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the grader only. The exporter writes one, at the tip (RD-F18) |
-| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows — the C++ walker's reading over LMDB, compared row by row against `ReadSnapshot::archival_snapshot()` by the grader's snapshot oracle. Exactly one per trace, at the tip, paired with the checkpoint — under `0x01` a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); `0x00` is no longer read at all — the six corpus traces were re-captured under `0x01` and the `0x00` arm deleted with them (E4 commit 7), so a `0x00` header is `UnsupportedVersion`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
+| **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the store's state at `height`: the store's `logical_state_digest_v0`, which `TraceWriter::push_checkpoint` records; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the comparison only. The writer takes one, at the covered tip (RD-F18) |
+| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows: the store's `ReadSnapshot::archival_snapshot()` when the trace was written, which a replay compares row by row against its own. Exactly one per trace, at the tip, paired with the checkpoint — under `0x01` a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); `0x00` is no longer read at all — the six corpus traces were re-captured under `0x01` and the `0x00` arm deleted with them (E4 commit 7), so a `0x00` header is `UnsupportedVersion`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
 | trailer | tag `0xFF` ‖ `n_facts` u64 ‖ `n_checkpoints` u64 | both counts re-derived by the reader |
 
 Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)

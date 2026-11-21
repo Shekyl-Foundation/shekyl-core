@@ -60,13 +60,11 @@
 //! 4. **Timing is killed by the read-point** — see [`ParentStateHoldings`].
 //! 5. **Validator cost is bounded, and here is the actual number:** this
 //!    function does no I/O. The caller gathers two facts per held shard.
-//!    The caller that exists is the C++ LMDB validator: one point lookup
-//!    for the `r_market` row and one for the segment freeze, so one bond
-//!    post is at most `2 · MAX_HOLDINGS_SHARDS` point reads. The Rust epoch
-//!    close does not use this gather. A closed shard's height there is a
-//!    binary search over the parent (one recorded-row read per probe, plus
-//!    one after the loop), paid once per closed shard per settlement
-//!    boundary and sized by the closed universe, not by this cap. Real, but
+//!    The caller is the validator's J15 row (`shekyl-chain-rules`): per
+//!    held shard it reads the closed-shard count, the `r_market` row, and
+//!    places the shard's close height by a binary search over the parent
+//!    (one recorded-row read per probe). One bond post is at most
+//!    `MAX_HOLDINGS_SHARDS` of these per-shard gathers. Real, but
 //!    not a cheap DoS: every shard in the holding is priced at a full
 //!    `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked
 //!    collateral, and the tx carries a PQC signature and pays weight fees. The
@@ -194,10 +192,11 @@ pub enum AdmissionError {
     /// The marshaled gather does not line up with the vin's shard list.
     ///
     /// This is a **real** invariant, not a restatement of the codec bound: the
-    /// gather is built by the C++ caller out of LMDB, *independently* of the vin's
-    /// wire decode, so the two can disagree. A mismatch means the caller scored a
-    /// different holding than the one being admitted, and the verdict would be
-    /// meaningless — fail closed rather than score whatever arrived.
+    /// gather is the caller's read of the chain store, an input *separate* from
+    /// the vin's wire decode, so the two can disagree. A mismatch means the
+    /// caller scored a different holding than the one being admitted, and the
+    /// verdict would be meaningless — fail closed rather than score whatever
+    /// arrived.
     #[error("admission gather covers {gathered} shards but the vin holds {vin_shards}")]
     GatherLengthMismatch {
         /// Shards named by the vin's holdings descriptor.
@@ -682,7 +681,7 @@ mod tests {
         assert!(check_admission(&whole, &parent(&[])).is_ok());
     }
 
-    /// The gather is built from LMDB independently of the vin's wire decode, so a
+    /// The gather is an input separate from the vin's wire decode, so a
     /// disagreement is reachable — and means the caller scored a *different*
     /// holding than the one being admitted. Fail closed.
     #[test]

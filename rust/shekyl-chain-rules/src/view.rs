@@ -131,10 +131,9 @@ pub enum AtHeight<T> {
 /// absence case carries semantics the caller must act on — `AtHeight::
 /// AboveTip` does (walk back; the state is not there) — and an empty chain
 /// is one behaviour with no valid-looking alternative, so `None` cannot be
-/// read as data. What `Option` does rule out is the C++ shape:
-/// `top_block_hash` hands back **two** sentinels on an empty chain,
-/// `null_hash` and `*block_height = UINT64_MAX`, neither distinguishable
-/// from a recorded value (`db_lmdb.cpp:3185–3191`). The store's own read
+/// read as data. What `Option` does rule out is a sentinel shape: **two**
+/// sentinels on an empty chain, a null hash and a `u64::MAX` height,
+/// neither distinguishable from a recorded value. The store's own read
 /// (`RecordedTip { tip: Tip, connect }`, S-CHAIN-R) composes this struct.
 ///
 /// Fields justified per ruling Q3: `hash` — CEN-A2 (`previous` must be the
@@ -606,16 +605,14 @@ pub trait ChainView<'id>: HeaderView<'id> {
 
     /// **A11.** Every bond record, in persona-key order, each with its
     /// persona; empty for a chain with no bonds. The slash scan's and the
-    /// close's universe (`db_lmdb.cpp:5301`'s record cursor and `:7600`'s
-    /// gather both walk `archival_bond` whole). Key order is the order the
-    /// scan applies slashes in, so the slash log's per-height sequence is a
-    /// function of the view and not of any iteration the store chose.
+    /// close's universe. Key order is the order the scan applies slashes
+    /// in, so the slash log's per-height sequence is a function of the view
+    /// and not of any iteration the store chose.
     fn bond_records(&self) -> Result<Vec<(PCanonicalId, BondRecord)>, Self::Fault>;
 
     /// **A12.** Whether the slash for `(persona, shard, epoch)` has been
-    /// applied — the scan's dedup, read before anything else about the
-    /// triple (`archival_challenge_failed_at_height`'s first probe,
-    /// `db_lmdb.cpp:5471`). A set membership, so `bool` and never `Option`.
+    /// applied — the scan's dedup. A set membership, so `bool` and never
+    /// `Option`.
     ///
     /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
     fn slash_applied(

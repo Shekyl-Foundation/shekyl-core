@@ -43,10 +43,10 @@ For every `(package, feature)` in `TEST_ONLY`, over `cargo metadata`:
 # The second limb — consumer-owned features (`CONSUMER_OWNED`)
 
 A different class with the same file as its subject. Some code exists for
-exactly one consumer and must not outlive it — the canonical case is a field
-the DRS-E2 comparator needs for column-completeness of its LMDB parity diff
-and nothing else ever should (`DRS_E1_STX.md` STX-9: `TxHeader.unlock_time`
-behind `shekyl-chain-store/comparator-parity`). Putting such code behind a
+exactly one consumer and must not outlive it — the canonical case is a
+function one bench needs and nothing else ever should (`shekyl-noise`'s
+`rekey-timing`, enabled by `shekyl-p2p-transport` alone so its C5 bench can
+time one rekey). Putting such code behind a
 cfg feature that the consumer alone enables makes its *expiry a consequence
 of the event*: retire the consumer, delete the feature, and the code cannot
 compile. What that construction still rests on is one link — someone
@@ -449,10 +449,7 @@ TEST_ONLY: dict[tuple[str, str], str] = {
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
 # A row is the declaration that the feature dies with its enabler; the feature
-# and its row land together. The shape this class was written for remains
-# `("shekyl-chain-store", "comparator-parity") → ("<the DRS-E2 comparator
-# crate>", "TxHeader.unlock_time for the LMDB txindex parity diff")`, which
-# lands only if E2 asks for the column (DRS_E1_STX.md STX-9 / STX-Q3).
+# and its row land together.
 CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
     (
         "shekyl-noise",

@@ -87,21 +87,21 @@ DRS-D12 — no store handle by construction).
 | --- | --- |
 | Live `MDB_dbi` table handles in `db_lmdb.h` | **47** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below; `output_metadata` and `txs_prunable_tip` left on 2026-09-22, LMDB v15) |
 | `lmdb_db_open(` **call** sites (macro path) | **47** — the 48th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
-| `docs/LMDB_SCHEMA.md` claimed total | **47** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| `docs/LMDB_SCHEMA.md` claimed total | **47** — the file is records-was, and its gate (`check_lmdb_schema_coverage.py`) is retired (§12.1); claimed 41 at the Round-2 pin |
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_reinstate_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
-| Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
+| Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion. The ghost leg that refused their return is retired with its gate (§12.1); `check_redb_schema_bijection.py` refuses a class row for a table the Rust schema does not define (§9.1) |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
-| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
+| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned at P0b, by a gate now retired, §12.1; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
 | Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
 | Document | Status |
 | --- | --- |
-| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **RECONCILED** (P0a, 2026-09-05) — gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
-| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **RECONCILED** (P0b, 2026-09-05) — rewritten in place at `2dba46537` over every write path; §10 matrix gate-pinned to `SHEKYL_LMDB_TABLES`; A-2/A-4/A-6 transcriptions + RAW set carried; the April verdicts preserved as records-was |
-| `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
-| Early **logical state digest** (E-1) | **Built** (P0d, 2026-09-10) against production LMDB — core chain + `spent_keys` + live curve-tree root. Archival journals are a named exclusion (§7.1.1), not first in DRS-E2 |
+| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **Records-was** (2026-10-28); its gate is retired (§12.1). At P0a (2026-09-05) it was **RECONCILED**: a gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
+| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **RECONCILED** (P0b, 2026-09-05) — rewritten in place at `2dba46537` over every write path; §10 matrix is the record of the C++ inventory, and the `accumulator/class.rs` tests hold each surviving table to the class it gives; A-2/A-4/A-6 transcriptions + RAW set carried; the April verdicts preserved as records-was |
+| `db_lmdb.{h,cpp}` | **Deleted.** The table inventory is `rust/shekyl-chain-store/src/schema.rs` and `pool/schema.rs`, held to `TABLE_CLASSES` by `check_redb_schema_bijection.py` |
+| Early **logical state digest** (E-1) | **Built** (P0d, 2026-09-10) against production LMDB — core chain + `spent_keys` + live curve-tree root. Archival journals are a named exclusion (§7.1.1), not first in DRS-E2. Its oracle role is retired with A2 (§8.1); the Rust half, `ReadSnapshot::logical_state_digest_v0`, stays |
 
 **DRS-P0 (P0a–P0d) landed 2026-09-10. DRS-0 is UNBLOCKED as of 2026-09-11** — the register's third S-grade was re-verified at its merged sha `e54e5b983` and CEN-B5 promoted. The S0 (CEN-M8, PR #602) and the first S1 (CEN-D2/D1, PR #604) are fixed, merged and re-verified; a **second S1 was found 2026-09-04 and fixed 2026-09-05 (PR #623)** — CEN-B5's header check compared the root *after* the add while `create_block_template` fills the header from the root *before* it, so every non-FAKECHAIN chain would have halted at height 60 (census §7 #17); the check now runs at admission before the add, red → green observed on a TESTNET Blockchain fixture (§7 #18); **re-verified 2026-09-11 at `e54e5b983` — ordering traced rather than read from the comment, uniformity established by the absence of any `m_nettype` token in the function, and the regression test confirmed wired at `tests/unit_tests/CMakeLists.txt:124`.** CEN-L11/L12 were promoted at PR #609's merged fix (2026-09-04).
 
@@ -221,13 +221,10 @@ the two 2026-09-22 deaths leave 47. Dispositions:
 | ~~`txs_prunable_tip`~~ | in code at pin, documented at pin; **DELETED 2026-09-22** (LMDB v15 / redb v10) — write-never since `PDM-Q7` |
 | `txs_pruned` | in code at pin, documented at pin |
 
-This registry is CI-pinned: `scripts/ci/check_lmdb_schema_coverage.py`
-asserts these rows are a duplicate-free bijection with
-`SHEKYL_LMDB_TABLES` and that the stated row count matches, in the same
-run that pins `LMDB_SCHEMA.md`'s property rows, section headings, stated
-total, and DB-version header. `docs-gates.yml` (né `doc-links.yml`; renamed by P0b) already triggers on
-`docs/**` and on `db_lmdb.cpp`, so both a registry edit and a
-source-only table change start the gate.
+This registry is the record of the C++ table set at its pin, and no gate
+reads it. The gate that pinned it, `scripts/ci/check_lmdb_schema_coverage.py`,
+is retired with its subject (§12.1). The Rust store's table set is held
+by `check_redb_schema_bijection.py` (§9.1).
 
 **Field evidence for the RECORD-AND-SPECIFY default (P0c), from the
 round preceding this PR.** C2-R1c-Q3b repaired one inherited defect —
@@ -248,17 +245,16 @@ store, don't patch blind.
 
 ## 0. Problem statement
 
-Durable state lives in C++ LMDB (**47** declared tables, 46 at runtime —
-DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (254 store call sites, 91 store methods), not the
-storage class alone.
-Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
-**boundary-thickness and type-safety** problem under
+Durable state lives in `shekyl-chain-store`, a redb store; the C++ store
+and `blockchain.cpp` are deleted (banner). The C++ tree this program
+started from is recorded in the substrate inventory above, under the
+verification stamp. The program's case is Path B: a cross-language
+gather/FFI/store is a **boundary-thickness and type-safety** problem under
 [`40-ffi-discipline`](../completed/RULE_40_FFI_DISCIPLINE.md) — marshal
 *cost* is unmeasured and **must not** load-bearing-justify Path B (R2-4 / R-14).
 
-**Program:** re-census LMDB truth **and** build a layout-independent **state
-digest against LMDB** → **partition `blockchain.cpp` analytically** with that
+**Program** (§8.1 holds its status): re-census the C++ store **and** build a layout-independent **state
+digest against it** → **partition `blockchain.cpp` analytically** with that
 digest as regression oracle (DRS-C is **analysis-only** since CSR-4; the surfaces
 scope Rust rewrite increments, they are not C++ refactor PRs) → redb-native
 `shekyl-chain-store` behind stable surfaces → **redb-only genesis**.
@@ -596,8 +592,9 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (91 store methods) → `BlockchainLMDB` (47 tables since v15) + FFI gather
-shells.
+`shekyl-chain-ingest` → `shekyl-chain-rules` (validate) → `shekyl-chain-store`
+(redb). Writes go through `ChainStore::write` and reads through a
+`ReadSnapshot` (§3.6.3, §3.6.4). No C++ is on the path.
 
 ### 3.2 After DRS-C (+ LMDB digest)
 
@@ -858,7 +855,7 @@ PR; digest identity before/after; no engine change.")
 
 ### 3.6 Writer / reader concurrency (process model)
 
-Applies to **both** LMDB today and redb after E\*. Mission: security (DoS)
+Applies to the redb store. Mission: security (DoS)
 and privacy (node liveness → density).
 
 | Rule | Specification |
@@ -869,11 +866,11 @@ and privacy (node liveness → density).
 | **DoS: long-lived readers** | Attacker-influenceable RPC must not pin free pages indefinitely. Mitigations (pick in DRS-0 / implement in C or E1): max read-txn wall time; max concurrent heavy reads; reject/export-only paths for full scans. BENCH measures file growth under adversarial concurrent readers. **PICKED** at `ba4b3c73a` (2026-09-12, slice C) — see §3.6.1; implementation stays C/E1. |
 | **redb-specific** | redb self-managed cache → peak RSS under attacker feed is a **hard BENCH bound** (§1.3). Writer still single; no multi-process multi-writer on one file. |
 | **Multi-process** | Default `shekyld` = one process, one store file, one writer. Remote wallet talks **RPC**, never opens daemon redb. (D3 topology.) |
-| **Shadow / dual backend** | Second engine is a **separate file**; never two writers on one LMDB env (V4). Shadow apply may lag; production authority is one backend. |
+| **Shadow / dual backend** | None: one backend per binary (ruled 2026-09-14; `DEL-003`, §12), so a store file never has a second engine or a second writer. |
 | **Writer halt** | A `StoreInvariantViolated` on connect **or pop** **halts the writer** — neither verb is accepted after it — and leaves the readers serving; the halt is **advertised on the tip** (§3.6.2), never inferred from silence, and **re-derived on restart**, never persisted. No peer penalty, no process exit (C2-R8 Q8). |
 
-P2P and levin remain C++ at genesis under D2-reopen without requiring B;
-they must still obey the writer queue when calling into surfaces.
+P2P and levin are Rust (`shekyl-p2p`, `shekyl-levin`), and like every
+other caller they must obey the writer queue when they reach the store.
 
 #### 3.6.1 Long-lived-reader mitigations — PICKED at `ba4b3c73a` (2026-09-12, DRS-0 slice C)
 
@@ -1268,7 +1265,7 @@ already rules it are otherwise read as a gap by the next person down the list.
 
 | Path | Why measure separately |
 | --- | --- |
-| **IBD** | Not network-paced vs fast/LAN peer; saturates disk/CPU. LMDB batches + `MDB_APPEND` (~10 sites) is bulk-load optimized; redb COW insert has no direct equivalent. FCMP++ verify may still dominate — **measure**, don’t deduce. |
+| **IBD** | Not network-paced vs fast/LAN peer; saturates disk/CPU. FCMP++ verify may still dominate — **measure**, don’t deduce. |
 | **Deep pop** | Unwinds as fast as possible off-chain; deletes/journals may churn more than apply |
 | **Resource bounds** | File growth, reader pinning, peak RSS — **security/privacy**, above speed in mission order |
 
@@ -1685,7 +1682,7 @@ a case for moving it.
 **A STATED BOUND ON WHAT THIS BASELINE GENERALISES TO.** The fixture is
 coinbase-only, so it holds no non-coinbase transaction and therefore no
 transaction **prunable region** — the part of a tx covered by the
-`txs_prunable_hash` table that already exists in `db_lmdb.h`. That region is the
+`txs_prunable_hash` table (`schema.rs`). That region is the
 subject of the pruning round's `PDM-Q-F13`/`PDM-Q-F14` findings in
 [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md), which name it
 as the scarce replay-compatible good and put `pqc_auths` at ~60% of tx bytes.
@@ -2145,7 +2142,7 @@ not there. What was owed, and where each piece stands:
 3. **The row** — `txs_pqc_auth_hash: u64 → Coded<PqcAuthHash>` (§11.1(f); the identity type, not a `Hash32`), written by `connect`
    beside `txs_prunable_hash` from the identity it is handed, under the
    three-leg invariant above (present ⇔ 4-part; never deleted by a
-   prune; pop reverses the journaled insert), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
+   prune; pop reverses the journaled insert), Rust-only (`RUST_ONLY_TABLES`,
    SCW-11), journaled, SI-9-fresh under `tx_id`. **Store crate: S-CHAIN-W
    amendment A3**, riding S-CHAIN-R's amendments layout commit
    ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) §7 commit 2b, `SCHEMA_VERSION
@@ -2189,7 +2186,7 @@ met.
 
 Each box states what holds it. A box whose subject left with the C++ at the store flip (`DRS_X_STORE_FLIP.md`, #1212) is **retired**, with what replaced it.
 
-- [ ] **§0.1 A1–A10** all green. Met: A1 (P0b), A3 (P0c), A8 in its redb form (the schema bijection, key-type and store-invariant gates in `docs-gates.yml`). Retired: A2 (its oracle was the digest against production LMDB; the E2 corpus is re-baselined from Rust, `DRS_E2_REPLAY_DRIVER.md`) and A9 (`blockchain.cpp` is deleted). Open: A4 (the next box), A5 and A6 (the BENCH box), A7 (the cross-store KAT box) and A10 (the D10 box).
+- [ ] **§0.1 A1–A10** all green. Met: A1 (P0b), A3 (P0c), A8 in its redb form (the schema bijection and store-invariant register gates in `docs-gates.yml`, and the schema snapshot gate, rule 42). Retired: A2 (its oracle was the digest against production LMDB; the E2 corpus is re-baselined from Rust, `DRS_E2_REPLAY_DRIVER.md`) and A9 (`blockchain.cpp` is deleted). Open: A4 (the next box), A5 and A6 (the BENCH box), A7 (the cross-store KAT box) and A10 (the D10 box).
 - [x] DRS-P0a–P0d complete (multi-PR envelope §7.1): delivered 2026-09-10. **Retired:** P0f's conformance register. Its subject was the C++ side's conformance, and the register left with the CSR-3a grading (`CONSENSUS_STORE_RECONCILIATION.md`, records-was at `43fadfb65e`).
 - **Retired:** DRS-C as analysis of `blockchain.cpp`'s surfaces, and digest stability per CSR-3a. `blockchain.cpp` is deleted; the surfaces became the Rust store's typed reads and writes (§3.5's rows are LANDED).
 - **Retired:** the divergence register's RECORD-AND-SPECIFY completeness. It graded the Rust store against the C++; the flip's own register (`DRS_X_STORE_FLIP.md` §3.1, DX-Q8) categorized every difference before the C++ left, with no "unexplained" category.
@@ -2211,30 +2208,36 @@ Each box states what holds it. A box whose subject left with the C++ at the stor
 
 ### 9.1 Bidirectional inventory CI (≈ one script)
 
-Makes DRS-R-1 **structurally unrepresentable**. Legs 1–2 are **live** as
-`scripts/ci/check_lmdb_schema_coverage.py` (`2572e6f5b`, 2026-08-25; extended by P0a
-2026-09-05), keyed on the `SHEKYL_LMDB_TABLES` X-macro — the single source
-`mdb_env_set_maxdbs` derives from (SO-D4), which is the sharper subject
-than this section's original `db_lmdb.h` phrasing (the handle set is
-name-derived `m_<name>`, verified 1:1 by P0a):
+Makes DRS-R-1 **structurally unrepresentable**. The four legs below
+are numbered as other sections cite them. They are the legs of
+`check_lmdb_schema_coverage.py` over the X-macro, retired with that gate
+(§12.1):
 
-1. Every X-macro table has an `LMDB name` property row **and** a section
-   heading in `LMDB_SCHEMA.md` — headings checked duplicate-free (the
-   property-row legs dedupe, which hid a doubled `properties` heading)
-2. Every `LMDB_SCHEMA.md` property row and heading names an X-macro table
-   (**catches phantoms** — the half that produced `staker_*`), plus the
-   stated total, the DB-version header, and the P0a reconciliation
-   registry's row bijection
-3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md` — **live**
-   (P0b, 2026-09-05: the audit-matrix leg of `check_lmdb_schema_coverage.py`,
-   stated at the table-name layer the macro owns)
-4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
-   row
+1. X-macro table → `LMDB_SCHEMA.md` property row and section heading:
+   retired; `LMDB_SCHEMA.md` is records-was
+2. `LMDB_SCHEMA.md` row or heading → X-macro table (the phantom check):
+   retired with leg 1
+3. X-macro table → `LMDB_WRITE_ATOMICITY_AUDIT.md` §10 row: retired; the
+   audit is a record at its pins
+4. X-macro table → one `Digest v0` state in the audit's §10: retired with
+   leg 3
 
-**Seed count: 47/47** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
-ruled the definition-site `rg` hit; the same N+1 shape reads 47+1 today).
-Gate must not cry wolf on day one — it has run green on `dev` since
-its landing (`2572e6f5b`, 2026-08-25).
+The inventory gate is `scripts/ci/check_redb_schema_bijection.py`, run by
+`docs-gates.yml`. Its denominator is the Rust table definitions: every
+`TableDefinition` and `MultimapTableDefinition` in
+`rust/shekyl-chain-store/src/schema.rs` and `pool/schema.rs`. It checks
+them both ways against `accumulator/class.rs`'s `TABLE_CLASSES`: a defined
+table with no class row fails, a class row that names no defined table
+fails (the phantom check), duplicates on either side fail, and an empty
+definition set or class table fails rather than passing over nothing
+(rule 47). `--selftest` builds each refusal. The gate prints both counts on
+every run, so this section states none.
+
+Two readers keep the audit binding on the Rust store. The
+`accumulator/class.rs` tests hold each table that survives to the class
+§10 gives it. `check_drs_p0d_digest_coverage.py` requires `digest_v0.rs`
+to name the three v0 families and record the §7.1.1 archival exclusion,
+and the audit's "Digest v0 read set" to name the same families.
 
 ### 9.2 Other layers
 
@@ -2810,7 +2813,7 @@ mis-stated is one that passes on the wrong set.
 | DEL-001 | Permanent C++ façade over redb | DRS-B | N/A until created |
 | DEL-002 | Time-boxed shims | Surface Rust-owned | Empty until created. The first is the thin C++ `core` shell the flip PR builds at the consumers — the protocol handler's chain reads, block arrivals and pool calls, and `levin_notify`'s five `i_core_events` methods — each forwarding to Rust (`DRS_X_STORE_FLIP.md` DX-Q1, 2026-10-16). Chain sync's cutover deletes its protocol-handler half, RD its relay half |
 | DEL-003 | Production dual-backend / shadow | D2 closed + artifacts | **N/A** (2026-10-15): one engine per binary (ruled 2026-09-14, §1.3, §7.4), so a production dual backend can never exist; R2 removes LMDB in the flip PR with no engine flag (§15) |
-| DEL-004 | liblmdb in default `shekyld` | The store flip PR (R2, §15) | **Landed 2026-10-28:** the default daemon configure does not compile or link liblmdb. The vendor tree stays at `external/db_drivers/liblmdb` and is not a target. Falsify by an `add_subdirectory(db_drivers)` or a `target_link_libraries` of `lmdb` in the daemon build. |
+| DEL-004 | liblmdb in default `shekyld` | The store flip PR (R2, §15) | **Landed 2026-10-28:** the default daemon configure does not compile or link liblmdb. The vendor tree `external/db_drivers/liblmdb` is deleted. Falsify by an `add_subdirectory(db_drivers)` or a `target_link_libraries` of `lmdb` in the daemon build. |
 | DEL-005 | Schema phantoms / missing seven | DRS-P0 | **Closed** (P0a, 2026-09-05) — phantom sections died with the claim-era wire deletion, the seven documented in `2572e6f5b` (2026-08-25), both directions gate-pinned since |
 | DEL-006 | V4 heed-as-destination without pointer | Docs | Closed |
 | DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve — the genesis block is regenerated from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so it is a derived artifact of a repo constant, not state; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
