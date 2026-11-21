@@ -634,10 +634,8 @@ pub enum SettlementCheck {
 }
 
 /// Which of a bond record's invariants a retention fold found broken —
-/// [`Corrupt::BondRecordInvariant`]'s discriminant. Each arm is a C++ writer
-/// `FATAL` that names the *record*, not the post (`db_lmdb.cpp`
-/// `apply_archival_unbond` / `apply_archival_reinstate` /
-/// `process_archival_slash_apply_one`); the store maps the class onto the
+/// [`Corrupt::BondRecordInvariant`]'s discriminant. Each arm names a break
+/// in the *record*, not in the post; the store maps the class onto the
 /// `archival_bond` cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordInvariant {

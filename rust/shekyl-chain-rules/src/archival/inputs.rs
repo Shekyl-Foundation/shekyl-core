@@ -59,9 +59,8 @@ impl super::Transition {
         }
     }
 
-    /// JoinMarket (`db_lmdb.cpp` `apply_archival_bond_post`, the join arm):
-    /// a new record joining at the open epoch, every held shard added at
-    /// that epoch, no claims, no first-paying height.
+    /// JoinMarket: a new record joining at the open epoch, every held
+    /// shard added at that epoch, no claims, no first-paying height.
     ///
     /// The receipt key the post commits (`FN_DSA_HYBRID.md` §8) is copied
     /// into the record byte for byte — CEN-J28 has judged it a key. This

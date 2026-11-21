@@ -5,9 +5,10 @@
 
 //! Operator coverage ranking (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4).
 //!
-//! C++ fills per-shard operands from LMDB; this module computes
-//! join-adjusted scarcity and expected-profit and orders the list.
-//! Presentation only — every frozen shard remains legal (SL-D8 reading 1).
+//! The daemon RPC fills per-shard operands from the chain store
+//! (`shard_coverage`); this module computes join-adjusted scarcity and
+//! expected-profit and orders the list. Presentation only — every frozen shard
+//! remains legal (SL-D8 reading 1).
 
 use shekyl_types::BlockHeight;
 

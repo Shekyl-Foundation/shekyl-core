@@ -17,15 +17,13 @@
 //!
 //! # Where the fold lives, and why here
 //!
-//! The C++ computed this inside the LMDB layer
-//! (`db_lmdb.cpp:archival_bond_holds_shard_of`), a cursor walk and an epoch
-//! comparison fused into one method — the R8-class placement
-//! `CONSENSUS_STORE_RECONCILIATION.md` CEN-L16 records. The store's job is
-//! the two reads it composes: the record (S-ARCH A1) and the slashes logged
-//! against the persona **strictly above** `h` (A2, `slash_log_after`). The
-//! judgement over them is consensus arithmetic, which is this crate's (E4
-//! commit 2, the `SAR-Q7` staged pair). The C++ stays live until the
-//! cutover; the as-of-height cases are this module's tests.
+//! Not in the store: a cursor walk and an epoch comparison fused into one
+//! store method is the R8-class placement `CONSENSUS_STORE_RECONCILIATION.md`
+//! CEN-L16 records. The store's job is the two reads the fold composes: the
+//! record (S-ARCH A1) and the slashes logged against the persona **strictly
+//! above** `h` (A2, `slash_log_after`). The judgement over them is
+//! consensus arithmetic, which is this crate's (E4 commit 2, the `SAR-Q7`
+//! staged pair). The as-of-height cases are this module's tests.
 //!
 //! # Three sources, one answer
 //!
@@ -92,8 +90,7 @@ use crate::consensus_state::SettlementSchedule;
 /// post-connect state of block `at_height` — given every slash logged
 /// against the persona strictly above `at_height` (`slashed_after`, the
 /// S-ARCH A2 read at the same height), with `schedule` placing
-/// `at_height` in its settlement epoch. The fold `db_lmdb.cpp:4890`
-/// computed inside the LMDB layer, over the store's two reads instead.
+/// `at_height` in its settlement epoch.
 ///
 /// `slashed_after` is the persona's rows already: the fold does not
 /// re-scope them (module docs, *What the fold does not check*). Log order
@@ -155,7 +152,7 @@ mod tests {
     use super::*;
     use crate::consensus_state::SettlementEpochBlocks;
 
-    /// The schedule the LMDB cases ran under.
+    /// The schedule these cases run under.
     const SCHEDULE: SettlementSchedule = SettlementSchedule::GENESIS;
 
     fn shard(n: u64) -> ShardId {
@@ -345,8 +342,7 @@ mod tests {
     }
 
     /// A complete tree still held at tip is held at every height — the
-    /// tip-held arm's first case, which the LMDB cases reach only through
-    /// the demotion row.
+    /// tip-held arm's first case.
     #[test]
     fn a_complete_tree_at_tip_is_held_at_every_height() {
         let record = record(Holdings::CompleteTree);

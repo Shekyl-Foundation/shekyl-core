@@ -28,8 +28,7 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location -LiteralPath $RepoRoot
 
-# Output path of the daemon. The importer, mdb_copy and core_tests went
-# with the C++ chain.
+# Output path of the daemon.
 $Shekyld = 'build\bin\Release\shekyld.exe'
 $MsvcLinkSubjects = @($Shekyld)
 

@@ -315,9 +315,8 @@ pub fn closed_and_final<'id, V: ChainView<'id>>(
 /// One assembly for two readers. The slash pass (`Transition::gather`)
 /// freezes what it computes over this; the claim verify (CEN-J23's per-epoch
 /// gather, CEN-J25's `EmissionEpochSource`) recomputes `Σwork(E)` over the
-/// same shape and compares it to the frozen row. The C++ reaches the same
-/// end by having the close and the verify call one LMDB gather (WS-1 §5.5);
-/// here the one function is this type's constructor, so the two readers
+/// same shape and compares it to the frozen row. Both build it through this
+/// type's one constructor (WS-1 §5.5's one gather), so the two readers
 /// cannot fold different index orders or different `Open`/`ClosedAt`
 /// operands and only find out at the compare.
 pub(crate) struct EpochSnapshot<'r> {
@@ -331,8 +330,8 @@ pub(crate) struct EpochSnapshot<'r> {
     pub(crate) pairs: Vec<CreditPair>,
     /// The claimant's index into `bonds`, when the gather was asked for
     /// one and that persona has a credit at `E` — the verify's
-    /// `EmissionEpochSource::claimant_bond_idx` (the C++ gather sets it
-    /// where `p_canonical_id` matches, `db_lmdb.cpp:7648`). `None` for the
+    /// `EmissionEpochSource::claimant_bond_idx` (the gather sets it where
+    /// the record's persona is the claimant). `None` for the
     /// close, which names no claimant, and for a claimant with no credit
     /// at `E`: it is not in the snapshot, and the verify says so.
     pub(crate) claimant_bond_idx: Option<usize>,

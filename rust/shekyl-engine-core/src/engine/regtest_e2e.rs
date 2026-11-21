@@ -753,9 +753,9 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let me = std::fs::metadata("/proc/self")
-            .map(|m| m.uid())
-            .expect("this process's uid");
+        // The effective uid, as the daemon's own ownership check reads it
+        // (`shekyl-daemon-config`'s `file.rs`); `/proc/self` is Linux-only.
+        let me = rustix::process::geteuid().as_raw();
         let candidates: Vec<PathBuf> = [
             std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
@@ -2129,11 +2129,16 @@ async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
     const STOP_WITHIN: Duration = Duration::from_secs(60);
     let pid = Pid::from_child(&daemon.child);
     kill_process(pid, Signal::TERM).expect("SIGTERM delivered");
+    // The thread hands back only whether the wait succeeded: the status
+    // waitid returns wraps the platform's siginfo_t, which on macOS and
+    // FreeBSD holds a raw pointer and so is not Send. `try_wait` below reads
+    // the exit status.
     let exited = tokio::task::spawn_blocking(move || {
         waitid(
             WaitId::Pid(pid),
             WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
         )
+        .map(|_| ())
     });
     match tokio::time::timeout(STOP_WITHIN, exited).await {
         Ok(waited) => {
@@ -3123,14 +3128,13 @@ async fn create_wallet(
 /// height: depth-3 needs `SELENE_CHUNK_WIDTH × HELIOS_CHUNK_WIDTH = 38 × 18`… in
 /// practice ~684–701 drained leaves (~750 blocks, several minutes — a slow gate).
 ///
-/// **Validates the depth-3 fix (was the #162 reopening trigger).** Before the
-/// `db_lmdb::grow_curve_tree` → `shekyl_curve_tree_grow_upper_layers` rewiring, the
-/// wallet `refresh` at depth-3 died with `CurveTreeIngest: curve-tree root mismatch
-/// vs header`: the daemon's in-place incremental upper-layer deepening dropped the
-/// pre-existing sibling when it created the first layer-2 Selene root, so its header
-/// root diverged from the wallet's narrow `build_layers`. With the producer-side fix
-/// the daemon recomposes every upper layer narrow (== `build_layers`), so the
-/// refresh succeeds and a spend over the depth-3 tree is daemon-accepted. (Confirmed
+/// **Validates the depth-3 boundary (the #162 reopening trigger).** A daemon whose
+/// incremental upper-layer deepening drops the pre-existing sibling when it creates
+/// the first layer-2 Selene root serves a header root that diverges from the
+/// wallet's narrow `build_layers`, and the wallet `refresh` at depth-3 dies with
+/// `CurveTreeIngest: curve-tree root mismatch vs header`. The daemon's grow equals
+/// the rebuild (`shekyl-chain-rules`'s `tree_growth`), so the refresh succeeds and a
+/// spend over the depth-3 tree is daemon-accepted. (Confirmed
 /// 2026-06-27 against a locally-built fixed `shekyld`: daemon depth 2 / 701 leaves,
 /// refresh OK, spend accepted.)
 #[tokio::test(flavor = "multi_thread")]
@@ -3867,12 +3871,9 @@ async fn assert_template_reports_its_coinbase(
 /// restore the EXACT curve-tree root that growing to that height produced. Grow is
 /// validated as consensus-correct (`e2e_fcmp_spend_over_depth3_tree`), so a trim that
 /// reproduces the grow root is itself correct — `trim == grow⁻¹`. The reorg crosses a
-/// Selene leaf-chunk boundary, so the pop-back recomposes the upper layer rather than
-/// only trimming a partial leaf chunk — exercising the `db_lmdb::trim_curve_tree` →
-/// `shekyl_curve_tree_grow_upper_layers` rewiring (the reorg twin of the grow fix:
-/// the old in-place incremental upper propagation had the same drop-the-sibling
-/// defect). Runs at depth-2 (a few minutes); the depth-3 deepening uses the identical
-/// FFI already validated by the grow gate.
+/// Selene leaf-chunk boundary, so the pop-back restores an upper-layer chunk rather
+/// than only a partial leaf chunk — exercising the store's pop of the curve-tree
+/// layers. Runs at depth-2 (a few minutes).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (depth-2 mine, a few min)"]
 async fn e2e_trim_curve_tree_restores_grow_root() {
