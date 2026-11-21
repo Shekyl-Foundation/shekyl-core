@@ -350,13 +350,17 @@ pub fn read_key_file(
     let mut file = match opts.open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
-            return Err(PrivateFileError::Exposed(
-                path.to_path_buf(),
-                "is a symbolic link".to_owned(),
-            ))
+        // `O_NOFOLLOW` refuses a link at the name with `ELOOP` on Linux and
+        // macOS and `EMLINK` on FreeBSD; the name itself says which it was.
+        Err(e) => {
+            let link =
+                std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+            return Err(if link {
+                PrivateFileError::Exposed(path.to_path_buf(), "is a symbolic link".to_owned())
+            } else {
+                PrivateFileError::Io(path.to_path_buf(), e)
+            });
         }
-        Err(e) => return Err(PrivateFileError::Io(path.to_path_buf(), e)),
     };
     let meta = file
         .metadata()
