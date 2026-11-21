@@ -37,8 +37,10 @@
 # set, including a clean exit. The Linux unit is Restart=on-failure, so
 # the restart lives in `shekyld_supervise` instead: a failure is retried
 # after restart_seconds (the unit's RestartSec), and a clean exit ends the
-# supervisor. Clean is what Restart=on-failure counts as clean: exit 0, or
-# death by SIGHUP, SIGINT, SIGTERM or SIGPIPE. An RPC stop and a SIGTERM the
+# supervisor. Clean is what the unit counts as clean: exit 0, exit 130 (a
+# second stop: the operator forced it; SuccessExitStatus=130), or death by
+# SIGHUP, SIGINT, SIGTERM or SIGPIPE. The shell reports exit 130 and death
+# by SIGINT alike. An RPC stop and a SIGTERM the
 # daemon has taken leave 0; a SIGTERM that arrives while the node is still
 # opening, before the daemon owns its stop triggers, ends it by the signal.
 # A refused start exits non-zero, so it is retried, and the refusal is in
