@@ -341,7 +341,6 @@ pub fn read_key_file(
     path: &Path,
     limit: usize,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
-    use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
     let mut opts = std::fs::OpenOptions::new();
@@ -374,6 +373,18 @@ pub fn read_key_file(
     }) {
         return Err(PrivateFileError::Exposed(path.to_path_buf(), why));
     }
+    read_bounded(&mut file, path, limit).map(Some)
+}
+
+/// At most `limit` bytes and one more from `file`, into a buffer wiped on
+/// drop and sized once, so no reallocation leaves a copy behind. The rest of
+/// a longer file is never read.
+fn read_bounded(
+    file: &mut File,
+    path: &Path,
+    limit: usize,
+) -> Result<Zeroizing<Vec<u8>>, PrivateFileError> {
+    use std::io::Read;
     let mut bytes = Zeroizing::new(vec![0u8; limit + 1]);
     let mut filled = 0;
     while filled < bytes.len() {
@@ -385,11 +396,13 @@ pub fn read_key_file(
         }
     }
     bytes.truncate(filled);
-    Ok(Some(bytes))
+    Ok(bytes)
 }
 
 /// The bytes of a key file handed to this process: on Windows, a file this
-/// account alone may read ([`check_private`]), at most `limit` and one more.
+/// account alone may read ([`check_private`]), at most `limit` and one more,
+/// read as [`read_private`] reads, then checked; the rest of a longer file is
+/// never read.
 ///
 /// # Errors
 ///
@@ -400,10 +413,14 @@ pub fn read_key_file(
     path: &Path,
     limit: usize,
 ) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
-    let Some(mut bytes) = read_checked(path, check_private)? else {
-        return Ok(None);
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(PrivateFileError::Io(path.to_path_buf(), e)),
     };
-    bytes.truncate(limit + 1);
+    let bytes = read_bounded(&mut file, path, limit)?;
+    drop(file);
+    check_private(path)?;
     Ok(Some(bytes))
 }
 
@@ -1519,6 +1536,51 @@ mod tests {
             read_console(&path),
             Err(PrivateFileError::Exposed(..))
         ));
+    }
+}
+
+/// `read_key_file` on every platform: what it reads, and what it refuses on
+/// Windows (the Unix rule is `tests`'s, beside the facts it judges).
+#[cfg(test)]
+mod key_file_tests {
+    use super::*;
+
+    /// **A key file is read at most one byte past its limit, and a missing
+    /// one is `None`**, on every platform. Red edit: read the whole file and
+    /// truncate (a longer file comes back whole), or treat a missing file as
+    /// an error.
+    #[test]
+    fn a_key_file_is_read_at_most_one_byte_past_its_limit() {
+        let dir = tempfile::tempdir().expect("directory");
+        let key = dir.path().join("key");
+        write_private(&key, &[7; 96]).expect("key");
+        let read = read_key_file(&key, 96).expect("read").expect("present");
+        assert_eq!(read.as_slice(), &[7; 96]);
+        let short = read_key_file(&key, 10).expect("read").expect("present");
+        assert_eq!(
+            short.as_slice(),
+            &[7; 11],
+            "one byte past the limit, no more"
+        );
+        assert!(read_key_file(&dir.path().join("absent"), 96)
+            .expect("absent")
+            .is_none());
+    }
+
+    /// **On Windows a key file another account can read is refused**: a file
+    /// made by a plain create, with the directory's inherited access and no
+    /// owner-only label, is `Exposed`. Red edit: drop the `check_private` in
+    /// the Windows `read_key_file`.
+    #[cfg(windows)]
+    #[test]
+    fn a_plain_file_is_not_a_key_file_on_windows() {
+        let dir = tempfile::tempdir().expect("directory");
+        let key = dir.path().join("key");
+        std::fs::write(&key, [7u8; 96]).expect("plain file");
+        assert!(
+            matches!(read_key_file(&key, 96), Err(PrivateFileError::Exposed(..))),
+            "a plain file was read as a key"
+        );
     }
 }
 
