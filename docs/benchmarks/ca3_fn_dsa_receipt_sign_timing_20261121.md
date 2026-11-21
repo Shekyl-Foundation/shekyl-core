@@ -177,6 +177,9 @@ records them
 - **The Pi:**
   - the model, the board revision, the OS, the kernel and the CPU governor,
     recorded before the run;
+  - the clock synchronised before the run starts (`timedatectl`: "System
+    clock synchronized: yes"). These boards boot on a stale clock and step
+    it a few seconds after boot, so the run starts only after the step;
   - at the start and the end: the load, the clock, the SoC temperature,
     `vcgencmd get_throttled`, the under-voltage alarm,
     `cpufreq/stats/time_in_state` and `total_trans`, and what else is
