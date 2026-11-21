@@ -1,7 +1,13 @@
 # `RT-P4`: both devices re-run on fips203 0.5.0, registered 2026-11-21
 
-**State of this record: registered; no run has been made.** Results are
-added below "Registered before the run", and that section is not edited
+**State of this record: the laptop's registered run is in, and it FAILS;
+the floor device's is not yet made.** On the laptop `fixed-vs-invalid`
+(`|t|` = 20.38) is over the fail line of 10 and `valid-vs-invalid` (9.64)
+is inconclusive; the control was detected and both nulls are clean, so
+the run is not void. A fail is not re-run: it goes to the maintainer, and
+the laptop's attestation entry is not changed. The floor device is under
+another lane's quiet claim until 2026-11-25 00:00Z. Results are added
+below "Registered before the run", and that section is not edited
 afterwards.
 
 ## Why this run
@@ -113,4 +119,110 @@ was made on that build's run; a fail here goes to the maintainer again.
 
 ## Results
 
-*None yet.*
+### The laptop — FAIL
+
+One attempt, 2026-11-21 15:14:06.91Z to 15:23:22.60Z (556 s), on the
+maintainer's Windows laptop, made by the agent on that machine. The
+machine enumerated as an Intel Core i9-11950H, 8 cores and 16 logical
+processors, before anything ran. A fresh recursive clone of `6b89c4862e`,
+the commit that carries this registration (`git status` clean), on a local
+fixed NTFS drive holding no synced folder; mains power; an unelevated
+session; `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`,
+`RUSTC_WRAPPER` and `CARGO_TARGET_DIR` empty and no user cargo config. The
+binary was not executed before this run. It was started with `start
+/affinity 10`, its affinity read back from the running process as `0x10`,
+normal priority, with no arguments. Its exit code was 1, the harness's
+failing exit. The output is
+`rt_p4_mlkem_decaps_timing_20261121_captures/laptop_registered_attempt1.txt`
+(5,025 bytes); its SHA-256 matches the one taken on the machine.
+
+```text
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=x86_64 os=windows samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on every real comparison; null comparisons: |t| < 4.5; control: |t| > 10
+comparison=fixed-vs-valid max_abs_t=1.40 median_ns=63100 n0=499545 n1=500455 verdict=no-evidence
+comparison=fixed-vs-invalid max_abs_t=20.38 median_ns=61900 n0=499434 n1=500566 verdict=LEAK
+comparison=fixed-vs-bitflip max_abs_t=2.97 median_ns=64400 n0=498225 n1=501775 verdict=no-evidence
+comparison=valid-vs-invalid max_abs_t=9.64 median_ns=63200 n0=500011 n1=499989 verdict=INCONCLUSIVE
+null=invalid-vs-invalid max_abs_t=1.75 median_ns=61700 n0=500041 n1=499959 verdict=no-evidence
+null=valid-vs-valid max_abs_t=1.43 median_ns=64300 n0=499595 n1=500405 verdict=no-evidence
+control=planted-leak fraction=0.005 planted_ns=322 max_abs_t=374.55 verdict=detected
+result=FAIL worst_real_abs_t=20.38 worst_null_abs_t=1.75 control_abs_t=374.55
+```
+
+(The per-quantile and per-crop lines are in the capture.)
+
+**Read against the lines, in order.** The control is detected (374.55 >
+10), and neither null reaches 4.5 (1.75, 1.43), so the run is not void.
+`fixed-vs-invalid` is over 10, so the run **fails** (line 3).
+`valid-vs-invalid`, one of the two comparisons an attacker's choice of
+ciphertext corresponds to, is inconclusive (line 4); the other,
+`fixed-vs-bitflip`, is below 4.5.
+
+**What the output shows, stated as observations.**
+
+- *The size.* Where `|t|` peaks, `fixed-vs-invalid` differs by 12.7 ns
+  (below 62,000 ns) and `valid-vs-invalid` by 14.0 ns (below 62,700 ns), on
+  a decapsulation of about 62 µs: about 0.02 % of one decapsulation. In
+  both the invalid class is the slower. The planted control is 322 ns, the
+  registered 0.5 %.
+- *Where.* Both comparisons over 4.5 compare an invalid ciphertext with a
+  valid one, and both peak at low cut-offs, near the fastest
+  decapsulations. `fixed-vs-valid` and the null `invalid-vs-invalid` are
+  clean. `fixed-vs-bitflip`, whose class 1 is also invalid, is below 4.5
+  here (it was 5.46 on 2026-10-23).
+- *Beside 2026-10-23.* That build's run failed on the same two
+  comparisons, by 17.9 ns and 16.0 ns, with the same sign and at the same
+  low cut-offs.
+
+**The build** (`laptop_rustc_vV.txt`, `example_rustc_line.txt`). rustc
+1.94.0 (`4a4ef493e`, LLVM 21.1.8), `fips203` 0.5.0 from the lock.
+`cargo build --release --locked -p shekyl-rpc-channel --example
+rt_p4_decaps_timing -v` exited 0; all 136 rustc invocations carry
+`-C target-feature=+crt-static`, the harness's included (its line is
+committed with the toolchain's path under the user profile replaced by
+`<rustup home>`, nothing else changed). The binary is 345,088 bytes, SHA-256
+`009df043067fd669db2e084ab2775b8be0d56ae6889c5ea54f3b0d0d2d9dc1ef`; `dumpbin
+/dependents` lists `api-ms-win-core-synch-l1-2-0.dll`, `KERNEL32.dll` and
+`ntdll.dll`, and no `VCRUNTIME140.dll`.
+
+**The code** (`laptop_x86_disasm_excerpts_crt_static.txt`, from this
+binary's `dumpbin /disasm`, in the 2026-10-23 file's sections). fips203
+changed, so addresses are this build's own and no same-address comparison
+is made. `ml_kem_decaps_internal`'s ciphertext comparison is a `sete`
+accumulated through `subtle::black_box` into the choice, as before, and the
+function has 9 conditional jumps. Over the 29 functions whose symbols name
+fips203, `subtle::black_box`, keccak or sha3: 7,793 instructions, 371
+conditional jumps, 78 cmov/set, 2 div. The agent made the excerpts with a
+PowerShell script, as that machine has no Python, not with the
+2026-10-23 script; per-function instruction counts may differ from that
+record's by padding lines.
+
+**Conditions**, none of them a line (the full records, which list every
+process on the machine, are kept in the estate's private captures):
+
+| Condition | At the run |
+|---|---|
+| Power | mains, battery 98 % charging, start and end; plan Balanced. The AC power overlay was set (`ded574b5-…`) at the start and the end; on 2026-10-23 there was none |
+| `QueryPerformanceFrequency` | 10,000,000, start and end |
+| Defender | real-time, tamper, behaviour and on-access protection on, start and end (left on, the maintainer's standing ruling); no scan running |
+| Quiet before the start | four 30-second samples, Defender 0.3 to 1.0 % of one logical processor, total load 1.4 to 2.9 % |
+| Logical processor 4 | 100 % busy in each of the nine one-minute samples through the run; performance counter 175.7 to 182.8 % of base |
+| Its sibling, logical 5 | 0.6 to 3.6 % busy over the run |
+| Total load | 7.5 to 10.7 % over the run |
+| Other work | two browser renderer processes used 186.7 s and 12.1 s of CPU over the 556 s, about a third of one logical processor; everything else under 3.2 s. The kernel, Defender, the search indexer and the WMI hosts are not readable from an unelevated session and are not measured |
+
+**Captures**, in `rt_p4_mlkem_decaps_timing_20261121_captures/`, each
+committed byte for byte as it left the machine, with `SHA256SUMS`:
+`laptop_registered_attempt1.txt`, `laptop_x86_disasm_excerpts_crt_static.txt`,
+`example_rustc_line.txt` and `laptop_rustc_vV.txt`.
+
+**Not done.** No re-run, and no analysis of the cause. The laptop's entry
+in `rt_p4_attestation.toml` is unchanged, so RT-P4's standing check stays
+red for the laptop until the maintainer rules.
+
+### The floor device — not yet made
+
+The Raspberry Pi 4 is under another lane's quiet claim (a 72-hour capture)
+until 2026-11-25 00:00Z. The run is made after that claim ends, or earlier
+if the maintainer clears a slot.
