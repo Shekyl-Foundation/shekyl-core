@@ -758,7 +758,9 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
             .expect("create the path");
         drop(
             redb::Builder::new()
-                .create_file(file)
+                .create_with_backend(
+                    redb::backends::FileBackend::new(file).expect("a file backend"),
+                )
                 .expect("the engine's first commit"),
         );
     }

@@ -14,11 +14,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-# The configuration file. 0.8 with `parse` is the workspace's production
-# TOML reader (shekyl-engine-prefs, shekyl-chain-store); its `Spanned`
-# re-export gives every key a byte range, so a refusal names its line
-# (IG-11). Verified at source in DAEMON_CONFIG_CUTOVER_AUDIT.md §4.
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+# The configuration file, read with the workspace's TOML reader; its
+# `Spanned` re-export gives every key a byte range, so a refusal names its
+# line (IG-11). Verified at source at the workspace pin (rust/Cargo.toml).
+toml = { workspace = true }
 # The nearest live name for an unknown one (IG-10), computed from the table.
 strsim = "0.11"
 # Secrets are zeroized when dropped (IG-6, rule 35).

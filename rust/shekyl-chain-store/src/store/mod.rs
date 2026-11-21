@@ -185,7 +185,7 @@ pub const TWO_PHASE_COMMIT: bool = true;
 
 /// Cache the engine is opened with.
 ///
-/// The value is redb's own default (1 GiB; `redb-4.4.0/src/db.rs:2045`) made explicit so a
+/// The value is redb's own default (1 GiB; `redb-4.6.0/src/db.rs:2299`) made explicit so a
 /// future redb bump cannot change RSS by omission (A4's shape, on the
 /// axis A5 measures). Reopen the number against DRS-BENCH peak-RSS,
 /// never to "go faster".
@@ -372,7 +372,7 @@ impl ChainStore {
     ///   the life of a writable `Database` and a shared one for a read-only
     ///   handle: a byte-range lock on its lock range, and on Linux also the
     ///   whole-file `flock` older redb took
-    ///   (`redb-4.4.0/src/tree_store/page_store/file_backend/optimized.rs:90`,
+    ///   (`redb-4.6.0/src/tree_store/page_store/file_backend/optimized.rs:128`, `lock_legacy_file`,
     ///   read at the pinned source). A second writable open — this process
     ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
     ///   read-only handle excludes every writer for as long as it exists.
@@ -561,8 +561,8 @@ impl ChainStore {
     /// closure wrote lands. There is no separate abort verb; an abort that
     /// the engine fails to complete is not lost either — redb latches the
     /// storage failure and refuses the next `begin_write` with
-    /// `StorageError::PreviousIo` (`redb-4.4.0/src/tree_store/page_store/cached_file.rs:200`,
-    /// held by its own test at `db.rs:2392`, read at the pinned source), which the next `write`
+    /// `StorageError::PreviousIo` (`redb-4.6.0/src/tree_store/page_store/cached_file.rs:221`,
+    /// held by its own test `transient_io_error`, `db.rs:2652`, read at the pinned source), which the next `write`
     /// surfaces as [`EngineError::BeginWrite`].
     ///
     /// `E` is any error the caller's closure may return, provided the

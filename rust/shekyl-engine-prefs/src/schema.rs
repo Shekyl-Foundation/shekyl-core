@@ -379,7 +379,13 @@ mod tests {
             schema_version = 1
             some_unknown_field = true
         "#;
-        assert!(toml::from_str::<WalletPrefs>(src).is_err());
+        let refused = toml::from_str::<WalletPrefs>(src).expect_err("refused");
+        assert!(
+            refused
+                .message()
+                .contains("unknown field `some_unknown_field`"),
+            "{refused}"
+        );
     }
 
     /// A typo inside a nested table must also fail.
@@ -389,7 +395,13 @@ mod tests {
             [cosmetic]
             defalt_priority = "high"
         "#;
-        assert!(toml::from_str::<WalletPrefs>(src).is_err());
+        let refused = toml::from_str::<WalletPrefs>(src).expect_err("refused");
+        assert!(
+            refused
+                .message()
+                .contains("unknown field `defalt_priority`"),
+            "{refused}"
+        );
     }
 
     /// The Bucket-3 names are NOT rejected at this layer — the schema
