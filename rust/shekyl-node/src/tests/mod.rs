@@ -26,10 +26,54 @@ mod producer;
 fn config_at(dir: &Path) -> DaemonConfig {
     dev_config(dir, &[])
 }
+/// The descriptor soft limit this test process runs under, at least: the
+/// hard limit when that is lower. Measured on macOS (soft limit 256 by
+/// default): the suite's parallel threads exhausted 256 descriptors and one
+/// node's transport runtime failed to start (`EMFILE`); one thread at 256,
+/// or every thread at 4096, passed.
+#[cfg(unix)]
+const IN_PROCESS_NODES_DESCRIPTORS: u64 = 4096;
+
+/// Every node a test opens stands in for a daemon, which has its own process
+/// and its own descriptor table, and sizes its inbound ceiling from the soft
+/// limit it observes and never raises (`shekyl-p2p`'s `descriptors`). Here
+/// the suite's nodes share this one process's table, so the process holds
+/// enough for the nodes running at once: the soft limit is raised once, to
+/// [`IN_PROCESS_NODES_DESCRIPTORS`] or the hard limit, never lowered. A
+/// refusal fails the test that asked, naming the limits.
+fn in_process_nodes_share_one_descriptor_table() {
+    #[cfg(unix)]
+    {
+        static RAISED: std::sync::Once = std::sync::Once::new();
+        RAISED.call_once(|| {
+            use rustix::process::{getrlimit, setrlimit, Resource, Rlimit};
+            let now = getrlimit(Resource::Nofile);
+            let want = now.maximum.map_or(IN_PROCESS_NODES_DESCRIPTORS, |hard| {
+                hard.min(IN_PROCESS_NODES_DESCRIPTORS)
+            });
+            if now.current.is_some_and(|soft| soft < want) {
+                setrlimit(
+                    Resource::Nofile,
+                    Rlimit {
+                        current: Some(want),
+                        maximum: now.maximum,
+                    },
+                )
+                .unwrap_or_else(|e| {
+                    panic!("raise the descriptor soft limit from {now:?} to {want}: {e}")
+                });
+            }
+        });
+    }
+}
+
 /// A network plan with no connectors: an in-process node binds nothing and
 /// dials nothing, whatever the configuration declares. The address file
-/// sits under the data directory, as the daemon's plan puts it.
+/// sits under the data directory, as the daemon's plan puts it. Every node
+/// a test opens takes its plan here, so this is where the process makes
+/// room for the nodes it holds ([`in_process_nodes_share_one_descriptor_table`]).
 fn test_plan(config: &DaemonConfig) -> NetworkPlan {
+    in_process_nodes_share_one_descriptor_table();
     NetworkPlan {
         network_id: [0; 16],
         seeds: None,
