@@ -25,6 +25,22 @@ pub enum CryptoError {
 
     #[error("serialization error: {0}")]
     SerializationError(String),
+
+    /// Stored ML-KEM decapsulation-key bytes that do not parse: a secret
+    /// coefficient of q or more (refused since fips203 0.5.0) or a failed
+    /// hash check. The key material is corrupt or was tampered with; the
+    /// ciphertext is not at fault, which is why this is not
+    /// [`Self::DecapsulationFailed`].
+    #[error("malformed ML-KEM decapsulation key: {0}")]
+    MalformedDecapsKey(String),
+
+    /// A stored ML-DSA signing key that does not parse (an s1 or s2
+    /// coefficient outside [-eta, eta], refused since fips204 0.5.0), or
+    /// that no signing attempt accepts (fips204's FIPS 204 Appendix C limit
+    /// of 814 attempts, which only a malformed key reaches). The key
+    /// material is corrupt.
+    #[error("malformed ML-DSA signing key: {0}")]
+    MalformedSigningKey(String),
 }
 
 /// Why a `pqc_auth` slot is refused: the multisig checks of
