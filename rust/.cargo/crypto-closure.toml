@@ -104,8 +104,8 @@ reason = "SHA-256 for bip39's mnemonic checksum word."
 
 [[package]]
 name = "bitvec"
-version = "1.0.1"
-reason = "Bit views under ff: scalar bit decomposition (PrimeFieldBits) in proofs and multiexp."
+version = "1.1.1"
+reason = "Bit views under ff: scalar bit decomposition (PrimeFieldBits) in proofs and multiexp. 1.1.1 admitted after diffing src against 1.0.1 (the crate ships no CHANGELOG): BitSpan's address mask keeps pointer provenance (wrapping offsets, not an int-to-pointer cast), serde slice deserialization checks head plus length against the buffer (behind serde, not enabled here), shift_left/shift_right become shift_start/shift_end with deprecated aliases (no Shekyl code calls bitvec), and cast cleanups."
 
 [[package]]
 name = "blake2"
