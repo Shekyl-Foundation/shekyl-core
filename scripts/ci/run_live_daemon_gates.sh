@@ -189,6 +189,11 @@ ARMED=(
   # daemon rebuilt to log an error line in its teardown: panicked at "a
   # requested stop logged". Green 8 s with the stop gate above.
   engine::regtest_e2e::a_requested_stop_logs_no_error_and_exits_0
+  # The dependency round (redb 4.6, whose close waits for the reads in
+  # progress): a wallet closed mid-scan, at a frame the scan reports,
+  # closes and reopens where it was; then SIGTERM stops the daemon.
+  # Prints both closes' durations.
+  engine::regtest_e2e::a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
@@ -237,11 +242,6 @@ ARMED=(
   # Observed red 2026-11-13 against a wallet server rebuilt without the
   # close at shutdown: panicked at "SIGTERM: the close is logged".
   engine::regtest_e2e::send_durable::each_stop_signal_closes_the_wallet
-  # The dependency round (redb 4.6, whose close waits for the reads in
-  # progress): SIGTERM while a refresh is scanning 1,500 blocks closes the
-  # wallet, the next server finds what was scanned, and the daemon's
-  # SIGTERM stops it. Prints both closes' durations.
-  engine::regtest_e2e::send_durable::a_stop_during_a_scan_closes_the_wallet_and_the_daemon_stops
   # Observed red 2026-11-13 against a wallet server rebuilt to mint the
   # hand-off when the dispatch save failed: the submit answered ACCEPTED
   # (verdict_saved false) where it must refuse -29131 SAVE_IO_FAILED (the

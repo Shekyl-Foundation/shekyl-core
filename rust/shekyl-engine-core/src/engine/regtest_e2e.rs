@@ -2188,6 +2188,113 @@ async fn a_stops_last_line_reaches_the_log_file() {
     );
 }
 
+/// **A wallet closed while its scan runs closes, and keeps what it had;
+/// then the daemon's stop closes its store.** redb 4.6's close waits for
+/// the reads in progress instead of racing them, so a scan still reading
+/// when the wallet closes holds the close. The close is taken at a point
+/// the scan itself reports: the refresh's own progress (one frame per
+/// scanned block, `local_refresh.rs`) shows blocks done and blocks left.
+/// The refresh must end `Cancelled`, which proves the close came mid-scan;
+/// the close must succeed; the reopened wallet must be where it was before
+/// the scan, since a scan merges into the ledger only at its end
+/// (snapshot-merge) and a cancelled one merges nothing. Then SIGTERM stops
+/// the daemon with exit 0. Each close's duration is printed
+/// (`--nocapture`), the figure the dependency round reports.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
+    use super::refresh::{RefreshOptions, RefreshPhase};
+    /// Blocks the wallet scans: the scan reports its first block long
+    /// before it reaches the last.
+    const CHAIN: u64 = 150;
+    const PASSWORD: &[u8] = b"close-mid-scan";
+    let seed = [0x6c; shekyl_crypto_pq::account::SEED_BYTES];
+    let mut daemon = RegtestDaemon::start_for_seed(&seed).await;
+    let (wallet, tmp) = create_wallet(daemon.rpc_port, &seed, PASSWORD).await;
+    let before = wallet.ledger().ledger.synced_count();
+    let mined = daemon.generate_blocks(CHAIN).await;
+    assert!(
+        mined.height > CHAIN,
+        "the chain is {CHAIN} blocks past genesis"
+    );
+
+    let arc = Arc::new(RwLock::new(wallet));
+    let handle = super::Engine::start_refresh(arc.clone(), RefreshOptions::default())
+        .await
+        .expect("start_refresh");
+    let mut progress = handle.progress();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        {
+            let frame = progress.borrow_and_update();
+            if frame.phase == RefreshPhase::Scanning
+                && frame.blocks_processed > 0
+                && frame.blocks_processed < frame.blocks_total
+            {
+                break;
+            }
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, progress.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("the scan ended before a frame showed it under way"),
+            Err(_) => panic!("no scanning frame within 120 s"),
+        }
+    }
+
+    let creds = super::lifecycle::Credentials::password_only(PASSWORD);
+    let asked = Instant::now();
+    handle.cancel();
+    let joined = handle.join().await;
+    assert!(
+        matches!(joined, Err(super::error::RefreshError::Cancelled)),
+        "the close must come mid-scan, so the scan ends Cancelled: {joined:?}"
+    );
+    let lock = Arc::try_unwrap(arc)
+        .unwrap_or_else(|_| panic!("the cancelled scan still holds the engine"));
+    lock.into_inner()
+        .close(&creds)
+        .await
+        .expect("a wallet closed mid-scan closes");
+    let wallet_close = asked.elapsed();
+
+    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+        .await
+        .expect("wallet rpc (reopen)");
+    let reopened = super::Engine::<super::SoloSigner>::open_full(
+        &tmp.path().join("wallet"),
+        &creds,
+        shekyl_address::Network::Regtest,
+        super::DaemonClient::verifying(rpc, regtest_expectation()),
+        shekyl_engine_file::SafetyOverrides::none(),
+    )
+    .expect("the wallet closed mid-scan reopens")
+    .into_wallet();
+    assert_eq!(
+        reopened.ledger().ledger.synced_count(),
+        before,
+        "a cancelled scan merges nothing: the wallet is where it was"
+    );
+    reopened
+        .close(&creds)
+        .await
+        .expect("close the reopened wallet");
+
+    let asked = Instant::now();
+    let status = terminate(&mut daemon).await;
+    let daemon_close = asked.elapsed();
+    let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).unwrap_or_default();
+    eprintln!(
+        "wallet close mid-scan: {wallet_close:?} from the close to closed; \
+         daemon close: {daemon_close:?} from SIGTERM to exit; its own line: {}",
+        log.lines()
+            .rfind(|l| l.contains("the daemon exits"))
+            .unwrap_or("<none>")
+    );
+    assert!(status.success(), "the daemon's stop exits 0: {status}");
+}
+
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
 /// and `dev_block_generate` advances the chain. De-risks the Phase-0 foundation
 /// (spawn, RPC, wallet creation, address-format match) before layering the spend

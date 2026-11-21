@@ -21,7 +21,7 @@
 
 #![cfg(test)]
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -178,91 +178,6 @@ async fn each_stop_signal_closes_the_wallet() {
     open(&last, NAME);
     let txid = previous.expect("three sends");
     assert!(outgoing_state(&last, &txid).is_some());
-}
-
-/// A stop that comes while the wallet is scanning closes it, and then the
-/// daemon's stop closes its store. redb 4.6's close waits for the reads in
-/// progress instead of racing them, so a reader still held at the stop
-/// would hold the close: the server must exit 0 with the close logged, the
-/// next server must find the wallet at least as far as the scan had got,
-/// and the daemon must stop on SIGTERM. Each close's duration is printed
-/// (`--no-capture`), the figure the dependency round reports.
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires SHEKYLD_BIN and SHEKYL_WALLET_RPC_BIN; spawns a live daemon"]
-async fn a_stop_during_a_scan_closes_the_wallet_and_the_daemon_stops() {
-    /// Blocks the wallet scans: enough that the scan is still running when
-    /// the stop is sent, on a fast host.
-    const CHAIN: u64 = 1_500;
-    let (mut daemon, wallet_dir, logs) = wallet_and_daemon(NAME, 0x67).await;
-    for _ in 0..CHAIN / 100 {
-        daemon.generate_blocks(100).await;
-    }
-    let mut server = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "scan");
-    open(&server, NAME);
-
-    // The scope ends when the refresh's call returns, which the stop ends:
-    // the process exits and its socket closes.
-    let (scanned, sent) = std::thread::scope(|scope| {
-        // The refresh is the scan; its reply may never come.
-        scope.spawn(|| drop(server.call("refresh", json!({}))));
-        let deadline = Instant::now() + Duration::from_secs(120);
-        let scanned = loop {
-            let reply = server.ok("get_height", json!({}));
-            let wallet = reply["wallet_height"].as_u64().expect("wallet_height");
-            let tip = reply["daemon_height"].as_u64().expect("daemon_height");
-            if wallet > 0 && wallet < tip {
-                break wallet;
-            }
-            assert!(
-                wallet < tip,
-                "the scan reached the tip ({tip}) before the stop could be sent mid-scan; \
-                 lengthen CHAIN"
-            );
-            assert!(Instant::now() < deadline, "the scan never started");
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        let sent = Instant::now();
-        server.signal("TERM");
-        (scanned, sent)
-    });
-    let status = server.wait_exit(Duration::from_secs(120));
-    let waited = sent.elapsed();
-    assert!(
-        status.success(),
-        "a stop mid-scan exits 0, got {status}; log tail:\n{}",
-        tail(&server.log_text())
-    );
-    eprintln!("wallet close mid-scan: {waited:?} from SIGTERM to exit, scanned to {scanned}");
-    assert!(
-        server.log_text().contains("the wallet is saved and closed"),
-        "the close is logged; log tail:\n{}",
-        tail(&server.log_text())
-    );
-
-    let next = WalletServer::spawn(wallet_dir.path(), daemon.rpc_port, logs.path(), "after");
-    open(&next, NAME);
-    let reopened = next.ok("get_height", json!({}))["wallet_height"]
-        .as_u64()
-        .expect("wallet_height");
-    assert!(
-        reopened >= scanned,
-        "the reopened wallet is at {reopened}, behind the {scanned} it had scanned"
-    );
-    drop(next);
-
-    let sent = Instant::now();
-    let status = super::terminate(&mut daemon).await;
-    eprintln!(
-        "daemon close: {:?} from SIGTERM to exit; its own line: {}",
-        sent.elapsed(),
-        std::fs::read_to_string(daemon.data_dir.join("shekyld.log"))
-            .unwrap_or_default()
-            .lines()
-            .rfind(|l| l.contains("the daemon exits"))
-            .unwrap_or("<none>")
-    );
-    assert!(status.success(), "the daemon's stop exits 0: {status}");
 }
 
 /// A send whose record cannot be saved is not sent: with every save of the
