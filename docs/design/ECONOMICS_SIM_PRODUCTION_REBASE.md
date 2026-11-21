@@ -5393,9 +5393,13 @@ at the inherited zone, ×1.25 all-Standard:
 | Closed shards y10 / y60 | 536 213 / 3 296 317 | 536 214 / 3 296 319 |
 | y1 Standard fees per block, SKL | 10.282 | 10.281 |
 
-The stage-2, flat-control, EUP-4 and J×G pins passed unregenerated. The
-`--esr10` fixtures are regenerated under this entry. Any other line they
-move is listed when they are committed.
+The full `--esr10` narration moved in the same block. The nightly
+narration on `steady` traffic moved in the same place: the stuffing
+attack at the inherited zone, year 1. Its emission at the flat-25 onset
+went from 471 973.5 to 471 973.4 SKL a year, and its y1 Standard fees per
+block from 14.839 to 14.838 SKL. No other line in the three moved. The
+stage-2, flat-control, EUP-4 and J×G pins passed unregenerated. The three
+`--esr10` fixtures are regenerated under this entry.
 
 **What sustained growth is in this table (Rick, 2026-11-21).** At
 20 % a year, demand at year 60 is already about 2.8 million transactions
