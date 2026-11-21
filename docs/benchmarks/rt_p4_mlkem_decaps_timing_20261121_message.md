@@ -263,6 +263,19 @@ each committed byte for byte as it left the machine, with `SHA256SUMS`:
 `example_rustc_line.txt`, `laptop_dumpbin_dependents.txt` and
 `laptop_rustc_vV.txt`.
 
+### The valid-against-invalid gap, 2026-11-21 (the maintainer)
+
+As information this run reads the gap between valid and invalid
+ciphertexts as `valid-vs-invalid` 45.41 (≈36 ns), `fixed-vs-invalid` 29.55
+(≈27 ns) and `fixed-vs-bitflip` 10.98 (≈10 ns), the invalid class slower in
+all three. The 2026-10-25 ruling's "about 16 ns"
+([`rt_p4_mlkem_decaps_timing_20261023.md`](rt_p4_mlkem_decaps_timing_20261023.md),
+"The ruling") no longer describes it. The maintainer's acceptance of the
+gap stands at these figures (2026-11-21), on the unchanged basis of
+`RPC_CHANNEL.md` §4.3: the same-user path decapsulates nothing, only a
+bundle holder reaches decapsulation (mac1), the handshake budget caps the
+rate, and the key is hybrid. The crypto-audit lane is investigating the gap.
+
 ### The floor device — not yet made
 
 The second Raspberry Pi 4 the maintainer is providing; its identity is
