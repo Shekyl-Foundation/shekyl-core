@@ -69,46 +69,31 @@ pub const FLUFF_RETURN: DerivationMs = DerivationMs::model(3_250);
 /// the design round can move it and watch the embargo follow.
 pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 
-/// The false-retry rate for an **origin's** re-broadcast, as `1 / one_in` —
-/// derived from [`EMBARGO_FULL_TRAVEL_PROBABILITY`], not chosen beside it.
+/// How many stem completions the network asks for before one judgment is
+/// early, as `1 / one_in`, derived from [`EMBARGO_FULL_TRAVEL_PROBABILITY`].
 ///
-/// # Why the origin's retry is the network's question asked by a different actor
+/// At `alpha = 0.90`, nine stems in ten finish before any node on the path
+/// fires. The residual `1 - alpha` is the rate at which calling a stem
+/// complete is early, so `one_in = 1 / (1 - alpha)`. If `alpha` moves, this
+/// follows (§94.8). It is not a second chosen bar.
 ///
-/// `EMBARGO_FULL_TRAVEL_PROBABILITY` pins the confidence at which a *relaying*
-/// node decides a stem has probably completed: at `alpha = 0.90`, a node's
-/// embargo is solved so that 9 stems in 10 finish before any node on the path
-/// fires. An origin re-broadcasting its own transaction is asking the same
-/// question — *has this stem probably completed?* — so it should ask it at the
-/// same confidence. The residual `1 - alpha` IS the rate at which retrying is
-/// premature, so `one_in = 1 / (1 - alpha)`.
+/// The name is the question this rate was derived to answer: an origin's
+/// re-broadcast, at that same confidence. The re-broadcast is gone (Rick,
+/// 2026-11-18). Once a transaction has been sent, this node's own draws the
+/// same embargo as a relayed one. Nothing arms a timer from this rate. It
+/// prices two reads that do not know which connector carried the stem: the
+/// age at which the daemon reports an unpublished own transaction overdue
+/// (`shekyl-relay`'s `origin_publication_budget_ms`, status only), and how
+/// long a test watches for an embargo fire that must not come
+/// (`embargo_quiet_wait_secs`).
 ///
-/// Deriving rather than choosing is the point (§94.8's argument, one layer
-/// down): if `alpha` moves, this follows automatically instead of decoupling
-/// silently, and there is no self-invented bar to defend. The alternative on
-/// offer was a point inside a bracket, which is a bar of exactly that kind.
-///
-/// # What it replaces, and why the shipped value was a defect rather than a
-/// tuning question
-///
-/// The inherited `MIN_RELAY_TIME` (300 s) governs the pool's re-broadcast loop
-/// for `local`, `fluff` and `block`. §15.4 cleared it from the embargo's
-/// neighbourhood on the ground that it *"governs an already-fluffed
-/// transaction, a different state from the embargo"* — true when written, and
-/// **vacated** by the own-edge plan, which keeps a hidden-address origin
-/// at `Local` for its whole life, so that class is never fluffed and lives
-/// on that branch until the stem is observed.
-///
-/// At 300 s that origin re-emits **below the anonymity embargo's median**
-/// (346 s): more than half the embargoes along its own stem are still running,
-/// so the retry fires while the transaction is propagating normally. That is
-/// the under-provisioning direction, on the origination path, where the thing
-/// being protected is the fact of origination.
+/// `MIN_RELAY_TIME` (300 s) is not this rate. It governed a pool
+/// re-broadcast of an already-fluffed transaction, and it sits below the
+/// embargo median (346 s).
 #[must_use]
 pub fn origin_retry_one_in() -> u64 {
-    // Rounded, then checked in `origin_retry_rate_is_the_reciprocal_of_alpha`:
-    // an `alpha` that is not of the form `1 - 1/N` cannot be expressed as an
-    // integer rate, and the test reds rather than this silently asking a
-    // different question than the network does.
+    // Rounded. An `alpha` that is not `1 - 1/N` cannot be an integer rate,
+    // and this cast is the whole expression of that rate.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let one_in = (1.0 / (1.0 - EMBARGO_FULL_TRAVEL_PROBABILITY)).round() as u64;
     one_in

@@ -551,7 +551,7 @@ jobs:
         uses: ./.github/actions/install-rust
 
       - name: install gungraun-runner
-        run: cargo install gungraun-runner --version '=0.19.3' --locked
+        run: cargo install gungraun-runner --version '=0.19.4' --locked
 
       - name: Capture the nightly set
         env:

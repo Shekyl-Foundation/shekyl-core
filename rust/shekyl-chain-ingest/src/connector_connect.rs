@@ -13,8 +13,8 @@
 //! the height claim, the refusal, or the bookkeeping.
 
 use shekyl_chain_rules::{
-    validate_with_memo, ArchivalDelta, CenRow, ChainValid, DrawableMemo, HeaderView, PaidEmission,
-    RuleSet, StructurallyValid, Verdict, Weights,
+    validate_with_memo, ArchivalDelta, CenRow, ChainValid, ChainView, DrawableMemo, HeaderView,
+    PaidEmission, RuleSet, StructurallyValid, Verdict, Weights,
 };
 use shekyl_chain_store::store::{BatchView, WriteBatch};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
@@ -30,6 +30,20 @@ pub(super) struct ConnectedFacts {
     weights: Weights,
     emission: PaidEmission,
     archival: ArchivalDelta,
+}
+
+impl ConnectedFacts {
+    /// The facts `valid`'s verdict derived: one constructor for a block
+    /// [`Apply`](super::Apply) connects and one a switch promotes.
+    pub(super) fn of<'id, V: ChainView<'id>>(valid: &ChainValid<'id, V>) -> Self {
+        Self {
+            hash: valid.block().hash(),
+            root_after: valid.block().root_after(),
+            weights: *valid.block().weights(),
+            emission: *valid.block().emission(),
+            archival: valid.block().archival().clone(),
+        }
+    }
 }
 
 /// A block `validate_with_memo` accepted and this batch has not connected yet.
@@ -94,13 +108,7 @@ pub(super) fn judge_connecting<'b, 'id>(
         }
         Err(fault) => return Err(super::validate_fault(batch, height, fault)),
     };
-    let facts = ConnectedFacts {
-        hash: valid.block().hash(),
-        root_after: valid.block().root_after(),
-        weights: *valid.block().weights(),
-        emission: *valid.block().emission(),
-        archival: valid.block().archival().clone(),
-    };
+    let facts = ConnectedFacts::of(&valid);
     Ok(Some(Judged {
         height,
         valid,
@@ -116,4 +124,18 @@ pub(super) fn record_connected(applied: &mut Applied, height: BlockHeight, facts
     applied.weights.push((height, facts.weights));
     applied.emission.push((height, facts.emission));
     applied.archival.push((height, facts.archival));
+}
+
+/// Record a block that this batch's switch has promoted, as
+/// [`record_connected`] records a connected one.
+pub(super) fn record_promoted(
+    done: &mut super::SwitchDone,
+    height: BlockHeight,
+    facts: ConnectedFacts,
+) {
+    done.promoted.push((height, facts.hash));
+    done.roots.push((height, facts.root_after));
+    done.weights.push((height, facts.weights));
+    done.emission.push((height, facts.emission));
+    done.archival.push((height, facts.archival));
 }
