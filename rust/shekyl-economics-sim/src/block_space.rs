@@ -543,8 +543,15 @@ impl BlockSpace {
             u64::try_from((room / u128::from(tx.weight)).min(u128::from(demand)))
                 .expect("at most the demand")
         };
-        let mut over = (self.weight_total + u128::from(admitted) * u128::from(tx.weight))
-            .saturating_sub(u128::from(limit));
+        // A refused arrival leaves the pool as it was, so nothing leaves
+        // unless one is admitted, even where the pool is over a limit that
+        // fell; the first admitted then covers that excess too.
+        let mut over = if admitted == 0 {
+            0
+        } else {
+            (self.weight_total + u128::from(admitted) * u128::from(tx.weight))
+                .saturating_sub(u128::from(limit))
+        };
         for group in victims {
             if over == 0 {
                 break;

@@ -263,7 +263,7 @@ fn the_cohort_walk_is_the_templates_walk_over_every_transaction() {
 /// split.
 #[test]
 fn admission_makes_room_as_the_pool_does() {
-    let cases: [(&[Cohort], OrdinaryTx, u64, u64); 4] = [
+    let cases: [(&[Cohort], OrdinaryTx, u64, u64); 5] = [
         // Same weight: the batch path.
         (
             &[cohort(1_000, 10, 50, 3), cohort(2_000, 10, 30, 4)],
@@ -307,6 +307,17 @@ fn admission_makes_room_as_the_pool_does() {
             },
             10,
             600,
+        ),
+        // A limit that fell below what the cheaper entries could free:
+        // every arrival refused, and nothing leaves.
+        (
+            &[cohort(1_000, 10, 5, 3), cohort(3_000, 10, 70, 4)],
+            OrdinaryTx {
+                fee_atomic: 3_000,
+                weight: 10,
+            },
+            5,
+            500,
         ),
     ];
     for (case, (pool, tx, demand, limit)) in cases.iter().enumerate() {
