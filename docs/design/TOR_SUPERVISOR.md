@@ -330,8 +330,9 @@ the sweep removes files as well as directories. **Built:** the sweep removes
 every entry under the prefix, a symlink as a link (§8).
 
 **TSR-F15 (medium; TB lane). macOS has a managed Tor; §7's macOS cases are
-the supervisor's acceptance tests there.** Both macOS rows are pinned at
-15.0.26 (TB-11, Rick 2026-10-23), with the Developer ID-signed `tor` and
+the supervisor's acceptance tests there.** Both macOS rows are pinned
+(TB-11, Rick 2026-10-23), at 16.0.1 since 2026-11-21, with the Developer
+ID-signed `tor` and
 `libevent` as what ships (`TOR_BUNDLE_DISTRIBUTION.md` §4). TB-11's launch
 test on both platforms is `tor-pin-verify`: its Windows entry and its two
 macOS entries, which run the live tests on the exact signed bytes. §7's

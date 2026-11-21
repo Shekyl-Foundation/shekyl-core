@@ -105,18 +105,18 @@
       "arch": "x86_64",
       "gitian_host": "x86_64-apple-darwin11",
       "disposition": "pinned",
-      "bundle_version": "15.0.26",
+      "bundle_version": "16.0.1",
       "bundle_target": "macos-x86_64",
-      "tor_version": "0.4.9.14",
-      "tarball_sha256": "e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95",
+      "tor_version": "0.4.9.16",
+      "tarball_sha256": "15464d99adc3bb4de1308260d79878336b04a1ac1aeff83e10f192de7d235946",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "81c00fb8fa85194ad853a9160d8c57029f01aac5e2cdd741b3a057e988a942b9" },
-        { "name": "libevent-2.1.7.dylib", "sha256": "afdbfe863b8dff0d8d23e20073d7f5f1d785fab72df953faa6bc5f2af5933394" }
+        { "name": "tor", "sha256": "3533d0debc16ad65a15fb1e9840d3e2f1d78ae5384a623750d11d40d99f2815d" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "3c7c2bab19e7457f2abac8f2ea977a764552a18ecee35e24dc390f6db7e3e62f" }
       ],
       "upstream": [
-        { "name": "tor", "sha256": "e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14" },
-        { "name": "libevent-2.1.7.dylib", "sha256": "38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b" }
+        { "name": "tor", "sha256": "41ac55a641569ddb94fbd42059799bcf4c00291b6cd8a607aed53e5eaa5ba016" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "25646a77c3f71f62f7cc3756320e6f7c3cc48174d5763b11ba03148daaae81e9" }
       ],
       "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
@@ -125,18 +125,18 @@
       "arch": "aarch64",
       "gitian_host": "aarch64-apple-darwin11",
       "disposition": "pinned",
-      "bundle_version": "15.0.26",
+      "bundle_version": "16.0.1",
       "bundle_target": "macos-aarch64",
-      "tor_version": "0.4.9.14",
-      "tarball_sha256": "a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c",
+      "tor_version": "0.4.9.16",
+      "tarball_sha256": "0b7d022017c31e3f972d06465bcd7ac50feb66ac825547419a934914fe4bb156",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "23829c8c47c8a13a391d7c0870666d571a65ab71167d0de7b9a560b0a5a76838" },
-        { "name": "libevent-2.1.7.dylib", "sha256": "cc12c96e43d0806e5c1767f6880c96fac3e6d77e7fbc325e47513a4fe1d2eeb2" }
+        { "name": "tor", "sha256": "f1e7283007c79f50d46428923238b432959c25370ee22a5af96de8e6508faef1" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "bf940212466065cea143c7c157c26eb46bc8d206d1c36ad8d1beb71daf1e0a79" }
       ],
       "upstream": [
-        { "name": "tor", "sha256": "7d5a89b6cec99aab47420040ad86dd5fd5174192e71b6c201b0b10170ba57ebb" },
-        { "name": "libevent-2.1.7.dylib", "sha256": "6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739" }
+        { "name": "tor", "sha256": "1a910d08cc88e23d5823554272dc1722c6275e322230455ea4dddf9c99e4de7a" },
+        { "name": "libevent-2.1.7.dylib", "sha256": "d51339ae695865b911c56c6d4da9a4084a74c9484c856c4fa5c22440ba82e0b9" }
       ],
       "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     }
