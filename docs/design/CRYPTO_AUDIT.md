@@ -712,4 +712,7 @@ message.
    pattern in signing is a function of values the signature reveals.
 4. **The harness's development run.** 100 samples per comparison, seed not
    registered; not a result. Every signature verified. The lines read 0.77
-   and 1.68, and the first null 1.52.
+   and 1.68, and the nulls 1.52 and 0.51. The planted 0.5 % (2.9 ms) read
+   1.27 and was not detected. At this signature's cost, the registered run
+   needs a sample count and control size chosen together, and on the floor
+   device each thousand samples is over an hour per comparison.
