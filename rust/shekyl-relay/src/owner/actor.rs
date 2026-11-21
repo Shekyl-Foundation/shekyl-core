@@ -15,6 +15,7 @@
 //! and the published snapshot replaced.
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use shekyl_draw_rng::RelayRng;
@@ -624,24 +625,28 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             // (`RPC_CHANNEL.md` §6.4, RT-O9.3): it sits on disk, at any
             // level a runtime option may raise.
             //
-            // The zone armed nothing when it asked for this stem: the write
-            // records it, and a write that did not land is reported back.
-            Effect::Stem {
-                peer,
-                tx,
-                blob,
-                source,
-            } => {
+            // The zone armed nothing when it asked for this stem. The write
+            // commits it; a write that did not land is the zone's rejection.
+            Effect::Stem { stem } => {
                 let now = self.now();
-                let one = [(tx, blob)];
-                if self.send_batch(peer, std::slice::from_ref(&one[0].1), false) {
+                if self.send_batch(stem.peer, std::slice::from_ref(&stem.blob), false) {
                     tracing::debug!("a reshape stem was written");
                     self.driver
                         .zone_mut()
-                        .record_stem(&one, peer, source, now, &mut *self.rng);
+                        .commit_stem(&stem, now, &mut *self.rng);
                 } else {
                     tracing::debug!("a reshape stem was not written");
-                    self.missed_zone_stem(&one[0], peer, source, now);
+                    if let ControlFlow::Break(()) =
+                        self.driver
+                            .zone_mut()
+                            .reject_stem(&stem, now, &mut *self.rng)
+                    {
+                        tracing::debug!(
+                            "fluffing what could not stem: {}",
+                            StemFallback::WriteFailed.reason()
+                        );
+                        self.fluff_and_record(&[(stem.tx, TxBlob::clone(&stem.blob))], stem.source);
+                    }
                 }
             }
             Effect::Published { txs } => {
@@ -725,42 +730,6 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
         self.driver
             .zone_mut()
             .record_stem(&one, successor, pending.source, now, &mut *self.rng);
-    }
-
-    /// A stem the zone asked for ([`Effect::Stem`]) was not written.
-    ///
-    /// A held origin's first send: the zone still holds it unsent and plans
-    /// it again on its grid. A reshape has already been sent once, so it is
-    /// armed for one more embargo and its next fire ends the stem phase;
-    /// when that embargo cannot be armed, the phase ends now. Which of the
-    /// two this is is read from whether the transaction was ever sent
-    /// ([`Relay::stem_sent`]), never from whose it is.
-    fn missed_zone_stem(
-        &mut self,
-        stem: &(TxId, TxBlob),
-        peer: ConnectionId,
-        source: Option<ConnectionId>,
-        now: Millis,
-    ) {
-        let (tx, _) = stem;
-        if !self.driver.zone().stem_sent(tx) {
-            self.driver
-                .zone_mut()
-                .hold_origin(std::slice::from_ref(stem), now);
-            return;
-        }
-        let armed =
-            self.driver
-                .zone_mut()
-                .arm_missed_reshape(*tx, peer, source, now, &mut *self.rng);
-        if !armed {
-            self.driver.zone_mut().release(tx);
-            tracing::debug!(
-                "fluffing what could not stem: {}",
-                StemFallback::WriteFailed.reason()
-            );
-            self.fluff_and_record(std::slice::from_ref(stem), source);
-        }
     }
 
     /// Hold this node's own transactions and say why.

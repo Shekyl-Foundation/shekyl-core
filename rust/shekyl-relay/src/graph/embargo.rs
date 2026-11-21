@@ -25,15 +25,15 @@
 //! retry interval where a relayed stem draws one. The own/relayed
 //! distinction exists only before the first send. **The edit that would
 //! bring a difference back is any branch on `source` in
-//! [`Relay::record_stem`], [`Relay::arm_missed_reshape`] or
+//! [`Relay::record_stem`], [`Relay::reject_stem`] or
 //! [`Relay::fire_embargoes`]**;
 //! `a_dropped_stem_gets_one_reaction_own_or_relayed` fails on it.
 //!
 //! **A stem is recorded when its write lands.** The zone asks for a reshape
-//! or a held origin's first send ([`StemWork`]) and arms nothing; the caller
-//! writes, then records ([`Relay::record_stem`]). A reshape whose write
-//! missed is armed once more ([`Relay::arm_missed_reshape`]) so its next
-//! fire ends the stem phase.
+//! or a held origin's first send ([`StemWork`]) and arms nothing. The caller
+//! writes, then [`Relay::commit_stem`] records it. A write that did not land
+//! is [`Relay::reject_stem`]: a first send stays on the unsent grid, and a
+//! reshape is armed once more so its next fire ends the stem phase.
 //!
 //! **On fire, reshape** (§12.2, adopted unconditionally at §14.7): the first
 //! fire re-stems to the source's alternate, taken from its frozen pin
@@ -53,6 +53,7 @@
 //! (`Relay::release`, `DRS_X_STORE_FLIP.md` §2).
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::sync::OnceLock;
 
 use shekyl_draw_rng::RelayRng;
@@ -218,10 +219,9 @@ pub struct EmbargoWork {
 
 /// One stem the zone asks for.
 ///
-/// The zone has armed nothing for it. The caller writes it and records the
-/// stem only after the write lands ([`Relay::record_stem`]); a write that
-/// did not land is the caller's to report (a reshape:
-/// [`Relay::arm_missed_reshape`]; a first send: the row is still unsent).
+/// The zone has armed nothing for it. The caller writes it, then
+/// [`Relay::commit_stem`] records the stem. A write that did not land is
+/// [`Relay::reject_stem`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StemWork {
     /// The successor.
@@ -285,35 +285,62 @@ impl Relay {
         }
     }
 
-    /// The reshape's write did not land.
+    /// The write of `stem` landed. Records it and arms its embargo.
     ///
-    /// [`Relay::fire_embargoes`] has already set `restemmed`, so the next
-    /// fire ends the stem phase. One embargo from `now` is that fire.
-    /// `false` when `successor` can no longer carry an embargo: the caller
-    /// ends the phase now, because nothing would wake it.
-    pub fn arm_missed_reshape<R: RelayRng + ?Sized>(
+    /// [`Self::record_stem`] is the same record for a batch. Dispatch and a
+    /// carrier verdict send more than one transaction and call that. A zone
+    /// effect is one [`StemWork`], and this is its record.
+    pub fn commit_stem<R: RelayRng + ?Sized>(&mut self, stem: &StemWork, now: Millis, rng: &mut R) {
+        self.record_stem(
+            &[(stem.tx, TxBlob::clone(&stem.blob))],
+            stem.peer,
+            stem.source,
+            now,
+            rng,
+        );
+    }
+
+    /// The write of `stem` did not land.
+    ///
+    /// [`ControlFlow::Continue`] — the zone still holds the transaction. A
+    /// first send stays on the unsent grid. A reshape was already marked
+    /// re-stemmed by [`Self::fire_embargoes`], and one embargo from `now`
+    /// is armed so the next fire ends the stem phase.
+    /// [`ControlFlow::Break`] — that embargo cannot be drawn, so nothing
+    /// would wake the row. The row is released and the caller broadcasts
+    /// `stem`.
+    ///
+    /// Which of the two holds it is read from the zone's own rows, never
+    /// from whose transaction it is. The [`ControlFlow`] is already
+    /// `must_use`: a `Break` the caller drops is a transaction released
+    /// and never broadcast.
+    pub fn reject_stem<R: RelayRng + ?Sized>(
         &mut self,
-        tx: TxId,
-        successor: ConnectionId,
-        source: Option<ConnectionId>,
+        stem: &StemWork,
         now: Millis,
         rng: &mut R,
-    ) -> bool {
-        let Some((connector, deadline)) = self.embargo_draw(successor, now, rng) else {
-            return false;
+    ) -> ControlFlow<()> {
+        if !self.embargoes.held.contains_key(&stem.tx) {
+            self.hold_origin(&[(stem.tx, TxBlob::clone(&stem.blob))], now);
+            return ControlFlow::Continue(());
+        }
+        let Some((connector, deadline)) = self.embargo_draw(stem.peer, now, rng) else {
+            self.release(&stem.tx);
+            return ControlFlow::Break(());
         };
         self.stem_watch
-            .stemmed(tx, successor, source, connector, deadline);
-        true
+            .stemmed(stem.tx, stem.peer, stem.source, connector, deadline);
+        ControlFlow::Continue(())
     }
 
     /// Act on every embargo that fired by `now`: re-stem once to the
     /// alternate, else fluff and publish (§12.2, §14.7). One path for this
     /// node's own transactions and relayed ones.
     ///
-    /// A reshape is asked for, not armed: the caller records the stem when
-    /// the write lands ([`Relay::record_stem`]), and a missed write is armed
-    /// then ([`Relay::arm_missed_reshape`]) so the next fire ends the phase.
+    /// A reshape is asked for, not armed. The caller records it when the
+    /// write lands ([`Relay::commit_stem`]). A missed write is
+    /// [`Relay::reject_stem`], which arms the next fire when it can and
+    /// ends the phase when it cannot.
     pub fn fire_embargoes<R: RelayRng + ?Sized>(
         &mut self,
         now: Millis,
@@ -363,14 +390,6 @@ impl Relay {
             }
         }
         work
-    }
-
-    /// Whether `tx` has been sent on a stem and is held for its embargo.
-    /// From then on it is treated as a relayed transaction, this node's own
-    /// included.
-    #[must_use]
-    pub fn stem_sent(&self, tx: &TxId) -> bool {
-        self.embargoes.held.contains_key(tx)
     }
 
     /// Hold this node's own `txs`, which were not sent: not shown, not

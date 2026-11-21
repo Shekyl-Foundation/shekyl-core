@@ -9,6 +9,8 @@
 
 #![cfg(test)]
 
+use std::ops::ControlFlow;
+
 use shekyl_draw_rng::SplitMix64;
 use shekyl_relay_privacy::conformance::RecoveryBudget;
 use shekyl_relay_privacy::params::{origin_retry_one_in, DandelionParams};
@@ -158,11 +160,8 @@ fn a_dropped_stem_gets_one_reaction_own_or_relayed() {
             z.stem_observation_deadline().is_none(),
             "the fire asks for the reshape; the write arms it"
         );
-        let stem = &first.stems[0];
-        z.record_stem(
-            &[(stem.tx, TxBlob::clone(&stem.blob))],
-            stem.peer,
-            stem.source,
+        z.commit_stem(
+            &first.stems[0],
             first_fire,
             &mut SplitMix64::new(seed ^ 0x55),
         );
@@ -290,13 +289,7 @@ fn the_daemon_judges_an_origin_hold_against_its_own_budget() {
         "the fire asks for the reshape; the write arms it"
     );
     for stem in &reshape.stems {
-        fired.record_stem(
-            &[(stem.tx, TxBlob::clone(&stem.blob))],
-            stem.peer,
-            stem.source,
-            first,
-            &mut rng,
-        );
+        fired.commit_stem(stem, first, &mut rng);
     }
     let second_at = fired
         .stem_observation_deadline()
@@ -362,14 +355,7 @@ fn an_own_transaction_re_stems_once_to_its_alternate_then_is_broadcast() {
         z.stem_observation_deadline().is_none(),
         "the fire asks for the reshape; the write arms it"
     );
-    let stem = &first.stems[0];
-    z.record_stem(
-        &[(stem.tx, TxBlob::clone(&stem.blob))],
-        stem.peer,
-        stem.source,
-        fire,
-        &mut rng,
-    );
+    z.commit_stem(&first.stems[0], fire, &mut rng);
 
     let second_at = z.stem_observation_deadline().expect("armed by the write");
     let second = z.fire_embargoes(second_at, &mut rng);
@@ -715,21 +701,21 @@ fn the_wire_carries_only_the_transaction() {
     let stems: Vec<_> = first
         .iter()
         .filter_map(|effect| match effect {
-            Effect::Stem {
-                peer,
-                tx,
-                blob,
-                source,
-            } => Some((*peer, *tx, TxBlob::clone(blob), *source)),
+            Effect::Stem { stem } => Some(StemWork::clone(stem)),
             _ => None,
         })
         .collect();
     assert_eq!(
         stems,
-        vec![(alternate, sent.0, TxBlob::clone(&sent.1), Some(id(9)))]
+        vec![StemWork {
+            peer: alternate,
+            tx: sent.0,
+            blob: TxBlob::clone(&sent.1),
+            source: Some(id(9)),
+        }]
     );
     assert_eq!(
-        stems[0].2.as_ref(),
+        stems[0].blob.as_ref(),
         sent.1.as_ref(),
         "byte for byte the transaction"
     );
@@ -737,14 +723,7 @@ fn the_wire_carries_only_the_transaction() {
         d.zone().stem_observation_deadline().is_none(),
         "the poll asks for the reshape; the write arms it"
     );
-    let (peer, tx, blob, source) = &stems[0];
-    d.zone_mut().record_stem(
-        &[(*tx, TxBlob::clone(blob))],
-        *peer,
-        *source,
-        fire,
-        &mut rng,
-    );
+    d.zone_mut().commit_stem(&stems[0], fire, &mut rng);
 
     let second_fire = d
         .zone()
@@ -776,7 +755,7 @@ fn first_reshape(z: &mut Relay, rng: &mut SplitMix64) -> (StemWork, Millis) {
 /// caller ends the phase at once and nothing is left waiting on a wake that
 /// never comes. Red edits: arm the reshape in `fire_embargoes` (the
 /// not-armed assertion); clear `restemmed` on a miss (a second reshape); or
-/// branch on `source` in `arm_missed_reshape` (own and relayed differ).
+/// branch on `source` in `reject_stem` (own and relayed differ).
 #[test]
 fn a_missed_reshape_is_armed_once_and_its_next_fire_broadcasts() {
     let run = |own: bool| {
@@ -804,20 +783,18 @@ fn a_missed_reshape_is_armed_once_and_its_next_fire_broadcasts() {
             &mut SplitMix64::new(1),
         );
         let (stem, fire) = first_reshape(&mut z, &mut rng);
-        assert!(z.stem_sent(&sent.0), "sent once: no longer a first send");
+        assert!(
+            !z.holds_unsent(&sent.0),
+            "sent once: no longer a first send"
+        );
         assert!(
             z.stem_observation_deadline().is_none(),
             "the fire arms nothing"
         );
-        assert!(
-            z.arm_missed_reshape(
-                stem.tx,
-                stem.peer,
-                stem.source,
-                fire,
-                &mut SplitMix64::new(2)
-            ),
-            "the alternate is connected: the miss is armed"
+        assert_eq!(
+            z.reject_stem(&stem, fire, &mut SplitMix64::new(2)),
+            ControlFlow::Continue(()),
+            "the alternate is connected: the miss stays armed"
         );
         let last = z
             .stem_observation_deadline()
@@ -836,10 +813,12 @@ fn a_missed_reshape_is_armed_once_and_its_next_fire_broadcasts() {
     originate(&mut z, &sent, &mut rng);
     let (stem, fire) = first_reshape(&mut z, &mut rng);
     z.on_connection_close(&stem.peer);
-    assert!(
-        !z.arm_missed_reshape(stem.tx, stem.peer, stem.source, fire, &mut rng),
+    assert_eq!(
+        z.reject_stem(&stem, fire, &mut rng),
+        ControlFlow::Break(()),
         "a gone alternate carries no embargo: the caller ends the phase"
     );
+    assert_eq!(z.relay_state_len(), 0, "the row is released with the break");
     assert!(z.stem_observation_deadline().is_none());
 }
 
@@ -860,8 +839,12 @@ fn a_first_send_that_misses_stays_unsent_and_is_planned_again_on_the_grid() {
     let first = z.due_unsent(NEVER_SENT_RETRY_MS, &mut rng);
     assert_eq!(first.stems.len(), 1, "due at the grid");
     assert_eq!(first.stems[0].source, None);
-    // The write misses: nothing is recorded.
-    assert!(z.holds_unsent(&sent.0) && !z.stem_sent(&sent.0));
+    assert_eq!(
+        z.reject_stem(&first.stems[0], NEVER_SENT_RETRY_MS, &mut rng),
+        ControlFlow::Continue(()),
+        "a missed first send stays with the zone"
+    );
+    assert!(z.holds_unsent(&sent.0), "still unsent: no byte left");
     assert_eq!(z.stem_observations_in_flight(), 0, "no embargo is armed");
     assert_eq!(
         z.unsent_deadline(),
