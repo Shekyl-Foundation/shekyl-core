@@ -6,9 +6,10 @@
 //! Spawning one incarnation and keeping its data directory across a respawn.
 //!
 //! A failed spawn returns the directory. [`DaemonTorControl::stop_for_respawn`]
-//! stops the child and returns it too. A directory that is not spawned into
-//! again is retired ([`KeptDataDir::retire`]): Tor's log is kept beside it and
-//! the rest becomes a tombstone (`TSR-Q1`, `TOR_SUPERVISOR.md` §4.7).
+//! stops the child, writes the directory cache and the guards back, and
+//! returns the directory. A directory that is not spawned into again is
+//! retired ([`KeptDataDir::retire`]): Tor's log is kept beside it and the
+//! rest becomes a tombstone (`TSR-Q1`, `TOR_SUPERVISOR.md` §4.7).
 
 use std::future::Future;
 use std::io;
@@ -28,7 +29,9 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::directory_cache;
 
-use super::{retire, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, Retirement};
+use super::{
+    kept, retire, DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptSave, Retirement,
+};
 use crate::data_dir::{sweep_stale_data_dirs, EphemeralDataDir, CACHE_DIR_NAME};
 
 /// A data directory kept across a respawn. [`Self::retire`] ends it; a drop
@@ -65,6 +68,16 @@ impl KeptDataDir {
         }
         self.retire().await
     }
+}
+
+/// A clean stop that kept the directory for the next spawn, and what that
+/// stop wrote back. The caller says a failed write-back; this crate does not
+/// log.
+pub struct RespawnKept {
+    /// The directory the next spawn uses.
+    pub directory: KeptDataDir,
+    /// The directory cache and, for a persistent onion, its guards.
+    pub saved: KeptSave,
 }
 
 /// A spawn that did not come up, with the directory still on disk.
@@ -166,6 +179,8 @@ impl DaemonTorControl {
             guard_state,
             ..
         } = config;
+        // A fresh directory takes the cache and, for a persistent onion, its
+        // guards, in one copy. A kept directory already holds both.
         let copied = if install_cache {
             let cache_dir = directory
                 .path()
@@ -173,8 +188,9 @@ impl DaemonTorControl {
                 .map(|parent| parent.join(CACHE_DIR_NAME))
                 .unwrap_or_default();
             let data_path = directory.path().to_path_buf();
+            let guards = guard_state.clone();
             match tokio::task::spawn_blocking(move || {
-                directory_cache::install_into(&cache_dir, &data_path)
+                kept::install_into(&cache_dir, &data_path, guards.as_ref())
             })
             .await
             {
@@ -195,23 +211,6 @@ impl DaemonTorControl {
         } else {
             Vec::new()
         };
-        // A persistent onion's guards join a fresh directory beside the
-        // cache; a kept directory already holds them.
-        if let (true, Some(guards)) = (install_cache, guard_state.clone()) {
-            let data_path = directory.path().to_path_buf();
-            let installed = tokio::task::spawn_blocking(move || guards.copy_into(&data_path)).await;
-            let error = match installed {
-                Ok(Ok(_)) => None,
-                Ok(Err(error)) => Some(error),
-                Err(join) => Some(io::Error::other(join)),
-            };
-            if let Some(error) = error {
-                return Err(LaunchFailure {
-                    error: DaemonTorStartError::DataDir(error),
-                    directory,
-                });
-            }
-        }
         let (exit_tx, exit_rx) = oneshot::channel();
         let (exit_watch_tx, exit_watch) = watch::channel(None);
         tokio::spawn(async move {
@@ -262,12 +261,16 @@ impl DaemonTorControl {
         Ok(handle)
     }
 
-    /// Stop the child and keep the directory for the next spawn.
-    pub async fn stop_for_respawn(mut self) -> KeptDataDir {
+    /// Stop the child, write the cache and the guards back, and keep the
+    /// directory for the next spawn. The same write-back as [`Self::shutdown`].
+    pub async fn stop_for_respawn(mut self) -> RespawnKept {
         let exit = self.stop_actor().await;
-        self.save_if_clean(&exit).await;
-        KeptDataDir {
-            dir: self.data_dir.take().expect("data directory"),
+        let saved = self.save_kept(&exit).await;
+        RespawnKept {
+            directory: KeptDataDir {
+                dir: self.data_dir.take().expect("data directory"),
+            },
+            saved,
         }
     }
 

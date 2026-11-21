@@ -130,9 +130,6 @@ pub const FILES: &[CacheFile] = &[
     },
 ];
 
-/// Environment variable the live-test lane sets to the cache this job's first
-/// boot wrote. Absent from production builds: the read is compiled only into
-/// test builds (`unpinned-tor-for-tests`, which no release edge enables).
 /// Tor's `state` file: its sampled and primary guards, the circuit-build-time
 /// histogram and little else, a few kilobytes on a client. The cap is far
 /// past that; it bounds a file that is not Tor's.
@@ -208,6 +205,9 @@ impl GuardState {
     }
 }
 
+/// Environment variable the live-test lane sets to the cache this job's first
+/// boot wrote. Absent from production builds: the read is compiled only into
+/// test builds (`unpinned-tor-for-tests`, which no release edge enables).
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
 const JOB_CACHE_ENV: &str = "SHEKYL_TEST_TOR_DIRECTORY_CACHE";
 

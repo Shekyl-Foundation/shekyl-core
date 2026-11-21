@@ -30,8 +30,9 @@
 //! so the guard sample in `state` survives (`TSR-Q1`). The directory is wiped
 //! when the daemon stops, and the next boot mints a new onion unless the
 //! operator gave a persistent one (`TSR-Q15`), whose guards are kept beside
-//! the directory cache. Neither is that directory, and Tor is never pointed
-//! at either. The
+//! the directory cache and written back with it after a clean stop, a
+//! respawn's as well as the daemon's. Neither is that directory, and Tor is
+//! never pointed at either. The
 //! operator-provisioned stable posture remains available and is untouched by
 //! this crate.
 //!
@@ -59,8 +60,8 @@ pub mod probe;
 pub use data_dir::{space_needed, sweep_stale_data_dirs, KeptLog, TOR_WRITE_HEADROOM};
 pub use ephemeral::{
     CacheSave, ControlAsker, DaemonTorConfig, DaemonTorControl, DaemonTorPublishError,
-    DaemonTorStartError, KeptDataDir, LaunchFailure, Retirement, SpawnError, Teardown,
-    TombstoneEnd, TorDeath, TOMBSTONE_DELETE_BOUND,
+    DaemonTorStartError, KeptDataDir, KeptSave, LaunchFailure, RespawnKept, Retirement, SpawnError,
+    Teardown, TombstoneEnd, TorDeath, TOMBSTONE_DELETE_BOUND,
 };
 pub use probe::{probe_own_onion, IsolationPair, ProbeDial};
 pub use shekyl_tor_control_client::control::OnionPow;

@@ -418,7 +418,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         .expect("watcher");
     let kept = boot.stop_for_respawn().await;
     let mut boot = DaemonTorControl::spawn_into(
-        kept,
+        kept.directory,
         binary,
         events,
         Duration::from_secs(30),

@@ -53,7 +53,7 @@ use shekyl_tor_control_client::supervisor::{
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
-    IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
+    IsolationPair, KeptDataDir, KeptLog, KeptSave, Retirement, TombstoneEnd, TorDeath,
 };
 use shekyl_tor_status::{held_at_start_sentence, install_sentence, render, TorStatus};
 use tokio::sync::watch;
@@ -383,6 +383,23 @@ fn tor_log_text(message: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Say a clean stop's write-back when it failed. The next start then fetches
+/// the network directory again, or keeps the guards saved before this stop.
+fn say_kept(saved: &KeptSave) {
+    if let CacheSave::Failed(error) = &saved.cache {
+        tracing::warn!(
+            target: "global",
+            "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
+        );
+    }
+    if let Some(CacheSave::Failed(error)) = &saved.guards {
+        tracing::warn!(
+            target: "global",
+            "this onion's Tor guards were not saved ({error}); the next start keeps the guards saved before"
+        );
+    }
 }
 
 /// Say what became of a retired directory. Tor's kept log is where a run
@@ -726,18 +743,7 @@ impl Drive {
         }
         if let Some(control) = self.control.take() {
             let teardown = control.shutdown().await;
-            if let CacheSave::Failed(error) = teardown.cache {
-                tracing::warn!(
-                    target: "global",
-                    "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
-                );
-            }
-            if let Some(CacheSave::Failed(error)) = teardown.guard_state {
-                tracing::warn!(
-                    target: "global",
-                    "this onion's Tor guards were not saved ({error}); the next start keeps the guards saved before"
-                );
-            }
+            say_kept(&teardown.saved);
             if let Some(retirement) = teardown.retirement {
                 say_retirement(&retirement);
             }

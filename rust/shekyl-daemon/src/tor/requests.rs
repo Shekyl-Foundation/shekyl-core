@@ -51,8 +51,8 @@ use shekyl_tor_control_daemon::{
 
 use super::inbox::Arrival;
 use super::{
-    consensus_sample, incarnation, input_of_ask, sample_keys, say_retirement, space_short,
-    sweep_stale_data_dirs, Drive, CONSENSUS_VALID_AFTER, MAX_STREAMS, SOCKS_TIMEOUT,
+    consensus_sample, incarnation, input_of_ask, sample_keys, say_kept, say_retirement,
+    space_short, sweep_stale_data_dirs, Drive, CONSENSUS_VALID_AFTER, MAX_STREAMS, SOCKS_TIMEOUT,
 };
 
 /// A request's answer, posted back to the loop.
@@ -239,7 +239,9 @@ impl Drive {
         // The stop's own death is not a second fault.
         self.generation = self.generation.wrapping_add(1);
         self.hold_later(number, async move {
-            Answer::Reaped(control.stop_for_respawn().await)
+            let stopped = control.stop_for_respawn().await;
+            say_kept(&stopped.saved);
+            Answer::Reaped(stopped.directory)
         });
         None
     }
@@ -260,7 +262,9 @@ impl Drive {
         if let Some(stray) = self.control.take() {
             self.generation = self.generation.wrapping_add(1);
             self.hold(async move {
-                say_retirement(&stray.stop_for_respawn().await.retire().await);
+                let stopped = stray.stop_for_respawn().await;
+                say_kept(&stopped.saved);
+                say_retirement(&stopped.directory.retire().await);
             });
         }
         // The policy read against the directory actually held. A fresh
