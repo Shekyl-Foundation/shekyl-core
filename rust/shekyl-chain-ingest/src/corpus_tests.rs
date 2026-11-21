@@ -39,9 +39,23 @@ fn listed(tag: u8) -> Transaction {
     }
 }
 
+std::thread_local! {
+    /// The block [`blobs`] built last at each height, on this test's
+    /// thread: the parent of the next block it builds one height above.
+    static BUILT: std::cell::RefCell<std::collections::HashMap<u64, BlockHash>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 /// A candidate at `height` with `n` listed bodies, serialized the way a
 /// source hands blobs over: the block blob and the bodies in header order.
+/// Its parent is the block this thread built last one height below, so
+/// blocks built in height order form a chain the corpus's lineage law
+/// accepts; a rebuilt height replaces the one before.
 fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
+    let parent = height
+        .checked_sub(1)
+        .and_then(|below| BUILT.with(|built| built.borrow().get(&below).copied()))
+        .unwrap_or_else(|| BlockHash::from_bytes([0x11; 32]));
     let bodies: Vec<Transaction> = (0..n)
         .map(|i| {
             // Distinct per (height, index); heights past u8 fold onto their
@@ -54,7 +68,7 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
             major_version: 1,
             minor_version: 0,
             timestamp: 1_700_000_000u64.saturating_add(height),
-            previous: BlockHash::from_bytes([0x11; 32]),
+            previous: parent,
             nonce: 7,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
             section_root: SectionRoot::from_bytes([0x33; 32]),
@@ -64,6 +78,7 @@ fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
     };
     let block_blob = block.serialize();
     let tx_blobs = bodies.iter().map(Transaction::serialize).collect();
+    BUILT.with(|built| built.borrow_mut().insert(height, block.hash()));
     (Candidate::new(block, bodies), block_blob, tx_blobs)
 }
 
@@ -105,7 +120,7 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
         );
         match event {
             IngestEvent::Extend(cand) => seen.push((seq, *cand)),
-            IngestEvent::Rewind { .. } => {
+            IngestEvent::Rewind { .. } | IngestEvent::Offer(_) => {
                 unreachable!("this corpus is Extend-only")
             }
         }
@@ -168,6 +183,7 @@ fn a_corpus_with_a_rewind_round_trips_as_events() {
         kinds.push(match ev.event {
             IngestEvent::Extend(c) => format!("E{}", c.block.transaction_hashes.len()),
             IngestEvent::Rewind { to } => format!("R{}", to.to_raw()),
+            IngestEvent::Offer(c) => format!("O{}", c.block.transaction_hashes.len()),
         });
     }
     // main: nothing listed below the floor, one spend at the floor and the

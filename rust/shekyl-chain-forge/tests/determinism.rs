@@ -67,6 +67,9 @@ const CHILD_HASHERS: &str = "SHEKYL_FORGE_CHILD_HASHERS";
 const CHILD_PLAN: &str = "SHEKYL_FORGE_CHILD_PLAN";
 /// The producer's start spread, in milliseconds.
 const CHILD_SPREAD_MS: &str = "SHEKYL_FORGE_CHILD_SPREAD_MS";
+/// Where the small plan's test keeps one forging, when set: the nightly
+/// replays it with `shekyl-chain-replay` (chain-forge.yml).
+const KEEP_SMALL: &str = "SHEKYL_FORGE_KEEP_SMALL";
 /// What the child wrote when it stopped at a difference.
 const STOPPED_FILE: &str = "stopped.txt";
 
@@ -301,6 +304,17 @@ fn the_small_plan_forges_the_same_bytes_in_two_processes() {
             pinned,
             "the manifest pins {file}"
         );
+    }
+
+    // The nightly replays this forging with the standalone replay binary
+    // and holds its switch to the manifest (chain-forge.yml); a run that
+    // names a directory here keeps one forging for it.
+    if let Some(keep) = std::env::var_os(KEEP_SMALL).filter(|dir| !dir.is_empty()) {
+        let keep = PathBuf::from(keep);
+        std::fs::create_dir_all(&keep).expect("the kept forging's directory");
+        for file in FILES {
+            std::fs::copy(a.join(file), keep.join(file)).expect("the forging kept");
+        }
     }
 
     // The selftest: one flipped byte in any file is red, and names it.

@@ -5,8 +5,7 @@
 #
 # The shard-fill chain (CHAIN_FORGE.md CF-4a, CF-R28): three shards closed by
 # real spends, the chain the long scenarios and the store's boundary tests
-# build on. It replaces the captured shard-fill.bin, whose bytes do not
-# regenerate; this one is forged, so it does, byte for byte, on x86_64 and
+# build on. It is forged, so it regenerates byte for byte, on x86_64 and
 # aarch64.
 #
 # Hosted, not committed (CF-R6: its corpus is about 12.8 MB, over the 5 MB
