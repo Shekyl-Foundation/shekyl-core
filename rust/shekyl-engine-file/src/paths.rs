@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Companion-path helpers for the two-file wallet envelope.
+//! Path rules for wallet files: companion names, and the default directory.
 //!
 //! A Shekyl v1 wallet is always a pair of files sharing a base name:
 //!
@@ -44,6 +44,14 @@
 //! learn; the migration discontinuity is in the file *format*, not in
 //! the file *naming*.
 //!
+//! # The default wallet directory
+//!
+//! [`wallet_dir_in`] names the directory a wallet binary uses when the
+//! person names none: `wallets/<network>` in the per-account root, the
+//! network's name from its row, mainnet included. In this tree
+//! `shekyl-cli` is the caller. The GUI wallet takes the same function
+//! up in its own repository.
+//!
 //! # What this module does not do
 //!
 //! It does not touch the filesystem. All functions are pure path
@@ -51,6 +59,8 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+use crate::Network;
 
 /// Extension suffix appended to the user-provided base path to derive
 /// the keys-file path. Appended as raw bytes, not via `set_extension`,
@@ -241,6 +251,20 @@ pub fn pending_post_path_from(base: &Path) -> PathBuf {
     PathBuf::from(os)
 }
 
+/// The wallet directory's name inside the per-account root (rule 83 IG-13).
+pub const WALLET_DIR_NAME: &str = "wallets";
+
+/// The default wallet directory for `network` inside the per-account root
+/// `root` (`shekyl_os_account::per_account_root`): `wallets/<network>`, the
+/// network's name from its row, so wallets on different networks never
+/// share a directory. Where a wallet binary keeps its wallets when the
+/// person names no other place; `shekyl-cli` and the GUI wallet read it
+/// here. A directory the person names is taken as given, never joined.
+#[must_use]
+pub fn wallet_dir_in(root: &Path, network: Network) -> PathBuf {
+    root.join(WALLET_DIR_NAME).join(network.name())
+}
+
 #[cfg(test)]
 mod tests {
     /// Two wallets must never derive the same Tor directory: a shared
@@ -353,5 +377,27 @@ mod tests {
             p_store_path_from(base).parent(),
             state_path_from(base).parent()
         );
+    }
+
+    /// The default wallet directory is `wallets/<network>` in the per-account
+    /// root for every network, mainnet included, pinned by name as the
+    /// wallets lay it out rather than recomputed from the row. Red edit: the
+    /// daemon's data subdirectory (`Network::subdirectory`), which names no
+    /// directory for mainnet, puts mainnet's wallets beside the others'.
+    #[test]
+    fn every_network_has_its_own_wallet_directory() {
+        let root = Path::new("root");
+        for (network, name) in [
+            (Network::Mainnet, "mainnet"),
+            (Network::Testnet, "testnet"),
+            (Network::Stagenet, "stagenet"),
+            (Network::Regtest, "regtest"),
+        ] {
+            assert_eq!(
+                wallet_dir_in(root, network),
+                root.join("wallets").join(name),
+                "{network:?}"
+            );
+        }
     }
 }
