@@ -394,8 +394,7 @@ pub fn assemble_leaf_stream(entries: &[LeafEntry], drained_through: BlockHeight)
 
 /// Compute the curve-tree root from an assembled leaf-scalar stream.
 ///
-/// The empty tree (no drained leaves) is `selene_hash_init()`, mirroring
-/// the daemon's `leaf_count == 0` special case (`db_lmdb.cpp`) — it is
+/// The empty tree (no drained leaves) is `selene_hash_init()` — it is
 /// **not** `build_layers(&[])` (the empty-tree boundary,
 /// CT2_DRAIN_ORDER.md §5). The Round-1 oracle rebuilds from leaves via
 /// `build_layers`; the cached `R_k` hot path (`store`, via

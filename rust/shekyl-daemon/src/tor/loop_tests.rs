@@ -98,8 +98,59 @@ fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
     .expect("the network starts")
 }
 
-/// A stand-in `tor` at `dir/tor` with this script.
-fn stand_in(dir: &std::path::Path, script: &str) -> VerifiedTorBinary {
+/// Set only in a stand-in: the role this test binary plays as `tor`.
+const STAND_IN_ROLE: &str = "SHEKYL_TOR_STAND_IN_ROLE";
+
+/// Set only in a stand-in: the inherited control connection's descriptor.
+const STAND_IN_FD: &str = "SHEKYL_TOR_STAND_IN_FD";
+
+/// How long a frozen stand-in lives on after its control connection
+/// closes: longer than Tor's grace, so the reap has to kill it.
+const FROZEN_LIVES: Duration = Duration::from_secs(45);
+
+/// What a stand-in `tor` does on its control connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// Says nothing, and exits when the connection closes, as Tor does when
+    /// it loses its owning controller.
+    Quiet,
+    /// Answers its first two control commands (the launch's `GETINFO
+    /// version`, then the next) and then nothing, and ignores the close of
+    /// its control connection: it lives on for [`FROZEN_LIVES`], until it is
+    /// killed. The reap waits Tor's grace for an exit that never comes.
+    Frozen,
+}
+
+impl Role {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Frozen => "frozen",
+        }
+    }
+}
+
+/// A stand-in `tor` at `dir/tor`: a POSIX shell script that records its
+/// launch, finds the inherited control connection, and `exec`s this test
+/// binary (so the recorded process is the stand-in itself) to re-run `test`
+/// (its full path, from `module_path!`) in `role`. The test calls
+/// [`stand_in_if_requested`] first. Rust, not the shell, reads and writes
+/// the connection: dash takes only one-digit descriptor numbers in a
+/// redirection, and bash, whose `read -u` takes more, is neither at
+/// `/bin/bash` on FreeBSD nor installed everywhere.
+fn stand_in(dir: &Path, role: Role, test: &str) -> VerifiedTorBinary {
+    let exe = std::env::current_exe().expect("the test binary");
+    let exe = sh_quoted(exe.to_str().expect("a UTF-8 test binary path"));
+    let name = sh_quoted(
+        test.split_once("::")
+            .expect("module path has a crate segment")
+            .1,
+    );
+    let script = format!(
+        "#!/bin/sh\n{RECORD}{OWNING_FD}export {STAND_IN_ROLE}={}\nexport {STAND_IN_FD}=\"$fd\"\n\
+         exec {exe} {name} --exact --nocapture --test-threads=1\n",
+        role.name()
+    );
     let path = dir.join("tor");
     let mut file = std::fs::File::create(&path).expect("the stand-in");
     file.write_all(script.as_bytes())
@@ -110,12 +161,76 @@ fn stand_in(dir: &std::path::Path, script: &str) -> VerifiedTorBinary {
     VerifiedTorBinary::unchecked_for_test(path)
 }
 
+/// `text` as one POSIX shell word: single-quoted, each `'` closing the quote,
+/// escaped, and reopening it, so any path a checkout can have is carried.
+fn sh_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// **A path with an apostrophe is carried to the stand-in whole** (Copilot,
+/// #1493): a checkout or build directory may hold one. Red edit: quote
+/// without escaping, and the word ends at the apostrophe.
+#[test]
+fn a_quoted_word_carries_an_apostrophe() {
+    assert_eq!(sh_quoted("/srv/build"), "'/srv/build'");
+    assert_eq!(sh_quoted("/srv/o'brien/t"), "'/srv/o'\\''brien/t'");
+}
+
+/// The stand-in's role, in a re-run of the test that calls it; returns in
+/// the test itself. It takes the control connection by its inherited number,
+/// which only `unsafe` can (rule 45: allowed on this item alone).
+#[allow(unsafe_code)]
+fn stand_in_if_requested() {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+
+    let Some(role) = std::env::var_os(STAND_IN_ROLE) else {
+        return;
+    };
+    let fd = std::env::var_os(STAND_IN_FD)
+        .and_then(|n| n.to_str().and_then(|n| n.parse::<libc::c_int>().ok()))
+        .expect("the control connection's descriptor");
+    // SAFETY: `fd` is the control connection this process inherited, and
+    // nothing else in it owns that descriptor.
+    let connection = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut answers = connection.try_clone().expect("the connection's write half");
+    let lines = BufReader::new(connection).split(b'\n');
+    if role == Role::Quiet.name() {
+        for line in lines {
+            if line.is_err() {
+                break;
+            }
+        }
+        std::process::exit(0);
+    }
+    assert_eq!(role, Role::Frozen.name(), "a stand-in role");
+    let mut answered = 0;
+    for line in lines {
+        let Ok(line) = line else {
+            break;
+        };
+        if answered < 2 {
+            answered += 1;
+            let reply: &[u8] = if line.starts_with(b"GETINFO version") {
+                b"250-version=0.4.9.14\r\n250 OK\r\n"
+            } else {
+                b"250 OK\r\n"
+            };
+            if answers.write_all(reply).is_err() {
+                break;
+            }
+        }
+    }
+    std::thread::sleep(FROZEN_LIVES);
+    std::process::exit(0);
+}
+
 /// The line each stand-in writes when it starts: its process id and the
 /// data directory it was given (`--DataDirectory`, the first argument).
 const RECORD: &str = r#"echo "$$ $2" >> "$(dirname "$0")/launches"
 "#;
 
-/// The bash that finds the inherited control connection's descriptor.
+/// The shell that finds the inherited control connection's descriptor.
 const OWNING_FD: &str = r#"fd=
 while [ $# -gt 0 ]; do
   if [ "$1" = "--__OwningControllerFD" ]; then fd=$2; fi
@@ -123,41 +238,14 @@ while [ $# -gt 0 ]; do
 done
 "#;
 
-/// A `tor` that says nothing on its control connection and exits when the
-/// connection closes, as Tor does when it loses its owning controller.
-fn quiet_tor(dir: &Path) -> VerifiedTorBinary {
-    stand_in(
-        dir,
-        &format!(
-            "#!/bin/bash\n{RECORD}{OWNING_FD}while IFS= read -r -u \"$fd\" line; do :; done\nexit 0\n"
-        ),
-    )
+/// A quiet stand-in ([`Role::Quiet`]) for `test`.
+fn quiet_tor(dir: &Path, test: &str) -> VerifiedTorBinary {
+    stand_in(dir, Role::Quiet, test)
 }
 
-/// A `tor` that answers its first two control commands (the launch's
-/// `GETINFO version`, then the next) and then nothing, and that ignores the
-/// close of its control connection: after the supervisor closes it, it
-/// keeps running until it is killed. The reap waits Tor's grace for an exit
-/// that never comes.
-fn frozen_tor(dir: &Path) -> VerifiedTorBinary {
-    stand_in(
-        dir,
-        &format!(
-            "#!/bin/bash\n{RECORD}{OWNING_FD}{}",
-            r#"answered=0
-while IFS= read -r -u "$fd" line; do
-  if [ "$answered" -lt 2 ]; then
-    answered=$((answered + 1))
-    case "$line" in
-      "GETINFO version"*) printf '250-version=0.4.9.14\r\n250 OK\r\n' >&"$fd" ;;
-      *) printf '250 OK\r\n' >&"$fd" ;;
-    esac
-  fi
-done
-exec sleep 45
-"#
-        ),
-    )
+/// A frozen stand-in ([`Role::Frozen`]) for `test`.
+fn frozen_tor(dir: &Path, test: &str) -> VerifiedTorBinary {
+    stand_in(dir, Role::Frozen, test)
 }
 
 /// The stand-ins launched so far: each one's process and data directory.
@@ -196,6 +284,33 @@ fn nothing_outlives(dir: &Path, after: &str) {
             data.display()
         );
     }
+}
+
+/// The directory a loop test works in, by path. The directory itself is
+/// [`on_the_loops_runtime`]'s, which removes it only once the runtime is gone.
+struct Dir(PathBuf);
+
+impl Dir {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// Run a loop test on the runtime the daemon's loop needs (two workers), in a
+/// fresh directory. The runtime is made after the directory, so it is dropped
+/// first, a failed test included: the supervisor's task, and the stand-in it
+/// launched, end before the directory is removed. Under `#[tokio::test]` the
+/// directory was the test's own and went first, while that task still
+/// launched into it; the removal could stop part-way and leave the stand-in
+/// behind.
+fn on_the_loops_runtime<F: std::future::Future<Output = ()>>(test: impl FnOnce(Dir) -> F) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("the loop's runtime");
+    runtime.block_on(test(Dir(dir.path().to_path_buf())));
 }
 
 /// The supervisor's loop over `tor`, under `policy`.
@@ -240,28 +355,36 @@ async fn status_of(supervisor: &Supervisor, what: &str) -> ManagedTor {
 /// within 5 s, with the launch's Tor gone and its directory retired.
 /// Awaiting the launch on the loop holds every ask and fails this; so does
 /// a stop that leaves the launch to run on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let tor = quiet_tor(dir.path());
-    let supervisor = supervise(dir.path(), tor, super::policy());
-    // The pin is accepted and the launch sent; its first reply does not come.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    for ask in 0..20 {
-        let asked = Instant::now();
-        let status = status_of(&supervisor, &format!("ask {ask}")).await;
-        let took = asked.elapsed();
-        assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
-        // The subject: the launch is in flight. A launch that had failed
-        // would read `FailedStart`; one that had answered, `Bootstrapping`.
-        assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
-        assert_eq!(status.cause, None, "ask {ask}: {status:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
-        .await
-        .expect("the stop was taken while the launch waited");
-    nothing_outlives(dir.path(), "the stop");
+#[test]
+fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
+    stand_in_if_requested();
+    on_the_loops_runtime(|dir| async move {
+        let tor = quiet_tor(
+            dir.path(),
+            concat!(
+                module_path!(),
+                "::a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer"
+            ),
+        );
+        let supervisor = supervise(dir.path(), tor, super::policy());
+        // The pin is accepted and the launch sent; its first reply does not come.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        for ask in 0..20 {
+            let asked = Instant::now();
+            let status = status_of(&supervisor, &format!("ask {ask}")).await;
+            let took = asked.elapsed();
+            assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
+            // The subject: the launch is in flight. A launch that had failed
+            // would read `FailedStart`; one that had answered, `Bootstrapping`.
+            assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
+            assert_eq!(status.cause, None, "ask {ask}: {status:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+            .await
+            .expect("the stop was taken while the launch waited");
+        nothing_outlives(dir.path(), "the stop");
+    });
 }
 
 /// **A launch the core gives up on ends its Tor.** The launch's first reply
@@ -272,39 +395,47 @@ async fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
 /// launch taking its place. Fails if the launch waits on for a reply after
 /// the core has given up (a bound of its own, or none), leaving that Tor
 /// running.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_launch_the_core_gives_up_on_ends_its_tor() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let tor = quiet_tor(dir.path());
-    let mut policy = super::policy();
-    policy.reply_bound = Duration::from_secs(2);
-    policy.base = Duration::from_secs(5);
-    let supervisor = supervise(dir.path(), tor, policy);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let status = status_of(&supervisor, "before the fault").await;
-        if status.cause == Some(TorCause::Unanswered) {
-            break;
-        }
-        assert!(Instant::now() < deadline, "no fault: {status:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let (first, data) = launches(dir.path())
-        .into_iter()
-        .next()
-        .expect("the first launch");
-    let ended = Instant::now() + Duration::from_secs(1);
-    while alive(&first) || data.exists() {
-        assert!(
-            Instant::now() < ended,
-            "the abandoned launch's Tor {first} or its directory is still there"
+#[test]
+fn a_launch_the_core_gives_up_on_ends_its_tor() {
+    stand_in_if_requested();
+    on_the_loops_runtime(|dir| async move {
+        let tor = quiet_tor(
+            dir.path(),
+            concat!(
+                module_path!(),
+                "::a_launch_the_core_gives_up_on_ends_its_tor"
+            ),
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
-        .await
-        .expect("the stop");
-    nothing_outlives(dir.path(), "the stop");
+        let mut policy = super::policy();
+        policy.reply_bound = Duration::from_secs(2);
+        policy.base = Duration::from_secs(5);
+        let supervisor = supervise(dir.path(), tor, policy);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = status_of(&supervisor, "before the fault").await;
+            if status.cause == Some(TorCause::Unanswered) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "no fault: {status:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let (first, data) = launches(dir.path())
+            .into_iter()
+            .next()
+            .expect("the first launch");
+        let ended = Instant::now() + Duration::from_secs(1);
+        while alive(&first) || data.exists() {
+            assert!(
+                Instant::now() < ended,
+                "the abandoned launch's Tor {first} or its directory is still there"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::timeout(Duration::from_secs(5), supervisor.shutdown())
+            .await
+            .expect("the stop");
+        nothing_outlives(dir.path(), "the stop");
+    });
 }
 
 /// **A status ask and the stop are taken while a frozen Tor is reaped.** The
@@ -317,43 +448,51 @@ async fn a_launch_the_core_gives_up_on_ends_its_tor() {
 /// margin, with the frozen Tor killed. Putting the reap back on the loop
 /// (the loop waiting while `stop_for_respawn` runs) holds the asks and
 /// fails this.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let tor = frozen_tor(dir.path());
-    let mut policy = super::policy();
-    policy.reply_bound = Duration::from_secs(2);
-    let supervisor = supervise(dir.path(), tor, policy);
-    // The launch is answered; a request after it is not, and is late one
-    // bound later. Poll until the fault is seen: the reap is then in flight.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let status = status_of(&supervisor, "the reap starts in the fault's step").await;
-        if status.cause == Some(TorCause::Unanswered) {
-            break;
+#[test]
+fn a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped() {
+    stand_in_if_requested();
+    on_the_loops_runtime(|dir| async move {
+        let tor = frozen_tor(
+            dir.path(),
+            concat!(
+                module_path!(),
+                "::a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped"
+            ),
+        );
+        let mut policy = super::policy();
+        policy.reply_bound = Duration::from_secs(2);
+        let supervisor = supervise(dir.path(), tor, policy);
+        // The launch is answered; a request after it is not, and is late one
+        // bound later. Poll until the fault is seen: the reap is then in flight.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let status = status_of(&supervisor, "the reap starts in the fault's step").await;
+            if status.cause == Some(TorCause::Unanswered) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "no fault: {status:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        assert!(Instant::now() < deadline, "no fault: {status:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let reaping = Instant::now();
-    for ask in 0..20 {
-        let asked = Instant::now();
-        let status = status_of(&supervisor, &format!("ask {ask}")).await;
-        let took = asked.elapsed();
-        assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
-        // The subject: Tor is being restarted, not bootstrapping again.
-        assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        reaping.elapsed() < Duration::from_secs(5),
-        "the asks ran past the reap's grace: {:?}",
-        reaping.elapsed()
-    );
-    tokio::time::timeout(Duration::from_secs(8), supervisor.shutdown())
-        .await
-        .expect("the stop was taken while the reap waited");
-    nothing_outlives(dir.path(), "the stop");
+        let reaping = Instant::now();
+        for ask in 0..20 {
+            let asked = Instant::now();
+            let status = status_of(&supervisor, &format!("ask {ask}")).await;
+            let took = asked.elapsed();
+            assert!(took < Duration::from_millis(250), "ask {ask} took {took:?}");
+            // The subject: Tor is being restarted, not bootstrapping again.
+            assert_eq!(status.state, TorState::Restarting, "ask {ask}: {status:?}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            reaping.elapsed() < Duration::from_secs(5),
+            "the asks ran past the reap's grace: {:?}",
+            reaping.elapsed()
+        );
+        tokio::time::timeout(Duration::from_secs(8), supervisor.shutdown())
+            .await
+            .expect("the stop was taken while the reap waited");
+        nothing_outlives(dir.path(), "the stop");
+    });
 }
 
 /// One `650` event line, framed as Tor sends it.
@@ -373,62 +512,70 @@ fn event(line: &str) -> shekyl_tor_control_client::control::ControlReply {
 /// add is in flight, starts its upload round. Fails if the service and its
 /// rounds are set only when the reply is folded: the event is dropped, and
 /// the first upload's probe never comes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_upload_before_the_add_onion_reply_is_read() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let tor = frozen_tor(dir.path());
-    let data_dir = dir.path().join("data");
-    std::fs::create_dir_all(&data_dir).expect("the data directory");
-    let (_owner, inbox, feeds) = inbox();
-    let network = network(dir.path(), feeds);
-    let events = inbox.poster().events();
-    let mut drive = Drive::start(
-        Supervises::Managed {
-            pin: PinSource::Unchecked(tor.clone()),
-            onion: super::OnionSource::PerBoot,
-        },
-        super::policy(),
-        true,
-        18_021,
-        data_dir.clone(),
-        inbox,
-        network,
-    )
-    .expect("the driver");
-    // A Tor that answered its launch, and answers nothing after it.
-    let up = DaemonTorControl::spawn_keeping(
-        DaemonTorConfig {
-            tor_binary: tor,
-            data_dir_parent: data_dir,
-            events,
-            reply_deadline: Duration::from_secs(5),
-            socks_timeout: SocksTimeout::TorDefault,
-            guard_state: None,
-        },
-        tokio::time::sleep(Duration::from_secs(5)),
-    )
-    .await
-    .unwrap_or_else(|_| panic!("the launch"));
-    drive.control = Some(up);
-    drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
-    assert_eq!(drive.send_add(1), None, "the add is sent off the loop");
-    let onion = drive.onion.service_id().as_str().to_owned();
-    let upload = event(&format!(
-        "HS_DESC UPLOAD {onion} UNKNOWN $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY"
-    ));
-    let inputs = drive.event_inputs(&upload);
-    assert!(
-        inputs
-            .iter()
-            .any(|input| matches!(input, Input::UploadRoundStarted { .. })),
-        "the upload was not read: {inputs:?}"
-    );
-    if let Some(control) = drive.control.take() {
-        drop(control.shutdown().await);
-    }
-    // The network owns a runtime, which is not dropped on an async thread.
-    tokio::task::spawn_blocking(move || drop(drive))
+#[test]
+fn an_upload_before_the_add_onion_reply_is_read() {
+    stand_in_if_requested();
+    on_the_loops_runtime(|dir| async move {
+        let tor = frozen_tor(
+            dir.path(),
+            concat!(
+                module_path!(),
+                "::an_upload_before_the_add_onion_reply_is_read"
+            ),
+        );
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).expect("the data directory");
+        let (_owner, inbox, feeds) = inbox();
+        let network = network(dir.path(), feeds);
+        let events = inbox.poster().events();
+        let mut drive = Drive::start(
+            Supervises::Managed {
+                pin: PinSource::Unchecked(tor.clone()),
+                onion: super::OnionSource::PerBoot,
+            },
+            super::policy(),
+            true,
+            18_021,
+            data_dir.clone(),
+            inbox,
+            network,
+        )
+        .expect("the driver");
+        // A Tor that answered its launch, and answers nothing after it.
+        let up = DaemonTorControl::spawn_keeping(
+            DaemonTorConfig {
+                tor_binary: tor,
+                data_dir_parent: data_dir,
+                events,
+                reply_deadline: Duration::from_secs(5),
+                socks_timeout: SocksTimeout::TorDefault,
+                guard_state: None,
+            },
+            tokio::time::sleep(Duration::from_secs(5)),
+        )
         .await
-        .expect("the driver drops");
-    nothing_outlives(dir.path(), "the shutdown");
+        .unwrap_or_else(|_| panic!("the launch"));
+        drive.control = Some(up);
+        drive.forward = Some(std::net::SocketAddr::from(([127, 0, 0, 1], 18_022)));
+        assert_eq!(drive.send_add(1), None, "the add is sent off the loop");
+        let onion = drive.onion.service_id().as_str().to_owned();
+        let upload = event(&format!(
+            "HS_DESC UPLOAD {onion} UNKNOWN $9E67E885D46AE284534EBA3B71A2DFE13A0E4783~Torr4Tor GOkbpjFN0/2R6w08BkOWd3Zj62ZDCvu7bVmkseOLvcY"
+        ));
+        let inputs = drive.event_inputs(&upload);
+        assert!(
+            inputs
+                .iter()
+                .any(|input| matches!(input, Input::UploadRoundStarted { .. })),
+            "the upload was not read: {inputs:?}"
+        );
+        if let Some(control) = drive.control.take() {
+            drop(control.shutdown().await);
+        }
+        // The network owns a runtime, which is not dropped on an async thread.
+        tokio::task::spawn_blocking(move || drop(drive))
+            .await
+            .expect("the driver drops");
+        nothing_outlives(dir.path(), "the shutdown");
+    });
 }

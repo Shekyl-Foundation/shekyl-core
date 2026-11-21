@@ -513,10 +513,9 @@ impl ReadSnapshot<'_> {
     /// **K1.** Whether `key_image` is spent on the committed chain — the
     /// chain half of CEN-I7, served to the pool's admission check, the
     /// submit verdict and `chain_spent` from one snapshot. Replaces
-    /// `has_key_image` **and** `has_key_images`: the batch form existed to
-    /// hold one LMDB `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`), and
-    /// this snapshot *is* that transaction — N calls on it are the batch
-    /// (SOK-3). Exact, never approximate (§3.3). One body with the
+    /// `has_key_image` **and** `has_key_images`: this snapshot is one read
+    /// transaction, so N calls on it are the batch (SOK-3). Exact, never
+    /// approximate (§3.3). One body with the
     /// validator's `BatchView::has_key_image`
     /// ([`chain_reads::has_key_image`]).
     ///
@@ -558,11 +557,8 @@ impl ReadSnapshot<'_> {
     // DRS-E2 (`DRS_E2_REPLAY_DRIVER.md` RD-F5): the redb half of the digest.
     // ------------------------------------------------------------------
 
-    /// The layout-independent logical state digest v0 of **this** file —
-    /// the redb half of DRS-E2's comparison. The C++ half is
-    /// `BlockchainLMDB::logical_state_digest_v0` walking LMDB into the same
-    /// hasher through `shekyl_logical_state_digest_v0`; until this method
-    /// existed the hasher had one caller and E2 had one side (RD-F5).
+    /// The layout-independent logical state digest v0 of **this** file,
+    /// the value DRS-E2's comparison reads (RD-F5).
     ///
     /// The three families, assembled from the reads the rules already
     /// depend on, so the digest cannot see a table the validator does not:
@@ -572,18 +568,14 @@ impl ReadSnapshot<'_> {
     /// - **spent keys** — the `spent_keys` scan K2 exists for
     ///   ([`key_images`](Self::key_images); the fold is order-insensitive);
     /// - **the live curve-tree root** — `curve_tree_roots[tip + 1]`, the
-    ///   state *after* the tip's drain, which is what the C++'s single
-    ///   `"root"` cell holds (`db_lmdb.cpp:9495`) and what `connect` wrote
-    ///   from the verdict's `root_after` (SCW-19); [`CurveTreeRoot::EMPTY`]
-    ///   for an empty chain, where nothing has been written and the C++
-    ///   cell is the identity.
+    ///   state *after* the tip's drain, which is what `connect` wrote from
+    ///   the verdict's `root_after` (SCW-19); [`CurveTreeRoot::EMPTY`] for
+    ///   an empty chain, where nothing has been written.
     ///
     /// What the digest *proves* is the grader's business, not this read's:
-    /// under RD-Q9 a root component was **borrowed** while `root_after` was
-    /// passed through (LMDB's root copied in), so identity there was never
-    /// evidence; since DRS-E3 the root is the validator's derivation and
-    /// all three families are real replay products. This method reports
-    /// the file; the grader carries the per-component origin.
+    /// the root is the validator's derivation (DRS-E3), so all three
+    /// families are replay products. This method reports the file; the
+    /// grader carries the per-component origin.
     ///
     /// # Errors
     ///
@@ -663,8 +655,7 @@ impl ReadSnapshot<'_> {
     /// the C++'s `amount` parameter: the read is the confidential bucket's
     /// slot ([`OutputSlot::confidential`](crate::OutputSlot::confidential)),
     /// because Shekyl has one bucket — every miner and emission vout is
-    /// stored under `0` and CEN-H14 makes every other vout's amount `0` —
-    /// and the C++ itself refused any other amount (`db_lmdb.cpp:3746`). The
+    /// stored under `0` and CEN-H14 makes every other vout's amount `0`. The
     /// amount dimension in the key is carried, not chosen, while R8b-2 is
     /// open (§3.4); if R8b-2 rules it consensus-visible, this read grows a
     /// parameter and the table needs no change.
@@ -923,7 +914,7 @@ impl ReadSnapshot<'_> {
     /// root; above that is [`AtHeight::AboveTip`]. The same body the
     /// validator's `ChainView::root_at` reads inside a batch (CEN-B5),
     /// made the store's public read. Replaces `get_curve_tree_root_at`,
-    /// whose all-zero root on `MDB_NOTFOUND` (SCU-4) is the arm the type
+    /// whose all-zero root for a missing row (SCU-4) is the arm the type
     /// removes.
     pub fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, StoreError> {
         curve_reads::root_at(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
@@ -1319,7 +1310,7 @@ impl ReadSnapshot<'_> {
     /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`): the nine table
     /// families walked whole and the slash watermark cell, re-encoded
     /// through [`ArchivalSnapshot`]'s constructors. The redb leg of the
-    /// archival comparison; the LMDB leg arrives in the trace's `0x04`
+    /// archival comparison; the other leg arrives in the trace's `0x04`
     /// record, and the grader diffs the two by family and key.
     ///
     /// # Errors

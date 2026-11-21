@@ -5,8 +5,7 @@
 
 //! Consensus validation (`shekyl-chain-rules`, DRS-E6).
 //!
-//! One crate, one home for every consensus rule the C++ spread across
-//! `blockchain.cpp`, `tx_pool.cpp`, `cryptonote_core.cpp` and the LMDB layer.
+//! One crate, one home for every consensus rule.
 //! Two stages: [`form`] takes a candidate block, a `RuleSet` and a
 //! [`Substrate`] (clock, longhash — the world, not the chain) and yields a
 //! [`StructurallyValid`], stateless and outside any transaction;

@@ -6,20 +6,20 @@
 //! The pool file's tables — DRS-E1 S-POOL (`DRS_E1_SPOOL.md` §4).
 //!
 //! Three tables in a file of their own (`DAEMON_REDB_STORE.md` §5.1: *the
-//! pool does not live in the consensus store file*). The two the C++ keeps
-//! in the chain's LMDB env as `txpool_meta` / `txpool_blob` are here as
-//! `pool_meta` / `pool_blob`, typed; the third is the file's header. None of
+//! pool does not live in the consensus store file*). `pool_meta` and
+//! `pool_blob` hold the entry's record and bytes, typed; the third is the
+//! file's header. None of
 //! them is in [`crate::schema`]'s catalogue, none is a journal target, and no
 //! digest reaches them — the pool is not chain state (§11.2).
 //!
 //! # Keyed by the transaction hash, in its natural order
 //!
-//! The consensus file keeps LMDB's `compare_hash32` order on its hash-keyed
-//! tables (`LmdbHashKey`) so the digest oracle can walk both stores in one
-//! order. The pool file has no oracle and no LMDB twin to stay in step
-//! with, and no `for_all_txpool_txes` caller depends on iteration order
-//! (SPL-8), so the key is the hash's own bytes (`SCU-Q3`: remove the thing
-//! that needs pinning).
+//! The consensus file keeps the `compare_hash32` order on its hash-keyed
+//! tables (`LmdbHashKey`, the order LMDB used, kept until S2 moves these
+//! tables to redb's native order). The pool file has no such order to keep,
+//! and no `for_all_txpool_txes` caller depends on iteration order (SPL-8),
+//! so the key is the hash's own bytes (`SCU-Q3`: remove the thing that
+//! needs pinning).
 //!
 //! # Two tables, deliberately (§3.5)
 //!
