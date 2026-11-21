@@ -18,11 +18,12 @@
 //!   the path and the process died before the engine's first flush.
 //! - **The engine flushed its header and not its magic.** redb writes the
 //!   magic only after the rest of the header is durable
-//!   (`redb-4.4.0` `page_manager.rs`, the `to_bytes(false)` flush, then
+//!   (`redb-4.6.0` `page_manager.rs`, the `to_bytes(false)` flush, then
 //!   `to_bytes(true)`). That image is one length, a clear magic slot, the
 //!   two-phase god byte, the engine's page size, and two slots that have
-//!   never committed ([`header_image`]). A sealed store stays that same
-//!   length until its first region fills, so length is not the test: a
+//!   never committed ([`header_image`]). A sealed store with a few rows is
+//!   still that length (redb grows the file only as commits need pages),
+//!   so length is not the test: a
 //!   zero-filled file, and a sealed file whose magic bytes were cleared,
 //!   both fail the header and stay where they are.
 //! - **The engine finished, the seal did not.** A valid database with no
@@ -59,7 +60,7 @@ use crate::store::{EngineError, StoreError};
 /// and the magic flush are this long, and a young store stays this long
 /// after it has committed. Length is the image's size, not a signal that
 /// anything has been committed.
-pub(crate) const ENGINE_INIT_LEN: u64 = 1_056_768;
+pub(crate) const ENGINE_INIT_LEN: u64 = 73_728;
 
 /// How many aside names one move will try before it reports that none is
 /// free. The first is `<name>.unfinished-<unix seconds>`; the rest append
@@ -68,10 +69,10 @@ const ASIDE_NAME_TRIES: u32 = 1024;
 
 const _: () = assert!(header_image::DB_HEADER_LEN as u64 <= ENGINE_INIT_LEN);
 
-/// redb 4.4's database header, the fields this crate reads to recognize
+/// redb 4.6's database header, the fields this crate reads to recognize
 /// an initialization that died before the magic flush.
 ///
-/// Offsets are redb's, from `redb-4.4.0/src/tree_store/page_store/header.rs`
+/// Offsets are redb's, from `redb-4.6.0/src/tree_store/page_store/header.rs`
 /// (`MAGICNUMBER`, the god byte, `PAGE_SIZE`, the two commit slots) and
 /// `btree_base.rs` (`BtreeHeader::serialized_size`). A bump that moves the
 /// header fails `the_engine_writes_its_magic_last_within_the_bound`, which
@@ -299,7 +300,7 @@ pub(crate) fn creation_lock_path(store: &Path) -> PathBuf {
 
 /// An unfinished file moved aside, and the empty file now at the path,
 /// claimed with `create_new` and not yet locked. The caller hands `file`
-/// to `create_file`. A second lock on it would make that open fail: the
+/// to `create_with_backend`. A second lock on it would make that open fail: the
 /// engine locks the descriptor it is given, and [`PathGuard`] already
 /// covers the path until that lock is held.
 pub(crate) struct Replaced {
@@ -626,8 +627,8 @@ mod tests {
     }
 
     /// A young store whose magic slot was cleared is the case the length
-    /// bound was added to refuse, at the size every store has until its
-    /// first region fills. The transaction ids are what says a commit
+    /// bound was added to refuse, at the size a store with a few rows still
+    /// has. The transaction ids are what says a commit
     /// happened. Red edit: treat a clear magic slot at [`ENGINE_INIT_LEN`]
     /// as unfinished.
     #[test]

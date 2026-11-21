@@ -2117,25 +2117,37 @@ pub(super) async fn try_generate_blocks(
 }
 
 /// Send the daemon SIGTERM, the operator's stop, and wait for its exit.
+///
+/// The wait is the exit itself, not a poll: `waitid` with `WNOWAIT` returns
+/// when the process exits and leaves its status for `try_wait` to reap, so
+/// a caller timing the stop measures the stop. It runs on a blocking thread
+/// bounded at `STOP_WITHIN`; a daemon still running then fails the gate,
+/// and its `Drop` kill ends the thread's wait.
 #[cfg(unix)]
 async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
+    use rustix::process::{kill_process, waitid, Pid, Signal, WaitId, WaitIdOptions};
     const STOP_WITHIN: Duration = Duration::from_secs(60);
-    let pid = daemon.child.id().to_string();
-    let sent =
-        shekyl_spawn::spawn_lock::status(std::process::Command::new("kill").args(["-TERM", &pid]))
-            .expect("run kill");
-    assert!(sent.success(), "SIGTERM delivered");
-    let deadline = std::time::Instant::now() + STOP_WITHIN;
-    loop {
-        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
-            return status;
+    let pid = Pid::from_child(&daemon.child);
+    kill_process(pid, Signal::TERM).expect("SIGTERM delivered");
+    let exited = tokio::task::spawn_blocking(move || {
+        waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        )
+    });
+    match tokio::time::timeout(STOP_WITHIN, exited).await {
+        Ok(waited) => {
+            waited
+                .expect("the exit wait's thread")
+                .expect("waitid on the daemon");
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the daemon did not stop within {STOP_WITHIN:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        Err(_) => panic!("the daemon did not stop within {STOP_WITHIN:?}"),
     }
+    daemon
+        .child
+        .try_wait()
+        .expect("reap the daemon")
+        .expect("waitid saw the daemon exit")
 }
 
 /// **A stop the operator asked for is not a failure:** no line at `error`,
@@ -2197,6 +2209,240 @@ async fn a_stops_last_line_reaches_the_log_file() {
         "the stop's last line is in the log file; its tail:\n{}",
         log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// A wallet whose scan is under way: a seeded daemon that mined `CHAIN`
+/// blocks to it, and a refresh that has scanned some of them and not all.
+/// "Under way" is a frame the scan itself publishes (one per scanned block,
+/// `local_refresh.rs`), not a guess from timing.
+#[cfg(unix)]
+struct MidScan {
+    daemon: RegtestDaemon,
+    tmp: tempfile::TempDir,
+    password: &'static [u8],
+    wallet: Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    scan: super::refresh::RefreshHandle,
+    /// The wallet's synced count before the scan: a scan merges into the
+    /// ledger only at its end (snapshot-merge), so a scan that does not
+    /// finish leaves the wallet here.
+    before: Option<shekyl_types::ChainCount>,
+}
+
+#[cfg(unix)]
+impl MidScan {
+    /// Blocks the wallet scans: the scan reports its first block long
+    /// before it reaches the last.
+    const CHAIN: u64 = 60;
+    /// A close, or a scan's end, that does not finish in this fails the
+    /// gate rather than hanging the lane.
+    const WITHIN: Duration = Duration::from_secs(60);
+
+    async fn start(seed_byte: u8, password: &'static [u8]) -> Self {
+        use super::refresh::{RefreshOptions, RefreshPhase};
+        let seed = [seed_byte; shekyl_crypto_pq::account::SEED_BYTES];
+        let daemon = RegtestDaemon::start_for_seed(&seed).await;
+        let (wallet, tmp) = create_wallet(daemon.rpc_port, &seed, password).await;
+        let before = wallet.ledger().ledger.synced_count();
+        let mined = daemon.generate_blocks(Self::CHAIN).await;
+        assert!(
+            mined.height > Self::CHAIN,
+            "the chain is {} blocks past genesis",
+            Self::CHAIN
+        );
+        let wallet = Arc::new(RwLock::new(wallet));
+        let scan = super::Engine::start_refresh(wallet.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh");
+        let mut progress = scan.progress();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            {
+                let frame = progress.borrow_and_update();
+                if frame.phase == RefreshPhase::Scanning
+                    && frame.blocks_processed > 0
+                    && frame.blocks_processed < frame.blocks_total
+                {
+                    break;
+                }
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, progress.changed()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => panic!("the scan ended before a frame showed it under way"),
+                Err(_) => panic!("no scanning frame within 120 s"),
+            }
+        }
+        Self {
+            daemon,
+            tmp,
+            password,
+            wallet,
+            scan,
+            before,
+        }
+    }
+
+    /// The wallet, its scan ended, closed and reopened: it must be where
+    /// it was before the scan.
+    async fn reopen_where_it_was(
+        tmp: &tempfile::TempDir,
+        password: &[u8],
+        rpc_port: u16,
+        before: Option<shekyl_types::ChainCount>,
+    ) {
+        let creds = super::lifecycle::Credentials::password_only(password);
+        let rpc = HttpRpc::new(format!("http://127.0.0.1:{rpc_port}"))
+            .await
+            .expect("wallet rpc (reopen)");
+        let reopened = super::Engine::<super::SoloSigner>::open_full(
+            &tmp.path().join("wallet"),
+            &creds,
+            shekyl_address::Network::Regtest,
+            super::DaemonClient::verifying(rpc, regtest_expectation()),
+            shekyl_engine_file::SafetyOverrides::none(),
+        )
+        .expect("the wallet reopens")
+        .into_wallet();
+        assert_eq!(
+            reopened.ledger().ledger.synced_count(),
+            before,
+            "a scan that did not finish merges nothing: the wallet is where it was"
+        );
+        reopened
+            .close(&creds)
+            .await
+            .expect("close the reopened wallet");
+    }
+}
+
+/// **A wallet closed mid-scan closes and keeps what it had; then the
+/// daemon's stop closes its store.** On the wallet side no read is in
+/// progress when anything closes, by construction: a wallet closes only
+/// once its scan has ended, so the close is cancel, drain, then close, and
+/// redb 4.6's wait for reads in progress has nothing to wait for. What this
+/// gate holds is that path: taken at a frame the scan reports, the refresh
+/// ends `Cancelled` (the close came mid-scan), the cancel, drain and close
+/// finish within [`MidScan::WITHIN`], and the reopened wallet is where it
+/// was. Then SIGTERM stops the daemon with exit 0, with no scan reading.
+/// The daemon stopped while a scan reads from it is
+/// [`a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place`].
+/// Both closes' durations are printed (`--nocapture`).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
+    let MidScan {
+        mut daemon,
+        tmp,
+        password,
+        wallet,
+        scan,
+        before,
+    } = MidScan::start(0x6c, b"close-mid-scan").await;
+    let creds = super::lifecycle::Credentials::password_only(password);
+    let asked = Instant::now();
+    let (joined, closed) = tokio::time::timeout(MidScan::WITHIN, async {
+        scan.cancel();
+        let joined = scan.join().await;
+        let lock = Arc::try_unwrap(wallet)
+            .unwrap_or_else(|_| panic!("the cancelled scan still holds the engine"));
+        (joined, lock.into_inner().close(&creds).await)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "the scan's drain and the wallet's close did not finish within {:?}",
+            MidScan::WITHIN
+        )
+    });
+    let wallet_close = asked.elapsed();
+    assert!(
+        matches!(joined, Err(super::error::RefreshError::Cancelled)),
+        "the close must come mid-scan, so the scan ends Cancelled: {joined:?}"
+    );
+    closed.expect("a wallet closed mid-scan closes");
+    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+
+    let asked = Instant::now();
+    let status = terminate(&mut daemon).await;
+    let daemon_close = asked.elapsed();
+    eprintln!(
+        "wallet close mid-scan: {wallet_close:?} from the cancel to closed; \
+         daemon close: {daemon_close:?} from SIGTERM to its exit; its own line: {}",
+        last_exit_line(&daemon)
+    );
+    assert!(status.success(), "the daemon's stop exits 0: {status}");
+}
+
+/// **The daemon stopped while a wallet's scan reads from it exits, the
+/// scan ends, and the wallet keeps its place.** This is where redb 4.6's
+/// close-waits-for-reads matters: a scan's RPC reads hit the daemon's chain
+/// store while it runs. SIGTERM goes to the daemon at a frame the scan
+/// reports. The daemon must exit 0 within `terminate`'s 60 s; the scan must
+/// end with an error within [`MidScan::WITHIN`], not hang (a block fetch
+/// retries a bounded number of times, `local_refresh.rs`
+/// `MAX_BLOCK_FETCH_RETRIES`); and the wallet must close and reopen where
+/// it was. The stop's duration is printed (`--nocapture`).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place() {
+    let MidScan {
+        mut daemon,
+        tmp,
+        password,
+        wallet,
+        scan,
+        before,
+    } = MidScan::start(0x6d, b"daemon-stop-mid-scan").await;
+    let asked = Instant::now();
+    let status = terminate(&mut daemon).await;
+    let daemon_stop = asked.elapsed();
+    eprintln!(
+        "daemon stop mid-scan: {daemon_stop:?} from SIGTERM to its exit; its own line: {}",
+        last_exit_line(&daemon)
+    );
+    assert!(
+        status.success(),
+        "a daemon stopped mid-scan exits 0: {status}"
+    );
+
+    let ended = tokio::time::timeout(MidScan::WITHIN, scan.join())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the scan did not end within {:?} of its daemon's stop",
+                MidScan::WITHIN
+            )
+        });
+    assert!(
+        ended.is_err(),
+        "a scan whose daemon stopped mid-scan ends with an error: {ended:?}"
+    );
+    let creds = super::lifecycle::Credentials::password_only(password);
+    let lock =
+        Arc::try_unwrap(wallet).unwrap_or_else(|_| panic!("the ended scan still holds the engine"));
+    tokio::time::timeout(MidScan::WITHIN, lock.into_inner().close(&creds))
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the wallet's close did not finish within {:?}",
+                MidScan::WITHIN
+            )
+        })
+        .expect("the wallet closes after its daemon stopped");
+    MidScan::reopen_where_it_was(&tmp, password, daemon.rpc_port, before).await;
+}
+
+/// The daemon's own last line of a stop, from its log file.
+#[cfg(unix)]
+fn last_exit_line(daemon: &RegtestDaemon) -> String {
+    std::fs::read_to_string(daemon.data_dir.join("shekyld.log"))
+        .unwrap_or_default()
+        .lines()
+        .rfind(|l| l.contains("the daemon exits"))
+        .unwrap_or("<none>")
+        .to_owned()
 }
 
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,

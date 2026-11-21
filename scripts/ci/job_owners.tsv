@@ -23,6 +23,8 @@ scripts/ci/_gfm_table.py	docs-gates:check-doc-links
 scripts/ci/change_scope.py	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,fuzz-harness:scope,grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan,rust-audit-test:changes
 scripts/ci/check_archival_reward_gates.sh	grep-gates:grep-gates
 scripts/ci/check_armed_lever_launchers.py	grep-gates:grep-gates
+scripts/ci/check_crypto_closure.py	rust-audit-test:rust-audit-and-test,gui-drift:gui-pin,gui-drift:gui-pin-nightly
+scripts/ci/check_gui_lock_shared.py	gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/check_owner_socket_launchers.py	grep-gates:grep-gates
 scripts/ci/check_bench_not_a_dependency.py	docs-gates:check-doc-links
 scripts/ci/check_binary_hardening.sh	build:build-macos,build:build-ubuntu,build:build-windows-msvc,depends:build-cross

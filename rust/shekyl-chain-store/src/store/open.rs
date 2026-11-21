@@ -25,6 +25,7 @@
 
 use std::path::Path;
 
+use redb::backends::FileBackend;
 use redb::{Database, ReadableDatabase};
 use shekyl_chain_rules::{AtHeight, GenesisPin};
 use shekyl_types::BlockHeight;
@@ -155,7 +156,7 @@ fn open_existing(
         Err(refused) => return Err(EngineError::Open(refused).into()),
     }
     let db = builder.open(path).map_err(EngineError::Open)?;
-    // `create_file` commits an empty database before the seal's
+    // `create_with_backend` commits an empty database before the seal's
     // transaction commits, so a power loss between the two leaves a valid
     // file with no table at all (PB-S2's first replay). Nothing in it can
     // be lost: it is sealed here, as `create_sealed` would have.
@@ -288,7 +289,9 @@ fn create_sealed(
     policy: ApplyPolicy,
     epoch: SettlementEpochBlocks,
 ) -> Result<(Database, Provenance), StoreError> {
-    let db = builder.create_file(file).map_err(EngineError::Open)?;
+    let db = builder
+        .create_with_backend(FileBackend::new(file).map_err(EngineError::Open)?)
+        .map_err(EngineError::Open)?;
     let provenance = seal_new(&db, policy, epoch)?;
     Ok((db, provenance))
 }

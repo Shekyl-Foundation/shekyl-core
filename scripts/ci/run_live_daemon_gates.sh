@@ -196,6 +196,26 @@ ARMED=(
   # daemon rebuilt to log an error line in its teardown: panicked at "a
   # requested stop logged". Green 8 s with the stop gate above.
   engine::regtest_e2e::a_requested_stop_logs_no_error_and_exits_0
+  # The dependency round (redb 4.6, whose close waits for the reads in
+  # progress): a wallet closed mid-scan, at a frame the scan reports,
+  # closes and reopens where it was; then SIGTERM stops the daemon.
+  # Prints both closes' durations. Observed red 2026-11-21 against an
+  # engine rebuilt to forget itself at release (its stores left open):
+  # panicked at "the wallet closed mid-scan reopens" (AlreadyLocked).
+  # Green 104-125 s on a build VM: the wallet's close 8-11 ms; the
+  # daemon's SIGTERM to its exit 17-24 ms (waited on the exit itself;
+  # its own line: the node closed in 6-9 ms).
+  engine::regtest_e2e::a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops
+  # The daemon side of the same round: SIGTERM to the daemon while a
+  # wallet's scan reads from it. The daemon exits 0 within 60 s, the scan
+  # ends with an error (its block fetches retry a bounded number of
+  # times), and the wallet closes and reopens where it was. Prints the
+  # stop's duration. Observed red 2026-11-21 against a producer whose
+  # block fetches never give up (MAX_BLOCK_FETCH_RETRIES = u32::MAX):
+  # panicked at "the scan did not end within 60s of its daemon's stop".
+  # Green 124-129 s on a build VM: the daemon's stop mid-scan 21-27 ms
+  # from SIGTERM to its exit (its own line: the node closed in 8 ms).
+  engine::regtest_e2e::a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open

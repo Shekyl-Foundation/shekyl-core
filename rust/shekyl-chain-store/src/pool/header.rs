@@ -76,6 +76,7 @@
 
 use std::path::Path;
 
+use redb::backends::FileBackend;
 use redb::{Database, ReadTransaction, ReadableDatabase, TableDefinition};
 use shekyl_store_codec::{Canonical, Raw};
 
@@ -215,7 +216,7 @@ fn admit(
 ) -> Result<(Database, PoolOpen), StoreError> {
     match judge(&claimed)? {
         Header::Current => Ok((claimed, PoolOpen::Opened)),
-        // `create_file` commits an empty database before the seal does; a
+        // `create_with_backend` commits an empty database before the seal does; a
         // power loss between them leaves a file with no table at all. The
         // claim is the engine's exclusive lock, so the creation is
         // finished in place.
@@ -346,7 +347,9 @@ fn seal_fresh(
     path: &Path,
 ) -> Result<Database, StoreError> {
     let sealed = (|| {
-        let db = builder.create_file(file).map_err(EngineError::Open)?;
+        let db = builder
+            .create_with_backend(FileBackend::new(file).map_err(EngineError::Open)?)
+            .map_err(EngineError::Open)?;
         seal(&db)?;
         Ok::<_, StoreError>(db)
     })();
