@@ -38,7 +38,7 @@ use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::schedule::Millis;
 use shekyl_relay_privacy::stem_map::ConnectionId;
 
-use crate::graph::{Relay, TxBlob};
+use crate::graph::{Relay, StemWork, TxBlob};
 
 /// Work the driver produced that the caller must perform.
 ///
@@ -114,15 +114,16 @@ pub enum Effect {
         /// Channel index. Positional: channel `i` follows stem slot `i`.
         channel: usize,
     },
-    /// Stem these blobs to `peer` on the ordinary wire: an embargo's reshape
-    /// to the alternate (§12.2), or a held origin's first send (RX-2). The
+    /// Stem this transaction on the ordinary wire: an embargo's reshape to
+    /// the alternate (§12.2), or a held origin's first send (RX-2).
+    ///
+    /// The zone has armed nothing. The caller [`Relay::commit_stem`]s when
+    /// the write lands and [`Relay::reject_stem`]s when it does not. The
     /// bytes are the transaction's own; no relay or retry state rides them
     /// (§12.2 item 5).
     Stem {
-        /// The successor.
-        peer: ConnectionId,
-        /// The transaction blobs.
-        blobs: Vec<TxBlob>,
+        /// The stem the zone asked for.
+        stem: StemWork,
     },
     /// The zone fluffed these transactions as the last resort, or saw them
     /// circulate: the pool's shown bit is set for each (criterion 2, Q9).
@@ -229,11 +230,8 @@ impl Driver {
         let unsent = self.zone.due_unsent(now, rng);
         let mut published = fired.published;
         published.extend(unsent.published);
-        for (peer, blob) in fired.stems.into_iter().chain(unsent.stems) {
-            effects.push(Effect::Stem {
-                peer,
-                blobs: vec![blob],
-            });
+        for stem in fired.stems.into_iter().chain(unsent.stems) {
+            effects.push(Effect::Stem { stem });
         }
         if !published.is_empty() {
             effects.push(Effect::Published { txs: published });

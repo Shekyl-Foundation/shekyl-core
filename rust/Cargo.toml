@@ -718,7 +718,37 @@ tempfile = "3.27"
 # built-in types existing tables use declare a niche only under
 # `experimental-niches`, and the `NonZero` integer types, which 4.4 adds and
 # which do declare one unconditionally, key or store no table here).
-redb = "4.4.0"
+# 4.6 (released 2026-11-13; the post-alpha.12 dependency round): repair no
+# longer falls back to a commit slot that failed its checksum (which could
+# open a damaged store as an empty one), `commit()` refuses a transaction
+# whose table was leaked, and a read in progress at close no longer returns
+# a later commit's data: closing a database waits for the reads and
+# writes in progress. Verified at source: the file format is still
+# version 3 and no table encoding changes (4.5's `&str` key comparison on
+# raw bytes gives the same order); the one layout change is that a new
+# file starts at 72 KiB instead of about 1 MiB. 4.5 deprecates
+# `Builder::create_file`, which in 4.4 is
+# `Database::new(Box::new(FileBackend::new(file)?), ...)`, the body of
+# `create_with_backend`; every caller here makes that call directly. 4.5's multi-process modes are not used (the
+# default, `ExclusiveWriter`, locks the whole file as 4.4 does). MSRV 1.90,
+# as 4.4.
+redb = "4.6"
+
+# The TOML reader of every configuration and prefs file (shekyl-options,
+# shekyl-daemon-config, shekyl-engine-prefs) and of the chain forge's plans
+# and pins; shekyl-chain-store reads manifests with it in a test. Files are
+# TOML 1.1 (INPUT_GRAMMAR.md R2): over TOML 1.0 that adds newlines and
+# trailing commas in inline tables, the `\e` and `\xHH` escapes, and times
+# without seconds; the key grammar is unchanged. Verified at source
+# (1.2.1+spec-1.1.0, rule 17): `std`, `serde` and `parse` give `from_str`,
+# `Table`, `Value`, `Spanned` (re-exported unconditionally, `lib.rs`) and
+# `de::Error::{message, span}` (`de/error.rs`); `display` (engine-prefs only)
+# gives `to_string`/`to_string_pretty`. Unlike 0.8, `str::parse::<Value>()`
+# parses one value, not a document: a document is a `Table`. Already in
+# Cargo.lock at this version (through trybuild), and the GUI wallet's graph
+# carries the same line through tauri, so core's config parser is never
+# chosen by the GTK3 compile-time chain's toml 0.8.
+toml = { version = "1.2", default-features = false, features = ["std", "serde", "parse"] }
 
 # `kameo` actor framework — pinned per the 2026-04-27 *Engine binary
 # boundary* decision in

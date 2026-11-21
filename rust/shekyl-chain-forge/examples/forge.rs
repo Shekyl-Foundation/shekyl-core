@@ -14,7 +14,15 @@
 //!     [--live-producer] [--start-spread-ms N]
 //! cargo run --manifest-path rust/Cargo.toml -p shekyl-chain-forge \
 //!     --example forge -- --diff <old blocks.txt> <new blocks.txt>
+//! cargo run --manifest-path rust/Cargo.toml -p shekyl-chain-forge \
+//!     --example forge -- --layers
 //! ```
+//!
+//! `--layers` prints a hosted chain's layers, one `file:media_type` line
+//! each in the artifact's order (`hosted::LAYERS`): what
+//! `shekyl-test-chains`' publish workflow packs a forging as, read from the
+//! commit it forged, so a layout change at that commit moves the media
+//! type the artifact carries with it.
 //!
 //! `--diff` prints the first block where two ledgers differ, the line a
 //! regeneration's pull request names (`CHAIN_FORGE.md` §9), and exits 1 if
@@ -64,6 +72,14 @@ fn run() -> Result<ExitCode, String> {
     if let [flag, old, new] = args.as_slice() {
         if flag == "--diff" {
             return diff(old, new);
+        }
+    }
+    if let [flag] = args.as_slice() {
+        if flag == "--layers" {
+            for (file, media_type) in shekyl_chain_forge::hosted::LAYERS {
+                println!("{file}:{media_type}");
+            }
+            return Ok(ExitCode::SUCCESS);
         }
     }
     let mut plan_path = None;

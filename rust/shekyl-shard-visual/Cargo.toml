@@ -21,7 +21,12 @@ required-features = ["cli"]
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 png = "0.18"
-imageproc = "0.25"
+# No default features: the defaults (`rayon`, `text`, `fft`, and image's own
+# defaults) are unused here (only `drawing` and `point`), and re-enabling
+# image's defaults is what pulled `paste` (via ravif/rav1e) and `ttf-parser`
+# (via ab_glyph) into the lock. 0.27 also moves to nalgebra 0.35 / simba
+# 0.10, which drop `paste`. The ruling-B goldens hold the raster.
+imageproc = { version = "0.27", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 sha3 = "0.10"
