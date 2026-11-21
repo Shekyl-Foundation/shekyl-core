@@ -109,7 +109,7 @@ jobs:
             tar -xzf "/tmp/$nx" -C "$CARGO_HOME/bin"
             stamp toolchain-end
             echo "toolchain rc=$tc_rc" >> "$R/timings.txt"
-            [ "$tc_rc" -eq 0 ] || { kill "$sampler"; exit "$tc_rc"; }
+            if [ "$tc_rc" -ne 0 ]; then kill "$sampler" || true; exit 0; fi
 
             cd "$W/rust"
             stamp build-start
@@ -139,12 +139,22 @@ jobs:
             fi
             echo "test rc=$test_rc doctest rc=$doc_rc" >> "$R/timings.txt"
             kill "$sampler" || true
+            grep -E '^ +(TRY [0-9]+ )?FAIL \[|^ +Summary \[|tests run:' "$R/test.log" || true
             cat "$R/timings.txt"
-            [ "$build_rc" -eq 0 ] && [ "$test_rc" = 0 ] && [ "$doc_rc" = 0 ]
+            # The step succeeds so the action copies fbsd-results/ back (it
+            # copies nothing after a failed step); the verdict step below
+            # reads the statuses recorded in timings.txt.
 
       - name: stamp after the VM
         if: always()
         run: echo "vm-step-end $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> fbsd-results/timings.txt
+
+      - name: verdict
+        run: |
+          cat fbsd-results/timings.txt
+          grep -qx 'toolchain rc=0' fbsd-results/timings.txt
+          grep -qx 'build rc=0' fbsd-results/timings.txt
+          grep -qx 'test rc=0 doctest rc=0' fbsd-results/timings.txt
 
       - name: results
         if: always()
