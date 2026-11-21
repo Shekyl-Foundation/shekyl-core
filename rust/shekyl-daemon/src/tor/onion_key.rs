@@ -12,16 +12,17 @@
 //! A key that is named and cannot be used refuses the start: a node never
 //! falls back to a new onion, which would put a seed at a random address.
 //!
-//! The file is read through `shekyl-os-account` (only this account and the
-//! superuser may reach it; a systemd credential qualifies) and parsed in
-//! `shekyl-onion-key` (rule 36). This module holds no byte of the secret
-//! itself: the read buffer is wiped on drop, and the keypair is heap-held.
+//! The file is read through `shekyl-os-account`'s key-file reader (only this
+//! account and the superuser may reach it; a systemd credential qualifies)
+//! and parsed in `shekyl-onion-key` (rule 36). This module holds no byte of
+//! the secret itself: the read buffer is wiped on drop, and the keypair is
+//! heap-held.
 
 use std::path::Path;
 
 use shekyl_onion_key::{OnionKeypair, TOR_SECRET_KEY_FILE_BYTES};
 use shekyl_options::{Code, Diagnostic, Source};
-use shekyl_os_account::private_file::{read_key_file, PrivateFileError};
+use shekyl_os_account::key_file::{read_key_file, KeyFileError};
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 /// The option the key is named by.
@@ -44,7 +45,7 @@ pub(crate) fn load(path: &Path, source: &Source) -> Result<OnionIdentity, Diagno
     let bytes = match read_key_file(path, TOR_SECRET_KEY_FILE_BYTES) {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Err(refused(Code::OnionKeyMissing)),
-        Err(PrivateFileError::Exposed(_, why)) => {
+        Err(KeyFileError::Exposed(_, why)) => {
             return Err(refused(Code::OnionKeyExposed).param("why", why))
         }
         Err(error) => {
