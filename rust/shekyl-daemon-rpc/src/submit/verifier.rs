@@ -1182,14 +1182,12 @@ fn verify_pqc_auth_slot(
 /// and is therefore readable by anyone who syncs the chain. Equality of two
 /// public values authenticates nobody — an attacker copies the record's key
 /// into `pqc_auths`, signs with garbage, passes the pin, and buys the
-/// per-shard last-served scan — two LMDB seeks per served shard, with both
-/// locks held, on every submit, unauthenticated. That is not a constant: a
-/// `HeldShards` record is capped by the codec (`MAX_HOLDINGS_SHARDS` = 4096,
-/// so ≤ 8192 seeks), but a `CompleteTree` record's all-shards form walks
-/// every shard carrying a serve-credit row under that persona, which tracks
-/// the frozen-segment count and therefore **grows with the chain**.
-/// CompleteTree is the shape an attacker would pick. K13 does reject the
-/// signature — but only after the gather has already run.
+/// last-served scan (`release_last_served`) on every submit,
+/// unauthenticated. That is not a constant: the scan reads each epoch of
+/// the release cooldown's window, and each read returns that epoch's whole
+/// issued-draw set (its support set, for a complete tree), which **grows
+/// with the chain's participants**. K13
+/// does reject the signature — but only after the gather has already run.
 ///
 /// So the two checks compose, and neither is redundant:
 ///

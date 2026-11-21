@@ -8,7 +8,7 @@ unforgeability** (construction bytes) may still defer relative to Phase 2b walle
 the **consensus interface** — what state emission reads, how it is keyed, how it
 prunes — is implemented.
 
-**Scope:** Consensus LMDB (or equivalent) tables, keying, invariants, and growth bounds
+**Scope:** Consensus store tables, keying, invariants, and growth bounds
 for everything the emission leg **consumes** (does not write except `ClaimedEpochSet`
 mutations and first-emission bond-record creation per emission leg §6).
 

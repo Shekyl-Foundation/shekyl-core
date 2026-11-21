@@ -51,7 +51,7 @@
 //! # Coverage boundary, stated rather than implied
 //!
 //! `predict_weight`'s `tree_depth` is the FCMP++ **layer count** `L`; the wire
-//! field is the LMDB depth `L - 1`. `build_wire_tx` rejects `L < 2`, so a
+//! field is the consensus depth `L - 1`. `build_wire_tx` rejects `L < 2`, so a
 //! spend at `L = 1` is unbuildable and the gate covers `2..=MAX_TREE_DEPTH`.
 //! The `L = 1` column of the proof-size table is covered by the KATs above,
 //! which measure the prover directly and are not bound by the builder's floor.
