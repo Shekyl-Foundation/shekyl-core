@@ -424,13 +424,18 @@ reason = "Ed448, carried by ciphersuite."
 
 [[package]]
 name = "modular-frost"
-version = "0.11.0"
-reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 is not admitted: its manifest moves it to multiexp 0.5, so its review is multiexp 0.5's batch verifier on the multisig FROST path, not its 2-line diff."
+version = "0.11.1"
+reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 admitted after diffing it against 0.11.0: the manifest moves it to multiexp 0.5 (reviewed there) and spells optional features as dep:, lib.rs swaps doc_auto_cfg for doc_cfg."
 
 [[package]]
 name = "multiexp"
 version = "0.4.2"
-reason = "Multi-scalar multiplication and batch verification in FCMP++, generalized Bulletproofs and FROST."
+reason = "Multi-scalar multiplication and batch verification in FCMP++ and the generalized Bulletproofs (fcmps, generalized-bulletproofs, shekyl-fcmp, shekyl-fcmp-proofs, shekyl-engine-core, shekyl-verify-cost). Kept at 0.4.2 while FROST moves to 0.5.2: 0.4's non-vartime multiexp indexes its Straus tables and Pippenger buckets by secret scalar bits (straus.rs: tables[s][groupings[s][b]]; pippenger.rs: buckets[bits[p][n]]), and the generalized-Bulletproofs prover calls it on secrets (lib.rs Pedersen commit; arithmetic_circuit_proof.rs AI/AO). 0.5 scans every entry with conditional_assign, at a cost to the prover's large multiexps. Reopen: the prover measured on 0.5 at the device floor (rule 76) and a ruling on moving these crates; 0.5 needs its alloc feature there, or multiexp falls back to a naive sum."
+
+[[package]]
+name = "multiexp"
+version = "0.5.2"
+reason = "Multi-scalar multiplication and batch verification under modular-frost 0.11.1 (multisig FROST). Admitted after diffing src against 0.4.2: the non-vartime Straus and Pippenger select table entries and buckets with subtle's conditional_assign over every index instead of indexing by secret scalar bits (the reason the group gains a ConditionallySelectable bound), BatchVerifier's constant-time verify moves to that bound's impl block with an unchanged body, std-shims gives way to alloc, and the vartime paths are unchanged. Without its alloc feature multiexp is a naive sum; modular-frost enables it."
 
 [[package]]
 name = "once_cell"
@@ -504,8 +509,8 @@ reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448
 
 [[package]]
 name = "schnorr-signatures"
-version = "0.5.2"
-reason = "Schnorr signatures inside FROST's DKG (modular-frost)."
+version = "0.5.3"
+reason = "Schnorr signatures inside FROST's DKG (modular-frost). 0.5.3 admitted after diffing it against 0.5.2: no source change; dependency ranges widen to admit multiexp 0.5 and std-shims 0.3, and the crate drops its lint table."
 
 [[package]]
 name = "sec1"

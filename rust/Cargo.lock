@@ -1289,7 +1289,7 @@ dependencies = [
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.4.5",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_core 0.6.4",
  "std-shims",
  "zeroize",
@@ -1397,7 +1397,7 @@ dependencies = [
  "ciphersuite",
  "ff",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_core 0.6.4",
  "std-shims",
  "subtle",
@@ -2135,9 +2135,9 @@ dependencies = [
 
 [[package]]
 name = "modular-frost"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373d09390d150d030cc06163dc83eae2af031e8048ceb08d74ac0eb187da1f4a"
+checksum = "24faa8d191d82ae1e418a7dc13de3690adf4bf8b23d556f84cb163176eeb5dfc"
 dependencies = [
  "ciphersuite",
  "dalek-ff-group 0.5.0",
@@ -2147,7 +2147,7 @@ dependencies = [
  "dkg-recovery",
  "flexible-transcript",
  "hex",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "schnorr-signatures",
@@ -2177,6 +2177,20 @@ dependencies = [
  "rand_core 0.6.4",
  "rustversion",
  "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "multiexp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d18b701213424f6cc2800ee2ff6159c3bc9c79910a2bcd31e09895d06feada"
+dependencies = [
+ "ff",
+ "group",
+ "rand_core 0.6.4",
+ "subtle",
+ "tap",
  "zeroize",
 ]
 
@@ -3023,13 +3037,13 @@ dependencies = [
 
 [[package]]
 name = "schnorr-signatures"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11fe30c28740bba75dc4649a8985861784e8a44fd636706076edb7cb2aec5765"
+checksum = "037878e1cd9b8dcd0c9bcd1de2f8f4e14233b6a62cd08f34e6c9bade081f52e8"
 dependencies = [
  "ciphersuite",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_core 0.6.4",
  "std-shims",
  "zeroize",
@@ -3994,7 +4008,7 @@ dependencies = [
  "hex",
  "hkdf",
  "kameo",
- "multiexp",
+ "multiexp 0.4.2",
  "proptest",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -4142,7 +4156,7 @@ dependencies = [
  "generalized-bulletproofs",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.4.2",
  "rand 0.8.8",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -4173,7 +4187,7 @@ dependencies = [
  "generic-array 1.4.5",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-curve-generators",
@@ -5316,7 +5330,7 @@ dependencies = [
  "ec-divisors",
  "gungraun",
  "helioselene",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-bulletproofs",

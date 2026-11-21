@@ -599,7 +599,7 @@ dependencies = [
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.4.5",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_core",
  "std-shims",
  "zeroize",
@@ -619,7 +619,7 @@ dependencies = [
  "ciphersuite",
  "ff",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_core",
  "std-shims",
  "subtle",
@@ -867,16 +867,16 @@ dependencies = [
 
 [[package]]
 name = "modular-frost"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373d09390d150d030cc06163dc83eae2af031e8048ceb08d74ac0eb187da1f4a"
+checksum = "24faa8d191d82ae1e418a7dc13de3690adf4bf8b23d556f84cb163176eeb5dfc"
 dependencies = [
  "ciphersuite",
  "dalek-ff-group 0.5.0",
  "digest",
  "dkg",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_chacha",
  "rand_core",
  "schnorr-signatures",
@@ -896,6 +896,20 @@ dependencies = [
  "rand_core",
  "rustversion",
  "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "multiexp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d18b701213424f6cc2800ee2ff6159c3bc9c79910a2bcd31e09895d06feada"
+dependencies = [
+ "ff",
+ "group",
+ "rand_core",
+ "subtle",
+ "tap",
  "zeroize",
 ]
 
@@ -1094,13 +1108,13 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "schnorr-signatures"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11fe30c28740bba75dc4649a8985861784e8a44fd636706076edb7cb2aec5765"
+checksum = "037878e1cd9b8dcd0c9bcd1de2f8f4e14233b6a62cd08f34e6c9bade081f52e8"
 dependencies = [
  "ciphersuite",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_core",
  "std-shims",
  "zeroize",
@@ -1367,7 +1381,7 @@ dependencies = [
  "generalized-bulletproofs",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_chacha",
  "rand_core",
  "serde",
@@ -1396,7 +1410,7 @@ dependencies = [
  "generic-array 1.4.5",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_chacha",
  "rand_core",
  "shekyl-curve-generators",
