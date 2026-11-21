@@ -302,27 +302,34 @@ impl Relay {
 
     /// The write of `stem` did not land.
     ///
-    /// [`ControlFlow::Continue`] — the zone still holds the transaction. A
-    /// first send stays on the unsent grid. A reshape was already marked
-    /// re-stemmed by [`Self::fire_embargoes`], and one embargo from `now`
-    /// is armed so the next fire ends the stem phase.
-    /// [`ControlFlow::Break`] — that embargo cannot be drawn, so nothing
-    /// would wake the row. The row is released and the caller broadcasts
-    /// `stem`.
+    /// Three cases, read from the zone's own rows and never from whose
+    /// transaction it is:
     ///
-    /// Which of the two holds it is read from the zone's own rows, never
-    /// from whose transaction it is. The [`ControlFlow`] is already
-    /// `must_use`: a `Break` the caller drops is a transaction released
-    /// and never broadcast.
+    /// - **Unsent:** [`ControlFlow::Continue`]. A first send stays on the
+    ///   grid [`Self::due_unsent`] already moved it to.
+    /// - **Held:** [`ControlFlow::Continue`]. A reshape was already marked
+    ///   re-stemmed by [`Self::fire_embargoes`], and one embargo from `now`
+    ///   is armed so the next fire ends the stem phase. If that embargo
+    ///   cannot be drawn nothing would wake the row: it is released and
+    ///   the answer is [`ControlFlow::Break`].
+    /// - **Neither:** [`ControlFlow::Break`]. The zone has no row for the
+    ///   transaction, so it adopts none. Holding it as unsent would make
+    ///   it this node's own, with no source, whoever sent it.
+    ///
+    /// On `Break` the caller broadcasts `stem`. The [`ControlFlow`] is
+    /// already `must_use`: a `Break` the caller drops is a transaction
+    /// released and never broadcast.
     pub fn reject_stem<R: RelayRng + ?Sized>(
         &mut self,
         stem: &StemWork,
         now: Millis,
         rng: &mut R,
     ) -> ControlFlow<()> {
-        if !self.embargoes.held.contains_key(&stem.tx) {
-            self.hold_origin(&[(stem.tx, TxBlob::clone(&stem.blob))], now);
+        if self.embargoes.unsent.contains_key(&stem.tx) {
             return ControlFlow::Continue(());
+        }
+        if !self.embargoes.held.contains_key(&stem.tx) {
+            return ControlFlow::Break(());
         }
         let Some((connector, deadline)) = self.embargo_draw(stem.peer, now, rng) else {
             self.release(&stem.tx);

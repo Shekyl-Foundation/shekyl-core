@@ -822,6 +822,37 @@ fn a_missed_reshape_is_armed_once_and_its_next_fire_broadcasts() {
     assert!(z.stem_observation_deadline().is_none());
 }
 
+/// **A missed stem the zone has no row for is released, not adopted.**
+/// Stem effects come only from unsent rows and held rows, so this is a
+/// transaction the pool dropped between the ask and the write, or a caller
+/// that kept a stem too long. The zone answers `Break` and writes no row:
+/// the caller broadcasts. Red edit: hold whatever is not in the held rows
+/// as unsent (a relayed transaction becomes this node's own, with no
+/// source, and is planned again on the grid).
+#[test]
+fn a_missed_stem_with_no_row_is_released_and_never_adopted() {
+    let mut rng = SplitMix64::new(0xED);
+    let mut z = stem_zone(&[1, 2], &mut rng);
+    z.set_node_sync(NodeSync::Synchronised, 0);
+    let stray = tx(44);
+    let stem = StemWork {
+        peer: id(1),
+        tx: stray.0,
+        blob: TxBlob::clone(&stray.1),
+        source: Some(id(2)),
+    };
+
+    assert_eq!(
+        z.reject_stem(&stem, 0, &mut rng),
+        ControlFlow::Break(()),
+        "no row: the caller broadcasts"
+    );
+    assert!(!z.holds_unsent(&stray.0), "not adopted as an own origin");
+    assert_eq!(z.relay_state_len(), 0, "no row is written");
+    assert_eq!(z.stem_observations_in_flight(), 0, "no embargo is armed");
+    assert_eq!(z.unsent_deadline(), None, "nothing is planned on the grid");
+}
+
 /// **A held origin's first send that misses stays unsent.** `due_unsent`
 /// hands the stem out and arms nothing; with no record the row is still
 /// unsent, not planned again before the grid, and planned again at it.
