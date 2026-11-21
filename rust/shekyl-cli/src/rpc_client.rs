@@ -121,6 +121,9 @@ struct Hosted {
     /// Keeps the in-process server's tasks alive for the session lifetime.
     runtime: tokio::runtime::Runtime,
     handle: Option<InProcessHandle>,
+    /// Where the server keeps its wallets; made only to make a wallet
+    /// ([`RpcSession::make_wallet_dir`]).
+    wallet_dir: PathBuf,
 }
 
 /// One CLI session's connection to `shekyl-wallet-rpc`.
@@ -294,7 +297,9 @@ impl RpcSession {
             .build()?;
         let handle = runtime
             .block_on(shekyl_wallet_rpc::spawn_in_process(
-                wallet_dir, network, daemon,
+                wallet_dir.clone(),
+                network,
+                daemon,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         // A stop signal (SIGTERM, SIGINT, SIGHUP; the Windows console's
@@ -319,11 +324,33 @@ impl RpcSession {
             hosted: Some(Hosted {
                 runtime,
                 handle: Some(handle),
+                wallet_dir,
             }),
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
             shown_endings: RefCell::new(std::collections::BTreeMap::new()),
             debug,
+        })
+    }
+
+    /// Makes the directory a self-hosted session's server keeps its wallets in.
+    ///
+    /// Called immediately before a wallet is created or restored there. The
+    /// server refuses a missing directory (`-29009 WALLET_DIR_MISSING`). A
+    /// command that makes no wallet makes no folder. An external server
+    /// keeps its own directory, and this call makes nothing for it.
+    ///
+    /// # Errors
+    /// A local refusal naming the directory and the system's cause.
+    pub fn make_wallet_dir(&self) -> Result<(), crate::outcome::CommandFailed> {
+        let Some(hosted) = &self.hosted else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(&hosted.wallet_dir).map_err(|e| {
+            crate::outcome::refusal(format!(
+                "cannot create wallet dir {}: {e}",
+                hosted.wallet_dir.display()
+            ))
         })
     }
 

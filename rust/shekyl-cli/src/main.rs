@@ -218,20 +218,22 @@ impl ReplArgs {
         }))
     }
 
-    /// The wallet-file directory: `--wallet-dir` as given, else the
-    /// per-network default `wallets/<network>/` in this account's
+    /// The wallet-file directory: `--wallet-dir` as given, else
+    /// `network`'s default `wallets/<network>/` in this account's
     /// per-account root (CU-1; rule 83 IG-13: `~/.shekyl`, or
     /// `%LOCALAPPDATA%\Shekyl` on Windows, read from the account interface,
-    /// never `HOME`) — so a testnet wallet file can never collide with a
-    /// mainnet one, the Electrum isolation shape. Only consulted for a
-    /// self-hosted session (`--rpc-url` stores wallets server-side).
-    fn resolved_wallet_dir(&self) -> Result<std::path::PathBuf, String> {
+    /// never `HOME`; `shekyl_engine_file::paths::wallet_dir_in` names it) —
+    /// so a testnet wallet file can never collide with a mainnet one, the
+    /// Electrum isolation shape. Only consulted for a self-hosted session
+    /// (`--rpc-url` stores wallets server-side). The network is the parsed
+    /// one, not the flag's text.
+    fn resolved_wallet_dir(&self, network: Network) -> Result<std::path::PathBuf, String> {
         if let Some(dir) = &self.wallet_dir {
             return Ok(std::path::PathBuf::from(dir));
         }
         let root = shekyl_os_account::per_account_root()
             .ok_or("this account has no home folder; pass --wallet-dir explicitly")?;
-        Ok(shekyl_os_account::wallet_dir_in(&root).join(self.network_name()))
+        Ok(shekyl_engine_file::paths::wallet_dir_in(&root, network))
     }
 }
 
@@ -508,27 +510,36 @@ fn build_session(
             cli.proxy.as_deref(),
             cli.debug,
         )?),
-        Endpoints::SelfHosted { network, daemon } => {
-            let wallet_dir = cli.resolved_wallet_dir()?;
-            // The per-account root is made first, as the daemon makes it,
-            // so whatever is made in it after has the root's protections.
-            // The per-network default is created on demand; an explicit
-            // --wallet-dir is also created rather than failing on a path the
-            // operator clearly intends to use.
-            if let Some(root) = shekyl_os_account::per_account_root() {
-                shekyl_os_account::ensure_per_account_root(&root)
-                    .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
-            }
-            std::fs::create_dir_all(&wallet_dir)
-                .map_err(|e| format!("cannot create wallet dir {}: {e}", wallet_dir.display()))?;
-            Ok(rpc_client::RpcSession::host_in_process(
-                wallet_dir,
-                *network,
-                daemon.target.clone(),
-                cli.debug,
-            )?)
-        }
+        Endpoints::SelfHosted { network, daemon } => host_session(
+            cli.resolved_wallet_dir(*network)?,
+            *network,
+            daemon.target.clone(),
+            cli.debug,
+            shekyl_os_account::per_account_root().as_deref(),
+        ),
     }
+}
+
+/// A self-hosted session's start, everything `build_session` does past
+/// reading the flags: the per-account root `root` is made first, as the
+/// daemon makes it, so whatever is made in it after has the root's
+/// protections (`None`: the account has no home). The wallet directory, the
+/// per-network default or an explicit `--wallet-dir`, is not made here: it
+/// is made only when a wallet is created or restored in it
+/// (`RpcSession::make_wallet_dir`), so a word that makes no wallet makes no
+/// folder.
+fn host_session(
+    wallet_dir: std::path::PathBuf,
+    network: Network,
+    daemon: DaemonTarget,
+    debug: bool,
+    root: Option<&std::path::Path>,
+) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
+    if let Some(root) = root {
+        shekyl_os_account::ensure_per_account_root(root)
+            .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
+    }
+    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, debug)
 }
 
 /// Run one non-interactive subcommand against a fresh session and translate a
@@ -718,247 +729,8 @@ fn run_repl_command(
     )
 }
 
+// The binary's tests sit beside this file (`main_tests.rs`) so the
+// session and the command loop stay the body of `main.rs`.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// With no `--daemon-address` the daemon is "this computer" on the
-    /// selected network (RT-W10 step 5); a given address is taken as given,
-    /// as a URL; an unknown network fails before anything is dialed; and a
-    /// proxy with no address is refused in a self-hosted run, where it could
-    /// only be the daemon's, but not beside `--rpc-url`, whose server it
-    /// reaches. The edit that turns this red is defaulting to the plaintext
-    /// port again.
-    #[test]
-    fn the_default_daemon_is_this_computer_on_the_network() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let this_computer = |argv: &[&str]| match args(argv).daemon_target().unwrap() {
-            DaemonTarget::ThisComputer { network, .. } => network,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(this_computer(&["shekyl-cli"]), Network::Mainnet);
-        assert_eq!(
-            this_computer(&["shekyl-cli", "--network", "testnet"]),
-            Network::Testnet
-        );
-        assert_eq!(
-            this_computer(&[
-                "shekyl-cli",
-                "--rpc-url",
-                "http://127.0.0.1:29500",
-                "--proxy",
-                "socks5h://127.0.0.1:9050"
-            ]),
-            Network::Mainnet
-        );
-        assert!(matches!(
-            args(&[
-                "shekyl-cli",
-                "--network",
-                "testnet",
-                "--daemon-address",
-                "node.example.com:11029"
-            ])
-            .daemon_target()
-            .unwrap(),
-            DaemonTarget::Address { url, proxy: None } if url == "http://node.example.com:11029"
-        ));
-        assert!(args(&["shekyl-cli", "--network", "bogus"])
-            .daemon_target()
-            .is_err());
-        let proxied = args(&["shekyl-cli", "--proxy", "socks5h://127.0.0.1:9050"])
-            .daemon_target()
-            .expect_err("a self-hosted proxy needs an address");
-        assert!(proxied.contains("--daemon-address"), "{proxied}");
-    }
-
-    /// A scripted run against an external wallet-RPC server opens no daemon
-    /// of its own, so it never consults `--network` — the flag's own help
-    /// says the server it configures is not started. The edit that turns
-    /// this red is resolving the daemon unconditionally (which is what
-    /// `--network` parsing hangs off): `Endpoints::resolve` then fails on a
-    /// network this run had no use for.
-    #[test]
-    fn a_scripted_external_run_resolves_no_daemon_and_no_network() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let external = args(&[
-            "shekyl-cli",
-            "--rpc-url",
-            "http://127.0.0.1:29500",
-            "--network",
-            "bogus",
-        ]);
-
-        let scripted = Endpoints::resolve(&external, false)
-            .expect("no daemon is opened, so the network is never parsed");
-        assert!(scripted.daemon().is_none(), "no daemon endpoint is dialed");
-
-        // The REPL *does* open a daemon client, and with no --daemon-address
-        // it is this computer's node on the network — so there the bad value
-        // is fatal, at the point it is actually needed.
-        assert!(Endpoints::resolve(&external, true).is_err());
-
-        // ...and naming the daemon removes even that need.
-        let named = args(&[
-            "shekyl-cli",
-            "--rpc-url",
-            "http://127.0.0.1:29500",
-            "--network",
-            "bogus",
-            "--daemon-address",
-            "127.0.0.1:11029",
-        ]);
-        let repl = Endpoints::resolve(&named, true).expect("the daemon is named");
-        assert!(matches!(
-            &repl.daemon().expect("a daemon").target,
-            DaemonTarget::Address { url, .. } if url == "http://127.0.0.1:11029"
-        ));
-    }
-
-    /// The enrollment flags are checked before a session opens, and the
-    /// check reads only what was typed: no bundle file, no remote; a bundle
-    /// file without the channel's address is refused; with one, the remote
-    /// is the bundle and that address. The key's path is not resolved here
-    /// (`EnrollOptions::key_file` is the flag as given), so a session whose
-    /// account has no home is not refused for a key it never reads. The
-    /// edit that turns this red is dropping the address check: the bundle
-    /// alone would then reach the plaintext port's default.
-    #[test]
-    fn the_enrollment_flags_are_checked_as_typed() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        assert!(args(&["shekyl-cli"])
-            .enroll_remote()
-            .expect("no bundle")
-            .is_none());
-        assert_eq!(
-            args(&["shekyl-cli", "--daemon-bundle-file", "node.bundle"])
-                .enroll_remote()
-                .expect_err("a bundle without the channel's address"),
-            shekyl_cli::enroll::CHANNEL_ADDRESS_REQUIRED
-        );
-        let remote = args(&[
-            "shekyl-cli",
-            "--daemon-bundle-file",
-            "node.bundle",
-            "--daemon-address",
-            "192.0.2.7:11031",
-        ])
-        .enroll_remote()
-        .expect("a bundle and the channel's address")
-        .expect("a remote");
-        assert_eq!(remote.bundle_file, std::path::PathBuf::from("node.bundle"));
-    }
-
-    /// `--testnet` / `--stagenet` are shorthand for `--network testnet` /
-    /// `--network stagenet`, the spelling `shekyld` takes. Combining spellings is a
-    /// parse error, not a precedence rule — a run that says two networks
-    /// must not silently pick one (CU-1).
-    #[test]
-    fn testnet_and_stagenet_flags_select_the_network() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let network = |argv: &[&str]| match args(argv).daemon_target().unwrap() {
-            DaemonTarget::ThisComputer { network, .. } => network,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(network(&["shekyl-cli", "--testnet"]), Network::Testnet);
-        assert_eq!(network(&["shekyl-cli", "--stagenet"]), Network::Stagenet);
-        assert!(
-            ReplArgs::try_parse_from(["shekyl-cli", "--testnet", "--network", "testnet"]).is_err()
-        );
-        assert!(
-            ReplArgs::try_parse_from(["shekyl-cli", "--stagenet", "--network", "stagenet"])
-                .is_err()
-        );
-        assert!(ReplArgs::try_parse_from(["shekyl-cli", "--testnet", "--stagenet"]).is_err());
-    }
-
-    /// Connection flags are global (CU-1): they parse after a subcommand
-    /// name, so `shekyl-cli create w --seed-out s --testnet` works instead
-    /// of demanding the flags come first.
-    #[test]
-    fn connection_flags_parse_after_a_subcommand() {
-        let cli = Cli::try_parse_from([
-            "shekyl-cli",
-            "create",
-            "w",
-            "--seed-out",
-            "/tmp/seed.txt",
-            "--testnet",
-        ])
-        .expect("global connection flags parse after the subcommand");
-        assert!(cli.repl.testnet);
-        assert!(matches!(cli.command, Some(Commands::Create(_))));
-    }
-
-    /// The default wallet dir is per-network (`wallets/<network>/`, CU-1)
-    /// in the per-account root (rule 83 IG-13), pinned as the rule states
-    /// it, so wallets on different networks never share a directory; an
-    /// explicit `--wallet-dir` is taken as given. Red edit: the old
-    /// `dirs::home_dir()` plus `.shekyl` fails on Windows, and under a moved
-    /// `HOME`.
-    #[test]
-    fn the_default_wallet_dir_is_per_network() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let home = shekyl_os_account::account_home().expect("the test account has a home");
-        let wallets = home
-            .join(if cfg!(windows) { "Shekyl" } else { ".shekyl" })
-            .join("wallets");
-        let dir = args(&["shekyl-cli", "--testnet"])
-            .resolved_wallet_dir()
-            .unwrap();
-        assert_eq!(dir, wallets.join("testnet"));
-        let mainnet = args(&["shekyl-cli"]).resolved_wallet_dir().unwrap();
-        assert_eq!(mainnet, wallets.join("mainnet"));
-        assert_eq!(
-            args(&["shekyl-cli", "--engine-dir", "/tmp/wallets"])
-                .resolved_wallet_dir()
-                .unwrap(),
-            std::path::PathBuf::from("/tmp/wallets")
-        );
-    }
-
-    /// The daemon-down hint (F1) fires for this machine only, this computer
-    /// or a loopback address, and names the network-matched `shekyld`
-    /// invocation, plus the port for an address; a remote daemon gets no
-    /// "start it" copy.
-    #[test]
-    fn the_daemon_down_hint_is_loopback_only_and_names_the_network() {
-        let args = |argv: &[&str]| ReplArgs::try_parse_from(argv).expect("parses");
-        let testnet = args(&["shekyl-cli", "--testnet"]);
-        let hint = daemon_down_hint(&testnet, &DaemonTarget::address("127.0.0.1:12029"))
-            .expect("loopback gets a hint");
-        assert!(hint.contains("shekyld --network testnet"), "got {hint}");
-        assert!(hint.contains("12029"), "got {hint}");
-        assert!(
-            daemon_down_hint(&testnet, &DaemonTarget::address("node.example.com:12029")).is_none()
-        );
-        assert!(
-            daemon_down_hint(
-                &testnet,
-                &DaemonTarget::address("http://127.0.0.1.evil.com:12029")
-            )
-            .is_none(),
-            "a spoofed 127.0.0.1 prefix is not loopback"
-        );
-        assert!(daemon_down_hint(&testnet, &DaemonTarget::address("[::1]:12029")).is_some());
-        assert!(
-            daemon_down_hint(&testnet, &DaemonTarget::address("127.0.0.2:12029")).is_some(),
-            "127.0.0.0/8 is loopback"
-        );
-
-        let here = daemon_down_hint(&testnet, &testnet.daemon_target().unwrap())
-            .expect("this computer gets a hint");
-        assert!(here.contains("shekyld --network testnet"), "got {here}");
-
-        let mainnet_hint = daemon_down_hint(
-            &args(&["shekyl-cli"]),
-            &DaemonTarget::address("127.0.0.1:11029"),
-        )
-        .expect("hint");
-        assert!(mainnet_hint.contains("shekyld"), "got {mainnet_hint}");
-        assert!(
-            !mainnet_hint.contains("--"),
-            "mainnet is flagless: {mainnet_hint}"
-        );
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;
