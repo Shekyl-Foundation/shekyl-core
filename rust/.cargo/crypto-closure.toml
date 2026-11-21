@@ -79,8 +79,8 @@ reason = "Wallet envelope key derivation (shekyl-crypto-pq wallet_envelope.rs) a
 
 [[package]]
 name = "arrayvec"
-version = "0.7.6"
-reason = "Fixed-capacity buffers under hex-conservative, on bip39's checksum path."
+version = "0.7.8"
+reason = "Fixed-capacity buffers under hex-conservative, on bip39's checksum path. 0.7.8 admitted after reading its CHANGELOG (0.7.7-0.7.8) and diffing src: a double drop of zero-sized elements fixed (extend), spare_capacity_mut added, a 16-bit length on 16-bit targets, a lifetime spelled out."
 
 [[package]]
 name = "base16ct"
@@ -99,8 +99,8 @@ reason = "Seed mnemonic: 24 English words decode to the 32-byte seed through par
 
 [[package]]
 name = "bitcoin_hashes"
-version = "0.14.1"
-reason = "SHA-256 for bip39's mnemonic checksum word."
+version = "0.14.101"
+reason = "SHA-256 for bip39's mnemonic checksum word. 0.14.101 admitted after reading the CHANGELOG (0.14.2, 0.14.100: the version jump is the MSRV bump) and diffing src: schemars/alloc feature gating and lint silencing; the SHA-256 compression and engine are unchanged."
 
 [[package]]
 name = "bitvec"
@@ -369,8 +369,8 @@ reason = "Hex under modular-frost's encodings."
 
 [[package]]
 name = "hex-conservative"
-version = "0.2.2"
-reason = "Hex under bitcoin_hashes, on bip39's checksum path."
+version = "0.2.3"
+reason = "Hex under bitcoin_hashes, on bip39's checksum path. 0.2.3 admitted after diffing src: the serde hex deserializer asks for a string, not a map (a fix behind serde), and the digit tables are spelled as byte strings."
 
 [[package]]
 name = "hkdf"
@@ -589,13 +589,8 @@ reason = "Derives thiserror's error types."
 
 [[package]]
 name = "tinyvec"
-version = "1.11.0"
-reason = "Small vectors inside unicode-normalization, on bip39's NFKD path."
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-reason = "tinyvec's macros."
+version = "1.13.3"
+reason = "Small vectors inside unicode-normalization, on bip39's NFKD path. 1.13.3 admitted after diffing src and the manifest (no CHANGELOG ships): impl_mirrored is inlined, so tinyvec_macros leaves the graph; deserialization caps its pre-allocation at 4096 bytes of items (behind serde/borsh/bin-proto, none enabled here); optional bin-proto and schemars impls."
 
 [[package]]
 name = "typenum"
@@ -604,8 +599,8 @@ reason = "Type-level sizes under generic-array and hybrid-array. 1.20.1 admitted
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.25"
-reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and no PBKDF2 step (shekyl-crypto-pq/src/bip39.rs): parse_in(English, ...) normalizes the input, then matches ASCII words, and the entropy comes from word indices. Unicode 17 to 18 (0.1.26) can change which odd spellings of the words are accepted, never the derived key."
+version = "0.1.26"
+reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and no PBKDF2 step (shekyl-crypto-pq/src/bip39.rs): parse_in(English, ...) normalizes the input, then matches ASCII words, and the entropy comes from word indices. 0.1.26 admitted: its only change is the tables, Unicode 17 to 18 (UNICODE_VERSION in src/tables.rs). NFKD stays on, as ruled, under Unicode's normalization stability policy: an assigned character's decomposition never changes, so input that parsed before parses the same; newly assigned characters can only change which odd spellings of the words are accepted, never the derived key."
 
 [[package]]
 name = "universal-hash"
