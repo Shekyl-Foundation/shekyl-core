@@ -192,7 +192,11 @@ ARMED=(
   # The dependency round (redb 4.6, whose close waits for the reads in
   # progress): a wallet closed mid-scan, at a frame the scan reports,
   # closes and reopens where it was; then SIGTERM stops the daemon.
-  # Prints both closes' durations.
+  # Prints both closes' durations. Observed red 2026-11-21 against an
+  # engine rebuilt to forget itself at release (its stores left open):
+  # panicked at "the wallet closed mid-scan reopens" (AlreadyLocked).
+  # Green 125-135 s on a build VM: the wallet's close 12-14 ms, the
+  # daemon's SIGTERM to exit 103-105 ms.
   engine::regtest_e2e::a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
