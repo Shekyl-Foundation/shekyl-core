@@ -5432,6 +5432,32 @@ measured partly under that co-load. WE-12's 80 CPU-hours is a miss by
 2.5 times. The full table's regeneration also writes its JSON summary
 (every year of every cell), so one run gives both.
 
+**The table (2026-11-21).** The nightly slice and the full table ran as
+one regeneration at `f8e6f1ec4b`: 51 022 s in all, about 13.9 hours for
+the full table. For about eight of those hours another lane's test kept
+the host's load near 28 on 16 vCPUs. From 14:00Z to 19:00Z the table ran
+alone, at 16. Two more lanes joined for its last 45 minutes. The
+committed narration is 8.4 MB, not the 1.6 MB the code's comment
+estimated, and it holds the sample years. The JSON summary holds every
+year of every cell: 379 MB, not committed. Figures below are the median
+across seeds 1–3, on the baseline at N = 90, `w_ref` 3 000 and the gross
+rule, unless named.
+
+| Prediction | Outcome |
+|---|---|
+| **WE-1.** A-stuffed's miner income 1.29, 1.09 and 0.75 of A-honest's at y1, y10 and y30; every other economy within 1 % | **Held.** A-stuffed 1.288, 1.087 and 0.750. B and every C 0.999, 0.998 and 1.003 |
+| **WE-2.** Half the supply out at y11.06 (A-stuffed y8.51) | **Held.** 11.06 on every economy but A-stuffed, which reads 8.51 |
+| **WE-3.** `M_r` and burn at y1, y10, y30: B, C1, C3 1.000 with burns 1.5, 22.4 and 42.1 %; A-honest `M_r` in [0.97, 1.02]; C2's burn within 10 % of B's; A-stuffed 1.30, with burns of about 3.2, 43 and 72 % | **Held.** B, C1 and C3 read 1.000 with burns of 1.5, 22.4 and 42.1 %. A-honest's `M_r` lies between 0.997 and 1.001. C2's burn is within 0.3 % of B's. A-stuffed reads 1.300, with burns of 3.1, 41.2 and 69.5 %, each within 4 % of the derivation |
+| **WE-4.** Stakers' income per GB held at y10: B, C1, C2 1.00 ± 1 %; C3 1.00–1.01; A-stuffed about 0.6 | **Held but for A-stuffed.** B, C1 and C2 0.998. C3 1.005, 1.001 and 0.999 at the three knees, with the pool at 0.31, 0.20 and 0.13 SKL a block against an emission share of 31.2. **A-stuffed missed: 0.445.** Its bytes are the zone's 1.05 GB a day against honest demand's 0.42, 2.5 times, not the 1.8 the derivation took. Its income is 1.09 times |
+| **WE-5.** The ratchet's cost is `1 − f·d(0.25)`; the inducer loses at every share, least on "all" at 20 % (80 % of the penalty); the shard-advance stuffer loses by orders of magnitude | **Held, the stuffer's margin smaller.** At `f` = 33 % the ratchet's cost reads 0.670, 0.918, 0.753 and 0.835 (all, up, down, flat), and to the third decimal at every `f` and at y5, y20 and y40. The inducer loses everywhere, least on "all" at 20 %: −0.794 of the penalty at y5. C together reads −0.732 at y40. The stuffer pays about 1.2 × 10⁵ SKL at y5 for a gain of at most 1 837, at the 500 000 knee. It loses by about 64 times, under two orders of magnitude |
+| **WE-6.** Slow adoption emits 22.2 % (A-honest), 26.9 % (B and every C) and 33.5 % (A-stuffed) by y5 | **Held.** 22.19, 26.92 and 33.48 %. The trailing mean reaches the baseline at y5.004 |
+| **WE-7.** In the inherited zone the miner's net never grows the median: about 0.32 of the gross rule's resting median, fee per byte at y30 about 7.6 times [5, 10], no penalty past the free room, and income about 0.8 of gross from y20, passing it near y37. B under the gross rule grows from about y10 | **Held.** The miner's-net median rests at 338 K against the gross rule's 1 041 K, 0.32 of it, and carries 22 to 23 of 50. Fee per byte at y30 is 7.1 times. The penalty is nil from y10. Income is 0.83 of gross at y20, 0.95 at y30 and 1.38 at y60, so it crosses between y30 and y60 (the sample years do not resolve y37). B under the gross rule reads 550 K at y10 and 1 041 K at y20. **The rules differ only there:** at `w_ref` 12 595 the inherited zone grows under both rules (1 010 K against 1 025 K at y30). In the re-derived, N = 90 and N = 150 zones the two rules read the same median, carried count and income |
+| **WE-8.** τ\* about 0.38 ms/KB gross at y1, 1.4 times by y10 and 2.0 times by y30; about 0.44 under the miner's net at every year | **Held.** 0.388, 0.542 and 0.760 ms/KB gross (1.40 and 1.96 times); 0.445 under the miner's net |
+| **WE-9.** Honest demand writes 0.72 GB a day and the design load 0.43; A-stuffed writes 1.3 GB a day from y1; growth passes 1 GB a day about y2 | **Missed on bytes.** Honest demand writes 0.42 GB a day, not 0.72; the design load is 0.431, as predicted. A-stuffed writes 1.05 GB a day and crosses 1 GB a day in y1. Growth crosses at y6 at N = 90 and N = 150, y7 in the re-derived zone and y19 in the inherited zone. That is later than y2, because a block of 50 writes 0.42 GB a day and 1 GB needs about 119 spends |
+| **WE-10.** In the tail era the miner's-net tail over the 95th-percentile block's fees is above 30 on the baseline at N = 90 in every economy and rule; the grown inherited median lowers it but leaves it above 10; growth stops before the tail era | **Held on the baseline; growth moot.** The lowest at N = 90 is 115.1 (A-stuffed). In the inherited zone it is 28.5 at `w_ref` 3 000 and 17.9 at 12 595. **Not predicted, and where `k` = 1 binds:** on boom and bust in the inherited zone the ratio falls to 3.3 at `w_ref` 3 000 and 0.8 at 12 595. 48 growth folds reach y135 and some reach the tail era, but under Rick's ruling above the tail is not read from growth |
+| **WE-11.** Every committed narration passes unregenerated, and production's arm equals the existing folds' figures where both read them | **Missed on the first part.** The `--esr10` narrations moved by their last digit with the eviction split (above). The second part held: the inherited baseline reads EI-1's 711.09 at y1 and EI-2's y13.83 exactly. EI-1's re-derived figures at seed 1 (871.95, 545.89, 203.34) lie inside the table's seed ranges |
+| **WE-12.** About 80 CPU-hours | **Missed, by about 2.8 times.** About 13.9 hours on 16 vCPUs, about 220 CPU-hours, partly under co-load. The pre-flight's measure was 203 |
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
