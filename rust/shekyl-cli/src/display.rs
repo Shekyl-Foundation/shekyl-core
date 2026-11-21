@@ -49,9 +49,9 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     }
 
     if let Some(warning) = multiplexer_warning() {
-        eprintln!("WARNING: {warning}");
-        eprintln!("Scrollback may retain this secret.");
-        eprint!("Type YES to proceed: ");
+        crate::err_line!("WARNING: {warning}");
+        crate::err_line!("Scrollback may retain this secret.");
+        crate::err_inline!("Type YES to proceed: ");
         drop(io::stderr().flush());
 
         let mut confirm = String::new();
@@ -69,11 +69,11 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
 /// deliberately no non-TTY fallback here, so the secret can never reach a pipe
 /// or file.
 pub fn show_secret(label: &str, secret: &mut String) {
-    println!("\n{label}:");
-    println!("{secret}");
-    println!();
+    crate::out_line!("\n{label}:");
+    crate::out_line!("{secret}");
+    crate::out_line!();
 
-    eprint!("Press Enter to clear screen...");
+    crate::err_inline!("Press Enter to clear screen...");
     drop(io::stderr().flush());
     let mut buf = String::new();
     drop(io::stdin().read_line(&mut buf));
@@ -81,10 +81,10 @@ pub fn show_secret(label: &str, secret: &mut String) {
     // Best-effort scrollback + screen clear.
     // \x1b[3J clears scrollback on xterm and most derivatives.
     // \x1b[2J clears the visible screen. \x1b[H moves cursor to top-left.
-    print!("\x1b[3J\x1b[2J\x1b[H");
+    crate::out_inline!("\x1b[3J\x1b[2J\x1b[H");
     drop(io::stdout().flush());
 
-    eprintln!(
+    crate::err_line!(
         "NOTE: Your terminal may still have this secret in scrollback.\n\
          Clear it manually (Cmd+K / Ctrl+Shift+K / your terminal's\n\
          clear-scrollback command) before walking away."

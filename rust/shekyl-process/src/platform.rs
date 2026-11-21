@@ -23,6 +23,28 @@ pub fn ignore_sigpipe() {
     }
 }
 
+/// Whether a process with this id runs now: `kill(pid, 0)`, which sends
+/// nothing. `ESRCH` is no such process; `EPERM` is one that runs under
+/// another account, so it counts as running. An id beyond `pid_t` names no
+/// process.
+#[cfg(unix)]
+#[must_use]
+pub fn is_running(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        // 0 and negative ids name process groups, not one process.
+        return false;
+    }
+    // SAFETY: `kill(2)` with signal 0 checks for the process and sends
+    // nothing; it reads and writes no memory of ours.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 /// `%ProgramData%` on Windows; `None` elsewhere.
 #[must_use]
 pub fn program_data() -> Option<PathBuf> {

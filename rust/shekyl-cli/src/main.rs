@@ -431,6 +431,11 @@ fn main() {
     if let Err(error) = outcome {
         stop(&presentation, "session", refusal(error.to_string()));
     }
+    // Every path above has shut its session down; one whose output was
+    // closed along the way says so and exits 1 (`shekyl_cli::out`).
+    if shekyl_cli::out::output_closed() {
+        shekyl_cli::out::end_for_closed_output();
+    }
 }
 
 /// Disclose network exposure for every endpoint this invocation will actually
@@ -463,7 +468,7 @@ fn disclose_network_posture(cli: &ReplArgs, endpoints: &Endpoints) {
     // the operator who typed the flag is looking.
     fn say(warnings: impl IntoIterator<Item = String>) {
         for warning in warnings {
-            eprintln!("{warning}");
+            shekyl_cli::err_line!("{warning}");
         }
     }
 
@@ -564,9 +569,9 @@ where
 
 fn run_derivation_freeze_self_check() {
     match shekyl_crypto_pq::address_derivation_freeze::address_derivation_manifest_self_check() {
-        Ok(()) => println!("ADDRESS_DERIVATION_V3 corpus OK"),
+        Ok(()) => shekyl_cli::out_line!("ADDRESS_DERIVATION_V3 corpus OK"),
         Err(e) => {
-            eprintln!("derivation freeze self-check failed: {e}");
+            shekyl_cli::err_line!("derivation freeze self-check failed: {e}");
             std::process::exit(1);
         }
     }
@@ -633,7 +638,7 @@ fn run_repl_command(
             Ok(dc) => Some(dc),
             Err(daemon::DaemonError::NotConfigured) => None,
             Err(e) => {
-                eprintln!("Warning: daemon client init failed: {e}");
+                shekyl_cli::err_line!("Warning: daemon client init failed: {e}");
                 None
             }
         }
@@ -647,7 +652,7 @@ fn run_repl_command(
         if dc.is_loopback() {
             if let Err(e) = dc.daemon_status() {
                 if matches!(e, daemon::DaemonError::ConnectionRefused { .. }) {
-                    eprintln!("Note: {e}");
+                    shekyl_cli::err_line!("Note: {e}");
                 }
             }
         }

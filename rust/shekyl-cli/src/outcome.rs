@@ -135,8 +135,8 @@ impl Presentation {
     /// Progress and explanation. See [`Self::narration`].
     pub fn say(&self, line: impl std::fmt::Display) {
         match self.narration() {
-            Some(Narration::Stdout) => println!("{line}"),
-            Some(Narration::Stderr) => eprintln!("{line}"),
+            Some(Narration::Stdout) => crate::out_line!("{line}"),
+            Some(Narration::Stderr) => crate::err_line!("{line}"),
             None => {}
         }
     }
@@ -146,9 +146,9 @@ impl Presentation {
     /// it on stdout, with the rest of what the operator reads.
     pub fn disclose(&self, text: &str) {
         if self.json() {
-            eprintln!("{text}");
+            crate::err_line!("{text}");
         } else {
-            println!("{text}");
+            crate::out_line!("{text}");
         }
     }
 
@@ -230,7 +230,7 @@ pub fn present<T: Serialize>(
         Ok(value) => {
             if presentation.json() {
                 let json = serde_json::to_value(&value).expect("command result serializes to JSON");
-                println!("{}", success_line(command, &json));
+                crate::out_line!("{}", success_line(command, &json));
             } else {
                 show(&value);
             }
@@ -238,12 +238,12 @@ pub fn present<T: Serialize>(
         }
         Err(error) => {
             if presentation.json() {
-                println!("{}", failure_line(command, &error));
+                crate::out_line!("{}", failure_line(command, &error));
             } else {
-                eprintln!("{}", error.message);
+                crate::err_line!("{}", error.message);
                 if presentation.debug {
                     if let Some(data) = &error.data {
-                        eprintln!("[DEBUG] error.data = {data}");
+                        crate::err_line!("[DEBUG] error.data = {data}");
                     }
                 }
             }

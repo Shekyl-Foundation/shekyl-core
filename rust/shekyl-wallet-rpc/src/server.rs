@@ -817,8 +817,9 @@ fn private_socket_dir() -> std::io::Result<PathBuf> {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
+    sweep_stale_socket_dirs(&base);
     let dir = base.join(format!(
-        "shekyl-rpc-{}-{}",
+        "{PRIVATE_DIR_PREFIX}{}-{}",
         std::process::id(),
         next_spawn()
     ));
@@ -977,6 +978,63 @@ pub async fn spawn_in_process(
 #[cfg(unix)]
 const PRIVATE_SOCKET_FILE: &str = "wallet-rpc.sock";
 
+/// The private directory's name before its `<pid>-<n>`.
+#[cfg(unix)]
+const PRIVATE_DIR_PREFIX: &str = "shekyl-rpc-";
+
+/// Removes the private socket directories a process of this account left
+/// in `base` when it ended without its shutdown (killed, or crashed):
+/// `shekyl-rpc-<pid>-<n>`, a directory (not a link) this account owns,
+/// whose pid runs no process. A running process's directory is never
+/// touched, this process's included; nor is anything not matching all of
+/// that. Only the socket and then the empty directory are removed, never
+/// recursively, so a directory holding anything else stays, and says so.
+#[cfg(unix)]
+fn sweep_stale_socket_dirs(base: &Path) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    let uid = shekyl_os_account::effective_uid();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(stale_candidate_pid) else {
+            continue;
+        };
+        let dir = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&dir) else {
+            continue;
+        };
+        if !meta.is_dir() || meta.uid() != uid {
+            continue;
+        }
+        if pid == std::process::id() || shekyl_process::platform::is_running(pid) {
+            continue;
+        }
+        match remove_private_socket_dir(&dir) {
+            Ok(()) => info!(path = %dir.display(), "removed a stale wallet RPC socket directory"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "a stale wallet RPC socket directory could not be removed"
+            ),
+        }
+    }
+}
+
+/// The pid in a private directory's name, `shekyl-rpc-<pid>-<n>` with both
+/// parts decimal; `None` for any other name.
+#[cfg(unix)]
+fn stale_candidate_pid(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix(PRIVATE_DIR_PREFIX)?;
+    let (pid, n) = rest.split_once('-')?;
+    let decimal = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !decimal(pid) || !decimal(n) {
+        return None;
+    }
+    pid.parse().ok()
+}
+
 /// Removes the private directory [`spawn_in_process`] made. The serve task's
 /// [`UdsCleanup`] has already unlinked the socket; one still there means it
 /// did not, so it is removed here and said. Every failure names its path.
@@ -1043,6 +1101,28 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only `shekyl-rpc-<pid>-<n>`, both parts decimal, names a candidate:
+    /// the sweep never reads another name as a pid.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_private_directory_name_yields_a_pid() {
+        assert_eq!(stale_candidate_pid("shekyl-rpc-4242-0"), Some(4242));
+        assert_eq!(stale_candidate_pid("shekyl-rpc-4242-17"), Some(4242));
+        for other in [
+            "shekyl-rpc-4242",
+            "shekyl-rpc--0",
+            "shekyl-rpc-4242-",
+            "shekyl-rpc-42a-0",
+            "shekyl-rpc-4242-0x",
+            "shekyl-rpc-+42-0",
+            "shekyl-rpc-99999999999-0",
+            "shekyl-rpc-dispatch-x-1",
+            "other-4242-0",
+        ] {
+            assert_eq!(stale_candidate_pid(other), None, "{other}");
+        }
+    }
     use tracing::instrument::WithSubscriber as _;
 
     /// With no `--daemon-address` the daemon is "this computer" on the

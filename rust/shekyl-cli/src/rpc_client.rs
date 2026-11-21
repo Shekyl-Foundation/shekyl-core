@@ -559,13 +559,13 @@ impl RpcSession {
     pub fn shutdown(self) {
         if self.is_open() {
             if let Err(e) = self.call("close_wallet", json!({})) {
-                eprintln!("Warning: failed to close wallet: {e}");
+                crate::err_line!("Warning: failed to close wallet: {e}");
             }
         }
         if let Some(mut hosted) = self.hosted {
             if let Some(handle) = hosted.handle.take() {
                 if let Err(e) = hosted.runtime.block_on(handle.shutdown()) {
-                    eprintln!("Warning: in-process wallet RPC shutdown failed: {e}");
+                    crate::err_line!("Warning: in-process wallet RPC shutdown failed: {e}");
                 }
             }
         }

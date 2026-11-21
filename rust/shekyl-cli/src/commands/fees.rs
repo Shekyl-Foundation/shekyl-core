@@ -59,7 +59,7 @@ pub(crate) fn show_fee(val: &Value) {
     let shape_in = val.get("n_inputs").and_then(Value::as_i64).unwrap_or(2);
     let shape_out = val.get("n_outputs").and_then(Value::as_i64).unwrap_or(2);
     let quotes = val.get("quotes").cloned().unwrap_or(json!({}));
-    println!("Fee quotes for a {shape_in}-input, {shape_out}-output transaction:");
+    crate::out_line!("Fee quotes for a {shape_in}-input, {shape_out}-output transaction:");
 
     // The tier `send` uses when `--priority` names none.
     let default_tier = shekyl_economics::FeePriority::default().name();
@@ -69,11 +69,11 @@ pub(crate) fn show_fee(val: &Value) {
         } else {
             ""
         };
-        println!("  {name:<9} {} SKL{marker}", opt_amount(&quotes, name));
+        crate::out_line!("  {name:<9} {} SKL{marker}", opt_amount(&quotes, name));
     }
 
     let est = val.get("estimate").cloned().unwrap_or(json!({}));
     let size = est.get("size").and_then(Value::as_i64).unwrap_or(0);
     let weight = est.get("weight").and_then(Value::as_i64).unwrap_or(0);
-    println!("Estimated size: {size} bytes (fee weight {weight})");
+    crate::out_line!("Estimated size: {size} bytes (fee weight {weight})");
 }
