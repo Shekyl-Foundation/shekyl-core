@@ -3,28 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The redb schema map over the censused LMDB inventory (DRS-0 slice B).
+//! The redb schema: every table the chain store opens (DRS-0 slice B).
 //!
-//! One `TableDefinition` per LMDB table, **derived from the X-macro
-//! `SHEKYL_LMDB_TABLES` (`src/blockchain_db/lmdb/db_lmdb.cpp:317`) and nothing
-//! else**. The denominator is counted from that macro; the bijection is gated
-//! by `scripts/ci/check_redb_schema_bijection.py`. Key/value types that
-//! reproduce LMDB order are gated by `scripts/ci/check_redb_schema_key_types.py`.
-//! Slice A's per-table accumulator classes pin to the same X-macro; a name
-//! that exists in only one of the two modules is a merge defect, not a
-//! third list to maintain here.
+//! One `TableDefinition` per table. These definitions, with the pool file's
+//! in `crate::pool::schema`, are the denominator: the gate
+//! `scripts/ci/check_redb_schema_bijection.py` holds them equal to the rows
+//! of `accumulator/class.rs`'s `TABLE_CLASSES`, so a name on only one side
+//! is a table the digest classification forgot, or a class row for a table
+//! that does not exist. That gate checks names; the hash key order is pinned
+//! by `lmdb_order`'s own tests.
 //!
-//! Walking `BlockchainDB`'s virtual interface is not the denominator, because
-//! a table can exist without being on it. The instance that proved this:
-//! until 2026-09-13 the settlement write path lived only on `BlockchainLMDB`,
-//! so a schema built from the abstract interface would have shipped without a
-//! write path LMDB has. SO-D8 has since promoted that path onto `BlockchainDB`
-//! (`ARCHIVAL_SETTLEMENT_WRITER.md` §12), which closes that instance and not
-//! the class — the X-macro stays the only authority.
+//! # Key orders
 //!
-//! # Mapping rules, derived from LMDB open flags and comparators
+//! The per-table docs below name each key's order by the LMDB flag or
+//! comparator it reproduces. Only `compare_hash32` differs from the key
+//! type's native redb order: it is `LmdbHashKey`'s order (the order LMDB
+//! used, kept until S2 moves these tables to redb's native order).
 //!
-//! | LMDB | redb |
+//! | LMDB flag or comparator | redb |
 //! |---|---|
 //! | `MDB_INTEGERKEY` | `u64` key (redb orders `u64` numerically) |
 //! | `MDB_DUPSORT` | a zerokval collapse (below), **or** a keyed `(key, dup)` tuple — never a redb multimap (SOK-1) |
@@ -36,21 +32,19 @@
 //!
 //! Default-flag tables that store `BE(x)` 8-byte keys are correctly mapped as
 //! either `u64` or `&[u8]`: big-endian bytes compared lexicographically *are*
-//! numeric order. The type gate leaves those unconstrained.
+//! numeric order.
 //!
 //! # The zerokval collapse (a deliberate divergence, §6.4)
 //!
 //! Five tables — `block_heights`, `block_info`, `output_txs`, `spent_keys`,
-//! `tx_indices` — store a **dummy 8-zero-byte key** and put the real
-//! identifier in a fixed-size duplicate value, ordered by a custom dupsort
-//! comparator. That exists to exploit LMDB's dup-sort B-tree; redb has no
-//! DUPSORT, so the workaround has no purpose and the real identifier becomes
-//! the redb **key**.
+//! `tx_indices` — are keyed by the real identifier, in the order of the
+//! comparator their docs name. The name is LMDB's layout for them: a dummy
+//! 8-zero-byte key with the identifier in a sorted duplicate value. redb has
+//! no duplicates to sort, so the identifier is the redb **key**.
 //!
-//! This **preserves ordering rather than changing it**: the comparator moves
-//! from duplicate-position to key-position and compares the same bytes the
-//! same way. It is recorded as a divergence because the shape differs, not
-//! because the semantics do.
+//! This **preserves ordering rather than changing it**: the comparator
+//! compares the same bytes the same way, at the key. It is recorded as a
+//! divergence because the shape differs, not because the semantics do.
 //!
 //! # Value types
 //!
@@ -61,17 +55,17 @@
 //!   value `TypeName` is `shekyl::Coded<{V::NAME}>`. Per DRS-0 slice A the accumulator folds
 //!   exactly that encoding, never storage bytes. Hash *values* are the
 //!   identity type (`PrunableHash`), not a `Hash32`: a value carries no
-//!   LMDB ordering, and `lmdb_order` is for orderings.
+//!   key ordering, and `lmdb_order` is for key orderings.
 //! - [`Blob<K>`] — wire bytes the chain encodes and this crate does not
 //!   re-codec (`blocks`, the tx segments, `properties`' per-key cells);
 //!   [`BlobKind`] names the kind.
 //! - [`Present`] — a set-table: the key is the member, the value is a
 //!   zero-width witness (`spent_keys`).
 //!
-//! There is no multimap in the catalogue: LMDB's one `DUPSORT` table,
-//! `output_amounts`, is a keyed `(amount, amount_index)` tuple (S-OUT-KI
-//! SOK-1) — the multimap had no seek within a key's members, and a set of
-//! members ordered by a prefix is a composite key wearing a value's clothes.
+//! There is no multimap in the catalogue: `output_amounts` is a keyed
+//! `(amount, amount_index)` tuple (S-OUT-KI SOK-1) — the multimap had no
+//! seek within a key's members, and a set of members ordered by a prefix is
+//! a composite key wearing a value's clothes.
 //!
 //! Keys are typed for **ordering** (`lmdb_order`); values for **codec**.
 //! Both are checked by redb at `open_table` (`TypeName`), which covers a
@@ -100,7 +94,7 @@
 //! `map<key, value>`: the catalogue has one shape (rule 21 — a second
 //! shape re-mints the word here with its table, not a reserved enum).
 //!
-//! # Ordinals, and the tables LMDB does not have
+//! # Ordinals, and the table maps
 //!
 //! The same invocation numbers its declarations: a table's
 //! [`TableOrdinal`] is its position in the list, and the pop journal
@@ -122,24 +116,19 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! Four tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
-//! `undo_log`, the first; `txs_pqc_auth_hash` (S-CHAIN-R amendment A3,
-//! `PDM-Q-F26`); `curve_tree_leaf_counts` (DRS-E3, `CTW-Q4`); and
-//! `txs_archival_len` (`SHT-Q2`). Each is declared in [`RUST_ONLY_TABLES`] with
-//! the reason it exists, and the bijection gate reads that map: a definition
-//! with neither a twin **nor** a named reason is still red with the
-//! extra-leg's original refusal, so the mirror assumption retires one table
-//! at a time, never as a mode switch.
-//!
-//! Two X-macro tables have their twin in **another file** (DRS-E1 S-POOL,
-//! `DRS_E1_SPOOL.md` §4): `txpool_meta` and `txpool_blob` are `pool_meta`
-//! and `pool_blob` in the pool file (`crate::pool::schema`), because
-//! `DAEMON_REDB_STORE.md` §5.1 ruled the pool out of the consensus store
-//! file. Each is declared in [`MIRRORED_ELSEWHERE`] with the twin's name and
-//! the reason; the bijection gate reads that map too, so a censused table
-//! with no definition here is red unless it says where its twin is, and an
-//! entry that names a twin no other file defines is red as well. The class
-//! table stays the LMDB inventory: both keep their `Excluded` rows there.
+//! Four maps in this file record how the tables defined here relate to the
+//! C++ store's table list, each entry with its reason. [`RUST_ONLY_TABLES`]
+//! names the tables defined here that the C++ store did not have; this
+//! module's tests hold each one declared and `Excluded` from the digest.
+//! [`MIRRORED_ELSEWHERE`] names the two whose twin is in the pool file
+//! (DRS-E1 S-POOL, `DRS_E1_SPOOL.md` §4):
+//! `txpool_meta` and `txpool_blob` are `pool_meta` and `pool_blob` in
+//! `crate::pool::schema`, because `DAEMON_REDB_STORE.md` §5.1 ruled the pool
+//! out of the consensus store file. `FOLDED_INTO` names a table whose
+//! bytes are a field of another table's record, and `NOT_PORTED` the
+//! tables whose job is done without a table. The bijection gate reads none
+//! of these maps; it compares the definitions with `TABLE_CLASSES`, where
+//! the twin or host table has a row and the C++ spelling has none.
 //!
 //! # The seal creates every catalogued table
 //!
@@ -227,14 +216,11 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
     UNDO_TARGETS.get(usize::try_from(ordinal.0).ok()?).copied()
 }
 
-/// X-macro tables whose redb twin is defined in **another file of this
-/// crate**, as `(lmdb_name, twin_name, reason)`. Read by
-/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
-/// must **not** have a definition in this file, its twin must be a
-/// definition in `crate::pool::schema`, and two entries must not name the
-/// same twin; `check_redb_schema_key_types.py` has no definition here to
-/// constrain and is told so. The class table names the Rust twin, not
-/// this LMDB spelling.
+/// C++ store tables whose redb twin is defined in **another file of this
+/// crate**, as `(lmdb_name, twin_name, reason)`. This module's tests hold
+/// each entry undefined in this file, its twin a table of
+/// `crate::pool::schema` with a class row, and its reason a sentence. The
+/// class table names the Rust twin, not the C++ spelling.
 pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     (
         "txpool_meta",
@@ -251,16 +237,13 @@ pub const MIRRORED_ELSEWHERE: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// X-macro tables whose bytes live as a **field of another table's
-/// record** in this file, as `(lmdb_name, host_table, reason)` — the
-/// bijection gate's fourth direction (DRS-E1 S-ALT, SAL-2; `SAL-Q6`: its
-/// own direction, because a twin *table* and a host *field* are different
-/// claims and the gate should say which it checked). Read by
-/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
-/// must **not** have a definition in this file, and its host must be a
-/// definition in this file; `check_redb_schema_key_types.py` has no
-/// definition here to constrain and its floor moved with the fold. The
-/// class table names the host table, not this LMDB spelling.
+/// C++ store tables whose bytes live as a **field of another table's
+/// record** in this file, as `(lmdb_name, host_table, reason)` (DRS-E1
+/// S-ALT, SAL-2; `SAL-Q6`: its own map, because a twin *table* and a host
+/// *field* are different claims). This module's tests hold each entry
+/// undefined in this file, its host a table here with a class row, and its
+/// reason a sentence. The class table names the host table, not the C++
+/// spelling.
 pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
     "archival_alt_section_references",
     "alt_blocks",
@@ -270,20 +253,16 @@ pub const FOLDED_INTO: &[(&str, &str, &str)] = &[(
      `SAR-Q5`, `SAL-Q2`): `AltBlock::bundle_references`",
 )];
 
-/// X-macro tables this crate **does not port**, as `(lmdb_name, reason)`:
-/// the job the table did for LMDB is done here by a function, by the undo
-/// journal, or by a table that already holds the facts — the bijection
-/// gate's fifth direction (DRS-E3, `DRS_E3_CURVE_WRITER.md` §3.7: *fact, or
-/// a view of facts the store already holds?*). Read by
-/// `check_redb_schema_bijection.py`: every entry must be in the X-macro,
-/// must **not** have a definition in this file, must not also be mirrored
-/// or folded, and carries a sentence naming what does its job now **and
-/// where a reader finds what the table held**. One direction covers two
-/// relationships that the gate cannot tell apart and a reader must: a
+/// C++ store tables this crate **does not port**, as `(lmdb_name, reason)`:
+/// the table's job is done here by a function, by the undo journal, or by
+/// a table that already holds the facts (DRS-E3, `DRS_E3_CURVE_WRITER.md`
+/// §3.7: *fact, or a view of facts the store already holds?*). Each reason
+/// names what does its job now **and where a reader finds what the table
+/// held**. The map covers two relationships a reader must tell apart: a
 /// journal whose function `undo_log` performs (the data is there, as
 /// pre-images) and a table retired by ruling (the data is nowhere, and
 /// nothing was lost). Each reason leads with which. The class table does
-/// not name these LMDB spellings. The C++ tables were deleted with the
+/// not name these C++ spellings. The C++ tables were deleted with the
 /// store. This is the record that the Rust store answered the requirement
 /// without the table, and why.
 pub const NOT_PORTED: &[(&str, &str)] = &[
@@ -493,7 +472,7 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
 /// key/value type names it validates at `open_table`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableSpec {
-    /// The redb table name (the LMDB table name, verbatim).
+    /// The redb table name.
     pub name: String,
     /// The key type as redb names it on disk.
     pub key: TypeName,
@@ -570,7 +549,7 @@ tables! {
     pub const TXS_PRUNABLE: TableDefinition<u64, Blob<TxPrunableSegment>> = TableDefinition::new("txs_prunable");
 
     /// `txs_prunable_hash` — INTEGERKEY; 1:1 hash value. A value carries no
-    /// LMDB ordering, so it is the identity type, not a `Hash32`.
+    /// key ordering, so it is the identity type, not a `Hash32`.
     pub const TXS_PRUNABLE_HASH: TableDefinition<u64, Coded<PrunableHash>> =
         TableDefinition::new("txs_prunable_hash");
 
@@ -583,10 +562,10 @@ tables! {
     /// `output_txs` — zerokval collapse: dup output id (`compare_uint64`) becomes the key.
     pub const OUTPUT_TXS: TableDefinition<u64, Coded<OutTx>> = TableDefinition::new("output_txs");
 
-    /// `output_amounts` — LMDB's `DUPSORT` table as a keyed tuple: key
-    /// `(amount, amount_index)`, the pair LMDB keyed by (`MDB_INTEGERKEY` on
-    /// `amount`, `compare_uint64` on the member prefix), so the tuple's
-    /// lexicographic order over two numeric `u64`s **is** LMDB's order. Not
+    /// `output_amounts` — `DUPSORT` as a keyed tuple: key
+    /// `(amount, amount_index)`, numeric on `amount` (`MDB_INTEGERKEY`) and
+    /// numeric on `amount_index` (`compare_uint64`), so the tuple's
+    /// lexicographic order over two numeric `u64`s **is** that order. Not
     /// a multimap: redb has no seek within a key's value set, so a point
     /// read on the ported multimap walked the whole amount-0 bucket
     /// (S-OUT-KI SOK-1); `get(&(0, i))` is O(log n). The amount dimension
@@ -618,9 +597,9 @@ tables! {
     /// `block_burn` — INTEGERKEY; height → units burned, present only when non-zero.
     pub const BLOCK_BURN: TableDefinition<u64, Coded<AtomicUnits>> = TableDefinition::new("block_burn");
 
-    /// `archival_settlement` — default flags in LMDB over the packed
-    /// `P_id ‖ BE64(shard) ‖ BE64(epoch)` (`ARCHIVAL_SETTLEMENT_WRITER.md`
-    /// `SO-D2`); here the tuple `([u8; 32], u64, u64)`, the same order and
+    /// `archival_settlement` — the tuple `([u8; 32], u64, u64)`,
+    /// `(P_id, shard, epoch)` ordered component-wise
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D2`), and
     /// [`ARCHIVAL_SLASH_APPLIED`]'s key. One [`SettlementRow`] per pair per
     /// settled epoch: `outcome ‖ passes ‖ issued`. A pair with no issued
     /// draw has no row, and absence is not a miss. Written by the slash
@@ -640,18 +619,18 @@ tables! {
     pub const ARCHIVAL_BOND: TableDefinition<[u8; 32], Coded<BondRecord>> =
         TableDefinition::new("archival_bond");
 
-    /// `archival_slash_applied` — default flags in LMDB over the packed
-    /// `P_id ‖ BE64(shard) ‖ BE64(epoch)`; here the tuple `([u8; 32], u64,
-    /// u64)`, the same order (`SlashAppliedKey`). A row is the fact that the
-    /// scheduler has applied the slash for `(P, shard, E)` — the dedup
-    /// `archival_challenge_failed_at_height` reads first (`db_lmdb.cpp:5471`).
+    /// `archival_slash_applied` — the tuple `([u8; 32], u64, u64)`,
+    /// `(P_id, shard, epoch)` ordered component-wise (`SlashAppliedKey`).
+    /// A row is the fact that the scheduler has applied the slash for
+    /// `(P, shard, E)`; a second write of one key is refused
+    /// (`SlashFault::AlreadyApplied`).
     /// A set-table: [`Present`]. DRS-E4 (phase 9 writes; SI-22 ties every
     /// slash-log row to one of these).
     pub const ARCHIVAL_SLASH_APPLIED: TableDefinition<([u8; 32], u64, u64), Present> =
         TableDefinition::new("archival_slash_applied");
 
-    /// `archival_slash_log` — default flags in LMDB over `BE(height) ‖
-    /// BE(seq)`; here the tuple `(u64, u32)` (`SlashLogKey`), the same order.
+    /// `archival_slash_log` — the tuple `(u64, u32)`, `(height, seq)`
+    /// ordered component-wise (`SlashLogKey`).
     /// **The one archival journal that is a fact** (DRS-E4 `ARW-Q2`,
     /// `DRS_E4_ARCHIVAL_WRITER.md` §3.3): read forward by the as-of-height
     /// holdings fold (`holds_shard_at`, A2), which reaches back past the

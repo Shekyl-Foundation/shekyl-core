@@ -6,8 +6,7 @@
 //! `connect`: the connect write set (S-CHAIN-W commit 6; `DRS_E1_SCHAIN_W.md`
 //! §2.3, §3.1, §3.2, §3.5, §4).
 //!
-//! The port of `BlockchainDB::add_block` (`blockchain_db.cpp:435`) and the
-//! LMDB helpers it reaches, as one method on the batch that takes a
+//! The block's writes, as one method on the batch that takes a
 //! [`ChainValid`] the validator alone can mint (C2-R8 Q3) — every
 //! consensus-visible value it records is the verdict's, and it derives
 //! none (Q4; the last handed-in fact left with E6 slice 7 wave B). Every
@@ -66,19 +65,17 @@
 //!
 //! `tx_id`, `output_id` and the per-amount `amount_index` are the owning
 //! table's next dense key at write time (`last + 1`, which equals the
-//! entry count when the primary is dense — LMDB's `mdb_stat` /
-//! `mdb_cursor_count` at `db_lmdb.cpp:1078`, `:1284`, `:1314`). All three
+//! entry count when the primary is dense). All three
 //! primaries are unique-key tables — `output_amounts` has been a keyed
 //! `(amount, amount_index)` table since S-OUT-KI's layout v6 (SOK-1), so
 //! `last + 1 == len` is complete for each. The insert under each is bound
 //! to **SI-9**: a collision or a hole is a corrupted index, not a consensus
 //! fact.
 //!
-//! `output_amounts` keeps LMDB's logical keying (SCW-8): every coinbase and
+//! `output_amounts` is keyed by amount (SCW-8): every coinbase and
 //! emission vout is stored under amount `0` with its ct-base commitment, and
 //! every other vout under its own amount — which CEN-H14 makes `0` — so the
-//! table holds **one bucket** and the E2 comparator projects it 1:1 onto
-//! LMDB's `DUPSORT` pairs. The amount dimension is carried, not chosen:
+//! table holds **one bucket**. The amount dimension is carried, not chosen:
 //! whether `amount_index` is ever *exposed* stays R8b-2's question
 //! (`DRS_E1_SOUT_KI.md` §3.4). The single-bucket premise is checked at
 //! both ends of the table before `len` is trusted as the bucket's
@@ -330,7 +327,7 @@ impl<'id> WriteBatch<'_, 'id> {
             // verdict (E6 slice 2 Q5).
             cumulative_difficulty: block.cumulative_difficulty(),
             hash,
-            // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
+            // Per-block, not accumulated: `bi_cum_rct` is this block's
             // count and nothing accumulates it (CEN-L15) — see
             // `BlockInfo::rct_outputs`.
             rct_outputs,

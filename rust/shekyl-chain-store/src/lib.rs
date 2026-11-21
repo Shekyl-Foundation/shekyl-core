@@ -9,8 +9,7 @@
 //! will grow the redb engine here. Freeze layers land as sibling modules:
 //!
 //! - **DRS-P0d** — [`digest_v0`]: the layout-independent logical-state
-//!   digest that DRS-0 / DRS-C use as a regression oracle against
-//!   production LMDB
+//!   digest that DRS-0 / DRS-C use as a regression oracle
 //!   ([`docs/design/DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md)
 //!   §7.1, DRS-D11, Tier-A **A2**). Transform-shaped (rule 18): defined
 //!   by the function over the three v0 families, not by a stored value.
@@ -18,8 +17,8 @@
 //!   for that full-domain scan, the five-token class vocabulary, and
 //!   the per-table write contracts the Rust port must honour.
 //! - **DRS-0 slice B** — [`schema`] / [`lmdb_order`]: one redb
-//!   `TableDefinition` per censused LMDB table, with the key types that
-//!   reproduce LMDB order. Table types encode ordering; domain identity
+//!   `TableDefinition` per table, with key types that carry each table's
+//!   key order. Table types encode ordering; domain identity
 //!   (`BlockHash` vs `TxHash` vs key image) converts at the engine API.
 //!
 //! - **DRS-E1 increment 1** — [`store`]: lifecycle and the write-transaction
@@ -49,7 +48,7 @@
 //!   and writes the 17-table set in the C++ funnel's phase order, every
 //!   write a declared verb bound to its `SI-` row and journaled.
 //!   [`store::WriteBatch::pop`] is the reverse replay of one
-//!   [`schema::UNDO_LOG`] row (the first table with no LMDB twin, named
+//!   [`schema::UNDO_LOG`] row (the first table the C++ store lacked, named
 //!   with its reason in [`schema::RUST_ONLY_TABLES`]; tables are named by
 //!   declaration ordinal, so a reorder or removal is a layout bump).
 //!   [`provenance::Provenance`] has two monotone components — stubbed
