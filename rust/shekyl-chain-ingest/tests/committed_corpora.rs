@@ -151,6 +151,25 @@ fn every_committed_corpus_round_trips_byte_for_byte() {
             "{} is layout {layout}",
             path.display()
         );
+        // Only the four version bytes may differ: every other byte of the
+        // re-encoding is the committed file's, and its length is too.
+        assert_eq!(
+            again.len(),
+            bytes.len(),
+            "{} changed length",
+            path.display()
+        );
+        let moved: Vec<usize> = bytes
+            .iter()
+            .zip(&again)
+            .enumerate()
+            .filter_map(|(at, (was, now))| (was != now).then_some(at))
+            .collect();
+        assert!(
+            moved.iter().all(|at| VERSION_FIELD.contains(at)),
+            "{}: bytes outside the version field moved: {moved:?}",
+            path.display()
+        );
         // The one field the current writer writes differently.
         bytes[VERSION_FIELD].copy_from_slice(&CORPUS_FORMAT_VERSION.to_le_bytes());
         assert!(

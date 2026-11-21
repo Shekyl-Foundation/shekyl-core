@@ -10,7 +10,7 @@
 
 use std::io;
 
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
 use crate::{CORPUS_FORMAT_VERSION, LAYOUT_4};
 
@@ -132,6 +132,16 @@ pub enum CorpusFault {
     },
     /// A `rewind` before any block: there is no tip.
     RewindOnEmpty,
+    /// An `extend` whose parent is neither the tip nor a block an earlier
+    /// `offer` carried (layout 5's law, `lineage` module).
+    ExtendUnfollowed {
+        /// The height the record carries.
+        height: BlockHeight,
+        /// The parent its header names.
+        parent: BlockHash,
+    },
+    /// An `offer` whose coinbase names no height.
+    OfferUnnumbered,
     /// The header's `count` disagrees with the records present, or the
     /// file ends inside a record: the corpus was not finished, or was
     /// truncated.
@@ -199,6 +209,11 @@ impl core::fmt::Display for CorpusFault {
                 "rewind to {to} is below the corpus's first height {first_height}"
             ),
             Self::RewindOnEmpty => write!(f, "rewind before any block"),
+            Self::ExtendUnfollowed { height, parent } => write!(
+                f,
+                "block {height} follows {parent:?}, which is neither the tip nor an offered block"
+            ),
+            Self::OfferUnnumbered => write!(f, "an offer whose coinbase names no height"),
             Self::CountMismatch { declared, present } => write!(
                 f,
                 "header declares {declared} records, {present} present; the corpus was not finished"

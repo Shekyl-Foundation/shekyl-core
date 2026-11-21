@@ -34,8 +34,9 @@ use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
     at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_offers,
-    corpus_of_reorg, corpus_offering, expected_state, h, key_image, open_store, reorg, reorg_of,
-    spent_keys_of, tmp, trace_of, Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
+    corpus_of_reorg, corpus_offering, corpus_offering_then, expected_state, h, key_image,
+    open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of, Family, GrownTree, JoinedConnector,
+    Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -1270,6 +1271,40 @@ async fn two_offers_out_of_order_are_refused_as_unlinked() {
         } => assert_eq!(record.to_raw(), f + 4, "the child, offered first"),
         other => panic!("not refused as unlinked: {other}"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_extend_on_an_offered_block_that_did_not_become_the_tip_is_refused() {
+    // The fork's first three blocks offered: three against main's three,
+    // held, no switch. Then the fork's fourth written as an `extend` on the
+    // third, which the format takes (its parent is an offered block). The
+    // tip is still main's, so the replay judges a block whose parent is not
+    // its tip and refuses it (CEN-A2): nothing in the corpus says the chain
+    // switched, and nothing is trusted because the corpus wrote it.
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering_then(&r, &[0, 1, 2], Some(3));
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp("pipeline-offers-extend-unswitched")),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    assert!(report.switches.is_empty(), "{:?}", report.switches);
+    let (at, refused) = report.refused.as_ref().expect("the extend is refused");
+    assert_eq!(*at, h(f + 4));
+    assert_eq!(
+        refused.rule,
+        CenRow::A2,
+        "its parent is not the tip: {refused:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -81,6 +81,17 @@
 //! An offer carries no height, so a fault in one names its place among the
 //! records ([`RecordAt::Offer`]).
 //!
+//! # Which block an `extend` follows
+//!
+//! An `extend` follows the tip: its header names the last block the corpus
+//! extended. From layout 5 it may instead follow a block an earlier
+//! `offer` carried, at the height one past it, which is how a corpus goes
+//! on after the chain switched to an offered branch; that branch is then
+//! the chain it extends. An `extend` whose parent is neither is refused
+//! ([`CorpusFault::ExtendUnfollowed`]). Whether the chain did switch is
+//! still the replay's to derive: an `extend` on an offered block that did
+//! not become the tip is refused there, its parent not being the tip.
+//!
 //! # Verified, not declared (RD-F15)
 //!
 //! The writer does not record what the source *said* about its bodies —
@@ -101,7 +112,8 @@
 //! # Where a layout change lands
 //!
 //! [`Record`] is the enum a new tag extends. The height cursor moves only
-//! for a tag that moves the tip. Integrity checks, the writer and the
+//! for a tag that moves the tip, and the lineage (which block an `extend`
+//! may follow) only for a tag that records a block. Integrity checks, the writer and the
 //! reader each have their own module, so the new tag is a variant and two
 //! arms rather than another branch in one file.
 
@@ -110,6 +122,7 @@
 mod cursor;
 mod fault;
 mod header;
+mod lineage;
 mod reader;
 mod record;
 mod verify;

@@ -42,10 +42,40 @@ fn tagged(tag: u64) -> Transaction {
     }
 }
 
+std::thread_local! {
+    /// The block [`blobs`] built last at each height, on this test's
+    /// thread: the parent of the next block it builds one height above.
+    static BUILT: std::cell::RefCell<std::collections::HashMap<u64, BlockHash>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// The parent a block at `height` names when a test builds it in order:
+/// the block [`blobs`] built last one height below, or a fixed hash for a
+/// test's first block (a corpus's first `extend` follows whatever it
+/// names).
+fn parent_below(height: u64) -> BlockHash {
+    height
+        .checked_sub(1)
+        .and_then(|below| BUILT.with(|built| built.borrow().get(&below).copied()))
+        .unwrap_or_else(|| BlockHash::from_bytes([0x11; 32]))
+}
+
 /// A block at `height` listing `n` bodies, as a source hands it over: the
 /// block blob and the bodies' blobs in header order, with the parsed
-/// record they make.
+/// record they make. Its parent is the block this thread built last one
+/// height below, so blocks built in height order form a chain the
+/// lineage law accepts; a rebuilt height replaces the one before.
 fn blobs(height: BlockHeight, n: u64) -> (Extend, Vec<u8>, Vec<Vec<u8>>) {
+    let built = on(parent_below(height.to_raw()), height, n);
+    BUILT.with(|map| {
+        map.borrow_mut()
+            .insert(height.to_raw(), built.0.block.hash())
+    });
+    built
+}
+
+/// [`blobs`]'s block, on `parent`, not recorded as built.
+fn on(parent: BlockHash, height: BlockHeight, n: u64) -> (Extend, Vec<u8>, Vec<Vec<u8>>) {
     let raw = height.to_raw();
     // Distinct per (height, index) within a block.
     let bodies: Vec<Transaction> = (0..n)
@@ -56,7 +86,7 @@ fn blobs(height: BlockHeight, n: u64) -> (Extend, Vec<u8>, Vec<Vec<u8>>) {
             major_version: 1,
             minor_version: 0,
             timestamp: 1_700_000_000u64.saturating_add(raw),
-            previous: BlockHash::from_bytes([0x11; 32]),
+            previous: parent,
             nonce: 7,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
             section_root: SectionRoot::from_bytes([0x33; 32]),
@@ -423,6 +453,8 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     // A writer near the top with a rewind: three records over two heights,
     // and the reader takes them — the count is records, not a span.
     let (_, b_prev, t_prev) = blobs(BlockHeight::from_raw(u64::MAX - 1), 0);
+    // Built again on `b_prev`, so the two form a chain.
+    let (_, b_last, t_last) = blobs(last, 0);
     let mut w = CorpusWriter::create(
         Cursor::new(Vec::new()),
         Network::Regtest,
@@ -557,7 +589,7 @@ fn as_layout(mut bytes: Vec<u8>, layout: u32) -> Vec<u8> {
 /// An alternative to the block [`blobs`] builds at `height`: the same
 /// bodies under another nonce, so another block at that height.
 fn alternative(height: BlockHeight, n: u64) -> (Offer, Vec<u8>, Vec<Vec<u8>>) {
-    let (extend, _, tx_blobs) = blobs(height, n);
+    let (extend, _, tx_blobs) = on(parent_below(height.to_raw()), height, n);
     let mut block = extend.block;
     block.header.nonce = block.header.nonce.wrapping_add(1);
     let block_blob = block.serialize();
@@ -694,5 +726,150 @@ fn an_oversized_length_is_refused_before_it_is_read() {
     assert!(matches!(
         reader.next_record(),
         Err(CorpusFault::Oversized { what: "block", len }) if len == u64::from(claimed)
+    ));
+}
+
+/// A competing block at `height` on `parent`, no bodies: [`on`]'s block
+/// under another nonce, so another id than the chain's block there.
+fn rival(parent: BlockHash, height: BlockHeight) -> (Block, Vec<u8>) {
+    let (extend, _, _) = on(parent, height, 0);
+    let mut block = extend.block;
+    block.header.nonce = block.header.nonce.wrapping_add(1);
+    let blob = block.serialize();
+    (block, blob)
+}
+
+/// One `extend` record as the layout writes it, for a corpus the writer
+/// would refuse: the reader must refuse it on its own.
+fn raw_extend(height: u64, block: &[u8]) -> Vec<u8> {
+    let mut record = vec![tag::EXTEND];
+    record.extend_from_slice(&height.to_le_bytes());
+    record.extend_from_slice(&u32::try_from(block.len()).expect("small").to_le_bytes());
+    record.extend_from_slice(block);
+    record.extend_from_slice(&0u32.to_le_bytes()); // no listed bodies
+    record.extend_from_slice(&0u32.to_le_bytes()); // no bundle section
+    record
+}
+
+/// A corpus of hand-encoded `records` from height 0.
+fn raw_corpus(records: &[Vec<u8>]) -> Vec<u8> {
+    let mut bytes = header::encode(
+        Network::Regtest,
+        BlockHeight::ZERO,
+        u64::try_from(records.len()).expect("small"),
+    )
+    .to_vec();
+    for record in records {
+        bytes.extend_from_slice(record);
+    }
+    bytes
+}
+
+#[test]
+fn an_extend_may_follow_an_offered_block_and_that_branch_is_the_chain_after() {
+    // Main 0..=2; a branch of three offered on block 0 (1', 2', 3'); then
+    // the first block after the switch, 4', on 3', and 5' on 4'. The writer
+    // takes them and the reader yields them, 4' at the height one past its
+    // offered parent.
+    let (e0, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (_, b1, t1) = blobs(BlockHeight::from_raw(1), 0);
+    let (_, b2, t2) = blobs(BlockHeight::from_raw(2), 0);
+    let (o1, ob1) = rival(e0.block.hash(), BlockHeight::from_raw(1));
+    let (o2, ob2) = rival(o1.hash(), BlockHeight::from_raw(2));
+    let (o3, ob3) = rival(o2.hash(), BlockHeight::from_raw(3));
+    let (after, _, _) = on(o3.hash(), BlockHeight::from_raw(4), 0);
+    let (next, _, _) = on(after.block.hash(), BlockHeight::from_raw(5), 0);
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    w.append(&b2, &t2).expect("2");
+    for blob in [&ob1, &ob2, &ob3] {
+        w.offer(blob, &[], &[], &[]).expect("an offer");
+    }
+    w.append(&after.block.serialize(), &[])
+        .expect("an extend on the offered branch's tip");
+    w.append(&next.block.serialize(), &[])
+        .expect("an extend on the tip after it");
+    let bytes = w.finish().expect("finish").into_inner();
+
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    for _ in 0..6 {
+        reader.next_record().expect("a record").expect("present");
+    }
+    let followed = extend(reader.next_record().expect("4'"));
+    assert_eq!(followed.height, BlockHeight::from_raw(4));
+    assert_eq!(followed.block, after.block);
+    assert_eq!(
+        extend(reader.next_record().expect("5'")).height,
+        BlockHeight::from_raw(5)
+    );
+    assert!(reader.next_record().expect("clean end").is_none());
+}
+
+#[test]
+fn an_extend_that_follows_neither_the_tip_nor_an_offer_is_refused_on_both_sides() {
+    let (e0, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (_, b1, t1) = blobs(BlockHeight::from_raw(1), 0);
+    // A block at 2 on block 0, which is neither the tip (1) nor offered.
+    let (stray, _, _) = on(e0.block.hash(), BlockHeight::from_raw(2), 0);
+    let stray_blob = stray.block.serialize();
+
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    let refused = w.append(&stray_blob, &[]).expect_err("follows neither");
+    assert!(
+        matches!(
+            refused,
+            CorpusFault::ExtendUnfollowed { height, parent }
+                if height == BlockHeight::from_raw(2) && parent == e0.block.hash()
+        ),
+        "{refused}"
+    );
+
+    // The reader refuses the same record on its own.
+    let bytes = raw_corpus(&[
+        raw_extend(0, &b0),
+        raw_extend(1, &b1),
+        raw_extend(2, &stray_blob),
+    ]);
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    reader.next_record().expect("0");
+    reader.next_record().expect("1");
+    let refused = reader.next_record().expect_err("follows neither");
+    assert!(
+        matches!(refused, CorpusFault::ExtendUnfollowed { .. }),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn an_extend_on_an_offered_block_carries_the_height_one_past_it() {
+    // An extend on the offered 1' must be at 2; one that says 3 is a gap.
+    let (e0, b0, _) = blobs(BlockHeight::from_raw(0), 0);
+    let (_, b1, _) = blobs(BlockHeight::from_raw(1), 0);
+    let (o1, ob1) = rival(e0.block.hash(), BlockHeight::from_raw(1));
+    let (after, _, _) = on(o1.hash(), BlockHeight::from_raw(2), 0);
+    let mut offer = vec![tag::OFFER];
+    offer.extend_from_slice(&u32::try_from(ob1.len()).expect("small").to_le_bytes());
+    offer.extend_from_slice(&ob1);
+    offer.extend_from_slice(&0u32.to_le_bytes());
+    offer.extend_from_slice(&0u32.to_le_bytes());
+    let bytes = raw_corpus(&[
+        raw_extend(0, &b0),
+        raw_extend(1, &b1),
+        offer,
+        raw_extend(3, &after.block.serialize()),
+    ]);
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    for _ in 0..3 {
+        reader.next_record().expect("a record");
+    }
+    assert!(matches!(
+        reader.next_record(),
+        Err(CorpusFault::HeightGap { expected, found })
+            if expected == BlockHeight::from_raw(2) && found == BlockHeight::from_raw(3)
     ));
 }

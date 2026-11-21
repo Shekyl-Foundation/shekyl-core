@@ -21,6 +21,7 @@ use shekyl_wire::transaction::MAX_TX_SIZE;
 
 use crate::cursor::HeightCursor;
 use crate::fault::{CorpusFault, RecordAt};
+use crate::lineage::{Lineage, Placed};
 use crate::record::{note_one_more, Record};
 use crate::verify::{parse_block, verified_section, verified_tx, Verified};
 use crate::{header, tag, CORPUS_FORMAT_VERSION, HEADER_LEN, LEN_PREFIX, MAX_SECTION_BLOB};
@@ -32,6 +33,7 @@ pub struct CorpusReader<R: BufRead> {
     layout: u32,
     net: Network,
     cursor: HeightCursor,
+    lineage: Lineage,
     declared: u64,
     read: u64,
 }
@@ -62,6 +64,7 @@ impl<R: BufRead> CorpusReader<R> {
             layout,
             net,
             cursor: HeightCursor::starting_at(first),
+            lineage: Lineage::starting_at(first),
             declared,
             read: 0,
         })
@@ -136,6 +139,7 @@ impl<R: BufRead> CorpusReader<R> {
                 let to = BlockHeight::from_raw(read_u64(&mut self.input)?);
                 self.cursor.check_rewind(to)?;
                 self.cursor.advance_past(to);
+                self.lineage.rewind(to);
                 self.read = note_one_more(self.read);
                 return Ok(Record::Rewind { to });
             }
@@ -143,41 +147,65 @@ impl<R: BufRead> CorpusReader<R> {
                 // An offer does not extend the tip: it carries no height,
                 // and the cursor does not move.
                 let at = RecordAt::Offer { record: self.read };
-                let offer = self.block_and_bodies(at)?.into_offer();
+                let block = self.read_block(at)?;
+                let offer = self.bodies_of(at, block)?.into_offer();
+                self.lineage.offer(&offer.block)?;
                 self.read = note_one_more(self.read);
                 return Ok(Record::Offer(Box::new(offer)));
             }
             other => return Err(CorpusFault::UnknownTag(other)),
         }
-        // The tag named an extend. There is no height past the last one, so
-        // the record's height is not read: a wrapped height cannot be a gap,
-        // and a file that ends on the tag is this fault, not a short read.
-        let expected = self.cursor.next_extend()?;
+        // The tag named an extend. Before any offer it can only follow the
+        // tip, and there is no height past the last one, so an exhausted
+        // cursor refuses here without reading the record's height: a
+        // wrapped height cannot be a gap, and a file that ends on the tag
+        // is this fault, not a short read.
+        if !self.lineage.holds_offers() {
+            self.cursor.next_extend()?;
+        }
         let height = BlockHeight::from_raw(read_u64(&mut self.input)?);
+        let at = RecordAt::Height(height);
+        let block = self.read_block(at)?;
+        // The height it must carry: the tip's next, or one past the offered
+        // block it follows (`lineage` module).
+        let placed = self.lineage.place(&block, height)?;
+        let expected = match &placed {
+            Placed::Tip => self.cursor.next_extend()?,
+            Placed::Offered { height, .. } => *height,
+        };
         if height != expected {
             return Err(CorpusFault::HeightGap {
                 expected,
                 found: height,
             });
         }
-        let extend = self
-            .block_and_bodies(RecordAt::Height(height))?
-            .into_extend(height);
+        let hash = block.hash();
+        let extend = self.bodies_of(at, block)?.into_extend(height);
         self.cursor.advance_past(height);
+        self.lineage.extend(placed, hash);
         self.read = note_one_more(self.read);
         Ok(Record::Extend(Box::new(extend)))
     }
 
-    /// A block, its listed bodies and its bundle section, read and
-    /// re-verified: what an `extend` (after its height) and an `offer`
-    /// carry.
-    fn block_and_bodies(&mut self, at: RecordAt) -> Result<Verified, CorpusFault> {
+    /// A record's block, read and parsed.
+    fn read_block(&mut self, at: RecordAt) -> Result<shekyl_wire::Block, CorpusFault> {
         let block_blob = read_blob(&mut self.input, "block", MAX_BLOCK_BLOB_SIZE)?;
-        // The header is the bound: parse it before trusting the file's
-        // `tx_count`. `Block::read` caps the hash list at `READ_LEN_CAP`
-        // and does not pre-allocate against it; a crafted `tx_count =
-        // u32::MAX` must not `Vec::with_capacity` before this check.
-        let block = parse_block(at, &block_blob)?;
+        parse_block(at, &block_blob)
+    }
+
+    /// `block`'s listed bodies and its bundle section, read and
+    /// re-verified: what an `extend` (after its height and block) and an
+    /// `offer` (after its block) carry.
+    fn bodies_of(
+        &mut self,
+        at: RecordAt,
+        block: shekyl_wire::Block,
+    ) -> Result<Verified, CorpusFault> {
+        // The header is the bound: the block was parsed before the file's
+        // `tx_count` is trusted. `Block::read` caps the hash list at
+        // `READ_LEN_CAP` and does not pre-allocate against it; a crafted
+        // `tx_count = u32::MAX` must not `Vec::with_capacity` before this
+        // check.
         let listed = block.transaction_hashes.len();
         let claimed = read_count(&mut self.input, "transaction count")?;
         if claimed != listed {
