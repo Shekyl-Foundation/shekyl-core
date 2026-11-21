@@ -38,23 +38,25 @@ darwin_arm64 = "e2b25a53234e2471c5fc81936f957fa612065ab559c21834c02d8bfbc2f62b30
 linux_amd64 = "66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0"
 linux_arm64 = "b84269e78dfc2d5329a4aab373da3200de95e6c138338cf6c66c10c0a3f248c1"
 
-# shard-fill (CF-4a, CF-R28): published twice from the same commit by
-# shekyl-test-chains' publish workflow, run 44452616267 and, after the
-# package was deleted, run 44533937333. Both gave
-# sha256:1cd48e4d42bb99fffcf7cfba79385c19a9157025bc04c2f60ff7c0687f0c1296.
+# shard-fill (CF-4a, CF-R28; corpus layout 5 from CF-3): published by
+# shekyl-test-chains' publish workflow, run 44857446184, at shekyl-core
+# 7e1f143424 (pull request #1491), the layers named by that commit's
+# `forge --layers`. Its blocks and trace are the ones pinned at CF-4a's
+# 8ecd609385 (runs 44452616267 and 44533937333, digest
+# sha256:1cd48e4d…c1296); the corpus moves with the layout.
 [[chain]]
 name = "shard-fill"
 plan = "rust/shekyl-chain-forge/plans/shard-fill.toml"
-commit = "8ecd6093859c424ef7d1858dc894eed345009260"
-created = "2026-11-19T02:03:42Z"
+commit = "7e1f143424e17151de3c48ea6b682c812ffa4324"
+created = "2026-11-21T02:41:15Z"
 reference = "ghcr.io/shekyl-foundation/test-chains/shard-fill"
-digest = "sha256:1cd48e4d42bb99fffcf7cfba79385c19a9157025bc04c2f60ff7c0687f0c1296"
+digest = "sha256:568aca6c0776228da682b71d5766262208180ad18b0a9b24a0f2e82f9b01a300"
 
 [[chain.layer]]
 file = "corpus.e2"
-media_type = "application/vnd.shekyl.corpus.v4"
+media_type = "application/vnd.shekyl.corpus.v5"
 size = 12829331
-sha256 = "d0976b45ea47a4821127e5798f9a282224e25f2cc9d4fea54c7dfe0739e5245e"
+sha256 = "e9320e381de2247617c075ae32cc692ea8b07fccec60b4bd0622b330ff8f7c1f"
 
 [[chain.layer]]
 file = "trace.e2"
@@ -66,4 +68,4 @@ sha256 = "5879def7701debf86ee6f3f4917397c2c4802f6a942a5d3deb5bde5ee40eaee2"
 file = "manifest.json"
 media_type = "application/vnd.shekyl.manifest.v6+json"
 size = 1163
-sha256 = "82aee296e6f7f83801d7892d173e3664d6c8115119143f89a8e3700ece6fbf80"
+sha256 = "6b94820a2d56720c005f6013be0994de4b03971581f74480a6bd63dd67b888ab"
