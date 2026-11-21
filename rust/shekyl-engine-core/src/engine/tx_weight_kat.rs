@@ -218,7 +218,19 @@ pub(crate) mod support {
     #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
     fn time_sign_transaction_by_shape() {
         const REPS: usize = 5;
-        const SHAPES: [(usize, u8); 6] = [(1, 1), (2, 1), (8, 1), (1, 4), (2, 4), (8, 4)];
+        // Depth 1 and 4 are a young tree; the consensus maximum is where
+        // the prover's multiexps, and so a full-scan multiexp's cost, peak.
+        const DEEPEST: u8 = shekyl_tx_weight::MAX_TREE_DEPTH;
+        const SHAPES: [(usize, u8); 8] = [
+            (1, 1),
+            (2, 1),
+            (8, 1),
+            (1, 4),
+            (2, 4),
+            (8, 4),
+            (1, DEEPEST),
+            (2, DEEPEST),
+        ];
         println!("sign_transaction wall time, median of {REPS} (ms):");
         for (n_in, tree_depth) in SHAPES {
             let cell =
