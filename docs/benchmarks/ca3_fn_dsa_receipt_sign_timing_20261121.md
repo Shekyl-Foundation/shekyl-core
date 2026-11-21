@@ -182,7 +182,12 @@ the commit that carries this record:
     line must not carry it.
 - **The floor device: the second Raspberry Pi 4 the maintainer provides**
   (Cortex-A72, rule 76), not the Pi under the cover-traffic lane's claim.
+  It is the 4 GB board, the floor rule 76 names (the other Pi 4 has 8 GB),
+  running from its SD card with no SSD. The run's 0.8 GB fits it.
   - Target `aarch64-unknown-linux-gnu`, with no rustflags (NEON path).
+  - Built on the device from the fresh clone with `-j 2`, as RT-P4's floor
+    run builds, so a 4 GB build does not exhaust memory. The build is not
+    timed. The binary's SHA-256 is recorded.
   - Run as `ca3_receipt_sign_timing 500000`: 500,000 samples per
     comparison. One signature takes about five times as long there (2.24 ms
     against 0.46 ms, [`FN_DSA_HYBRID.md`](../design/FN_DSA_HYBRID.md) §3.1), and the control shows the
