@@ -90,7 +90,7 @@ table ([`design/INPUT_GRAMMAR.md`](./design/INPUT_GRAMMAR.md) §12.1, §12.4).
 
 | Option     | Binaries                                        | Default | Behaviour |
 |------------|-------------------------------------------------|---------|-----------|
-| `tor-file` | `shekyl-wallet-rpc`; `shekyl-cli` for its own in-process server (refused with `--rpc-url`) | unset: discovery (`tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix) | The Tor binary a serving wallet runs. Resolved once at start (`shekyl_engine_core::TorFile`): a path naming no file on this machine falls back to discovery and says so once; a path naming a file is taken and must still pass the pin, never replaced by discovery on failure. The GUI starts no serving host, so it has no such option. |
+| `tor-file` | `shekyl-wallet-rpc`; `shekyl-cli` for its own in-process server (refused with `--rpc-url`) | unset: discovery (`tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix) | The Tor binary a serving wallet runs, with the daemon's behaviour (IG-Q41). Resolved once at start (`shekyl_engine_core::TorFile`): a path naming no file on this machine refuses the start with its remedy; a path naming a file is taken and must still pass the pin. Neither is ever replaced by discovery. The GUI starts no serving host, so it has no such option. |
 
 ## 5. Sealed wallet state
 
@@ -121,7 +121,7 @@ each with its reason. None is read anywhere.
 `ignore_outputs_below` and `merge_destinations` are REJECTED, for the reason
 given for the user freeze (2026-11-15): a human choice on a visible transaction
 parameter becomes a pattern, while deterministic selection gives every wallet
-the same shapes. `shekyl-cli` refuses each by name with that reason. They reopen
+the same shapes. `shekyl-cli` refuses each by name with that reason; its command table (`design/INPUT_GRAMMAR.md` §12.3) is the only place they are recorded, since the wallet contract never exposed these names. They reopen
 only on a named user job the wallet's own selection does not cover.
 
 ### 6.2 Deleted
@@ -141,7 +141,7 @@ only on a named user job the wallet's own selection does not cover.
 | `auto_low_priority` | The fee is chosen per send; nothing read it. |
 | `track_uses` | Monero's ring-member use tracking; FCMP++ has no rings. |
 | `store_tx_info` | Send records are sealed state (the send journal), always kept. |
-| `device_name`, `device_derivation_path` | Hardware wallets are not supported in V3 ([HARDWARE_WALLETS.md](./HARDWARE_WALLETS.md)). |
+| `device_name`, `device_derivation_path` | Nothing read them; device selection, if built, is per-machine configuration. |
 | `seed_language` | The seed is BIP-39 English ([V3_WALLET_DECISION_LOG.md](./V3_WALLET_DECISION_LOG.md), the per-network seed policy); there is no language to choose. |
 | `schema_version` | The deleted file's own version. |
 

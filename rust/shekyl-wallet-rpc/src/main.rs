@@ -92,8 +92,8 @@ struct Cli {
     log_file: Option<PathBuf>,
 
     /// The Tor binary a serving wallet runs. Unset, the wallet finds the
-    /// bundled one; a path naming no file on this machine falls back to that
-    /// with one warning. Either way the binary must match the pinned build.
+    /// bundled one. A path naming no file on this machine refuses the start.
+    /// Either way the binary must match the pinned build.
     #[arg(long = shekyl_wallet_rpc::server::TOR_FILE_OPTION)]
     tor_file: Option<PathBuf>,
 }
@@ -160,8 +160,8 @@ async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         daemon,
         auth,
         kdf: KdfParams::default(),
-        // Resolved after logging starts, so a path naming no file is said.
-        tor_file: shekyl_engine_core::TorFile::from_option(cli.tor_file),
+        tor_file: shekyl_engine_core::TorFile::from_option(cli.tor_file)
+            .map_err(|e| e.to_string())?,
     };
 
     // `run_server` serves until a stop signal (SIGTERM, SIGINT, SIGHUP; on

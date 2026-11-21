@@ -7367,22 +7367,27 @@ torn write).
 - **A wallet keeps no preferences file.** `<base>.prefs.toml`, its
   `.prefs.toml.hmac` companion and the `shekyl-engine-prefs` crate are
   deleted, with the prefs HMAC key, its derivation (the label
-  `shekyl-prefs-hmac-v1` is retired, never reused), the load at open, the
+  `shekyl-prefs-hmac-v1` leaves the domain registry with its code), the load at open, the
   saves at create, close, shutdown and password change, and the
   quarantine. A password change is the rotation alone.
 - **The one live field becomes an option of the process.** Which Tor
   binary a serving wallet runs is the machine's, not the wallet's: it is
   `tor-file` on `shekyl-wallet-rpc`, and on `shekyl-cli` for its
-  in-process server (`INPUT_GRAMMAR.md` §12.1, §12.4). Unset is
-  discovery; a path naming no file falls back to discovery and says so
-  once; a path naming a file must pass the pin.
+  in-process server (`INPUT_GRAMMAR.md` §12.1, §12.4), with the daemon's
+  behaviour (IG-Q41): unset is discovery; a path naming no file on this
+  machine refuses the start with its remedy, never replaced by discovery;
+  a path naming a file must pass the pin. The deleted override fell back to
+  discovery only because a path stored beside the wallet travelled with
+  it; an option of the machine has no such residue.
 - **The coin-selection knobs are REJECTED:** `min_output_count`,
   `min_output_value`, `ignore_outputs_above`, `ignore_outputs_below` and
   `merge_destinations`, refused by name in the CLI's table with the reason
-  below.
+  below. That table is the only record: the wallet contract never exposed
+  these names.
 - **Every other field is deleted** with a one-line reason each
   (`WALLET_SETTINGS.md` §6.2): Monero's settings carried over with no
-  reader.
+  reader. Auto-lock (`inactivity_lock_timeout`) is required by no live
+  design; if the GUI builds it, it is a GUI setting.
 - **No migration and no compatibility code.** A pair an earlier build left
   beside a wallet is not read, moved or deleted.
 - `WALLET_PREFS.md` is retired to `docs/completed/`; what still holds is

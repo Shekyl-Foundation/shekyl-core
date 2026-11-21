@@ -67,6 +67,7 @@ pub use engine::cadence::CadenceHandle;
 /// that module sits at its decomposition ceiling.
 pub use engine::stake_engine::serving::{
     ServingHandle, ServingPosture, ServingStartError, ServingStatus, TorConfigError, TorFile,
+    TorFileMissing,
 };
 pub use engine::stake_facade::StakeFacade;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};

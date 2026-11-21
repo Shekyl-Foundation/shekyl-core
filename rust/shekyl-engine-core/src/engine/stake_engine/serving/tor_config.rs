@@ -117,15 +117,31 @@ impl std::error::Error for TorConfigError {
 /// The serving host's `tor-file` option, resolved once when the host reads
 /// its options: the Tor binary serving runs, or discovery when unset.
 ///
-/// A path that names no file on this machine falls back to discovery **and
-/// says so once**, here, rather than refusing (Rick, 2026-11-21: the
-/// behaviour the deleted prefs override had). Refusing would stop a bonded
-/// wallet from serving, which costs it misses, over an option that discovery
-/// can answer; saying nothing would hide an operator's typo. A path that
-/// names a file is taken, and the hash gate still decides whether it runs: a
-/// file that fails the pin is refused, never replaced by discovery.
+/// A path that names no file on this machine is refused at start with its
+/// remedy, never replaced by discovery, as the daemon's `tor-file` is
+/// (`INPUT_GRAMMAR.md` IG-Q41; Rick, 2026-11-21): the option is the
+/// machine's, so a missing file is a typo or a removed install, and serving
+/// a different binary than the one named would hide it. A path naming a file
+/// is taken, and the hash gate still decides whether it runs.
 #[derive(Clone, Debug, Default)]
 pub struct TorFile(Option<std::path::PathBuf>);
+
+/// A `tor-file` that names no file on this machine.
+#[derive(Debug)]
+pub struct TorFileMissing(std::path::PathBuf);
+
+impl std::fmt::Display for TorFileMissing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tor-file {} names no file on this machine: point it at the Tor binary here, \
+             or remove the option to use the bundled one",
+            self.0.display()
+        )
+    }
+}
+
+impl std::error::Error for TorFileMissing {}
 
 impl TorFile {
     /// Unset: discovery.
@@ -134,22 +150,17 @@ impl TorFile {
         Self(None)
     }
 
-    /// The option as given, resolved: `None` or a path naming no file is
-    /// discovery (the second with one warning); a path naming a file is that
+    /// The option as given: `None` is discovery; a path naming a file is that
     /// file.
-    #[must_use]
-    pub fn from_option(path: Option<std::path::PathBuf>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`TorFileMissing`] when the path names no file on this machine.
+    pub fn from_option(path: Option<std::path::PathBuf>) -> Result<Self, TorFileMissing> {
         match path {
-            None => Self(None),
-            Some(path) if path.is_file() => Self(Some(path)),
-            Some(path) => {
-                tracing::warn!(
-                    configured = %path.display(),
-                    "tor-file does not name a file on this machine; serving uses the \
-                     discovered Tor binary. Correct or remove the option to silence this."
-                );
-                Self(None)
-            }
+            None => Ok(Self(None)),
+            Some(path) if path.is_file() => Ok(Self(Some(path))),
+            Some(path) => Err(TorFileMissing(path)),
         }
     }
 
@@ -277,7 +288,7 @@ mod tests {
     #[test]
     fn an_unset_option_means_discovery() {
         assert!(matches!(
-            TorFile::from_option(None).source(),
+            TorFile::from_option(None).expect("unset").source(),
             TorBinarySource::Discover
         ));
     }
@@ -289,71 +300,27 @@ mod tests {
         std::fs::write(&bin, b"not really tor, but it is a file").expect("write");
         // The hash gate runs on this later; the option selects *which*
         // candidate is gated, never whether it is.
-        match TorFile::from_option(Some(bin.clone())).source() {
+        match TorFile::from_option(Some(bin.clone()))
+            .expect("a file")
+            .source()
+        {
             TorBinarySource::At(p) => assert_eq!(p, bin),
             other => panic!("expected the option to be taken, got {other:?}"),
         }
     }
 
-    /// Log lines written while a test runs, for the once-only warning.
-    #[derive(Clone, Default)]
-    struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Lines {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("lines").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Lines {
-        type Writer = Lines;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    /// An option naming no file on this machine is discovery, said once: at
-    /// the host's read of its options, and not again however often serving
-    /// starts (the cadence restarts it).
+    /// An option naming no file on this machine refuses the start with its
+    /// remedy; it is never replaced by discovery (IG-Q41, as the daemon's).
     #[test]
-    fn an_option_naming_no_file_falls_back_to_discovery_and_warns_once() {
-        let lines = Lines::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(lines.clone())
-            .with_ansi(false)
-            .finish();
+    fn an_option_naming_no_file_refuses_the_start_with_its_remedy() {
         let tmp = tempfile::tempdir().expect("tmp");
-        tracing::subscriber::with_default(subscriber, || {
-            // tracing caches a callsite's interest globally, computed on the
-            // thread that hits it first; another test reaching this `warn!`
-            // with no subscriber would cache it as never. Hit it once,
-            // rebuild the cache from this thread, and count from a clean
-            // buffer (the pattern of `scan_step_tests`).
-            drop(TorFile::from_option(Some(tmp.path().join("warm-up"))));
-            tracing::callsite::rebuild_interest_cache();
-            lines.0.lock().expect("lines").clear();
-            let tor = TorFile::from_option(Some(tmp.path().join("no-such-tor")));
-            for n in 0..3 {
-                let cfg = tor_service_config(&tmp.path().join(format!("w{n}.wallet")), &tor)
-                    .expect("config");
-                assert!(matches!(cfg.binary, TorBinarySource::Discover));
-            }
-        });
-        let text = String::from_utf8(lines.0.lock().expect("lines").clone()).expect("utf8");
-        assert_eq!(
-            text.matches("tor-file does not name a file on this machine")
-                .count(),
-            1,
-            "{text}"
-        );
-        assert!(
-            text.contains("no-such-tor"),
-            "the warning names the path: {text}"
-        );
+        let missing = tmp.path().join("no-such-tor");
+        let refused = TorFile::from_option(Some(missing.clone()))
+            .expect_err("a path naming no file is refused");
+        let said = refused.to_string();
+        assert!(said.contains(&missing.display().to_string()), "{said}");
+        assert!(said.contains("point it at the Tor binary here"), "{said}");
+        assert!(said.contains("remove the option"), "{said}");
     }
 
     #[test]

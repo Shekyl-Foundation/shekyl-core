@@ -297,11 +297,12 @@ store check, never read by consensus. Its step is pinned by two vectors
 computed with a pure-Python cSHAKE256 checked against NIST SP 800-185
 sample 3, not regenerated from this crate's output. Mechanism 1 is 57.
 
-The 2026-11-21 refresh retires one mechanism-2 info, `shekyl-prefs-hmac-v1`:
+The 2026-11-21 refresh removes one mechanism-2 info, `shekyl-prefs-hmac-v1`:
 the wallet prefs file and its HMAC key are deleted (Rick, 2026-11-21;
-`V3_WALLET_DECISION_LOG.md`). The row stays in the registry as `retired`,
-so the binding gate refuses the label's reuse. Mechanism 2 is 46, and the
-total is back to 129 (134 with the two micro-buckets).
+`V3_WALLET_DECISION_LOG.md`), and the row goes with its code, as a label
+with no production caller does before genesis (the registry's retired
+section, 2026-11-05). Mechanism 2 is 46, and the total is back to 129 (134
+with the two micro-buckets).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|

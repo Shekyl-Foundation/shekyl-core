@@ -5286,7 +5286,8 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // Tor, from the bond on: its endpoint is the bond record's.
     // The binary reaches serving as the wallet server's does: the host's
     // `tor-file` option, resolved once, handed to the start.
-    let tor_file = crate::TorFile::from_option(Some(tor.clone()));
+    let tor_file =
+        crate::TorFile::from_option(Some(tor.clone())).expect("the pinned Tor is a file");
     let serving =
         super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target(), &tor_file)
             .await
