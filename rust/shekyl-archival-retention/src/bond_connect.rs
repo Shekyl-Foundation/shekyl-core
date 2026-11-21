@@ -273,8 +273,7 @@ pub fn reinstate_connect(
         return Err(ReinstateConnectError::EmptyPost);
     }
     // Codec-cap belt (verify's oversize twin): a post past the cap would fold
-    // into a record ArchivalBondValue::encode refuses — fail typed here instead
-    // of as an opaque encode throw in the LMDB writer.
+    // into holdings past `MAX_HOLDINGS_SHARDS` — fail typed here instead.
     if post_held_shard_ids.len() > MAX_HOLDINGS_SHARDS {
         return Err(ReinstateConnectError::PostOversize);
     }

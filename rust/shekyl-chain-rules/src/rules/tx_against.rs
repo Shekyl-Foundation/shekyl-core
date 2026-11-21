@@ -132,10 +132,9 @@ impl TxAgainstRule for I7 {
 
 /// CEN-L1: no key image appears twice among one block's inputs — the
 /// intra-block half of key-image uniqueness (C2-R8 Q6, minted as the
-/// validator's rule; the C++ enforces it only at `add_spent_key`'s
-/// `MDB_NODUPDATA` put, caught as a block rejection). Runs after every
-/// slot has passed `tx_form` and `tx_against`, over the listed transactions
-/// only: the coinbase has no key image, and a repeat *within* one
+/// validator's rule). Runs after every slot has passed `tx_form` and
+/// `tx_against`, over the listed transactions only: the coinbase has no key
+/// image, and a repeat *within* one
 /// transaction is H10's and has already refused. The refusal names the
 /// second occurrence — the slot and the input — so the operator sees which
 /// spend collided, not merely that one did.

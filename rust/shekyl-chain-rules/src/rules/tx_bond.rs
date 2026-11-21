@@ -163,9 +163,9 @@ impl Rule for J14 {
 /// archival read the harness plants, for this reason). On a driven chain
 /// the operands are reached, not planted: the forged shard-fill chain
 /// (`shekyl-chain-forge`'s `plans/shard-fill.toml`, the ingest crate's
-/// `forged_fill`) closes shards with real spends, and the join scenario,
-/// the slash chain and the LMDB slash-fixture replica join it at
-/// `first_admissible_compact_join` — refused on this row one block
+/// `forged_fill`) closes shards with real spends, and the join scenario
+/// and the slash chain join it at `first_admissible_compact_join` —
+/// refused on this row one block
 /// earlier, admitted there. Those run in the ingest crate's ignored set
 /// (minutes of real proofs; `nightly.yml`'s `chain-ingest-ignored` job);
 /// the default lane's driven joins are onto the

@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The datadir schedule pin: blocks per archival settlement epoch, as the
-//! file was built under (S-CHAIN-W SCW-2; C++ `set_settlement_epoch_blocks_pin`,
-//! `db_lmdb.cpp`, and the `Blockchain::init` check that consumed it).
+//! file was built under (S-CHAIN-W SCW-2; C++ `set_settlement_epoch_blocks_pin`
+//! and the `Blockchain::init` check that consumed it).
 //!
 //! Persisted epoch-derived state — bond join epochs, serve-credit windows —
 //! is only meaningful under the schedule it was written with. The C++ pinned

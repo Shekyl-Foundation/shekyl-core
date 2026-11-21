@@ -11,7 +11,7 @@
 
 use thiserror::Error;
 
-/// Snapshot inputs for §4.5 bonded-aggregation cross-check (no LMDB).
+/// Snapshot inputs for §4.5 bonded-aggregation cross-check (no store reads).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConservationSnapshot<'a> {
     pub total_bonded_atomic: u64,
