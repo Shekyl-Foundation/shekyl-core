@@ -116,12 +116,12 @@ pass-line figures are not reported as one.
   (above, *The classes*). With the shuffled placement this registration
   fixes, both builds pass every check, and every null is flat:
 
-  | Build | Nulls | Control (planted ≈ 2.05 µs) | Restarts |
+  | Build | Nulls | Control (planted ≈ 2.05 µs) | Restart-rate `|z|` across comparisons |
   | --- | --- | --- | --- |
   | AVX2 | 2.26, 1.76 | 33.83, detected | 0.39 to 2.92 |
   | SSE2 (`fn-dsa-sign/no_avx2`) | 2.34, 1.73 | 49.32, detected | 0.39 to 2.92 |
 
-  The restart counts agree between the two builds entry for entry: the two
+  The restart-rate figures agree between the two builds: the two
   paths sign the same bytes, and the nonce check recovers the same counts.
 - **The SSE2 binary has no AVX2 signing code.** It carries no
   `fn_dsa_sign::sign_avx2` symbol; the AVX2 build carries 17.
