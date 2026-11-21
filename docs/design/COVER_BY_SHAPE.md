@@ -1,8 +1,8 @@
 # Round 0: cover by shape — 2026-11-19
 
-**Status: OPEN — Round 0 (Rick). The direction in §2 was ruled on 2026-11-19 and `CBS-E1` on 2026-11-20; `CBS-E2`–`CBS-E7` in §6 are open. Last ruling recorded: 2026-11-20.** Nothing here is built. Read at two commits of this repository: `88864d06`, the head of PR #1431's branch on 2026-11-19, and `d86ef32f` on `dev`; the file and line citations in §3 are at those commits unless an item names another. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held unmerged (`CBS-E4`).
+**Status: OPEN — Round 0 (Rick). The direction in §2 was ruled on 2026-11-19, and `CBS-E1` and `CBS-E4` on 2026-11-20; `CBS-E2`, `CBS-E3` and `CBS-E5`–`CBS-E7` in §6 are open. Last ruling recorded: 2026-11-20.** Nothing here is built. Read at two commits of this repository: `88864d06`, the head of PR #1431's branch on 2026-11-19, and `d86ef32f` on `dev`; the file and line citations in §3 are at those commits unless an item names another. This is a second approach to wire-observer cover, beside the volume build of #1431, which is held and then closed unmerged, its branch kept (`CBS-E4`).
 
-**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the decisions of §6, of which `CBS-E1` is ruled and `CBS-E2`–`CBS-E7` are open.
+**Identifier family:** `CBS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. `CBS-R1`–`CBS-R6` are the rulings of §2; `CBS-E1`–`CBS-E7` are the decisions of §6, of which `CBS-E1` and `CBS-E4` are ruled and `CBS-E2`, `CBS-E3` and `CBS-E5`–`CBS-E7` are open.
 
 ## 1. The idea (Rick)
 
@@ -53,7 +53,7 @@ Rick: "If a transaction (or part of one) is indistinguishable from the rest of t
 - Its cost was fixed and its benefit unmeasured.
 - It coupled cover rate to stem delay, and stem delay to the embargo.
 
-## 6. Decisions — `CBS-E1` RULED 2026-11-20; `CBS-E2`–`CBS-E7` OPEN
+## 6. Decisions — `CBS-E1` and `CBS-E4` RULED 2026-11-20; `CBS-E2`, `CBS-E3`, `CBS-E5`–`CBS-E7` OPEN
 
 ### `CBS-E1` — measure the texture first — RULED 2026-11-20 (Rick): from outside the daemon
 
@@ -115,9 +115,11 @@ What was read for it stands as fact (dev `ac63d95d`):
 
 - **Recommendation.** None by default. Run the pass mark with pieces on; add filler only if it fails, and then as a lone dummy of real size on a uniformly drawn outgoing connection, dropped by the receiver.
 
-### `CBS-E4` — PR #1431 — OPEN (held unmerged, Rick 2026-11-19)
+### `CBS-E4` — PR #1431 — RULED 2026-11-20 (Rick): held, then closed with a pointer to the salvage PR; its branch is kept
 
-- **Recommendation.** Hold unmerged. A salvage PR keeps what does not depend on windows: the `local_observer_visibility` reading, the uniform own/relayed timer, the stem recorded when its write lands.
+- **Ruling.** #1431 stays held and is then closed unmerged, with a pointer to the salvage PR. Its branch is kept.
+- **The salvage PR carries** what does not depend on windows: the uniform own/relayed timer (once sent, a node's own transaction draws the embargo a relayed one draws; `DAEMON_RELAY_PRIVACY.md` §92.5c item 3) and the stem recorded when its write lands.
+- **The salvage PR does not carry** the `local_observer_visibility` reading or the `CoverClass` deletion. Only cover reads them, and `dev`'s cover code is due to be removed whole when the shape build lands.
 
 ### `CBS-E5` — the pass mark — OPEN
 

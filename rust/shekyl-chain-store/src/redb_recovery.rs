@@ -5,7 +5,7 @@
 
 //! What the store tests observe in a redb file on disk.
 //!
-//! redb 4.4.0 documents the super-header (`header.rs`): the 9-byte
+//! redb 4.6.0 documents the super-header (`header.rs`): the 9-byte
 //! [`MAGIC`], then one god byte. Bit 1 of that byte is `RECOVERY_REQUIRED`.
 //! Set, a read-only open answers [`redb::DatabaseError::RepairAborted`]
 //! and a writable open repairs, keeping the committed rows. Both stores'

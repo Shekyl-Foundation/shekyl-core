@@ -78,6 +78,9 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
                 };
                 height = to.to_raw() + 1;
             }
+            IngestEvent::Offer(_) => {
+                unreachable!("the committed corpora are layout 4, which has no offer")
+            }
         }
     }
     chain
