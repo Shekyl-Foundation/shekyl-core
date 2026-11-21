@@ -3582,6 +3582,7 @@ dependencies = [
  "hex",
  "proptest",
  "rpassword",
+ "rustix",
  "rustyline",
  "serde",
  "serde_json",
