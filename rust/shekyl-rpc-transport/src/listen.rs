@@ -44,7 +44,7 @@ pub enum SocketPath {
     Refuse(SocketRefusal),
 }
 
-/// Why a socket path may not be replaced.
+/// Why a listener may not bind at a socket path.
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketRefusal {
@@ -57,9 +57,15 @@ pub enum SocketRefusal {
     /// denied), a server whose accept queue is full, no answer within
     /// [`SOCKET_PROBE_BOUND`], or the path could not be read.
     Unknown(String),
+    /// The path may be replaced, and removing the file failed
+    /// ([`clear_replaceable_socket`]). The path is left as it is.
+    NotRemoved(String),
 }
 
 /// May the listener replace what is at `path`?
+///
+/// [`clear_replaceable_socket`] is the bind step: it removes the path when
+/// this returns [`SocketPath::Replace`], and leaves it when this refuses.
 ///
 /// The path is read without following a symbolic link, and only a socket
 /// is ever probed. The type check is part of the decision, not a
@@ -93,6 +99,23 @@ pub async fn may_replace_socket(path: &std::path::Path) -> SocketPath {
                 ))),
             }
         }
+    }
+}
+
+/// Remove `path` when [`may_replace_socket`] would replace it, so a listener
+/// can bind. Nothing there is success. A refusal leaves the path as it is,
+/// and so does a removal that fails ([`SocketRefusal::NotRemoved`]).
+#[cfg(unix)]
+pub async fn clear_replaceable_socket(path: &std::path::Path) -> Result<(), SocketRefusal> {
+    match may_replace_socket(path).await {
+        SocketPath::Replace => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(SocketRefusal::NotRemoved(format!(
+                "the socket could not be removed: {error}"
+            ))),
+        },
+        SocketPath::Refuse(refusal) => Err(refusal),
     }
 }
 
@@ -322,6 +345,57 @@ mod tests {
             matches!(unknown, SocketPath::Refuse(SocketRefusal::Unknown(_))),
             "a socket this account may not open is not proven gone: {unknown:?}"
         );
+    }
+
+    /// **Removing a socket is the same decision as the probe**: a path that
+    /// is not there, and a socket whose server is gone, become absent; a
+    /// live socket, a regular file and a socket this account cannot probe
+    /// stay, so a start cannot take them over by unlinking. The permission
+    /// arm is skipped under root, which connects to a mode-000 socket.
+    /// Red edit: unlink on any probe error.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_replaceable_socket_is_removed_and_every_other_path_is_left() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("a directory");
+        let missing = dir.path().join("none");
+        assert_eq!(clear_replaceable_socket(&missing).await, Ok(()));
+        assert!(!missing.exists(), "nothing was created");
+
+        let left = dir.path().join("left");
+        drop(std::os::unix::net::UnixListener::bind(&left).expect("bind"));
+        assert_eq!(clear_replaceable_socket(&left).await, Ok(()));
+        assert!(!left.exists(), "a socket whose server is gone is removed");
+
+        let live = dir.path().join("live");
+        let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
+        assert_eq!(
+            clear_replaceable_socket(&live).await,
+            Err(SocketRefusal::Answers)
+        );
+        assert!(live.exists(), "a live socket is left in place");
+
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"not a socket").expect("a regular file");
+        assert_eq!(
+            clear_replaceable_socket(&file).await,
+            Err(SocketRefusal::NotASocket)
+        );
+        assert_eq!(std::fs::read(&file).expect("kept"), b"not a socket");
+
+        if shekyl_os_account::effective_uid() == 0 {
+            eprintln!("skipped the permission arm: root connects to a mode-000 socket");
+            return;
+        }
+        std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
+        assert!(
+            matches!(
+                clear_replaceable_socket(&live).await,
+                Err(SocketRefusal::Unknown(_))
+            ),
+            "a socket this account may not open is not removed"
+        );
+        assert!(live.exists(), "the unprobed socket is left in place");
     }
 
     /// **A regular file and a symbolic link at a socket path are refused

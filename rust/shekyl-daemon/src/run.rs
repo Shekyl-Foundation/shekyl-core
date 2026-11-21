@@ -405,7 +405,11 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         tracing::info!(target: "global", "clearnet bound to {bound}");
     }
 
-    // The one signal owner, on a runtime of its own.
+    // The supervision runtime: the stop latch's wait, the notify runner
+    // (§2.10) and the Tor supervisor. The stop streams live on
+    // `shekyl-process`'s `shekyl-stops` thread for the life of the process.
+    // This thread keeps the name `shekyld-signals`: TOR_SUPERVISOR.md §10
+    // (TSR-M15) measured it under that name, and the latch wait still runs here.
     stop::install_dispositions();
     let budget = RuntimeBudget {
         workers: NonZeroUsize::MIN,
@@ -415,7 +419,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let pool = match shekyl_runtime::runtime(budget, &name) {
         Ok(p) => p,
         Err(e) => {
-            return end.fail(format!("the signal owner's runtime could not start: {e}"));
+            return end.fail(format!("the supervision runtime could not start: {e}"));
         }
     };
     if let Err(e) = stop::own(pool.handle(), inherited) {
@@ -511,7 +515,7 @@ fn supervise(
         }
     }
     // The notify runner, pushed from the chain's tip watch; its children
-    // run on the signal owner's runtime (§2.10).
+    // run on the supervision runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
     let notify_driver = pool.spawn(notify::drive_blocks(runner, node.tips()));
     // The supervisor starts with the node, under every `tor` setting. A

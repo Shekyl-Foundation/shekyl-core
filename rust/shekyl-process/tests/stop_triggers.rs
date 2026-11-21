@@ -32,7 +32,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use shekyl_process::stop::{Inherited, Stops, EXIT_SECOND_STOP};
+use shekyl_process::stop::{FirstStop, Inherited, Stops, EXIT_SECOND_STOP};
 
 const CHILD_MARKER: &str = "SHEKYL_STOP_CHILD";
 
@@ -76,7 +76,9 @@ fn run_child_if_asked() -> bool {
         .enable_all()
         .build()
         .expect("a runtime");
-    let first = runtime.block_on(stops.first());
+    let FirstStop::Stop(first) = runtime.block_on(stops.first()) else {
+        panic!("the arm was replaced");
+    };
     println!("first: {first}");
     if mode == HOLDING {
         std::thread::sleep(HOLD);

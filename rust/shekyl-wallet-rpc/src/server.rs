@@ -29,7 +29,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
-use shekyl_process::stop::{Inherited, Stops};
+use shekyl_process::stop::{FirstStop, Inherited, Stops};
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
@@ -643,7 +643,10 @@ enum AfterClose {
 /// once.
 fn watch_stops(mut stops: Stops, state: Arc<AppState>, after: AfterClose) {
     tokio::spawn(async move {
-        let first = stops.first().await;
+        let FirstStop::Stop(first) = stops.first().await else {
+            // A later arm replaced this one. That start has its own watcher.
+            return;
+        };
         info!("stop requested by {first}: closing the open wallet; a second stop exits at once");
         state.shutdown.notify_one();
         if let AfterClose::Exit = after {
@@ -821,7 +824,7 @@ impl axum::serve::Listener for PipeListener {
 #[cfg(unix)]
 async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
     use shekyl_rpc_transport::listen::{
-        may_replace_socket, owner_only_socket_dir, SocketDirRefusal, SocketPath, SocketRefusal,
+        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
     };
     use std::os::unix::fs::DirBuilderExt;
     // The socket's mode is set only after its bind; until then the
@@ -855,27 +858,26 @@ async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
         }
     }
     // A socket a server still answers on is not taken over; one a stopped
-    // or killed server left is replaced. Anything else at the path is not
+    // or killed server left is removed. Anything else at the path is not
     // this server's to remove.
-    match may_replace_socket(path).await {
-        SocketPath::Replace => match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        },
-        SocketPath::Refuse(SocketRefusal::Answers) => {
+    match clear_replaceable_socket(path).await {
+        Ok(()) => {}
+        Err(SocketRefusal::Answers) => {
             return Err(format!("another server answers on {}", path.display()).into());
         }
-        SocketPath::Refuse(SocketRefusal::NotASocket) => {
+        Err(SocketRefusal::NotASocket) => {
             return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
         }
-        SocketPath::Refuse(SocketRefusal::Unknown(why)) => {
+        Err(SocketRefusal::Unknown(why)) => {
             return Err(format!(
                 "{}: whether a server still holds this socket is not known ({why}); it is not \
                  replaced",
                 path.display()
             )
             .into());
+        }
+        Err(SocketRefusal::NotRemoved(why)) => {
+            return Err(format!("{}: {why}", path.display()).into());
         }
     }
     Ok(())

@@ -16,14 +16,15 @@
 //! waits (the managed Tor's bootstrap sits between the RPC start and step
 //! 8) is kept, not dropped.
 //!
-//! The latch is per daemon start: [`own`] clears it, so a request made
-//! before the owner existed does not stop the daemon it was not meant for.
+//! The latch is per daemon start: [`own`] clears it and retires the
+//! previous start. A request made before this start, and a signal the
+//! replaced arm already read, do not stop the daemon they were not meant for.
 
 use std::fmt;
 use std::sync::Mutex;
 
 use shekyl_node::NodeEnd;
-use shekyl_process::stop::{Inherited, Stops, Trigger};
+use shekyl_process::stop::{FirstStop, Inherited, Stops, Trigger};
 use tokio::sync::Notify;
 
 /// Why the daemon stops. The report matches the variant: an operator's
@@ -59,26 +60,49 @@ impl fmt::Display for StopCause {
     }
 }
 
-/// The cause of the stop, once one has arrived.
-static STOP: Mutex<Option<StopCause>> = Mutex::new(None);
-/// Woken when `STOP` is set.
+/// One daemon start's latch. `generation` advances in [`own`]; a signal
+/// publishes only when it still names the start that armed it.
+struct Latch {
+    generation: u64,
+    cause: Option<StopCause>,
+}
+
+/// The latched cause, and which start it belongs to.
+static STOP: Mutex<Latch> = Mutex::new(Latch {
+    generation: 0,
+    cause: None,
+});
+/// Woken when [`STOP`]'s cause is set.
 static STOPPED: Notify = Notify::const_new();
 
+fn lock_stop() -> std::sync::MutexGuard<'static, Latch> {
+    STOP.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn latch(cause: StopCause) {
-    let mut stop = STOP
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if stop.is_none() {
-        *stop = Some(cause);
+    let mut stop = lock_stop();
+    if stop.cause.is_none() {
+        stop.cause = Some(cause);
         drop(stop);
         STOPPED.notify_waiters();
     }
 }
 
+/// A signal from the arm [`own`] installed at `generation`. A later `own`
+/// has moved on, and the signal is not this start's.
+fn latch_signal(generation: u64, trigger: Trigger) {
+    let mut stop = lock_stop();
+    if stop.generation != generation || stop.cause.is_some() {
+        return;
+    }
+    stop.cause = Some(StopCause::Signal(trigger));
+    drop(stop);
+    STOPPED.notify_waiters();
+}
+
 fn latched() -> Option<StopCause> {
-    STOP.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    lock_stop().cause.clone()
 }
 
 /// The daemon's own request: the RPC's `daemon_stop`.
@@ -142,17 +166,26 @@ fn owed(line: Option<String>, started_by: bool) -> Option<String> {
 }
 
 /// Arm the operating system's stop triggers for this start, and forward the
-/// first of them to the latch on `handle`. Clears the latch. `inherited`
+/// first of them to the latch on `handle`. Clears the latch. The generation
+/// advances before the new arm is installed, so a forwarder that already
+/// took a trigger from the previous arm cannot publish it here. `inherited`
 /// is [`Inherited::at_start`], read before anything installed a handler.
 ///
 /// # Errors
 /// The operating system refused a trigger's stream.
 pub fn own(handle: &tokio::runtime::Handle, inherited: Inherited) -> std::io::Result<()> {
-    *STOP
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    let generation = {
+        let mut stop = lock_stop();
+        stop.generation = stop.generation.wrapping_add(1);
+        stop.cause = None;
+        stop.generation
+    };
     let mut stops = Stops::arm(inherited)?;
-    handle.spawn(async move { latch(StopCause::Signal(stops.first().await)) });
+    handle.spawn(async move {
+        if let FirstStop::Stop(trigger) = stops.first().await {
+            latch_signal(generation, trigger);
+        }
+    });
     Ok(())
 }
 
@@ -218,6 +251,49 @@ mod tests {
         assert_eq!(cause, StopCause::Requested);
         // Still latched: a second wait answers the same way.
         assert_eq!(rt.block_on(stop_requested()), cause);
+    }
+
+    fn one_trigger() -> Trigger {
+        #[cfg(unix)]
+        {
+            Trigger::Terminate
+        }
+        #[cfg(windows)]
+        {
+            Trigger::CtrlBreak
+        }
+    }
+
+    /// A signal read for the previous start does not latch after [`own`]
+    /// retires it, and a signal for this start does. Red edit: `latch_signal`
+    /// ignores the generation (the next start stops on the previous arm's
+    /// trigger).
+    #[test]
+    fn a_signal_from_a_replaced_start_does_not_latch() {
+        let _serial = crate::run::hold_process_table();
+        let rt = runtime();
+        own(rt.handle(), Inherited::none()).expect("own");
+        let generation = lock_stop().generation;
+        latch_signal(generation.wrapping_sub(1), one_trigger());
+        let waited = rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_millis(50), stop_requested()).await
+        });
+        assert!(
+            waited.is_err(),
+            "a signal from the replaced start latched: {waited:?}"
+        );
+
+        latch_signal(generation, one_trigger());
+        assert_eq!(
+            rt.block_on(stop_requested()),
+            StopCause::Signal(one_trigger())
+        );
+        // The next start does not inherit this one.
+        own(rt.handle(), Inherited::none()).expect("own");
+        let waited = rt.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_millis(50), stop_requested()).await
+        });
+        assert!(waited.is_err(), "own() left the previous signal latched");
     }
 
     /// **A node started by a program holding its owning connection names

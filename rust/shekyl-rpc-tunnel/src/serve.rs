@@ -41,7 +41,7 @@ use tokio::sync::{watch, Semaphore};
 use tokio::time::{sleep, Sleep};
 
 use crate::config::{Config, Listen};
-use shekyl_process::stop::{Inherited, Stops};
+use shekyl_process::stop::{FirstStop, Inherited, Stops};
 
 /// A grant set, as `rpc client list` names one.
 fn names(set: GrantSet) -> String {
@@ -193,7 +193,9 @@ where
                 let fault = ended.ok().and_then(|value| value.clone());
                 break Err(fault.map_or_else(String::new, |fault| fault.to_string()));
             }
-            _ = stops.first() => break Ok(()),
+            // `Replaced` does not complete: this tunnel armed once, and a
+            // later arm is not a stop. The accept loop still ends on revocation.
+            () = until_stop(stops) => break Ok(()),
             Some(_) = serving.join_next(), if !serving.is_empty() => {}
         }
     };
@@ -206,6 +208,14 @@ where
         .await,
     );
     ended
+}
+
+/// The first stop. A replaced arm does not end this wait: the accept loop
+/// has the revocation to end on, and a replacement is not a stop.
+async fn until_stop(stops: &mut Stops) {
+    if let FirstStop::Replaced = stops.first().await {
+        std::future::pending::<()>().await;
+    }
 }
 
 /// One local request, carried whole to the node and its response back.
@@ -270,7 +280,7 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 #[cfg(unix)]
 async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
     use shekyl_rpc_transport::listen::{
-        may_replace_socket, owner_only_socket_dir, SocketDirRefusal, SocketPath, SocketRefusal,
+        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
     };
     let dir = path
         .parent()
@@ -287,28 +297,25 @@ async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener,
         }
         Err(SocketDirRefusal::Unreadable(why)) => return Err(format!("{}: {why}", dir.display())),
     }
-    match may_replace_socket(path).await {
-        SocketPath::Replace => match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("{}: {e}", path.display())),
-        },
-        SocketPath::Refuse(SocketRefusal::Answers) => {
+    match clear_replaceable_socket(path).await {
+        Ok(()) => {}
+        Err(SocketRefusal::Answers) => {
             return Err(format!("another tunnel answers on {}", path.display()));
         }
-        SocketPath::Refuse(SocketRefusal::NotASocket) => {
+        Err(SocketRefusal::NotASocket) => {
             return Err(format!(
                 "{} is not a socket; it is not replaced",
                 path.display()
             ));
         }
-        SocketPath::Refuse(SocketRefusal::Unknown(why)) => {
+        Err(SocketRefusal::Unknown(why)) => {
             return Err(format!(
                 "{}: whether a tunnel still holds this socket is not known ({why}); it is not \
                  replaced",
                 path.display()
             ));
         }
+        Err(SocketRefusal::NotRemoved(why)) => return Err(format!("{}: {why}", path.display())),
     }
     tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
 }

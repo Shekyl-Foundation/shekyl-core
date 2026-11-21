@@ -228,6 +228,16 @@ fn is_ignored(signal: libc::c_int) -> bool {
     read == 0 && current.sa_sigaction == libc::SIG_IGN
 }
 
+/// How [`Stops::first`] ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirstStop {
+    /// This arm's first stop.
+    Stop(Trigger),
+    /// A later [`Stops::arm`] replaced this arm. A stop already stored on
+    /// it is not delivered: that stop belongs to the start that was replaced.
+    Replaced,
+}
+
 /// The armed stops, as one program start sees them. Cloned handles see the
 /// same first stop.
 #[derive(Clone, Debug)]
@@ -252,7 +262,8 @@ impl Stops {
     /// The first call opens the streams on the owner's thread; a platform
     /// that refuses one refuses this call and every later one. A later call
     /// (a test that starts a program twice in one process) starts a fresh
-    /// arm on the same streams: a stop before it is not this start's, and
+    /// arm on the same streams. The previous arm's [`Stops::first`] ends
+    /// [`FirstStop::Replaced`] and does not yield a stop it had stored.
     /// `inherited` is the first call's.
     ///
     /// # Errors
@@ -268,24 +279,35 @@ impl Stops {
         Ok(Self { first })
     }
 
-    /// The first stop, at once when it has already arrived.
-    pub async fn first(&mut self) -> Trigger {
-        loop {
-            if let Some(trigger) = *self.first.borrow_and_update() {
-                return trigger;
-            }
-            if self.first.changed().await.is_err() {
-                // A later arm replaced this one: no stop of this start's
-                // can arrive any more.
-                std::future::pending::<()>().await;
-            }
-        }
+    /// This arm's first stop, at once when it has already arrived.
+    /// [`FirstStop::Replaced`] when a later [`Self::arm`] has taken the
+    /// streams, including when this arm already held a stop: that stop is
+    /// not this wait's to deliver.
+    pub async fn first(&mut self) -> FirstStop {
+        wait_for_first(&mut self.first).await
     }
+}
 
-    /// The first stop, if it has arrived.
-    #[must_use]
-    pub fn arrived(&self) -> Option<Trigger> {
-        *self.first.borrow()
+/// The next stop stored in `slot`, or [`FirstStop::Replaced`] when every
+/// sender is gone. The closed check comes before the stored value: a
+/// replaced arm's stop belongs to the start that was replaced.
+async fn wait_for_first(slot: &mut watch::Receiver<Option<Trigger>>) -> FirstStop {
+    loop {
+        if slot.has_changed().is_err() {
+            return FirstStop::Replaced;
+        }
+        // Copy the stop out so the watch borrow ends before the close is
+        // checked again: the sender can close between the two reads.
+        let stored = *slot.borrow_and_update();
+        if let Some(trigger) = stored {
+            if slot.has_changed().is_err() {
+                return FirstStop::Replaced;
+            }
+            return FirstStop::Stop(trigger);
+        }
+        if slot.changed().await.is_err() {
+            return FirstStop::Replaced;
+        }
     }
 }
 
@@ -512,5 +534,41 @@ mod tests {
         for (trigger, name) in all {
             assert_eq!(trigger.to_string(), name);
         }
+    }
+
+    fn one_trigger() -> Trigger {
+        #[cfg(unix)]
+        {
+            Trigger::Terminate
+        }
+        #[cfg(windows)]
+        {
+            Trigger::CtrlC
+        }
+    }
+
+    /// A live arm delivers the stop it holds. A replaced arm ends, and a
+    /// stop already stored on it is not delivered: the sender is closed
+    /// before the value is read. Red edit: return the stored stop after
+    /// the sender is gone (`first` borrows before it notices the close).
+    #[test]
+    fn a_replaced_arm_ends_without_delivering_its_stored_stop() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let trigger = one_trigger();
+            let (sender, mut live) = watch::channel(Some(trigger));
+            assert_eq!(wait_for_first(&mut live).await, FirstStop::Stop(trigger));
+            drop(sender);
+
+            let (sender, mut replaced) = watch::channel(Some(trigger));
+            drop(sender);
+            assert_eq!(wait_for_first(&mut replaced).await, FirstStop::Replaced);
+
+            let (sender, mut empty) = watch::channel(None::<Trigger>);
+            drop(sender);
+            assert_eq!(wait_for_first(&mut empty).await, FirstStop::Replaced);
+        });
     }
 }
