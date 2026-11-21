@@ -314,6 +314,144 @@ pub fn read_console(path: &Path) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFi
     read_checked(path, check_console)
 }
 
+/// The bytes of a key file handed to this process, at most `limit` and one
+/// more: a key its service manager passes it (a systemd credential, owned by
+/// the superuser with mode `0440` and read through an access-list entry for
+/// the service's account) or one an operator placed for it. `None` when
+/// there is none.
+///
+/// Only this account and the superuser may read it: it is owned by one of
+/// them, no other account can write it, every account cannot read it, and
+/// its group can read it only when that group is the superuser's. The file
+/// is opened once, without following a link at its name and without
+/// blocking, and that handle is judged and then read, so what is judged is
+/// what is read. An access-list entry is not read: it is how systemd grants
+/// the service's account, and the mode's group bits are its mask.
+///
+/// A file longer than `limit` returns `limit + 1` bytes, so its reader
+/// refuses it by length without the rest being read.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when it cannot be opened or read;
+/// [`PrivateFileError::Exposed`] when it is a link, not a regular file, or
+/// another account can read or write it.
+#[cfg(unix)]
+pub fn read_key_file(
+    path: &Path,
+    limit: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    let mut file = match opts.open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
+            return Err(PrivateFileError::Exposed(
+                path.to_path_buf(),
+                "is a symbolic link".to_owned(),
+            ))
+        }
+        Err(e) => return Err(PrivateFileError::Io(path.to_path_buf(), e)),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| PrivateFileError::Io(path.to_path_buf(), e))?;
+    if let Some(why) = key_file_exposure(&KeyFileFacts {
+        is_file: meta.is_file(),
+        owner: meta.uid(),
+        group: meta.gid(),
+        mode: meta.permissions().mode() & 0o777,
+        me: crate::effective_uid(),
+    }) {
+        return Err(PrivateFileError::Exposed(path.to_path_buf(), why));
+    }
+    let mut bytes = Zeroizing::new(vec![0u8; limit + 1]);
+    let mut filled = 0;
+    while filled < bytes.len() {
+        match file.read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(PrivateFileError::Io(path.to_path_buf(), e)),
+        }
+    }
+    bytes.truncate(filled);
+    Ok(Some(bytes))
+}
+
+/// The bytes of a key file handed to this process: on Windows, a file this
+/// account alone may read ([`check_private`]), at most `limit` and one more.
+///
+/// # Errors
+///
+/// [`PrivateFileError::Io`] when it cannot be read;
+/// [`PrivateFileError::Exposed`] when another account can read it.
+#[cfg(windows)]
+pub fn read_key_file(
+    path: &Path,
+    limit: usize,
+) -> Result<Option<Zeroizing<Vec<u8>>>, PrivateFileError> {
+    let Some(mut bytes) = read_checked(path, check_private)? else {
+        return Ok(None);
+    };
+    bytes.truncate(limit + 1);
+    Ok(Some(bytes))
+}
+
+/// What a key file's handle says about who can reach it.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct KeyFileFacts {
+    is_file: bool,
+    owner: u32,
+    group: u32,
+    mode: u32,
+    /// This process's effective user id.
+    me: u32,
+}
+
+/// Why another account can reach a key file, or `None` when only this
+/// account and the superuser can ([`read_key_file`]).
+#[cfg(unix)]
+fn key_file_exposure(facts: &KeyFileFacts) -> Option<String> {
+    let KeyFileFacts {
+        is_file,
+        owner,
+        group,
+        mode,
+        me,
+    } = *facts;
+    if !is_file {
+        return Some("is not a regular file".to_owned());
+    }
+    if owner != me && owner != SUPERUSER {
+        return Some(format!(
+            "is owned by uid {owner}, neither this account (uid {me}) nor the superuser"
+        ));
+    }
+    if mode & 0o022 != 0 {
+        return Some(format!(
+            "has mode {mode:04o}, so another account can write it"
+        ));
+    }
+    if mode & 0o004 != 0 {
+        return Some(format!("has mode {mode:04o}, so every account can read it"));
+    }
+    if mode & 0o040 != 0 && group != SUPERUSER {
+        return Some(format!("has mode {mode:04o}, so group {group} can read it"));
+    }
+    None
+}
+
+/// The superuser's user and group id.
+#[cfg(unix)]
+const SUPERUSER: u32 = 0;
+
 fn read_checked(
     path: &Path,
     check: fn(&Path) -> Result<(), PrivateFileError>,
@@ -1091,6 +1229,109 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    /// A key file's facts, as this account (uid 1000) sees them.
+    fn key_facts(owner: u32, group: u32, mode: u32) -> KeyFileFacts {
+        KeyFileFacts {
+            is_file: true,
+            owner,
+            group,
+            mode,
+            me: 1000,
+        }
+    }
+
+    /// **A systemd credential is a key file this account may read.** The
+    /// service manager hands it owned by the superuser, group superuser,
+    /// mode `0440` (seen on systemd 257: `LoadCredential=` under `User=`).
+    /// So is this account's own `0600` or `0400` file. Red edit: refuse a
+    /// superuser owner, or any group read bit.
+    #[test]
+    fn a_systemd_credential_and_an_owner_only_file_are_key_files() {
+        assert_eq!(
+            key_file_exposure(&key_facts(SUPERUSER, SUPERUSER, 0o440)),
+            None
+        );
+        assert_eq!(key_file_exposure(&key_facts(1000, 1000, 0o600)), None);
+        assert_eq!(key_file_exposure(&key_facts(1000, 1000, 0o400)), None);
+        assert_eq!(
+            key_file_exposure(&key_facts(SUPERUSER, SUPERUSER, 0o400)),
+            None
+        );
+    }
+
+    /// **A key file another account can reach is refused, by what reaches
+    /// it.** A third account's file, a file its group or every account can
+    /// write, one every account can read, one a group other than the
+    /// superuser's can read, and anything not a regular file. Red edit: drop
+    /// any one clause of [`key_file_exposure`].
+    #[test]
+    fn a_key_file_another_account_can_reach_is_refused() {
+        let refused = [
+            (key_facts(1001, 1000, 0o600), "neither this account"),
+            (key_facts(1000, 1000, 0o620), "another account can write it"),
+            (key_facts(1000, 1000, 0o602), "another account can write it"),
+            (
+                key_facts(SUPERUSER, SUPERUSER, 0o460),
+                "another account can write it",
+            ),
+            (key_facts(1000, 1000, 0o604), "every account can read it"),
+            (key_facts(1000, 1000, 0o640), "group 1000 can read it"),
+            (key_facts(SUPERUSER, 1000, 0o440), "group 1000 can read it"),
+        ];
+        for (facts, why) in refused {
+            let exposure = key_file_exposure(&facts)
+                .unwrap_or_else(|| panic!("mode {:04o} was accepted", facts.mode));
+            assert!(exposure.contains(why), "{exposure}");
+        }
+        let not_a_file = KeyFileFacts {
+            is_file: false,
+            ..key_facts(1000, 1000, 0o600)
+        };
+        assert_eq!(
+            key_file_exposure(&not_a_file).as_deref(),
+            Some("is not a regular file")
+        );
+    }
+
+    /// **A key file is read through the handle that was judged.** This
+    /// account's `0600` file is read, at most one byte past the limit; a
+    /// missing one is `None`; a link at the name is refused without being
+    /// followed; a FIFO with no writer is refused at once, not waited on.
+    /// Red edit: drop `O_NOFOLLOW` (the link is read), or `O_NONBLOCK` (the
+    /// FIFO hangs the test).
+    #[test]
+    fn a_key_file_is_read_through_its_judged_handle() {
+        let dir = tempfile::tempdir().expect("directory");
+        let key = dir.path().join("key");
+        write_private(&key, &[7; 96]).expect("key");
+        let read = read_key_file(&key, 96).expect("read").expect("present");
+        assert_eq!(read.as_slice(), &[7; 96]);
+        let short = read_key_file(&key, 10).expect("read").expect("present");
+        assert_eq!(short.len(), 11, "one byte past the limit, no more");
+
+        assert!(read_key_file(&dir.path().join("absent"), 96)
+            .expect("absent")
+            .is_none());
+
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&key, &link).expect("link");
+        match read_key_file(&link, 96) {
+            Err(PrivateFileError::Exposed(_, why)) => assert_eq!(why, "is a symbolic link"),
+            other => panic!("a link was not refused: {other:?}"),
+        }
+
+        let fifo = dir.path().join("fifo");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).expect("path");
+        // SAFETY: `mkfifo` on a NUL-terminated path this test owns.
+        #[allow(unsafe_code)]
+        let made = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
+        assert_eq!(made, 0, "mkfifo");
+        match read_key_file(&fifo, 96) {
+            Err(PrivateFileError::Exposed(_, why)) => assert_eq!(why, "is not a regular file"),
+            other => panic!("a FIFO was not refused: {other:?}"),
+        }
+    }
 
     /// Set in the child this test starts: the directory it writes in.
     const CHILD_DIR: &str = "SHEKYL_PRIVATE_FILE_UMASK_CHILD_DIR";
