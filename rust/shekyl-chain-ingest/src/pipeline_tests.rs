@@ -28,14 +28,14 @@ use shekyl_units::AtomicUnits;
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
 use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
-use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
+use crate::pipeline::{run, Checkpoint, OfferStop, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
     at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_offers,
-    corpus_of_reorg, expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp,
-    trace_of, Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
+    corpus_of_reorg, corpus_offering, expected_state, h, key_image, open_store, reorg, reorg_of,
+    spent_keys_of, tmp, trace_of, Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -1189,6 +1189,87 @@ async fn offers_of_a_heavier_fork_switch_through_the_fork_choice_and_land_where_
         "{:?}",
         archival.diff.diverged().collect::<Vec<_>>()
     );
+}
+
+/// The offers test's chain replayed with the fork offered in `order`.
+async fn replay_offering(
+    name: &str,
+    order: &[usize],
+) -> Result<
+    RunReport,
+    PipelineFault<shekyl_corpus::CorpusFault, <MockSubstrate as crate::pow::Pow>::Fault>,
+> {
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering(&r, order);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp(name)),
+        trace,
+        cfg(2),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offer_dropped_from_the_tip_of_the_fork_leaves_no_switch() {
+    // Negative control: without the fork's last block the fork is three
+    // against main's three, never heavier, so the fork choice holds it and
+    // nothing switches. Against the switch the full corpus derives (at the
+    // fourth offer) the outcome changed: a replay test holding the switch
+    // to a manifest goes red.
+    let report = replay_offering("pipeline-offers-drop-last", &[0, 1, 2])
+        .await
+        .expect("the held offers replay");
+    assert!(report.switches.is_empty(), "{:?}", report.switches);
+    let f = FIRST_SPEND_HEIGHT;
+    let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
+    assert_eq!(connected, (0..=f + 3).collect::<Vec<_>>(), "main alone");
+    assert!(
+        report.checkpoint.is_none(),
+        "the fork's tip, which the trace covers, is never reached"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offer_dropped_from_inside_the_fork_is_refused_as_unlinked() {
+    // Negative control: without the fork's first block, its child is
+    // offered with a parent the store holds nowhere. The node refuses it
+    // (CEN-K2's orphan); the replay stops there, naming the offer.
+    let f = FIRST_SPEND_HEIGHT;
+    let refused = replay_offering("pipeline-offers-drop-first", &[1, 2, 3])
+        .await
+        .expect_err("an orphan offer");
+    match refused {
+        PipelineFault::Offer {
+            record,
+            stop: OfferStop::Unlinked { .. },
+        } => assert_eq!(record.to_raw(), f + 4, "the first offer"),
+        other => panic!("not refused as unlinked: {other}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_offers_out_of_order_are_refused_as_unlinked() {
+    // Negative control: the fork's first two blocks swapped, so the child
+    // arrives before its parent and is refused as an orphan, as it would be
+    // live; the corpus carries no order of its own to repair it.
+    let f = FIRST_SPEND_HEIGHT;
+    let refused = replay_offering("pipeline-offers-swapped", &[1, 0, 2, 3])
+        .await
+        .expect_err("a child before its parent");
+    match refused {
+        PipelineFault::Offer {
+            record,
+            stop: OfferStop::Unlinked { .. },
+        } => assert_eq!(record.to_raw(), f + 4, "the child, offered first"),
+        other => panic!("not refused as unlinked: {other}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

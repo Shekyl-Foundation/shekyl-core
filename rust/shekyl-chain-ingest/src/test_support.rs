@@ -446,13 +446,23 @@ pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
 /// as an `extend`, then each fork block as an `offer` after the blocks it
 /// competes with. No rewind and no switch: the fork choice derives it.
 pub fn corpus_of_offers(r: &Reorg) -> Vec<u8> {
+    let fork = r.after.len() - usize::try_from(r.to).expect("small") - 1;
+    corpus_offering(r, &(0..fork).collect::<Vec<_>>())
+}
+
+/// [`corpus_of_offers`] with the fork's blocks offered in `order`, each an
+/// index into the fork (its first block is 0): an order that leaves one
+/// out, or puts a child before its parent, is a negative control.
+pub fn corpus_offering(r: &Reorg, order: &[usize]) -> Vec<u8> {
     let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, h(0))
         .expect("header");
     for (b, txs) in &r.main {
         let (bytes, bodies) = wire(b, txs);
         w.append(&bytes, &bodies).expect("append");
     }
-    for (b, txs) in &r.after[usize::try_from(r.to).expect("small") + 1..] {
+    let fork = &r.after[usize::try_from(r.to).expect("small") + 1..];
+    for &index in order {
+        let (b, txs) = &fork[index];
         let (bytes, bodies) = wire(b, txs);
         w.offer(&bytes, &bodies, &[], &[]).expect("offer fork");
     }
