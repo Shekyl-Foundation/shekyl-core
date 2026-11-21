@@ -8,6 +8,37 @@ name: nightly/live-daemon-slow-gates
 # armed gates, not optional smoke — a red here is a consensus regression
 # and blocks release the same as a per-PR red.
 #
+# The GATE_LANE=embargo leg runs the relay embargo's two live walks
+# (ARMED_EMBARGO). Each waits for a real embargo fire, a random draw with
+# a mean of 194 s on the clearnet connector the walks use, so the leg has
+# no fixed run time: the build, then one draw in each walk (polled for up
+# to the longest-transit timer's 1-in-1000 quantile, about 3,530 s) and
+# the second walk's quiet wait of 1,176 s (derived 2026-11-20 from the
+# embargo timer, not yet measured on a runner).
+# It takes those two walks out of the slow leg, where they ran 62 minutes
+# on the fixed interval they replaced. The job's timeout is the
+# hosted-runner maximum, so that a long draw is not reported as a red.
+#
+# A leg runs a lane only where the CHECKED-OUT revision has it. The matrix
+# is this file's, but each leg checks out matrix.branch and runs that
+# branch's run_live_daemon_gates.sh: a dispatch from a branch whose matrix
+# names a lane the other branch's script does not know would fail there
+# with "unknown GATE_LANE" and open a regression issue for nothing. The
+# step after checkout asks the checked-out tree two things:
+#   - does its run_live_daemon_gates.sh have the lane's case arm?
+#     Yes: the leg runs.
+#   - if not, does its own copy of this workflow name the lane in its
+#     matrix? Yes: the revision claims a lane its runner cannot run, and
+#     the leg is RED. No: the revision predates the lane; the leg ends
+#     green with a notice that says so, and builds nothing.
+# So a leg is skipped only for a revision that never had the lane, and
+# the skip is visible. A branch that defines a lane cannot lose it
+# quietly: the arm gone is red here, a listed name gone or an empty list
+# is red in the script (its name checks and its empty-lane check). The
+# skip ends by itself when the lane reaches the other branch; there is no
+# exclude to remember to delete. The probe reads text, so the matrix's
+# `lane:` list stays on one line and the script's arms stay `<lane>)`.
+#
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
 # per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
 # the shekyld under test here is the same shape the per-PR gates run against.
@@ -47,11 +78,16 @@ jobs:
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
     # before it lands on main.
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    # One number for both legs (the timeout gate takes a whole number): the
+    # hosted-runner maximum, which the embargo leg needs.
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
         branch: [main, dev]
+        # One line: the lane probe below reads this list from the
+        # checked-out copy of this file.
+        lane: [slow, embargo]
     container:
       image: ubuntu:24.04
       env:
@@ -69,21 +105,52 @@ jobs:
         with:
           ref: ${{ matrix.branch }}
           submodules: recursive
+      - name: does this revision have the ${{ matrix.lane }} lane
+        # See the header: run where the checked-out script has the lane,
+        # red where the checked-out workflow names a lane its script
+        # lacks, a visible skip where the revision predates the lane.
+        id: lane
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/run_live_daemon_gates.sh
+          workflow=.github/workflows/nightly-live-daemon-slow.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the live-daemon gates have no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+            echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the $LANE lane (neither its $script nor its $workflow names it). This leg ran no gate. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
       - name: install Rust
         # Composite action (.github/actions/install-rust) — see build.yml
         # for why it must come after checkout and before the daemon build.
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
       - uses: ./.github/actions/set-make-job-count
+        if: steps.lane.outputs.run == 'true'
       - name: build
+        if: steps.lane.outputs.run == 'true'
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
         run: ${{env.BUILD_DEFAULT_LINUX}}
-      - name: slow live-daemon gates
+      - name: ${{ matrix.lane }} live-daemon gates
+        if: steps.lane.outputs.run == 'true'
         # `shell: bash` for the same reason as build.yml's per-PR step: the
         # container default is dash, which rejects `set -o pipefail`.
         shell: bash
         env:
-          GATE_LANE: slow
+          GATE_LANE: ${{ matrix.lane }}
         run: scripts/ci/run_live_daemon_gates.sh
       - name: notify on red
         # The visibility route that justifies this lane's existence (header
@@ -99,11 +166,11 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const title = `nightly slow live-daemon gates RED (${{ matrix.branch }})`;
+            const title = `nightly ${{ matrix.lane }} live-daemon gates RED (${{ matrix.branch }})`;
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               'Branch: ${{ matrix.branch }}',
-              'The GATE_LANE=slow consensus gates (depth-3 FCMP++ spend / emission claim) failed.',
+              'The GATE_LANE=${{ matrix.lane }} gates failed (slow: depth-3 FCMP++ spend and the bonded walks; embargo: the relay embargo walks).',
               'A red here is a consensus regression and blocks release the same as a per-PR red.',
             ].join('\n');
             // Exact-title match over open issues, not text search: the search

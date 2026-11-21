@@ -15,6 +15,7 @@
 //! and the published snapshot replaced.
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use shekyl_draw_rng::RelayRng;
@@ -623,11 +624,29 @@ impl<C: Clock + Clone + Send + Sync + 'static> Actor<C> {
             // The log never names a stem's successor or its transactions
             // (`RPC_CHANNEL.md` §6.4, RT-O9.3): it sits on disk, at any
             // level a runtime option may raise.
-            Effect::Stem { peer, blobs } => {
-                if self.send_batch(peer, &blobs, false) {
-                    tracing::debug!(count = blobs.len(), "a reshape stem was written");
+            //
+            // The zone armed nothing when it asked for this stem. The write
+            // commits it; a write that did not land is the zone's rejection.
+            Effect::Stem { stem } => {
+                let now = self.now();
+                if self.send_batch(stem.peer, std::slice::from_ref(&stem.blob), false) {
+                    tracing::debug!("a reshape stem was written");
+                    self.driver
+                        .zone_mut()
+                        .commit_stem(&stem, now, &mut *self.rng);
                 } else {
-                    tracing::debug!("a reshape stem was not written; the next fire fluffs");
+                    tracing::debug!("a reshape stem was not written");
+                    if let ControlFlow::Break(()) =
+                        self.driver
+                            .zone_mut()
+                            .reject_stem(&stem, now, &mut *self.rng)
+                    {
+                        tracing::debug!(
+                            "fluffing what could not stem: {}",
+                            StemFallback::WriteFailed.reason()
+                        );
+                        self.fluff_and_record(&[(stem.tx, TxBlob::clone(&stem.blob))], stem.source);
+                    }
                 }
             }
             Effect::Published { txs } => {

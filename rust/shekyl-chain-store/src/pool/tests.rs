@@ -627,7 +627,11 @@ fn a_creation_cut_off_before_its_seal_is_finished_by_the_next_open() {
             .create_new(true)
             .open(&path)
             .unwrap();
-        drop(redb::Builder::new().create_file(file).unwrap());
+        drop(
+            redb::Builder::new()
+                .create_with_backend(redb::backends::FileBackend::new(file).unwrap())
+                .unwrap(),
+        );
     }
     let (store, how) = PoolStore::create(&path).expect("the creation is finished");
     assert_eq!(how, PoolOpen::Finished);

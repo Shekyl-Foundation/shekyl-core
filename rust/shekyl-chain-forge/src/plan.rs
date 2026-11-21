@@ -305,6 +305,28 @@ persona = 0
 start_spread_ms = 50
 "#;
 
+    /// A key the plan's schema does not declare is the parser's refusal,
+    /// naming the key: at the top level and inside a step.
+    #[test]
+    fn an_unknown_key_in_a_plan_is_refused_by_name() {
+        let top = PLAN.replacen(
+            "fixed_difficulty = 1",
+            "fixed_difficulty = 1\nnetwork_id = 7",
+            1,
+        );
+        let step = PLAN.replacen("blocks = 3", "blocks = 3\nsplit = 2", 1);
+        for (text, key) in [(top, "network_id"), (step, "split")] {
+            match Plan::parse(&text) {
+                Err(PlanFault::Toml(e)) => assert!(
+                    e.message().contains(&format!("unknown field `{key}`")),
+                    "{key}: {e}"
+                ),
+                Err(other) => panic!("{key}: refused for another reason: {other}"),
+                Ok(_) => panic!("{key}: an unknown key was accepted"),
+            }
+        }
+    }
+
     #[test]
     fn a_plan_parses_every_step_kind() {
         let plan = Plan::parse(PLAN).expect("parses");

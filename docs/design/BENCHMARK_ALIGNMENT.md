@@ -795,8 +795,8 @@ the clearnet hop 195 ms, the Tor hop 1770 ms; the embargoes 194 s and
 with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
 §97's register). The masks-and-proof term stays at §85.3's figures until
 BA-T10's floor run, which re-times the door's sequence after `PL-D3` and
-includes the depth sweep. The origin retry follows the derivation
-(1176 s); no literal holds it.
+includes the depth sweep. The overdue budget for a node's own
+transaction follows the derivation; no literal holds it.
 
 **Why the Rust range proof read 2.56× C++, and what it reads now
 (ruled 2026-11-08, landed in #1319).** The verifier evaluated `Â` with a

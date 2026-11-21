@@ -335,12 +335,13 @@ fn parse_toml_strict(body_bytes: &[u8]) -> Result<WalletPrefs, PrefsError> {
     let text = std::str::from_utf8(body_bytes)
         .map_err(|e| PrefsError::TomlParse(format!("prefs.toml is not valid UTF-8: {e}")))?;
 
-    // First pass: look for a Bucket-3 name at the top level. We use
-    // `toml::Value` rather than `toml::Table` because a malformed
-    // document will fail here and we want that error to surface as
-    // a generic parse failure, not a Bucket-3 collision.
-    match text.parse::<toml::Value>() {
-        Ok(toml::Value::Table(table)) => {
+    // First pass: look for a Bucket-3 name at the top level. The
+    // document parses as a `toml::Table` (in `toml` 1.x a `Value` parses
+    // a single value, not a document); a malformed document fails here,
+    // and that error surfaces as a generic parse failure, not a Bucket-3
+    // collision.
+    match text.parse::<toml::Table>() {
+        Ok(table) => {
             for key in table.keys() {
                 if let Some(bucket3) = Bucket3Field::from_toml_key(key) {
                     return Err(PrefsError::bucket3(bucket3));
@@ -364,12 +365,6 @@ fn parse_toml_strict(body_bytes: &[u8]) -> Result<WalletPrefs, PrefsError> {
                     });
                 }
             }
-        }
-        Ok(_) => {
-            // TOML grammar says the top level is always a table; a
-            // non-table here means the `toml` crate accepted an
-            // unusual document. Fall through to the strict parser,
-            // which will reject it.
         }
         Err(e) => {
             return Err(PrefsError::TomlParse(e.to_string()));
@@ -789,5 +784,46 @@ mod tests {
 
         let outcome = load_prefs(&base, &other_key).unwrap();
         assert!(outcome.is_tampered());
+    }
+
+    /// A key the schema does not declare is refused by name, at the top
+    /// level and inside a section, through the parser `load_prefs` runs.
+    /// Not `is_err()`: a parser that refused every document would pass
+    /// that, and one did (in `toml` 1.x `str::parse::<Value>()` reads a
+    /// single value, so the first pass refused every prefs file until it
+    /// read a `Table`).
+    #[test]
+    fn an_unknown_key_is_refused_by_name() {
+        for (body, key) in [
+            ("schema_version = 5\ncolour = \"red\"\n", "colour"),
+            ("[cosmetic]\nfont = \"big\"\n", "font"),
+        ] {
+            match parse_toml_strict(body.as_bytes()) {
+                Err(PrefsError::TomlParse(text)) => assert!(
+                    text.contains(&format!("unknown field `{key}`")),
+                    "{key}: {text}"
+                ),
+                Err(other) => panic!("{key}: refused for another reason: {other}"),
+                Ok(_) => panic!("{key}: an unknown key was accepted"),
+            }
+        }
+    }
+
+    /// The file is TOML 1.1 (`INPUT_GRAMMAR.md` R2): an inline table may
+    /// span lines and end in a comma. And a file this binary writes reads
+    /// back through the same parser.
+    #[test]
+    fn a_toml_1_1_document_and_a_written_file_parse() {
+        let body = "[cosmetic]\nshow_wallet_name_when_locked = true\n\
+                    [device]\n";
+        parse_toml_strict(body.as_bytes()).expect("a plain document parses");
+        let inline = "cosmetic = {\n  show_wallet_name_when_locked = true,\n}\n";
+        let prefs = parse_toml_strict(inline.as_bytes()).expect("TOML 1.1 inline table");
+        assert!(prefs.cosmetic.show_wallet_name_when_locked);
+        let written = toml::to_string_pretty(&prefs).expect("serialize");
+        assert_eq!(
+            parse_toml_strict(written.as_bytes()).expect("a written file parses"),
+            prefs
+        );
     }
 }
