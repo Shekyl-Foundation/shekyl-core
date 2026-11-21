@@ -28,7 +28,11 @@ name: chain-forge
 #   test (the identity test's four locks and the receipt tamper test), the
 #   negative controls (each source of randomness drawn from the OS, the chain
 #   must differ), and the producer audit (two processes at the plan's spread,
-#   then the live settlement comparison). A red nightly reaches `report-dev-red`.
+#   then the live settlement comparison). On x86_64 the nightly also
+#   replays one kept forging of the small plan with `shekyl-chain-replay`
+#   and holds the switch it derives to the manifest (CF-3): one replay of
+#   about 1,500 blocks, about 6.5 minutes on the hosted runner, nightly only
+#   (Rick, 2026-11-21). A red nightly reaches `report-dev-red`.
 # - The hosted chains (§10.4, CF-4a). Nightly, both legs forge the shard-fill
 #   plan in two processes at dev's HEAD and hold it to its committed
 #   blocks.txt and to every layer its pin in chains/hosted.toml names: red
@@ -143,7 +147,46 @@ jobs:
         working-directory: rust
         run: cargo test --locked --release -p shekyl-chain-forge --test primitives_across_architectures
       - name: the small plan, forged in two processes, is the committed chain
+        # The nightly keeps one forging for the replay step below.
+        env:
+          SHEKYL_FORGE_KEEP_SMALL: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && format('{0}/small-forged', runner.temp) || '' }}
         run: bash scripts/ci/ignored_set_chain_forge.sh --run determinism::the_small_plan_forges_the_same_bytes_in_two_processes
+      - name: the forged small chain replays through shekyl-chain-replay, and its switch is the manifest's (nightly)
+        # CF-3: the standalone replay binary reads the layout-5 corpus,
+        # holds every height to the trace, and derives the reorg's switch
+        # through the fork choice; the switch lines it prints must be the
+        # manifest's switches, record for record.
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          chain="$RUNNER_TEMP/small-forged"
+          test -f "$chain/corpus.e2" || { echo "::error::the small plan's test kept no forging at $chain"; exit 1; }
+          flags=$(python3 -c 'import json, sys; s = json.load(open(sys.argv[1]))["schedule"]; print(s["settlement_epoch_blocks"], s["reorg_cap_blocks"], s["fixed_difficulty"])' "$chain/manifest.json")
+          read -r seb cap difficulty <<< "$flags"
+          rc=0
+          cargo run --locked --release --manifest-path rust/Cargo.toml -p shekyl-chain-ingest \
+            --features replay-cli --bin shekyl-chain-replay -- replay \
+            --corpus "$chain/corpus.e2" --trace "$chain/trace.e2" --store "$RUNNER_TEMP/small-replay" \
+            --chain regtest --fixed-difficulty "$difficulty" \
+            --settlement-epoch-blocks "$seb" --reorg-cap "$cap" \
+            2> "$RUNNER_TEMP/small-replay.log" || rc=$?
+          cat "$RUNNER_TEMP/small-replay.log"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::shekyl-chain-replay exited $rc on the forged small chain"
+            exit 1
+          fi
+          python3 - "$chain/manifest.json" "$RUNNER_TEMP/small-replay.log" <<'PY'
+          import json, re, sys
+          expected = [(s["at_record"], s["fork_height"], s["depth"]) for s in json.load(open(sys.argv[1]))["switches"]]
+          derived = [
+              (int(m[1]), int(m[2]), int(m[3]))
+              for m in re.finditer(r"^switched at record (\d+): fork (\d+), (\d+) demoted, tip \d+$", open(sys.argv[2]).read(), re.M)
+          ]
+          if not expected:
+              sys.exit("::error::the manifest records no switch: the small plan's reorg is the subject")
+          if derived != expected:
+              sys.exit(f"::error::the replay switched at {derived}, the manifest records {expected}")
+          print(f"the replay's switches are the manifest's: {derived}")
+          PY
       - name: the forged chain is regtest's alone, and refuses a tampered receipt (nightly)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: bash scripts/ci/ignored_set_chain_forge.sh --run forged_chain::the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt

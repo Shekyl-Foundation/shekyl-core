@@ -44,8 +44,7 @@ use std::process::Command;
 
 use executor::seeds::Source;
 use executor::{forge, Options, Outcome, BLOCKS_FILE, FILES, MANIFEST_FILE};
-use shekyl_chain_forge::{sha256_hex, BlocksTxt, Manifest, Plan, PlanRef, SwitchRecord};
-use shekyl_chain_ingest::pipeline::Checkpoint;
+use shekyl_chain_forge::{sha256_hex, BlocksTxt, Manifest, Plan, PlanRef};
 use shekyl_corpus::CORPUS_FORMAT_VERSION;
 
 /// The plan, from the crate's directory.
@@ -68,6 +67,9 @@ const CHILD_HASHERS: &str = "SHEKYL_FORGE_CHILD_HASHERS";
 const CHILD_PLAN: &str = "SHEKYL_FORGE_CHILD_PLAN";
 /// The producer's start spread, in milliseconds.
 const CHILD_SPREAD_MS: &str = "SHEKYL_FORGE_CHILD_SPREAD_MS";
+/// Where the small plan's test keeps one forging, when set: the nightly
+/// replays it with `shekyl-chain-replay` (chain-forge.yml).
+const KEEP_SMALL: &str = "SHEKYL_FORGE_KEEP_SMALL";
 /// What the child wrote when it stopped at a difference.
 const STOPPED_FILE: &str = "stopped.txt";
 
@@ -304,55 +306,16 @@ fn the_small_plan_forges_the_same_bytes_in_two_processes() {
         );
     }
 
-    // The replay (CF-3): the forged chain replayed against its own trace on
-    // a fresh store, as `shekyl-chain-replay replay` does. Every connected
-    // and promoted height's facts and the covered tip's state agree with
-    // the trace, and the switch the fork choice derives from the corpus's
-    // offers is the one the committed manifest records.
-    let plan = Plan::parse(&std::fs::read_to_string(crate_dir().join(PLAN)).expect("the plan"))
-        .expect("the plan parses");
-    let report = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime")
-        .block_on(executor::replay(
-            a,
-            &plan,
-            NonZeroUsize::MIN.saturating_add(1),
-        ))
-        .expect("the forged chain replays");
-    let disagreements: Vec<_> = report.disagreements().collect();
-    assert!(
-        disagreements.is_empty(),
-        "the replay disagrees: {disagreements:?}"
-    );
-    assert!(
-        report
-            .checkpoint
-            .as_ref()
-            .is_some_and(Checkpoint::identical),
-        "the covered tip's state is the trace's: {:?}",
-        report.checkpoint
-    );
-    // Rule 47: the subject is present. The plan's reorg is a switch.
-    assert_eq!(
-        manifest.switches.len(),
-        1,
-        "the small plan forges one switch"
-    );
-    let derived: Vec<SwitchRecord> = report
-        .switches
-        .iter()
-        .map(|switch| SwitchRecord {
-            at_record: switch.record.to_raw(),
-            fork_height: switch.fork.to_raw(),
-            depth: switch.depth,
-        })
-        .collect();
-    assert_eq!(
-        derived, manifest.switches,
-        "the fork choice switched where the manifest records"
-    );
+    // The nightly replays this forging with the standalone replay binary
+    // and holds its switch to the manifest (chain-forge.yml); a run that
+    // names a directory here keeps one forging for it.
+    if let Some(keep) = std::env::var_os(KEEP_SMALL).filter(|dir| !dir.is_empty()) {
+        let keep = PathBuf::from(keep);
+        std::fs::create_dir_all(&keep).expect("the kept forging's directory");
+        for file in FILES {
+            std::fs::copy(a.join(file), keep.join(file)).expect("the forging kept");
+        }
+    }
 
     // The selftest: one flipped byte in any file is red, and names it.
     let flipped = tempfile::tempdir().expect("a directory");

@@ -147,9 +147,6 @@ pub enum ForgeFault {
     /// The trace's replay of the corpus failed.
     #[error("trace: {0}")]
     Replay(#[from] ReplayFault),
-    /// A forged trace did not read back.
-    #[error("trace file: {0}")]
-    Trace(#[from] shekyl_chain_ingest::trace::TraceFault),
     /// The trace's hasher did not start.
     #[error("hasher: {0}")]
     Hasher(String),
@@ -178,49 +175,6 @@ pub fn rules_for(plan: &Plan) -> Result<(ChainRules, CappedEpoch), ForgeFault> {
     let rules = ChainRules::new(Network::Regtest, Some(NonZeroU128::MIN), capped)
         .map_err(|refused| ForgeFault::Plan(format!("regtest's levers: {refused}")))?;
     Ok((rules, capped))
-}
-
-/// Replay the forged chain in `out` against its own trace on a fresh
-/// store, as `shekyl-chain-replay replay` does: every connected and
-/// promoted height's facts held to the trace's, the covered tip's
-/// checkpoint compared, and every switch derived by the fork choice from
-/// the corpus's offers.
-///
-/// # Errors
-///
-/// [`ForgeFault`].
-pub async fn replay(
-    out: &Path,
-    plan: &Plan,
-    hashers: NonZeroUsize,
-) -> Result<shekyl_chain_ingest::pipeline::RunReport, ForgeFault> {
-    let (rules, _) = rules_for(plan)?;
-    let trace = Arc::new(shekyl_chain_ingest::trace::Trace::read(
-        std::io::BufReader::new(File::open(out.join(TRACE_FILE))?),
-    )?);
-    let store = tempfile::Builder::new()
-        .prefix("shekyl-chain-forge-replay-")
-        .tempdir()?;
-    let metrics = Arc::new(Metrics::new());
-    let (hasher, owner) = shekyl_hasher::Hasher::start(shekyl_hash_budget::Budget::new(hashers))
-        .map_err(|fault| ForgeFault::Hasher(format!("{fault:?}")))?;
-    let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
-    let replayed = shekyl_chain_ingest::rebaseline::replay_corpus(
-        &out.join(CORPUS_FILE),
-        &store.path().join("replay.redb"),
-        rules,
-        PipelineConfig {
-            window: PipelineConfig::DEFAULT_WINDOW,
-            hashers,
-            digest_each_commit: false,
-        },
-        pow,
-        metrics,
-        trace,
-    )
-    .await;
-    owner.stop();
-    Ok(replayed?)
 }
 
 /// Forge `plan` (read from `plan_ref.path`) into `out`: the corpus, the

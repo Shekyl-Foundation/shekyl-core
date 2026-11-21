@@ -21,7 +21,8 @@
 # `first-spend-2in` is this plan's own. The reorg is CF-E22's
 # `reorg-shallow`: a branch of three blocks from two below the tip,
 # written as offers (corpus layout 5), which the replay's fork choice
-# switches to at its last block.
+# switches to at its last block. One block follows it, an extend on the
+# branch's last offered block: the corpus's chain after a switch.
 #
 # The seed is SHA-256("shekyl/chain-forge/small-plan-v1").
 
@@ -71,3 +72,7 @@ blocks = 3
 event = "reorg-shallow"
 do = "reorg"
 depth = 2
+
+[[step]]
+do = "mine"
+blocks = 1
