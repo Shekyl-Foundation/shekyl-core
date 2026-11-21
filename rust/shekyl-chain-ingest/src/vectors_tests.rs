@@ -111,10 +111,13 @@ pub(crate) struct Manifest {
     baseline_built_at_dev_sha: String,
     /// The decision that authorized re-baselining `trace.e2` over the
     /// captured corpus at `baseline_built_at_dev_sha`, as
-    /// `YYYY-MM-DD <rationale>`. Empty when the trace is the capture's own;
-    /// `regen_decision` stays the capture's citation either way.
+    /// `YYYY-MM-DD <rationale>`. Absent means the trace is unchanged since
+    /// capture: the capture writer never writes it, and `regen_decision`
+    /// stays the capture's citation either way. Optional without a manifest
+    /// format bump (Rick, 2026-11-21, #1500); it is deleted with the five
+    /// captured vectors in `CF-5`.
     #[serde(default)]
-    trace_rebaseline_decision: String,
+    trace_rebaseline_decision: Option<String>,
 }
 
 /// `YYYY-MM-DD <rationale>`, the shape rule 50 requires of a recorded
@@ -161,7 +164,7 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 && manifest.baseline_built_at_dev_sha != manifest.built_at_dev_sha;
             assert_eq!(
                 rebaselined,
-                !manifest.trace_rebaseline_decision.is_empty(),
+                manifest.trace_rebaseline_decision.is_some(),
                 "{}: the baseline ({}) names another commit than the daemon ({}) exactly when \
                  trace_rebaseline_decision says why ({:?})",
                 p.display(),
@@ -169,12 +172,11 @@ pub(crate) fn captured_chains() -> Vec<(PathBuf, Manifest)> {
                 manifest.built_at_dev_sha,
                 manifest.trace_rebaseline_decision
             );
-            if rebaselined {
+            if let Some(decision) = &manifest.trace_rebaseline_decision {
                 assert!(
-                    cited_regen_decision(&manifest.trace_rebaseline_decision),
-                    "{}: trace_rebaseline_decision is not YYYY-MM-DD <rationale> ({:?})",
-                    p.display(),
-                    manifest.trace_rebaseline_decision
+                    cited_regen_decision(decision),
+                    "{}: trace_rebaseline_decision is not YYYY-MM-DD <rationale> ({decision:?})",
+                    p.display()
                 );
             }
             if !manifest.regen_decision.is_empty() {
