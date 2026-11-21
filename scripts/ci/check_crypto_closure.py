@@ -163,6 +163,12 @@ def closure_of(metadata: dict, roots: set[str]) -> set[tuple[str, str]]:
     def normal(dep: dict) -> bool:
         return any(k.get("kind") is None for k in dep["dep_kinds"])
 
+    def normal_or_build(dep: dict) -> bool:
+        # A held crate's build script chooses what compiles (curve25519-dalek's
+        # picks its backend and word size through rustc_version), so its build
+        # dependencies are on the path too.
+        return any(k.get("kind") in (None, "build") for k in dep["dep_kinds"])
+
     def local(pid: str) -> bool:
         return pk[pid]["source"] is None
 
@@ -183,7 +189,7 @@ def closure_of(metadata: dict, roots: set[str]) -> set[tuple[str, str]]:
         seen.add(pid)
         if proc_macro(pid):
             continue
-        todo += [d["pkg"] for d in nodes[pid]["deps"] if normal(d)]
+        todo += [d["pkg"] for d in nodes[pid]["deps"] if normal_or_build(d)]
     return {(pk[i]["name"], pk[i]["version"]) for i in seen if not local(i)}
 
 
@@ -201,15 +207,21 @@ def walk(roots: set[str]) -> set[tuple[str, str]]:
     return found
 
 
+def complete_errors(found: set[tuple[str, str]], held: dict[str, dict[str, str]]) -> list[str]:
+    """Each package the walk found and the record lacks, and the reverse."""
+    recorded = {(n, v) for n, vs in held.items() for v in vs}
+    errors = [f"in the closure, not in the record: {n} {v}" for n, v in sorted(found - recorded)]
+    errors += [f"in the record, not in the closure: {n} {v}" for n, v in sorted(recorded - found)]
+    return errors
+
+
 def run_complete(record_path: str) -> int:
     roots, held = parse_record(open(record_path, encoding="utf-8").read())
     found = walk(set(roots))
     if not found:
         print("crypto closure: the walk found nothing; the roots name no dependency")
         return 1
-    recorded = {(n, v) for n, vs in held.items() for v in vs}
-    errors = [f"in the closure, not in the record: {n} {v}" for n, v in sorted(found - recorded)]
-    errors += [f"in the record, not in the closure: {n} {v}" for n, v in sorted(recorded - found)]
+    errors = complete_errors(found, held)
     for e in errors:
         print(e)
     if errors:
@@ -271,6 +283,50 @@ def selftest() -> int:
         else:
             print(f"selftest FAIL: the parser accepted {name}")
             failed += 1
+    # The walk, on a planted resolve: local crate `app` -> root `dalek`;
+    # `dalek` has a build dependency `rustcv` (which depends on `semverx`)
+    # and a derive `derivex` (whose compiler toolchain `synx` is not walked);
+    # `app` also has a dev-only edge to `devonly`, which is not a root path.
+    def pkg(name: str, *, local: bool = False, proc: bool = False) -> dict:
+        return {"id": name, "name": name, "version": "1.0.0",
+                "source": None if local else "registry+https://github.com/rust-lang/crates.io-index",
+                "targets": [{"kind": ["proc-macro" if proc else "lib"]}]}
+
+    def edge(to: str, kind: str | None) -> dict:
+        return {"pkg": to, "dep_kinds": [{"kind": kind, "target": None}]}
+
+    planted = {
+        "packages": [pkg("app", local=True), pkg("dalek"), pkg("rustcv"), pkg("semverx"),
+                     pkg("derivex", proc=True), pkg("synx"), pkg("devonly")],
+        "resolve": {"nodes": [
+            {"id": "app", "deps": [edge("dalek", None), edge("devonly", "dev")]},
+            {"id": "dalek", "deps": [edge("rustcv", "build"), edge("derivex", None)]},
+            {"id": "rustcv", "deps": [edge("semverx", None)]},
+            {"id": "semverx", "deps": []},
+            {"id": "derivex", "deps": [edge("synx", None)]},
+            {"id": "synx", "deps": []},
+            {"id": "devonly", "deps": []},
+        ]},
+    }
+    walked = closure_of(planted, {"dalek"})
+    want = {(n, "1.0.0") for n in ("dalek", "rustcv", "semverx", "derivex")}
+    if walked != want:
+        print(f"selftest FAIL: the walk follows normal and build edges, not a derive's "
+              f"toolchain or a dev edge: {sorted(walked)}")
+        failed += 1
+    else:
+        print("selftest ok: the walk follows a held crate's build dependencies")
+    _, short = parse_record(
+        'roots = ["dalek"]\n'
+        + "".join(f'[[package]]\nname = "{n}"\nversion = "1.0.0"\nreason = "r"\n'
+                  for n in ("dalek", "semverx", "derivex")))
+    missing = complete_errors(walked, short)
+    if missing != ["in the closure, not in the record: rustcv 1.0.0"]:
+        print(f"selftest FAIL: a held crate's build dependency missing from the record "
+              f"must fail, naming it: {missing}")
+        failed += 1
+    else:
+        print("selftest ok: a held crate's build dependency missing from the record fails")
     for v, line in [("1.8.2", "1"), ("0.8.6", "0.8"), ("0.0.3", "0.0.3"), ("1.2.1+spec-1.1.0", "1")]:
         if compat_line(v) != line:
             print(f"selftest FAIL: compat_line({v}) = {compat_line(v)}, expected {line}")

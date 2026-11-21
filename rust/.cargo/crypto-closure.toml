@@ -8,8 +8,10 @@
 #     compatibility line at exactly this version, or not at all;
 #   - `--complete`: this list is the closure, no more and no less: the
 #     registry packages a local crate reaches through a normal edge from a
-#     package named in `roots`, walking normal edges, a derive recorded and
-#     its compiler toolchain not walked.
+#     package named in `roots`, walking normal and build edges (a held
+#     crate's build script chooses what compiles: curve25519-dalek's picks
+#     its SIMD cfgs through rustc_version), a derive recorded and its
+#     compiler toolchain not walked.
 #
 # Moving a version here is a review, not a refresh: read the change at
 # source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
@@ -139,6 +141,11 @@ reason = "Byte buffers under borsh's DKG and FROST encodings."
 name = "cfg-if"
 version = "1.0.4"
 reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2."
+
+[[package]]
+name = "cfg_aliases"
+version = "0.2.1"
+reason = "borsh 1.6's build.rs: the `hash_collections` cfg alias its DKG and FROST message encodings compile with."
 
 [[package]]
 name = "chacha20"
@@ -486,6 +493,11 @@ version = "0.6.4"
 reason = "RNG traits every key generation and proof draws through (OsRng)."
 
 [[package]]
+name = "rustc_version"
+version = "0.4.1"
+reason = "curve25519-dalek 4.1.3's build.rs: reads the compiler's channel and version, setting the `nightly` cfg its SIMD backend reads."
+
+[[package]]
 name = "rustversion"
 version = "1.0.22"
 reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims."
@@ -499,6 +511,11 @@ reason = "Schnorr signatures inside FROST's DKG (modular-frost)."
 name = "sec1"
 version = "0.7.3"
 reason = "SEC1 point encodings under elliptic-curve."
+
+[[package]]
+name = "semver"
+version = "1.0.28"
+reason = "Parses the compiler version for rustc_version, in curve25519-dalek's build script."
 
 [[package]]
 name = "serde"
@@ -594,6 +611,11 @@ reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and
 name = "universal-hash"
 version = "0.5.1"
 reason = "Universal-hash traits under poly1305."
+
+[[package]]
+name = "version_check"
+version = "0.9.5"
+reason = "generic-array 0.14's build.rs: compiler-version probes that set its `relaxed_coherence` and deprecation cfgs."
 
 [[package]]
 name = "wasi"

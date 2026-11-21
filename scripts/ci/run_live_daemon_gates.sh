@@ -199,6 +199,12 @@ ARMED=(
   # daemon's SIGTERM to its exit 22-24 ms (waited on the exit itself;
   # its own line: the node closed in 8-9 ms).
   engine::regtest_e2e::a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops
+  # The daemon side of the same round: SIGTERM to the daemon while a
+  # wallet's scan reads from it. The daemon exits 0 within 60 s, the scan
+  # ends with an error (its block fetches retry a bounded number of
+  # times), and the wallet closes and reopens where it was. Prints the
+  # stop's duration.
+  engine::regtest_e2e::a_daemon_stopped_mid_scan_exits_and_the_wallet_keeps_its_place
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
