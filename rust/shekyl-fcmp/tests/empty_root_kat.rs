@@ -25,10 +25,9 @@ fn empty_root_is_selene_hash_init() {
     );
 }
 
-/// The absent-key substitute the daemon's LMDB reader returns for a missing
-/// per-height root (32 zero bytes, `db_lmdb.cpp:9757`) is **not** the empty
-/// tree's root — it decodes to the identity point (CEN-I12's absent-key
-/// walk). Pinned so nobody "simplifies" `EMPTY` to zeros.
+/// 32 zero bytes are **not** the empty tree's root — they decode to the
+/// identity point (CEN-I12's absent-key walk). Pinned so nobody
+/// "simplifies" `EMPTY` to zeros.
 #[test]
 fn empty_root_is_not_the_zero_encoding() {
     assert_ne!(*CurveTreeRoot::EMPTY.as_bytes(), [0u8; 32]);

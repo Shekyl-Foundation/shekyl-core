@@ -201,8 +201,8 @@ pub enum EmissionVerifyError {
 }
 
 /// The claimant's **pre-block** bond record — step 2/3 operands, marshaled
-/// by value from the LMDB record as it stood before this block's
-/// transactions (Q7: no callbacks across the FFI).
+/// by value from the bond record as it stood before this block's
+/// transactions (Q7: no callbacks).
 #[derive(Debug, Clone)]
 pub struct ClaimantBondRecord<'a> {
     /// `E_join` — step 2's `E ≥ E_join + 1` operand.

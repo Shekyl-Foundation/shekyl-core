@@ -108,9 +108,7 @@ impl SettlementSchedule {
     /// the parent block** (`H − 1`).
     ///
     /// While the parent sits in epoch `P`, every epoch **strictly below** `P`
-    /// has closed. Returns `0` before the first close (no rows exist yet;
-    /// LMDB NOTFOUND must still marshal as `0` — see admission's
-    /// applicant-counts-itself term).
+    /// has closed. Returns `0` before the first close (no rows exist yet).
     ///
     /// Single source for the admission gather's epoch key — C++ must not
     /// re-derive `epoch_at_height(parent) − 1` by hand.

@@ -129,9 +129,8 @@ impl AltLinks {
     }
 }
 
-/// The table key for a block hash. `alt_blocks` keeps LMDB's
-/// `compare_hash32` order (the key-types gate holds it), so the key is
-/// [`LmdbHashKey`], never the bare array.
+/// The table key for a block hash. `alt_blocks` keeps the `compare_hash32`
+/// order, so the key is [`LmdbHashKey`], never the bare array.
 pub(super) fn key(id: &BlockHash) -> LmdbHashKey {
     LmdbHashKey::from_bytes(*id.as_bytes())
 }

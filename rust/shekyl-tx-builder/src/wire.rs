@@ -51,7 +51,7 @@ pub struct WireEncodeInput {
     pub pqc_auths: Vec<PqcAuth>,
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
     /// consume), NOT the on-chain `curve_trees_tree_depth`. The name is distinct
-    /// on purpose: the consensus prunable field is the LMDB depth `L − 1`, so
+    /// on purpose: the consensus prunable field is the depth `L − 1`, so
     /// `build_wire_tx` serializes `fcmp_layers - 1` and the daemon reconstructs
     /// `fcmp_layers = curve_trees_tree_depth + 1` (`blockchain.cpp:4119`). Pass
     /// the layer count here (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.4); a spendable
@@ -220,7 +220,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
         })
         .collect();
 
-    // FCMP++ layer count `L` → on-chain `curve_trees_tree_depth` (the LMDB depth
+    // FCMP++ layer count `L` → on-chain `curve_trees_tree_depth` (the depth
     // `L - 1`). The daemon reconstructs `fcmp_layers = curve_trees_tree_depth + 1`
     // and range-checks `1 ..= current_depth` (`blockchain.cpp:4064/4119`). A
     // spendable tx therefore needs `2 <= L <= MAX_TREE_DEPTH`. `encode_final_tx` /
@@ -256,7 +256,7 @@ pub(crate) fn build_wire_tx(input: &WireEncodeInput) -> Result<Transaction, TxBu
             prunable: Some(Prunable {
                 bulletproofs: vec![bp_plus],
                 // `shekyl_wire::Prunable::tree_depth` IS the consensus
-                // `curve_trees_tree_depth` (LMDB depth = layer count − 1),
+                // `curve_trees_tree_depth` (depth = layer count − 1),
                 // computed + range-checked above. Both the submitted bytes and
                 // the PQC-auth signing hash route through this builder, so they
                 // agree on the value.

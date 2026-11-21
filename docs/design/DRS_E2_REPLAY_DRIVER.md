@@ -1,18 +1,7 @@
 # DRS-E2 — the ingest spine and its first source, the replay driver (pre-flight)
 
-**Status:** OPEN — **the CSR-3a grading is retired (2026-11-01):** with the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1; five chains; `emission-claim` is removed and captured anew by SO-D12 4b's evidence run, `docs/FOLLOWUPS.md`), a replay agrees with its baseline or fails, and the grader, the register fixture and its extractor left with the register (RD-Q6 and RD-Q9 below are the record of what they were). **Implementation: increment 1 (§7 commits 0, 1, 2, 3,
-4a, 6) LANDED via #804 (2026-09-20); increment 2 (4b, 5, 6b, 7, 7b, 8b, 8c,
-and commit 8's regtest leg) LANDED on the branch 2026-09-20 — ported from
-the parallel #806 onto #804's APIs (rule 95: code on `dev` wins) after the
-two lanes were found to have built the same increment 1 independently.
-Increment 3 (§7 item 8d, the mutation family) LANDED on its branch
-2026-09-22 — §3.10 is its spec; §5's FTL row is closed. Open: commit 8's
-testnet leg and LWMA-past-N run (§7 item 8, blockers named), commit 9's
-archive. Increment 2's review round (2026-09-21, §9; RD-F21, RD-F22) landed.** Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12). Round 1 opened with the sweep of #785 as
-merged (`dev` @ `93f91b0d4`; §3.7); ground re-pinned to `306af9bae` (§0.1). Round 0 REVIEWED and RULED 2026-09-19
-(maintainer). Round-0 text was written against `dev` @ `14f8dc739` with #785
-in flight; §3.7 records what the merged tree changed, and every citation
-below is read against `93f91b0d4` unless it says otherwise.
+**Status:** OPEN — the ingest spine and the replay driver are built (increments 1 and 2, #804, 2026-09-20; increment 3, the mutation family, 2026-09-22, §3.10). With the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1), and a replay agrees with its baseline or fails; the CSR-3a grading, the grader and the register fixture are retired (RD-Q6 and RD-Q9 below are the record of what they were). Rounds 0 and 1 are ruled (2026-09-19). Open: commit 8's testnet leg, which is also LWMA-1's first run past `N` on a real store (§7 item 8; the regtest runs were fixed-difficulty); the corpus's `emission-claim` chain, captured anew by SO-D12 4b's evidence run; and two rows this file owns in `docs/FOLLOWUPS.md`, the test-deviation register's live section (§5) and the mutation family's burn witnesses (§3.10). Commit 9 archives this file when those close.
+
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1's slice shape,
 applied to a *program* increment. Parent plan:
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — **DRS-D10** (replayable derived
@@ -445,16 +434,16 @@ The corpus's layout is `shekyl-corpus`'s (`CORPUS_CODEC.md`; format 4: an
 `extend` record carries a block with its bundle section, a `rewind` record
 a pop target, and the reader refuses tag `0x03` as it refuses any other
 unknown tag); the ingest's `corpus.rs` reads it as the replay `Source`.
-The trace is the LMDB side's contribution, Rust-minted and versioned like
-the corpus; little-endian, fixed widths; every violation a `TraceFault`
+The trace is a store's chain as `shekyl-chain-replay baseline` writes it,
+Rust-minted and versioned like the corpus; little-endian, fixed widths; every violation a `TraceFault`
 naming what it found.
 
 | Field | Layout | Notes |
 | --- | --- | --- |
-| header | magic `"SHKTRACE"` ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
+| header | magic `"SHKTRAC\0"` (`TRACE_MAGIC`) ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
 | **facts** × n | tag `0x01` ‖ `height` u64 ‖ `weight` u64 ‖ `long_term_weight` u64 ‖ `coins_generated` u64 ‖ `burned` u64 ‖ `root_after`[32] ‖ `long_term_effective_median` u64 ‖ `cumulative_difficulty` u128 | one 88-byte row per height, consecutive from the first; the six passed-through `ConnectFacts` fields + the accumulator SI-10 reads; `Trace::borrow(h)` yields `Borrowed<Facts>`, convertible only into `ConnectFacts` with every origin `PassedThrough` |
-| **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the LMDB state at `height` — `TraceWriter::push_checkpoint_families` computes it from the three families with the function the redb read uses, so the C++ never hashes; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the grader only. The exporter writes one, at the tip (RD-F18) |
-| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows — the C++ walker's reading over LMDB, compared row by row against `ReadSnapshot::archival_snapshot()` by the grader's snapshot oracle. Exactly one per trace, at the tip, paired with the checkpoint — under `0x01` a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); `0x00` is no longer read at all — the six corpus traces were re-captured under `0x01` and the `0x00` arm deleted with them (E4 commit 7), so a `0x00` header is `UnsupportedVersion`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
+| **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the store's state at `height`: the store's `logical_state_digest_v0`, which `TraceWriter::push_checkpoint` records; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the comparison only. The writer takes one, at the covered tip (RD-F18) |
+| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows: the store's `ReadSnapshot::archival_snapshot()` when the trace was written, which a replay compares row by row against its own. Exactly one per trace, at the tip, paired with the checkpoint — under `0x01` a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); `0x00` is no longer read at all — the six corpus traces were re-captured under `0x01` and the `0x00` arm deleted with them (E4 commit 7), so a `0x00` header is `UnsupportedVersion`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
 | trailer | tag `0xFF` ‖ `n_facts` u64 ‖ `n_checkpoints` u64 | both counts re-derived by the reader |
 
 Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)

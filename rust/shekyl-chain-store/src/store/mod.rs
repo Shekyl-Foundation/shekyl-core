@@ -15,8 +15,7 @@
 //!
 //! # The write handle is a possession type, and that is the point
 //!
-//! `BlockchainLMDB` keeps its write transaction in a raw member pointer
-//! and dereferences `*m_write_txn` at **129** sites with no guard at the
+//! A write transaction held as a raw pointer must be checked at every
 //! dereference (DRS-W3). [`WriteBatch`] makes the precondition
 //! unrepresentable: it cannot be null, table access goes through it (never
 //! a raw `WriteTransaction`), and it exists only inside a
@@ -39,12 +38,8 @@
 //!
 //! A second live batch is a typed [`StoreCannot::WriteInProgress`], not
 //! redb's blocking `begin_write`. Same-thread re-entry would otherwise
-//! deadlock. The C++ is **not** the same shape, and saying so precisely is
-//! the point: `BlockchainLMDB::batch_start` **returns `false`** for a
-//! second batch (`m_batch_active` or `m_write_batch_txn` set,
-//! `db_lmdb.cpp:4103`/`:4105`) and two core callers *spin* on that; it
-//! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
-//! store refuses with a typed error and never spins — DRS-W17.
+//! deadlock. This store refuses with a typed error and never spins —
+//! DRS-W17.
 //!
 //! # Four verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
 //!
