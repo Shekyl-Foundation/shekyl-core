@@ -89,5 +89,13 @@ shekyl-store-codec = { path = "../shekyl-store-codec" }
 tempfile = "3"
 redb = { workspace = true }
 
+# The suite's nodes share this test process's descriptor table, so the
+# tests raise its soft limit once (`tests::in_process_nodes_share_one_descriptor_table`).
+# rustix is a normal dependency above; this edge adds only `process`
+# (`getrlimit`/`setrlimit` on `Resource::Nofile`, verified at 1.1.6, rule 17),
+# on unix test builds.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [lints]
 workspace = true
