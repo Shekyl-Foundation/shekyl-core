@@ -53,6 +53,7 @@
 #![allow(dead_code)] // each including test uses part of the surface
 
 use std::io::{BufRead, BufReader};
+use std::ops::{Deref, DerefMut};
 use std::process::{Child, Command, Stdio};
 
 /// Raises the soft core limit to the hard one, then becomes `$0`.
@@ -88,7 +89,7 @@ pub fn run_as_control_if_asked() -> bool {
 
 /// Starts the control (this test binary, on `test` alone, in control mode,
 /// through the raising shell) and waits for its line.
-fn start_control(test: &str) -> Child {
+fn start_control(test: &str) -> Started {
     let exe = std::env::current_exe().expect("this test binary");
     let mut control = raised(exe.to_str().expect("a UTF-8 test binary path"))
         .args(["--exact", test, "--nocapture"])
@@ -104,12 +105,46 @@ fn start_control(test: &str) -> Child {
         .map(|line| line.expect("read the control's output"))
         .any(|line| line == READY);
     assert!(ready, "the control ended without saying it runs");
-    control
+    Started::new(control)
 }
 
-fn end(mut child: Child) {
+fn end(mut child: Started) {
     child.kill().expect("end the child");
     child.wait().expect("reap the child");
+}
+
+/// A started process that is ended and reaped when dropped, if it still
+/// runs. A check that fails panics before the test ends what it started;
+/// without this the binary outlives the test, and run as root it outlives
+/// it as root.
+pub struct Started(Child);
+
+impl Started {
+    pub fn new(child: Child) -> Self {
+        Self(child)
+    }
+}
+
+impl Deref for Started {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+
+impl DerefMut for Started {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+
+impl Drop for Started {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            drop(self.0.kill());
+            drop(self.0.wait());
+        }
+    }
 }
 
 /// The control, observed: the property the binary must lack is present.
@@ -127,7 +162,7 @@ pub fn assert_hardened(child: &mut Child) {
 
 #[cfg(target_os = "linux")]
 mod os {
-    use super::{end, Child};
+    use super::{end, Child, Started};
 
     /// The program as it is: this arm reads the limit itself.
     pub fn observable(program: &str) -> &str {
@@ -149,7 +184,7 @@ mod os {
         (soft, hard)
     }
 
-    pub fn assert_unhardened(control: Child) {
+    pub fn assert_unhardened(control: Started) {
         let limit = core_limit(control.id());
         end(control);
         assert!(
@@ -173,7 +208,7 @@ mod os {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
-    use super::{end, Child};
+    use super::{end, Child, Started};
 
     /// The program as it is: this arm reads the limit itself.
     pub fn observable(program: &str) -> &str {
@@ -263,7 +298,7 @@ mod os {
         String::from_utf8_lossy(&out.stdout).trim() == "0"
     }
 
-    pub fn assert_unhardened(control: Child) {
+    pub fn assert_unhardened(control: Started) {
         let limit = core_limit(control.id());
         let trace = trace_control(control.id());
         let attached = (!as_root()).then(|| {
@@ -332,7 +367,7 @@ mod os {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use super::{end, Child};
+    use super::{end, Child, Started};
 
     fn sysctl(name: &str) -> String {
         let out = Command::new("sysctl")
@@ -450,7 +485,7 @@ mod os {
         copy
     }
 
-    pub fn assert_unhardened(mut control: Child) {
+    pub fn assert_unhardened(mut control: Started) {
         let coredump = sysctl("kern.coredump");
         if coredump != "1" {
             end(control);

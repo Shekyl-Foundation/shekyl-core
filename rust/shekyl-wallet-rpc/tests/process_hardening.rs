@@ -45,16 +45,18 @@ fn a_running_wallet_rpc_is_hardened() {
     let socket = dir.path().join("s");
     let stderr_path = dir.path().join("stderr");
     let stderr_of = || std::fs::read_to_string(&stderr_path).unwrap_or_default();
-    let mut child = from_outside::raised(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
-        .args(["--network", "stagenet", "--disable-rpc-login"])
-        .arg(format!("--rpc-bind=uds://{}", socket.display()))
-        .arg("--wallet-dir")
-        .arg(&wallets)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
-        .spawn()
-        .expect("spawn shekyl-wallet-rpc");
+    let mut child = from_outside::Started::new(
+        from_outside::raised(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
+            .args(["--network", "stagenet", "--disable-rpc-login"])
+            .arg(format!("--rpc-bind=uds://{}", socket.display()))
+            .arg("--wallet-dir")
+            .arg(&wallets)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
+            .spawn()
+            .expect("spawn shekyl-wallet-rpc"),
+    );
 
     let start = Instant::now();
     while !socket.exists() {
