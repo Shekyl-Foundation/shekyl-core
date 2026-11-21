@@ -156,32 +156,50 @@ struct Server {
 }
 
 impl Server {
-    /// Starts the binary on `socket`. `ignore_sigint` starts it through a
-    /// shell that ignores `SIGINT` first, as a non-interactive background
-    /// list does; the ignore survives the exec.
+    /// Starts the binary on `socket`, with `SIGINT` set to `SIG_IGN` when
+    /// `ignore_sigint` (as a non-interactive background list sets it) and to
+    /// `SIG_DFL` otherwise, and `SIGHUP` and `SIGTERM` to `SIG_DFL`: set
+    /// between fork and exec, so the test does not depend on what the
+    /// process that started it ignored. A shell cannot reset a signal that
+    /// was ignored when it started.
     fn start(dir: &Path, socket: &Path, name: &str, ignore_sigint: bool) -> Self {
+        use std::os::unix::process::CommandExt;
         let wallets = dir.join(format!("wallets-{name}"));
         std::fs::create_dir_all(&wallets).expect("the wallet directory");
         let stderr = dir.join(format!("stderr-{name}"));
-        let program = env!("CARGO_BIN_EXE_shekyl-wallet-rpc");
-        let trap = if ignore_sigint {
-            r#"trap "" INT; "#
-        } else {
-            ""
-        };
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(format!(r#"{trap}exec "$0" "$@""#))
-            .arg(program)
+        let mut command = Command::new(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"));
+        command
             .args(["--network", "stagenet", "--disable-rpc-login"])
             .arg(format!("--rpc-bind=uds://{}", socket.display()))
             .arg("--wallet-dir")
             .arg(&wallets)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(std::fs::File::create(&stderr).expect("the stderr file"))
-            .spawn()
-            .expect("spawn shekyl-wallet-rpc");
+            .stderr(std::fs::File::create(&stderr).expect("the stderr file"));
+        // SAFETY: the closure runs between fork and exec and calls only
+        // `signal`, which is async-signal-safe, plus the errno read on
+        // failure. It sets this child's stop dispositions and no other
+        // state.
+        unsafe {
+            command.pre_exec(move || {
+                let interrupt = if ignore_sigint {
+                    libc::SIG_IGN
+                } else {
+                    libc::SIG_DFL
+                };
+                for (signal, disposition) in [
+                    (libc::SIGINT, interrupt),
+                    (libc::SIGTERM, libc::SIG_DFL),
+                    (libc::SIGHUP, libc::SIG_DFL),
+                ] {
+                    if libc::signal(signal, disposition) == libc::SIG_ERR {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn shekyl-wallet-rpc");
         Self { child, stderr }
     }
 
