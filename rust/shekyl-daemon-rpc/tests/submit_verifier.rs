@@ -100,7 +100,7 @@ struct SpendFixture {
     other_root: [u8; 32],
     /// Reference height the proof was assembled at.
     reference_height: u64,
-    /// Consensus/LMDB tree depth (layer count − 1) at the reference height.
+    /// Consensus tree depth (layer count − 1) at the reference height.
     lmdb_depth: u8,
 }
 
@@ -2046,10 +2046,9 @@ fn a_forged_debit_signature_never_reaches_the_fact_gather() {
     // against, and signs with a key they actually hold. The pin sees two
     // equal public values and passes.
     //
-    // What that bought, before the possession pre-gate: the per-shard
-    // last-served scan, up to 2 * MAX_HOLDINGS_SHARDS (8192) LMDB seeks with
-    // the pool and blockchain locks held, on every submit, from an
-    // unauthenticated caller.
+    // What that buys without the possession pre-gate: the last-served scan
+    // (`release_last_served`) on every submit, from an unauthenticated
+    // caller.
     //
     // THE ASSERTION IS THE ABSENCE OF THE GATHER, not the verdict. The
     // verdict was already Rejected{Malformed} before the fix — K13 caught the

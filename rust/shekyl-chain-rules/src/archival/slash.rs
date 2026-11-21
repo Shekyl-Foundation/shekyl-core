@@ -66,8 +66,8 @@ use crate::Claimable;
 use super::close::settled_for;
 use super::{emptied, Slash};
 
-/// Apply one slash to `record` (`db_lmdb.cpp` `apply_archival_slash_one`,
-/// the record half): a complete-tree record becomes an empty compact one;
+/// Apply one slash to `record` (the record half): a complete-tree record
+/// becomes an empty compact one;
 /// a compact record loses `shard`; an open bad interval is appended unless
 /// one is open already (P2B-9 Pin 5 coalescing); one bond floor leaves
 /// `bonded_total`. Returns the log entry and the burn.

@@ -8,8 +8,8 @@
 //! `properties` is one `&str → &[u8]` table holding values of **different
 //! types and different jurisdictions**: engine bookkeeping (`version`,
 //! the stripe seed) sits next to chain state (`total_burned`,
-//! `total_bonded_atomic`). LMDB's schema does not tell them apart and the
-//! C++ reads each cell by string at every call site. Here a cell is a
+//! `total_bonded_atomic`). The table's key and value types do not tell
+//! them apart. Here a cell is a
 //! **type**: its key, its value codec and its scope are declared once, and
 //! a read or write of that cell is a generic over the type rather than a
 //! string that might be misspelled at one site.
@@ -298,8 +298,8 @@ property_cells! {
     /// its slash deadline (DRS-E1 S-ARCH A9; the C++ key, verbatim).
     ///
     /// **Absent means no epoch settled yet** — the C++ spelled that as a
-    /// `u64::MAX` sentinel (`db_lmdb.cpp`, `get_archival_last_slash_epoch`);
-    /// here the read is `Option<SettlementEpoch>` and no sentinel is stored.
+    /// `u64::MAX` sentinel; here the read is `Option<SettlementEpoch>` and no
+    /// sentinel is stored.
     /// Chain-state: the bond-post admission and the emission claim source
     /// read it as a consensus fact. E4's slash writer is its one writer; the
     /// cell is absent in every store until then, so the digest domain gains

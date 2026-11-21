@@ -37,11 +37,10 @@ use shekyl_types::BlockHash;
 /// CEN-A2: the candidate's `previous` is the recorded tip's hash — or, on
 /// an empty chain, the null hash the genesis block carries.
 ///
-/// The empty-chain arm is the C++'s: `get_tail_id()` → `top_block_hash()`
-/// → `null_hash` when the store is empty (`db_lmdb.cpp:3186–3191`), so the
-/// genesis block's `prev_id` is all zeros and `add_new_block` routes it to
-/// the main-chain path. Written as an explicit `None` arm, not a fall-
-/// through: a genesis candidate with a non-zero `previous` is refused.
+/// The empty-chain arm: with no recorded tip, the expected `previous` is
+/// the null hash, so the genesis block's `prev_id` is all zeros. Written as
+/// an explicit `None` arm, not a fall-through: a genesis candidate with a
+/// non-zero `previous` is refused.
 pub(crate) struct A2;
 
 impl A2 {

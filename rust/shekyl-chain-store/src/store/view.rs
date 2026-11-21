@@ -43,11 +43,11 @@
 //! missing row **inside** those ranges is store corruption, and it comes
 //! back as SI-7 (`CellCorrupt { fault: Absent }`) through the trait's
 //! `Fault`, poisoning the batch — never as `AboveTip`, which a rule would
-//! read as an ordinary "not yet" and turn into an `InvalidBlock`. The same
-//! shape the LMDB reader got wrong for `curve_tree_roots[0]` (returning
-//! 32 zero bytes, a *valid* encoding of the identity point) is what this
-//! module makes unrepresentable: absence is a case the caller must handle,
-//! not a value that reads as data.
+//! read as an ordinary "not yet" and turn into an `InvalidBlock`. A missing
+//! `curve_tree_roots[0]` read as 32 zero bytes would be a *valid* encoding
+//! of the identity point; this module makes that shape unrepresentable:
+//! absence is a case the caller must handle, not a value that reads as
+//! data.
 //!
 //! Height 0 has no root row in either store; its state is the empty tree,
 //! [`CurveTreeRoot::EMPTY`], and that is what `root_at(0)` returns. Whether a
@@ -237,8 +237,8 @@ impl<'a, 'id> ChainView<'id> for BatchView<'a, 'id> {
     }
 
     /// `block_info[height]` for the identity, `blocks[height]` for the
-    /// header — the header is inside the recorded blob, exactly as LMDB
-    /// keeps it, so it is parsed from the bytes the rules will be persisted
+    /// header — the header is inside the recorded blob, so it is parsed
+    /// from the bytes the rules will be persisted
     /// against, and the blob must hash to the identity `block_info` records
     /// (CEN-B6): a replaced or corrupted blob is never exposed to a rule as
     /// a `(hash, header)` pair that does not belong together.

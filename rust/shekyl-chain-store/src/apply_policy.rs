@@ -38,13 +38,11 @@
 //! gone: the history is in the file.
 //!
 //! The family list is **one** macro invocation. [`ArchivalFamily::ALL`]
-//! and [`ArchivalFamily::table`] cannot drift from each other;
-//! `check_lmdb_schema_coverage.py` pins the table names against the
-//! X-macro.
+//! and [`ArchivalFamily::table`] cannot drift from each other.
 
 use crate::family_set::FamilySet;
 
-/// One archival family — an `archival_*` table in `SHEKYL_LMDB_TABLES`.
+/// One archival family, named by its `archival_*` table.
 ///
 /// Generated with [`ArchivalFamily::ALL`] from the same rows; adding a
 /// family is one line in the macro.
@@ -69,7 +67,7 @@ macro_rules! archival_families {
                 $(Self::$variant,)+
             ];
 
-            /// The LMDB table name this family owns.
+            /// The `archival_*` table name this family is named by.
             #[must_use]
             pub const fn table(self) -> &'static str {
                 match self {

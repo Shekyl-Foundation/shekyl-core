@@ -459,7 +459,7 @@ corpus — rather than by contributing corpus events. `archival_budget_conservat
 is the one existing block-sequence generator and is the natural starting point.
 
 **DRS-TLB is the same artifact, and the corpus should extend it rather than
-sit beside it.** `DAEMON_REDB_STORE.md:950` lists TestLedgerBuilder as
+sit beside it.** `DAEMON_REDB_STORE.md:938` lists TestLedgerBuilder as
 "Critical path E2/B" with `TLB --> E2` in the work-breakdown graph, and
 `CONSENSUS_STORE_RECONCILIATION.md:324` already speaks of "DRS-TLB-generated
 corpora" feeding exactly this comparison. A second corpus builder would be a

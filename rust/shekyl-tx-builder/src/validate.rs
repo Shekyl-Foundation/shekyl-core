@@ -121,7 +121,7 @@ pub(crate) fn validate_inputs(
         // Branch layer consistency with tree depth (= upstream layers count).
         //
         // tree_depth here is the upstream library's `layers` value, which
-        // includes the leaf layer: layers = LMDB_depth + 1.
+        // includes the leaf layer: layers = consensus depth + 1.
         // Branch layers cover everything above the leaf layer:
         //   branch_count = layers - 1
         // The leaf chunk is a C1 (Selene) node at layer 0; the branch directly

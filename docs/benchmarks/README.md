@@ -272,7 +272,7 @@ conditions measures the difference and not the engine.
 Neither binary takes a sync-mode option: each opens its one store at a constant
 and logs what it opened with, and `measure` reads that line from the generating
 seed before any block is generated and from the subject before its sync is
-timed. The C++ daemon's line is
+timed. The C++ daemon's line, which the recorded `lmdb` baselines carry, is
 `Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks` (the `safe`
 open at `db_nosync`, no `MDB_NOSYNC` / `MDB_MAPASYNC`); the Rust store's is
 `Store durability: immediate (an fsync per commit, DRS-D9; redb Durability::Immediate)`.
