@@ -549,6 +549,24 @@ struct Heartbeat {
 /// Years between two heartbeat lines.
 const HEARTBEAT_YEARS: u64 = 5;
 
+/// The wall clock's time of day, UTC, as `HH:MM:SSZ`, on each heartbeat
+/// and end line: a host shared with another run is then read by when, not
+/// only by how long (§5.37.1).
+fn utc_clock() -> String {
+    const SECONDS_PER_HOUR: u64 = 3_600;
+    const SECONDS_PER_MINUTE: u64 = 60;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+        % SECONDS_PER_DAY;
+    format!(
+        "{:02}:{:02}:{:02}Z",
+        now / SECONDS_PER_HOUR,
+        now % SECONDS_PER_HOUR / SECONDS_PER_MINUTE,
+        now % SECONDS_PER_MINUTE
+    )
+}
+
 impl<'p> EconomyProbe<'p> {
     fn new(params: &'p SimParams, stuffs: bool) -> Self {
         Self {
@@ -712,7 +730,8 @@ impl FoldProbe for EconomyProbe<'_> {
             if let Some(beat) = &self.heartbeat {
                 if year.is_multiple_of(HEARTBEAT_YEARS) {
                     eprintln!(
-                        "beat | {} | y{year} | median {} B | waiting {} | cohorts {} | {:.0} s",
+                        "beat | {} | {} | y{year} | median {} B | waiting {} | cohorts {} | {:.0} s",
+                        utc_clock(),
                         beat.label,
                         priced.medians.effective_median.to_raw(),
                         filled.waiting,
@@ -976,7 +995,10 @@ fn write_report(out: &mut impl Write, rows: &[Row], scope: Scope) -> fmt::Result
         "THREE ECONOMIES GRADED WHOLE (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37, WE-1..WE-12).\n\
          Measures only, never a verdict. Scope: {}. Standard traffic; each figure is the median\n\
          [range] across the row's seeds ({:?}). Horizon y{HORIZON_YEARS}; a fold that reaches its\n\
-         supply break stops there and prints the year. SKL per block unless named.",
+         supply break or the edge of the reward's arithmetic stops there and prints which, the\n\
+         year and the median. {SUSTAINED_GROWTH} is a stress of the mechanism, not a forecast:\n\
+         its folds run until the arithmetic or the supply runs out. Read the tail columns from\n\
+         the other scenarios. SKL per block unless named.",
         match scope {
             Scope::Full => "full",
             Scope::Nightly => "nightly slice",
@@ -989,14 +1011,30 @@ fn write_report(out: &mut impl Write, rows: &[Row], scope: Scope) -> fmt::Result
         if last != Some(key) {
             writeln!(
                 out,
-                "\n== {} | zone {} ({} B) | w_ref {} ==",
-                row.scenario, row.place.zone, row.place.zone_bytes, row.place.w_ref
+                "\n== {}{} | zone {} ({} B) | w_ref {} ==",
+                row.scenario,
+                stress_tag(row.scenario),
+                row.place.zone,
+                row.place.zone_bytes,
+                row.place.w_ref
             )?;
             last = Some(key);
         }
         write_row(out, row, scope)?;
     }
     Ok(())
+}
+
+/// The stress scenario's mark on its sections and tail lines: the
+/// sustained growth's demand compounds without a ceiling, so its folds
+/// show where the mechanism's arithmetic or supply runs out, and the tail
+/// is read from the other scenarios (§5.37.1).
+fn stress_tag(scenario: &str) -> &'static str {
+    if scenario == SUSTAINED_GROWTH {
+        " (stress: runs to its edge; not read for the tail)"
+    } else {
+        ""
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -1066,7 +1104,10 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
         )?;
     }
     writeln!(out, "{template}")?;
-    let mut tail = String::from("   tail (miner's-net tail over miner's-net fees p50/p95/p99):");
+    let mut tail = format!(
+        "   tail{} (miner's-net tail over miner's-net fees p50/p95/p99):",
+        stress_tag(row.scenario)
+    );
     for year in SAMPLE_YEARS {
         let ratio = |p: fn(&Spread) -> f64| {
             move |y: &YearFig| {
@@ -1407,7 +1448,8 @@ mod tests {
                 .stop
                 .map_or_else(|| format!("y{HORIZON_YEARS}"), |stop| stop.label());
             eprintln!(
-                "done | {} | {stop} | {:.0} s",
+                "done | {} | {} | {stop} | {:.0} s",
+                utc_clock(),
                 label(cell),
                 started.elapsed().as_secs_f64()
             );
@@ -1448,9 +1490,28 @@ mod tests {
         );
     }
 
+    /// Where the full table's regeneration also writes the run's JSON
+    /// summary, which `--economies` prints and which is not committed.
+    const SUMMARY_PATH_ENV: &str = "SHEKYL_ECONOMIES_SUMMARY";
+
+    /// The full table's narration; its JSON summary, every year of every
+    /// cell, written to [`SUMMARY_PATH_ENV`]'s path when it names one, so
+    /// one 2 880-fold run gives both (§5.37.1).
+    fn full_narration_and_summary() -> String {
+        let mut out = String::new();
+        let summary =
+            run(&mut out, &SimParams::default(), Scope::Full).expect("String sink is infallible");
+        if let Ok(path) = std::env::var(SUMMARY_PATH_ENV) {
+            let json = serde_json::to_string(&summary).expect("JSON serialization failed");
+            std::fs::write(&path, json).expect("write the summary");
+            eprintln!("wrote {path}");
+        }
+        out
+    }
+
     /// Armed: rewrites the committed narrations under a cited decision.
     #[test]
-    #[ignore = "armed regeneration helper; writes the committed fixtures; requires SHEKYL_PINNED_REGEN_DECISION"]
+    #[ignore = "armed regeneration helper; writes the committed fixtures (and the full table's JSON summary where SHEKYL_ECONOMIES_SUMMARY names); requires SHEKYL_PINNED_REGEN_DECISION"]
     fn regen_economies_narration_fixtures() {
         regenerate(
             "the --economies narrations",
@@ -1461,7 +1522,7 @@ mod tests {
                 },
                 Output {
                     path: FULL_FIXTURE,
-                    build: || narration(Scope::Full),
+                    build: full_narration_and_summary,
                 },
             ],
         );
