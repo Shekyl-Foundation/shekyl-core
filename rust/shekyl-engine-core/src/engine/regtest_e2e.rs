@@ -753,9 +753,9 @@ fn config_base() -> Result<PathBuf, Vec<PathBuf>> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let me = std::fs::metadata("/proc/self")
-            .map(|m| m.uid())
-            .expect("this process's uid");
+        // The effective uid, as the daemon's own ownership check reads it
+        // (`shekyl-daemon-config`'s `file.rs`); `/proc/self` is Linux-only.
+        let me = rustix::process::geteuid().as_raw();
         let candidates: Vec<PathBuf> = [
             std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
