@@ -269,44 +269,46 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 /// stopped tunnel (the connection refused) is replaced.
 #[cfg(unix)]
 async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
-    use shekyl_rpc_transport::listen::{socket_owner, SocketOwner};
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    use shekyl_rpc_transport::listen::{
+        may_replace_socket, owner_only_socket_dir, SocketDirRefusal, SocketPath, SocketRefusal,
+    };
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| format!("{} names no directory", path.display()))?;
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let me = shekyl_os_account::effective_uid();
-    if !meta.is_dir() || meta.uid() != me || meta.permissions().mode() & 0o077 != 0 {
-        return Err(format!(
-            "{} must be a directory only this account can enter (owned by uid {me}, mode 0700)",
-            dir.display()
-        ));
+    match owner_only_socket_dir(dir) {
+        Ok(()) => {}
+        Err(SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly) => {
+            return Err(format!(
+                "{} must be a directory only this account can enter (owned by uid {}, mode 0700)",
+                dir.display(),
+                shekyl_os_account::effective_uid()
+            ));
+        }
+        Err(SocketDirRefusal::Unreadable(why)) => return Err(format!("{}: {why}", dir.display())),
     }
-    match std::fs::symlink_metadata(path) {
-        Ok(existing) if existing.file_type().is_socket() => match socket_owner(path).await {
-            SocketOwner::Gone => {
-                std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            }
-            SocketOwner::Answers => {
-                return Err(format!("another tunnel answers on {}", path.display()));
-            }
-            SocketOwner::Unknown(why) => {
-                return Err(format!(
-                    "{}: whether a tunnel still holds this socket is not known ({why}); \
-                     it is not replaced",
-                    path.display()
-                ));
-            }
+    match may_replace_socket(path).await {
+        SocketPath::Replace => match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", path.display())),
         },
-        Ok(_) => {
+        SocketPath::Refuse(SocketRefusal::Answers) => {
+            return Err(format!("another tunnel answers on {}", path.display()));
+        }
+        SocketPath::Refuse(SocketRefusal::NotASocket) => {
             return Err(format!(
                 "{} is not a socket; it is not replaced",
                 path.display()
-            ))
+            ));
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        SocketPath::Refuse(SocketRefusal::Unknown(why)) => {
+            return Err(format!(
+                "{}: whether a tunnel still holds this socket is not known ({why}); it is not \
+                 replaced",
+                path.display()
+            ));
+        }
     }
     tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
 }

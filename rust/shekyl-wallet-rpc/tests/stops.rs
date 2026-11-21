@@ -199,6 +199,19 @@ impl Server {
     /// process that started it ignored. A shell cannot reset a signal that
     /// was ignored when it started.
     fn start(dir: &Path, socket: &Path, name: &str, ignore_sigint: bool) -> Self {
+        Self::start_with(dir, socket, name, ignore_sigint, None)
+    }
+
+    /// [`Self::start`], and with `umask` the child runs under that umask;
+    /// it also makes `control` with mode 0777 first, under the same umask,
+    /// so the test can show the umask was live in the child.
+    fn start_with(
+        dir: &Path,
+        socket: &Path,
+        name: &str,
+        ignore_sigint: bool,
+        umask: Option<(libc::mode_t, std::ffi::CString)>,
+    ) -> Self {
         use std::os::unix::process::CommandExt;
         let wallets = dir.join(format!("wallets-{name}"));
         std::fs::create_dir_all(&wallets).expect("the wallet directory");
@@ -213,11 +226,18 @@ impl Server {
             .stdout(Stdio::null())
             .stderr(std::fs::File::create(&stderr).expect("the stderr file"));
         // SAFETY: the closure runs between fork and exec and calls only
-        // `signal`, which is async-signal-safe, plus the errno read on
-        // failure. It sets this child's stop dispositions and no other
-        // state.
+        // `signal`, `umask` and `mkdir`, which are async-signal-safe, plus
+        // the errno read on failure, on a path made before the fork. It
+        // sets this child's stop dispositions and umask and makes the
+        // control directory, and no other state.
         unsafe {
             command.pre_exec(move || {
+                if let Some((mask, control)) = &umask {
+                    libc::umask(*mask);
+                    if libc::mkdir(control.as_ptr(), 0o777) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
                 let interrupt = if ignore_sigint {
                     libc::SIG_IGN
                 } else {
@@ -393,5 +413,117 @@ fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
     assert_eq!(
         std::fs::read(&file).expect("the file is kept"),
         b"not a socket"
+    );
+}
+
+/// **With umask 002, nothing but the owner can reach the socket at any
+/// point during startup** (Rick, 2026-11-21). The socket's own mode is set
+/// only after its bind, so the directory carries the startup: the server
+/// makes a missing directory 0700 whatever the umask, and it is 0700 from
+/// the first moment it exists, polled while the server starts. The control:
+/// a directory the child made under the same umask with mode 0777 is
+/// group-writable (0775), so the umask was live. Red edit: make the
+/// directory with `create_dir_all` (it appears 0775).
+#[test]
+fn with_umask_002_only_the_owner_can_reach_the_socket_during_startup() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let control = dir.path().join("control");
+    let control_c = std::ffi::CString::new(control.as_os_str().as_bytes()).expect("a path");
+    let socket_dir = dir.path().join("made");
+    let socket = socket_dir.join("s");
+    let mut server = Server::start_with(
+        dir.path(),
+        &socket,
+        "umask",
+        false,
+        Some((0o002, control_c)),
+    );
+    let me = std::fs::metadata(dir.path())
+        .expect("the test's directory")
+        .uid();
+    let start = Instant::now();
+    let mut seen = Vec::new();
+    while std::os::unix::net::UnixStream::connect(&socket).is_err() {
+        if let Ok(meta) = std::fs::symlink_metadata(&socket_dir) {
+            seen.push((meta.permissions().mode() & 0o777, meta.uid()));
+        }
+        if let Some(status) = server.child.try_wait().expect("poll the server") {
+            panic!(
+                "the server ended before it answered ({status}):\n{}",
+                server.said()
+            );
+        }
+        assert!(
+            start.elapsed() < WITHIN,
+            "the server did not answer:\n{}",
+            server.said()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let control_mode = std::fs::metadata(&control)
+        .expect("the control")
+        .permissions()
+        .mode();
+    assert_eq!(
+        control_mode & 0o777,
+        0o775,
+        "the control: umask 002 was live in the child"
+    );
+    let last = std::fs::metadata(&socket_dir).expect("the socket's directory");
+    seen.push((last.permissions().mode() & 0o777, last.uid()));
+    assert!(
+        seen.iter().all(|&(mode, uid)| mode == 0o700 && uid == me),
+        "the socket's directory was ever more than the owner's: {seen:?} (octal modes: 448 is 0700)"
+    );
+    let socket_mode = std::fs::metadata(&socket)
+        .expect("the socket")
+        .permissions()
+        .mode();
+    assert_eq!(
+        socket_mode & 0o777,
+        0o600,
+        "the bound socket is the owner's alone"
+    );
+    send("TERM", server.child.id());
+    assert!(server.ended().success(), "{}", server.said());
+}
+
+/// **An existing group-writable directory is refused, naming it**, and no
+/// socket is bound there (Rick, 2026-11-21): the same rule as the tunnel's.
+/// The control is the same start in an owner-only directory, which serves.
+/// Red edit: bind in any directory that exists.
+#[test]
+fn a_group_writable_socket_directory_is_refused_naming_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let private = dir.path().join("private");
+    std::fs::create_dir(&private).expect("a directory");
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    let mut control = Server::start(dir.path(), &private.join("s"), "private", false);
+    control.wait_answering(&private.join("s"));
+    send("TERM", control.child.id());
+    assert!(control.ended().success(), "the control: {}", control.said());
+
+    let shared = dir.path().join("shared");
+    std::fs::create_dir(&shared).expect("a directory");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o770)).expect("chmod");
+    let socket = shared.join("s");
+    let mut server = Server::start(dir.path(), &socket, "shared", false);
+    let status = server.ended();
+    assert!(!status.success(), "a group-writable directory was used");
+    let said = server.said();
+    assert!(
+        said.contains(&format!(
+            "{} must be a directory only this account can enter",
+            shared.display()
+        )),
+        "the refusal names the directory: {said}"
+    );
+    assert!(
+        !socket.exists(),
+        "no socket was bound in the refused directory"
     );
 }

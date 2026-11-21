@@ -820,36 +820,63 @@ impl axum::serve::Listener for PipeListener {
 
 #[cfg(unix)]
 async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
-    use shekyl_rpc_transport::listen::{socket_owner, SocketOwner};
-    use std::os::unix::fs::FileTypeExt;
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
+    use shekyl_rpc_transport::listen::{
+        may_replace_socket, owner_only_socket_dir, SocketDirRefusal, SocketPath, SocketRefusal,
+    };
+    use std::os::unix::fs::DirBuilderExt;
+    // The socket's mode is set only after its bind; until then the
+    // directory is what keeps another account from connecting. It is made
+    // 0700 whatever the umask, or, if it is there, held to the tunnel's
+    // rule: this account's alone (Rick, 2026-11-21).
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let not_owner_only = || -> BoxErr {
+        format!(
+            "{} must be a directory only this account can enter (owned by this account, no \
+             group or other access); the wallet RPC's socket is not bound there",
+            dir.display()
+        )
+        .into()
+    };
+    match owner_only_socket_dir(dir) {
+        Ok(()) => {}
+        Err(SocketDirRefusal::Missing) => {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)?;
+            owner_only_socket_dir(dir).map_err(|_| not_owner_only())?;
+        }
+        Err(SocketDirRefusal::NotOwnerOnly) => return Err(not_owner_only()),
+        Err(SocketDirRefusal::Unreadable(why)) => {
+            return Err(format!("{}: {why}", dir.display()).into());
         }
     }
     // A socket a server still answers on is not taken over; one a stopped
     // or killed server left is replaced. Anything else at the path is not
     // this server's to remove.
-    match std::fs::symlink_metadata(path) {
-        Ok(existing) if existing.file_type().is_socket() => match socket_owner(path).await {
-            SocketOwner::Gone => std::fs::remove_file(path)?,
-            SocketOwner::Answers => {
-                return Err(format!("another server answers on {}", path.display()).into());
-            }
-            SocketOwner::Unknown(why) => {
-                return Err(format!(
-                    "{}: whether a server still holds this socket is not known ({why}); \
-                     it is not replaced",
-                    path.display()
-                )
-                .into());
-            }
+    match may_replace_socket(path).await {
+        SocketPath::Replace => match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         },
-        Ok(_) => {
+        SocketPath::Refuse(SocketRefusal::Answers) => {
+            return Err(format!("another server answers on {}", path.display()).into());
+        }
+        SocketPath::Refuse(SocketRefusal::NotASocket) => {
             return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
+        SocketPath::Refuse(SocketRefusal::Unknown(why)) => {
+            return Err(format!(
+                "{}: whether a server still holds this socket is not known ({why}); it is not \
+                 replaced",
+                path.display()
+            )
+            .into());
+        }
     }
     Ok(())
 }

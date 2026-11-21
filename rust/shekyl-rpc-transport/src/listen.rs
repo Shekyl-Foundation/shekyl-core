@@ -27,39 +27,114 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 /// How long a start waits for the server at a socket file to accept its
-/// probe ([`socket_owner`]).
+/// probe ([`may_replace_socket`]).
 #[cfg(unix)]
 pub const SOCKET_PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// What a probe of a socket file found out about the server behind it,
-/// for a listener deciding whether it may replace the file: only
-/// [`SocketOwner::Gone`] lets it (the wallet RPC's and the tunnel's socket
-/// listeners).
+/// Whether a listener may replace what is at its socket path: the one
+/// decision the wallet RPC's and the tunnel's socket listeners share. Each
+/// keeps only its own wording of a refusal.
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SocketOwner {
-    /// The connection was refused: no server listens there any more.
-    Gone,
-    /// A server accepted the connection.
+pub enum SocketPath {
+    /// Nothing is there, or a socket whose server is proven gone: remove
+    /// it, if it is there, and bind.
+    Replace,
+    /// Leave the path as it is and refuse the start, for this reason.
+    Refuse(SocketRefusal),
+}
+
+/// Why a socket path may not be replaced.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketRefusal {
+    /// A server accepted the probe: it is live.
     Answers,
-    /// Anything else: another account's socket (permission denied), a
-    /// server whose accept queue is full, or no answer within
-    /// [`SOCKET_PROBE_BOUND`]. Not a proof that the server is gone.
+    /// Something other than a socket is at the path, a symbolic link
+    /// included: it is not the listener's to remove.
+    NotASocket,
+    /// The probe proved nothing: another account's socket (permission
+    /// denied), a server whose accept queue is full, no answer within
+    /// [`SOCKET_PROBE_BOUND`], or the path could not be read.
     Unknown(String),
 }
 
-/// Probe the server at `path` without blocking: a connection refused is
-/// the one answer that proves it gone.
+/// May the listener replace what is at `path`?
+///
+/// The path is read without following a symbolic link, and only a socket
+/// is ever probed. The type check is part of the decision, not a
+/// courtesy: on Linux a connect to a path that is not a socket also
+/// reports connection refused, the same answer a dead server's socket
+/// gives, so a probe alone would replace a regular file, or a link to a
+/// dead socket elsewhere. A socket is replaced only when its connection is
+/// refused, the one answer that proves its server gone. The probe does not
+/// block: tokio's connect, bounded by [`SOCKET_PROBE_BOUND`].
 #[cfg(unix)]
-pub async fn socket_owner(path: &std::path::Path) -> SocketOwner {
-    match tokio::time::timeout(SOCKET_PROBE_BOUND, tokio::net::UnixStream::connect(path)).await {
-        Ok(Ok(_)) => SocketOwner::Answers,
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => SocketOwner::Gone,
-        Ok(Err(e)) => SocketOwner::Unknown(e.to_string()),
-        Err(_) => SocketOwner::Unknown(format!(
-            "no answer within {} s",
-            SOCKET_PROBE_BOUND.as_secs()
-        )),
+pub async fn may_replace_socket(path: &std::path::Path) -> SocketPath {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SocketPath::Replace,
+        Err(e) => SocketPath::Refuse(SocketRefusal::Unknown(e.to_string())),
+        Ok(found) if !found.file_type().is_socket() => {
+            SocketPath::Refuse(SocketRefusal::NotASocket)
+        }
+        Ok(_) => {
+            match tokio::time::timeout(SOCKET_PROBE_BOUND, tokio::net::UnixStream::connect(path))
+                .await
+            {
+                Ok(Ok(_)) => SocketPath::Refuse(SocketRefusal::Answers),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    SocketPath::Replace
+                }
+                Ok(Err(e)) => SocketPath::Refuse(SocketRefusal::Unknown(e.to_string())),
+                Err(_) => SocketPath::Refuse(SocketRefusal::Unknown(format!(
+                    "no answer within {} s",
+                    SOCKET_PROBE_BOUND.as_secs()
+                ))),
+            }
+        }
+    }
+}
+
+/// Why a directory may not hold a listener's socket.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketDirRefusal {
+    /// Nothing is at the path.
+    Missing,
+    /// It is not a directory (a symbolic link to one included), it is not
+    /// this account's, or its group or others have any access. A socket's
+    /// own mode is set only after its bind, so until then the directory is
+    /// all that keeps another account from connecting.
+    NotOwnerOnly,
+    /// It could not be read.
+    Unreadable(String),
+}
+
+/// Is `dir` a directory only this account can enter: owned by the
+/// effective user, no group or other access, not a symbolic link? The
+/// check both socket listeners hold their directory to (the tunnel's R0
+/// §1.1 construction).
+///
+/// # Errors
+/// Why it is not.
+#[cfg(unix)]
+pub fn owner_only_socket_dir(dir: &std::path::Path) -> Result<(), SocketDirRefusal> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(SocketDirRefusal::Missing);
+        }
+        Err(e) => return Err(SocketDirRefusal::Unreadable(e.to_string())),
+    };
+    if meta.is_dir()
+        && meta.uid() == shekyl_os_account::effective_uid()
+        && meta.permissions().mode() & 0o077 == 0
+    {
+        Ok(())
+    } else {
+        Err(SocketDirRefusal::NotOwnerOnly)
     }
 }
 
@@ -205,39 +280,125 @@ pub fn parse_listen_addr(s: &str) -> Result<SocketAddr, ListenParseError> {
 mod tests {
     use super::*;
 
-    /// **Only a refused connection proves a socket's server gone**: a
-    /// socket left by a server that closed answers "refused" (`Gone`); a
-    /// listening one answers (`Answers`); one this account may not connect
-    /// to is `Unknown`, never `Gone`, so a listener does not replace
-    /// another account's live socket (Copilot's review of #1490). Red
-    /// edit: treat every connect error as `Gone`. Skipped under root, which
-    /// connects to a mode-000 socket.
+    /// **Only a socket whose connection is refused may be replaced**: a
+    /// socket a closed listener left is `Replace`, and so is an empty path;
+    /// a listening one is refused as live; one this account may not
+    /// connect to is refused as unknown, never replaced, so a listener
+    /// does not take another account's live socket (Copilot's review of
+    /// #1490). Red edit: replace on any connect error. The permission arm
+    /// is skipped under root, which connects to a mode-000 socket.
     #[cfg(unix)]
     #[tokio::test]
-    async fn only_a_refused_connection_proves_a_socket_s_server_gone() {
+    async fn only_a_socket_whose_connection_is_refused_may_be_replaced() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("a directory");
+        assert_eq!(
+            may_replace_socket(&dir.path().join("none")).await,
+            SocketPath::Replace
+        );
+
         let left = dir.path().join("left");
         drop(std::os::unix::net::UnixListener::bind(&left).expect("bind"));
         assert!(
             left.exists(),
             "the control: a closed listener leaves its file"
         );
-        assert_eq!(socket_owner(&left).await, SocketOwner::Gone);
+        assert_eq!(may_replace_socket(&left).await, SocketPath::Replace);
 
         let live = dir.path().join("live");
         let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
-        assert_eq!(socket_owner(&live).await, SocketOwner::Answers);
+        assert_eq!(
+            may_replace_socket(&live).await,
+            SocketPath::Refuse(SocketRefusal::Answers)
+        );
 
         if shekyl_os_account::effective_uid() == 0 {
             eprintln!("skipped the permission arm: root connects to a mode-000 socket");
             return;
         }
         std::fs::set_permissions(&live, std::fs::Permissions::from_mode(0o000)).expect("chmod 000");
-        let unknown = socket_owner(&live).await;
+        let unknown = may_replace_socket(&live).await;
         assert!(
-            matches!(unknown, SocketOwner::Unknown(_)),
+            matches!(unknown, SocketPath::Refuse(SocketRefusal::Unknown(_))),
             "a socket this account may not open is not proven gone: {unknown:?}"
+        );
+    }
+
+    /// **A regular file and a symbolic link at a socket path are refused
+    /// and left in place** (Rick, 2026-11-21). On Linux a connect to a path
+    /// that is not a socket reports connection refused, as a dead socket
+    /// does: the control shows it, so the type check, not the probe, is
+    /// what keeps them. The link points at a socket a closed listener left,
+    /// the case a decision that followed links would replace. Red edits:
+    /// read the path with `metadata` (the link is followed and replaced),
+    /// or drop the type check (the file is replaced).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_regular_file_and_a_symlink_at_a_socket_path_are_refused_and_kept() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"not a socket").expect("a regular file");
+        #[cfg(target_os = "linux")]
+        {
+            let probed = tokio::net::UnixStream::connect(&file)
+                .await
+                .expect_err("not a socket");
+            assert_eq!(
+                probed.kind(),
+                std::io::ErrorKind::ConnectionRefused,
+                "the control: Linux answers a connect to a regular file as refused"
+            );
+        }
+        assert_eq!(
+            may_replace_socket(&file).await,
+            SocketPath::Refuse(SocketRefusal::NotASocket)
+        );
+        assert_eq!(std::fs::read(&file).expect("kept"), b"not a socket");
+
+        let dead = dir.path().join("dead");
+        drop(std::os::unix::net::UnixListener::bind(&dead).expect("bind"));
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&dead, &link).expect("a symbolic link");
+        assert_eq!(
+            may_replace_socket(&link).await,
+            SocketPath::Refuse(SocketRefusal::NotASocket)
+        );
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("kept")
+                .file_type()
+                .is_symlink(),
+            "the link is left in place"
+        );
+    }
+
+    /// **A socket directory is this account's alone**: owned by it, with no
+    /// group or other access, and not a link. A group-writable directory, a
+    /// group-readable one and a link to an owner-only one are refused; a
+    /// missing one is named missing. Red edit: accept group access.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_directory_is_this_accounts_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().expect("a directory");
+        let dir = base.path().join("d");
+        assert_eq!(owner_only_socket_dir(&dir), Err(SocketDirRefusal::Missing));
+        std::fs::create_dir(&dir).expect("a directory");
+        for (mode, ok) in [
+            (0o700, true),
+            (0o770, false),
+            (0o750, false),
+            (0o701, false),
+        ] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).expect("chmod");
+            assert_eq!(owner_only_socket_dir(&dir).is_ok(), ok, "mode {mode:o}");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let link = base.path().join("l");
+        std::os::unix::fs::symlink(&dir, &link).expect("a symbolic link");
+        assert_eq!(
+            owner_only_socket_dir(&link),
+            Err(SocketDirRefusal::NotOwnerOnly)
         );
     }
 
