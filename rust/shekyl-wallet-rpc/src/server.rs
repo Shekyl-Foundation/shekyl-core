@@ -817,13 +817,27 @@ impl axum::serve::Listener for PipeListener {
 
 #[cfg(unix)]
 fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
+    use std::os::unix::fs::FileTypeExt;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    if path.exists() {
-        std::fs::remove_file(path)?;
+    // A socket a server still answers on is not taken over; one a stopped
+    // or killed server left is replaced. Anything else at the path is not
+    // this server's to remove.
+    match std::fs::symlink_metadata(path) {
+        Ok(existing) if existing.file_type().is_socket() => {
+            if std::os::unix::net::UnixStream::connect(path).is_ok() {
+                return Err(format!("another server answers on {}", path.display()).into());
+            }
+            std::fs::remove_file(path)?;
+        }
+        Ok(_) => {
+            return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
