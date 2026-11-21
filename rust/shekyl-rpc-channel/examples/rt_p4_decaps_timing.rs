@@ -37,7 +37,24 @@
 //! samples on a quiet machine turn into `|t|` in the hundreds
 //! (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`).
 //!
-//! Four comparisons:
+//! # The pass line: invalid against invalid, differing only in the message
+//!
+//! Ruled 2026-10-25 (`rt_p4_mlkem_decaps_timing_20261023.md`, "The ruling"):
+//! RT-P4's pass line is `invalid-message-fixed-vs-invalid-message-random`.
+//! Both classes are K-PKE encryptions under the subject's key with fresh
+//! random coins `r`. Re-encryption derives its coins as G(m ‖ H(ek)), not
+//! this `r`, so every one fails re-encryption and decapsulates by implicit
+//! rejection. Class 0 encrypts one fixed message, class 1 a fresh random
+//! message each time: the coins, and so the noise, are drawn identically,
+//! and the decrypted message is the only thing that differs. Each entry is
+//! checked before the loop: it decrypts to its message, and `fips203`'s
+//! decapsulation of it returns the implicit-rejection key J(z ‖ c). A failed
+//! check voids the run. The encryption and decryption are a reference
+//! K-PKE (`rt_p4_support/kpke.rs`), held to `fips203` by a self-check that
+//! runs first: encrypting `m` with ML-KEM's own coins must give
+//! `encaps_from_seed(m)`'s ciphertext byte for byte, and decrypting it `m`.
+//!
+//! # Four comparisons reported as information
 //!
 //! - `fixed-vs-valid`: one fixed valid ciphertext against fresh valid ones.
 //! - `fixed-vs-invalid`: the fixed valid ciphertext against random bytes,
@@ -78,8 +95,13 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+use std::cell::Cell;
+
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
+
+#[path = "rt_p4_support/kpke.rs"]
+mod kpke;
 
 /// `|t|` below this on every cut-off is "no evidence of a leak"; dudect's
 /// own bound.
@@ -95,6 +117,8 @@ const CALIBRATION: usize = 10_000;
 /// Cut-offs, as in dudect: `1 - 0.5^(10 (i + 1) / CROPS)` quantiles.
 const CROPS: usize = 100;
 const CT_LEN: usize = 1088;
+/// Messages the reference K-PKE is checked against `fips203` on, before any loop.
+const SELF_CHECK_CASES: usize = 256;
 /// The input seed of the registered run. Not the seed of the 2026-10-10 runs
 /// or of any diagnostic: this registration's inputs were not seen before it.
 const REGISTERED_SEED: u64 = 0x5348_454b_5254_5034;
@@ -125,6 +149,10 @@ enum Class {
     Valid,
     Invalid,
     Bitflip,
+    /// Invalid: the fixed message under fresh coins.
+    MessageFixed,
+    /// Invalid: a fresh random message under fresh coins.
+    MessageRandom,
 }
 
 impl Class {
@@ -134,14 +162,32 @@ impl Class {
             Self::Valid => "valid",
             Self::Invalid => "invalid",
             Self::Bitflip => "bitflip",
+            Self::MessageFixed => "invalid-message-fixed",
+            Self::MessageRandom => "invalid-message-random",
         }
     }
+}
+
+/// The message classes' per-entry checks, counted while the batch is built.
+#[derive(Default)]
+struct Checks {
+    entries: Cell<u64>,
+    decrypt_mismatch: Cell<u64>,
+    not_rejected: Cell<u64>,
 }
 
 struct Subject {
     dk: ml_kem_768::DecapsKey,
     ek: ml_kem_768::EncapsKey,
     fixed: [u8; CT_LEN],
+    ek_bytes: [u8; kpke::EK_LEN],
+    /// The decapsulation key's K-PKE part (its first 384k bytes) and z (its
+    /// last 32), for the reference decryption and the rejection key.
+    dk_pke: Vec<u8>,
+    z: [u8; 32],
+    tables: kpke::Tables,
+    message: [u8; 32],
+    checks: Checks,
 }
 
 impl Subject {
@@ -154,11 +200,69 @@ impl Subject {
         let mut seed = [0u8; 32];
         inputs.fill(&mut seed);
         let (_, ct) = ek.encaps_from_seed(&seed);
+        let ek_bytes = ek.clone().into_bytes();
+        let dk_bytes = dk.clone().into_bytes();
+        let mut z = [0u8; 32];
+        z.copy_from_slice(&dk_bytes[dk_bytes.len() - 32..]);
+        let mut message = [0u8; 32];
+        inputs.fill(&mut message);
         Self {
             dk,
             ek,
             fixed: ct.into_bytes(),
+            ek_bytes,
+            dk_pke: dk_bytes[..384 * 3].to_vec(),
+            z,
+            tables: kpke::Tables::new(),
+            message,
+            checks: Checks::default(),
         }
+    }
+
+    /// The reference K-PKE against `fips203`, before anything is timed:
+    /// for `cases` random messages, K-PKE.Encrypt with ML-KEM's own coins
+    /// G(m ‖ H(ek)) must be `encaps_from_seed(m)`'s ciphertext byte for byte,
+    /// its key half the shared secret, and K-PKE.Decrypt of it `m`. Returns
+    /// the number of cases that disagree.
+    fn self_check(&self, cases: usize, inputs: &mut Inputs) -> usize {
+        let mut mismatches = 0;
+        for _ in 0..cases {
+            let mut m = [0u8; 32];
+            inputs.fill(&mut m);
+            let (key, coins) = kpke::encaps_coins(&self.ek_bytes, &m);
+            let ours = kpke::encrypt(&self.tables, &self.ek_bytes, &m, &coins);
+            let (shared, theirs) = self.ek.encaps_from_seed(&m);
+            let agrees = ours == theirs.into_bytes()
+                && key == shared.into_bytes()
+                && kpke::decrypt(&self.tables, &self.dk_pke, &ours) == m;
+            mismatches += usize::from(!agrees);
+        }
+        mismatches
+    }
+
+    /// An invalid ciphertext decrypting to `m`: K-PKE.Encrypt under fresh
+    /// coins, checked to decrypt to `m` and to decapsulate by implicit
+    /// rejection.
+    fn message_ciphertext(&self, m: &[u8; 32], inputs: &mut Inputs) -> [u8; CT_LEN] {
+        let mut coins = [0u8; 32];
+        inputs.fill(&mut coins);
+        let ct = kpke::encrypt(&self.tables, &self.ek_bytes, m, &coins);
+        self.checks.entries.set(self.checks.entries.get() + 1);
+        if kpke::decrypt(&self.tables, &self.dk_pke, &ct) != *m {
+            self.checks
+                .decrypt_mismatch
+                .set(self.checks.decrypt_mismatch.get() + 1);
+        }
+        let decapsulated = ml_kem_768::CipherText::try_from_bytes(ct)
+            .ok()
+            .and_then(|c| self.dk.try_decaps(&c).ok())
+            .map(SerDes::into_bytes);
+        if decapsulated != Some(kpke::rejection_key(&self.z, &ct)) {
+            self.checks
+                .not_rejected
+                .set(self.checks.not_rejected.get() + 1);
+        }
+        ct
     }
 
     /// One ciphertext of `class`. Called only while the batch is built,
@@ -181,6 +285,12 @@ impl Subject {
                 let bit = usize::try_from(inputs.next() % (CT_LEN as u64 * 8)).unwrap_or(0);
                 bitflip[bit / 8] ^= 1 << (bit % 8);
                 bitflip
+            }
+            Class::MessageFixed => self.message_ciphertext(&self.message, inputs),
+            Class::MessageRandom => {
+                let mut m = [0u8; 32];
+                inputs.fill(&mut m);
+                self.message_ciphertext(&m, inputs)
             }
         }
     }
@@ -401,22 +511,19 @@ fn main() {
         }
     );
     println!(
-        "pass: |t| < {T_PASS} on every real comparison; null comparisons: |t| < {T_PASS}; \
-         control: |t| > {T_LEAK}"
+        "pass: |t| < {T_PASS} on the message-only comparison (ruled 2026-10-25); null comparisons: \
+         |t| < {T_PASS}; control: |t| > {T_LEAK}; the four other comparisons are information"
     );
 
-    let real = [
-        [Class::Fixed, Class::Valid],
-        [Class::Fixed, Class::Invalid],
-        [Class::Fixed, Class::Bitflip],
-        [Class::Valid, Class::Invalid],
-    ];
-    // Both classes the same kind: there is nothing to find, so anything
-    // these report is the harness or the machine.
-    let null = [
-        [Class::Invalid, Class::Invalid],
-        [Class::Valid, Class::Valid],
-    ];
+    // The reference K-PKE builds the pass line's inputs; it is held to
+    // `fips203` before anything is timed.
+    let mismatches = subject.self_check(SELF_CHECK_CASES, &mut inputs);
+    println!("selfcheck=reference-kpke cases={SELF_CHECK_CASES} mismatches={mismatches}");
+    if mismatches != 0 {
+        println!("result=VOID (the reference K-PKE disagrees with fips203, so the message classes are not what they claim)");
+        std::process::exit(2);
+    }
+
     let verdict = |t: f64| {
         if t < T_PASS {
             "no-evidence"
@@ -426,29 +533,61 @@ fn main() {
             "INCONCLUSIVE"
         }
     };
-    let mut worst: f64 = 0.0;
+    let report = |label: &str, classes: [Class; 2], outcome: &Outcome, word: &str| {
+        println!(
+            "{label}={}-vs-{} max_abs_t={:.2} median_ns={:.0} n0={:.0} n1={:.0} verdict={word}",
+            classes[0].name(),
+            classes[1].name(),
+            outcome.max_t,
+            outcome.median_ns,
+            outcome.samples[0],
+            outcome.samples[1],
+        );
+    };
+
+    let pass_classes = [Class::MessageFixed, Class::MessageRandom];
+    let pass_line = compare(&subject, pass_classes, samples, &mut inputs, None);
+    report(
+        "pass-line",
+        pass_classes,
+        &pass_line,
+        verdict(pass_line.max_t),
+    );
+    let checks = &subject.checks;
+    let checked = checks.entries.get() == (samples + CALIBRATION) as u64
+        && checks.decrypt_mismatch.get() == 0
+        && checks.not_rejected.get() == 0;
+    println!(
+        "check=message-classes entries={} decrypt_mismatch={} not_rejected={} verdict={}",
+        checks.entries.get(),
+        checks.decrypt_mismatch.get(),
+        checks.not_rejected.get(),
+        if checked { "as-intended" } else { "FAILED" }
+    );
+
+    let information = [
+        [Class::Fixed, Class::Valid],
+        [Class::Fixed, Class::Invalid],
+        [Class::Fixed, Class::Bitflip],
+        [Class::Valid, Class::Invalid],
+    ];
+    let mut median_ns = pass_line.median_ns;
+    for classes in information {
+        let outcome = compare(&subject, classes, samples, &mut inputs, None);
+        median_ns = outcome.median_ns;
+        report("information", classes, &outcome, "information");
+    }
+    // Both classes the same kind: there is nothing to find, so anything
+    // these report is the harness or the machine.
+    let null = [
+        [Class::Invalid, Class::Invalid],
+        [Class::Valid, Class::Valid],
+    ];
     let mut worst_null: f64 = 0.0;
-    let mut median_ns: f64 = 0.0;
-    for (label, set, is_null) in [("comparison", &real[..], false), ("null", &null[..], true)] {
-        for classes in set {
-            let outcome = compare(&subject, *classes, samples, &mut inputs, None);
-            if is_null {
-                worst_null = worst_null.max(outcome.max_t);
-            } else {
-                worst = worst.max(outcome.max_t);
-            }
-            median_ns = outcome.median_ns;
-            println!(
-                "{label}={}-vs-{} max_abs_t={:.2} median_ns={:.0} n0={:.0} n1={:.0} verdict={}",
-                classes[0].name(),
-                classes[1].name(),
-                outcome.max_t,
-                outcome.median_ns,
-                outcome.samples[0],
-                outcome.samples[1],
-                verdict(outcome.max_t)
-            );
-        }
+    for classes in null {
+        let outcome = compare(&subject, classes, samples, &mut inputs, None);
+        worst_null = worst_null.max(outcome.max_t);
+        report("null", classes, &outcome, verdict(outcome.max_t));
     }
 
     let leak_ns = median_ns * CONTROL_LEAK_FRACTION;
@@ -471,21 +610,25 @@ fn main() {
         }
     );
 
-    // A run that could not have seen a leak, or that sees one where there is
-    // none, is void before the real comparisons are read at all.
+    // A run that could not have seen a leak, that sees one where there is
+    // none, or whose pass-line inputs are not what they claim, is void before
+    // the pass line is read at all.
     let detected = control.max_t > T_LEAK;
     let unbiased = worst_null < T_PASS;
-    let passed = detected && unbiased && worst < T_PASS;
+    let pass_t = pass_line.max_t;
+    let passed = checked && detected && unbiased && pass_t < T_PASS;
     println!(
-        "result={} worst_real_abs_t={worst:.2} worst_null_abs_t={worst_null:.2} \
+        "result={} pass_line_abs_t={pass_t:.2} worst_null_abs_t={worst_null:.2} \
          control_abs_t={:.2}",
-        if !detected {
+        if !checked {
+            "VOID (a message-class entry failed its check, so the pass line compared the wrong inputs)"
+        } else if !detected {
             "VOID (the control was not detected, so a pass would mean nothing)"
         } else if !unbiased {
             "VOID (a null comparison is over the line, so the harness is biased)"
         } else if passed {
             "PASS"
-        } else if worst > T_LEAK {
+        } else if pass_t > T_LEAK {
             "FAIL"
         } else {
             "INCONCLUSIVE"
