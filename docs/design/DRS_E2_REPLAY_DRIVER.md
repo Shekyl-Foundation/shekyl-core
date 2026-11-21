@@ -1,18 +1,7 @@
 # DRS-E2 — the ingest spine and its first source, the replay driver (pre-flight)
 
-**Status:** OPEN — **the CSR-3a grading is retired (2026-11-01):** with the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1; five chains; `emission-claim` is removed and captured anew by SO-D12 4b's evidence run, `docs/FOLLOWUPS.md`), a replay agrees with its baseline or fails, and the grader, the register fixture and its extractor left with the register (RD-Q6 and RD-Q9 below are the record of what they were). **Implementation: increment 1 (§7 commits 0, 1, 2, 3,
-4a, 6) LANDED via #804 (2026-09-20); increment 2 (4b, 5, 6b, 7, 7b, 8b, 8c,
-and commit 8's regtest leg) LANDED on the branch 2026-09-20 — ported from
-the parallel #806 onto #804's APIs (rule 95: code on `dev` wins) after the
-two lanes were found to have built the same increment 1 independently.
-Increment 3 (§7 item 8d, the mutation family) LANDED on its branch
-2026-09-22 — §3.10 is its spec; §5's FTL row is closed. Open: commit 8's
-testnet leg and LWMA-past-N run (§7 item 8, blockers named), commit 9's
-archive. Increment 2's review round (2026-09-21, §9; RD-F21, RD-F22) landed.** Round 1 RULED 2026-09-19 (RD-Q9–RD-Q12). Round 1 opened with the sweep of #785 as
-merged (`dev` @ `93f91b0d4`; §3.7); ground re-pinned to `306af9bae` (§0.1). Round 0 REVIEWED and RULED 2026-09-19
-(maintainer). Round-0 text was written against `dev` @ `14f8dc739` with #785
-in flight; §3.7 records what the merged tree changed, and every citation
-below is read against `93f91b0d4` unless it says otherwise.
+**Status:** OPEN — the ingest spine and the replay driver are built (increments 1 and 2, #804, 2026-09-20; increment 3, the mutation family, 2026-09-22, §3.10). With the C++ side gone the corpus is re-baselined from Rust (`shekyl-chain-replay baseline`, `DAEMON_REDB_STORE.md` §12.1), and a replay agrees with its baseline or fails; the CSR-3a grading, the grader and the register fixture are retired (RD-Q6 and RD-Q9 below are the record of what they were). Rounds 0 and 1 are ruled (2026-09-19). Open: commit 8's testnet leg, which is also LWMA-1's first run past `N` on a real store (§7 item 8; the regtest runs were fixed-difficulty); the corpus's `emission-claim` chain, captured anew by SO-D12 4b's evidence run; and two rows this file owns in `docs/FOLLOWUPS.md`, the test-deviation register's live section (§5) and the mutation family's burn witnesses (§3.10). Commit 9 archives this file when those close.
+
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1's slice shape,
 applied to a *program* increment. Parent plan:
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — **DRS-D10** (replayable derived

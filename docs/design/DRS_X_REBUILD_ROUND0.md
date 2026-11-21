@@ -7,7 +7,7 @@
 
 ## What is already ruled, and stands
 
-- **DRS-D10** (`DAEMON_REDB_STORE.md:331`, §11): derived state is reconstructible from the local block corpus alone; mandatory for genesis; on the §8.1 genesis checklist (`:2107`).
+- **DRS-D10** (`DAEMON_REDB_STORE.md:319`, §11): derived state is reconstructible from the local block corpus alone; mandatory for genesis; on the §8.1 genesis checklist.
 - **§11.1(a):** a layout mismatch is answered by rebuild, never a migrator; "no migration ladder and none will be written," with the C++ `migrate()` ladder as the cautionary precedent.
 - **§11.2:** the corpus is three tables, `blocks`, `txs_pruned`, `txs_pqc_auths`, drawn by table because a boundary one table too small is unrecoverable (the V10/V11 case).
 - **DRS-D12:** replay-that-validates — every replayed block passes `validate` before `connect`.
