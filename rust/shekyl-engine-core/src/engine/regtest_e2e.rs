@@ -2106,25 +2106,37 @@ pub(super) async fn try_generate_blocks(
 }
 
 /// Send the daemon SIGTERM, the operator's stop, and wait for its exit.
+///
+/// The wait is the exit itself, not a poll: `waitid` with `WNOWAIT` returns
+/// when the process exits and leaves its status for `try_wait` to reap, so
+/// a caller timing the stop measures the stop. It runs on a blocking thread
+/// bounded at `STOP_WITHIN`; a daemon still running then fails the gate,
+/// and its `Drop` kill ends the thread's wait.
 #[cfg(unix)]
 async fn terminate(daemon: &mut RegtestDaemon) -> std::process::ExitStatus {
+    use rustix::process::{kill_process, waitid, Pid, Signal, WaitId, WaitIdOptions};
     const STOP_WITHIN: Duration = Duration::from_secs(60);
-    let pid = daemon.child.id().to_string();
-    let sent =
-        shekyl_spawn::spawn_lock::status(std::process::Command::new("kill").args(["-TERM", &pid]))
-            .expect("run kill");
-    assert!(sent.success(), "SIGTERM delivered");
-    let deadline = std::time::Instant::now() + STOP_WITHIN;
-    loop {
-        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
-            return status;
+    let pid = Pid::from_child(&daemon.child);
+    kill_process(pid, Signal::TERM).expect("SIGTERM delivered");
+    let exited = tokio::task::spawn_blocking(move || {
+        waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        )
+    });
+    match tokio::time::timeout(STOP_WITHIN, exited).await {
+        Ok(waited) => {
+            waited
+                .expect("the exit wait's thread")
+                .expect("waitid on the daemon");
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the daemon did not stop within {STOP_WITHIN:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        Err(_) => panic!("the daemon did not stop within {STOP_WITHIN:?}"),
     }
+    daemon
+        .child
+        .try_wait()
+        .expect("reap the daemon")
+        .expect("waitid saw the daemon exit")
 }
 
 /// **A stop the operator asked for is not a failure:** no line at `error`,
@@ -2208,8 +2220,9 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
     /// Blocks the wallet scans: the scan reports its first block long
     /// before it reaches the last, and the close is taken at that report.
     const CHAIN: u64 = 60;
-    /// A close a held read or write keeps from finishing fails here rather
-    /// than hanging the lane.
+    /// The close, from the cancel through the scan's drain to the wallet's
+    /// close: one that a held read or write, or a scan that does not stop,
+    /// keeps from finishing fails here rather than hanging the lane.
     const CLOSE_WITHIN: Duration = Duration::from_secs(60);
     const PASSWORD: &[u8] = b"close-mid-scan";
     let seed = [0x6c; shekyl_crypto_pq::account::SEED_BYTES];
@@ -2248,19 +2261,23 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
 
     let creds = super::lifecycle::Credentials::password_only(PASSWORD);
     let asked = Instant::now();
-    handle.cancel();
-    let joined = handle.join().await;
+    let (joined, closed) = tokio::time::timeout(CLOSE_WITHIN, async {
+        handle.cancel();
+        let joined = handle.join().await;
+        let lock = Arc::try_unwrap(arc)
+            .unwrap_or_else(|_| panic!("the cancelled scan still holds the engine"));
+        (joined, lock.into_inner().close(&creds).await)
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("the scan's drain and the wallet's close did not finish within {CLOSE_WITHIN:?}")
+    });
+    let wallet_close = asked.elapsed();
     assert!(
         matches!(joined, Err(super::error::RefreshError::Cancelled)),
         "the close must come mid-scan, so the scan ends Cancelled: {joined:?}"
     );
-    let lock = Arc::try_unwrap(arc)
-        .unwrap_or_else(|_| panic!("the cancelled scan still holds the engine"));
-    tokio::time::timeout(CLOSE_WITHIN, lock.into_inner().close(&creds))
-        .await
-        .unwrap_or_else(|_| panic!("the wallet's close did not finish within {CLOSE_WITHIN:?}"))
-        .expect("a wallet closed mid-scan closes");
-    let wallet_close = asked.elapsed();
+    closed.expect("a wallet closed mid-scan closes");
 
     let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
         .await
@@ -2289,8 +2306,8 @@ async fn a_close_during_a_scan_keeps_the_wallet_and_the_daemon_stops() {
     let daemon_close = asked.elapsed();
     let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).unwrap_or_default();
     eprintln!(
-        "wallet close mid-scan: {wallet_close:?} from the close to closed; \
-         daemon close: {daemon_close:?} from SIGTERM to exit; its own line: {}",
+        "wallet close mid-scan: {wallet_close:?} from the cancel to closed; \
+         daemon close: {daemon_close:?} from SIGTERM to its exit; its own line: {}",
         log.lines()
             .rfind(|l| l.contains("the daemon exits"))
             .unwrap_or("<none>")

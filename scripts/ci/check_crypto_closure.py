@@ -100,13 +100,27 @@ def lock_packages(text: str) -> dict[str, set[str]]:
 
 
 def check_lock(label: str, lock: dict[str, set[str]], held: dict[str, dict[str, str]]) -> list[str]:
+    """Each held package a lock carries on a held line, at another version.
+
+    A held package may be absent from a lock (a fuzz crate links part of
+    the closure), but a lock that carries none of them on a held line
+    compared nothing, and agreeing with it would be absence of signal read
+    as agreement (rule 47): it fails, naming the lock.
+    """
     errors = []
+    compared = 0
     for name, versions in sorted(held.items()):
         by_line = {compat_line(v): v for v in versions}
         for got in sorted(lock.get(name, ())):
             want = by_line.get(compat_line(got))
-            if want is not None and got != want:
+            if want is None:
+                continue
+            compared += 1
+            if got != want:
                 errors.append(f"{label}: {name} is {got}; the crypto-closure record holds {want}")
+    if compared == 0:
+        errors.append(f"{label}: carries none of the record's packages on a held line, "
+                      "so nothing was compared; it is not a lock this record governs")
     return errors
 
 
@@ -228,6 +242,8 @@ def selftest() -> int:
         ("a held package stepped down fails", lock(("zeroize", "1.8.2"), ("rand", "0.8.5")), 1),
         ("another compat line is not held", lock(("zeroize", "1.8.2"), ("rand", "0.8.6"), ("rand", "0.10.4")), 0),
         ("an absent package is not a difference", lock(("rand", "0.8.6")), 0),
+        ("a lock with no held package fails", lock(("tokio", "1.54.1")), 1),
+        ("a lock with a held name only on another line fails", lock(("rand", "0.10.4")), 1),
     ]
     failed = 0
     for name, pkgs, want in cases:
