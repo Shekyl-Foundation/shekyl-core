@@ -430,7 +430,12 @@ reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 is no
 [[package]]
 name = "multiexp"
 version = "0.4.2"
-reason = "Multi-scalar multiplication and batch verification in FCMP++, generalized Bulletproofs and FROST."
+reason = "Multi-scalar multiplication under FROST alone (modular-frost 0.11.0, schnorr-signatures 0.5.2). Its non-vartime multiexp indexes the Straus tables and Pippenger buckets by secret scalar bits (straus.rs: tables[s][groupings[s][b]]; pippenger.rs: buckets[bits[p][n]]), so no first-party crate declares it; it leaves the graph when FROST moves to modular-frost 0.11.1."
+
+[[package]]
+name = "multiexp"
+version = "0.5.2"
+reason = "Multi-scalar multiplication and batch verification in the FCMP++ prover and verifier (fcmps, generalized-bulletproofs, shekyl-fcmp, shekyl-fcmp-proofs, shekyl-engine-core, shekyl-verify-cost; one workspace declaration with alloc). Every non-vartime multiexp in the prover takes secret scalars: the Pedersen and vector commitments, AI/AO/S, the t/tau points, PointVector::multiexp and the witness tape's commitments. Admitted after diffing src against 0.4.2: the non-vartime Straus and Pippenger select table entries and buckets with subtle's conditional_assign over every index instead of indexing by secret scalar bits (the reason the group gains a ConditionallySelectable bound), BatchVerifier's constant-time verify moves to that bound's impl block with an unchanged body, std-shims gives way to alloc, and the vartime paths are unchanged. Without its alloc feature multiexp is a naive sum, so the workspace declaration enables it."
 
 [[package]]
 name = "once_cell"

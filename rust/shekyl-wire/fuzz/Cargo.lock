@@ -325,6 +325,7 @@ dependencies = [
  "multiexp",
  "rand_core",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -538,15 +539,15 @@ dependencies = [
 
 [[package]]
 name = "multiexp"
-version = "0.4.2"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ec2ce93a6f06ac6cae04c1da3f2a6a24fcfc1f0eb0b4e0f3d302f0df45326cb"
+checksum = "04d18b701213424f6cc2800ee2ff6159c3bc9c79910a2bcd31e09895d06feada"
 dependencies = [
  "ff",
  "group",
  "rand_core",
- "rustversion",
- "std-shims",
+ "subtle",
+ "tap",
  "zeroize",
 ]
 

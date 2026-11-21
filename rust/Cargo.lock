@@ -1290,9 +1290,10 @@ dependencies = [
  "generalized-bulletproofs-circuit-abstraction",
  "generalized-bulletproofs-ec-gadgets",
  "generic-array 1.3.5",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_core 0.6.4",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -1398,7 +1399,7 @@ dependencies = [
  "ciphersuite",
  "ff",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_core 0.6.4",
  "std-shims",
  "subtle",
@@ -2148,7 +2149,7 @@ dependencies = [
  "dkg-recovery",
  "flexible-transcript",
  "hex",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "schnorr-signatures",
@@ -2178,6 +2179,20 @@ dependencies = [
  "rand_core 0.6.4",
  "rustversion",
  "std-shims",
+ "zeroize",
+]
+
+[[package]]
+name = "multiexp"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04d18b701213424f6cc2800ee2ff6159c3bc9c79910a2bcd31e09895d06feada"
+dependencies = [
+ "ff",
+ "group",
+ "rand_core 0.6.4",
+ "subtle",
+ "tap",
  "zeroize",
 ]
 
@@ -3030,7 +3045,7 @@ checksum = "11fe30c28740bba75dc4649a8985861784e8a44fd636706076edb7cb2aec5765"
 dependencies = [
  "ciphersuite",
  "flexible-transcript",
- "multiexp",
+ "multiexp 0.4.2",
  "rand_core 0.6.4",
  "std-shims",
  "zeroize",
@@ -3995,7 +4010,7 @@ dependencies = [
  "hex",
  "hkdf",
  "kameo",
- "multiexp",
+ "multiexp 0.5.2",
  "proptest",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -4143,7 +4158,7 @@ dependencies = [
  "generalized-bulletproofs",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.5.2",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -4174,7 +4189,7 @@ dependencies = [
  "generic-array 1.3.5",
  "helioselene",
  "modular-frost",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-curve-generators",
@@ -5317,7 +5332,7 @@ dependencies = [
  "ec-divisors",
  "gungraun",
  "helioselene",
- "multiexp",
+ "multiexp 0.5.2",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "shekyl-bulletproofs",
