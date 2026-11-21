@@ -105,5 +105,11 @@ shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 
+# The regtest's configuration directory must be owned by this account the
+# whole way up, the daemon's rule; the account is the effective uid, read as
+# the daemon reads it (`rustix::process::geteuid`, unix only).
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [lints]
 workspace = true
