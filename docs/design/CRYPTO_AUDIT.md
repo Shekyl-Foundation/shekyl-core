@@ -659,6 +659,12 @@ through its seeded twin (`:1206`).
      targets" (`helpers.rs:139-147`). The crate's comment covers the
      accepted `z`, which the signature reveals; `r0` and a rejected `z` are
      not revealed.
+   - No division or variable shift touches a secret-derived value.
+     `decompose` (`high_low.rs:74-90`) splits a coefficient by
+     multiplication and shifts by constants. The crate's other divisions
+     are of constants (`helpers.rs:34`, `:48`), and the `%` at
+     `helpers.rs:177-178` builds the zeta table in a `const fn`, at
+     compile time.
 4. **The harness's development run.** It used a seed that is not
    registered, 20,000 samples per comparison, on the development machine.
    It is not a result.
@@ -707,9 +713,11 @@ message.
    tree index. The tree index comes from the message digest over `R`, and
    `R` is in the signature. Every verifier recomputes the root from the
    signature.
-3. **Addresses and indices.** FORS indices and the tree and leaf
-   addresses come from the same digest, so every secret-indexed access
-   pattern in signing is a function of values the signature reveals.
+3. **Addresses and indices.** The digest is split into the FORS message
+   and the tree and leaf indices (`slh.rs:190-207`). The FORS indices are
+   read from it (`base_2b`, `fors.rs:123-125`). So every index that selects
+   a secret key element or an authentication path in signing is a function
+   of the digest, which a verifier recomputes from the signature's `R`.
 4. **The harness's development run.** 100 samples per comparison, seed not
    registered; not a result. Every signature verified. The lines read 0.77
    and 1.68, and the nulls 1.52 and 0.51. The planted 0.5 % (2.9 ms) read

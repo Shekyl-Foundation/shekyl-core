@@ -48,9 +48,10 @@
 //! - `fixed-vs-varied`: one secret against a fresh secret per entry.
 //! - `fixed-a-vs-fixed-b`: two fixed secrets.
 //!
-//! **Nulls:** `fixed-a-vs-fixed-a` and `varied-vs-varied`. **Control:**
-//! `fixed-vs-varied` with work of [`CONTROL_LEAK_FRACTION`] of a
-//! signature's median time planted in class 1. **Checks:** every timed call
+//! **Nulls:** `fixed-a-vs-fixed-a` and `varied-vs-varied` (both classes
+//! fresh per entry, from one distribution). **Control:** the first null
+//! with work of [`CONTROL_LEAK_FRACTION`] of a signature's median time
+//! planted in class 1, on a null so no real effect adds to or cancels it. **Checks:** every timed call
 //! returned a signature, and every kept signature verifies under its key
 //! (every signature for `slh-dsa`; one in [`KEEP_EVERY`] for `ml-dsa`,
 //! whose signatures are too many to hold).
@@ -542,8 +543,10 @@ fn main() {
             let fixed_pair = run([a, b], "pass-line", &mut inputs, None);
             let null_fixed = run([a, a], "null", &mut inputs, None);
             let null_varied = run([varied, other], "null", &mut inputs, None);
-            let iterations = calibrate_spin(fixed_varied.median_ns * CONTROL_LEAK_FRACTION);
-            let control = run([a, varied], "control", &mut inputs, Some(iterations));
+            // Planted on the first null, so no real effect adds to or
+            // cancels it.
+            let iterations = calibrate_spin(null_fixed.median_ns * CONTROL_LEAK_FRACTION);
+            let control = run([a, a], "control", &mut inputs, Some(iterations));
             (fixed_varied, fixed_pair, null_fixed, null_varied, control)
         }
         Mode::SlhDsa => {
@@ -564,13 +567,15 @@ fn main() {
             let fixed_pair = run([a, b], "pass-line", &mut inputs, None);
             let null_fixed = run([a, a], "null", &mut inputs, None);
             let null_varied = run([varied, other], "null", &mut inputs, None);
-            let iterations = calibrate_spin(fixed_varied.median_ns * CONTROL_LEAK_FRACTION);
-            let control = run([a, varied], "control", &mut inputs, Some(iterations));
+            // Planted on the first null, so no real effect adds to or
+            // cancels it.
+            let iterations = calibrate_spin(null_fixed.median_ns * CONTROL_LEAK_FRACTION);
+            let control = run([a, a], "control", &mut inputs, Some(iterations));
             (fixed_varied, fixed_pair, null_fixed, null_varied, control)
         }
     };
 
-    let planted_ns = fixed_varied.median_ns * CONTROL_LEAK_FRACTION;
+    let planted_ns = null_fixed.median_ns * CONTROL_LEAK_FRACTION;
     println!(
         "control=planted-leak fraction={CONTROL_LEAK_FRACTION} planted_ns={planted_ns:.0} \
          max_abs_t={:.2} verdict={}",
