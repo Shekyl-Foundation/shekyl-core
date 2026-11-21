@@ -98,8 +98,62 @@ fn network(dir: &std::path::Path, feeds: SupervisorFeeds) -> Network {
     .expect("the network starts")
 }
 
-/// A stand-in `tor` at `dir/tor` with this script.
-fn stand_in(dir: &std::path::Path, script: &str) -> VerifiedTorBinary {
+/// Set only in a stand-in: the role this test binary plays as `tor`.
+const STAND_IN_ROLE: &str = "SHEKYL_TOR_STAND_IN_ROLE";
+
+/// Set only in a stand-in: the inherited control connection's descriptor.
+const STAND_IN_FD: &str = "SHEKYL_TOR_STAND_IN_FD";
+
+/// How long a frozen stand-in lives on after its control connection
+/// closes: longer than Tor's grace, so the reap has to kill it.
+const FROZEN_LIVES: Duration = Duration::from_secs(45);
+
+/// What a stand-in `tor` does on its control connection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Role {
+    /// Says nothing, and exits when the connection closes, as Tor does when
+    /// it loses its owning controller.
+    Quiet,
+    /// Answers its first two control commands (the launch's `GETINFO
+    /// version`, then the next) and then nothing, and ignores the close of
+    /// its control connection: it lives on for [`FROZEN_LIVES`], until it is
+    /// killed. The reap waits Tor's grace for an exit that never comes.
+    Frozen,
+}
+
+impl Role {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Quiet => "quiet",
+            Self::Frozen => "frozen",
+        }
+    }
+}
+
+/// A stand-in `tor` at `dir/tor`: a POSIX shell script that records its
+/// launch, finds the inherited control connection, and `exec`s this test
+/// binary (so the recorded process is the stand-in itself) to re-run `test`
+/// (its full path, from `module_path!`) in `role`. The test calls
+/// [`stand_in_if_requested`] first. Rust, not the shell, reads and writes
+/// the connection: dash takes only one-digit descriptor numbers in a
+/// redirection, and bash, whose `read -u` takes more, is neither at
+/// `/bin/bash` on FreeBSD nor installed everywhere.
+fn stand_in(dir: &Path, role: Role, test: &str) -> VerifiedTorBinary {
+    let exe = std::env::current_exe().expect("the test binary");
+    let exe = exe.to_str().expect("a UTF-8 test binary path");
+    assert!(
+        !exe.contains('\''),
+        "a test binary path the script can quote"
+    );
+    let name = test
+        .split_once("::")
+        .expect("module path has a crate segment")
+        .1;
+    let script = format!(
+        "#!/bin/sh\n{RECORD}{OWNING_FD}export {STAND_IN_ROLE}={}\nexport {STAND_IN_FD}=\"$fd\"\n\
+         exec '{exe}' '{name}' --exact --nocapture --test-threads=1\n",
+        role.name()
+    );
     let path = dir.join("tor");
     let mut file = std::fs::File::create(&path).expect("the stand-in");
     file.write_all(script.as_bytes())
@@ -110,12 +164,61 @@ fn stand_in(dir: &std::path::Path, script: &str) -> VerifiedTorBinary {
     VerifiedTorBinary::unchecked_for_test(path)
 }
 
+/// The stand-in's role, in a re-run of the test that calls it; returns in
+/// the test itself. It takes the control connection by its inherited number,
+/// which only `unsafe` can (rule 45: allowed on this item alone).
+#[allow(unsafe_code)]
+fn stand_in_if_requested() {
+    use std::io::{BufRead, BufReader};
+    use std::os::fd::FromRawFd;
+
+    let Some(role) = std::env::var_os(STAND_IN_ROLE) else {
+        return;
+    };
+    let fd = std::env::var_os(STAND_IN_FD)
+        .and_then(|n| n.to_str().and_then(|n| n.parse::<libc::c_int>().ok()))
+        .expect("the control connection's descriptor");
+    // SAFETY: `fd` is the control connection this process inherited, and
+    // nothing else in it owns that descriptor.
+    let connection = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut answers = connection.try_clone().expect("the connection's write half");
+    let lines = BufReader::new(connection).split(b'\n');
+    if role == Role::Quiet.name() {
+        for line in lines {
+            if line.is_err() {
+                break;
+            }
+        }
+        std::process::exit(0);
+    }
+    assert_eq!(role, Role::Frozen.name(), "a stand-in role");
+    let mut answered = 0;
+    for line in lines {
+        let Ok(line) = line else {
+            break;
+        };
+        if answered < 2 {
+            answered += 1;
+            let reply: &[u8] = if line.starts_with(b"GETINFO version") {
+                b"250-version=0.4.9.14\r\n250 OK\r\n"
+            } else {
+                b"250 OK\r\n"
+            };
+            if answers.write_all(reply).is_err() {
+                break;
+            }
+        }
+    }
+    std::thread::sleep(FROZEN_LIVES);
+    std::process::exit(0);
+}
+
 /// The line each stand-in writes when it starts: its process id and the
 /// data directory it was given (`--DataDirectory`, the first argument).
 const RECORD: &str = r#"echo "$$ $2" >> "$(dirname "$0")/launches"
 "#;
 
-/// The bash that finds the inherited control connection's descriptor.
+/// The shell that finds the inherited control connection's descriptor.
 const OWNING_FD: &str = r#"fd=
 while [ $# -gt 0 ]; do
   if [ "$1" = "--__OwningControllerFD" ]; then fd=$2; fi
@@ -123,41 +226,14 @@ while [ $# -gt 0 ]; do
 done
 "#;
 
-/// A `tor` that says nothing on its control connection and exits when the
-/// connection closes, as Tor does when it loses its owning controller.
-fn quiet_tor(dir: &Path) -> VerifiedTorBinary {
-    stand_in(
-        dir,
-        &format!(
-            "#!/bin/bash\n{RECORD}{OWNING_FD}while IFS= read -r -u \"$fd\" line; do :; done\nexit 0\n"
-        ),
-    )
+/// A quiet stand-in ([`Role::Quiet`]) for `test`.
+fn quiet_tor(dir: &Path, test: &str) -> VerifiedTorBinary {
+    stand_in(dir, Role::Quiet, test)
 }
 
-/// A `tor` that answers its first two control commands (the launch's
-/// `GETINFO version`, then the next) and then nothing, and that ignores the
-/// close of its control connection: after the supervisor closes it, it
-/// keeps running until it is killed. The reap waits Tor's grace for an exit
-/// that never comes.
-fn frozen_tor(dir: &Path) -> VerifiedTorBinary {
-    stand_in(
-        dir,
-        &format!(
-            "#!/bin/bash\n{RECORD}{OWNING_FD}{}",
-            r#"answered=0
-while IFS= read -r -u "$fd" line; do
-  if [ "$answered" -lt 2 ]; then
-    answered=$((answered + 1))
-    case "$line" in
-      "GETINFO version"*) printf '250-version=0.4.9.14\r\n250 OK\r\n' >&"$fd" ;;
-      *) printf '250 OK\r\n' >&"$fd" ;;
-    esac
-  fi
-done
-exec sleep 45
-"#
-        ),
-    )
+/// A frozen stand-in ([`Role::Frozen`]) for `test`.
+fn frozen_tor(dir: &Path, test: &str) -> VerifiedTorBinary {
+    stand_in(dir, Role::Frozen, test)
 }
 
 /// The stand-ins launched so far: each one's process and data directory.
@@ -239,8 +315,15 @@ async fn status_of(supervisor: &Supervisor, what: &str) -> ManagedTor {
 /// a stop that leaves the launch to run on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
+    stand_in_if_requested();
     let dir = tempfile::tempdir().expect("tempdir");
-    let tor = quiet_tor(dir.path());
+    let tor = quiet_tor(
+        dir.path(),
+        concat!(
+            module_path!(),
+            "::a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer"
+        ),
+    );
     let supervisor = supervise(dir.path(), tor, super::policy());
     // The pin is accepted and the launch sent; its first reply does not come.
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -271,8 +354,15 @@ async fn a_status_ask_and_the_stop_are_taken_while_tor_does_not_answer() {
 /// running.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_launch_the_core_gives_up_on_ends_its_tor() {
+    stand_in_if_requested();
     let dir = tempfile::tempdir().expect("tempdir");
-    let tor = quiet_tor(dir.path());
+    let tor = quiet_tor(
+        dir.path(),
+        concat!(
+            module_path!(),
+            "::a_launch_the_core_gives_up_on_ends_its_tor"
+        ),
+    );
     let mut policy = super::policy();
     policy.reply_bound = Duration::from_secs(2);
     policy.base = Duration::from_secs(5);
@@ -316,8 +406,15 @@ async fn a_launch_the_core_gives_up_on_ends_its_tor() {
 /// fails this.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped() {
+    stand_in_if_requested();
     let dir = tempfile::tempdir().expect("tempdir");
-    let tor = frozen_tor(dir.path());
+    let tor = frozen_tor(
+        dir.path(),
+        concat!(
+            module_path!(),
+            "::a_status_ask_and_the_stop_are_taken_while_a_frozen_tor_is_reaped"
+        ),
+    );
     let mut policy = super::policy();
     policy.reply_bound = Duration::from_secs(2);
     let supervisor = supervise(dir.path(), tor, policy);
@@ -372,8 +469,15 @@ fn event(line: &str) -> shekyl_tor_control_client::control::ControlReply {
 /// the first upload's probe never comes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_upload_before_the_add_onion_reply_is_read() {
+    stand_in_if_requested();
     let dir = tempfile::tempdir().expect("tempdir");
-    let tor = frozen_tor(dir.path());
+    let tor = frozen_tor(
+        dir.path(),
+        concat!(
+            module_path!(),
+            "::an_upload_before_the_add_onion_reply_is_read"
+        ),
+    );
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).expect("the data directory");
     let (_owner, inbox, feeds) = inbox();
