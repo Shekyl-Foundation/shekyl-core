@@ -122,12 +122,14 @@ impl DaemonTorControl {
 
     /// Spawn into a directory a previous incarnation kept. The cache is not
     /// copied again. `until` is as [`Self::spawn_keeping`]'s.
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_into(
         directory: KeptDataDir,
         tor_binary: VerifiedTorBinary,
         events: EventSink,
         reply_deadline: Duration,
         socks_timeout: SocksTimeout,
+        guard_state: Option<directory_cache::GuardState>,
         until: impl Future<Output = ()> + Send,
     ) -> Result<Self, LaunchFailure> {
         let parent = directory
@@ -143,6 +145,7 @@ impl DaemonTorControl {
                 events,
                 reply_deadline,
                 socks_timeout,
+                guard_state,
             },
             false,
             until,
@@ -160,6 +163,7 @@ impl DaemonTorControl {
             tor_binary,
             events,
             reply_deadline,
+            guard_state,
             ..
         } = config;
         let copied = if install_cache {
@@ -191,6 +195,23 @@ impl DaemonTorControl {
         } else {
             Vec::new()
         };
+        // A persistent onion's guards join a fresh directory beside the
+        // cache; a kept directory already holds them.
+        if let (true, Some(guards)) = (install_cache, guard_state.clone()) {
+            let data_path = directory.path().to_path_buf();
+            let installed = tokio::task::spawn_blocking(move || guards.copy_into(&data_path)).await;
+            let error = match installed {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(error),
+                Err(join) => Some(io::Error::other(join)),
+            };
+            if let Some(error) = error {
+                return Err(LaunchFailure {
+                    error: DaemonTorStartError::DataDir(error),
+                    directory,
+                });
+            }
+        }
         let (exit_tx, exit_rx) = oneshot::channel();
         let (exit_watch_tx, exit_watch) = watch::channel(None);
         tokio::spawn(async move {
@@ -226,6 +247,7 @@ impl DaemonTorControl {
             ready,
             handshake: Some(handshake),
             data_dir: Some(directory.dir),
+            guard_state,
         };
         let asker = handle.asker();
         let first = asker.ask(Command::GetInfo(vec!["version".to_owned()]));

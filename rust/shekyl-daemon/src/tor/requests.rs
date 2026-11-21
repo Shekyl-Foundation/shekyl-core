@@ -269,6 +269,7 @@ impl Drive {
         let plan = directory.plan(self.kept.take());
         let events = self.events.clone();
         let data_dir = self.data_dir.clone();
+        let guard_state = self.guard_state.clone();
         let (abandon, abandoned) = watch::channel(false);
         self.launch = Some((number, abandon));
         self.hold_later(number, async move {
@@ -303,6 +304,7 @@ impl Drive {
                     events,
                     REPLY_BOUND,
                     SOCKS_TIMEOUT,
+                    guard_state,
                     until,
                 )
                 .await
@@ -314,6 +316,7 @@ impl Drive {
                         events,
                         reply_deadline: REPLY_BOUND,
                         socks_timeout: SOCKS_TIMEOUT,
+                        guard_state,
                     },
                     until,
                 )

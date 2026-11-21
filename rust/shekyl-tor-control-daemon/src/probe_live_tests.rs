@@ -131,6 +131,7 @@ fn subscribed_config(
         events,
         reply_deadline: Duration::from_secs(30),
         socks_timeout: SocksTimeout::TorDefault,
+        guard_state: None,
     }
 }
 
@@ -422,6 +423,7 @@ async fn a_respawn_republishes_the_same_onion_and_is_reachable_again() {
         events,
         Duration::from_secs(30),
         SocksTimeout::TorDefault,
+        None,
         tokio::time::sleep(Duration::from_secs(30)),
     )
     .await

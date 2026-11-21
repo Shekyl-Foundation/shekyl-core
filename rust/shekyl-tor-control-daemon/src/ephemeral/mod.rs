@@ -93,6 +93,10 @@ pub struct DaemonTorConfig {
     /// Tor's `SocksTimeout`: below the daemon's Tor dial deadline, so Tor's
     /// own reply ends a dial it cannot attach (`TOR_SUPERVISOR.md` §4.2).
     pub socks_timeout: SocksTimeout,
+    /// A persistent onion's kept guards (`TSR-Q2` as amended): copied into a
+    /// fresh directory at launch and written back after a clean stop. `None`
+    /// for a per-boot onion, which keeps no guards.
+    pub guard_state: Option<directory_cache::GuardState>,
 }
 
 /// Why [`DaemonTorControl::launch`] failed. Terminal for the boot: the caller
@@ -253,6 +257,8 @@ pub struct DaemonTorControl {
     ///
     /// [`HandshakeWait::Until`]: shekyl_tor_control_client::control::HandshakeWait::Until
     handshake: Option<oneshot::Sender<()>>,
+    /// Where a persistent onion's guards are written back at a clean stop.
+    guard_state: Option<directory_cache::GuardState>,
     /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -465,6 +471,7 @@ impl DaemonTorControl {
         // After the reap, before the directory is retired. A crash (Tor died,
         // or we had to kill it) saves nothing: the previous cache stays.
         let cache = self.save_if_clean(&exit).await;
+        let guard_state = self.save_guards_if_clean(&exit).await;
         let retirement = match self.data_dir.take() {
             Some(dir) => Some(retire(dir).await),
             None => None,
@@ -472,8 +479,29 @@ impl DaemonTorControl {
         Teardown {
             exit,
             cache,
+            guard_state,
             retirement,
         }
+    }
+
+    /// A persistent onion's guards, written back on the same terms as the
+    /// cache: a Tor that bootstrapped and was reaped. `None` for a per-boot
+    /// onion.
+    async fn save_guards_if_clean(&self, exit: &Option<TorExit>) -> Option<CacheSave> {
+        let guards = self.guard_state.clone()?;
+        if !self.bootstrapped {
+            return Some(CacheSave::NotDue);
+        }
+        let (Some(TorExit::Reaped(_)), Some(dir)) = (exit, self.data_dir.as_ref()) else {
+            return Some(CacheSave::NotDue);
+        };
+        let data_dir = dir.path().to_path_buf();
+        let saved = tokio::task::spawn_blocking(move || guards.save_from(&data_dir)).await;
+        Some(match saved {
+            Ok(Ok(())) => CacheSave::Saved,
+            Ok(Err(error)) => CacheSave::Failed(error),
+            Err(join) => CacheSave::Failed(std::io::Error::other(join.to_string())),
+        })
     }
 
     async fn save_if_clean(&self, exit: &Option<TorExit>) -> CacheSave {
@@ -523,6 +551,9 @@ pub struct Teardown {
     pub exit: Option<TorExit>,
     /// The public directory cache's write-back (`TSR-Q8`).
     pub cache: CacheSave,
+    /// A persistent onion's guards' write-back (`TSR-Q2` as amended);
+    /// `None` for a per-boot onion.
+    pub guard_state: Option<CacheSave>,
     /// What became of the directory and Tor's log. `None` when the control
     /// held no directory.
     pub retirement: Option<Retirement>,
@@ -722,6 +753,7 @@ pub(crate) mod tests {
             events: EventSink::unsubscribed(),
             reply_deadline: Duration::from_secs(30),
             socks_timeout: SocksTimeout::TorDefault,
+            guard_state: None,
         }
     }
 

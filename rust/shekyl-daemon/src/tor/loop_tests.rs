@@ -403,6 +403,7 @@ async fn an_upload_before_the_add_onion_reply_is_read() {
             events,
             reply_deadline: Duration::from_secs(5),
             socks_timeout: SocksTimeout::TorDefault,
+            guard_state: None,
         },
         tokio::time::sleep(Duration::from_secs(5)),
     )

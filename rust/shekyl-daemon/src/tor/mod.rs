@@ -44,6 +44,7 @@ use shekyl_tor_control_client::control::{
     parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
     Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
+use shekyl_tor_control_client::directory_cache::GuardState;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
@@ -555,10 +556,16 @@ impl Drive {
             Supervises::Managed { pin, onion } => (TorSetting::Managed, Some(pin), onion),
             Supervises::Unmanaged(setting) => (setting, None, OnionSource::PerBoot),
         };
-        let onion = match onion {
-            OnionSource::Persistent(onion) => onion,
+        // A persistent onion keeps its guards beside the directory cache, in
+        // a directory of its own (`TSR-Q2` as amended); a per-boot onion keeps
+        // none.
+        let (onion, guard_state) = match onion {
+            OnionSource::Persistent(onion) => {
+                let guards = GuardState::for_onion(&data_dir, onion.service_id().as_str());
+                (onion, Some(guards))
+            }
             OnionSource::PerBoot => match DaemonTorControl::mint_identity() {
-                Ok(onion) => onion,
+                Ok(onion) => (onion, None),
                 Err(error) => {
                     tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
                     return None;
@@ -586,6 +593,7 @@ impl Drive {
             clock,
             binary,
             data_dir,
+            guard_state,
             events: poster.events(),
             poster,
             inbox,
@@ -628,6 +636,9 @@ struct Drive {
     /// The binary's source, for a Tor this daemon launches.
     binary: Option<PinSource>,
     data_dir: PathBuf,
+    /// A persistent onion's kept guards, handed to every launch; `None` for
+    /// a per-boot onion.
+    guard_state: Option<GuardState>,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
     events: EventSink,
@@ -719,6 +730,12 @@ impl Drive {
                 tracing::warn!(
                     target: "global",
                     "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
+                );
+            }
+            if let Some(CacheSave::Failed(error)) = teardown.guard_state {
+                tracing::warn!(
+                    target: "global",
+                    "this onion's Tor guards were not saved ({error}); the next start keeps the guards saved before"
                 );
             }
             if let Some(retirement) = teardown.retirement {
