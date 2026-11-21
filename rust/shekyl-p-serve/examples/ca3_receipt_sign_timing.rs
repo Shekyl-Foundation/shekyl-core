@@ -78,12 +78,14 @@
 //! every timed signature returned `Ok` and verifies; every signature's
 //! nonce is the one its key, transcript and seed derive for some counter.
 //!
-//! **Nulls.** `fixed-vs-fixed` (key A in two disjoint sets of slots) and
-//! `varied-vs-varied` (two disjoint sets of keys). Nothing differs, so
-//! whatever they report is the harness or the machine.
+//! **Nulls.** Key A in two disjoint sets of slots, and the varied class's
+//! 256 keys in two disjoint sets of slots. The keys are the same on both
+//! sides, so nothing differs, and whatever they report is the harness or
+//! the machine. (Two different key sets would not be a null: under a key
+//! dependence they differ too.)
 //!
-//! **A planted leak.** The `fixed-vs-varied` comparison again, with extra
-//! work inside the timed region for one class, calibrated to
+//! **A planted leak.** The first null again, with extra work inside the
+//! timed region for one class, calibrated to
 //! [`CONTROL_LEAK_FRACTION`] of one signature's median time. It must be
 //! detected; a pass excludes a leak of that size or more, and nothing
 //! smaller.
@@ -149,6 +151,9 @@ const SLOTS: usize = 256;
 /// The input seed of the registered run. No run before the registration
 /// drew from it.
 const REGISTERED_SEED: u64 = 0x4341_335f_464e_4453;
+/// XORed into the seed for the slot-placement stream, so placement draws
+/// nothing from the stream the keys and entries come from.
+const PLACEMENT_STREAM: u64 = 0x504c_4143_454d_454e;
 
 /// FN-DSA's per-signature seed, drawn from the caller's RNG and hedged
 /// (`fn-dsa-sign` 0.4.0, `lib.rs`, `SigningKey::sign`).
@@ -284,31 +289,78 @@ struct Class {
 }
 
 impl Class {
-    /// Every slot holds `key`.
+    /// Every slot holds `key`. The slots are decoded by [`decode_interleaved`].
     fn fixed(name: &'static str, key: Key) -> Self {
-        let slots = (0..SLOTS)
-            .map(|_| (FnDsaHybridSigner::new(&key.secret).expect("decodes"), 0))
-            .collect();
         Self {
             name,
             keys: vec![key],
-            slots,
+            slots: Vec::with_capacity(SLOTS),
         }
     }
 
-    /// Each slot holds its own key.
-    fn varied(name: &'static str, inputs: &mut Inputs) -> Self {
-        let keys: Vec<Key> = (0..SLOTS).map(|_| Key::new(inputs)).collect();
-        let slots = keys
+    /// Each slot holds its own key, generated from `seeds` (one pair per
+    /// slot, drawn once for the whole run, so every comparison and every
+    /// device uses the same keys).
+    fn varied(name: &'static str, seeds: &[([u8; 32], [u8; 32])]) -> Self {
+        let keys: Vec<Key> = seeds
             .iter()
-            .enumerate()
-            .map(|(i, key)| (FnDsaHybridSigner::new(&key.secret).expect("decodes"), i))
+            .map(|(ed25519, fn_dsa)| Key::from_seeds(*ed25519, *fn_dsa))
             .collect();
-        Self { name, keys, slots }
+        Self {
+            name,
+            keys,
+            slots: Vec::with_capacity(SLOTS),
+        }
+    }
+
+    /// The key slot `slot` holds: the one key, or the slot's own.
+    fn key_index(&self, slot: usize) -> usize {
+        if self.keys.len() == 1 {
+            0
+        } else {
+            slot
+        }
     }
 
     fn replicates(&self) -> bool {
         self.keys.iter().all(|key| key.replicates)
+    }
+}
+
+/// Decode both classes' slots in a shuffled order, so that which addresses
+/// each class's slots get is random, as which class each entry belongs to is
+/// random in time.
+///
+/// The allocator places blocks in the order they are asked for. Decoded one
+/// class after the other, the second class's 30 MB had a region of its own;
+/// decoded alternately, each class had a fixed alignment pattern (118,640
+/// bytes is 128 short of 29 pages, so the classes took the even and the odd
+/// 128-byte offsets). The development runs measured both: a null of one key
+/// set in two slot sets read `|t|` 11.94 and then 37.69 at 200,000 samples,
+/// with the second class slower by 0.15 % and 0.3 % of a signature at every
+/// quantile. `placement` is a stream of its own, so the keys and the entries
+/// are what they would be without it.
+fn decode_shuffled(classes: &mut [Class; 2], placement: &mut Inputs) {
+    let mut order: Vec<(usize, usize)> =
+        (0..SLOTS).flat_map(|slot| [(0, slot), (1, slot)]).collect();
+    for i in (1..order.len()).rev() {
+        let j = (placement.next() % (i as u64 + 1)) as usize;
+        order.swap(i, j);
+    }
+    let mut decoded: [Vec<Option<(FnDsaHybridSigner, usize)>>; 2] = [
+        (0..SLOTS).map(|_| None).collect(),
+        (0..SLOTS).map(|_| None).collect(),
+    ];
+    for (class, slot) in order {
+        let key = classes[class].key_index(slot);
+        let signer = FnDsaHybridSigner::new(&classes[class].keys[key].secret).expect("decodes");
+        decoded[class][slot] = Some((signer, key));
+    }
+    for (class, slots) in classes.iter_mut().zip(decoded) {
+        class.slots = slots
+            .into_iter()
+            .map(|slot| slot.expect("every slot is decoded once"))
+            .collect();
     }
 }
 
@@ -674,14 +726,22 @@ fn main() {
          both < {T_PASS}; control: |t| > {T_LEAK}"
     );
 
+    // Every key is drawn here, before any comparison, so the keys do not
+    // depend on the sample count: every device signs with the same keys.
     let key_a = Key::new(&mut inputs);
     let key_b = Key::new(&mut inputs);
+    let pool: Vec<([u8; 32], [u8; 32])> = (0..SLOTS)
+        .map(|_| (inputs.array(), inputs.array()))
+        .collect();
 
+    // Slot placement draws from its own stream (see `decode_shuffled`).
+    let mut placement = Inputs(seed ^ PLACEMENT_STREAM);
     let mut replicated = true;
     let mut checked = true;
     let mut run = |label: &str, classes: [Class; 2], inputs: &mut Inputs, planted: Option<u64>| {
         replicated &= classes.iter().all(Class::replicates);
         let mut classes = classes;
+        decode_shuffled(&mut classes, &mut placement);
         let outcome = compare(&mut classes, samples, inputs, planted);
         checked &= outcome.checks.hold();
         let word = if planted.is_some() {
@@ -710,7 +770,7 @@ fn main() {
         "pass-line",
         [
             Class::fixed("fixed", key_a.again()),
-            Class::varied("varied", &mut inputs),
+            Class::varied("varied", &pool),
         ],
         &mut inputs,
         None,
@@ -735,24 +795,28 @@ fn main() {
         &mut inputs,
         None,
     );
+    // The same 256 keys decoded into two sets of slots: under a key
+    // dependence two different key sets would differ, and a null that can
+    // cross on the effect under test would void a run that should fail.
     let null_varied = run(
         "null",
         [
-            Class::varied("varied", &mut inputs),
-            Class::varied("other-varied", &mut inputs),
+            Class::varied("varied", &pool),
+            Class::varied("varied-other-slots", &pool),
         ],
         &mut inputs,
         None,
     );
     let worst_null = null_fixed.figure().max(null_varied.figure());
-    // The control: pass line 1's shape with a planted leak in class 1.
-    let leak_ns = fixed_varied.median_ns * CONTROL_LEAK_FRACTION;
+    // The control is planted on a null, so no real effect adds to or
+    // cancels it: key A in two slot sets, class 1 with the planted work.
+    let leak_ns = null_fixed.median_ns * CONTROL_LEAK_FRACTION;
     let iterations = calibrate_spin(leak_ns);
     let control = run(
         "control",
         [
-            Class::fixed("fixed", key_a),
-            Class::varied("varied", &mut inputs),
+            Class::fixed("fixed-a", key_a.again()),
+            Class::fixed("fixed-a-other-slots", key_a),
         ],
         &mut inputs,
         Some(iterations),
