@@ -484,9 +484,9 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "fips203"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
+checksum = "602e37d80ffd53e1b6037a91bbc471d94bd18a6d1f86493b721b7ef4609a013c"
 dependencies = [
  "rand_core",
  "sha3",
@@ -496,21 +496,20 @@ dependencies = [
 
 [[package]]
 name = "fips204"
-version = "0.4.6"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9fb5a367b9846933e271a3c2a992930743f82ae5e8cb7faa780715a80fa0b15"
+checksum = "a823e139c2d539b1b735d31cdce8b0b356671585eac3d54dec79d1d15052093b"
 dependencies = [
  "rand_core",
- "sha2",
  "sha3",
  "zeroize",
 ]
 
 [[package]]
 name = "fips205"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f5626bf5534df4ebdbd2536465d7eaa8a9dc2cdeb7e036e0ecf291dcc80ffb6"
+checksum = "4a5a5dcc490a93ad15deabf0534af8b2b6e9d20e01e8066f6fcba4da7e316100"
 dependencies = [
  "rand_core",
  "sha2",

@@ -284,18 +284,18 @@ reason = "Formally generated field arithmetic backend of curve25519-dalek."
 
 [[package]]
 name = "fips203"
-version = "0.4.3"
-reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, shekyl-p2p-transport, shekyl-rpc-channel). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, shekyl-p2p-transport, shekyl-rpc-channel). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; a decaps key with a secret coefficient of q or more is now refused at parse; Decompress rounds to nearest (FIPS 203 eq. 4.8, a correct encapsulation no longer decapsulates to the rejection key against a crafted key pair); keygen, encaps and honest decaps on Shekyl's paths byte-identical to 0.4.3."
 
 [[package]]
 name = "fips204"
-version = "0.4.6"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"
-version = "0.4.1"
-reason = "SLH-DSA-SHA2-192s: the inner signature of wallet message signing (shekyl-crypto-pq message_signing.rs). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "SLH-DSA-SHA2-192s: the inner signature of wallet message signing (shekyl-crypto-pq message_signing.rs). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; keygen_with_seeds renamed keygen_from_seed, try_from_bytes takes the array by value, Ph removed; signing time no longer varies with the digest; deterministic keygen and signing byte-identical to 0.4.1."
 
 [[package]]
 name = "flexible-transcript"
