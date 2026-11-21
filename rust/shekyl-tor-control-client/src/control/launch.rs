@@ -1390,7 +1390,11 @@ mod tests {
     const ENV_SENTINEL_NAME: &str = "SHEKYL_TEST_SENTINEL";
     const ENV_SENTINEL_VALUE: &str = "must-not-reach-tor";
     const PRELOAD_NAME: &str = "LD_PRELOAD";
-    const PRELOAD_VALUE: &str = "/nonexistent/shekyl-test-preload.so";
+    /// An empty list. The re-executed test binary's own loader reads it first,
+    /// and FreeBSD's refuses to start a program whose preload it cannot open
+    /// (glibc only warns); an empty list loads nothing on either. The test
+    /// looks for the name in the child, never the value.
+    const PRELOAD_VALUE: &str = "";
 
     /// What `/bin/sh` sets for itself on the way to `exec`. Not inherited,
     /// and not filtered on Windows: a leak of one of these names there is real.
