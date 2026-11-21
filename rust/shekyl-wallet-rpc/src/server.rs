@@ -10,7 +10,7 @@
 //! in-process server without shelling out (`WALLET_REWRITE_PLAN.md` Phase 3).
 //!
 //! The platform seam is [`BoundListener`]: **one** `cfg` split, at listener
-//! construction, shared by [`run_server`] and [`spawn_in_process_with`] so the
+//! construction, shared by [`ArmedServer::serve`] and [`spawn_in_process_with`] so the
 //! two cannot drift (`WINDOWS_WALLET_SUPPORT.md` §8.1). Everything
 //! Windows-specific below it lives in `shekyl-win-sec`, the crate built to
 //! hold the `unsafe` this one denies (WP-D2).
@@ -557,31 +557,25 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
 /// The program's name in the line its start says about its stops.
 const PROGRAM: &str = "shekyl-wallet-rpc";
 
-/// Run the server until a stop, then close the open wallet and return.
-/// Blocks the calling task. [`arm_server`], then [`ArmedServer::serve`].
-///
-/// The stops are `shekyl_process::stop`'s: `SIGTERM`, `SIGINT` and
-/// `SIGHUP` on Unix, every console event on Windows. The first stops the
-/// listener, lets in-flight requests finish, and closes the wallet through
-/// the `close_wallet` choreography with the shutdown save; a second exits
-/// at once with status 130 and no cleanup.
-pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
-    arm_server(config)?.serve().await
-}
-
 /// A checked configuration whose stops are armed, before anything that
 /// needs a clean stop to be released exists: a stop from here on, the bind
 /// included, is a clean stop that removes the socket.
 pub struct ArmedServer {
     config: ServerConfig,
     stops: Stops,
+    notice: Option<String>,
 }
 
-/// Check `config`, say what the start owes, and arm the stops.
+/// Check `config` and arm the stops: the first of the server's two start
+/// steps, then [`ArmedServer::serve`].
 ///
-/// An inherited ignore of `SIGINT` is kept and said once on standard
-/// error; on Windows every start names the stops that always work
-/// (IG-14; Rick, 2026-11-20).
+/// The stops are `shekyl_process::stop`'s: `SIGTERM`, `SIGINT` and
+/// `SIGHUP` on Unix, every console event on Windows. The first stops the
+/// listener, lets in-flight requests finish, and closes the wallet through
+/// the `close_wallet` choreography with the shutdown save; a second exits
+/// at once with status 130 and no cleanup. An inherited ignore is kept,
+/// and the line the start owes for it is [`ArmedServer::notice`], for the
+/// binary to say on standard error (IG-14; Rick, 2026-11-20).
 ///
 /// # Errors
 /// The configuration is refused, or the stops could not be armed.
@@ -595,21 +589,30 @@ pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
     for warning in daemon_disclosures(&config) {
         warn!("{warning}");
     }
-    if let Some(line) = inherited.line(PROGRAM) {
-        eprintln!("{PROGRAM}: {line}");
-    }
+    let notice = inherited.line(PROGRAM);
     let stops = Stops::arm(inherited)
         .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
-    Ok(ArmedServer { config, stops })
+    Ok(ArmedServer {
+        config,
+        stops,
+        notice,
+    })
 }
 
 impl ArmedServer {
+    /// The IG-14 line this start owes about its stops, naming the program:
+    /// on Unix when `SIGINT` was ignored, on Windows on every start.
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
     /// Bind, serve until the first stop, then close the open wallet.
     ///
     /// # Errors
     /// The listener could not be bound or served.
     pub async fn serve(self) -> Result<(), BoxErr> {
-        let Self { config, stops } = self;
+        let Self { config, stops, .. } = self;
         let bound = BoundListener::bind(&config.listen).await?;
         let state = AppState::new(config);
         let app = build_router(state.clone());
@@ -651,7 +654,7 @@ fn watch_stops(mut stops: Stops, state: Arc<AppState>, after: AfterClose) {
 }
 
 /// Serve until shutdown is requested, then close the open wallet — the one
-/// stopping path both hosts share ([`run_server`], and the in-process
+/// stopping path both hosts share ([`ArmedServer::serve`], and the in-process
 /// server behind [`InProcessHandle::shutdown`]). The wallet is closed even
 /// when the serve loop failed, and [`AppState::closed`] is notified last.
 async fn serve_then_close(
@@ -667,7 +670,7 @@ async fn serve_then_close(
 
 /// A listener bound to its address, per platform — **the** `cfg` seam.
 ///
-/// [`run_server`] and [`spawn_in_process_with`] both go through
+/// [`ArmedServer::serve`] and [`spawn_in_process_with`] both go through
 /// [`Self::bind`] and [`Self::serve`], so there is one place the platform
 /// decision is made and one place the serve loop is written. Five `cfg`
 /// splits at five call sites would scatter the boundary across a file whose
@@ -1250,9 +1253,8 @@ mod tests {
     /// call at that site. The oracle is the wildcard message itself, not a
     /// bare `is_err()`: `validate_daemon_endpoint` runs first on both paths,
     /// and any refusal of the fixture's daemon address would otherwise
-    /// satisfy the test with the listen check gone. `run_server` would
-    /// block forever if the refusal did not fire, hence the timeout — a
-    /// hang here is a failure, not a pass.
+    /// satisfy the test with the listen check gone. `arm_server` refuses
+    /// before anything binds.
     #[tokio::test]
     async fn both_bind_paths_refuse_a_wildcard_before_binding() {
         let config = listen_config("0.0.0.0:0", basic());
@@ -1261,12 +1263,11 @@ mod tests {
         };
         let err = err.to_string();
         assert!(err.contains("wildcard"), "spawn_in_process_with: {err}");
-        let err = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
-            .await
-            .expect("run_server must return (refuse) rather than bind and block")
-            .expect_err("run_server must refuse a wildcard bind")
-            .to_string();
-        assert!(err.contains("wildcard"), "run_server: {err}");
+        let Err(err) = arm_server(config) else {
+            panic!("arm_server must refuse a wildcard bind");
+        };
+        let err = err.to_string();
+        assert!(err.contains("wildcard"), "arm_server: {err}");
     }
 
     /// RT-W7's binary-specific facts — the predicate itself is pinned in the
@@ -1307,10 +1308,11 @@ mod tests {
         assert!(proxied.operator.is_some(), "{proxied:?}");
     }
 
-    /// The wiring: `run_server` logs the disclosure before it binds. The
-    /// edit that turns this red is deleting the `daemon_disclosures` loop in
-    /// `run_server`. This test holds the listen port first, so `run_server`
-    /// returns (address in use) right after the disclosure — no timer to
+    /// The wiring: the binary's start (`arm_server`, then `serve`) logs the
+    /// disclosure before it binds. The edit that turns this red is deleting
+    /// the `daemon_disclosures` loop in `arm_server`. This test holds the
+    /// listen port first, so `serve` returns (address in use) right after the
+    /// disclosure — no timer to
     /// wait out, and "said before bound" is pinned with it.
     ///
     /// The subscriber rides the future (`with_subscriber`) rather than the
@@ -1321,7 +1323,7 @@ mod tests {
     /// capture that cannot be broken by where the future runs needs one
     /// fewer thing held true elsewhere.
     #[tokio::test]
-    async fn run_server_logs_the_operator_statement_before_binding() {
+    async fn the_start_logs_the_operator_statement_before_binding() {
         #[derive(Clone)]
         struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
@@ -1344,7 +1346,7 @@ mod tests {
         let port = held.local_addr().expect("local addr").port();
         let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
         config.daemon = DaemonTarget::address("http://203.0.113.7:11029");
-        let err = run_server(config)
+        let err = async { arm_server(config)?.serve().await }
             .with_subscriber(subscriber)
             .await
             .expect_err("the held port refuses the bind");
