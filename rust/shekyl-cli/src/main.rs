@@ -76,6 +76,18 @@ pub struct ReplArgs {
     #[arg(long, global = true)]
     rpc_url: Option<String>,
 
+    /// The Tor binary the self-hosted wallet server runs when this wallet
+    /// serves. Unset, the bundled one is found; a path naming no file on this
+    /// machine falls back to that with one warning. Either way the binary
+    /// must match the pinned build. Refused with --rpc-url: that server is
+    /// not started, so set it on the server you connect to.
+    #[arg(
+        long = shekyl_wallet_rpc::server::TOR_FILE_OPTION,
+        global = true,
+        conflicts_with = "rpc_url"
+    )]
+    tor_file: Option<std::path::PathBuf>,
+
     /// Network the self-hosted wallet server binds to: mainnet, testnet,
     /// stagenet. With --rpc-url that server is not started, and the flag is
     /// then read only to supply the default daemon port (so a run that names
@@ -514,6 +526,7 @@ fn build_session(
             cli.resolved_wallet_dir(*network)?,
             *network,
             daemon.target.clone(),
+            shekyl_wallet_rpc::server::TorFile::from_option(cli.tor_file.clone()),
             cli.debug,
             shekyl_os_account::per_account_root().as_deref(),
         ),
@@ -532,6 +545,7 @@ fn host_session(
     wallet_dir: std::path::PathBuf,
     network: Network,
     daemon: DaemonTarget,
+    tor_file: shekyl_wallet_rpc::server::TorFile,
     debug: bool,
     root: Option<&std::path::Path>,
 ) -> Result<rpc_client::RpcSession, Box<dyn std::error::Error>> {
@@ -539,7 +553,7 @@ fn host_session(
         shekyl_os_account::ensure_per_account_root(root)
             .map_err(|e| format!("cannot create {}: {e}", root.display()))?;
     }
-    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, debug)
+    rpc_client::RpcSession::host_in_process(wallet_dir, network, daemon, tor_file, debug)
 }
 
 /// Run one non-interactive subcommand against a fresh session and translate a

@@ -5283,11 +5283,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     }
     // The persona serves its shard on its onion, through the same pinned
     // Tor, from the bond on: its endpoint is the bond record's.
-    fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
-    let serving = super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target())
-        .await
-        .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
-        .expect("a staker with a confirmed bond starts a serving host");
+    // The binary reaches serving as the wallet server's does: the host's
+    // `tor-file` option, resolved once, handed to the start.
+    let tor_file = crate::TorFile::from_option(Some(tor.clone()));
+    let serving =
+        super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target(), &tor_file)
+            .await
+            .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
+            .expect("a staker with a confirmed bond starts a serving host");
     let serving_up = Instant::now() + TOR_READY;
     while serving.posture().is_none() {
         assert!(

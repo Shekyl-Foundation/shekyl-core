@@ -355,6 +355,9 @@ pub struct TenantState {
     pub network: shekyl_engine_core::Network,
     /// The daemon target every wallet connects to.
     pub daemon: DaemonTarget,
+    /// The `tor-file` option: the Tor binary a serving wallet runs, resolved
+    /// once when the server read its options; unset is discovery.
+    pub tor_file: shekyl_engine_core::TorFile,
     /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
@@ -370,7 +373,14 @@ impl TenantState {
             wallet_dir,
             network,
             daemon,
+            tor_file: shekyl_engine_core::TorFile::discover(),
             tenant: Tenant::new(),
         }
+    }
+
+    /// The same state with the server's `tor-file` option.
+    #[must_use]
+    pub fn with_tor_file(self, tor_file: shekyl_engine_core::TorFile) -> Self {
+        Self { tor_file, ..self }
     }
 }

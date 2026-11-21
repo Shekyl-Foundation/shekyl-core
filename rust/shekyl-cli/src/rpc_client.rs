@@ -287,6 +287,7 @@ impl RpcSession {
         wallet_dir: PathBuf,
         network: Network,
         daemon: shekyl_wallet_rpc::tenant::DaemonTarget,
+        tor_file: shekyl_wallet_rpc::server::TorFile,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Multi-thread runtime: Engine create/open paths use
@@ -300,6 +301,7 @@ impl RpcSession {
                 wallet_dir.clone(),
                 network,
                 daemon,
+                tor_file,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         // A stop signal (SIGTERM, SIGINT, SIGHUP; the Windows console's

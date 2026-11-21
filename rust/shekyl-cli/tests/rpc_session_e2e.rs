@@ -25,6 +25,7 @@ fn host(dir: &std::path::Path) -> RpcSession {
         dir.to_path_buf(),
         Network::Stagenet,
         shekyl_wallet_rpc::tenant::DaemonTarget::address(NO_DAEMON),
+        shekyl_wallet_rpc::server::TorFile::discover(),
         false,
     )
     .expect("host in-process wallet RPC")

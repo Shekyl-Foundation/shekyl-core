@@ -18,10 +18,11 @@
 //!    [`tor_data_dir_from`](shekyl_engine_file::paths::tor_data_dir_from)
 //!    gives DQ-T0.7's three placement requirements by construction, and
 //!    forecloses the cross-wallet guard linkage a shared directory would create.
-//! 2. **`binary` is discovery by default**, with one override
-//!    ([`DevicePrefs::tor_binary_path`](shekyl_engine_prefs::DevicePrefs::tor_binary_path))
-//!    — the single item where the operator knows something the wallet cannot
-//!    derive. The hash gate runs either way.
+//! 2. **`binary` is discovery by default**, with one override, the serving
+//!    host's `tor-file` option ([`TorFile`]) — the single item where the
+//!    operator knows something the wallet cannot derive. It is an option of
+//!    the process, never stored with a wallet: which Tor binary a machine has
+//!    is the machine's. The hash gate runs either way.
 //! 3. **`policy` gets no surface at all.** Backoff curve, `degrade_after`,
 //!    `bootstrap_deadline` and `trust_retry` are all observable in retry
 //!    timing, so an operator-tuned supervisor is a *distinguishable client*.
@@ -113,6 +114,55 @@ impl std::error::Error for TorConfigError {
     }
 }
 
+/// The serving host's `tor-file` option, resolved once when the host reads
+/// its options: the Tor binary serving runs, or discovery when unset.
+///
+/// A path that names no file on this machine falls back to discovery **and
+/// says so once**, here, rather than refusing (Rick, 2026-11-21: the
+/// behaviour the deleted prefs override had). Refusing would stop a bonded
+/// wallet from serving, which costs it misses, over an option that discovery
+/// can answer; saying nothing would hide an operator's typo. A path that
+/// names a file is taken, and the hash gate still decides whether it runs: a
+/// file that fails the pin is refused, never replaced by discovery.
+#[derive(Clone, Debug, Default)]
+pub struct TorFile(Option<std::path::PathBuf>);
+
+impl TorFile {
+    /// Unset: discovery.
+    #[must_use]
+    pub fn discover() -> Self {
+        Self(None)
+    }
+
+    /// The option as given, resolved: `None` or a path naming no file is
+    /// discovery (the second with one warning); a path naming a file is that
+    /// file.
+    #[must_use]
+    pub fn from_option(path: Option<std::path::PathBuf>) -> Self {
+        match path {
+            None => Self(None),
+            Some(path) if path.is_file() => Self(Some(path)),
+            Some(path) => {
+                tracing::warn!(
+                    configured = %path.display(),
+                    "tor-file does not name a file on this machine; serving uses the \
+                     discovered Tor binary. Correct or remove the option to silence this."
+                );
+                Self(None)
+            }
+        }
+    }
+
+    /// The source serving's supervisor resolves and pin-checks.
+    fn source(&self) -> shekyl_tor_control_wallet::service::TorBinarySource {
+        use shekyl_tor_control_wallet::service::TorBinarySource;
+        match &self.0 {
+            None => TorBinarySource::Discover,
+            Some(path) => TorBinarySource::At(path.clone()),
+        }
+    }
+}
+
 /// Assemble this wallet's [`WalletTorControlConfig`].
 ///
 /// # Errors
@@ -121,13 +171,13 @@ impl std::error::Error for TorConfigError {
 /// with group/world-write permission. Both are fail-closed at open.
 pub(crate) fn tor_service_config(
     wallet_state_path: &std::path::Path,
-    device: &shekyl_engine_prefs::DevicePrefs,
+    tor_file: &TorFile,
 ) -> Result<WalletTorControlConfig, TorConfigError> {
     let data_dir = shekyl_engine_file::paths::tor_data_dir_from(wallet_state_path);
     establish_data_dir(&data_dir)?;
 
     Ok(WalletTorControlConfig {
-        binary: binary_source(&device.tor_binary_path),
+        binary: tor_file.source(),
         data_dir,
         // Nothing subscribes to tor's async events in production: no call site
         // issues `SETEVENTS`, so the sink receives nothing at all. Named rather
@@ -140,34 +190,6 @@ pub(crate) fn tor_service_config(
         // sole author. Passing `Client` asserts we are not the one choosing.
         posture: shekyl_tor_control_wallet::service::ServingPosture::Client,
     })
-}
-
-/// Resolve the binary source from the device override.
-///
-/// An override that does not resolve to an existing file falls back to
-/// discovery **and says so once**, rather than failing. The reason is the
-/// travel residual on [`DevicePrefs::tor_binary_path`](shekyl_engine_prefs::schema::DevicePrefs::tor_binary_path): `<P>.prefs.toml` sits
-/// beside the wallet file, so a cluster copied to another machine carries a
-/// path that machine may not have. Treating that as fatal would make moving a
-/// wallet break it; treating it silently would hide a genuine operator typo.
-/// Warn-once-and-fall-back is the same shape the FAKECHAIN settlement-epoch
-/// lever uses for an ignored setting.
-fn binary_source(override_path: &str) -> shekyl_tor_control_wallet::service::TorBinarySource {
-    use shekyl_tor_control_wallet::service::TorBinarySource;
-    if override_path.is_empty() {
-        return TorBinarySource::Discover;
-    }
-    let path = std::path::PathBuf::from(override_path);
-    if path.is_file() {
-        return TorBinarySource::At(path);
-    }
-    tracing::warn!(
-        configured = %path.display(),
-        "device.tor_binary_path does not name a file on this machine; falling back to \
-         discovery (a wallet cluster copied from another machine carries its prefs, and \
-         the override is machine-scoped). Clear or correct the setting to silence this."
-    );
-    TorBinarySource::Discover
 }
 
 /// Create the derived directory **private**, or refuse a too-permissive
@@ -226,21 +248,13 @@ fn establish_data_dir(path: &std::path::Path) -> Result<(), TorConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_engine_prefs::DevicePrefs;
     use shekyl_tor_control_wallet::service::TorBinarySource;
-
-    fn device(tor_binary_path: &str) -> DevicePrefs {
-        DevicePrefs {
-            tor_binary_path: tor_binary_path.to_owned(),
-            ..DevicePrefs::default()
-        }
-    }
 
     #[test]
     fn the_data_dir_is_derived_from_the_wallet_path_and_created() {
         let tmp = tempfile::tempdir().expect("tmp");
         let wallet = tmp.path().join("alice.wallet");
-        let cfg = tor_service_config(&wallet, &device("")).expect("config");
+        let cfg = tor_service_config(&wallet, &TorFile::discover()).expect("config");
         assert_eq!(cfg.data_dir, tmp.path().join("alice.wallet.tor"));
         assert!(
             cfg.data_dir.is_dir(),
@@ -253,43 +267,100 @@ mod tests {
     #[test]
     fn two_wallets_never_share_a_tor_directory() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let a = tor_service_config(&tmp.path().join("one.wallet"), &device("")).expect("a");
-        let b = tor_service_config(&tmp.path().join("two.wallet"), &device("")).expect("b");
+        let a =
+            tor_service_config(&tmp.path().join("one.wallet"), &TorFile::discover()).expect("a");
+        let b =
+            tor_service_config(&tmp.path().join("two.wallet"), &TorFile::discover()).expect("b");
         assert_ne!(a.data_dir, b.data_dir);
     }
 
     #[test]
-    fn no_override_means_discovery() {
-        assert!(matches!(binary_source(""), TorBinarySource::Discover));
+    fn an_unset_option_means_discovery() {
+        assert!(matches!(
+            TorFile::from_option(None).source(),
+            TorBinarySource::Discover
+        ));
     }
 
     #[test]
-    fn an_override_naming_a_real_file_is_taken() {
+    fn an_option_naming_a_file_is_taken() {
         let tmp = tempfile::tempdir().expect("tmp");
         let bin = tmp.path().join("tor");
         std::fs::write(&bin, b"not really tor, but it is a file").expect("write");
-        // The hash gate runs on this later; the override selects *which*
+        // The hash gate runs on this later; the option selects *which*
         // candidate is gated, never whether it is.
-        match binary_source(bin.to_str().expect("utf8")) {
+        match TorFile::from_option(Some(bin.clone())).source() {
             TorBinarySource::At(p) => assert_eq!(p, bin),
-            other => panic!("expected the override to be taken, got {other:?}"),
+            other => panic!("expected the option to be taken, got {other:?}"),
         }
     }
 
-    /// The travel residual: a cluster copied from another machine carries a
-    /// path this machine does not have. That must not break the wallet.
+    /// Log lines written while a test runs, for the once-only warning.
+    #[derive(Clone, Default)]
+    struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Lines {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lines").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Lines {
+        type Writer = Lines;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// An option naming no file on this machine is discovery, said once: at
+    /// the host's read of its options, and not again however often serving
+    /// starts (the cadence restarts it).
     #[test]
-    fn a_travelled_override_falls_back_to_discovery() {
-        assert!(matches!(
-            binary_source("/nonexistent/machine/specific/tor"),
-            TorBinarySource::Discover,
-        ));
+    fn an_option_naming_no_file_falls_back_to_discovery_and_warns_once() {
+        let lines = Lines::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(lines.clone())
+            .with_ansi(false)
+            .finish();
+        let tmp = tempfile::tempdir().expect("tmp");
+        tracing::subscriber::with_default(subscriber, || {
+            // tracing caches a callsite's interest globally, computed on the
+            // thread that hits it first; another test reaching this `warn!`
+            // with no subscriber would cache it as never. Hit it once,
+            // rebuild the cache from this thread, and count from a clean
+            // buffer (the pattern of `scan_step_tests`).
+            drop(TorFile::from_option(Some(tmp.path().join("warm-up"))));
+            tracing::callsite::rebuild_interest_cache();
+            lines.0.lock().expect("lines").clear();
+            let tor = TorFile::from_option(Some(tmp.path().join("no-such-tor")));
+            for n in 0..3 {
+                let cfg = tor_service_config(&tmp.path().join(format!("w{n}.wallet")), &tor)
+                    .expect("config");
+                assert!(matches!(cfg.binary, TorBinarySource::Discover));
+            }
+        });
+        let text = String::from_utf8(lines.0.lock().expect("lines").clone()).expect("utf8");
+        assert_eq!(
+            text.matches("tor-file does not name a file on this machine")
+                .count(),
+            1,
+            "{text}"
+        );
+        assert!(
+            text.contains("no-such-tor"),
+            "the warning names the path: {text}"
+        );
     }
 
     #[test]
     fn the_supervisor_policy_is_taken_not_tuned() {
         let tmp = tempfile::tempdir().expect("tmp");
-        let cfg = tor_service_config(&tmp.path().join("w.wallet"), &device("")).expect("config");
+        let cfg =
+            tor_service_config(&tmp.path().join("w.wallet"), &TorFile::discover()).expect("config");
         // `SupervisorPolicy` is deliberately not `PartialEq` (it is a config,
         // not a value), so the assertion compares the fields whose *timing* is
         // observable — which is the property the ruling is about.
@@ -315,7 +386,7 @@ mod tests {
 
         // `WalletTorControlConfig` is not `Debug` (it holds an `EventSink`, a
         // forensic surface), so match rather than `expect_err`.
-        match tor_service_config(&wallet, &device("")) {
+        match tor_service_config(&wallet, &TorFile::discover()) {
             Err(TorConfigError::DataDirTooPermissive { mode, .. }) => {
                 assert_eq!(
                     mode & 0o022,
@@ -339,6 +410,6 @@ mod tests {
         let dir = tmp.path().join("tight.wallet.tor");
         std::fs::create_dir(&dir).expect("mkdir");
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-        assert!(tor_service_config(&tmp.path().join("tight.wallet"), &device("")).is_ok());
+        assert!(tor_service_config(&tmp.path().join("tight.wallet"), &TorFile::discover()).is_ok());
     }
 }

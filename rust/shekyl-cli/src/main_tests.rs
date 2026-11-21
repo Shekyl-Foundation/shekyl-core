@@ -156,6 +156,29 @@ fn testnet_and_stagenet_flags_select_the_network() {
     assert!(ReplArgs::try_parse_from(["shekyl-cli", "--testnet", "--stagenet"]).is_err());
 }
 
+/// `--tor-file` is the self-hosted server's: with `--rpc-url` no server is
+/// started, so the pair is refused at parse rather than the path ignored.
+#[test]
+fn the_tor_file_is_the_self_hosted_servers_and_refused_with_rpc_url() {
+    let parsed = ReplArgs::try_parse_from(["shekyl-cli", "--tor-file", "/opt/tor/tor"])
+        .expect("parses alone");
+    assert_eq!(
+        parsed.tor_file.as_deref(),
+        Some(std::path::Path::new("/opt/tor/tor"))
+    );
+    let refused = ReplArgs::try_parse_from([
+        "shekyl-cli",
+        "--tor-file",
+        "/opt/tor/tor",
+        "--rpc-url",
+        "http://127.0.0.1:29500",
+    ]);
+    assert!(
+        refused.is_err(),
+        "--tor-file with --rpc-url must be refused"
+    );
+}
+
 /// Connection flags are global (CU-1): they parse after a subcommand
 /// name, so `shekyl-cli create w --seed-out s --testnet` works instead
 /// of demanding the flags come first.
@@ -223,6 +246,7 @@ fn a_session_start_makes_the_root_and_not_the_wallet_dir() {
         wallets.clone(),
         Network::Regtest,
         DaemonTarget::address("http://127.0.0.1:1"),
+        shekyl_wallet_rpc::server::TorFile::discover(),
         false,
         Some(&root),
     )

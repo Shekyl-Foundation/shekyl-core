@@ -20,7 +20,7 @@ use shekyl_crypto_pq::bip39::{entropy_from_mnemonic, mnemonic_from_entropy};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, DaemonExpectation, Engine, EngineCreateParams,
-    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture,
+    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture, TorFile,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
@@ -89,7 +89,7 @@ pub(crate) async fn create_wallet(
 
     // Short critical section: refuse if busy, reserve the opening slot,
     // snapshot config, then release the tenant mutex before slow work.
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -99,7 +99,12 @@ pub(crate) async fn create_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     // Move password into Zeroizing before any slow work so the serde
@@ -118,7 +123,7 @@ pub(crate) async fn create_wallet(
     // A freshly created wallet is a non-staker (no bond record), so
     // `start_pscan_if_staker` parks `None` here; the call is unconditional so
     // the embedder never branches on staking state (`81-no-protocol-knowledge`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -211,7 +216,7 @@ pub(crate) async fn restore_wallet(
     let mnemonic = Zeroizing::new(p.mnemonic);
     let password = Zeroizing::new(p.password.into_bytes());
 
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -221,7 +226,12 @@ pub(crate) async fn restore_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     let restored = restore_wallet_engine(
@@ -244,7 +254,7 @@ pub(crate) async fn restore_wallet(
 
     let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -306,7 +316,7 @@ pub(crate) async fn open_wallet(
     let p: OpenWalletParams = parse_required_object(params, "open_wallet")?;
     validate_wallet_name(&p.name)?;
 
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -316,7 +326,12 @@ pub(crate) async fn open_wallet(
             return Err(WalletRpcError::WalletFileNotFound);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     // Same password hand-off as create: consume the serde String into
@@ -335,7 +350,7 @@ pub(crate) async fn open_wallet(
     // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
     // A corrupt sealed P-scan state fails the open closed (see
     // `wrap_and_start_pscan`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -395,9 +410,10 @@ async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
     expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
-    let (name, shared, tasks, daemon) = {
+    let (name, shared, tasks, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         let daemon = state.daemon.clone();
+        let tor_file = state.tor_file.clone();
         if let Some(expected) = expected_name {
             // Same mutex hold as `take_open`: check-then-take is atomic.
             if state.tenant.open_name() != Some(expected) {
@@ -412,13 +428,13 @@ async fn take_and_close_tenant(
             .tenant
             .take_open()
             .ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, shared, tasks, daemon)
+        (name, shared, tasks, daemon, tor_file)
     };
     tasks.shutdown().await;
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            let tasks = restart_tasks(&shared, &daemon).await;
+            let tasks = restart_tasks(&shared, &daemon, &tor_file).await;
             tenants
                 .lock()
                 .await
@@ -437,7 +453,7 @@ async fn take_and_close_tenant(
         // spawn a second driver. The open-wallet ⇒ driver-running property
         // still holds — `restart_tasks` is unconditional on this path.
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let tasks = restart_tasks(&shared, &daemon).await;
+        let tasks = restart_tasks(&shared, &daemon, &tor_file).await;
         tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
@@ -629,8 +645,9 @@ pub(crate) async fn make_daemon(
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
     daemon: &DaemonTarget,
+    tor_file: &TorFile,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let (shared, cadence) = engine.into_shared(daemon);
+    let (shared, cadence) = engine.into_shared(daemon, tor_file);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -660,7 +677,7 @@ async fn wrap_and_start_tasks(
     // open. The task itself does not publish immediately; it waits the gate-6
     // §10.9 launch standoff first, precisely so the onion does not reanimate
     // in lockstep with this open.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon, tor_file).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `Ok(None)`: not a serving persona. `AlreadyRunning`: the driver's
         // first tick fired before this call and won the start race; the
@@ -1007,12 +1024,13 @@ async fn reopen_with_first_stake_intent(
     password: Zeroizing<Vec<u8>>,
     slot: u32,
 ) -> Result<SharedEngine, WalletRpcError> {
-    let (base, network, endpoint, shared) = {
+    let (base, network, endpoint, tor_file, shared) = {
         let state = tenants.lock().await;
         (
             wallet_base(&state.wallet_dir, expected_name),
             state.network,
             state.daemon.clone(),
+            state.tor_file.clone(),
             state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?,
         )
     };
@@ -1094,7 +1112,7 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) = open_wallet_engine(&base, network, &endpoint, pw).await?;
-                wrap_and_start_tasks(engine, &endpoint).await
+                wrap_and_start_tasks(engine, &endpoint, &tor_file).await
             }
             .await;
             let mut state = tenants.lock().await;
@@ -1133,7 +1151,7 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let (shared, cadence) = engine.into_shared(&endpoint);
+    let (shared, cadence) = engine.into_shared(&endpoint, &tor_file);
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
@@ -1141,7 +1159,7 @@ async fn reopen_with_first_stake_intent(
             // stake the operator is in the middle of. The driver's
             // serving-liveness leg re-attempts it on the next chain advance
             // (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
-            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint).await {
+            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint, &tor_file).await {
                 Ok(Some(h)) => cadence.adopt_serving(h),
                 // `None`: not a serving persona. `AlreadyRunning`: the
                 // driver's leg won the start race and parked the handle.
@@ -1201,8 +1219,12 @@ async fn reopen_with_first_stake_intent(
 /// already-shared form of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and
 /// that one is infallible: the driver polls its way to health rather than
 /// failing to start.
-async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTasks {
-    let cadence = Engine::start_cadence(shared, daemon);
+async fn restart_tasks(
+    shared: &SharedEngine,
+    daemon: &DaemonTarget,
+    tor_file: &TorFile,
+) -> OpenTasks {
+    let cadence = Engine::start_cadence(shared, daemon, tor_file);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1222,7 +1244,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTask
     // re-attempts on the next chain advance. A fresh standoff is drawn either
     // way, so the re-armed host does not republish in lockstep with the
     // failed close.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon, tor_file).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `None`: not a serving persona. `AlreadyRunning`: the freshly
         // re-armed driver's first tick won the start race and parked the
