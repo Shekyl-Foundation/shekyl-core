@@ -1262,6 +1262,21 @@ mod tests {
         cmd
     }
 
+    /// Run a probing test's own half on a runtime made after
+    /// [`probe_if_requested`] has returned. In the probe child the probe runs
+    /// before any runtime exists: a Tokio runtime opens descriptors, and in a
+    /// child that was not handed tor's end one of them can take that end's
+    /// now-free number, which the probe would read as the end held (Copilot,
+    /// #1493).
+    #[cfg(unix)]
+    fn after_the_probe(test: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the test's runtime")
+            .block_on(test);
+    }
+
     /// The token the probe wrote into tor's end, read on ours.
     #[cfg(unix)]
     async fn token_on_our_end(read: &mut ControlRead) -> Vec<u8> {
@@ -1279,35 +1294,37 @@ mod tests {
     /// handed it writes into it, and the token arrives on our end: close-on-exec
     /// is cleared in that child only.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn only_the_child_handed_tors_end_holds_it() {
+    #[test]
+    fn only_the_child_handed_tors_end_holds_it() {
         probe_if_requested();
-        const TEST: &str = concat!(module_path!(), "::only_the_child_handed_tors_end_holds_it");
-        let pair = ControlPair::new().expect("control pair");
-        let number = pair.tor_end();
+        after_the_probe(async {
+            const TEST: &str = concat!(module_path!(), "::only_the_child_handed_tors_end_holds_it");
+            let pair = ControlPair::new().expect("control pair");
+            let number = pair.tor_end();
 
-        let mut other = probe_command(TEST, number, None);
-        let other_status =
-            shekyl_spawn::spawn_lock::status(&mut other).expect("the other spawn runs");
-        assert_eq!(
-            other_status.code(),
-            Some(PROBE_ABSENT),
-            "a spawn not handed tor's end does not hold it"
-        );
+            let mut other = probe_command(TEST, number, None);
+            let other_status =
+                shekyl_spawn::spawn_lock::status(&mut other).expect("the other spawn runs");
+            assert_eq!(
+                other_status.code(),
+                Some(PROBE_ABSENT),
+                "a spawn not handed tor's end does not hold it"
+            );
 
-        let mut handed = Command::from(probe_command(TEST, number, None));
-        inherit_in_the_child_only(&mut handed, number);
-        let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
-        assert_eq!(
-            child.wait().await.expect("exits").code(),
-            Some(PROBE_HELD),
-            "the child handed tor's end holds it"
-        );
-        assert_eq!(
-            token_on_our_end(&mut read).await,
-            PROBE_TOKEN,
-            "what the child wrote into tor's end arrives on ours"
-        );
+            let mut handed = Command::from(probe_command(TEST, number, None));
+            inherit_in_the_child_only(&mut handed, number);
+            let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+            assert_eq!(
+                child.wait().await.expect("exits").code(),
+                Some(PROBE_HELD),
+                "the child handed tor's end holds it"
+            );
+            assert_eq!(
+                token_on_our_end(&mut read).await,
+                PROBE_TOKEN,
+                "what the child wrote into tor's end arrives on ours"
+            );
+        });
     }
 
     /// A descriptor opened without close-on-exec, as C++ in the daemon's process
@@ -1316,34 +1333,36 @@ mod tests {
     /// [`inherit_in_the_child_only`] stops calling
     /// [`shekyl_spawn::inherit::StdioOnly::apply`].
     #[cfg(unix)]
-    #[tokio::test]
-    async fn the_child_handed_tors_end_holds_nothing_else_of_ours() {
+    #[test]
+    fn the_child_handed_tors_end_holds_nothing_else_of_ours() {
         probe_if_requested();
-        const TEST: &str = concat!(
-            module_path!(),
-            "::the_child_handed_tors_end_holds_nothing_else_of_ours"
-        );
-        // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
-        let planted = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
-        assert!(planted >= 3, "a descriptor above stdio");
-        let pair = ControlPair::new().expect("control pair");
-        let number = pair.tor_end();
-        let mut handed = Command::from(probe_command(TEST, number, Some(planted)));
-        inherit_in_the_child_only(&mut handed, number);
-        let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
-        let status = child.wait().await.expect("exits");
-        // SAFETY: closes the descriptor this test opened.
-        unsafe { libc::close(planted) };
-        assert_eq!(
-            status.code(),
-            Some(PROBE_HELD),
-            "the child holds tor's end and not the planted descriptor"
-        );
-        assert_eq!(
-            token_on_our_end(&mut read).await,
-            PROBE_TOKEN,
-            "what the child wrote into tor's end arrives on ours"
-        );
+        after_the_probe(async {
+            const TEST: &str = concat!(
+                module_path!(),
+                "::the_child_handed_tors_end_holds_nothing_else_of_ours"
+            );
+            // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
+            let planted = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+            assert!(planted >= 3, "a descriptor above stdio");
+            let pair = ControlPair::new().expect("control pair");
+            let number = pair.tor_end();
+            let mut handed = Command::from(probe_command(TEST, number, Some(planted)));
+            inherit_in_the_child_only(&mut handed, number);
+            let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+            let status = child.wait().await.expect("exits");
+            // SAFETY: closes the descriptor this test opened.
+            unsafe { libc::close(planted) };
+            assert_eq!(
+                status.code(),
+                Some(PROBE_HELD),
+                "the child holds tor's end and not the planted descriptor"
+            );
+            assert_eq!(
+                token_on_our_end(&mut read).await,
+                PROBE_TOKEN,
+                "what the child wrote into tor's end arrives on ours"
+            );
+        });
     }
 
     /// The variable set on the built command, against an oracle written out

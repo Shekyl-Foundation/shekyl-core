@@ -140,18 +140,15 @@ impl Role {
 /// `/bin/bash` on FreeBSD nor installed everywhere.
 fn stand_in(dir: &Path, role: Role, test: &str) -> VerifiedTorBinary {
     let exe = std::env::current_exe().expect("the test binary");
-    let exe = exe.to_str().expect("a UTF-8 test binary path");
-    assert!(
-        !exe.contains('\''),
-        "a test binary path the script can quote"
+    let exe = sh_quoted(exe.to_str().expect("a UTF-8 test binary path"));
+    let name = sh_quoted(
+        test.split_once("::")
+            .expect("module path has a crate segment")
+            .1,
     );
-    let name = test
-        .split_once("::")
-        .expect("module path has a crate segment")
-        .1;
     let script = format!(
         "#!/bin/sh\n{RECORD}{OWNING_FD}export {STAND_IN_ROLE}={}\nexport {STAND_IN_FD}=\"$fd\"\n\
-         exec '{exe}' '{name}' --exact --nocapture --test-threads=1\n",
+         exec {exe} {name} --exact --nocapture --test-threads=1\n",
         role.name()
     );
     let path = dir.join("tor");
@@ -162,6 +159,21 @@ fn stand_in(dir: &Path, role: Role, test: &str) -> VerifiedTorBinary {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
         .expect("the stand-in runs");
     VerifiedTorBinary::unchecked_for_test(path)
+}
+
+/// `text` as one POSIX shell word: single-quoted, each `'` closing the quote,
+/// escaped, and reopening it, so any path a checkout can have is carried.
+fn sh_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// **A path with an apostrophe is carried to the stand-in whole** (Copilot,
+/// #1493): a checkout or build directory may hold one. Red edit: quote
+/// without escaping, and the word ends at the apostrophe.
+#[test]
+fn a_quoted_word_carries_an_apostrophe() {
+    assert_eq!(sh_quoted("/srv/build"), "'/srv/build'");
+    assert_eq!(sh_quoted("/srv/o'brien/t"), "'/srv/o'\\''brien/t'");
 }
 
 /// The stand-in's role, in a re-run of the test that calls it; returns in
