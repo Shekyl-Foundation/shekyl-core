@@ -3,7 +3,7 @@
   "chain": "small",
   "plan": {
     "path": "rust/shekyl-chain-forge/plans/small.toml",
-    "sha256": "9556de216ed9f49270d3d8189fa048212063e953a0e641195bc1f7ae06e443f7"
+    "sha256": "584ed59dc48eaeedba5523ff51e607f00ab9ec76f6977d34812bd72885d370ea"
   },
   "seed": "4caafe22ad997dbcdf53d5a74394c7d9f594482231d080f2e43bb364170cdf9d",
   "network": "regtest",
@@ -15,11 +15,11 @@
     "block_seconds": 1
   },
   "corpus_format_version": 5,
-  "blocks": 1507,
-  "tip_height": 1504,
+  "blocks": 1508,
+  "tip_height": 1505,
   "transactions": 292,
-  "corpus_sha256": "fead3202df8e561314fea0dc7346819a9918275bbce4f12fded6942b8b740fc5",
-  "trace_sha256": "04bd05cb99c8165464943fa5341aefaa4e2357c97f1bd9a7000f125aa15f6939",
+  "corpus_sha256": "bfe1be8e32fe237e29a4ab4bfb0a8d4af9270c7d74d4358fc5c35441630657b3",
+  "trace_sha256": "91cefd1f56a72aa89c51f11edd093caef3f07fc3dd9912f94519d586e46beed0",
   "events": [
     {
       "name": "first-spend-2in",
