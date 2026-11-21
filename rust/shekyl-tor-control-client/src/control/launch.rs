@@ -1156,33 +1156,157 @@ mod tests {
         launcher.join().expect("the launching thread");
     }
 
-    /// Tor's end reaches the child it is meant for, and no other. The first child is
-    /// handed it and finds it open; a second spawned while the pair exists, which is
-    /// not handed it, finds it closed: close-on-exec is cleared in the first child
-    /// only.
+    /// Set only in a probe child: the number of tor's end. The probe writes
+    /// [`PROBE_TOKEN`] into it, so the token reaches our end only when the child
+    /// holds tor's socket itself, not merely some descriptor with that number.
+    #[cfg(unix)]
+    const PROBE_TOR_END: &str = "SHEKYL_TOR_LAUNCH_PROBE_TOR_END";
+
+    /// Set only in a probe child, beside [`PROBE_TOR_END`]: a descriptor the
+    /// child must not hold as `/dev/null`.
+    #[cfg(unix)]
+    const PROBE_PLANTED: &str = "SHEKYL_TOR_LAUNCH_PROBE_PLANTED";
+
+    /// What the probe writes into tor's end.
+    #[cfg(unix)]
+    const PROBE_TOKEN: &[u8] = b"the probe holds tor's end\n";
+
+    /// The probe's exit when it wrote [`PROBE_TOKEN`] whole and, when one was
+    /// named, the planted descriptor is not there. It is neither libtest's pass
+    /// (0) nor its failure (101), so a re-run that matched no test is never read
+    /// as a probe's answer.
+    #[cfg(unix)]
+    const PROBE_HELD: i32 = 40;
+
+    /// The probe's exit when tor's end is not open in the child.
+    #[cfg(unix)]
+    const PROBE_ABSENT: i32 = 41;
+
+    /// The probe's exit when the token was not written whole, or the planted
+    /// descriptor reached the child.
+    #[cfg(unix)]
+    const PROBE_WRONG: i32 = 42;
+
+    /// How long the parent waits for the token on our end.
+    #[cfg(unix)]
+    const PROBE_TOKEN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// The probe child's role, in a re-run of the test that calls it; returns in
+    /// the parent. The child looks at its own descriptor table with `fcntl`, never
+    /// at `/dev/fd`: FreeBSD without `fdescfs` lists only 0 to 2 there.
+    #[cfg(unix)]
+    fn probe_if_requested() {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        let number = |name: &str| {
+            std::env::var_os(name).map(|n| {
+                n.to_str()
+                    .and_then(|n| n.parse::<libc::c_int>().ok())
+                    .expect("a descriptor number")
+            })
+        };
+        let Some(end) = number(PROBE_TOR_END) else {
+            return;
+        };
+        // SAFETY: `F_GETFD` reads only this descriptor's flags; an unopened
+        // descriptor fails with `EBADF`.
+        if unsafe { libc::fcntl(end, libc::F_GETFD) } < 0 {
+            std::process::exit(PROBE_ABSENT);
+        }
+        // SAFETY: writes from a live slice of its stated length.
+        let wrote = unsafe { libc::write(end, PROBE_TOKEN.as_ptr().cast(), PROBE_TOKEN.len()) };
+        if usize::try_from(wrote).ok() != Some(PROBE_TOKEN.len()) {
+            std::process::exit(PROBE_WRONG);
+        }
+        if let Some(planted) = number(PROBE_PLANTED) {
+            let null = std::fs::metadata("/dev/null").expect("/dev/null");
+            // SAFETY: as above.
+            let open = unsafe { libc::fcntl(planted, libc::F_GETFD) } >= 0;
+            let is_null = open && {
+                // SAFETY: `planted` is open in this process; `ManuallyDrop` never
+                // closes it, so the borrow takes nothing.
+                let file =
+                    std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(planted) });
+                file.metadata()
+                    .is_ok_and(|m| m.ino() == null.ino() && m.rdev() == null.rdev())
+            };
+            if is_null {
+                std::process::exit(PROBE_WRONG);
+            }
+        }
+        std::process::exit(PROBE_HELD);
+    }
+
+    /// A re-run of `test` (its full path, from `module_path!`) as the probe for
+    /// tor's end at `tor_end`, and for `planted` when given.
+    #[cfg(unix)]
+    fn probe_command(
+        test: &str,
+        tor_end: TorEndNumber,
+        planted: Option<libc::c_int>,
+    ) -> std::process::Command {
+        let name = test
+            .split_once("::")
+            .expect("module path has a crate segment")
+            .1;
+        let mut cmd = std::process::Command::new(std::env::current_exe().expect("test executable"));
+        cmd.args([name, "--exact", "--nocapture", "--test-threads=1"])
+            .env(PROBE_TOR_END, tor_end.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if let Some(planted) = planted {
+            cmd.env(PROBE_PLANTED, planted.to_string());
+        }
+        cmd
+    }
+
+    /// The token the probe wrote into tor's end, read on ours.
+    #[cfg(unix)]
+    async fn token_on_our_end(read: &mut ControlRead) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+        let mut token = vec![0; PROBE_TOKEN.len()];
+        tokio::time::timeout(PROBE_TOKEN_WAIT, read.read_exact(&mut token))
+            .await
+            .expect("the token reaches our end in time")
+            .expect("read our end");
+        token
+    }
+
+    /// Tor's end reaches the child it is meant for, and no other. A child spawned
+    /// while the pair exists, which is not handed it, finds it closed; the child
+    /// handed it writes into it, and the token arrives on our end: close-on-exec
+    /// is cleared in that child only.
     #[cfg(unix)]
     #[tokio::test]
     async fn only_the_child_handed_tors_end_holds_it() {
+        probe_if_requested();
+        const TEST: &str = concat!(module_path!(), "::only_the_child_handed_tors_end_holds_it");
         let pair = ControlPair::new().expect("control pair");
         let number = pair.tor_end();
-        let probe = format!("test -e /dev/fd/{number}");
 
-        let mut other = std::process::Command::new("/bin/sh");
-        other.args(["-c", &probe]);
+        let mut other = probe_command(TEST, number, None);
         let other_status =
             shekyl_spawn::spawn_lock::status(&mut other).expect("the other spawn runs");
-        assert!(
-            !other_status.success(),
+        assert_eq!(
+            other_status.code(),
+            Some(PROBE_ABSENT),
             "a spawn not handed tor's end does not hold it"
         );
 
-        let mut handed = Command::new("/bin/sh");
-        handed.args(["-c", &probe]);
+        let mut handed = Command::from(probe_command(TEST, number, None));
         inherit_in_the_child_only(&mut handed, number);
-        let (mut child, _read, _write) = pair.spawn(&mut handed, None).expect("spawn");
-        assert!(
-            child.wait().await.expect("exits").success(),
+        let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+        assert_eq!(
+            child.wait().await.expect("exits").code(),
+            Some(PROBE_HELD),
             "the child handed tor's end holds it"
+        );
+        assert_eq!(
+            token_on_our_end(&mut read).await,
+            PROBE_TOKEN,
+            "what the child wrote into tor's end arrives on ours"
         );
     }
 
@@ -1194,24 +1318,31 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn the_child_handed_tors_end_holds_nothing_else_of_ours() {
+        probe_if_requested();
+        const TEST: &str = concat!(
+            module_path!(),
+            "::the_child_handed_tors_end_holds_nothing_else_of_ours"
+        );
         // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
         let planted = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
         assert!(planted >= 3, "a descriptor above stdio");
         let pair = ControlPair::new().expect("control pair");
         let number = pair.tor_end();
-        let mut handed = Command::new("/bin/sh");
-        handed.args([
-            "-c",
-            &format!("test -e /dev/fd/{number} && ! test -e /dev/fd/{planted}"),
-        ]);
+        let mut handed = Command::from(probe_command(TEST, number, Some(planted)));
         inherit_in_the_child_only(&mut handed, number);
-        let (mut child, _read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+        let (mut child, mut read, _write) = pair.spawn(&mut handed, None).expect("spawn");
         let status = child.wait().await.expect("exits");
         // SAFETY: closes the descriptor this test opened.
         unsafe { libc::close(planted) };
-        assert!(
-            status.success(),
+        assert_eq!(
+            status.code(),
+            Some(PROBE_HELD),
             "the child holds tor's end and not the planted descriptor"
+        );
+        assert_eq!(
+            token_on_our_end(&mut read).await,
+            PROBE_TOKEN,
+            "what the child wrote into tor's end arrives on ours"
         );
     }
 
@@ -1259,7 +1390,11 @@ mod tests {
     const ENV_SENTINEL_NAME: &str = "SHEKYL_TEST_SENTINEL";
     const ENV_SENTINEL_VALUE: &str = "must-not-reach-tor";
     const PRELOAD_NAME: &str = "LD_PRELOAD";
-    const PRELOAD_VALUE: &str = "/nonexistent/shekyl-test-preload.so";
+    /// An empty list. The re-executed test binary's own loader reads it first,
+    /// and FreeBSD's refuses to start a program whose preload it cannot open
+    /// (glibc only warns); an empty list loads nothing on either. The test
+    /// looks for the name in the child, never the value.
+    const PRELOAD_VALUE: &str = "";
 
     /// What `/bin/sh` sets for itself on the way to `exec`. Not inherited,
     /// and not filtered on Windows: a leak of one of these names there is real.
