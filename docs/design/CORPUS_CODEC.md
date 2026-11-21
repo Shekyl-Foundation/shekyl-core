@@ -1,9 +1,10 @@
 # The corpus codec (`shekyl-corpus`)
 
 **Status: LIVING CONTRACT** — built in #1434 (`CF-4a` PR 2, merged
-2026-11-19 as `f5e5cd7908`); last verified 2026-11-20 at
-`dev@7a249e462c`, where the chain store's tests read the forged
-shard-fill chain's corpus through it. Ruled by Rick, 2026-11-18: "Corpus
+2026-11-19 as `f5e5cd7908`); layout 5 and its `offer` record added by
+`CF-3` (2026-11-20), and verified there: the forged chains are written at
+layout 5 and replayed through it, and the committed corpora still read at
+layout 4. Ruled by Rick, 2026-11-18: "Corpus
 codec crate: yes, in its own PR under rule 26. Codec only: magic, version,
 encode and decode. The five committed corpora must round-trip byte for
 byte. Classify the crate in the production graph check."
@@ -28,16 +29,21 @@ code.
 
 ## 2. What it holds
 
-- `CORPUS_MAGIC` and `CORPUS_FORMAT_VERSION` (layout 4).
+- `CORPUS_MAGIC`, `CORPUS_FORMAT_VERSION` (layout 5, what the writer
+  writes) and `LAYOUT_4`, the one older layout the reader still reads
+  (`CF-R7`).
 - `CorpusWriter`: the one encoder. It verifies each record before it lands
   (RD-F15: the bodies match the block's listed hashes in count, order and
   hash, and each bundle body is its reference's) and patches the header's
   record count at `finish`.
 - `CorpusReader`: the one decoder. `open` refuses a foreign magic, version
   or network tag; `next_record` yields `Record::Extend` (the parsed block,
-  its bodies and its bundle section) or `Record::Rewind`, re-deriving every
-  check the writer made.
-- `CorpusFault`: every refusal of either side, by name.
+  its bodies and its bundle section), `Record::Rewind` or, from layout 5,
+  `Record::Offer` (an `extend`'s contents without the height: a block that
+  does not extend the tip), re-deriving every check the writer made.
+- `CorpusFault`: every refusal of either side, by name. A refusal of a
+  block names it by `RecordAt`: an `extend` by its height, an `offer` by
+  its place among the records.
 
 Its dependencies are the wire types it parses (`shekyl-wire`), the header's
 network tag (`shekyl-network`), heights and section references
@@ -60,7 +66,10 @@ lockfile gains only the crate itself.
 - **The committed corpora round-trip byte for byte**
   (`shekyl-chain-ingest/tests/committed_corpora.rs`): the five replay
   vectors and every bench fixture corpus are decoded, written again from
-  the parsed records, and compared with the committed bytes. The five
+  the parsed records, and compared with the committed bytes. They are
+  layout 4 and the writer writes layout 5, which is layout 4 plus `offer`,
+  so every record re-encodes to its own bytes and the header's version
+  field is the one field held to the current layout instead. The five
   vectors are named, so a missing one fails the test rather than
   shrinking it. It lives beside the corpora rather than in this crate so
   that both a regenerated corpus and a changed codec run it:
@@ -71,10 +80,18 @@ lockfile gains only the crate itself.
   tampered body, a crafted `tx_count`, a truncation, an unfinished file,
   bytes past the declared end, a height gap, an oversized length and
   height exhaustion on read; the rewind law on both sides; an unknown tag,
-  `0x03` among them.
+  `0x03` among them in both layouts; an offer round-tripping between
+  extends without moving the height law, its bodies verified on both
+  sides and named by its record; a layout-4 corpus read, and an `offer`
+  in one refused as an unknown tag; the layouts before 4 and after 5
+  refused; an `extend` on an offered block at the height one past it, and
+  that branch extended after it; an `extend` that follows neither the tip
+  nor an offer refused on both sides, and one on an offer at another
+  height refused as a gap.
 - **The ingest's adapter** (`shekyl-chain-ingest`'s `corpus_tests.rs`):
   records come out as sequenced events, a rewind as `IngestEvent::Rewind`,
-  a bundle section on the candidate, and the codec's refusals unchanged.
+  an offer as `IngestEvent::Offer`, a bundle section on the candidate, and
+  the codec's refusals unchanged.
 - **The production graph** (`scripts/ci/shipped_graph.py`): the crate is
   in this repository's release graph through `shekyl-chain-ingest`, so it
   needs neither `HEADED_FOR_PRODUCTION` nor `NOT_SHIPPED`; `classify()`
@@ -89,15 +106,23 @@ lockfile gains only the crate itself.
 ## 5. Changing the format
 
 A layout change bumps `CORPUS_FORMAT_VERSION` (rule 42's discipline), and
-today's reader refuses every value but 4: an artifact is rebuilt, never
-migrated (rule 15). `CF-3`'s layout 5 is the next such change
-(`CHAIN_FORGE.md` §7.1), and it lands in this crate; which layouts its
-reader accepts while layout-4 corpora remain is `CF-R7`'s ruling.
+the reader refuses every value but the current layout: an artifact is
+rebuilt, never migrated (rule 15). The one exception is `LAYOUT_4`
+(`CF-R7`): the reader also reads layout 4, with layout 4's tags, until the
+last layout-4 corpus is gone. Those are the five committed corpora, which
+`CF-5` deletes when their last consumer has moved to a forged chain, and
+that change deletes `LAYOUT_4` and its arm (the trigger is named at the
+constant).
 
-The record, the height cursor, the integrity checks, the writer and the
-reader are separate modules. A new tag is a `Record` variant and the two
-arms that encode and decode it. The cursor moves only for a tag that
-moves the tip, so an offer — a block that does not extend the tip — does
-not change the height law. The section-blob ceiling (`MAX_SECTION_BLOB`)
+The record, the height cursor, the lineage, the integrity checks, the
+writer and the reader are separate modules. A new tag is a `Record`
+variant and the two arms that encode and decode it. The cursor moves only
+for a tag that moves the tip. An `extend` may follow the tip, or a block
+an earlier `offer` carried, at the height one past it: the first block a
+corpus writes after the chain switched to an offered branch, which is the
+chain it extends from then on. An `extend` whose parent is neither is
+refused (`ExtendUnfollowed`, the `lineage` module). The corpus still never
+says the chain switched; an `extend` on an offered block that did not
+become the tip is refused by the replay, its parent not being the tip. The section-blob ceiling (`MAX_SECTION_BLOB`)
 is the bundle-body packet ceiling; the ingest adapter's corpus tests hold
 the two equal.
