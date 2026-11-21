@@ -1464,7 +1464,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             fee,
             ..
         } => (
-            // Wire `curve_trees_tree_depth` is the LMDB depth = proof layer
+            // Wire `curve_trees_tree_depth` is the consensus depth = proof layer
             // count − 1 (`build_wire_tx`); `predict_weight` models the FCMP++
             // proof size from the layer count, so add 1 back.
             u8::try_from(p.tree_depth + 1).expect("tree_depth + 1 fits u8"),
@@ -3911,7 +3911,7 @@ async fn build_then_submit_via_test_daemon_uses_daemon_fee() {
             fee,
             ..
         } => (
-            // Wire `curve_trees_tree_depth` is the LMDB depth = proof layer
+            // Wire `curve_trees_tree_depth` is the consensus depth = proof layer
             // count − 1 (`build_wire_tx`); `predict_weight` models the FCMP++
             // proof size from the layer count, so add 1 back.
             u8::try_from(p.tree_depth + 1).expect("tree_depth + 1 fits u8"),

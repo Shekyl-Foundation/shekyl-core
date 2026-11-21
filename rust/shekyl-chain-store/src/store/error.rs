@@ -268,17 +268,10 @@ pub enum StoreCannot {
     /// a bug, and the loop will appear to work.
     ///
     /// **Port-boundary divergence, recorded as DRS-W17** in
-    /// `LMDB_WRITE_ATOMICITY_AUDIT.md` §9: the C++ `batch_start()` returns
-    /// `bool`, and two core callers *spin* on it —
-    /// `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(..)))`
-    /// and `:6743` likewise. Those loops must **not** be transliterated to
-    /// `while store.write(..).is_err()`. Serialization of writers is owned by
-    /// the core layer above the store (`m_blockchain_lock`,
-    /// `CRITICAL_REGION_LOCAL1` at `blockchain.cpp:277`), which is why the
-    /// C++ never actually contends there; LMDB's own writer mutex sits below
-    /// that and is never reached by a second thread. No state diff can see
-    /// this divergence — it is a concurrency property, not a stored one — so
-    /// it lives in the register rather than in any comparator.
+    /// `LMDB_WRITE_ATOMICITY_AUDIT.md` §9: a caller must **not** wrap this
+    /// in `while store.write(..).is_err()`. No state diff can see this
+    /// divergence — it is a concurrency property, not a stored one — so it
+    /// lives in the register rather than in any comparator.
     WriteInProgress,
     /// [`ApplyPolicy::stubbed`](crate::apply_policy::ApplyPolicy::stubbed)
     /// was given an empty family list, which is `Full` wearing a non-parity
@@ -476,7 +469,7 @@ pub enum AltCannot {
         at: BlockHash,
     },
     /// `insert_alt_block` of a hash the store already holds — CEN-K3's
-    /// belt (`MDB_NODUPDATA`), re-specified as the one typed refusal (SAL-4).
+    /// belt, re-specified as the one typed refusal (SAL-4).
     AlreadyHeld,
     /// `remove_alt_block` of a hash the store does not hold. Removing what
     /// is not held is a caller-contract violation — L14's insert-versus-upsert

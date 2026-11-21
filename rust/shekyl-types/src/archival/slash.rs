@@ -19,8 +19,7 @@ use crate::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 /// record does not hold at tip, the answer is *yes* iff a logged slash
 /// strictly above `h` removed it — either this exact shard was erased from
 /// a compact set that had held it since `add_epoch`, or the record was a
-/// complete tree that a slash demoted to empty (`db_lmdb.cpp`,
-/// `archival_slash_removed_holding_after`). The two arms are the two
+/// complete tree that a slash demoted to empty. The two arms are the two
 /// variants; the C++'s `holdings_pre_kind` byte plus a zero-when-unused
 /// `slashed_shard_add_epoch` become one sum, so an add-epoch on a
 /// complete-tree demotion cannot be spelled.

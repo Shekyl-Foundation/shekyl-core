@@ -45,10 +45,9 @@ fn decode_hex(s: &str) -> Vec<u8> {
 /// canonical-length filler keys/sigs. Mirrors `validate()`'s invariants
 /// (strictly increasing epochs, aligned work claims, positive amounts).
 ///
-/// The epochs are the lowest claimable pair ({1, 2}, settled at tip epoch 3)
-/// so the real-LMDB connect/pop round-trip KAT
-/// (`tests/unit_tests/archival_substrate_lmdb.cpp`) only has to append
-/// ~3 settlement epochs of blocks to make them claimable at connect.
+/// The epochs are the lowest claimable pair ({1, 2}, settled at tip epoch 3),
+/// so a chain needs only ~3 settlement epochs of blocks to make them
+/// claimable at connect.
 fn build_connect_vin() -> ArchivalRewardEmissionVin {
     const SHARD: u64 = 7;
     let epochs = [1u64, 2];

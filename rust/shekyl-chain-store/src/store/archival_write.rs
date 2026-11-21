@@ -63,9 +63,8 @@
 //!
 //! `total_burned` is not an archival family: it is the chain-state cell
 //! phase 8 owns, and the slash contribution goes through phase 8's one
-//! fold. `block_burn[h]` stays the emission burn alone, as the C++ has it
-//! (`apply_archival_slash_one` adds to `total_burned` and to nothing
-//! per-height, `db_lmdb.cpp:5615–5618`); the cell's write is one
+//! fold. `block_burn[h]` stays the emission burn alone: a slash adds to
+//! `total_burned` and to nothing per-height; the cell's write is one
 //! `checked_add` over both contributors, so SI-8 sees one running total.
 //!
 //! # Settlement rows (`ARCHIVAL_SETTLEMENT_WRITER.md` §14, `SO-D10`)

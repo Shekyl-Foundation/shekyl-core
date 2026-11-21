@@ -4,14 +4,13 @@
 // BSD-3-Clause
 
 //! `Transaction::write_segments` — the chain store's three-way cut of a
-//! transaction blob (S-CHAIN-W SCW-9; `db_lmdb.cpp` `add_transaction_data`).
+//! transaction blob (S-CHAIN-W SCW-9).
 //!
 //! The cut is layout, not consensus: the segments concatenate to exactly
-//! `Transaction::write`, and the first two concatenate to exactly the C++
-//! `serialize_base` framing (the `pruned_hex` the parity fixture pins), so
-//! `txs_pruned` / `txs_pqc_auths` / `txs_prunable` hold byte-identical rows
-//! on both engines. Three shapes: a full FCMP++ spend (both fixtures), and
-//! the coinbase (no pqc_auths, no prunable).
+//! `Transaction::write`, and the first two concatenate to exactly the
+//! `serialize_base` framing (the `pruned_hex` the parity fixture pins).
+//! Three shapes: a full FCMP++ spend (both fixtures), and the coinbase (no
+//! pqc_auths, no prunable).
 
 use std::path::PathBuf;
 

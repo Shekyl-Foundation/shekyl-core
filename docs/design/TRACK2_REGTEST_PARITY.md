@@ -120,7 +120,7 @@ reopening trigger; CHANGELOG.
 - **Reorg failures are daemon-rollback-first.** The reorg cases are the first live
   exercise of the daemon's `pop_block` deferred-insertion tree rollback (popping
   H removes leaves from outputs created at H−maturity). Diagnose the daemon
-  rollback / LMDB-atomicity path before suspecting wallet `ReselectionRequired`.
+  rollback / store-atomicity path before suspecting wallet `ReselectionRequired`.
 - **X3 ordering parity is first testable at mixed maturity.** `gindex ==
   global_output_index` trivially (both creation order). The consensus-relevant
   ordering is the tree leaf position = **drain order `(maturity, gindex)`**

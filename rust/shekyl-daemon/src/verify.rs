@@ -384,8 +384,22 @@ mod tests {
         assert_eq!(walked.warnings.len(), 1);
         let warning = &walked.warnings[0];
         assert!(warning.starts_with("warning: managed Tor: "));
-        assert!(warning.contains("was not started"));
-        assert!(warning.contains(missing.to_str().unwrap()));
+        // The pin is this target's: a pinned target refuses the named file,
+        // and a target with no bundle (FreeBSD) says so before any file is
+        // read.
+        match shekyl_tor_control_client::binary::CURRENT_DISPOSITION {
+            shekyl_tor_control_client::binary::TorDisposition::Pinned(_) => {
+                assert!(warning.contains("was not started"), "{warning}");
+                assert!(warning.contains(missing.to_str().unwrap()), "{warning}");
+            }
+            shekyl_tor_control_client::binary::TorDisposition::Unavailable { reason } => {
+                let sentence =
+                    shekyl_tor_status::install_sentence(&shekyl_tor_status::TorCause::Unavailable)
+                        .expect("an install cause");
+                assert!(warning.contains(sentence), "{warning}");
+                assert!(warning.contains(reason), "{warning}");
+            }
+        }
         assert!(warning.contains("this node will wait for Tor"));
         assert!(
             warning.contains("It will not sync until Tor is up."),
