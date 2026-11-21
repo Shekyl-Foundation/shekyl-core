@@ -406,8 +406,10 @@ that probe as the answer.
   write it can replace `shekyld`; the pin was never a defence against root.
 - **macOS `DYLD_*` variables.** TB-7 part 2 clears them from the child's
   environment, and the library is named by `@executable_path`, which no search
-  path overrides. Tor's macOS binaries ship unsigned; Shekyl's Developer ID
-  signature turns on the hardened runtime, which ignores `DYLD_*` variables,
+  path overrides. Tor's macOS binaries carry no identity (x86_64 unsigned;
+  arm64, from 16.0.1, the linker's ad-hoc signature, which Shekyl's replaces
+  and the tie accepts as exactly that); Shekyl's Developer ID signature turns
+  on the hardened runtime, which ignores `DYLD_*` variables,
   and library validation, which refuses a `libevent` signed by another team
   (TB-11). These are a second layer, not the one relied on.
 - **A local attacker who can write tor's directory between the check and the
