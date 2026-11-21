@@ -28,8 +28,10 @@
 //! reaches is not a default. Its `DataDirectory` is a unique 0700 subdirectory
 //! of a caller-named parent. A respawn inside one boot keeps that directory,
 //! so the guard sample in `state` survives (`TSR-Q1`). The directory is wiped
-//! when the daemon stops, and the next boot mints a new onion. The directory
-//! cache beside it is not that directory, and Tor is never pointed at it. The
+//! when the daemon stops, and the next boot mints a new onion unless the
+//! operator gave a persistent one (`TSR-Q15`), whose guards are kept beside
+//! the directory cache. Neither is that directory, and Tor is never pointed
+//! at either. The
 //! operator-provisioned stable posture remains available and is untouched by
 //! this crate.
 //!

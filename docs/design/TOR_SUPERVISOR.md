@@ -74,18 +74,19 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Requirements | The brief's items 3 to 7 (operator-fixable states, one log stream, suspend and resume, floor-device bounds, Windows first-class) are requirements of this round |
 | Acceptance | §7's matrix on Linux, Windows and macOS, then a seven-day soak on each, a Pi 4 as the Linux host. Nothing is called "24/7" before that |
 | `TSR-Q1`: a respawn is a repair | The `DataDirectory` is kept across respawns within a boot, so guards and the consensus cache survive. The daemon holds the hs-id seed for the boot in secure memory (rules 35, 36) and republishes the **same** onion; `ADD_ONION` still sends `Flags=DiscardPK`, since Tor need not hand back a key we hold. After a run of consecutive launch failures on a kept directory, the next launch uses a fresh one; the run length is set from `TSR-M2`'s failure distribution, not chosen |
-| `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
+| `TSR-Q2`: guards are per boot for a per-boot onion, and persist with a persistent one (amended by Rick, 2026-11-21) | A per-boot onion's guards do not persist across boots; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1`. A persistent onion (`TSR-Q15`) keeps its guards: both reasons fail for it. The harm is no longer per boot, since one hostile guard draw exposes a long-lived service's location for good and fresh guards at every boot draw again each time; and a kept guard links nothing the onion does not already link |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
 | `TSR-Q4`: Tor status in RPC | The `health` grant (`RPC_CHANNEL.md` §6.1, in the `view` preset) carries one boolean, as `has_peers` does: an outbound session hides this node's address now, the class part of the relay's hop-0 verdict. The pin part, whether this node's own transaction leaves now, is `OwnTx`'s under the `status` grant: it moves when the node's own-edge peers disconnect, which a `health` caller must not be able to watch (`GS-Q3`, review 2026-10-23). State, cause, since and the respawn count are `status` fields; `TSR-Q12` (2026-10-20) lists every one, and the RW round names them. Tor's state and timing stay off `health` (§8, "Link the RPC endpoint to the onion") |
 | `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). Each of the service's two descriptors has its own rounds, and the probe goes out, and its check's list is drawn, once every open round is `round_wait` old (Rick, 2026-11-15). Outside a round, a republish when no round has begun within the descriptor's lifetime, and one probe after a clock jump while Running; each probe also asks the round's directories (Rick, 2026-10-31, §4.5 "Overdue", "The directory check") |
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
-| `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
+| `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; for a per-boot onion, guards, keys and the onion stay per boot (a persistent onion keeps its key and its guards, `TSR-Q15`). A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept in the cache, and Tor is never pointed at the cache directory itself; a persistent onion's `state` is kept apart, in a directory of that onion's own (`TSR-Q15`). The per-boot rule becomes: for a per-boot onion, nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
 | `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
 | `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The daemon starts. A pin failure does not execute the binary (`TSR-F6`). What the node does, which `OwnTx` applies, and which `ManagedTorFix` values the message offers, is the posture table in this section. Health is false meanwhile (`TSR-Q4`). A failed start is a Process cause (§4.4), not this row. TB-2 matches this row |
 | `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act: whoever can block or break the node's Tor would otherwise choose its transport. The `Clearnet::Off` row of the posture table is that rule. `ClearnetOn` and `ClearnetOnly` are the operator's act, and the node does not apply them |
 | `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | The `status` grant (`RPC_CHANNEL.md` §6.1; outside the `view` preset, so the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. The `health` grant keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, is RT-15's owner case, and no leg carries that grant yet: `RPC_CHANNEL.md` RT-15's owner-only socket or pipe is RT-W10's to build and is not authorized (§13), so the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`, the GUI sync lane), and RT-W10's leg follows for every other same-user client. A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrollment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
 | `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes, their detail, `OwnTx`, and `ManagedTorFix` values, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
 | `TSR-Q14`: Tor does Tor (Rick, 2026-10-25) | The managed Tor's own judgment governs everything Tor already does: circuits, path selection, guard and network liveness, retries. The supervisor reads Tor's statements and reports them; it never infers a Tor-domain verdict from its own traffic. Our evidence covers only what Tor cannot see: our process, our control connection, and our own onion's reachability. Consistent with it: the liveness sample (a wedged process is ours), backoff and respawn (ours), and `SocksTimeout`, `ExtendedErrors` and `IsolateSOCKSAuth` (configuring Tor, not replacing it). Withdrawn under it: an External verdict from this node's dial replies, and counting `CIRC`/`ORCONN` events. The probe (§4.5) answers one question, whether the node is reachable at its own onion, and grows into no circuit-health monitor. **Restated 2026-11-15 (Rick):** the probe is not a monitor of each circuit; when asked, the manager is the best-placed component to say whether the onion path works, and it answers (§4.5a). The dialer asks it through the Tor connector and no longer infers that from its own traffic; no Tor-domain verdict is inferred from this node's traffic |
+| `TSR-Q15`: a persistent onion, the operator's key (Rick, 2026-11-21) | A managed Tor may publish the operator's onion at every boot: `tor-onion-key-file` names Tor's own `hs_ed25519_secret_key`, as a seed node's compiled onion needs, so the Tor that serves it is the one the daemon supervises rather than one run beside it. The walk loads the key once, read through a handle judged first (only this account and the superuser may reach it; a systemd credential qualifies) and parsed where onion secrets live, and the start hands that identity to Tor; a key named and not usable refuses the start, never a fallback to a new onion. Its guards persist (`TSR-Q2`): Tor's `state` file, copied into a fresh directory at launch and back after a clean stop of a Tor that bootstrapped, in `tor-guard-state-<service id>` beside the directory cache, so a key changed or removed never starts with another onion's guards. Stock Tor keeps its second-layer guards in memory only; keeping them is the next increment's, and until it lands a persistent onion is not recommended to an operator with clearnet off. A second Tor on the same key is named, never raced: §4.5, "Another publisher". Moving a host from a Tor run beside the daemon to this stops that Tor first, or the host is its own second publisher |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
 
 ### Posture while the managed Tor is down — RULED 2026-10-20 (`TSR-Q10`, `TSR-Q11`)
@@ -171,7 +172,7 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs` `supervise` (its `tor::begin`); `rust/shekyl-daemon/src/tor/mod.rs` `Drive::spawn` (the kept directory) and `drive` (the seed, minted once); `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `Policy` (no bootstrap deadline among its fields) |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion key is held for the boot: a new one, or the operator's (`TSR-Q15`). There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs` `supervise` (its `tor::begin`); `rust/shekyl-daemon/src/tor/mod.rs` `Drive::spawn` (the kept directory) and `drive` (the seed, minted once); `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs` `Policy` (no bootstrap deadline among its fields) |
 | A managed Tor's death takes that incarnation's route down and the supervisor respawns. A shutdown takes an installed route down and does not announce. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor/mod.rs` |
 | The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs` `Command::supervisor_events`; `rust/shekyl-tor-control-client/src/control/actor.rs` `bootstrap_poll_loop` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs` `EVENT_QUEUE_EVENTS`, `EventSink` |
@@ -942,11 +943,10 @@ it.
 - **The copy must be ours (Rick, 2026-11-01).** A directory counts as
   holding the descriptor only when its copy's `revision-counter` is ours,
   read with the check from `GETINFO hs/service/desc/id/<onion>`
-  (`control_getinfo.c:569`; `Input::DirectoriesDrawn`'s `ours`). Any other
-  counter is a stale copy and a miss for that directory: below ours, a later
-  upload never reached it; above ours, it is a copy numbered on a clock that
-  has since gone back, which the directory keeps serving and refuses to
-  replace. A copy with no readable counter is excluded. That key gives the
+  (`control_getinfo.c:569`; `Input::DirectoriesDrawn`'s `ours`). A counter
+  below ours is a stale copy and a miss for that directory: a later upload
+  never reached it. A counter above ours is a newer copy, its own verdict
+  ("Another publisher", below). A copy with no readable counter is excluded. That key gives the
   service's `desc_current` only (`hs_service.c:4222-4242`). A client asks
   for the current time period's descriptor (`hs_client.c:232`), and from the
   period's start to the next shared-random run, 12:00 to 00:00 UTC on the
@@ -1058,7 +1058,8 @@ it.
   descriptor this node uploaded under a key a correct-clock client would not
   ask for is found by these fetches as well. The clock is named from the
   consensus instead (below); what the check sees of a clock that went back
-  is the stale copy its counter comparison counts as a miss.
+  is this node's own earlier copy above its counter, a newer copy whose
+  cause the clock or the refused round names ("Another publisher", below).
 
 **The clock (Rick, 2026-11-01).** Tor numbers each descriptor with the
 seconds since the start of the shared-random run it uses, from its own
@@ -1090,8 +1091,25 @@ descriptor does not: its directories may hold no newer copy to refuse
 against. A round in which no upload succeeded leaves refused uploads
 standing: it is not a round of uploads, and Tor retries its own.
 
-**No republish while it cannot help.** While the clock is named, or either
-descriptor's latest round was refused, nothing is republished: a republish replaces the
+**Another publisher (Rick, 2026-11-21).** A directory that returns this
+onion's descriptor at a counter above ours holds a copy this node did not
+publish: Tor returns only a copy it decoded, which the onion's key signed, so
+one such copy is proof that another holder of the key published it (a second
+host on a persistent onion's key, `TSR-Q15`), or that this node did before its
+clock went back. The check's verdict is then contested, whatever the other
+directories hold, and the judge decides it at once, probe in or not: a named
+clock or a standing refused round keeps its cause, since either is why this
+node's own earlier copy sits above its counter, and a refused round names
+itself over this cause. Otherwise inbound is `Unreachable` with
+`PublishedElsewhere`, said as "Another computer is using this node's Tor
+address and key, so peers may reach it instead of this node. Stop the other
+one, or give this node its own key." No refetch and no republish: clients
+reach whichever copy is newest, and a republish would only race the other
+host's. A later check that finds no newer copy judges the facet again.
+
+**No republish while it cannot help.** While the clock is named, another
+publisher is, or either descriptor's latest round was refused, nothing is
+republished: a republish replaces the
 introduction points, and the directories go on advertising the old ones
 (the VM run's 36 republishes, each tearing down the points the served copy
 named, so every stranger's dial failed at introduction). The overdue check
@@ -1355,7 +1373,8 @@ without a teardown is renamed the same way, and its tombstone is left to the
 sweep. What a respawned Tor reads is the kept directory's `state`; when Tor first
 writes it, and what a kill loses, is `TSR-M6`.
 
-The public directory cache (`TSR-Q8`) is the one thing that outlives a boot.
+The public directory cache (`TSR-Q8`) is the one thing that outlives a boot,
+and, with a persistent onion, that onion's guards (`TSR-Q15`).
 The daemon owns a cache directory (mode 0700) beside the per-boot ones. At
 launch into a **fresh** directory, the launch copies in
 `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and
@@ -1385,7 +1404,9 @@ cache directory is created with an owner-only access list.
 ### 4.8 Identity across a respawn
 
 The onion does not change across a respawn (`TSR-Q1`): the daemon republishes
-it from the seed it holds for the boot. Nothing is republished to the peer
+it from the key it holds for the boot, minted at the start or, for a persistent
+onion, read from the operator's file (`TSR-Q15`), which also keeps it across
+boots. Nothing is republished to the peer
 lists, and the brief's item 8 (identity churn on each respawn) is deleted.
 
 ### 4.9 Operator posture
@@ -1648,8 +1669,9 @@ Every question of this round is ruled (§1).
 - **A new identity per respawn** (fresh directory and fresh onion): a guard
   re-roll on demand for whoever can cause a respawn, a livelock on a slow
   link (`TSR-F7`), and churn in every peer's lists.
-- **Guards persisted across boots:** no reduction in expected exposure; a
-  guard file on disk, and one hostile guard linking every boot's onion.
+- **Guards persisted across boots, for a per-boot onion:** no reduction in
+  expected exposure; a guard file on disk, and one hostile guard linking every
+  boot's onion. A persistent onion keeps them (`TSR-Q2`, `TSR-Q15`).
 - **Respawn on a degradation bound:** a respawn fixes only process faults, and
   hands the cause of any other degradation a re-roll.
 - **Tor state, since and count in Health:** links an RPC endpoint to the
