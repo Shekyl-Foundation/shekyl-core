@@ -129,8 +129,8 @@ fn a_real_transaction_rides_the_carrier_and_is_recorded_when_its_window_goes_out
 ///
 /// An origin the carrier dropped was never sent. Showing or fluffing it
 /// would publish this node's own transaction from its own address, and
-/// recording it would buy it the long origin retry for a send that never
-/// happened (§92.5c). It is held instead, and re-planned: the moment an
+/// recording it would arm an embargo for a send that never happened
+/// (§92.5c). It is held instead, and re-planned: the moment an
 /// outbound session appears it leaves on the ordinary wire as a stem,
 /// before the clock moves (the carrier would need the clock).
 ///

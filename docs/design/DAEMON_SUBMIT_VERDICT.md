@@ -952,8 +952,9 @@ de-risking the multi-daemon reopen in advance.
 ### 5.2 Daemon-side guarantees (each source-verified)
 
 1. **Origin re-send, then residence.** The relay re-sends the node's own
-   transaction only on its embargo: each stem send arms a deadline of
-   `origin_retry_secs` (1,176 s at the shipped terms); the first fire
+   transaction only on its embargo: each stem send arms a deadline drawn
+   from the same memoryless timer a relayed stem draws (mean 511 s on
+   Tor and 194 s on clearnet at the shipped terms); the first fire
    re-stems to the source's alternate, the second fluffs and publishes
    (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
    re-planned every 300 s, at once on turning synchronised and at once on
@@ -976,9 +977,9 @@ de-risking the multi-daemon reopen in advance.
    send arms a deadline; the first fire re-stems to the source's frozen
    alternate; the second fire, or a first fire with no live alternate,
    fluffs to every session but the source and marks the transaction
-   shown. An origin's deadline is `origin_retry_secs` (1,176 s at the
-   shipped terms, pinned in that crate's embargo tests); a relay position
-   draws its connector's memoryless embargo. An origin that never sent
+   shown. Every sent stem draws its connector's memoryless embargo, this
+   node's own included: once sent, an own transaction is treated as a
+   relayed one (Rick, 2026-11-18). An origin that never sent
    is held unsent and re-planned every 300 s (`NEVER_SENT_RETRY_MS`),
    and at once when the node turns synchronised or a session is
    established. There is no periodic re-broadcast after publication, and
@@ -989,7 +990,10 @@ de-risking the multi-daemon reopen in advance.
    rung remains the sole effective backstop there (§7.5). The daemon
    records when it armed an origin and, when that state is read,
    reports the hold as `held` or `held_overdue` against
-   `origin_retry_secs` times its fires. A missing origin row is
+   `origin_publication_budget_ms`, the timer's 1-in-10 quantile over its
+   two fires (2,352 s at the shipped terms; the per-fire 1,176 s is pinned
+   in that crate's embargo tests). That figure is status only; nothing is
+   sent on it. A missing origin row is
    `untracked`, not a hold. The wallet is told that judgment and holds
    no relay constant. The wallet cannot substitute for this
    kernel.
@@ -1038,7 +1042,8 @@ de-risking the multi-daemon reopen in advance.
   including while the daemon is still syncing: a status read is a
   local relay fact. **Held-overdue** alarms on the tick it is seen.
   The daemon compared the origin's arm time with its publication
-  budget (`origin_retry_secs` over the origin's fires, the cycle count
+  budget (`origin_publication_budget_ms`: the embargo timer's 1-in-10
+  quantile over the origin's fires, the cycle count
   `RecoveryBudget::for_cap` prices) at the moment the state was read,
   and the wallet holds no relay constant. Sync does not gate that
   alarm. **Untracked** (pool-resident, no origin row) alarms the same
