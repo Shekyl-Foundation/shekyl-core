@@ -11,7 +11,7 @@
 use std::io::Cursor;
 
 use shekyl_network::Network;
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, SectionRoot};
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
@@ -53,10 +53,10 @@ std::thread_local! {
 /// the block [`blobs`] built last one height below, or a fixed hash for a
 /// test's first block (a corpus's first `extend` follows whatever it
 /// names).
-fn parent_below(height: u64) -> BlockHash {
+fn parent_below(height: BlockHeight) -> BlockHash {
     height
-        .checked_sub(1)
-        .and_then(|below| BUILT.with(|built| built.borrow().get(&below).copied()))
+        .checked_sub_count(BlockCount::ONE)
+        .and_then(|below| BUILT.with(|built| built.borrow().get(&below.to_raw()).copied()))
         .unwrap_or_else(|| BlockHash::from_bytes([0x11; 32]))
 }
 
@@ -66,7 +66,7 @@ fn parent_below(height: u64) -> BlockHash {
 /// height below, so blocks built in height order form a chain the
 /// lineage law accepts; a rebuilt height replaces the one before.
 fn blobs(height: BlockHeight, n: u64) -> (Extend, Vec<u8>, Vec<Vec<u8>>) {
-    let built = on(parent_below(height.to_raw()), height, n);
+    let built = on(parent_below(height), height, n);
     BUILT.with(|map| {
         map.borrow_mut()
             .insert(height.to_raw(), built.0.block.hash())
@@ -589,7 +589,7 @@ fn as_layout(mut bytes: Vec<u8>, layout: u32) -> Vec<u8> {
 /// An alternative to the block [`blobs`] builds at `height`: the same
 /// bodies under another nonce, so another block at that height.
 fn alternative(height: BlockHeight, n: u64) -> (Offer, Vec<u8>, Vec<Vec<u8>>) {
-    let (extend, _, tx_blobs) = on(parent_below(height.to_raw()), height, n);
+    let (extend, _, tx_blobs) = on(parent_below(height), height, n);
     let mut block = extend.block;
     block.header.nonce = block.header.nonce.wrapping_add(1);
     let block_blob = block.serialize();
@@ -741,9 +741,9 @@ fn rival(parent: BlockHash, height: BlockHeight) -> (Block, Vec<u8>) {
 
 /// One `extend` record as the layout writes it, for a corpus the writer
 /// would refuse: the reader must refuse it on its own.
-fn raw_extend(height: u64, block: &[u8]) -> Vec<u8> {
+fn raw_extend(height: BlockHeight, block: &[u8]) -> Vec<u8> {
     let mut record = vec![tag::EXTEND];
-    record.extend_from_slice(&height.to_le_bytes());
+    record.extend_from_slice(&height.to_raw().to_le_bytes());
     record.extend_from_slice(&u32::try_from(block.len()).expect("small").to_le_bytes());
     record.extend_from_slice(block);
     record.extend_from_slice(&0u32.to_le_bytes()); // no listed bodies
@@ -831,9 +831,9 @@ fn an_extend_that_follows_neither_the_tip_nor_an_offer_is_refused_on_both_sides(
 
     // The reader refuses the same record on its own.
     let bytes = raw_corpus(&[
-        raw_extend(0, &b0),
-        raw_extend(1, &b1),
-        raw_extend(2, &stray_blob),
+        raw_extend(BlockHeight::from_raw(0), &b0),
+        raw_extend(BlockHeight::from_raw(1), &b1),
+        raw_extend(BlockHeight::from_raw(2), &stray_blob),
     ]);
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     reader.next_record().expect("0");
@@ -858,10 +858,10 @@ fn an_extend_on_an_offered_block_carries_the_height_one_past_it() {
     offer.extend_from_slice(&0u32.to_le_bytes());
     offer.extend_from_slice(&0u32.to_le_bytes());
     let bytes = raw_corpus(&[
-        raw_extend(0, &b0),
-        raw_extend(1, &b1),
+        raw_extend(BlockHeight::from_raw(0), &b0),
+        raw_extend(BlockHeight::from_raw(1), &b1),
         offer,
-        raw_extend(3, &after.block.serialize()),
+        raw_extend(BlockHeight::from_raw(3), &after.block.serialize()),
     ]);
     let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
     for _ in 0..3 {
