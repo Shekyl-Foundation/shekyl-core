@@ -101,14 +101,50 @@ fn run_child_if_asked() -> bool {
     true
 }
 
-fn child_output(test: &str, mode: &str, dir: &Path) -> std::process::Output {
-    Command::new(std::env::current_exe().expect("this test binary"))
+/// What a child said and how it ended.
+struct ChildRun {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+/// Runs this binary on `test` in `mode`, its output to files, and waits at
+/// most [`WITHIN`]: a child that does not end is killed and reaped, and the
+/// test fails saying so, rather than waiting on it for ever.
+fn child_run(test: &str, mode: &str, dir: &Path) -> ChildRun {
+    let out = dir.join(format!("{mode}.stdout"));
+    let err = dir.join(format!("{mode}.stderr"));
+    let mut child = Command::new(std::env::current_exe().expect("this test binary"))
         .args(["--exact", test, "--nocapture", "--test-threads", "1"])
         .env(CHILD_MARKER, mode)
         .env(CHILD_DIR, dir)
         .stdin(Stdio::null())
-        .output()
-        .expect("the child runs")
+        .stdout(std::fs::File::create(&out).expect("the stdout file"))
+        .stderr(std::fs::File::create(&err).expect("the stderr file"))
+        .spawn()
+        .expect("the child runs");
+    let read = |path: &Path| std::fs::read_to_string(path).unwrap_or_default();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the child") {
+            break status;
+        }
+        if start.elapsed() >= WITHIN {
+            drop(child.kill());
+            drop(child.wait());
+            panic!(
+                "the {mode} child did not end within {WITHIN:?}\nstdout:\n{}\nstderr:\n{}",
+                read(&out),
+                read(&err)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    ChildRun {
+        status,
+        stdout: read(&out),
+        stderr: read(&err),
+    }
 }
 
 /// **A `SIGTERM` in the bind window stops the server cleanly and leaves
@@ -126,7 +162,7 @@ fn a_sigterm_in_the_bind_window_stops_cleanly_and_leaves_no_socket() {
     }
     use std::os::unix::process::ExitStatusExt;
     let control = tempfile::tempdir().expect("tempdir");
-    let before = child_output(TEST, BEFORE_THE_ARM, control.path());
+    let before = child_run(TEST, BEFORE_THE_ARM, control.path());
     assert_eq!(
         before.status.signal(),
         Some(libc::SIGTERM),
@@ -135,13 +171,13 @@ fn a_sigterm_in_the_bind_window_stops_cleanly_and_leaves_no_socket() {
     );
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let out = child_output(TEST, IN_THE_WINDOW, dir.path());
-    let said = String::from_utf8_lossy(&out.stdout);
+    let out = child_run(TEST, IN_THE_WINDOW, dir.path());
+    let said = &out.stdout;
     assert!(
         out.status.success() && said.lines().any(|line| line == "served"),
         "the stop in the bind window was not a clean stop: {:?}\nstdout:\n{said}\nstderr:\n{}",
         out.status,
-        String::from_utf8_lossy(&out.stderr)
+        out.stderr
     );
     assert!(
         !socket_in(dir.path()).exists(),
