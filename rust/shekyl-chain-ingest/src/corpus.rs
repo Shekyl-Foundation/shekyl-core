@@ -11,8 +11,10 @@
 //! (`docs/design/CORPUS_CODEC.md`). This module turns its records into the
 //! pipeline's events: an `extend` becomes [`IngestEvent::Extend`] carrying
 //! the [`Candidate`] the validator consumes (the block, its listed bodies
-//! in header order, and its bundle section), and a `rewind` becomes
-//! [`IngestEvent::Rewind`], each stamped with the next [`SequenceNo`].
+//! in header order, and its bundle section), a `rewind` becomes
+//! [`IngestEvent::Rewind`], and an `offer` becomes [`IngestEvent::Offer`]
+//! carrying its candidate the same way, each stamped with the next
+//! [`SequenceNo`].
 //! Nothing here reads a byte of the file: a corpus that `shekyl-corpus`
 //! refuses is refused here with the same [`CorpusFault`].
 
@@ -87,6 +89,14 @@ impl<R: BufRead> Source for CorpusSource<R> {
                 ))
             }
             Record::Rewind { to } => IngestEvent::Rewind { to },
+            Record::Offer(offer) => {
+                let offer = *offer;
+                IngestEvent::Offer(Box::new(
+                    Candidate::new(offer.block, offer.transactions)
+                        .with_bundle_references(offer.bundle_references)
+                        .with_bundle_bodies(offer.bundle_bodies),
+                ))
+            }
         };
         let seq = self.seq;
         self.seq = seq.next();

@@ -171,6 +171,7 @@ impl Corpus {
                     });
                 }
                 IngestEvent::Rewind { .. } => panic!("{}: a rewind in a corpus", self.shape),
+                IngestEvent::Offer(_) => panic!("{}: an offer in a corpus", self.shape),
             }
         }
         steps

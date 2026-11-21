@@ -147,9 +147,10 @@ pub enum Action {
         /// the spread, so another spread moves a later read plan.
         start_spread_ms: u64,
     },
-    /// Pop the last `depth` blocks and mine `depth + 1` blocks on the fork,
-    /// the first listing a spend the popped branch did not: a shallow
-    /// reorg, written as a rewind and the branch after it.
+    /// A competing branch of `depth + 1` blocks from `depth` below the tip,
+    /// the first listing a spend the branch it competes with did not: a
+    /// shallow reorg, written as `offer` records the replay's fork choice
+    /// switches to (`CHAIN_FORGE.md` §7.1).
     Reorg {
         /// Blocks popped; at most the schedule's reorg cap.
         depth: u64,

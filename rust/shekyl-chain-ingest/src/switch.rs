@@ -302,6 +302,21 @@ pub struct SwitchDone {
     pub demoted: Vec<(BlockHeight, BlockHash)>,
     /// The blocks connected, ascending.
     pub promoted: Vec<(BlockHeight, BlockHash)>,
+    /// The curve-tree root after each promoted block, one per entry of
+    /// `promoted`, in the same order: the verdict's derivation, as
+    /// [`Applied::roots`](super::Applied::roots) carries a connected
+    /// block's, so a replay compares a promoted height as it compares a
+    /// connected one.
+    pub roots: Vec<(BlockHeight, CurveTreeRoot)>,
+    /// Each promoted block's weights, as
+    /// [`Applied::weights`](super::Applied::weights).
+    pub weights: Vec<(BlockHeight, shekyl_chain_rules::Weights)>,
+    /// Each promoted block's paid emission, as
+    /// [`Applied::emission`](super::Applied::emission).
+    pub emission: Vec<(BlockHeight, shekyl_chain_rules::PaidEmission)>,
+    /// Each promoted block's archival delta, as
+    /// [`Applied::archival`](super::Applied::archival).
+    pub archival: Vec<(BlockHeight, shekyl_chain_rules::ArchivalDelta)>,
     /// The demoted blocks' listed transactions, in chain order — for the
     /// pool's relay: `shekyl_mempool::Pool::returned` offers each to
     /// the door against the chain the switch left. The scenario driver's
@@ -898,7 +913,7 @@ fn switch(
             let in_force = rules.in_force(height);
             match validate_with_memo(formed, &view, &in_force, &trust, Some(memo)) {
                 Ok(Ok(valid)) => {
-                    let hash = valid.block().hash();
+                    let facts = super::connect_step::ConnectedFacts::of(&valid);
                     done.exercised
                         .extend(valid.coverage().iter().map(CenRow::as_str));
                     // Its alt row leaves in the connect, before the same
@@ -906,7 +921,7 @@ fn switch(
                     // one home (`store/alt.rs`).
                     let connected = batch.connect(valid, in_force)?;
                     debug_assert!(connected.left_alt, "a promoted block was its own alt row");
-                    done.promoted.push((height, hash));
+                    super::connect_step::record_promoted(&mut done, height, facts);
                 }
                 Ok(Err(refused)) => {
                     return Err(Stop::Refused {
