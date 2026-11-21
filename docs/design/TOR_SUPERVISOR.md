@@ -1108,21 +1108,32 @@ one, or give this node its own key." No refetch and no republish: clients
 reach whichever copy is newest, and a republish would only race the other
 host's. A later check that finds no newer copy judges the facet again.
 
-**No republish while it cannot help.** While the clock is named, another
-publisher is, or either descriptor's latest round was refused, nothing is
-republished: a republish replaces the
-introduction points, and the directories go on advertising the old ones
-(the VM run's 36 republishes, each tearing down the points the served copy
-named, so every stranger's dial failed at introduction). The overdue check
-stands down, and no probe is scheduled or judged: the facet already says
-what a probe could not change, and a probe's verdict would overwrite it.
-Standing down does not move the descriptor's lifetime anchor, so a check
-that came due while a republish could not help runs when one can. A
-remedial republish already handed to the driver is not sent once standing
-down; the anchor it moved is put back, and a hold it cleared stays due
-when a republish can help. A probe or directory fetch already handed over
-is dropped, and the open rounds can still schedule their probe once standing
-down has cleared.
+**No republish while it cannot help.** While the clock is named, or either
+descriptor's latest round was refused, nothing is republished: a republish
+replaces the introduction points, and the directories go on advertising the
+old ones (the VM run's 36 republishes, each tearing down the points the
+served copy named, so every stranger's dial failed at introduction). The
+overdue check stands down, and no probe is scheduled or judged: the facet
+already says what a probe could not change, and a probe's verdict would
+overwrite it. Standing down does not move the descriptor's lifetime anchor,
+so a check that came due while a republish could not help runs when one
+can. A remedial republish already handed to the driver is not sent once
+standing down; the anchor it moved is put back, and a hold it cleared stays
+due when a republish can help. A probe or directory fetch already handed
+over is dropped, and the open rounds can still schedule their probe once
+standing down has cleared.
+
+**Another publisher holds the send and the overdue check.** While another
+publisher is named, nothing is republished, for the same reason a clock or
+a refused round withholds it: a republish would only race the other host.
+The overdue check stays hidden and its anchor stays where it is, so the
+check does not treat a lifetime the directories have not broken as a failed
+upload, and does not slide that anchor forward every lifetime. The probe
+and the directory check keep running. Standing them down would leave
+`PublishedElsewhere` with no later check that could clear it. A clock or a
+refused round, once it names itself over this cause, stands the probe down
+as above.
+
 A republish has two triggers only: the overdue upload and the two-miss
 rule.
 

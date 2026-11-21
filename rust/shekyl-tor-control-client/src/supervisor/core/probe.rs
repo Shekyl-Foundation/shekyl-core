@@ -293,12 +293,15 @@ impl Core {
 
     /// When the descriptor's lifetime runs out with no round begun: the
     /// lifetime from its anchor, while no round is open and a republish
-    /// could help. Standing down does not move the anchor, so a check that
-    /// came due while a republish could not help is due when one can. A
-    /// round that ends with no upload leaves the old anchor, so the check
-    /// can be due at once: nothing shows a fresh descriptor.
+    /// would be sent. Another publisher holds the check off the same way a
+    /// clock or a refused round does, and leaves the anchor where it is, so
+    /// a check that came due while the send was held is due when one can
+    /// go. The probe keeps running under another publisher: only a clock or
+    /// a refused round stands it down. A round that ends with no upload
+    /// leaves the old anchor, so the check can be due at once: nothing
+    /// shows a fresh descriptor.
     pub(super) fn overdue_due(&self) -> Option<u64> {
-        if !self.rounds.is_empty() || self.republish_cannot_help() {
+        if !self.rounds.is_empty() || self.republish_held_off() {
             return None;
         }
         self.lifetime_from
@@ -310,21 +313,22 @@ impl Core {
     /// descriptor at their next cleanup. Publish the onion again from the
     /// held seed, which forces a fresh upload; that round's probe judges the
     /// facet. Inbound is not marked down: nothing shows peers cannot reach
-    /// the onion yet. Not while the clock is named or the latest round was
-    /// refused, and the backoff may hold it ([`Core::republish`]). The next
-    /// lifetime counts from now, so a republish that brings no round does
-    /// not ask again at every tick. A republish still waiting for its round
-    /// a whole lifetime later never got one: that is its failed judgment,
-    /// and the backoff holds this one. Standing down because a republish
-    /// cannot help leaves the anchor where it is. The onion not being
-    /// published yet does move it: a past deadline would otherwise fire on
-    /// every tick.
+    /// the onion yet. Not while the send is held — the clock is named, the
+    /// latest round was refused, or another publisher is — and the backoff
+    /// may hold it ([`Core::republish`]). Another publisher leaves the
+    /// anchor where it is; the probe and the directory check keep running.
+    /// The next lifetime counts from now, so a republish that brings no
+    /// round does not ask again at every tick. A republish still waiting
+    /// for its round a whole lifetime later never got one: that is its
+    /// failed judgment, and the backoff holds this one. Holding the send
+    /// leaves the anchor where it is. The onion not being published yet
+    /// does move it: a past deadline would otherwise fire on every tick.
     pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
         if !self.onion_done() {
             self.lifetime_from = Some(now);
             return Vec::new();
         }
-        if self.republish_cannot_help() {
+        if self.republish_held_off() {
             return Vec::new();
         }
         self.republish_failed(now);

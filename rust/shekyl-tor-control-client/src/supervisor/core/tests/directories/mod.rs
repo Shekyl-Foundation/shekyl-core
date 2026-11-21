@@ -18,8 +18,10 @@ use super::probe::{
     arrival, count, probes, published, publishes_inbound, refetches, republishes, secs, served,
     uploaded,
 };
-use super::{replied, said_of};
+use super::replied;
 use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
+
+mod contested;
 
 /// This service's revision counter in these tests: a directory's copy carrying it
 /// is the current one.
@@ -773,7 +775,7 @@ fn a_queued_fetch_is_not_open_and_its_window_runs_from_its_send() {
 /// current counter: a copy numbered below ours is one a later upload never
 /// reached. Reachable needs our copy at more than half. A copy numbered
 /// above ours is not stale: it is a newer copy, its own verdict
-/// ([`a_newer_copy_names_another_publisher_and_sends_nothing`]; Rick,
+/// ([`contested::a_newer_copy_names_another_publisher_and_sends_nothing`]; Rick,
 /// 2026-11-21). Fails if `answered` counts any `Received` as found,
 /// whatever its counter.
 #[test]
@@ -814,156 +816,6 @@ fn a_stale_directory_copy_is_a_miss() {
         core.status().inbound,
         Inbound::Reachable {
             evidence_at: secs(18)
-        }
-    );
-}
-
-/// **A newer copy this node did not publish names another publisher, and
-/// nothing is sent** (Rick, 2026-11-21). One directory of eight holds our
-/// descriptor at a counter above ours, the other seven ours: another Tor
-/// holding this onion's key published it. Inbound goes down as
-/// `PublishedElsewhere` at once, the probe in or not: no refetch, no
-/// republish, which would only race it. Fails if a newer copy counts as
-/// missing (a refetch, then a republish fight), or as found.
-#[test]
-fn a_newer_copy_names_another_publisher_and_sends_nothing() {
-    let copy = |counter| DirectoryAnswer::Received {
-        revision_counter: Some(counter),
-    };
-    for probe_in in [true, false] {
-        let (mut core, _) = checking(sent(1..=8, "cur", 0));
-        for n in 1..=7 {
-            core.on(answered(n, "cur", copy(OURS)), secs(16));
-        }
-        core.on(answered(8, "cur", copy(OURS + 1)), secs(16));
-        let judged = if probe_in {
-            core.on(arrival(secs(15), secs(18)), secs(18))
-        } else {
-            super::probe::run_timed(&mut core, secs(15) + secs(60)).1
-        };
-        assert_eq!(refetches(&judged), 0, "probe in: {probe_in}");
-        assert_eq!(republishes(&judged), 0, "probe in: {probe_in}");
-        let status = core.status();
-        assert!(
-            matches!(
-                status.inbound,
-                Inbound::Unreachable {
-                    cause: InboundCause::PublishedElsewhere,
-                    ..
-                }
-            ),
-            "probe in: {probe_in}: {:?}",
-            status.inbound
-        );
-        assert!(
-            said_of(&status).contains("Another computer is using this node's Tor address"),
-            "{}",
-            said_of(&status)
-        );
-        // Hours on, every deadline served, still nothing sent: no overdue
-        // republish, no hold that expires into one.
-        let later = drive(&mut core, secs(4 * 3_600), &mut None, &ours());
-        assert_eq!(republishes(&later), 0, "probe in: {probe_in}");
-    }
-}
-
-/// **A refused round names itself over another publisher** (Rick,
-/// 2026-11-21: the new cause never swallows the clock case). A clock that
-/// went back leaves this node's own earlier copy above its counter, and the
-/// directories refuse its uploads: the refused-upload path names that. A
-/// node shown `PublishedElsewhere` whose next round is refused says
-/// `UploadsRefused`, and still publishes nothing. Fails if
-/// `uploads_refused` leaves `PublishedElsewhere` standing.
-#[test]
-fn a_refused_round_names_itself_over_another_publisher() {
-    let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=8 {
-        core.on(
-            answered(
-                n,
-                "cur",
-                DirectoryAnswer::Received {
-                    revision_counter: Some(OURS + 1),
-                },
-            ),
-            secs(16),
-        );
-    }
-    core.on(arrival(secs(15), secs(18)), secs(18));
-    assert!(matches!(
-        core.status().inbound,
-        Inbound::Unreachable {
-            cause: InboundCause::PublishedElsewhere,
-            ..
-        }
-    ));
-    let refused = core.on(super::probe::round_tally(0, 16, 16, 0), secs(30));
-    assert_eq!(republishes(&refused), 0);
-    assert!(
-        matches!(
-            core.status().inbound,
-            Inbound::Unreachable {
-                cause: InboundCause::UploadsRefused,
-                ..
-            }
-        ),
-        "{:?}",
-        core.status().inbound
-    );
-}
-
-/// **Another publisher, once gone, leaves at the next held check.** A check
-/// that finds our copy at more than half and no newer one, with the probe
-/// in, is `Reachable` again. Fails if `PublishedElsewhere` outlives the
-/// evidence that named it.
-#[test]
-fn another_publisher_gone_is_reachable_at_the_next_held_check() {
-    let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=8 {
-        core.on(
-            answered(
-                n,
-                "cur",
-                DirectoryAnswer::Received {
-                    revision_counter: Some(OURS + 1),
-                },
-            ),
-            secs(16),
-        );
-    }
-    core.on(arrival(secs(15), secs(18)), secs(18));
-    assert!(matches!(
-        core.status().inbound,
-        Inbound::Unreachable {
-            cause: InboundCause::PublishedElsewhere,
-            ..
-        }
-    ));
-    // Tor's next round brings the next check: our copy everywhere.
-    let round = secs(600);
-    core.on(uploaded(0), round);
-    let at = round + secs(15);
-    let launched = drive(&mut core, at, &mut Some(sent(1..=8, "cur", 0)), &ours());
-    assert_eq!(probes(&launched), 1, "{launched:?}");
-    assert_eq!(fetched(&launched).len(), 8, "{launched:?}");
-    core.on(Input::ProbeDialed { minted_at: at }, at);
-    for n in 1..=8 {
-        core.on(
-            answered(
-                n,
-                "cur",
-                DirectoryAnswer::Received {
-                    revision_counter: Some(OURS),
-                },
-            ),
-            at + secs(1),
-        );
-    }
-    core.on(arrival(at, at + secs(3)), at + secs(3));
-    assert_eq!(
-        core.status().inbound,
-        Inbound::Reachable {
-            evidence_at: at + secs(3)
         }
     );
 }
