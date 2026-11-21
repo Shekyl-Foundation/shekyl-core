@@ -54,11 +54,11 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid,
-    Verdict, Weights,
+    form, Candidate, Corrupt, FormAttempt, FormClaims, InvalidBlock, PaidEmission, ReferenceClaims,
+    StructurallyValid, Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
-use shekyl_chain_store::store::{ChainStore, StoreError};
+use shekyl_chain_store::store::{AltCannot, ChainStore, StoreCannot, StoreError};
 use shekyl_hasher::{Class, Ranked};
 use shekyl_pow_randomx::Seedhash;
 use shekyl_types::{
@@ -70,10 +70,13 @@ use tokio::task::JoinSet;
 
 use crate::connector::{
     Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, ObserveTarget,
-    Rewind, Rewound, RunFault,
+    OfferAlt, Offered, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind, Rewound, RunFault,
+    SwitchDone, SwitchPlan, Switched,
 };
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
+use crate::plan_form::{form_plan, FormedPlan, PlanStop};
 use crate::pow::Pow;
+use crate::router::{claim_alt, ClaimStop, ClaimedAlt};
 use crate::schedule::ChainRules;
 use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
@@ -193,6 +196,13 @@ pub struct RunReport {
     /// `to` — the reorg family's "digest after each switch" (§3.8), and the
     /// pop-symmetry check through the actor (the state at `to` must be the
     /// state the chain had when `to` was first the tip).
+    pub rewinds: Vec<Pop>,
+    /// One entry per switch the fork choice made on an `Offer`: where the
+    /// chain forked, how deep, the record that tipped it and the state it
+    /// left. Derived on replay, never read from the source: a corpus says
+    /// which blocks arrived, not whether the chain switched
+    /// (`CHAIN_FORGE.md` §7.1). A forged chain's manifest names the
+    /// switches its forge expects, and the replay test holds the two equal.
     pub switches: Vec<Switch>,
 }
 
@@ -448,12 +458,28 @@ impl ArchivalCheckpoint {
 
 /// A committed rewind and the state it left.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Switch {
+pub struct Pop {
     /// The tip after the pop.
     pub to: BlockHeight,
     /// How many blocks the pop removed.
     pub popped: u64,
     /// The store's logical state at `to`, after the pop.
+    pub digest: crate::trace::Digest,
+}
+
+/// A switch the fork choice made on an `Offer`, and the state it left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Switch {
+    /// The offer whose arrival made its branch the heavier one: its place
+    /// in the source's stream, which for a corpus is its record.
+    pub record: SequenceNo,
+    /// The fork point: the highest block the two branches share.
+    pub fork: BlockHeight,
+    /// How many blocks the switch demoted.
+    pub depth: u64,
+    /// The tip after the switch.
+    pub tip: BlockHeight,
+    /// The store's logical state at `tip`, after the switch.
     pub digest: crate::trace::Digest,
 }
 
@@ -508,10 +534,12 @@ pub enum Disagreement {
 }
 
 impl RunReport {
-    /// Blocks popped over every committed rewind.
+    /// Blocks popped over every committed rewind and every switch.
     #[must_use]
     pub fn popped(&self) -> u64 {
-        self.switches.iter().map(|s| s.popped).sum()
+        let rewound: u64 = self.rewinds.iter().map(|r| r.popped).sum();
+        let switched: u64 = self.switches.iter().map(|s| s.depth).sum();
+        rewound + switched
     }
 
     /// Every way the run disagreed with the chain, in the order they can
@@ -637,17 +665,84 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The lowest poppable height.
         floor: BlockHeight,
     },
+    /// An `Offer` the run could not carry to the fork choice, or whose
+    /// switch it could not follow. Each is a corpus that asked for what
+    /// this chain cannot do, never a verdict on the block: a verdict is a
+    /// [`RunReport::refused`].
+    #[error("the offer at {record:?}: {stop}")]
+    Offer {
+        /// The offer's place in the stream.
+        record: SequenceNo,
+        /// Why.
+        stop: OfferStop,
+    },
     /// [`PipelineConfig::digest_each_commit`] needs one block per commit.
     /// A wider window can put several blocks in one transaction, and a
     /// digest read after that transaction names only the batch tip. The
     /// run refuses that window before it connects anything, and refuses
-    /// again if an apply still covers more than one block.
+    /// again if an apply, or a switch, still covers more than one block.
     #[error(
         "a digest at every height needs one block per commit; {connected} blocks would share one"
     )]
     DigestWindow {
         /// How many blocks one commit would cover.
         connected: usize,
+    },
+}
+
+/// Why an `Offer` stopped the run ([`PipelineFault::Offer`]).
+#[derive(Debug, thiserror::Error)]
+pub enum OfferStop {
+    /// Its parent chain reaches no block the store holds (CEN-K2's
+    /// orphan): the corpus offered a block before its parent.
+    #[error("its parent chain reaches no held block (first unheld: {at:?})")]
+    Unlinked {
+        /// The first hash neither table holds.
+        at: BlockHash,
+    },
+    /// The store already holds it: the corpus offered a block twice, or one
+    /// of the chain.
+    #[error("the store already holds it")]
+    AlreadyHeld,
+    /// The early gate refused to hash it: its fork or its seed is outside
+    /// what this node hashes for an alternative (`cache_window`).
+    #[error("the early gate did not hash it: {why}")]
+    NotHashed {
+        /// The gate's answer.
+        why: String,
+    },
+    /// The headers its target window reads are corrupt.
+    #[error("its target window at height {height} is corrupt: {corrupt}")]
+    Corrupt {
+        /// The height whose window it was.
+        height: BlockHeight,
+        /// What was observed.
+        corrupt: Corrupt,
+    },
+    /// The fork choice switches to it, but the fork is deeper than the
+    /// reorg cap (`E5-Q6`): a local outcome.
+    #[error("its fork is past the reorg cap: {beyond:?}")]
+    BeyondCap {
+        /// The cap the fork exceeded.
+        beyond: PopBeyondReorgCap,
+    },
+    /// The switch's pop met the undo floor: this node cannot follow the
+    /// heavier chain (F-1, local).
+    #[error("the switch's pop met the undo floor {floor} at tip {tip}")]
+    BelowFloor {
+        /// The tip the pop met.
+        tip: u64,
+        /// The persisted undo floor.
+        floor: u64,
+    },
+    /// A block the switch demotes, which this run connected, did not form
+    /// again: an invariant, not a verdict.
+    #[error("a demoted block {hash:?} did not form again: {refused}")]
+    DemotionRefused {
+        /// The demoted block.
+        hash: BlockHash,
+        /// What `form` said.
+        refused: InvalidBlock,
     },
 }
 
@@ -751,8 +846,12 @@ where
     // engine's lock).
     let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
     let connector = prepared.actor_ref().clone();
+    // The run reads the store beside the actor for an offer's claims, as
+    // the node's router does (`router::claim_alt`); the actor is its one
+    // writer. The run's handle is dropped before the actor is waited for.
+    let store = Arc::new(store);
     let actor_task = prepared.spawn(ConnectorArgs {
-        store: Arc::new(store),
+        store: Arc::clone(&store),
         rules,
         bundle_queued: None,
         ranked: None,
@@ -764,6 +863,7 @@ where
         metrics: &metrics,
         rules,
         connector: &connector,
+        store,
         trace: &trace,
         cfg,
         ledger: SeedLedger::new(),
@@ -776,11 +876,12 @@ where
         ranked: None,
         hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
-        pending_rewind: None,
+        pending: None,
         exhausted: false,
         unclaimable: None,
     };
     let outcome = drive.run_loop().await;
+    drop(drive);
 
     // On every path — a finished run or a fault — stop the actor and wait
     // for its task to end, which is when the store it owns is dropped. A
@@ -804,6 +905,8 @@ where
     metrics: &'a Arc<Metrics>,
     rules: ChainRules,
     connector: &'a kameo::actor::ActorRef<Connector>,
+    /// The store the actor writes, read here for an offer's claims.
+    store: Arc<ChainStore>,
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
     ledger: SeedLedger,
@@ -823,10 +926,10 @@ where
     /// its `form`.
     hashers: Arc<Semaphore>,
     in_flight: JoinSet<Sequenced<Formed<P::Fault>>>,
-    /// The `Rewind` read but not yet committed, if any, as its target: a
-    /// barrier, so `fill` reads nothing past it and it commits once nothing
-    /// is in flight ahead of it.
-    pending_rewind: Option<Sequenced<BlockHeight>>,
+    /// The `Rewind` or `Offer` read but not yet carried out, if any: a
+    /// barrier, so `fill` reads nothing past it and it is carried out once
+    /// nothing is in flight ahead of it.
+    pending: Option<Sequenced<Barrier>>,
     /// No further event is read: the source ended, or a block was refused
     /// or found unclaimable before it was formed. A refusal ends the run,
     /// and nothing past an unformed block has a target to claim.
@@ -850,8 +953,11 @@ where
             if self.report.refused.is_some() {
                 break;
             }
-            self.try_rewind().await?;
-            if self.exhausted && self.in_flight.is_empty() && self.pending_rewind.is_none() {
+            self.try_barrier().await?;
+            if self.report.refused.is_some() {
+                break;
+            }
+            if self.exhausted && self.in_flight.is_empty() && self.pending.is_none() {
                 // Every block ahead of an unclaimable one has been judged,
                 // so the writer's tip is its parent: the writer re-derives
                 // the window over its own view and halts on what it sees.
@@ -878,10 +984,11 @@ where
     }
 
     /// Read events and start forming them, while the window has room and a
-    /// hasher is free. Stops at a `Rewind` (a barrier) and at exhaustion.
+    /// hasher is free. Stops at a `Rewind` or an `Offer` (a barrier) and at
+    /// exhaustion.
     async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         while !self.exhausted
-            && self.pending_rewind.is_none()
+            && self.pending.is_none()
             && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
         {
             // The permit is taken before the event is read, so no event is
@@ -896,9 +1003,15 @@ where
             self.take_sequence(event.seq)?;
             match event.event {
                 IngestEvent::Rewind { to } => {
-                    self.pending_rewind = Some(Sequenced {
+                    self.pending = Some(Sequenced {
                         seq: event.seq,
-                        event: to,
+                        event: Barrier::Rewind(to),
+                    });
+                }
+                IngestEvent::Offer(candidate) => {
+                    self.pending = Some(Sequenced {
+                        seq: event.seq,
+                        event: Barrier::Offer(candidate),
                     });
                 }
                 IngestEvent::Extend(candidate) => {
@@ -1117,11 +1230,29 @@ where
         self.report
             .connected
             .extend(applied.connected.iter().copied());
+        self.compare(&applied.roots, &applied.weights, &applied.emission);
+        if let Some(refused) = applied.refused {
+            self.report.refused = Some(refused);
+        }
+        if self.cfg.digest_each_commit {
+            self.record_commit_digest(&applied.connected).await?;
+        }
+        Ok(())
+    }
+
+    /// Hold what the verdicts derived for connected (or promoted) heights
+    /// against the trace's facts at those heights.
+    fn compare(
+        &mut self,
+        roots: &[(BlockHeight, CurveTreeRoot)],
+        weights: &[(BlockHeight, Weights)],
+        emission: &[(BlockHeight, PaidEmission)],
+    ) {
         // CTW-5: the derived root against the trace's, at every connected
         // height the trace covers. The trace's root is the comparison
         // input, not a fact the store was handed (it left `ConnectFacts`
         // with DRS-E3); a disagreement is recorded, never patched.
-        for (at, ours) in &applied.roots {
+        for (at, ours) in roots {
             if let Some(facts) = self.trace.borrow(*at) {
                 self.report
                     .roots
@@ -1130,7 +1261,7 @@ where
         }
         // CEN-G6/G6b: the verdict's weights against the trace's three
         // recorded values, the same way.
-        for (at, ours) in &applied.weights {
+        for (at, ours) in weights {
             if let Some(facts) = self.trace.borrow(*at) {
                 self.report
                     .weights
@@ -1139,20 +1270,13 @@ where
         }
         // CEN-F14b / G12 and F17 / G11: the verdict's accumulator and burn
         // against the trace's.
-        for (at, ours) in &applied.emission {
+        for (at, ours) in emission {
             if let Some(facts) = self.trace.borrow(*at) {
                 self.report
                     .emission
                     .record(*at, *ours, RecordedEmissionFacts::from(facts.value()));
             }
         }
-        if let Some(refused) = applied.refused {
-            self.report.refused = Some(refused);
-        }
-        if self.cfg.digest_each_commit {
-            self.record_commit_digest(&applied.connected).await?;
-        }
-        Ok(())
     }
 
     /// The digest at the one height `connected` names. An empty connect
@@ -1221,19 +1345,24 @@ where
         Ok(())
     }
 
-    /// Commit the pending `Rewind` once nothing is in flight ahead of it:
-    /// it records the digest after the pop and moves the ledger and the
-    /// next height to the post-rewind chain.
-    async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
-        let Some(rewind) = self.pending_rewind.take() else {
+    /// Carry out the pending barrier once nothing is in flight ahead of
+    /// it. A `Rewind` records the digest after the pop; an `Offer` goes to
+    /// the alternative door and, when the fork choice switches, through the
+    /// switch. Either moves the ledgers and the next height to the chain
+    /// it left.
+    async fn try_barrier(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let Some(barrier) = self.pending.take() else {
             return Ok(());
         };
         if !(self.in_flight.is_empty() && self.sequencer.pending() == 0) {
-            self.pending_rewind = Some(rewind);
+            self.pending = Some(barrier);
             return Ok(());
         }
-        self.sequencer.advance(rewind.seq)?;
-        self.rewind(rewind.event).await
+        self.sequencer.advance(barrier.seq)?;
+        match barrier.event {
+            Barrier::Rewind(to) => self.rewind(to).await,
+            Barrier::Offer(candidate) => self.offer(barrier.seq, *candidate).await,
+        }
     }
 
     /// Pop to `to`.
@@ -1243,7 +1372,7 @@ where
             return Err(PipelineFault::RewindBelowFloor { to, tip, floor });
         }
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
-        self.report.switches.push(Switch {
+        self.report.rewinds.push(Pop {
             to,
             popped: rewound.popped(),
             digest,
@@ -1263,4 +1392,206 @@ where
         self.form_at = next_height(Some(to));
         Ok(())
     }
+
+    /// Offer `candidate` at the alternative door, the way the node's
+    /// router does (`span::offer_alt`): the claims off the store
+    /// ([`claim_alt`]: the seed and target on the chain the block is on),
+    /// one form on the claims' seed, then [`OfferAlt`]. When the fork
+    /// choice switches, the switch follows ([`Self::switch`]). A verdict
+    /// on the block is [`RunReport::refused`]; an offer this chain cannot
+    /// carry or follow is [`PipelineFault::Offer`].
+    async fn offer(
+        &mut self,
+        record: SequenceNo,
+        candidate: Candidate,
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let stop = |stop| PipelineFault::Offer { record, stop };
+        let store = Arc::clone(&self.store);
+        let rules = self.rules;
+        let for_claims = candidate.clone();
+        let claimed =
+            tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims)).await?;
+        let claims = match claimed {
+            Ok(ClaimedAlt::Ready { claims }) => claims,
+            Ok(ClaimedAlt::Spend(spend)) => {
+                return Err(stop(OfferStop::NotHashed {
+                    why: format!("{spend:?}"),
+                }));
+            }
+            Err(ClaimStop::Store(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked {
+                at,
+            })))) => return Err(stop(OfferStop::Unlinked { at })),
+            Err(ClaimStop::Store(e)) => return Err(PipelineFault::Store(e)),
+            Err(ClaimStop::Corrupt { height, corrupt }) => {
+                return Err(stop(OfferStop::Corrupt { height, corrupt }));
+            }
+            Err(ClaimStop::Moved) => {
+                unreachable!("the run is the store's one writer, and nothing is in flight")
+            }
+        };
+        let height = claims.height;
+        let pow = Arc::clone(&self.pow);
+        let formed = tokio::task::spawn_blocking(move || {
+            pow.run(Class::Chain, claims.seed, &NEVER_STOPS, |job| {
+                form(
+                    candidate,
+                    &FormClaims {
+                        rule_set: &claims.rule_set,
+                        seed: claims.seed,
+                        target: claims.target,
+                        references: &claims.references,
+                        network: claims.network,
+                    },
+                    job,
+                    FormAttempt::FIRST,
+                )
+            })
+        })
+        .await?;
+        let formed = match formed {
+            Some(Ok(Ok(formed))) => formed,
+            Some(Ok(Err(refused))) => {
+                self.report.refused = Some((height, refused));
+                return Ok(());
+            }
+            Some(Err(fault)) => return Err(PipelineFault::Substrate(fault)),
+            None => return Err(PipelineFault::HasherStopped),
+        };
+        match self
+            .connector
+            .ask(OfferAlt(formed))
+            .await
+            .map_err(collapse)?
+        {
+            Offered::Refused(refused) => self.report.refused = Some((height, refused)),
+            Offered::Unlinked { at } => return Err(stop(OfferStop::Unlinked { at })),
+            Offered::AlreadyHeld => return Err(stop(OfferStop::AlreadyHeld)),
+            // Stored; the incumbent stays. An earlier block of a branch
+            // that is not yet the heavier one is held this way.
+            Offered::Held { .. } => {}
+            Offered::BeyondCap { beyond, .. } => {
+                return Err(stop(OfferStop::BeyondCap { beyond }));
+            }
+            Offered::SwitchDue(plan) => self.switch(record, plan).await?,
+        }
+        Ok(())
+    }
+
+    /// Carry out `plan`, the way the node's router does (`span::carry_out`):
+    /// form what it names ([`form_plan`]), then [`Reorganize`], or
+    /// [`RefusePromotion`] for a promoted block `form` refused.
+    async fn switch(
+        &mut self,
+        record: SequenceNo,
+        plan: SwitchPlan,
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let stop = |stop| PipelineFault::Offer { record, stop };
+        let pow = Arc::clone(&self.pow);
+        let rules = self.rules;
+        let to_form = plan.clone();
+        let formed =
+            tokio::task::spawn_blocking(move || form_plan(&to_form, rules, &*pow, &NEVER_STOPS))
+                .await?;
+        let switched = match formed {
+            Ok(FormedPlan { demoted, promoted }) => self
+                .connector
+                .ask(Reorganize {
+                    tip: plan.tip,
+                    alt_tip: plan.alt_tip,
+                    demoted,
+                    promoted,
+                })
+                .await
+                .map_err(collapse)?,
+            Err(PlanStop::Refused(refusal)) if refusal.demoted => {
+                return Err(stop(OfferStop::DemotionRefused {
+                    hash: refusal.hash,
+                    refused: refusal.refused,
+                }));
+            }
+            Err(PlanStop::Refused(refusal)) => self
+                .connector
+                .ask(RefusePromotion {
+                    tip: plan.tip,
+                    alt_tip: plan.alt_tip,
+                    hash: refusal.hash,
+                    refused: refusal.refused,
+                })
+                .await
+                .map_err(collapse)?,
+            Err(PlanStop::Substrate(fault)) => return Err(PipelineFault::Substrate(fault)),
+            Err(PlanStop::Stopped) => unreachable!("the run's forms have no stop"),
+        };
+        match switched {
+            Switched::Done(done) => self.switched(record, &plan, done).await,
+            Switched::Refused { at, refused, .. } => {
+                self.report.refused = Some((at, refused));
+                Ok(())
+            }
+            Switched::BeyondCap { beyond, .. } => Err(stop(OfferStop::BeyondCap { beyond })),
+            Switched::BelowFloor { tip, floor, .. } => {
+                Err(stop(OfferStop::BelowFloor { tip, floor }))
+            }
+        }
+    }
+
+    /// Record a switch that landed: the promoted blocks as connected and
+    /// compared, the demoted heights' comparisons retracted, the ledgers
+    /// and the next height moved to the branch the chain is on now, and
+    /// the digest after it.
+    async fn switched(
+        &mut self,
+        record: SequenceNo,
+        plan: &SwitchPlan,
+        done: SwitchDone,
+    ) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let fork = plan.root.height;
+        let tip = done.promoted.last().map_or(fork, |(height, _)| *height);
+        self.report.exercised.extend(done.exercised.iter().copied());
+        self.report.connected.extend(done.promoted.iter().copied());
+        // The demoted heights' comparisons were against the branch the
+        // chain has left; the promoted blocks are compared afresh.
+        self.report.roots.retract_above(fork);
+        self.report.weights.retract_above(fork);
+        self.report.emission.retract_above(fork);
+        self.compare(&done.roots, &done.weights, &done.emission);
+        // The ledgers drop the branch the chain left. The next claims read
+        // the promoted headers (and the fork's, if the window had moved
+        // past it, or the ledgers never held it) from the store, as a claim
+        // past a rewind does (`claim_seed`, `claim_target`).
+        self.ledger.rewind_to(fork);
+        self.targets.rewind_to(fork);
+        self.form_at = next_height(Some(tip));
+        // A digest at every height is the digest after that height's own
+        // commit. A switch promotes its blocks in one commit, so a switch
+        // of more than one block leaves heights with no digest of their
+        // own, as a batch commit would.
+        if self.cfg.digest_each_commit && done.promoted.len() > 1 {
+            return Err(PipelineFault::DigestWindow {
+                connected: done.promoted.len(),
+            });
+        }
+        let digest = self.connector.ask(Digest).await.map_err(collapse)?;
+        if self.cfg.digest_each_commit {
+            self.report.digests.retain(|height, _| *height <= fork);
+            self.report.digests.insert(tip, digest);
+        }
+        self.report.switches.push(Switch {
+            record,
+            fork,
+            depth: u64::try_from(done.demoted.len()).expect("a demoted count fits u64"),
+            tip,
+            digest,
+        });
+        Ok(())
+    }
+}
+
+/// An event the pipeline carries out alone, once nothing is in flight
+/// ahead of it.
+enum Barrier {
+    /// Pop to this height.
+    Rewind(BlockHeight),
+    /// Offer this block at the alternative door.
+    Offer(Box<Candidate>),
 }

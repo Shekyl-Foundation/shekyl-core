@@ -88,17 +88,24 @@ pub enum IngestEvent {
         /// The height the tip must be at when the rewind has committed.
         to: BlockHeight,
     },
+    /// A block that arrived and does not extend the tip: its parent is
+    /// named by its own header, a block of the chain or an earlier offer.
+    /// The pipeline hands it to the connector's alternative door; whether
+    /// the chain switches to its branch, and where, is the fork choice's
+    /// to derive (`CHAIN_FORGE.md` §7.1). Boxed as [`Self::Extend`] is.
+    Offer(Box<Candidate>),
 }
 
 impl IngestEvent {
     /// Whether the sequencer may reorder formation across this event.
-    /// `true` for a `Rewind`: a barrier — the `Extend`s after it are formed
-    /// against a chain whose state it changed. Exhaustive so a new variant
-    /// is a compile error, not a silent non-barrier.
+    /// `true` for a `Rewind` and an `Offer`: a barrier — the `Extend`s
+    /// after it are formed against a chain whose state it may have changed
+    /// (an offer can switch the chain). Exhaustive so a new variant is a
+    /// compile error, not a silent non-barrier.
     #[must_use]
     pub const fn is_barrier(&self) -> bool {
         match self {
-            Self::Rewind { .. } => true,
+            Self::Rewind { .. } | Self::Offer(_) => true,
             Self::Extend(_) => false,
         }
     }

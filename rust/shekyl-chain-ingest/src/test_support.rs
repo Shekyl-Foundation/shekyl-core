@@ -442,6 +442,46 @@ pub fn corpus_of_reorg(r: &Reorg) -> Vec<u8> {
     w.finish().expect("count").into_inner()
 }
 
+/// The corpus of `r` as a network meets it (layout 5): every main block
+/// as an `extend`, then each fork block as an `offer` after the blocks it
+/// competes with. No rewind and no switch: the fork choice derives it.
+pub fn corpus_of_offers(r: &Reorg) -> Vec<u8> {
+    let fork = r.after.len() - usize::try_from(r.to).expect("small") - 1;
+    corpus_offering(r, &(0..fork).collect::<Vec<_>>())
+}
+
+/// [`corpus_of_offers`] with the fork's blocks offered in `order`, each an
+/// index into the fork (its first block is 0): an order that leaves one
+/// out, or puts a child before its parent, is a negative control.
+pub fn corpus_offering(r: &Reorg, order: &[usize]) -> Vec<u8> {
+    corpus_offering_then(r, order, None)
+}
+
+/// [`corpus_offering`], then the fork's block `extend` written as an
+/// `extend` after the offers: the first block a corpus writes after a
+/// switch, which the format takes when its parent is an offered block.
+pub fn corpus_offering_then(r: &Reorg, order: &[usize], extend: Option<usize>) -> Vec<u8> {
+    let mut w = CorpusWriter::create(std::io::Cursor::new(Vec::new()), Network::Regtest, h(0))
+        .expect("header");
+    for (b, txs) in &r.main {
+        let (bytes, bodies) = wire(b, txs);
+        w.append(&bytes, &bodies).expect("append");
+    }
+    let fork = &r.after[usize::try_from(r.to).expect("small") + 1..];
+    for &index in order {
+        let (b, txs) = &fork[index];
+        let (bytes, bodies) = wire(b, txs);
+        w.offer(&bytes, &bodies, &[], &[]).expect("offer fork");
+    }
+    if let Some(index) = extend {
+        let (b, txs) = &fork[index];
+        let (bytes, bodies) = wire(b, txs);
+        w.append(&bytes, &bodies)
+            .expect("an extend on an offered block is a corpus the format takes");
+    }
+    w.finish().expect("count").into_inner()
+}
+
 pub fn wire(b: &Block, txs: &[Transaction]) -> (Vec<u8>, Vec<Vec<u8>>) {
     let bodies = txs
         .iter()

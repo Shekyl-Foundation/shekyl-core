@@ -122,6 +122,9 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
             IngestEvent::Rewind { to } => {
                 height = to.saturating_add(BlockCount::ONE);
             }
+            IngestEvent::Offer(_) => {
+                unreachable!("the committed corpora are layout 4, which has no offer")
+            }
         }
     }
     found
