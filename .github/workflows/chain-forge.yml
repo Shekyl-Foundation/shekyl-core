@@ -176,10 +176,23 @@ jobs:
           fi
           python3 - "$chain/manifest.json" "$RUNNER_TEMP/small-replay.log" <<'PY'
           import json, re, sys
-          expected = [(s["at_record"], s["fork_height"], s["depth"]) for s in json.load(open(sys.argv[1]))["switches"]]
+          manifest = json.load(open(sys.argv[1]))
+          log = open(sys.argv[2]).read()
+          # The whole chain was compared, not only the switch: every height
+          # to the tip for roots, weights and emission, and the covered
+          # tip's checkpoint.
+          summary = re.search(r"^connected (\d+) block\(s\), popped \d+, (\d+) checkpoint digested, (\d+) root\(s\) compared, (\d+) weight row\(s\) compared, (\d+) accumulator\(s\) compared$", log, re.M)
+          if not summary:
+              sys.exit("::error::the replay printed no summary")
+          heights = manifest["tip_height"] + 1
+          checkpoints, roots, weights, accumulators = (int(summary[i]) for i in (2, 3, 4, 5))
+          if (checkpoints, roots, weights, accumulators) != (1, heights, heights, heights):
+              sys.exit(f"::error::the replay compared {checkpoints} checkpoint(s), {roots} roots, {weights} weight rows and {accumulators} accumulators; the chain has {heights} heights and one covered tip")
+          print(f"every height compared: {heights}, and the checkpoint")
+          expected = [(s["at_record"], s["fork_height"], s["depth"]) for s in manifest["switches"]]
           derived = [
               (int(m[1]), int(m[2]), int(m[3]))
-              for m in re.finditer(r"^switched at record (\d+): fork (\d+), (\d+) demoted, tip \d+$", open(sys.argv[2]).read(), re.M)
+              for m in re.finditer(r"^switched at record (\d+): fork (\d+), (\d+) demoted, tip \d+$", log, re.M)
           ]
           if not expected:
               sys.exit("::error::the manifest records no switch: the small plan's reorg is the subject")
