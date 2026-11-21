@@ -100,6 +100,7 @@ pub mod pool;
 pub mod provenance;
 pub mod schema;
 pub mod store;
+pub mod tables_digest;
 
 #[cfg(test)]
 mod redb_recovery;
