@@ -344,7 +344,8 @@ could stage are named in §7.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
 libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
-list is that set, re-derived from the 15.0.25 `tor.exe`.
+list is that set, re-derived from the 15.0.25 `tor.exe` and again, unchanged,
+from the 16.0.1 one.
 
 **TSR-F16 (medium; Tor lane). A leaked copy of Tor's socket end hides Tor's
 death.** Measured on Windows (case C6b, 2026-10-15): with the handle leaked

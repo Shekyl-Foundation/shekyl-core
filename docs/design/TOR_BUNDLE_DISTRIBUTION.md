@@ -165,14 +165,15 @@ said about a row on its own.
 Every tarball carries a valid signature (`VALIDSIG`, not only `GOODSIG`) from
 the Tor Browser Developers key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`
 (signing subkey `022DA248432D2A0E0F54E65E316C1FACD62D07D9`), the key
-`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. Every bundle below was downloaded
-from the Tor Project's archive on 2026-10-17 and ships tor `0.4.9.14`.
+`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. The Linux and Windows bundles below
+were downloaded from the Tor Project's archive on 2026-11-21 and ship tor
+`0.4.9.16`; the macOS ones on 2026-10-22, tor `0.4.9.14`.
 
 | Target | Bundle | Tarball SHA-256 |
 | --- | --- | --- |
-| `linux-x86_64` | 15.0.25 (stable) | `19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a` |
-| `linux-aarch64` | 16.0a14 (alpha) | `6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2` |
-| `windows-x86_64` | 15.0.25 (stable) | `c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252` |
+| `linux-x86_64` | 16.0.1 (stable) | `7039cb16060ab22e669852e55774d894b55f25ea8bd0ab7194d3478429a58725` |
+| `linux-aarch64` | 16.0.1 (stable) | `67040520d44c87ccaaf5aa7df0dc1ff122eb938dbb600ae7722e8b6b75282a4b` |
+| `windows-x86_64` | 16.0.1 (stable) | `9eed3c3ff1fe43df034ce360196c9ec95472560d77ff55614d0cd5120edea27b` |
 | `macos-aarch64` | 15.0.26 (stable) | `a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c` |
 | `macos-x86_64` | 15.0.26 (stable) | `e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95` |
 
@@ -184,15 +185,15 @@ Extracted files, by target:
 
 | Target | File | SHA-256 |
 | --- | --- | --- |
-| `linux-x86_64` | `tor` | `39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3` |
-| | `libevent-2.1.so.7` | `b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff` |
-| | `libssl.so.3` | `9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac` |
-| | `libcrypto.so.3` | `418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05` |
-| `linux-aarch64` | `tor` | `0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b` |
+| `linux-x86_64` | `tor` | `0769509fb10e5b916d91f824fdb7575ae142f5afe134b16e9ea174074a327ccf` |
+| | `libevent-2.1.so.7` | `d252ad9c63de5ac276bdcf73f466ecf6ce0b390f33c3d241b6a32ea4e2f59ef6` |
+| | `libssl.so.3` | `cb31eaf171a10f660137b6c3d1ff552c2e89fdedd20e8523a7bf30cc06727457` |
+| | `libcrypto.so.3` | `e2c0901c520c07cdaab4af3507bf20f6c80273571764b4dc9b3b0b4a75621052` |
+| `linux-aarch64` | `tor` | `689da686cdc64d2238430a5100460dd45fc045dabed88989dfcf553e06b48609` |
 | | `libevent-2.1.so.7` | `097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577` |
 | | `libssl.so.3` | `080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf` |
 | | `libcrypto.so.3` | `f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3` |
-| `windows-x86_64` | `tor.exe` | `8c38513b3c4584154158e7c584f4144849dc679a64cd679553d72dad28230c54` |
+| `windows-x86_64` | `tor.exe` | `da22856f95ee24f8ace4ad1ab04acbd818fd6c3042bc3cf8f1d7cc3fa3edcb2b` |
 | `macos-aarch64` | `tor` | `7d5a89b6cec99aab47420040ad86dd5fd5174192e71b6c201b0b10170ba57ebb` |
 | | `libevent-2.1.7.dylib` | `6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739` |
 | `macos-x86_64` | `tor` | `e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14` |
@@ -378,10 +379,10 @@ canonical location, watching the network recover from each dropped node.
 The pin cannot cover a file Shekyl has no source for. With the loader pointed
 at the bundle, the Linux `tor` still takes these from the system (observed on
 `linux-x86_64`; the `linux-aarch64` `tor` names the same set — `readelf -d`
-lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically. The
-16.0a14 bundle carries a `docs/zlib.txt` that the 15.0.25 bundle does not;
-that is a licence text for a library the bundle does not ship, and Shekyl
-does not stage it):
+lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically; so
+again at 16.0.1. The `linux-aarch64` bundle carries a `docs/zlib.txt` that the
+`linux-x86_64` bundle does not; that is a licence text for a library the
+bundle does not ship, and Shekyl does not stage it):
 
 - the glibc family — the dynamic loader, `libc`, `libm`, `libdl`,
   `libpthread` — and `libgcc_s`;
