@@ -21,8 +21,21 @@
 //! snapshot    0x04 ‖ height u64 ‖ for each of the ten archival families, in
 //!                  §3.8.1's order: n_rows u64 ‖ (len u32 ‖ row bytes)*   (80 bytes after height
 //!                                                                         when every family is empty)
-//! trailer     0xFF ‖ facts u64 ‖ checkpoints u64
+//! event       0x05 ‖ record u64 ‖ tables_digest[32]
+//! trailer     0xFF ‖ facts u64 ‖ checkpoints u64 ‖ events u64
 //! ```
+//!
+//! # Event digests (version `0x02`, `CHAIN_FORGE.md` §8)
+//!
+//! A forged chain's trace carries the store's **tables digest**
+//! (`shekyl_chain_store::tables_digest`: every table it holds, row for row)
+//! at each of the chain's indexed events, keyed by the event's corpus
+//! record, not by height: a rewind and its re-extension put two blocks at
+//! one height, and an `offer` changes state without moving the tip. The
+//! replay takes the digest right after that record, and holds it to the
+//! trace's; a snapshot opened at the event is held to it too. Records are
+//! strictly ascending. A chain with no indexed events (the captured
+//! vectors) carries none.
 //!
 //! At most one checkpoint, at the **covered tip** (the last facts row):
 //! the logical-state digest's spent set is the tip's (RD-F18), so a
@@ -109,15 +122,17 @@ use shekyl_units::AtomicUnits;
 /// The file's first eight bytes.
 pub const TRACE_MAGIC: [u8; 8] = *b"SHKTRAC\0";
 /// The layout this module writes and the only one it reads; bumped on any
-/// change. `0x01` added the archival snapshot record (DRS-E4 commit 6);
-/// `0x00`, the layout without it, is no longer read (commit 7).
-pub const TRACE_VERSION: u8 = 0x01;
+/// change. `0x02` added the event digest record and its trailer count
+/// (`CF-4b`); `0x01` added the archival snapshot record (DRS-E4 commit 6).
+/// Neither older layout is read: every committed trace was re-baselined.
+pub const TRACE_VERSION: u8 = 0x02;
 
 mod tag {
     pub const FACTS: u8 = 0x01;
     pub const CHECKPOINT: u8 = 0x02;
     pub const RESERVED_VERDICT: u8 = 0x03;
     pub const ARCHIVAL_SNAPSHOT: u8 = 0x04;
+    pub const EVENT_DIGEST: u8 = 0x05;
     pub const TRAILER: u8 = 0xFF;
 }
 
@@ -253,6 +268,15 @@ pub enum TraceFault {
         /// The checkpoint's height.
         height: u64,
     },
+    /// An event digest whose record is not past the last one: records are
+    /// strictly ascending, one digest each.
+    #[error("event digest at record {record} is not past record {after}")]
+    EventOutOfOrder {
+        /// The record that arrived.
+        record: u64,
+        /// The last record before it.
+        after: u64,
+    },
     /// The snapshot's rows could not be read back as §3.8.1 rows.
     #[error("archival snapshot: {0}")]
     Snapshot(#[from] SnapshotFault),
@@ -385,6 +409,9 @@ pub struct TraceWriter<W: Write> {
     /// The height of the one archival snapshot, once written — the
     /// checkpoint's.
     snapshotted: Option<u64>,
+    /// The last event digest's record, once one is written.
+    last_event: Option<u64>,
+    events: u64,
 }
 
 impl<W: Write> TraceWriter<W> {
@@ -404,6 +431,8 @@ impl<W: Write> TraceWriter<W> {
             facts: 0,
             checkpointed: None,
             snapshotted: None,
+            last_event: None,
+            events: 0,
         })
     }
 
@@ -485,6 +514,31 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
+    /// The store's tables digest right after corpus record `record`, an
+    /// indexed event (module docs). Records strictly ascend.
+    ///
+    /// # Errors
+    ///
+    /// [`TraceFault::EventOutOfOrder`]; I/O.
+    pub fn push_event_digest(
+        &mut self,
+        record: crate::source::SequenceNo,
+        digest: &Digest,
+    ) -> Result<(), TraceFault> {
+        let record = record.to_raw();
+        if let Some(after) = self.last_event {
+            if record <= after {
+                return Err(TraceFault::EventOutOfOrder { record, after });
+            }
+        }
+        self.out.write_all(&[tag::EVENT_DIGEST])?;
+        self.out.write_all(&record.to_le_bytes())?;
+        self.out.write_all(digest)?;
+        self.last_event = Some(record);
+        self.events += 1;
+        Ok(())
+    }
+
     /// Write the trailer and hand the sink back.
     ///
     /// # Errors
@@ -499,6 +553,7 @@ impl<W: Write> TraceWriter<W> {
         self.out.write_all(&self.facts.to_le_bytes())?;
         let n_checkpoints = u64::from(self.checkpointed.is_some());
         self.out.write_all(&n_checkpoints.to_le_bytes())?;
+        self.out.write_all(&self.events.to_le_bytes())?;
         self.out.flush()?;
         Ok(self.out)
     }
@@ -517,6 +572,12 @@ pub struct Trace {
     checkpoint: Option<(u64, Digest)>,
     /// With the checkpoint, at its height: `Some` iff `checkpoint` is.
     snapshot: Option<(u64, ArchivalSnapshot)>,
+    /// The tables digest at each indexed event, by corpus record.
+    events: BTreeMap<u64, Digest>,
+    /// The records a run takes the tables digest at: the event digests'
+    /// records for a trace that was read, the requested ones for a
+    /// baseline that captures them ([`Trace::capturing`]).
+    capture: std::collections::BTreeSet<u64>,
 }
 
 fn read_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
@@ -543,6 +604,22 @@ impl Trace {
             facts: BTreeMap::new(),
             checkpoint: None,
             snapshot: None,
+            events: BTreeMap::new(),
+            capture: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// An empty trace that asks a run to take the tables digest at each of
+    /// `records`, with no expectation: what a baseline over a forged chain
+    /// runs against, so the trace it writes carries the digests.
+    #[must_use]
+    pub fn capturing(records: impl IntoIterator<Item = crate::source::SequenceNo>) -> Self {
+        Self {
+            capture: records
+                .into_iter()
+                .map(crate::source::SequenceNo::to_raw)
+                .collect(),
+            ..Self::empty()
         }
     }
 
@@ -567,6 +644,7 @@ impl Trace {
         let mut facts = BTreeMap::new();
         let mut checkpoint: Option<(u64, Digest)> = None;
         let mut snapshot: Option<(u64, ArchivalSnapshot)> = None;
+        let mut events: BTreeMap<u64, Digest> = BTreeMap::new();
         let mut last_height: Option<u64> = None;
         loop {
             let mut t = [0u8; 1];
@@ -616,9 +694,24 @@ impl Trace {
                     }
                     snapshot = Some((h, ArchivalSnapshot::read_body(&mut input)?));
                 }
+                tag::EVENT_DIGEST => {
+                    let record = read_u64(&mut input)?;
+                    if let Some((&after, _)) = events.last_key_value() {
+                        if record <= after {
+                            return Err(TraceFault::EventOutOfOrder { record, after });
+                        }
+                    }
+                    let mut digest = [0u8; CHECKPOINT_LEN];
+                    input.read_exact(&mut digest)?;
+                    events.insert(record, digest);
+                }
                 tag::TRAILER => {
                     let n_facts = read_u64(&mut input)?;
                     let n_checkpoints = read_u64(&mut input)?;
+                    let n_events = read_u64(&mut input)?;
+                    if n_events != events.len() as u64 {
+                        return Err(TraceFault::TrailerMismatch { what: "events" });
+                    }
                     if n_facts != facts.len() as u64 {
                         return Err(TraceFault::TrailerMismatch { what: "facts" });
                     }
@@ -642,10 +735,13 @@ impl Trace {
                     if input.read(&mut probe)? != 0 {
                         return Err(TraceFault::TrailingBytes);
                     }
+                    let capture = events.keys().copied().collect();
                     return Ok(Self {
                         facts,
                         checkpoint,
                         snapshot,
+                        events,
+                        capture,
                     });
                 }
                 tag::RESERVED_VERDICT => return Err(TraceFault::ReservedTag(t[0])),
@@ -687,6 +783,36 @@ impl Trace {
         self.snapshot
             .as_ref()
             .map(|(h, s)| (BlockHeight::from_raw(*h), Expected(s)))
+    }
+
+    /// The records a run takes the tables digest at, ascending (module
+    /// docs): every event digest a read trace carries, or the records a
+    /// capturing trace asks for.
+    pub fn event_records(&self) -> impl Iterator<Item = crate::source::SequenceNo> + '_ {
+        self.capture
+            .iter()
+            .copied()
+            .map(crate::source::SequenceNo::from_raw)
+    }
+
+    /// The `expect` door for an indexed event: the baseline's tables digest
+    /// right after `record`. `None` where the trace carries none there (a
+    /// capturing trace carries none at all).
+    #[must_use]
+    pub fn event_digest(&self, record: crate::source::SequenceNo) -> Option<Expected<Digest>> {
+        self.events.get(&record.to_raw()).copied().map(Expected)
+    }
+
+    /// Every event digest the trace carries, by record, ascending.
+    pub fn event_digests(
+        &self,
+    ) -> impl Iterator<Item = (crate::source::SequenceNo, Expected<Digest>)> + '_ {
+        self.events.iter().map(|(&record, &digest)| {
+            (
+                crate::source::SequenceNo::from_raw(record),
+                Expected(digest),
+            )
+        })
     }
 
     /// The heights this trace has facts for, as an inclusive range; `None`

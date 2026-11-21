@@ -84,7 +84,7 @@ async fn a_chain_replays_against_its_own_rust_baseline() {
             .expect("horizons"),
         )
         .expect("reopen");
-        let bytes = trace_of(&store.begin_read().expect("read"), Vec::new()).expect("trace");
+        let bytes = trace_of(&store.begin_read().expect("read"), &[], Vec::new()).expect("trace");
         drop(store);
         let trace =
             Trace::read(std::io::Cursor::new(bytes.as_slice())).expect("the baseline reads back");
