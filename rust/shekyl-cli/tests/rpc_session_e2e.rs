@@ -285,6 +285,43 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
     rpc.shutdown();
 }
 
+/// A self-hosted session makes its wallet directory only to make a wallet:
+/// starting the session and calling a word that makes none leaves no
+/// folder (an `rpc` enrollment word made `wallets/<network>` on Windows and
+/// Unix), and a create makes it, with its seed file named inside the new
+/// folder. Red edits: `create_dir_all` in `RpcSession::host_in_process`
+/// fails the first assertion (the CLI's own start, `host_session`, has its
+/// unit test); dropping `make_wallet_dir` from `run_create` fails the
+/// create with `WALLET_DIR_MISSING`, and making it after the seed file is
+/// reserved fails the seed file's open.
+#[test]
+fn the_wallet_dir_is_made_only_to_make_a_wallet() {
+    use shekyl_cli::commands::scripted::{run_create, CreateArgs};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let wallets = dir.path().join("wallets").join("stagenet");
+    let rpc = host(&wallets);
+    rpc.call("get_version", json!({})).expect("get_version");
+    assert!(
+        !wallets.exists(),
+        "a session that makes no wallet makes no wallet folder"
+    );
+
+    let pw_file = dir.path().join("pw");
+    std::fs::write(&pw_file, "s3cret\n").expect("write password file");
+    let create = CreateArgs {
+        name: "made".into(),
+        seed_out: wallets.join("seed.txt"),
+        password_file: Some(pw_file),
+        password_stdin: false,
+    };
+    run_create(&rpc, &create).expect("scripted create makes its folder");
+    assert!(wallets.is_dir(), "a create makes the wallet folder");
+
+    rpc.call("close_wallet", json!({})).expect("close");
+    rpc.shutdown();
+}
+
 /// WI-RPC-2a grep gate: the CLI has no wallet2 / EngineContext /
 /// shekyl-engine-rpc code reference left. Prose may say "wallet2" only to
 /// state the absence or name the era; identifiers may not.

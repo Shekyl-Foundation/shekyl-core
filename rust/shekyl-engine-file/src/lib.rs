@@ -32,7 +32,7 @@
 //! | SWSP payload framing (`SWSP` magic, kind, len) | [`payload`]              |
 //! | Atomic write with parent-dir fsync             | [`atomic`] (private)      |
 //! | Advisory lock (`flock` / `LockFileEx`)         | [`lock`] (private)        |
-//! | Companion-path rules (`.wallet` ↔ `.wallet.keys`) | [`paths`]              |
+//! | Companion-path rules (`.wallet` ↔ `.wallet.keys`), the default wallet directory | [`paths`] |
 //! | `WalletFile` lifecycle                   | [`handle`]                |
 //! | Error type & `From` impls                      | [`error`]                 |
 //!

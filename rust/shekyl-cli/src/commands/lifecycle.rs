@@ -37,6 +37,7 @@ pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str)
     }
     drop(confirm);
 
+    rpc.make_wallet_dir()?;
     let result = rpc.call(
         "create_wallet",
         params::NamedPassword {
@@ -154,6 +155,7 @@ pub fn cmd_restore(
         }
     };
 
+    rpc.make_wallet_dir()?;
     let result = rpc.call(
         "restore_wallet",
         params::Restore {

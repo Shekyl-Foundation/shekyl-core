@@ -47,6 +47,9 @@ shekyl-process = { path = "../shekyl-process" }
 shekyl-rpc-channel = { path = "../shekyl-rpc-channel" }
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 shekyl-os-account = { path = "../shekyl-os-account" }
+# The default wallet directory, `wallets/<network>` in the per-account root
+# (`paths::wallet_dir_in`), named once beside the wallet files it holds.
+shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 clap = { version = "4", features = ["derive"] }
 rustyline = "15"
@@ -100,7 +103,6 @@ shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # `tx show`'s regtest: a wallet that holds a coinbase, against a real daemon.
 shekyl-engine-core = { path = "../shekyl-engine-core" }
 shekyl-address = { path = "../shekyl-address" }
-shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
 
 [lints]
