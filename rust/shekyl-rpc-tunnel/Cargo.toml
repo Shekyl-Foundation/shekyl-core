@@ -33,7 +33,7 @@ shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-rpc-stream = { path = "../shekyl-rpc-stream" }
 shekyl-os-account = { path = "../shekyl-os-account" }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "signal", "macros", "time", "sync", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "time", "sync", "io-util"] }
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 http-body-util = { version = "0.1", default-features = false }
