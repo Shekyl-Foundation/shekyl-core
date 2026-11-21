@@ -116,7 +116,7 @@ pass-line figures are not reported as one.
   (above, *The classes*). With the shuffled placement this registration
   fixes, both builds pass every check, and every null is flat:
 
-  | Build | Nulls | Control (planted ≈ 2.05 µs) | Restart-rate `|z|` across comparisons |
+  | Build | Nulls | Control (planted ≈ 2.05 µs) | Restart-rate z, absolute, across comparisons |
   | --- | --- | --- | --- |
   | AVX2 | 2.26, 1.76 | 33.83, detected | 0.39 to 2.92 |
   | SSE2 (`fn-dsa-sign/no_avx2`) | 2.34, 1.73 | 49.32, detected | 0.39 to 2.92 |
