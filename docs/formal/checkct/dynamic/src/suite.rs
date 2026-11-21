@@ -260,6 +260,9 @@ const BRANCH_CONTROL_FIXED_BYTE: u8 = 0;
 /// The loop control's fixed class: the shortest loop, the extreme against
 /// random odd lengths.
 const LOOP_CONTROL_SHORTEST: u8 = 1;
+/// An ML-KEM-768 ciphertext's length, the span fips203 0.5.0 compares
+/// against its re-encryption (`ml_kem.rs:144`, `ct.ct_ne(&*c_prime)`).
+const ML_KEM_768_CT_LEN: usize = 1088;
 /// Knuth's MMIX LCG multiplier: one iteration's work in the loop control.
 const LOOP_CONTROL_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 
@@ -344,12 +347,71 @@ pub fn run(h: &mut impl Bench) {
         },
     );
 
+    h.section("CA-2: Field25519 with sparse Montgomery residues (class 0: the residue crypto-bigint holds is sparse; class 1: random) — does the multiplier path or red512 carry the effect?");
+    // Field25519 holds x as the Montgomery residue x·R mod p, so a sparse
+    // canonical value is not sparse inside it; this is why its shape rows
+    // stay flat while HelioseleneField's (canonical inside) cross. Here the
+    // residue itself is sparse (x = s·R⁻¹ mod p for a sparse s). If these
+    // rows cross, the multiplier path carries the effect; if not, the
+    // reduction HelioseleneField uses in its place (red512) does.
+    // One field by design: HelioseleneField holds its canonical value, so
+    // its counterpart is the existing `property: helio ... sparse` row. The
+    // names carry the type, not a field label, so the both-fields check
+    // does not ask for a helio twin that would mean nothing.
+    h.row(
+        "property: Field25519 Montgomery-sparse square (direct)",
+        Contrast::Shaped(Box::new(sparse_montgomery_fe25519)),
+        Field25519::sample,
+        |a| sink_word(&ff::Field::square(a)),
+    );
+    h.row(
+        "property: Field25519 Montgomery-sparse mul (direct)",
+        Contrast::Shaped(Box::new(|rng: &mut Rng| {
+            (
+                sparse_montgomery_fe25519(rng),
+                sparse_montgomery_fe25519(rng),
+            )
+        })),
+        <(Field25519, Field25519)>::sample,
+        |(a, b)| sink_word(&(*a * *b)),
+    );
+
     h.section("crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)");
     tested(
         h,
         "residue pow (secret exponent)",
         <(Residue25519, U256)>::sample,
         |(a, e)| black_box(a.pow(e).retrieve()).as_limbs()[0].0,
+    );
+
+    h.section("CA-2: ML-KEM-768 decapsulation's ciphertext compare (subtle 2.6.1 `[u8]::ct_ne` over 1,088 bytes, as fips203 0.5.0 `ml_kem.rs:144` resolves it); class 0: equal pairs, class 1 as named");
+    // RT-P4 sees valid ciphertexts decapsulate faster than invalid ones
+    // (CRYPTO_AUDIT.md §2.1). For a valid one the re-encryption equals the
+    // input, so this compare XORs equal bytes and folds zeros. These rows
+    // time the compare alone: if they reproduce the gap, it is the carrier.
+    h.row(
+        "property: ct_ne 1088 equal vs random",
+        Contrast::Shaped(Box::new(CtPair::equal)),
+        CtPair::random,
+        CtPair::ne,
+    );
+    h.row(
+        "property: ct_ne 1088 equal vs one bit flipped",
+        Contrast::Shaped(Box::new(CtPair::equal)),
+        CtPair::bitflip,
+        CtPair::ne,
+    );
+    h.row(
+        "null: ct_ne 1088 random pairs",
+        Contrast::Null,
+        CtPair::random,
+        CtPair::ne,
+    );
+    h.row(
+        "null: ct_ne 1088 equal pairs",
+        Contrast::Null,
+        CtPair::equal,
+        CtPair::ne,
     );
 
     h.section("positive controls (must show a class difference)");
@@ -383,6 +445,51 @@ pub fn run(h: &mut impl Bench) {
     );
 }
 
+/// A Field25519 element whose Montgomery residue (what crypto-bigint holds
+/// and multiplies) is a sparse value: x = s·R⁻¹ mod p, from the residue s.
+fn sparse_montgomery_fe25519(rng: &mut Rng) -> Field25519 {
+    let residue = U256::from_le_bytes(Shape::Sparse.encoding::<Field25519>(rng));
+    let canonical = Residue25519::from_montgomery(residue).retrieve();
+    decode(canonical.to_le_bytes())
+}
+
+/// Two ciphertext-length byte strings, the compare's two operands.
+#[derive(Clone)]
+struct CtPair(Box<([u8; ML_KEM_768_CT_LEN], [u8; ML_KEM_768_CT_LEN])>);
+
+impl CtPair {
+    /// A random string and itself: a valid ciphertext and its
+    /// re-encryption.
+    fn equal(rng: &mut Rng) -> Self {
+        let a: [u8; ML_KEM_768_CT_LEN] = rng.bytes();
+        CtPair(Box::new((a, a)))
+    }
+
+    /// Two independent random strings: an invalid ciphertext and its
+    /// re-encryption.
+    fn random(rng: &mut Rng) -> Self {
+        CtPair(Box::new((rng.bytes(), rng.bytes())))
+    }
+
+    /// A random string and itself with one bit flipped: RT-P4's
+    /// `fixed-vs-bitflip` shape, the closest to a plaintext-checking query.
+    fn bitflip(rng: &mut Rng) -> Self {
+        let a: [u8; ML_KEM_768_CT_LEN] = rng.bytes();
+        let mut b = a;
+        let bit = rng.below(ML_KEM_768_CT_LEN * 8);
+        b[bit / 8] ^= 1 << (bit % 8);
+        CtPair(Box::new((a, b)))
+    }
+
+    /// The compare fips203 makes, inlined into the timed loop as it is
+    /// inlined into decapsulation.
+    fn ne(pair: &Self) -> u64 {
+        use subtle::ConstantTimeEq;
+        let (a, b) = &*pair.0;
+        u64::from(a[..].ct_ne(&b[..]).unwrap_u8())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +517,27 @@ mod tests {
         let mut catalogue = Catalogue::default();
         run(&mut catalogue);
         catalogue.0
+    }
+
+    /// The sparse-Montgomery operand holds a sparse residue: re-entering
+    /// its canonical value into Montgomery form gives back at most one set
+    /// byte per limb, which a uniformly drawn element almost never does.
+    #[test]
+    fn sparse_montgomery_operands_hold_sparse_residues() {
+        use ff::PrimeField;
+        let mut rng = Rng::from_os();
+        for _ in 0..256 {
+            let x = sparse_montgomery_fe25519(&mut rng);
+            let canonical = U256::from_le_bytes(x.to_repr());
+            let residue = Residue25519::new(&canonical);
+            let set_bytes = residue
+                .as_montgomery()
+                .to_le_bytes()
+                .iter()
+                .filter(|byte| **byte != 0)
+                .count();
+            assert!(set_bytes <= 4, "residue has {set_bytes} set bytes");
+        }
     }
 
     #[test]

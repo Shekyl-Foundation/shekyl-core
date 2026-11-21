@@ -398,6 +398,36 @@ vendored crate or upstream and re-measured flat with this harness on the
 direct path on both x86_64 hosts, with a note in the wallet's threat model
 for the release that predates it.
 
+### 2.1 Localisation, and ML-KEM decapsulation's validity gap (registered 2026-11-21)
+
+Two runs settle which part of the inlined stream carries `CA-2`. Both are
+registered in
+[`ca2-localisation-registration.md`](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md),
+and neither has been made.
+- The halves on the inlined path, under a fat-LTO profile of the dynamic
+  crate (`release-lto`).
+- `Field25519` rows whose Montgomery residue is sparse.
+
+The same registration covers an observation from RT-P4 that belongs here.
+On the laptop, invalid ML-KEM-768 ciphertexts decapsulate slower than
+valid ones:
+- `valid-vs-invalid` 45.41, about 36 ns;
+- `fixed-vs-bitflip` 10.98;
+- the gap roughly doubled between runs of identical code.
+
+The maintainer has accepted it under `RPC_CHANNEL.md` §4.3's bounds
+(2026-10-25, reaffirmed 2026-11-21). The source holds no branch on
+validity:
+- `fips203` 0.5.0 computes `J(z‖c)` unconditionally (`ml_kem.rs:128`);
+- it selects the key with `conditional_assign` over `subtle`'s `ct_ne`
+  (`:144`).
+
+The hypothesis to test is this core's low-activity effect: a valid
+ciphertext's compare folds equal bytes. The registration times the compare
+alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
+silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
+on the floor device.
+
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
 **Opened 2026-11-21 by Rick's ruling**, from shekyl-core #1494's review of
