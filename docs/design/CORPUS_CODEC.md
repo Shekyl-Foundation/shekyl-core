@@ -87,7 +87,9 @@ lockfile gains only the crate itself.
   refused; an `extend` on an offered block at the height one past it, and
   that branch extended after it; an `extend` that follows neither the tip
   nor an offer refused on both sides, and one on an offer at another
-  height refused as a gap.
+  height refused as a gap; a partial corpus's branch rooted below its
+  first height followed; a switch back walked down through the blocks the
+  chain left.
 - **The ingest's adapter** (`shekyl-chain-ingest`'s `corpus_tests.rs`):
   records come out as sequenced events, a rewind as `IngestEvent::Rewind`,
   an offer as `IngestEvent::Offer`, a bundle section on the candidate, and

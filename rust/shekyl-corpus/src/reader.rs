@@ -179,10 +179,10 @@ impl<R: BufRead> CorpusReader<R> {
                 found: height,
             });
         }
-        let hash = block.hash();
+        let (hash, parent) = (block.hash(), block.header.previous);
         let extend = self.bodies_of(at, block)?.into_extend(height);
         self.cursor.advance_past(height);
-        self.lineage.extend(placed, hash);
+        self.lineage.extend(placed, hash, parent);
         self.read = note_one_more(self.read);
         Ok(Record::Extend(Box::new(extend)))
     }

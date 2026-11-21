@@ -129,7 +129,8 @@ impl<W: Write + Seek> CorpusWriter<W> {
         encode_block(&mut record, block_blob, tx_blobs, references, bodies)?;
         self.out.write_all(&record)?;
         self.cursor.advance_past(height);
-        self.lineage.extend(placed, block.hash());
+        self.lineage
+            .extend(placed, block.hash(), block.header.previous);
         self.count = note_one_more(self.count);
         Ok(())
     }

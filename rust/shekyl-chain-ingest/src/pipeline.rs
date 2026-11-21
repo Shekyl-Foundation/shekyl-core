@@ -680,7 +680,7 @@ pub enum PipelineFault<SrcF, SubF> {
     /// A wider window can put several blocks in one transaction, and a
     /// digest read after that transaction names only the batch tip. The
     /// run refuses that window before it connects anything, and refuses
-    /// again if an apply still covers more than one block.
+    /// again if an apply, or a switch, still covers more than one block.
     #[error(
         "a digest at every height needs one block per commit; {connected} blocks would share one"
     )]
@@ -1555,20 +1555,22 @@ where
         self.report.weights.retract_above(fork);
         self.report.emission.retract_above(fork);
         self.compare(&done.roots, &done.weights, &done.emission);
+        // The ledgers drop the branch the chain left. The next claims read
+        // the promoted headers (and the fork's, if the window had moved
+        // past it, or the ledgers never held it) from the store, as a claim
+        // past a rewind does (`claim_seed`, `claim_target`).
         self.ledger.rewind_to(fork);
         self.targets.rewind_to(fork);
-        for promoted in &plan.promoted {
-            let at = &promoted.at;
-            self.ledger.record(at.height, at.hash);
-            if let Err(corrupt) = self.targets.extend(at.height, &promoted.block, at.target) {
-                return Err(PipelineFault::TargetLedger {
-                    height: at.height,
-                    corrupt,
-                });
-            }
-            self.targets.forget_below_window_of(at.height);
-        }
         self.form_at = next_height(Some(tip));
+        // A digest at every height is the digest after that height's own
+        // commit. A switch promotes its blocks in one commit, so a switch
+        // of more than one block leaves heights with no digest of their
+        // own, as a batch commit would.
+        if self.cfg.digest_each_commit && done.promoted.len() > 1 {
+            return Err(PipelineFault::DigestWindow {
+                connected: done.promoted.len(),
+            });
+        }
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         if self.cfg.digest_each_commit {
             self.report.digests.retain(|height, _| *height <= fork);

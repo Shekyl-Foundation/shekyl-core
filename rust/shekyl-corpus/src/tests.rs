@@ -873,3 +873,80 @@ fn an_extend_on_an_offered_block_carries_the_height_one_past_it() {
             if expected == BlockHeight::from_raw(2) && found == BlockHeight::from_raw(3)
     ));
 }
+
+#[test]
+fn a_partial_corpus_may_follow_a_branch_rooted_below_it() {
+    // A corpus from height 100, replayed against a store that holds 99:
+    // extends 100 and 101, then a branch 100'..102' rooted at 99 (outside
+    // the corpus), then 103' on 102'. The branch's lowest block is at the
+    // corpus's first height, so the format takes it; the replay judges 99.
+    let first = BlockHeight::from_raw(100);
+    let below = BlockHash::from_bytes([0x99; 32]);
+    let (e100, _, _) = on(below, first, 0);
+    let (e101, _, _) = on(e100.block.hash(), BlockHeight::from_raw(101), 0);
+    let (o100, ob100) = rival(below, first);
+    let (o101, ob101) = rival(o100.hash(), BlockHeight::from_raw(101));
+    let (o102, ob102) = rival(o101.hash(), BlockHeight::from_raw(102));
+    let (after, _, _) = on(o102.hash(), BlockHeight::from_raw(103), 0);
+    let mut w =
+        CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, first).expect("header");
+    w.append(&e100.block.serialize(), &[]).expect("100");
+    w.append(&e101.block.serialize(), &[]).expect("101");
+    for blob in [&ob100, &ob101, &ob102] {
+        w.offer(blob, &[], &[], &[]).expect("an offer");
+    }
+    w.append(&after.block.serialize(), &[])
+        .expect("an extend on a branch rooted below the corpus");
+    let bytes = w.finish().expect("finish").into_inner();
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    for _ in 0..5 {
+        reader.next_record().expect("a record").expect("present");
+    }
+    assert_eq!(
+        extend(reader.next_record().expect("103'")).height,
+        BlockHeight::from_raw(103)
+    );
+}
+
+#[test]
+fn a_switch_back_walks_down_through_the_blocks_the_chain_left() {
+    // Main 0..=2; a branch 1'..3' on 0; 4' on 3' (the chain switched, 1 and
+    // 2 left it). Then a branch 3'', 4'' on main's 2, and 5 on 4'': the
+    // walk goes down through 2 and 1, which the chain left, to the fork at
+    // 0. Both sides take it.
+    let (e0, b0, t0) = blobs(BlockHeight::from_raw(0), 0);
+    let (_, b1, t1) = blobs(BlockHeight::from_raw(1), 0);
+    let (e2, b2, t2) = blobs(BlockHeight::from_raw(2), 0);
+    let (o1, ob1) = rival(e0.block.hash(), BlockHeight::from_raw(1));
+    let (o2, ob2) = rival(o1.hash(), BlockHeight::from_raw(2));
+    let (o3, ob3) = rival(o2.hash(), BlockHeight::from_raw(3));
+    let (four, _, _) = on(o3.hash(), BlockHeight::from_raw(4), 0);
+    let (back3, bb3) = rival(e2.block.hash(), BlockHeight::from_raw(3));
+    let (back4, bb4) = rival(back3.hash(), BlockHeight::from_raw(4));
+    let (five, _, _) = on(back4.hash(), BlockHeight::from_raw(5), 0);
+    let mut w = CorpusWriter::create(Cursor::new(Vec::new()), Network::Regtest, BlockHeight::ZERO)
+        .expect("header");
+    w.append(&b0, &t0).expect("0");
+    w.append(&b1, &t1).expect("1");
+    w.append(&b2, &t2).expect("2");
+    for blob in [&ob1, &ob2, &ob3] {
+        w.offer(blob, &[], &[], &[]).expect("an offer");
+    }
+    w.append(&four.block.serialize(), &[])
+        .expect("4' after the switch");
+    for blob in [&bb3, &bb4] {
+        w.offer(blob, &[], &[], &[]).expect("an offer back");
+    }
+    w.append(&five.block.serialize(), &[])
+        .expect("5 after the switch back");
+    let bytes = w.finish().expect("finish").into_inner();
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    for _ in 0..9 {
+        reader.next_record().expect("a record").expect("present");
+    }
+    assert_eq!(
+        extend(reader.next_record().expect("5")).height,
+        BlockHeight::from_raw(5)
+    );
+    assert!(reader.next_record().expect("clean end").is_none());
+}

@@ -1274,6 +1274,39 @@ async fn two_offers_out_of_order_are_refused_as_unlinked() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_after_a_switch_is_claimed_from_the_store_and_connects() {
+    // Four offers switch the chain (at the fourth), then the fork's fifth
+    // block is an `extend` on the new tip. The ledgers dropped the branch
+    // the chain left; the claims for the block after the switch read the
+    // promoted headers from the store, as a claim past a rewind does, and
+    // the run ends at the trace's covered tip with every height compared.
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 5);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering_then(&r, &[0, 1, 2, 3], Some(4));
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp("pipeline-offers-then-extend")),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("the switch and the block after it replay");
+    assert_eq!(report.switches.len(), 1, "{:?}", report.switches);
+    assert_eq!(report.switches[0].tip, h(f + 4));
+    assert_eq!(report.connected.last().map(|(hh, _)| *hh), Some(h(f + 5)));
+    assert_eq!(report.disagreements().count(), 0);
+    assert_eq!(report.roots.compared(), f + 6, "every height 0..={}", f + 5);
+    let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(f + 5));
+    assert_eq!(ours, theirs);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_extend_on_an_offered_block_that_did_not_become_the_tip_is_refused() {
     // The fork's first three blocks offered: three against main's three,
     // held, no switch. Then the fork's fourth written as an `extend` on the
