@@ -4452,11 +4452,21 @@ an owner if no row names it (rule 22).
   response. The reassembly buffer never holds more than one inner message its
   command admits. Each refusal has its own error and its own close
   cause (`InnerMessageOversize`, `FragmentTrainOverrun`,
-  `InnerMessageNotDispatch`; `P2P_TRANSPORT_LAYER.md` D12). **Not bounded by
-  this:** one bucket of the noise / fragment class, a dummy or a single
-  fragment, may still claim a body up to the packet limit (PWD-B3a's class
-  rule), and a train whose inner command takes the packet limit (2014, 2015,
-  2017) is bounded by that limit.
+  `InnerMessageNotDispatch`; `P2P_TRANSPORT_LAYER.md` D12).
+- **The noise / fragment class: IMPLEMENTED 2026-11-21 (Rick's ruling of
+  2026-11-20).** A bucket with neither the request nor the response flag is a
+  dummy or a piece of a transaction notice, and nothing else. One such bucket
+  claims at most `CAP_NOISE_CLASS`, a transaction notice and its inner header
+  (`CAP_NEW_TRANSACTIONS` + 29 = 1 000 073 bytes), where PWD-B3a's class rule
+  left it at the packet limit. A train whose inner header names any command
+  other than the transaction notice is refused when that header is read, with
+  its own error and close cause (`InnerMessageNotTransactionNotice`, 23). No
+  path of the ingress check answers "unlimited" any more. **This is the
+  interim bound:** the link layer ruled in the wire size system round (`WSZ-`; Rick,
+  2026-11-21; its record is not yet in this repository) replaces Levin's
+  fragment code. **Not bounded by this:** the unfinished
+  bytes a node holds across all its sessions together (`WSZ-4` closes that;
+  the row is in `docs/FOLLOWUPS.md`).
 
 *The description that follows is the tree as ruled on 2026-09-04, at this
 document's pin; the release it describes is the one the bound above replaced.*

@@ -60,7 +60,7 @@ pub(crate) const fn handshake_refused(connector: ConnectorId) -> DialEnd {
 }
 
 /// The D12 kind a Levin framing error closes with, when it has one of
-/// its own: the three fragment-train refusals (PWD-B12). `None` for every
+/// its own: the four fragment-train refusals (PWD-B12). `None` for every
 /// other framing error, which closes as the session's form end
 /// ([`form_failure`], or [`handshake_refused`] on this node's own dial).
 ///
@@ -72,6 +72,9 @@ pub(crate) const fn framing_kind(error: &LevinError) -> Option<CloseKind> {
         LevinError::InnerOversize { .. } => Some(CloseKind::InnerMessageOversize),
         LevinError::FragmentOverrun { .. } => Some(CloseKind::FragmentTrainOverrun),
         LevinError::InnerNotDispatch { .. } => Some(CloseKind::InnerMessageNotDispatch),
+        LevinError::InnerNotTransactionNotice { .. } => {
+            Some(CloseKind::InnerMessageNotTransactionNotice)
+        }
         LevinError::BadSignature
         | LevinError::OversizePacket { .. }
         | LevinError::BufferLimit { .. }
@@ -278,6 +281,10 @@ mod tests {
         assert_eq!(
             framing_kind(&LevinError::InnerNotDispatch { flags: 0 }),
             Some(CloseKind::InnerMessageNotDispatch)
+        );
+        assert_eq!(
+            framing_kind(&LevinError::InnerNotTransactionNotice { command: 1001 }),
+            Some(CloseKind::InnerMessageNotTransactionNotice)
         );
         for other in [
             LevinError::BadSignature,

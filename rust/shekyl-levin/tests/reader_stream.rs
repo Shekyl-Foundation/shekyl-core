@@ -16,8 +16,8 @@
 
 use shekyl_levin::{
     fragmented_notify, ingress_payload_cap, invoke, noise_notify, notify, response, BucketReader,
-    Error, Flags, Received, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
-    INITIAL_MAX_PACKET_SIZE,
+    Error, Flags, Received, CAP_NOISE_CLASS, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE,
+    HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
 };
 
 /// Feed a whole stream, then pull exactly one message and assert it is the
@@ -417,7 +417,8 @@ fn reassembled_inner_payload_trimmed_to_declared_length() {
 /// notification here.
 #[test]
 fn reassembled_response_classifies_by_inner_protocol_version() {
-    let mut inner = response(1001, b"rsp");
+    // The transaction notice is the one command a train may carry (PWD-B12).
+    let mut inner = response(2002, b"rsp");
     // Overwrite the inner protocol-version field (bytes 25..29) with 0.
     inner[25..29].copy_from_slice(&0u32.to_le_bytes());
 
@@ -434,7 +435,7 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
     assert_eq!(
         only_message(&stream),
         Received::Notification {
-            command: 1001,
+            command: 2002,
             payload: b"rsp".to_vec(),
         },
         "inner ver=0 must not classify as Response even though outer is ver=1"
@@ -630,11 +631,11 @@ const MIDDLE: Flags = Flags::from_bits(0);
 /// `Ok(None)` and the train may grow to the packet limit unjudged.
 #[test]
 fn an_inner_length_over_its_cap_is_refused_when_the_inner_header_completes() {
-    let cap = ingress_payload_cap(COMMAND_HANDSHAKE, Flags::REQUEST).unwrap();
-    let inner =
-        shekyl_levin::BucketHead::make(COMMAND_HANDSHAKE, cap + 1, Flags::REQUEST, true).write();
+    let cap = ingress_payload_cap(2002, Flags::REQUEST).unwrap();
+    let inner = shekyl_levin::BucketHead::make(2002, cap + 1, Flags::REQUEST, false).write();
 
     let mut reader = BucketReader::new();
+    reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
     reader.feed(&fragment(Flags::BEGIN, &inner[..20])).unwrap();
     assert_eq!(
         reader.next_message(),
@@ -826,4 +827,89 @@ fn an_inner_message_of_the_noise_class_is_refused_when_its_header_arrives() {
             );
         }
     }
+}
+
+/// PWD-B12, the class cap: one bucket of the noise / fragment class claims
+/// at most a transaction notice and its inner header, on a session whose
+/// packet limit is 100 MB. A dummy and each kind of fragment are refused
+/// one byte over the cap, from the header alone, and admitted at it.
+///
+/// Red edit: answer the packet limit (or `u64::MAX`, as the inherited code
+/// did) for the class in `ingress_payload_cap`. The over-cap headers are
+/// then admitted, and each can make the session wait on 100 MB.
+#[test]
+fn a_noise_class_bucket_over_the_class_cap_is_refused_from_its_header() {
+    assert_eq!(
+        CAP_NOISE_CLASS,
+        ingress_payload_cap(2002, Flags::REQUEST).unwrap() + u64::try_from(HEADER_SIZE).unwrap(),
+        "one transaction notice and its inner header"
+    );
+    const { assert!(CAP_NOISE_CLASS < DEFAULT_MAX_PACKET_SIZE) };
+    for flags in [
+        Flags::BEGIN.union(Flags::END),
+        Flags::BEGIN,
+        MIDDLE,
+        Flags::END,
+    ] {
+        let over = shekyl_levin::BucketHead::make(0, CAP_NOISE_CLASS + 1, flags, false).write();
+        let mut reader = BucketReader::new();
+        reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+        reader.feed(&over).unwrap();
+        assert_eq!(
+            reader.next_message(),
+            Err(Error::OversizePacket {
+                claimed: CAP_NOISE_CLASS + 1,
+                limit: CAP_NOISE_CLASS,
+            }),
+            "{flags:?} one byte over the class cap"
+        );
+
+        let at = shekyl_levin::BucketHead::make(0, CAP_NOISE_CLASS, flags, false).write();
+        let mut reader = BucketReader::new();
+        reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+        reader.feed(&at).unwrap();
+        assert_eq!(
+            reader.next_message(),
+            Ok(None),
+            "{flags:?} at the class cap waits for its body"
+        );
+    }
+}
+
+/// PWD-B12, a train carries a transaction notice: an inner header naming
+/// any other command is refused when it is read, as a request and as a
+/// response, in a train that begins and in one that ends, and the
+/// transaction notice in the same position is not.
+///
+/// Red edit: delete the `InnerNotTransactionNotice` check in
+/// `judge_inner_header`. The `END` forms are then delivered as that
+/// command, and the `BEGIN` forms fail as an overrun, not as this refusal.
+#[test]
+fn a_train_whose_inner_message_is_not_the_transaction_notice_is_refused() {
+    for command in [COMMAND_HANDSHAKE, 1002, 2008, 2011, 2014, 2015] {
+        for (inner_flags, expect_response) in [(Flags::REQUEST, false), (Flags::RESPONSE, false)] {
+            let inner =
+                shekyl_levin::BucketHead::make(command, 0, inner_flags, expect_response).write();
+            for train_flags in [Flags::BEGIN, Flags::END] {
+                let mut reader = BucketReader::new();
+                reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+                reader.feed(&fragment(train_flags, &inner)).unwrap();
+                assert_eq!(
+                    reader.next_message(),
+                    Err(Error::InnerNotTransactionNotice { command }),
+                    "inner {command} {inner_flags:?} in a {train_flags:?} fragment"
+                );
+            }
+        }
+    }
+    let inner = notify(2002, &[]);
+    let mut reader = BucketReader::new();
+    reader.feed(&fragment(Flags::END, &inner)).unwrap();
+    assert!(
+        matches!(
+            reader.next_message(),
+            Ok(Some(Received::Notification { command: 2002, .. }))
+        ),
+        "the transaction notice is what a train carries"
+    );
 }

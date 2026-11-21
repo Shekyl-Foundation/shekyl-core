@@ -20,8 +20,9 @@
 //!   payload is within that command's cap, whether it came as one bucket
 //!   or out of a train;
 //! - a train whose first 29 bytes are in has an inner header the reader
-//!   was right to accept (a request or a response, a defined command, a
-//!   length within the command's cap and the packet limit), and the
+//!   was right to accept (a request or a response, the transaction
+//!   notice and no other command, a length within its cap and the packet
+//!   limit), and the
 //!   reassembly buffer holds fewer bytes than that inner message while
 //!   the train is unfinished.
 //!
@@ -35,7 +36,7 @@
 use libfuzzer_sys::fuzz_target;
 use shekyl_levin::{
     ingress_payload_cap, noise_notify, BucketHead, BucketReader, Command, Error, Flags, Received,
-    DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
+    DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE, NOTIFY_NEW_TRANSACTIONS,
 };
 
 /// The input, read front to back. A read past the end answers zero, so
@@ -158,6 +159,10 @@ fn check_unfinished(reader: &BucketReader, train: &Train, packet_limit: u64) {
             .intersects(Flags::REQUEST.union(Flags::RESPONSE)),
         "the reader took a train whose inner message is not a request or response"
     );
+    assert_eq!(
+        inner.command, NOTIFY_NEW_TRANSACTIONS,
+        "the reader took a train whose inner message is not the transaction notice"
+    );
     let cap = ingress_payload_cap(inner.command, inner.flags)
         .expect("the reader took a train whose inner header ingress refuses");
     assert!(
@@ -201,10 +206,13 @@ fuzz_target!(|data: &[u8]| {
                 None
             }
             // A fragment that opens with an inner header the input
-            // describes: any command, any flag byte, any length.
+            // describes: any command, any flag byte, any length. Half the
+            // selector's values name the transaction notice, the one
+            // command a train may carry, so trains get past their header.
             1 => {
                 let command = match script.byte() {
                     selector @ 0..=12 => Command::ALL[usize::from(selector)].wire_id(),
+                    13..=140 => NOTIFY_NEW_TRANSACTIONS,
                     _ => script.u32(),
                 };
                 let flags = Flags::from_bits(u32::from(script.byte()));

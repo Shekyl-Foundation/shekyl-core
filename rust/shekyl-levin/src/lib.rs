@@ -137,10 +137,7 @@
 //!    appended every fragment, padding included, up to the packet limit. Unreachable for a conforming
 //!    sender: [`fragmented_notify`] cuts the inner message into equal
 //!    bodies and pads only the last, so every earlier fragment ends short
-//!    of the inner message's end. What this does **not** bound is one
-//!    bucket: a single fragment or dummy may still claim a body up to the
-//!    packet limit, and its bytes wait in the receive buffer until the
-//!    bucket is complete (entry 6's class rule).
+//!    of the inner message's end. One bucket is bounded by entry 10.
 //! 9. **inner dispatch class** (PWD-B12, 2026-11-20) — a reassembled inner
 //!    message must be a request or a response. An inner header that sets
 //!    neither `Q` nor `S` is refused when it is read
@@ -149,6 +146,20 @@
 //!    notification of whatever command its header named. Unreachable
 //!    for a conforming sender: the inner message of a train is a
 //!    [`notify`] bucket, which sets `Q`.
+//! 10. **class cap** (PWD-B12, 2026-11-21) — one bucket of the noise /
+//!     fragment class (a dummy, or one fragment) claims at most
+//!     [`CAP_NOISE_CLASS`]: a transaction notice of one largest transaction
+//!     and its inner header ([`Error::OversizePacket`]). The inherited
+//!     reader bounded such a bucket by the packet limit alone, so one
+//!     header could make a session wait on 100 MB. Unreachable for a
+//!     conforming sender: a dummy and a fragment are both the sender's
+//!     noise size, far below a notice.
+//! 11. **train carries a transaction notice** (PWD-B12, 2026-11-21) — a
+//!     reassembled inner message must be the transaction notice
+//!     ([`Error::InnerNotTransactionNotice`]), judged when the inner header
+//!     is read. The inherited reader reassembled any command. Unreachable
+//!     for a conforming sender: only transaction notices are cut into
+//!     trains.
 
 mod error;
 mod fragment;
@@ -166,8 +177,9 @@ pub use header::{
     PROTOCOL_VERSION_1,
 };
 pub use ingress::{
-    ingress_payload_cap, Command, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED,
-    HANDSHAKE_FIXED_MAX_BYTES, MAX_OBJECT_REQUEST_COUNT, PEERLIST_ENTRY_MAX_ENCODED_BYTES,
+    ingress_payload_cap, Command, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, CAP_NOISE_CLASS,
+    FLAGS_DEFINED, HANDSHAKE_FIXED_MAX_BYTES, MAX_OBJECT_REQUEST_COUNT,
+    PEERLIST_ENTRY_MAX_ENCODED_BYTES,
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;

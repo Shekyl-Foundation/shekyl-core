@@ -113,6 +113,11 @@ close_kinds! {
     (20, InnerMessageOversize, ChannelExists),
     (21, FragmentTrainOverrun, ChannelExists),
     (22, InnerMessageNotDispatch, ChannelExists),
+    // A fourth, of the same class (PWD-B12, 2026-11-21): a train whose
+    // inner message is a request or response of a command other than the
+    // transaction notice (`shekyl-levin`'s
+    // `Error::InnerNotTransactionNotice`).
+    (23, InnerMessageNotTransactionNotice, ChannelExists),
 }
 
 impl CloseKind {
@@ -129,6 +134,7 @@ impl CloseKind {
                 | Self::InnerMessageOversize
                 | Self::FragmentTrainOverrun
                 | Self::InnerMessageNotDispatch
+                | Self::InnerMessageNotTransactionNotice
         )
     }
 }
@@ -213,6 +219,7 @@ mod tests {
             CloseKind::InnerMessageOversize,
             CloseKind::FragmentTrainOverrun,
             CloseKind::InnerMessageNotDispatch,
+            CloseKind::InnerMessageNotTransactionNotice,
         ];
         let after = [
             CloseKind::PeerClosed,
@@ -225,6 +232,7 @@ mod tests {
             CloseKind::InnerMessageOversize,
             CloseKind::FragmentTrainOverrun,
             CloseKind::InnerMessageNotDispatch,
+            CloseKind::InnerMessageNotTransactionNotice,
         ];
         assert_eq!(kinds_in(Phase::BeforeChannel), before);
         assert_eq!(kinds_in(Phase::Gap), gap);
@@ -239,14 +247,14 @@ mod tests {
             .collect()
     }
 
-    /// The session-refusal class is `SessionRefused` and the three
+    /// The session-refusal class is `SessionRefused` and the four
     /// fragment-train refusals, and nothing else: a kind added to the
     /// table is outside the class until someone puts it in.
     ///
-    /// Red edit: drop one of the three from `refuses_session`; the dialer
+    /// Red edit: drop one of the four from `refuses_session`; the dialer
     /// then reads that close as an ordinary drop.
     #[test]
-    fn the_session_refusal_class_is_four_kinds() {
+    fn the_session_refusal_class_is_five_kinds() {
         let class: Vec<CloseKind> = CloseKind::ALL
             .iter()
             .copied()
@@ -259,6 +267,7 @@ mod tests {
                 CloseKind::InnerMessageOversize,
                 CloseKind::FragmentTrainOverrun,
                 CloseKind::InnerMessageNotDispatch,
+                CloseKind::InnerMessageNotTransactionNotice,
             ]
         );
         for kind in class {
@@ -275,6 +284,7 @@ mod tests {
         assert_eq!(CloseKind::InnerMessageOversize.code(), 20);
         assert_eq!(CloseKind::FragmentTrainOverrun.code(), 21);
         assert_eq!(CloseKind::InnerMessageNotDispatch.code(), 22);
+        assert_eq!(CloseKind::InnerMessageNotTransactionNotice.code(), 23);
         for kind in CloseKind::ALL {
             assert_eq!(CloseKind::from_code(kind.code()), Some(*kind));
         }

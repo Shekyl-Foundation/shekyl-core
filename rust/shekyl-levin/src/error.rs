@@ -89,6 +89,17 @@ pub enum Error {
         flags: u32,
     },
 
+    /// A fragment train's inner message is a request or response of a
+    /// command other than the transaction notice. A train carries pieces
+    /// of a transaction notice and nothing else (PWD-B12); any other
+    /// command travels as one bucket under its own cap. Refused when the
+    /// inner header's last byte arrives.
+    #[error("fragmented inner message is command {command}, not the transaction notice")]
+    InnerNotTransactionNotice {
+        /// The command the inner header named.
+        command: u32,
+    },
+
     /// The reader already returned a fatal error and was used again. In the
     /// C++ oracle `handle_recv` returning `false` *is* the disconnect, so the
     /// question cannot arise; here the reader latches so a caller that logs

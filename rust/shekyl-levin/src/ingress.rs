@@ -17,11 +17,14 @@
 //! The check is by **flag class**, not command id:
 //!
 //! - Flags carry **neither** [`Flags::REQUEST`] nor [`Flags::RESPONSE`] →
-//!   noise / fragment class. The command field is filler (often 0). Bound
-//!   is the packet / framing limit. Do **not** reject on the id. That is
-//!   the class of a bucket on the wire. The inner message a fragment train
-//!   reassembles to is never of this class: [`crate::BucketReader`]
-//!   refuses one when it reads the inner header (PWD-B12).
+//!   noise / fragment class. The command field is filler (often 0). Do
+//!   **not** reject on the id. A bucket of this class is a dummy or a
+//!   piece of a transaction notice and nothing else, so its bound is
+//!   [`CAP_NOISE_CLASS`]: one transaction notice and its header (PWD-B12).
+//!   That is the class of a bucket on the wire. The inner message a
+//!   fragment train reassembles to is never of this class, and is always
+//!   a transaction notice: [`crate::BucketReader`] refuses any other when
+//!   it reads the inner header (PWD-B12).
 //! - Flags carry Q or S → dispatch. The command must convert to
 //!   [`Command`], and the payload is then bounded by that command's
 //!   cap.
@@ -58,7 +61,7 @@
 
 use shekyl_peer_bounds::DISCLOSE_COUNT;
 
-use crate::header::Flags;
+use crate::header::{Flags, HEADER_SIZE};
 use crate::{
     Error, CAP_NEW_BUNDLE, CAP_NEW_TRANSACTIONS, CAP_REQUEST_BODIES, CAP_REQUEST_BUNDLE_BODIES,
     CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_BUNDLE_BODIES, CAP_RESPONSE_HEADERS,
@@ -258,10 +261,20 @@ impl Command {
     }
 }
 
+/// The payload cap of one bucket of the noise / fragment class (PWD-B12).
+///
+/// Such a bucket is a dummy or a piece of a transaction notice, so the
+/// most one can usefully carry is a whole notice of one largest
+/// transaction behind its inner header. Derived from
+/// [`CAP_NEW_TRANSACTIONS`], not chosen.
+pub const CAP_NOISE_CLASS: u64 = CAP_NEW_TRANSACTIONS + HEADER_SIZE as u64;
+
 /// Admit one parsed bucket header at ingress (PWD-B3a / PWD-B4).
 ///
 /// Returns the payload cap to apply together with the packet-size limit.
-/// Noise / fragment class returns [`u64::MAX`] so the packet limit binds.
+/// Every class has one: the noise / fragment class takes
+/// [`CAP_NOISE_CLASS`], a dispatch its command's cap. No path answers
+/// "unlimited".
 ///
 /// # Errors
 ///
@@ -275,7 +288,7 @@ pub fn ingress_payload_cap(command: u32, flags: Flags) -> Result<u64, Error> {
         });
     }
     if !flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)) {
-        return Ok(u64::MAX);
+        return Ok(CAP_NOISE_CLASS);
     }
     Command::from_wire(command)
         .map(Command::payload_cap)
@@ -320,7 +333,7 @@ mod tests {
     fn noise_dummy_is_not_rejected_on_command_zero() {
         let flags = Flags::BEGIN.union(Flags::END);
         assert!(!flags.intersects(Flags::REQUEST.union(Flags::RESPONSE)));
-        assert_eq!(ingress_payload_cap(0, flags).unwrap(), u64::MAX);
+        assert_eq!(ingress_payload_cap(0, flags).unwrap(), CAP_NOISE_CLASS);
     }
 
     #[test]

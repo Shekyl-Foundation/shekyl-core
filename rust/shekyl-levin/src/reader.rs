@@ -41,8 +41,9 @@
 //!   discriminator ([`crate::ingress_payload_cap`]): unknown flag bits are
 //!   rejected; a Q/S-flagged bucket whose command is not a
 //!   [`crate::Command`] is rejected; a noise/fragment bucket (neither
-//!   Q nor S) is bounded only by the packet limit, so cover traffic with
-//!   command 0 is not treated as an unknown command. The packet limit is
+//!   Q nor S) takes the class cap ([`crate::CAP_NOISE_CLASS`]) whatever
+//!   its command field says, so cover traffic with command 0 is not
+//!   treated as an unknown command. The packet limit is
 //!   256 KiB before the handshake and 100 MB after (the caller raises it
 //!   with [`BucketReader::complete_handshake`], as the C++ does at its
 //!   three handshake sites);
@@ -185,7 +186,7 @@ impl BucketReader {
     }
 
     /// The limit in force for one parsed header: packet limit and the
-    /// PWD-B3 command cap (or unlimited for the noise/fragment class).
+    /// PWD-B3 command cap (the class cap for the noise/fragment class).
     fn limit_for(&self, command: u32, flags: Flags) -> Result<u64, Error> {
         let admitted = ingress::ingress_payload_cap(command, flags)?;
         Ok(self.max_packet_size.min(admitted))
@@ -443,8 +444,9 @@ impl BucketReader {
     /// Read and judge the inner header a train's first [`HEADER_SIZE`]
     /// bytes are, as soon as they are all here.
     ///
-    /// Three divergences live here — "inner-signature verify", "inner
-    /// header judged on arrival" and "inner dispatch class" (crate docs).
+    /// Four divergences live here — "inner-signature verify", "inner
+    /// header judged on arrival", "inner dispatch class" and "train carries
+    /// a transaction notice" (crate docs).
     fn judge_inner_header(&self) -> Result<BucketHead, Error> {
         let header_bytes: &[u8; HEADER_SIZE] = self.fragment[..HEADER_SIZE]
             .try_into()
@@ -460,6 +462,13 @@ impl BucketReader {
         {
             return Err(Error::InnerNotDispatch {
                 flags: inner.flags.bits(),
+            });
+        }
+        // Divergence "train carries a transaction notice": nothing else is
+        // ever cut into a train.
+        if inner.command != crate::NOTIFY_NEW_TRANSACTIONS {
+            return Err(Error::InnerNotTransactionNotice {
+                command: inner.command,
             });
         }
         if inner.payload_len > limit {
