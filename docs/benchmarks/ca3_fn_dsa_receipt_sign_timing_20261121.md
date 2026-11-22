@@ -438,10 +438,35 @@ and code and data addresses are masked (`laptop_instruction_counts.txt`).
     775-instruction function.
   - Masked, the two share a longest common subsequence of 327 instructions.
     Both call the same, identical `ffsamp_fft_inner`.
-  - So the SSE2 run measured the same sampler and LDL decomposition, which
-    are the work that touches the key's floating-point values (the source
-    read, §3.1 of `CRYPTO_AUDIT.md`), inside a differently compiled
-    `sign_inner`.
+  - So the SSE2 run measured the same sampler and LDL decomposition inside
+    a differently compiled `sign_inner`. Why that does not weaken the
+    result (corrected on review, 2026-11-22):
+
+    `sign_inner` (`fn-dsa-sign` 0.4.0, `lib.rs:482`) does key-derived
+    floating-point work of its own:
+    - the Gram matrix from the basis (`poly_mulownadj_fft`, `poly_muladj_fft`,
+      `lib.rs:590-604`);
+    - the target and lattice-point products (`poly_mul_fft`, `lib.rs:632-635`
+      and `:680-686`);
+    - the inverse FFT (`lib.rs:688-689`);
+    - `rint` (`lib.rs:700`, `:715`), which on x86_64 is `cvtsd2si`
+      (`_mm_cvtsd_si64`, `flr_native.rs:373-384`).
+
+    All of it is multiplies, adds, subtractions and conversions, whose latency
+    on x86_64 does not depend on operand values for normal inputs. Every
+    division and square root on key-derived values in signing is in the two
+    functions the comparison found identical between the harness and the
+    wallet:
+    - `poly_LDL_fft`, whose divisions on x86_64 are `_mm_div_pd` and
+      `_mm_div_sd` (`poly.rs:1130`, `:1148`; the AVX2 path's `_mm256_div_pd`
+      at `poly_avx2.rs:393`; `poly.rs:1215` is the same division on targets
+      without SIMD);
+    - `ffsamp_fft_inner`, whose leaf divides once (`sampler.rs:512`) and takes
+      two square roots (`:532`, `:553`); on the AVX2 path
+  `sampler_avx2.rs:280`, `:300` and `:321`.
+
+    So the differently compiled `sign_inner` contains no operation whose time
+    can vary with the key's values.
   - This applies only on an x86_64 processor without AVX2. It is recorded
     with the SSE2 result rather than hidden.
 
