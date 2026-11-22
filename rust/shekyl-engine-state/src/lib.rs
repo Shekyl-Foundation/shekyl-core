@@ -38,6 +38,7 @@ pub mod invariants;
 pub mod ledger_block;
 pub mod ledger_indexes;
 pub mod local_label;
+pub mod multisig_state;
 pub mod output_state;
 pub mod payment_id;
 pub mod payment_request;
@@ -69,6 +70,7 @@ pub use group_ledger::{
 pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
+pub use multisig_state::{MultisigState, Reservation, ReservedElsewhere, MULTISIG_STATE_VERSION};
 pub use output_state::{OutputStanding, OutputState, SpendHorizon};
 pub use payment_id::PaymentId;
 pub use payment_request::{

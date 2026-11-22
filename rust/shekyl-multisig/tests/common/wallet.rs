@@ -51,7 +51,9 @@ use shekyl_wire::{Ct, Input, PqcAuth, Transaction};
 pub struct Live(pub HashMap<u64, [u8; 32]>);
 
 impl LiveCeremonies for Live {
-    fn reserve(&mut self, intent_hash: &[u8; 32], inputs: &[u64]) -> Result<(), InputInUse> {
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), InputInUse> {
+        let intent_hash = intent.hash();
+        let inputs = &intent.intent().input_global_indices;
         if let Some(&input) = inputs
             .iter()
             .find(|i| self.0.get(i).is_some_and(|h| h != intent_hash))

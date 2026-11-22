@@ -48,7 +48,7 @@ impl<'a> Holder<'a, Committed> {
         expect_role(&ctx, &[Role::Holder])?;
         from_role(&ctx, proposal, Role::Proposer)?;
         check_rounds(&ctx, proposal.sender(), proposal.body().rounds.iter())?;
-        live.reserve(ctx.intent.hash(), &ctx.intent.intent().input_global_indices)?;
+        live.reserve(&ctx.intent)?;
         let rounds = hold_all(&ctx, store, rng)?;
         let file = seal_as(
             &ctx,

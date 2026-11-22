@@ -31,6 +31,15 @@
 #   docs/MID_REWIRE_HARDENING.md §3.5
 
 
+# ── multisig_state.rs ─────────────────────────────────────────────────
+# A group wallet's ceremony records (`.wallet.multisig`, R-30). An intent
+# hash names a ceremony the members already exchanged; a seen-seed entry is
+# the seed's one-way fingerprint, never the seed (the file holds no nonce
+# and no key, R-20).
+rust/shekyl-engine-state/src/multisig_state.rs|intent_hash: [u8; 32]
+rust/shekyl-engine-state/src/multisig_state.rs|responder_approvals: Vec<[u8; 32]>
+rust/shekyl-engine-state/src/multisig_state.rs|seen_seeds: Vec<[u8; 32]>
+
 # ── payment_request.rs ────────────────────────────────────────────────
 #
 # `matched_tx_hash` was migrated from `Option<[u8; 32]>` to

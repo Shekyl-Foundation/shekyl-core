@@ -38,6 +38,7 @@
 //! - `pending_post_block.snap`     ↔  [`PENDING_POST_VERSION`]
 //! - `group_wallet_ledger.snap`    ↔  [`GROUP_WALLET_LEDGER_FORMAT_VERSION`]
 //! - `group_ledger_block.snap`     ↔  [`GROUP_LEDGER_BLOCK_VERSION`]
+//! - `multisig_state.snap`         ↔  [`MULTISIG_STATE_VERSION`]
 //!
 //! The pairing is enforced in CI by
 //! `.github/workflows/schema-snapshot.yml` — any PR that touches a `.snap`
@@ -78,6 +79,7 @@
 //! [`PENDING_POST_VERSION`]: crate::pending_post_block::PENDING_POST_VERSION
 //! [`GROUP_WALLET_LEDGER_FORMAT_VERSION`]: crate::group_ledger::GROUP_WALLET_LEDGER_FORMAT_VERSION
 //! [`GROUP_LEDGER_BLOCK_VERSION`]: crate::group_ledger::GROUP_LEDGER_BLOCK_VERSION
+//! [`MULTISIG_STATE_VERSION`]: crate::multisig_state::MULTISIG_STATE_VERSION
 //! [`WalletLedger`]: crate::wallet_ledger::WalletLedger
 //! [`LedgerBlock`]: crate::ledger_block::LedgerBlock
 //! [`BookkeepingBlock`]: crate::bookkeeping_block::BookkeepingBlock
@@ -105,6 +107,7 @@ mod tests {
         bookkeeping_block::BookkeepingBlock,
         group_ledger::{GroupLedgerBlock, GroupWalletLedger},
         ledger_block::LedgerBlock,
+        multisig_state::MultisigState,
         pending_post_block::PendingPostBlock,
         pscan_cursor::PScanCursor,
         pscan_state::PScanState,
@@ -238,6 +241,11 @@ mod tests {
     #[test]
     fn group_ledger_block_schema_matches_snapshot() {
         check_or_update_snapshot("group_ledger_block", <GroupLedgerBlock as Schema>::SCHEMA);
+    }
+
+    #[test]
+    fn multisig_state_schema_matches_snapshot() {
+        check_or_update_snapshot("multisig_state", <MultisigState as Schema>::SCHEMA);
     }
 
     #[test]

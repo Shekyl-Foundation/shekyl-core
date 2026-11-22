@@ -1236,6 +1236,11 @@ fn is_cross_device_error(e: &io::Error) -> bool {
     }
 }
 
+// `.wallet.multisig` (R-30): a child module, for the private fields its
+// save and open share with the other sibling seals.
+#[path = "multisig_state_file.rs"]
+mod multisig_state_file;
+
 #[cfg(test)]
 mod tests {
     use super::*;

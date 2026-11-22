@@ -131,6 +131,12 @@ pub enum PayloadKind {
     /// writer (the assemble path, not the pscan task); the distinct kind
     /// byte keeps a swapped sibling a loud refusal.
     PendingPostBlockPostcard = 0x03,
+    /// `body` is a postcard-encoded `shekyl_engine_state::MultisigState` — a
+    /// group wallet's ceremony records (`.wallet.multisig`, R-30): input
+    /// reservations, the responder's approvals and the seen-seed
+    /// fingerprints. A sibling seal under the group wallet's region-2 key;
+    /// the distinct kind byte keeps a swapped sibling a loud refusal.
+    MultisigStatePostcard = 0x04,
 }
 
 impl PayloadKind {
@@ -141,6 +147,7 @@ impl PayloadKind {
             0x01 => Ok(Self::WalletLedgerPostcard),
             0x02 => Ok(Self::PScanStatePostcard),
             0x03 => Ok(Self::PendingPostBlockPostcard),
+            0x04 => Ok(Self::MultisigStatePostcard),
             other => Err(PayloadError::UnknownPayloadKind(other)),
         }
     }

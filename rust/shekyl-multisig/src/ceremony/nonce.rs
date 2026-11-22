@@ -29,6 +29,10 @@
 //! the ceremony is forfeit: a new intent completes the spend, and no funds
 //! are at stake.
 
+use shekyl_engine_state::MultisigState;
+use shekyl_types::{BlockHeight, GlobalOutputIndex};
+
+use crate::invariants::ValidatedIntent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
@@ -225,16 +229,40 @@ pub(crate) fn consume(
     store.take(intent_hash).map(ConsumedNonce).ok_or(NotHeld)
 }
 
-/// A member's live ceremonies, by the inputs they spend. Slice 4a keeps
-/// it in the wallet ledger.
+/// A member's live ceremonies, by the inputs they spend. A group wallet
+/// keeps them in `.wallet.multisig`
+/// ([`shekyl_engine_state::MultisigState`]).
 pub trait LiveCeremonies {
-    /// Record that `intent_hash` spends `inputs` (global output indices).
+    /// Record that `intent` spends its inputs, until it lands or its
+    /// reference block ages out. The reservation is read from the
+    /// validated intent: its hash, its inputs and its reference height. No
+    /// caller hands in a list.
     ///
     /// # Errors
     ///
     /// [`InputInUse`] when another live ceremony at this member spends
     /// one of them.
-    fn reserve(&mut self, intent_hash: &[u8; 32], inputs: &[u64]) -> Result<(), InputInUse>;
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), InputInUse>;
+}
+
+impl LiveCeremonies for MultisigState {
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), InputInUse> {
+        let inputs: Vec<GlobalOutputIndex> = intent
+            .intent()
+            .input_global_indices
+            .iter()
+            .map(|&index| GlobalOutputIndex::from_raw(index))
+            .collect();
+        MultisigState::reserve(
+            self,
+            intent.hash(),
+            &inputs,
+            BlockHeight::from_raw(intent.intent().reference_block_height),
+        )
+        .map_err(|held| InputInUse {
+            input: held.input.to_raw(),
+        })
+    }
 }
 
 /// Another live ceremony at this member already spends this input.
