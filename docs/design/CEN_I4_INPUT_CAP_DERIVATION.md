@@ -26,8 +26,11 @@ reserve's value; the cover carrier's fragment count.
 comment *"bounds proof gen time and tx size"* (`rust/shekyl-fcmp/src/lib.rs:40`).
 Raising or deleting a consensus cap widens what consensus accepts: free before
 genesis, a hard fork after. The concrete pressure is a miner or staker
-consolidating many coinbase-sized outputs. At a cap of 8, merging 1 000 outputs
-into one takes ⌈999 / 7⌉ = 143 transactions; at 22 it takes ⌈999 / 21⌉ = 48.
+consolidating many coinbase-sized outputs. Every transaction needs two
+outputs (CEN-I1) and the builder refuses a zero-valued one, so a consolidation
+ends at two outputs the wallet owns and each transaction removes `c − 2`: at a
+cap of 8, merging 1 000 outputs takes ⌈998 / 6⌉ = 167 transactions; at 22 it
+takes ⌈998 / 20⌉ = 50 (§6).
 
 The round takes the cap's possible jobs one at a time (§3 to §6), derives the
 number from the weight model (§2), lists every consumer that moves with it
@@ -351,31 +354,35 @@ byte of the shapes in it. Slice 6 read the per-byte cost as flat across input
 counts, which made the cap irrelevant to per-block work. With the padding in
 view it is not flat:
 
-- **`ICD-F9` — a larger cap admits shapes that cost more per byte.** On the
-  diagnostic Pi at depth 3 (§2.6; a ratio, so it stands), a 13-input spend
-  costs 14.17 µs per weight byte; the
-  costliest of the shapes measured that the cap of 8 admits costs 13.33 (a
-  1-input spend at depth 2). Only 1 and 8 inputs were measured below the cap;
-  7 inputs at depth 3 sits just past a Selene step and was not.
-  A block filled with 13-input spends would verify about 6 % slower than the
-  worst block today. (x86 shows 12 %; the floor's larger fixed range-proof cost
-  raises the 1-input shape's per-byte cost more than the 13-input one's.) At
-  depth 2 the costliest shape stays the 1-input spend: 19 inputs, just past the
-  Selene step, costs 12.04.
+- **`ICD-F9` — a larger cap admits shapes that cost more per byte.** Two
+  comparisons on the diagnostic Pi (§2.6; ratios, so they stand), measured on
+  lone transactions, which bound the block case from both sides:
+  - **Lone transactions, range proof included:** a 13-input spend at depth 3
+    costs 14.17 µs per weight byte, against 13.33 for the costliest of the
+    shapes measured that the cap of 8 admits (1 input at depth 2): +6 %.
+  - **Range proofs batched, as a block verifies them** (`form` batches H19 over
+    the block; only a lone transaction verifies its own,
+    `rust/shekyl-chain-rules/src/validate.rs:357-360`): proof and signatures
+    only, the 13-input spend costs 13.91 µs per byte against 11.88 for the
+    costliest measured shape under the cap (8 inputs at depth 3): +17 %.
+  Only 1 and 8 inputs were measured below the cap; 7 inputs at depth 3 sits
+  just past a Selene step and was not, so the "today's worst" side of both
+  comparisons is a lower bound. **No block-level figure follows from these:**
+  a block's cost is the batched sweep's to measure.
 - **The worst block was measured at today's shapes.** GAP-7's zone-point worst
   cold block (7.23 s on the floor, 6.0 % of T) and the transient leg that
   re-signed the surge factor at S = 3 (depth 24) come from
   `shekyl-verify-cost`'s `block_connect_verify` sweep, whose shapes stop at 8
-  inputs. At about 6 % more, 7.23 s becomes about 7.7 s, still near 6.4 % of T.
-  Depths beyond 3 were not measured here, and S = 3 was signed on a
+  inputs. Depths beyond 3 were not measured here, and S = 3 was signed on a
   conservative bracket at depth 24, where the cost per byte has to be measured,
   not assumed.
 
-**Disposition proposed:** the cap is not the per-block bound, and it does not
-need to be one, because the margin is large. The cutover re-runs the GAP-7
-sweep with the new shapes added (every Selene step up to N at the depths the
-sweep covers) on the floor, and S = 3 is re-checked against it. If the
-re-run moved S, that would be a finding for the C2-R2 owners, not a reason to
+**Disposition proposed:** the cap is not the per-block bound. The cutover
+re-runs the GAP-7 sweep, batched as blocks are, with the new shapes added
+(every Selene step up to `N(d)` at the depths the sweep covers, and the
+current cap's own step shapes such as 7 inputs at depth 3) on the floor
+device, and GAP-7's margin and S = 3 are re-checked against it. If the re-run
+moved either, that would be a finding for the C2-R2 owners, not a reason to
 keep the cap at 8.
 
 ## 4. Job 2: the work a relay wastes on one invalid transaction
@@ -405,8 +412,24 @@ So the count and weight refusals are cheap and come first; a transaction that
 passes them buys a full verification. One that then fails is
 `Admit::RefusedForm` (`rust/shekyl-node/src/pool_door.rs:156-160`, `:169`), and
 the relay owner closes that session at the first such refusal in a batch
-(`rust/shekyl-relay/src/owner/port.rs:150-165`). So **one session buys at most
-one failed verification**, and a peer that wants another needs a new session.
+(`rust/shekyl-relay/src/owner/port.rs:150-165`). So a transaction whose proof
+*fails* buys one verification per session, and a peer that wants another needs
+a new session.
+
+**`ICD-F18` — a transaction whose proof is valid but which is refused on state
+or fee policy can be re-verified without limit on one session.** Such a
+transaction passes `stateless` and is then refused by the chain-bound or
+policy step: a key image already spent, or a fee under the relay floor. It
+comes back `Admit::RefusedState` and the session stays open
+(`pool_door.rs:169-170`, `port.rs:149`). Nothing remembers the refusal: the
+door's duplicate check asks only whether the pool or the chain holds the
+transaction (`rust/shekyl-mempool/src/pool.rs:343-358`), and a refused one is
+in neither. So a peer that built one valid transaction once (one input: about
+3.4 s of proving on the diagnostic Pi) can send the same bytes in notification
+after notification, and each costs a full verification (0.18 to 1.65 s of a
+transport worker there) for the price of the bytes. The accept rate does not
+bound it, and neither does the close on a failed proof. A fee under the floor
+is the cheapest form: the transaction never needs to be spendable.
 
 **`ICD-F13` — the verification runs on the transport runtime.** The session's
 read loop dispatches a `NewTransactions` notification straight into the relay
@@ -431,8 +454,9 @@ behind at every block, so each turn to synchronised can bring up to one
 message's worth of transactions per session to verify. At the 9 to 14 µs per
 weight byte measured in §2.6, a full message is roughly 9 to 14 s of one
 transport worker. A held batch refused on form closes its session and drops
-its other held batches, so one failed verification per session holds on this
-path too. Whatever moves verification off the transport runtime (`ICD-R4`)
+its other held batches, so a failed proof buys one verification per session
+on this path too, and a state or policy refusal is unbounded here as on the
+live path (`ICD-F18`). Whatever moves verification off the transport runtime (`ICD-R4`)
 covers both callers.
 
 What a new session costs the peer is the accept-rate bound
@@ -497,8 +521,13 @@ that one wallet held `m` outputs of unknown amounts. A large `n_in` is rare, so
 the event is visible, but a single event cannot be clustered: clustering needs
 same-class repetition (decision log, 2026-09-20, the bond-immutability ruling).
 
-**The same consolidation under a cap `c < m`:** ⌈(m − 1) / (c − 1)⌉
-transactions in a window, each at or near the cap. That is a run of rare-shaped
+**The same consolidation under a cap `c < m`:** ⌈(m − 2) / (c − 2)⌉
+transactions in a window, each at or near the cap. Each transaction has to pay
+two outputs (CEN-I1), and the builder refuses a zero-valued output
+(`rust/shekyl-tx-builder/src/validate.rs:64-66`), so both outputs carry value
+and both stay the wallet's: a consolidation removes `c − 2` outputs per
+transaction and ends at two, not one. (One large consolidation, `m ≤ N`, ends
+at two outputs as well.) That is a run of rare-shaped
 transactions close in time, which is exactly the repeated same-class pattern
 clustering needs. It also costs more, per extra transaction:
 
@@ -511,8 +540,8 @@ clustering needs. It also costs more, per extra transaction:
 | outputs to merge | transactions at a cap of 8 | at 22 |
 | ---: | ---: | ---: |
 | 20 | 3 | 1 |
-| 100 | 15 | 5 |
-| 1 000 | 143 | 48 |
+| 100 | 17 | 5 |
+| 1 000 | 167 | 50 |
 
 **What the cap does not buy is uniformity.** At any cap the count stays public
 and correlates with wallet state. Uniformity would mean fixed-count
@@ -562,12 +591,18 @@ equal to the first (`rust/shekyl-tx-builder/src/lib.rs:119`, `:139-142`).
 weight byte. **`ICD-F11` — the P-lane ceiling scans cells the weight limit
 refuses.** `p_lane_weight_ceiling_bytes` takes the maximum of `predict_weight`
 over every `(n_in, n_out, depth)` cell up to the cap, without asking whether
-the cell is legal. At 8 that is harmless (the scan's maximum, 8 inputs at
-depth 24, is legal). At 22 the unbounded scan returns 204 128 bytes, a 22-input
-spend at depth 24 that CEN-H3 refuses; restricted to legal cells the ceiling is
-148 608 (16 inputs at depth 23). The cutover bounds the scan by the weight
-limit. The reserve's head-room at 0.05 SKL then falls from about 600 to about
-336 atomic per weight byte: either the reserve rises to about 0.09 SKL to keep
+the cell is legal, and prices every cell at one fee width, the 10-byte varint
+of `u64::MAX` (`rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:79-84`).
+At 8 that is harmless (the scan's maximum, 8 inputs at depth 24, is legal). At
+22 the unbounded scan returns 204 137 bytes, a 22-input spend at depth 24 that
+CEN-H3 refuses. Filtering those cells at the 10-byte fee alone is not enough
+either: it drops 16 inputs at depth 23 (148 617 bytes at that fee), which is
+legal with a fee varint of 7 bytes or fewer, and would leave the ceiling below a
+legal spend. **The heaviest legal `P`-lane spend weighs exactly the weight
+limit, 148 614 bytes** (16 inputs, two outputs, depth 23, a 7-byte fee). The
+cutover's scan reads the legal-shape function (below), which answers per shape
+and fee width, so it cannot fall below a legal spend. The reserve's head-room at
+0.05 SKL then falls from about 600 to about 336 atomic per weight byte: either the reserve rises to about 0.09 SKL to keep
 600, or the 600 is restated, and the rule-75 bounds (`0 < reserve < rung`) are
 re-checked. (The reserve's comment gives today's ceiling as 80 456 bytes; the
 weight model gives 79 625 for the same shape at a 10-byte fee varint. The
@@ -613,8 +648,9 @@ with that design, not to this round.
   three readers of it: `stuffer_shape`, the one-shot W9 stuffer (the most
   archival bytes per fee); `max_archival_bytes_per_block`, the physical ceiling
   on the fold's slew; and `sustained_stuffer_cost_per_shard_atomic`, the
-  output-conserving cycle that consumes the cap minus one outputs per
-  transaction;
+  output-conserving cycle, which consumes the cap minus one outputs per
+  transaction at the 1-output shape it uses today and the cap minus two once it
+  starts at CEN-I1's minimum (`ICD-F17`);
 - `miner_stuffer.rs`: the miner's stuffing body, searched over `all_shapes()`
   at two sites (`:514`, `:1342`), which drives the A-stuffed economy;
 - `MAX_TREE_DEPTH`, read through `shekyl-tx-weight` in `burden.rs` and in
@@ -716,8 +752,15 @@ the cutover sweeps them.
   the two generator counts asserted equal to the computed need (`ICD-R2`).
 - **Tests on the real pathway:** a transaction of `N` inputs built, proved,
   relayed and mined on regtest at a depth where the weight limit admits it
-  (2 to 4), and `N + 1` refused at consensus with CEN-I4 named; at a depth
-  where `N(d) < N`, the weight limit's refusal named instead.
+  (2 to 4). One input more is refused where the pathway actually refuses it,
+  and each test names that refusal: on relay, the wire parser's count
+  refusal (`Transaction::validate`, reading the computed cap) before any rule;
+  in a block, CEN-H3, which `tx_form` runs before CEN-I4
+  (`rust/shekyl-chain-rules/src/validate.rs:826-830`) and which refuses every
+  `N + 1`-input transaction by construction. At a depth where `N(d) < N`,
+  CEN-H3 names the refusal on both paths. CEN-I4's own refusal, if `ICD-Q1`
+  keeps the rule, is tested through its conformance entry, the only route that
+  reaches it (`ICD-Q1`).
 
 ## 9. Rulings — RULED 2026-11-22 (Rick)
 
@@ -811,6 +854,13 @@ these requirements from here:
 - **What makes a session verified.** A duplicate of a transaction already in
   the pool is answered before its proofs run (`pool_door.rs`), so it proves
   nothing about its sender and cannot count.
+- **Repeated verification of a refused transaction (`ICD-F18`).** A
+  transaction whose proof is valid but which state or fee policy refuses keeps
+  the session open and is verified again on every resend. The budget is
+  charged by verification work done, per session as well as per reconnect,
+  whatever the outcome; a memory of refused transactions is one input to that
+  design, not a substitute for it, since the bytes are free to vary for anyone
+  willing to prove again.
 - **The queue for unverified sessions:** its bound, and what is dropped when it
   is full.
 - **The privacy cost, stated,** when a stem transaction is dropped or delayed.
@@ -867,30 +917,48 @@ other unit's numbers are diagnostics whatever their cause.
 
 ## 11. Still open with Rick
 
-### `ICD-Q1` — does CEN-I4 stay an explicit rule?
+### `ICD-Q1` — does CEN-I4 stay an explicit rule? (recommendation changed 2026-11-22)
 
-**The problem.** At the derived value, CEN-I4 refuses exactly what CEN-H3
-already refuses for the lightest shape, and nothing H3 admits. It becomes
-redundant in effect. But the closed domains (§5) need a maximum consensus
-enforces, and under `ICD-R1` the parser reads the real cap.
+**The problem.** At the derived value, CEN-I4 refuses nothing CEN-H3 admits:
+`N` is the weight limit's own maximum over the lightest legal shapes, so every
+transaction of `N + 1` inputs is over the weight limit, whatever its shape
+(§2.2, §2.3). The paths a transaction actually takes make that concrete:
 
-**The question.** Keep CEN-I4 at the computed cap, or delete it and let the
-weight limit imply the maximum?
+- **On relay** the wire parser refuses it first: the pool door's `parse` runs
+  `Transaction::validate` (`rust/shekyl-node/src/pool_door.rs:210-219`), which
+  refuses more than `MAX_FCMP_INPUTS` inputs before any rule runs, and under
+  `ICD-R1` reads the computed cap.
+- **In a block** no wire count check runs (the block path does not call
+  `Transaction::validate`), and `tx_form` runs CEN-H3 before CEN-I4
+  (`rust/shekyl-chain-rules/src/validate.rs:826-830`), so H3 refuses it.
+- So **the chain-rules I4 arm is reached by no transaction on any path**, only
+  by a conformance test that builds one by hand.
+
+The closed domains (§5) still need a maximum that consensus enforces. CEN-H3
+enforces it, by construction, and the computed constant names it.
+
+**The question.** Keep CEN-I4 as a rule at the computed cap, or delete it and
+let the weight limit imply the maximum?
 
 **The options.**
 
-- **(a) Keep it, valued at the computed constant.** A cheap early refusal, a
-  named maximum that the closed domains and the parser read, and a census row
-  whose rationale is the derivation. The rule cannot bind before H3 for any
-  legal shape, by construction, and a test pins that.
-- **(b) Delete it.** The maximum is implied by H3; the parser and the closed
-  domains read the computed constant without a consensus row naming it.
+- **(a) Keep it, valued at the computed constant.** The census keeps a row
+  whose value is the derivation, and the validator keeps an arm that a test
+  pins as unreachable after H3.
+- **(b) Delete the rule; keep the constant.** The census row records CEN-I4 as
+  implied by CEN-H3 at the computed cap, with this round as its reason. The
+  wire parser's count refusal stays, reading the same constant, as the
+  allocation bound on untrusted bytes (rule 25), and the closed domains read
+  the constant directly.
 
-**Recommendation: (a).** The parser already refuses past the computed cap under
-`ICD-R1`, so the rule costs nothing new, and a census row whose value is
-derived and whose redundancy is tested is easier to read than an implication
-through the weight model. The record says plainly that it binds nothing H3
-does not.
+**Recommendation: (b), changed from (a).** (a) was recommended as "a cheap
+early refusal"; it is neither early (the parser on relay and H3 in a block both
+run first) nor ever the refusal. A consensus arm that no transaction can reach,
+by construction, is the kind of code rule 15 deletes rather than carries: it
+adds a site to keep in step with the constant and protects nothing H3 does not.
+The derived number survives in the place it does work, the computed constant
+that the parser, the builder, the engine and the closed domains read.
+Deleting the rule is not a widening: H3 already refuses exactly what I4 would.
 
 ### `ICD-Q3` — snap to a padding boundary?
 
@@ -1003,7 +1071,8 @@ beside the counts it sizes, and every reader (the wire's model, `shekyl-fcmp`,
 
 ### The standoff reserve's value
 
-The heaviest legal `P`-lane shape becomes about 148 608 bytes (§7, `ICD-F11`).
+The heaviest legal `P`-lane spend becomes 148 614 bytes, the weight limit
+itself (§7, `ICD-F11`).
 Keeping 600 atomic units per weight byte of head-room needs the reserve at
 about 0.09 SKL; keeping 0.05 SKL means restating the head-room as about 336.
 Recommendation: raise it to the value that keeps 600, computed in the cutover
@@ -1047,3 +1116,14 @@ the relay lane's round (`ICD-R4`).
   (the builder and the sim accept 1-output shapes CEN-I1 refuses) is recorded,
   and the cutover gains one legal-shape function in `shekyl-wire` that the
   builder, the wallet, the sim, the GAP-7 sweep and the P-lane ceiling read.
+- **2026-11-22 — review findings on #1528, each checked against the code.**
+  `ICD-F18` recorded (a valid transaction refused on state or fee policy is
+  re-verified without limit on one session) and handed to the relay round's
+  requirements. `ICD-F9` restated as two lone-transaction brackets (+6 % with
+  the range proof, +17 % with it batched), the block figure left to the
+  batched GAP-7 sweep. The consolidation counts corrected for CEN-I1's second
+  output (167 and 50 transactions for 1 000 outputs, not 143 and 48). The
+  P-lane ceiling corrected to the weight limit itself, 148 614, with the
+  scan's fee width named. The test plan names the refusal each path produces,
+  and `ICD-Q1`'s recommendation changed to deleting the rule, since no
+  transaction reaches it.
