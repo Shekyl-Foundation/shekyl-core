@@ -242,6 +242,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `HF-` — [`HASHRATE_FLOOR_EMISSION.md`](design/HASHRATE_FLOOR_EMISSION.md)
   - Target: pre-genesis (trigger: EUP-4 and the J, G, F and I rulings are done)
 
+- **Archival bond sizing is parked until the economics sim's current series is finished.** The per-shard bond is a flat 0.75 SKL, mapped from the staking sim's dimensionless `bond_rate*` and never set against what the chain pays stakers: early a seat repays it in weeks, late the purse supports a few holders a shard (Rick, 2026-11-22). Nothing is built and no `ABS-` identifier is minted. Named blocker: EUP-4 prep, EUP-4 and the stakers' emission share first look; then Rick reopens the note, and its §9 sets the run. Falsify by: Rick's ruling on the bond's shape, recorded in the note.
+  - Owner: `ABS-` — [`ARCHIVAL_BOND_SIZING.md`](design/ARCHIVAL_BOND_SIZING.md)
+  - Target: pre-genesis (trigger: EUP-4 and the stakers' emission share first look are done)
+
 - **`--secret-draw-production` runs the shipped count rule only.** The mode is EUP-5 H's instrument (the challenge doctrine), and it reads `archival_params()`. A `--set` is accepted in `--stage2` alone, and there the count-rule fields (the catch-up share, the horizon floor, the cap multiple and the section multiple) are refused as having no reader. Before H runs, the mode takes the run's `ArchivalParams`, so H's cells are overrides on the baseline like every other sweep. Falsifier: `--secret-draw-production --set archival.count_cap_multiple=4` prints a count table that differs from the default run's.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the mode is `rust/shekyl-economics-sim/src/secret_draw_production.rs`
   - Target: pre-genesis
