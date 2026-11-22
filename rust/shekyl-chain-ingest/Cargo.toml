@@ -124,7 +124,7 @@ forge = [
     "shekyl-tx-builder/seeded-rng",
     "shekyl-crypto-pq/seeded-rng",
     # The wallet's fee loop, over a forged transaction's measured weight
-    # (`priced`, CHAIN_FORGE.md §5.4).
+    # (`priced`, CHAIN_FORGE.md §11.4).
     "dep:shekyl-tx-weight",
     "dep:shekyl-genesis-tool",
     "dep:shekyl-hash-budget",

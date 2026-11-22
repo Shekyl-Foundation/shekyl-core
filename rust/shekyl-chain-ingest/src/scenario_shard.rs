@@ -345,7 +345,7 @@ fn next_height(chain: &[Mined]) -> BlockHeight {
 /// fill's order and never the threads' (§5.3, seam T4). The sizing spends,
 /// which are measured and never listed, draw from the OS.
 ///
-/// Every spend pays what the daemon asks of it (§5.4): each fill block's
+/// Every spend pays what the daemon asks of it (§11.4): each fill block's
 /// batch is priced at the economy rung served for that block, over a
 /// sizing spend of the batch's shape, and the block is mined only once the
 /// daemon's pool has admitted every spend it lists.
@@ -437,7 +437,7 @@ pub async fn close_shards_drawing(
         let coinbases: Vec<u64> = (next_coinbase..next_coinbase + batch as u64).collect();
         next_coinbase += batch as u64;
         // The batch's price: one sizing spend of its shape, at the rate the
-        // daemon serves for this block (§5.4). Every spend in the batch is
+        // daemon serves for this block (§11.4). Every spend in the batch is
         // one coinbase against this block's reference, so one weighs what
         // another does.
         let rate = scenario.connecting_economy_rate().await;

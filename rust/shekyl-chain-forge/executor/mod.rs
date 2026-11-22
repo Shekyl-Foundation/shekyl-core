@@ -543,7 +543,7 @@ impl Forge {
                 record,
             });
             // Every listed transaction passed the daemon's pool before its
-            // block was mined (`CHAIN_FORGE.md` §5.4): a listing that skipped
+            // block was mined (`CHAIN_FORGE.md` §11.4): a listing that skipped
             // the pool stops the forge here, whichever step built it.
             for tx in &mined.template.transactions {
                 let txid = tx.txid_parts().hash;
@@ -605,7 +605,7 @@ impl Forge {
     }
 
     /// The miner spends `inputs` kept coinbases in one transaction, paying
-    /// what the daemon asks of it (`CHAIN_FORGE.md` §5.4).
+    /// what the daemon asks of it (`CHAIN_FORGE.md` §11.4).
     async fn spend(&mut self, inputs: u32) -> Result<(), ForgeFault> {
         let connecting = self.connecting();
         let heights = (0..inputs)

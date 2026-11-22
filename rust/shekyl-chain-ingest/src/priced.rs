@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! What a forged transaction pays (`CHAIN_FORGE.md` §5.4).
+//! What a forged transaction pays (`CHAIN_FORGE.md` §11.4).
 //!
 //! The fee is the one the daemon would ask of it: the economy rung it
 //! serves for the block that lists it ([`Scenario::connecting_economy_rate`](crate::scenario::Scenario::connecting_economy_rate)),

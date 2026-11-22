@@ -445,7 +445,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
     scenario.close().await;
 }
 
-/// The chain forge's price and its pool (`CHAIN_FORGE.md` §5.4): a spend
+/// The chain forge's price and its pool (`CHAIN_FORGE.md` §11.4): a spend
 /// priced by [`crate::priced`] at the economy rung served for its block is
 /// admitted, and kept for the block that lists it, once; the same spend one
 /// lattice step under what the shipped policy admits is refused on CEN-M3,

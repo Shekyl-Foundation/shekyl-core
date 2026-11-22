@@ -12,7 +12,7 @@
 //! [`Scenario::connecting_economy_rate`] is the fee the daemon serves for
 //! the next block, and [`Scenario::admit`] is the daemon's pool admission:
 //! the chain forge prices every transaction it lists at the one and passes
-//! it through the other (`CHAIN_FORGE.md` §5.4).
+//! it through the other (`CHAIN_FORGE.md` §11.4).
 
 use shekyl_mempool::{Admission, Pool};
 use shekyl_types::{TxHash, UnixSeconds};
