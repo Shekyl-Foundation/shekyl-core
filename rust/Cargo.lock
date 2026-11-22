@@ -4750,6 +4750,7 @@ dependencies = [
  "shekyl-spawn",
  "shekyl-win-sec",
  "tempfile",
+ "tokio",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -5383,6 +5384,7 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
+ "libc",
  "rand 0.8.6",
  "serde",
  "serde_json",

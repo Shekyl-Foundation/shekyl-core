@@ -200,6 +200,61 @@ fn try_consumer_call(listen: &str, method: &str) -> std::io::Result<(u16, String
     Ok((status, body))
 }
 
+/// How long a stop held by an in-flight request must stay running.
+const DRAIN_HOLDS: Duration = Duration::from_millis(500);
+/// How soon a second stop must end a tunnel: well inside the drain's own
+/// bound (the handshake deadline).
+const AT_ONCE: Duration = Duration::from_secs(2);
+
+fn signal_child(child: &Child, signal: &str) {
+    let sent = Command::new("kill")
+        .args([&format!("-{signal}"), &child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(sent.success(), "kill -{signal}");
+}
+
+/// A tunnel on `socket`, once it says it listens.
+fn tunnel_on_socket(
+    what: &'static str,
+    channel_listen: &str,
+    bundle_file: &Path,
+    key_file: &Path,
+    socket: &Path,
+    dir: &Path,
+) -> Running {
+    let name = socket.file_name().expect("a socket name").to_string_lossy();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shekyl-rpc-tunnel"));
+    command
+        .args(["--network", "regtest", "--daemon-endpoint"])
+        .arg(channel_listen)
+        .arg("--daemon-bundle-file")
+        .arg(bundle_file)
+        .arg("--rpc-key-file")
+        .arg(key_file)
+        .arg("--listen-socket-file")
+        .arg(socket)
+        .arg("--log-file")
+        .arg(dir.join(format!("{name}.log")))
+        .stdout(Stdio::piped());
+    let mut running = spawn(what, command, dir.join(format!("{name}.stderr")));
+    let mut out = running.child.stdout.take().expect("stdout");
+    let mut said = String::new();
+    let deadline = Instant::now() + READY;
+    while !said.contains("Listening on") {
+        assert!(
+            Instant::now() < deadline,
+            "{what}: {said}\n{}",
+            running.stderr()
+        );
+        let mut buf = [0u8; 256];
+        let n = out.read(&mut buf).expect("the tunnel's output");
+        assert!(n > 0, "the {what} ended: {said}\n{}", running.stderr());
+        said.push_str(&String::from_utf8_lossy(&buf[..n]));
+    }
+    running
+}
+
 /// **Enroll, dial, call, revoke, and a refused call after the revocation**
 /// (RT-W11, against a real daemon). An administrator the owner enrolled
 /// enrolls the tunnel's key with `rpc client add` over the channel; the tunnel reports its grant and
@@ -323,34 +378,14 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
     // script stop one, ends cleanly on SIGTERM sent the moment it says it
     // listens, and removes its socket.
     let second_socket = socket_dir(dir.path()).join("t2.sock");
-    let mut second = {
-        let mut command = Command::new(tunnel);
-        command
-            .args(["--network", "regtest", "--daemon-endpoint"])
-            .arg(&channel_listen)
-            .arg("--daemon-bundle-file")
-            .arg(&bundle_file)
-            .arg("--rpc-key-file")
-            .arg(&key_file)
-            .arg("--listen-socket-file")
-            .arg(&second_socket)
-            .arg("--log-file")
-            .arg(dir.path().join("tunnel2.log"))
-            .stdout(Stdio::piped());
-        spawn("second tunnel", command, dir.path().join("tunnel2.stderr"))
-    };
-    let mut out = second.child.stdout.take().expect("stdout");
-    let mut said2 = String::new();
-    while !said2.contains("Listening on") {
-        let mut buf = [0u8; 256];
-        let n = out.read(&mut buf).expect("the second tunnel's output");
-        assert!(
-            n > 0,
-            "the second tunnel ended: {said2}\n{}",
-            second.stderr()
-        );
-        said2.push_str(&String::from_utf8_lossy(&buf[..n]));
-    }
+    let mut second = tunnel_on_socket(
+        "second tunnel",
+        &channel_listen,
+        &bundle_file,
+        &key_file,
+        &second_socket,
+        dir.path(),
+    );
     let killed = Command::new("kill")
         .args(["-TERM", &second.child.id().to_string()])
         .status()
@@ -370,6 +405,88 @@ fn enroll_dial_call_revoke_and_a_refused_call_after() {
         "a clean stop removes the socket {}",
         second_socket.display()
     );
+
+    // A second stop exits at once with 130, in the drain too (Rick,
+    // 2026-11-20): a third tunnel holds a local request whose body has not
+    // arrived, so its first stop waits on that request; the second ends
+    // it at once, with no cleanup, and its socket stays. The next start on
+    // that socket replaces it (kill safety).
+    let third_socket = socket_dir(dir.path()).join("t3.sock");
+    let mut third = tunnel_on_socket(
+        "third tunnel",
+        &channel_listen,
+        &bundle_file,
+        &key_file,
+        &third_socket,
+        dir.path(),
+    );
+    let mut held =
+        std::os::unix::net::UnixStream::connect(&third_socket).expect("a local connection");
+    held.write_all(
+        b"POST /json_rpc HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n\
+          content-length: 200\r\n\r\n{\"jsonrpc\":",
+    )
+    .expect("a request whose body has not arrived");
+    std::thread::sleep(Duration::from_millis(200));
+    signal_child(&third.child, "TERM");
+    std::thread::sleep(DRAIN_HOLDS);
+    assert!(
+        third.child.try_wait().expect("the third tunnel").is_none(),
+        "the control: the first stop waits on the held request"
+    );
+    signal_child(&third.child, "TERM");
+    let second_stop = Instant::now();
+    let deadline = second_stop + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = third.child.try_wait().expect("the third tunnel") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a second SIGTERM did not end the tunnel"
+        );
+        std::thread::sleep(POLL);
+    };
+    assert_eq!(
+        status.code(),
+        Some(shekyl_process::stop::EXIT_SECOND_STOP),
+        "a second stop exits at once with 130: {status}"
+    );
+    assert!(
+        second_stop.elapsed() < AT_ONCE,
+        "the second stop waited {:?} for the drain",
+        second_stop.elapsed()
+    );
+    drop(held);
+    assert!(
+        third_socket.exists(),
+        "the second stop's exit cleans up nothing: the socket stays"
+    );
+    let mut fourth = tunnel_on_socket(
+        "fourth tunnel",
+        &channel_listen,
+        &bundle_file,
+        &key_file,
+        &third_socket,
+        dir.path(),
+    );
+    signal_child(&fourth.child, "TERM");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = fourth.child.try_wait().expect("the fourth tunnel") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "SIGTERM did not stop the fourth tunnel"
+        );
+        std::thread::sleep(POLL);
+    };
+    assert!(
+        status.success(),
+        "the start over a left socket stops cleanly: {status}"
+    );
+    assert!(!third_socket.exists(), "its clean stop removes the socket");
 
     // Revoke.
     enroll::run(
