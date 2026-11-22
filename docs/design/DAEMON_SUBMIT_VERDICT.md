@@ -953,8 +953,9 @@ de-risking the multi-daemon reopen in advance.
 
 1. **Origin re-send, then residence.** The relay re-sends the node's own
    transaction only on its embargo: each stem send arms a deadline drawn
-   from the same memoryless timer a relayed stem draws (mean 511 s on
-   Tor and 194 s on clearnet at the shipped terms); the first fire
+   from the same timer a relayed stem draws, a floor plus a memoryless
+   draw (mean 534 s on Tor and 199 s on clearnet at the shipped terms,
+   never sooner than 22.75 s and 5.5 s); the first fire
    re-stems to the source's alternate, the second fluffs and publishes
    (`shekyl-relay` `graph/embargo.rs`). An origin that never sent is
    re-planned every 300 s, at once on turning synchronised and at once on
@@ -991,7 +992,7 @@ de-risking the multi-daemon reopen in advance.
    records when it armed an origin and, when that state is read,
    reports the hold as `held` or `held_overdue` against
    `origin_publication_budget_ms`, the timer's 1-in-10 quantile over its
-   two fires (2,352 s at the shipped terms; the per-fire 1,176 s is pinned
+   two fires (2,398 s at the shipped terms; the per-fire 1,199 s is pinned
    in that crate's embargo tests). That figure is status only; nothing is
    sent on it. A missing origin row is
    `untracked`, not a hold. The wallet is told that judgment and holds

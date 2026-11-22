@@ -388,7 +388,8 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// This is the black-hole backstop. The **adopted** configuration is
 /// [`Self::adopted`] — exact survival solve + memoryless draws at the default
-/// tick. The closed-form helpers ([`Self::closed_form_poisson`],
+/// tick, each deadline no sooner than the floor
+/// ([`Self::floor_millis`]). The closed-form helpers ([`Self::closed_form_poisson`],
 /// [`Self::paper_faithful`]) exist only as measurement baselines against the
 /// paper formula; they are not what this crate recommends shipping.
 ///
@@ -397,8 +398,8 @@ pub type EmbargoDistribution = DelayFamily;
 ///
 /// # The shipped value, and why it is not 39 s
 ///
-/// The daemon draws from [`Self::adopted`] — **mean 194 s on clearnet,
-/// memoryless** — and
+/// The daemon draws from [`Self::adopted`] — **a memoryless draw of mean
+/// 194 s on clearnet, on top of a 5.5 s floor** — and
 /// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
 /// replaced an inherited `39 s` that was wrong three ways, each of which this
 /// type is shaped to prevent recurring:
@@ -421,6 +422,9 @@ pub type EmbargoDistribution = DelayFamily;
 #[derive(Debug, Clone)]
 pub struct EmbargoTimer {
     table: DelayTable,
+    /// The least a deadline waits, in ticks: see [`Self::floor_millis`].
+    floor_ticks: u64,
+    /// Mean of a deadline: the floor and the draw's mean together.
     mean_secs: u32,
     tick_millis: u64,
 }
@@ -449,10 +453,9 @@ pub const DEFAULT_EMBARGO_TICK_MILLIS: u64 = 250;
 /// stops being a coin-flip against the backstop it is waiting for.
 ///
 /// The seconds this rate buys are pinned by
-/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`] — **2 297 s**, drawn on the *worst
-/// zone's* embargo since §89.2 made the embargo per-zone (it was 874 s when
-/// the wait was the adopted clearnet embargo, and 664 s before F-7 corrected
-/// `fluff_return_ms`; §44). Which zone the quantile is taken over is the
+/// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`], drawn on the *worst zone's*
+/// embargo since §89.2 made the embargo per-zone, and later by that zone's
+/// floor as every figure read from the timer is. Which zone the quantile is taken over is the
 /// wallet-coupling defect §89.6 records, not a property of this rate.
 ///
 /// Pin the seconds, not only the rate: the same F-1 class of defect reappears
@@ -468,11 +471,13 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// the daemon whether a transaction is still in flight rather than time it. The
 /// worst-zone global is the interim precisely because it needs no machinery and
 /// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
-/// — the reasoning lives in §89.6, not here.
+/// — the reasoning lives in §89.6, not here. It follows the timer: the
+/// embargo floor (Rick, 2026-11-22) moved every quantile by the longest
+/// transit's 22.75 s, and this pin with them, from 2 352 s.
 ///
 /// Cost of the interim, stated: a clearnet send reports failure at ~39 minutes
 /// rather than ~15.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_352;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_375;
 
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.
@@ -523,7 +528,43 @@ impl EmbargoTimer {
             crate::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
         )
         .expect("full-travel target reachable below 1");
-        Self::geometric_from_ticks(d.mean_ticks, d.tick_millis)
+        Self::geometric_with_floor(
+            d.mean_ticks,
+            params.embargo_floor_ms().div_ceil(d.tick_millis),
+            d.tick_millis,
+        )
+    }
+
+    /// A memoryless embargo whose every deadline is at least `floor_ticks`
+    /// out.
+    ///
+    /// The floor is added to the draw. It is not the larger of the two: that
+    /// would put a point mass at the floor, where a draw past the floor is
+    /// the same memoryless draw it was. So the mean and every quantile move
+    /// by exactly the floor, and [`Self::mean_secs`] and
+    /// [`Self::judge_failed_after_secs`] carry it.
+    ///
+    /// [`Self::adopted`] takes the floor from
+    /// [`DandelionParams::embargo_floor_ms`], rounded **up** to a whole tick
+    /// (a short floor fires early, the privacy-losing direction). The other
+    /// constructors build the configurations a measurement compares against
+    /// and have no floor, which is what those configurations are.
+    fn geometric_with_floor(mean_ticks: u32, floor_ticks: u64, tick_millis: u64) -> Self {
+        assert!(mean_ticks > 0, "embargo mean must be non-zero");
+        assert!(tick_millis > 0, "embargo tick must be non-zero");
+        let mean_secs = u32::try_from(
+            u64::from(mean_ticks)
+                .saturating_add(floor_ticks)
+                .saturating_mul(tick_millis)
+                .div_ceil(1_000),
+        )
+        .unwrap_or(u32::MAX);
+        Self {
+            table: DelayTable::build(mean_ticks, DelayFamily::Geometric),
+            floor_ticks,
+            mean_secs,
+            tick_millis,
+        }
     }
 
     /// Closed-form mean + Poisson — measurement isolation only.
@@ -588,6 +629,7 @@ impl EmbargoTimer {
                 );
                 Self {
                     table: DelayTable::build(mean_secs, DelayFamily::Poisson),
+                    floor_ticks: 0,
                     mean_secs,
                     tick_millis: 1_000,
                 }
@@ -631,6 +673,7 @@ impl EmbargoTimer {
         );
         Self {
             table: DelayTable::build(mean_ticks, DelayFamily::Geometric),
+            floor_ticks: 0,
             mean_secs,
             tick_millis,
         }
@@ -649,21 +692,24 @@ impl EmbargoTimer {
     /// Panics if `mean_ticks` or `tick_millis` is zero.
     #[must_use]
     pub fn geometric_from_ticks(mean_ticks: u32, tick_millis: u64) -> Self {
-        assert!(mean_ticks > 0, "embargo mean must be non-zero");
-        assert!(tick_millis > 0, "embargo tick must be non-zero");
-        let mean_secs = u32::try_from((u64::from(mean_ticks) * tick_millis).div_ceil(1_000))
-            .unwrap_or(u32::MAX);
-        Self {
-            table: DelayTable::build(mean_ticks, DelayFamily::Geometric),
-            mean_secs,
-            tick_millis,
-        }
+        Self::geometric_with_floor(mean_ticks, 0, tick_millis)
     }
 
-    /// Mean in force, in seconds.
+    /// Mean of a deadline in force, in seconds: the floor and the draw's
+    /// mean together.
     #[must_use]
     pub const fn mean_secs(&self) -> u32 {
         self.mean_secs
+    }
+
+    /// The least a deadline waits, in milliseconds. No fire comes sooner.
+    ///
+    /// On [`Self::adopted`] it is [`DandelionParams::embargo_floor_ms`]
+    /// rounded up to a tick: what a stem and its fluff return can reasonably
+    /// take. Zero on the measurement constructors.
+    #[must_use]
+    pub const fn floor_millis(&self) -> u64 {
+        self.floor_ticks.saturating_mul(self.tick_millis)
     }
 
     /// Timer granularity in milliseconds.
@@ -702,7 +748,8 @@ impl EmbargoTimer {
     /// releases the inputs it had reserved and may re-spend them.
     ///
     /// Provisioned from the shipped table (see
-    /// [`DelayTable::survival_quantile_ticks`]) and rounded **up** to whole
+    /// [`DelayTable::survival_quantile_ticks`]), later by the floor
+    /// ([`Self::floor_millis`]) every deadline carries, and rounded **up** to whole
     /// seconds, so the wait never comes in under the stated rate. On the adopted
     /// timer at [`PROPAGATION_FALSE_FAIL_ONE_IN`] the result is pinned as
     /// [`ADOPTED_PROPAGATION_TIMEOUT_SECS`].
@@ -712,17 +759,20 @@ impl EmbargoTimer {
     /// Panics if `one_in` is zero.
     #[must_use]
     pub fn judge_failed_after_secs(&self, one_in: u64) -> u32 {
-        let ticks = self.table.survival_quantile_ticks(one_in);
+        let ticks = self
+            .floor_ticks
+            .saturating_add(self.table.survival_quantile_ticks(one_in));
         u32::try_from(ticks.saturating_mul(self.tick_millis).div_ceil(1_000)).unwrap_or(u32::MAX)
     }
 
     /// Draw an embargo deadline relative to `now`, in monotonic milliseconds.
     ///
-    /// The draw is the table's tick count times this timer's tick; callers that
+    /// The deadline is the floor ([`Self::floor_millis`]) plus the table's
+    /// tick count times this timer's tick; callers that
     /// store a whole-second `time_t` should round **up** when converting
     /// (under-provisioning fluffs early — the privacy-losing direction).
     pub fn deadline<R: RelayRng + ?Sized>(&self, now: Millis, rng: &mut R) -> Millis {
-        let ticks = self.table.draw(rng);
+        let ticks = self.floor_ticks.saturating_add(self.table.draw(rng));
         now.saturating_add(ticks.saturating_mul(self.tick_millis))
     }
 }
@@ -1042,6 +1092,92 @@ mod tests {
             t.judge_failed_after_secs(1_000) > secs,
             "a 1-in-1000 deadline must wait longer than 1-in-100"
         );
+    }
+
+    /// Every adopted deadline is the floor plus the draw (Rick, 2026-11-22):
+    /// none comes sooner, the floor is the parameter set's own figure on the
+    /// tick grid, and the mean and each quantile sit later than the bare
+    /// draw's by exactly the floor.
+    /// Red edit: drop the floor from `deadline`, or from
+    /// `judge_failed_after_secs`.
+    #[test]
+    fn an_adopted_deadline_is_the_floor_plus_the_draw() {
+        for transit in [
+            crate::verify_cost::ADOPTED_TRANSIT,
+            crate::verify_cost::ANON_ZONE_TRANSIT,
+        ] {
+            let params = DandelionParams::adopted_for_transit_ms(transit);
+            let adopted = EmbargoTimer::adopted(&params);
+            let d = crate::derive::derive_embargo(
+                &params,
+                DEFAULT_EMBARGO_TICK_MILLIS,
+                crate::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
+            )
+            .expect("the adopted target is reachable");
+            let bare = EmbargoTimer::geometric_from_ticks(d.mean_ticks, d.tick_millis);
+
+            let floor = adopted.floor_millis();
+            assert_eq!(bare.floor_millis(), 0);
+            assert_eq!(
+                floor,
+                params
+                    .embargo_floor_ms()
+                    .next_multiple_of(DEFAULT_EMBARGO_TICK_MILLIS),
+                "the floor is the parameter set's, rounded up to a tick"
+            );
+
+            let mut earliest = Millis::MAX;
+            for seed in 0..20_000_u64 {
+                let with_floor = adopted.deadline(0, &mut SplitMix64::new(seed));
+                let without = bare.deadline(0, &mut SplitMix64::new(seed));
+                assert_eq!(with_floor, floor + without, "seed {seed}");
+                earliest = earliest.min(with_floor);
+            }
+            assert!(earliest >= floor);
+            assert!(
+                earliest - floor < floor,
+                "the draws reach inside one floor of zero ({earliest} ms, floor {floor} ms)"
+            );
+
+            let floor_ticks = floor / DEFAULT_EMBARGO_TICK_MILLIS;
+            for one_in in [10, PROPAGATION_FALSE_FAIL_ONE_IN, 1_000] {
+                let ticks = bare.table.survival_quantile_ticks(one_in) + floor_ticks;
+                assert_eq!(
+                    u64::from(adopted.judge_failed_after_secs(one_in)),
+                    (ticks * DEFAULT_EMBARGO_TICK_MILLIS).div_ceil(1_000),
+                    "the 1-in-{one_in} wait is later by the floor"
+                );
+            }
+            assert_eq!(
+                u64::from(adopted.mean_secs()),
+                ((u64::from(d.mean_ticks) + floor_ticks) * DEFAULT_EMBARGO_TICK_MILLIS)
+                    .div_ceil(1_000),
+                "the mean is later by the floor"
+            );
+
+            // The draw's mean is solved with no floor, so the shipped timer
+            // sits above the full-travel target by what the floor adds.
+            let with_floor = crate::derive::full_travel_probability_with_floor(
+                &params,
+                d.mean_ticks,
+                floor_ticks,
+                d.tick_millis,
+            );
+            println!(
+                "transit {} ms: floor {floor} ms, draw mean {} s, deadline mean {} s, \
+                 full travel {:.4} without the floor and {with_floor:.4} with it",
+                transit.ms(),
+                d.mean_secs(),
+                adopted.mean_secs(),
+                d.achieved
+            );
+            assert!(d.achieved >= crate::params::EMBARGO_FULL_TRAVEL_PROBABILITY);
+            assert!(
+                with_floor > d.achieved,
+                "the floor can only raise full travel ({with_floor} against {})",
+                d.achieved
+            );
+        }
     }
 
     #[test]

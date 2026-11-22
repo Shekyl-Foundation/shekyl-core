@@ -437,7 +437,8 @@ fn dependents_at_each_candidate_boundary() {
     // **Calibration against the shipped constants, which is what makes this a
     // test rather than a report.** The first row is the pair in force today, so
     // it must reproduce the three values the tree pins independently — the
-    // clearnet and anonymity embargoes, 194 s and 511 s, and
+    // clearnet and anonymity embargo means, 199 s and 534 s (each its solved
+    // draw mean, 194 s and 511 s, plus its floor), and
     // `ADOPTED_PROPAGATION_TIMEOUT_SECS`. If the derivation
     // drifts, every other row is wrong by the same amount and nothing else here
     // would notice.
@@ -447,13 +448,13 @@ fn dependents_at_each_candidate_boundary() {
         "the first row must be the shipped pair for the calibration below to mean anything"
     );
     assert_eq!(
-        shipped_clear, 194,
-        "the shipped clearnet embargo is pinned at 194 s (EmbargoTimer::adopted); this \
+        shipped_clear, 199,
+        "the shipped clearnet embargo is pinned at 199 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_clear} s"
     );
     assert_eq!(
-        shipped_anon, 511,
-        "the shipped anonymity embargo is pinned at 511 s (EmbargoTimer::adopted); this \
+        shipped_anon, 534,
+        "the shipped anonymity embargo is pinned at 534 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_anon} s"
     );
     assert_eq!(
@@ -698,7 +699,16 @@ fn leak_at_each_candidate_region() {
             fluff_return_ms: DerivationMs::model(f_prime),
             ..DandelionParams::adopted()
         };
-        let e = EmbargoTimer::adopted(&params);
+        // The rows are read on the solved draw alone, as §6.6's record was.
+        // The shipped timer adds its floor to every deadline; its row is
+        // read after the calibration below.
+        let solved = derive_embargo(
+            &params,
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("the full-travel target must be reachable at every candidate");
+        let e = EmbargoTimer::geometric_from_ticks(solved.mean_ticks, solved.tick_millis);
         let mut cr = SplitMix64::new(0x1EA4_0000 + u64::from(f_prime));
         let c = simulate_passive_neighbor_leak(
             &params,
@@ -740,11 +750,43 @@ fn leak_at_each_candidate_region() {
     // it, or the column below is measuring a channel the record does not have.
     assert!(
         (base - 0.0108).abs() < NOISE_3SIGMA,
-        "the shipped pair (F' = 3250, embargo 194 s) reads {base:.5}; §6.6's banner \
+        "the solved pair (F' = 3250, draw mean 194 s) reads {base:.5}; §6.6's banner \
          records 0.0108 at exactly this pair. A mismatch means this is not the \
          channel §43.2 names"
     );
-    println!("\n  shipped F' = 3250 reads {base:.5} (§6.6 banner records 0.0108)");
+    println!("\n  solved F' = 3250 reads {base:.5} (§6.6 banner records 0.0108)");
+
+    // **The shipped timer.** Every deadline is the solved draw plus the
+    // floor (`EmbargoTimer::floor_millis`; Rick, 2026-11-22), so a timer
+    // cannot fire while a stem of ordinary length is still out. This channel
+    // is fed by exactly those fires, and the floor removes most of it.
+    /// The shipped reading, `DAEMON_RELAY_PRIVACY.md` §100.
+    const SHIPPED_LEAK: f64 = 0.000_22;
+    /// Three binomial standard errors at `CANDIDATE_TRIALS` and
+    /// [`SHIPPED_LEAK`], rounded up.
+    const SHIPPED_3SIGMA: f64 = 5e-5;
+    let shipped_params = DandelionParams::adopted();
+    let shipped_timer = EmbargoTimer::adopted(&shipped_params);
+    let mut sr = SplitMix64::new(0x1EA4_F100);
+    let shipped = simulate_passive_neighbor_leak(
+        &shipped_params,
+        &shipped_timer,
+        PHI,
+        FloodReach::EveryPeer,
+        CANDIDATE_TRIALS,
+        &mut sr,
+    );
+    println!(
+        "  shipped timer (floor {} ms, mean {} s) reads {:.5}",
+        shipped_timer.floor_millis(),
+        shipped_timer.mean_secs(),
+        shipped.leak_rate
+    );
+    assert!(
+        (shipped.leak_rate - SHIPPED_LEAK).abs() < SHIPPED_3SIGMA,
+        "the shipped timer reads {:.5} against the recorded {SHIPPED_LEAK}",
+        shipped.leak_rate
+    );
     for (f_prime, rate) in &rows[1..] {
         println!(
             "  F' = {f_prime}: {:+.1} % against shipped",

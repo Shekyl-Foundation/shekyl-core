@@ -6,9 +6,9 @@
 //! The origin's embargo on two live walks: no alternate, and a successor
 //! that drops so the origin re-stems.
 //!
-//! The embargo is a memoryless draw with no least value. Neither walk
-//! waits on a minimum time or reads the origin "still in stem": both read
-//! what the origin sent from its simulated peers' records.
+//! The embargo is a floor plus a memoryless draw. Neither walk times the
+//! floor or reads the origin "still in stem": both read what the origin
+//! sent from its simulated peers' records.
 //!
 //! A `#[path]` child of the origin rig, so the stem/sink pair stays with
 //! that rig and this file still sees the harness. The production
@@ -101,15 +101,17 @@ async fn await_linked(origin: &RegtestDaemon, peers: &[&TestPeer]) {
 ///
 /// **Everything is read from the peer's record of what the origin sent
 /// it, in the order its session delivered it:** one stem, then a fluff.
-/// That order does not depend on when the embargo fires. The embargo is a
-/// memoryless draw with no least value, so a fire a moment after the stem
+/// That order does not depend on when the embargo fires. The embargo is
+/// its floor plus a memoryless draw, so a fire a moment after the floor
 /// is correct behaviour, and no assertion here reads the origin's state
 /// to catch it "still in stem": that read would race the timer. This walk
 /// has no race to tolerate and no retry.
 ///
 /// What it does not see: how long the origin waited. A node that stemmed
-/// and broadcast at once every time would pass. The unit test
-/// `a_dropped_stem_gets_one_reaction_own_or_relayed` holds the draw.
+/// and broadcast at once every time would pass. The unit tests
+/// `a_dropped_stem_gets_one_reaction_own_or_relayed` and
+/// `no_embargo_fires_before_a_stem_could_return` hold the draw and the
+/// floor.
 ///
 /// Red on a node that broadcasts its own transaction with no stem: the
 /// peer's first record is a fluff. Red on the flip binary before the
@@ -247,10 +249,9 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 ///   from the origin through the quiet wait (the timer's 1-in-10 quantile
 ///   over the longest transit), and the next block mines it.
 ///
-/// **The embargo is a memoryless draw with no least value, so nothing
-/// here waits on a minimum.** The stems are read from each peer's record,
-/// in the order its session delivered them, whenever the fires came: a
-/// first fire a moment after the first send is the same record as a late
+/// **Nothing here times the embargo's floor.** The stems are read from
+/// each peer's record, in the order its session delivered them, whenever
+/// the fires came: a first fire at the floor is the same record as a late
 /// one, and is not a race.
 ///
 /// **One race is legal, and the walk names it.** The second embargo is
@@ -266,23 +267,21 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 /// tries again with a fresh one, `MAX_ATTEMPTS` times in all. A fluff
 /// later than that limit is a disarmed origin fluffing, and fails at once.
 ///
-/// **The race's rate, from the timer.** The walk's sessions are clearnet,
-/// whose adopted embargo has a mean of 194 s (`DAEMON_RELAY_PRIVACY.md`
-/// §72's record), drawn in quarter-second ticks from zero: 776 ticks, so
-/// each tick ends the embargo with probability 1/777, and a gap spanning
-/// `k` ticks is raced with probability `1 - (776/777)^(k + 1)`. A zero
-/// draw alone is 0.13 %. The gap is one [`POLL`] and two loopback round
-/// trips; at a whole second it is 0.64 %, at two seconds 1.15 %. All
-/// `MAX_ATTEMPTS` attempts race, and the walk fails falsely, with the
-/// cube of that: 3 in ten million at one second, under 2 in a million at
-/// two.
+/// **The race needs a slow walk, not a short draw.** The walk's sessions
+/// are clearnet, whose adopted embargo is a 5.5 s floor plus a memoryless
+/// draw of mean 194 s (`DAEMON_RELAY_PRIVACY.md` §100). The second embargo
+/// cannot fire inside the floor, and the gap is one [`POLL`] and two
+/// loopback round trips, a second or two. So the race is open only to a
+/// walk that takes longer than the floor to send the return, on a host
+/// that stalled it. The retry stays for that host.
 ///
 /// **The retry does not let a broken disarm pass.** An attempt passes
 /// only by staying quiet through the whole wait. An origin whose disarm
-/// did nothing fires again at the timer's mean: it lands inside the
-/// tolerated window about one time in seven (30 s against 194 s) and is
-/// retried, and otherwise fluffs later and fails at once; it survives a
-/// whole quiet wait about one time in 800 (`e^(-1296/194)`).
+/// did nothing fires again at the timer's floor plus its draw: it lands
+/// inside the tolerated window about one time in eight (30 s, less the
+/// floor, against the draw's 194 s) and is retried, and otherwise fluffs
+/// later and fails at once; it survives a whole quiet wait about one time
+/// in 900 (`e^(-1314/194)`).
 ///
 /// What it does not see: a node that sent both stems at once. The record
 /// of a zero first draw is the same.

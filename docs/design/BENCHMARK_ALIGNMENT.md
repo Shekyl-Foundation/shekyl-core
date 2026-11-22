@@ -790,8 +790,9 @@ is that sequence on the floor device: §85.3's masks-and-proof term, plus
 and the lone range proof at 2 outputs (18.838 ms, 18.882 ms, from
 `docs/benchmarks/gap7_block_verify_pi4_rust_20261108T232442Z.txt`)
 (`DAEMON_RELAY_PRIVACY.md` §72.2's table). The modal cell is 144.31 ms,
-the clearnet hop 195 ms, the Tor hop 1770 ms; the embargoes 194 s and
-511 s; the wallet wait 2352 s. Every value derived from the cells moved
+the clearnet hop 195 ms, the Tor hop 1770 ms; the embargo draws' means
+194 s and 511 s; the wallet wait 2375 s, floor included
+(`DAEMON_RELAY_PRIVACY.md` §100). Every value derived from the cells moved
 with them, through the production derivation (`DAEMON_RELAY_PRIVACY.md`
 §97's register). The masks-and-proof term stays at §85.3's figures until
 BA-T10's floor run, which re-times the door's sequence after `PL-D3` and

@@ -89,7 +89,7 @@ pub const EMBARGO_FULL_TRAVEL_PROBABILITY: f64 = 0.90;
 ///
 /// `MIN_RELAY_TIME` (300 s) is not this rate. It governed a pool
 /// re-broadcast of an already-fluffed transaction, and it sits below the
-/// embargo median (346 s).
+/// median of the embargo over the longest transit.
 #[must_use]
 pub fn origin_retry_one_in() -> u64 {
     // Rounded. An `alpha` that is not `1 - 1/N` cannot be an integer rate,
@@ -428,10 +428,11 @@ impl DandelionParams {
     /// 50 ms transit assumption: 195 ms, where the inherited set restates
     /// `175`. The inherited number was never pure transit (§71.3 — a ~80 ms
     /// Monero-era verification figure plus one ocean crossing); our
-    /// verification is larger, so the clearnet embargo is 194 s against the
-    /// inherited set's 190 s. (A longer measured transit takes a longer hop —
-    /// see [`Self::adopted_for_transit_ms`]. The wallet failed-send wait is
-    /// the longest measured transit's quantile, currently 2352 s —
+    /// verification is larger, so the clearnet embargo draw's mean is 194 s
+    /// against the inherited set's 190 s. (A longer measured transit takes a
+    /// longer hop — see [`Self::adopted_for_transit_ms`]. The wallet
+    /// failed-send wait is the longest measured transit's quantile, floor
+    /// included, currently 2375 s —
     /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
     /// §89.6.)
     ///
@@ -513,6 +514,94 @@ impl DandelionParams {
             "fluff probability must be non-zero — k = 1/q is otherwise unbounded"
         );
         100.0 / f64::from(self.fluff_probability_pct)
+    }
+
+    /// The stem length the network's own confidence covers: the smallest
+    /// `h` that a stem exceeds no more often than one time in
+    /// [`origin_retry_one_in`], the integer form of
+    /// [`EMBARGO_FULL_TRAVEL_PROBABILITY`].
+    ///
+    /// Stem length is geometric on `{1, 2, …}` (the origin always stems its
+    /// own transaction, RD-4), so `P(stem > h) = (1 - q)^h`, and this is the
+    /// smallest `h` with `(1 - q)^h <= 1 / one_in`. At the shipped `q = 20 %`
+    /// and one in ten it is 11 hops. Computed in integers, with no `ln` and
+    /// no `pow`, like the derivation it sits beside ([`crate::derive`]).
+    ///
+    /// It is not a second bar. Both inputs are the ones the embargo mean is
+    /// solved from, so it moves when either of them moves.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fluff probability is zero (no stem ever ends) or above
+    /// 100 %.
+    #[must_use]
+    pub fn full_travel_stem_hops(&self) -> u32 {
+        /// A percentage's whole.
+        const PCT: u128 = 100;
+        /// One, in the fixed point the tail `(1 - q)^h` is carried at.
+        const ONE: u128 = 1 << 64;
+        assert!(
+            self.fluff_probability_pct > 0,
+            "fluff probability must be non-zero — no stem length covers a stem that never ends"
+        );
+        let stay = PCT
+            .checked_sub(u128::from(self.fluff_probability_pct))
+            .expect("a fluff probability is at most 100 %");
+        let one_in = u128::from(origin_retry_one_in());
+        // The tail is rounded up at every step, so it is never read as
+        // shorter than it is and the count never comes out a hop short.
+        let shorten = |tail: u128| (tail * stay).div_ceil(PCT);
+        let mut tail = shorten(ONE);
+        let mut hops = 1_u32;
+        while tail.checked_mul(one_in).expect("stem tail fits u128") > ONE {
+            tail = shorten(tail);
+            hops += 1;
+        }
+        hops
+    }
+
+    /// The least time an embargo waits before it may fire, in milliseconds:
+    /// what a stem and its fluff return can reasonably take (Rick,
+    /// 2026-11-22).
+    ///
+    /// ```text
+    /// floor = full_travel_stem_hops · hop + F
+    /// ```
+    ///
+    /// That is the origin's slack on a stem of the length the network's
+    /// confidence covers ([`Self::full_travel_stem_hops`]): the hops out, and
+    /// one fluff return ([`Self::fluff_return_ms`]). The origin has the
+    /// longest slack on any stem ([`crate::derive`]: node `i` of a stem of
+    /// length `h` waits `(h - i)·hop + F`), and every node takes this one
+    /// figure. A node does not know its place on a stem, and a floor that
+    /// read whether a transaction is the node's own would be the own/relayed
+    /// difference `shekyl-relay`'s embargo removed.
+    ///
+    /// **Why there is a floor at all.** A memoryless draw has no minimum.
+    /// About one draw in a hundred came out at a few seconds, inside the time
+    /// the fluff takes to come back. The embargo then fired on a stem that
+    /// was completing, the node re-stemmed to its alternate, and the fluff
+    /// arriving from that alternate did not count as circulation (F-10, the
+    /// charged-successor echo), so the node went on holding a transaction
+    /// the network already had. A fire inside this floor says nothing about
+    /// a black hole: no stem of ordinary length could have come back yet.
+    ///
+    /// **What it inherits.** [`Self::fluff_return_ms`] is the transit-free
+    /// model figure, provisional under `DAEMON_RELAY_PRIVACY.md` §96 item 2.
+    /// On a connector with real transit the return takes longer than `F`, and
+    /// this floor is short by the same amount the embargo mean is. It moves
+    /// when that input does.
+    ///
+    /// The mean of the draw is not solved again with the floor in it
+    /// ([`crate::derive::derive_embargo`] does not read this): a deadline is
+    /// the floor plus the draw, so the full-travel probability sits above
+    /// its target and every figure read from the timer is later by the floor.
+    #[must_use]
+    pub fn embargo_floor_ms(&self) -> u64 {
+        u64::from(self.full_travel_stem_hops())
+            .checked_mul(u64::from(self.time_between_hop_ms.ms()))
+            .and_then(|out| out.checked_add(u64::from(self.fluff_return_ms.ms())))
+            .expect("embargo floor fits u64")
     }
 
     /// Paper appendix B.5 closed-form `Tbase` — **diagnosis only**.
@@ -756,6 +845,59 @@ mod tests {
             (38.0..38.5).contains(&under_log10),
             "log10 substitution gives {under_log10}"
         );
+    }
+
+    /// The floor's stem length is the one the full-travel confidence covers:
+    /// at most one stem in `origin_retry_one_in` is longer, and one hop
+    /// fewer does not meet that.
+    /// Red edit: a literal hop count in `full_travel_stem_hops`.
+    #[test]
+    fn the_floor_stem_length_follows_the_fluff_probability() {
+        let one_in = f64::from(u32::try_from(origin_retry_one_in()).expect("small"));
+        for q in [1_u32, 5, 10, 20, 25, 50, 90, 99] {
+            let p = DandelionParams {
+                fluff_probability_pct: q,
+                ..DandelionParams::adopted()
+            };
+            let hops = p.full_travel_stem_hops();
+            let stay = 1.0 - f64::from(q) / 100.0;
+            let exceeds = |h: u32| stay.powi(i32::try_from(h).expect("small"));
+            assert!(exceeds(hops) <= 1.0 / one_in + 1e-12, "q {q}: {hops} hops");
+            assert!(
+                hops == 1 || exceeds(hops - 1) > 1.0 / one_in - 1e-12,
+                "q {q}: {hops} hops is one more than needed"
+            );
+        }
+        let certain = DandelionParams {
+            fluff_probability_pct: 100,
+            ..DandelionParams::adopted()
+        };
+        assert_eq!(certain.full_travel_stem_hops(), 1);
+        assert_eq!(DandelionParams::adopted().full_travel_stem_hops(), 11);
+    }
+
+    /// The floor is that many hops out and one fluff return, per transit.
+    /// The figures are the ones `DAEMON_RELAY_PRIVACY.md` states.
+    /// Red edit: any term dropped from `embargo_floor_ms`.
+    #[test]
+    fn the_embargo_floor_is_the_covered_stem_and_its_fluff_return() {
+        for (transit, floor_ms) in [
+            (crate::verify_cost::ADOPTED_TRANSIT, 5_395_u64),
+            (crate::verify_cost::ANON_ZONE_TRANSIT, 22_720),
+        ] {
+            let p = DandelionParams::adopted_for_transit_ms(transit);
+            assert_eq!(
+                p.embargo_floor_ms(),
+                u64::from(p.full_travel_stem_hops()) * u64::from(p.time_between_hop_ms.ms())
+                    + u64::from(p.fluff_return_ms.ms())
+            );
+            assert_eq!(
+                p.embargo_floor_ms(),
+                floor_ms,
+                "transit {} ms",
+                transit.ms()
+            );
+        }
     }
 
     #[test]

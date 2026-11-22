@@ -41,7 +41,7 @@
 #           archival shard with real spends before they stake).
 #   embargo — ARMED_EMBARGO, its own leg of the nightly live-daemon
 #           workflow: the relay embargo's two live walks. Each waits for
-#           a real embargo fire, which is a random draw (mean 194 s on
+#           a real embargo fire, which is a random draw (mean 199 s on
 #           the clearnet connector the walks use), so their run time has
 #           no fixed bound and would time the slow lane out on a long
 #           draw. A leg of their own keeps a long draw from reddening the
