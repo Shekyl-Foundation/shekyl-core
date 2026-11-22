@@ -87,9 +87,14 @@ jobs:
     outputs:
       judged: ${{ steps.run.outputs.judged }}
     steps:
-      # The script alone, from the commit under test.
+      # The script alone, from the base branch as it is now: never the
+      # pull request's own copy, so a pull request cannot change its judge,
+      # and never the event's merge commit, which GitHub may not have
+      # refreshed since the base moved (#1489 was judged by a script two
+      # merges old). The workflow file itself is still the merge's.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.base_ref }}
           sparse-checkout: scripts/ci/merge_ready.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
@@ -121,10 +126,13 @@ jobs:
     outputs:
       leg: ${{ steps.plan.outputs.leg }}
     steps:
-      # The pull request's merge with `dev`, every branch's history: the
+      # The base branch as it is now, with every branch's history: the
       # head, the merge base and `dev`, which the plan fetches again now.
+      # The script and the tree it scopes by are the base's, as for the
+      # label check and as merge-ready-dev.yml's push plan already is.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.base_ref }}
           fetch-depth: 0
           persist-credentials: false
       - id: plan
