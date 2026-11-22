@@ -30,37 +30,74 @@ use super::{
 /// back (F-10). A third peer is the least that leaves the origin a return
 /// it can trust; five leaves one when a peer is slow. A test mesh is sized
 /// to the production shape, not to the smallest that passes.
-pub(super) const MESH_NODES: usize = 5;
+const MESH_NODES: usize = 5;
 
-/// The mesh's node names: A the miner, then its relays in dial order
-/// ([`RegtestDaemon::start_tor_mesh`]).
+/// The mesh's relays: every node but the miner.
+const MESH_RELAYS: usize = MESH_NODES - 1;
+
+/// The mesh's sessions: one for each pair of nodes.
+const MESH_DIALS: usize = MESH_NODES * (MESH_NODES - 1) / 2;
+
+/// The mesh's node names, by node index: A, the miner, is 0, then its
+/// relays in dial order ([`RegtestDaemon::start_tor_mesh`]).
 const NODE_NAMES: [char; MESH_NODES] = ['A', 'B', 'C', 'D', 'E'];
+
+/// Every session the mesh is made of, as (dialer, dialed) node indices:
+/// each node dials every node after it, so each pair is one session and
+/// the miner, node 0, is dialed by none.
+const DIALS: [(usize, usize); MESH_DIALS] = {
+    let mut dials = [(0, 0); MESH_DIALS];
+    let mut next = 0;
+    let mut from = 0;
+    while from < MESH_NODES {
+        let mut to = from + 1;
+        while to < MESH_NODES {
+            dials[next] = (from, to);
+            next += 1;
+            to += 1;
+        }
+        from += 1;
+    }
+    dials
+};
 
 /// One of the mesh's relays, as the miner's harness reads it: its own
 /// `daemon_status` and `peer_connections`, the operator's reads, over its
 /// admin listener.
 struct MeshRelay {
-    name: char,
     rpc: HttpRpc,
     onion: OnionPeer,
 }
 
-/// The mesh's relays in dial order: B, which dials every relay after it,
-/// to the last, which dials nobody.
-pub(super) struct MeshRelays(Vec<MeshRelay>);
+/// The mesh's relays in dial order, B to E: relay `i` is node `i + 1`.
+pub(super) struct MeshRelays([MeshRelay; MESH_RELAYS]);
 
-/// One reading of the mesh's sessions and tips. A stem the miner
-/// originates comes back as a fluff only over this whole mesh
-/// ([`RegtestDaemon::start_tor_mesh`]). A session missing at the miner's
-/// pool limit fails that wait: the walk is rerun, and the origin's embargo
-/// is not a second deadline.
+/// One of the mesh's sessions, as the dialer reads it.
+#[derive(Clone, Copy, Debug)]
+struct Dial {
+    from: char,
+    to: char,
+    held: bool,
+}
+
+/// One node's tip.
+#[derive(Clone, Copy, Debug)]
+struct Tip {
+    node: char,
+    height: u64,
+}
+
+/// One reading of the mesh's sessions and tips, every dial and every node
+/// in it. A stem the miner originates comes back as a fluff only over this
+/// whole mesh ([`RegtestDaemon::start_tor_mesh`]). A session missing at
+/// the miner's pool limit fails that wait: the walk is rerun, and the
+/// origin's embargo is not a second deadline.
 #[derive(Debug)]
 struct MeshReading {
-    /// Each dial the mesh is made of: the dialer, the dialed, and whether
-    /// the dialer holds that outbound session.
-    sessions: Vec<(char, char, bool)>,
-    /// Each node's tip, the miner's first.
-    tips: Vec<(char, u64)>,
+    /// Each dial in [`DIALS`]' order.
+    sessions: [Dial; MESH_DIALS],
+    /// Each node's tip, in [`NODE_NAMES`]' order: the miner's first.
+    tips: [Tip; MESH_NODES],
 }
 
 impl MeshReading {
@@ -68,46 +105,55 @@ impl MeshReading {
     /// first: a relay behind the miner cannot admit a spend of an output it
     /// has not seen.
     fn whole(&self) -> bool {
-        let Some((&(_, miner_tip), relay_tips)) = self.tips.split_first() else {
-            return false;
-        };
-        self.sessions.iter().all(|&(_, _, held)| held)
-            && relay_tips.iter().all(|&(_, tip)| tip >= miner_tip)
+        let [miner, relays @ ..] = &self.tips;
+        self.sessions.iter().all(|dial| dial.held)
+            && relays.iter().all(|relay| relay.height >= miner.height)
     }
 }
 
 impl std::fmt::Display for MeshReading {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, (from, to, held)) in self.sessions.iter().enumerate() {
+        for (i, dial) in self.sessions.iter().enumerate() {
             let sep = if i == 0 { "" } else { ", " };
-            let state = if *held { "up" } else { "down" };
-            write!(f, "{sep}{from}→{to} {state}")?;
+            let state = if dial.held { "up" } else { "down" };
+            write!(f, "{sep}{}→{} {state}", dial.from, dial.to)?;
         }
         f.write_str("; tips")?;
-        for (i, (name, tip)) in self.tips.iter().enumerate() {
+        for (i, tip) in self.tips.iter().enumerate() {
             let sep = if i == 0 { " " } else { ", " };
-            write!(f, "{sep}{name} {tip}")?;
+            write!(f, "{sep}{} {}", tip.node, tip.height)?;
         }
         Ok(())
     }
 }
 
 #[test]
-fn a_mesh_reads_whole_only_with_every_session_up_and_every_relay_at_the_tip() {
-    let names = &NODE_NAMES;
-    let mut sessions = Vec::new();
-    for (i, &dialer) in names.iter().enumerate() {
-        for &dialed in &names[i + 1..] {
-            sessions.push((dialer, dialed, true));
+fn the_mesh_dials_each_pair_of_nodes_once_and_never_the_miner() {
+    for from in 0..MESH_NODES {
+        for to in 0..MESH_NODES {
+            let dialed = DIALS
+                .iter()
+                .filter(|&&dial| dial == (from, to) || dial == (to, from))
+                .count();
+            let expected = usize::from(from != to);
+            assert_eq!(
+                dialed, expected,
+                "nodes {from} and {to} share {dialed} dials"
+            );
         }
     }
-    // Each pair is one session: five nodes, ten dials.
-    assert_eq!(sessions.len(), MESH_NODES * (MESH_NODES - 1) / 2);
-    let tips: Vec<(char, u64)> = names.iter().map(|&name| (name, 390)).collect();
-    let whole = MeshReading {
-        sessions: sessions.clone(),
-        tips: tips.clone(),
-    };
+    assert!(DIALS.iter().all(|&(from, to)| from < to && to != 0));
+}
+
+#[test]
+fn a_mesh_reads_whole_only_with_every_session_up_and_every_relay_at_the_tip() {
+    let sessions = DIALS.map(|(from, to)| Dial {
+        from: NODE_NAMES[from],
+        to: NODE_NAMES[to],
+        held: true,
+    });
+    let tips = NODE_NAMES.map(|node| Tip { node, height: 390 });
+    let whole = MeshReading { sessions, tips };
     assert!(whole.whole());
     assert!(whole
         .to_string()
@@ -116,31 +162,38 @@ fn a_mesh_reads_whole_only_with_every_session_up_and_every_relay_at_the_tip() {
         .to_string()
         .ends_with("; tips A 390, B 390, C 390, D 390, E 390"));
 
-    // One session down, anywhere in the mesh.
-    let mut short = sessions.clone();
-    let last = short.len() - 1;
-    short[last].2 = false;
-    let reading = MeshReading {
-        sessions: short,
-        tips: tips.clone(),
-    };
-    assert!(!reading.whole());
-    assert!(reading.to_string().contains("D→E down"));
-
-    // One relay behind the miner's tip; a relay past it is at it.
-    let mut behind = tips.clone();
-    behind[2].1 = 389;
-    behind[3].1 = 391;
-    assert!(!MeshReading {
-        sessions: sessions.clone(),
-        tips: behind,
+    // Each session down, one at a time, anywhere in the mesh.
+    for down in 0..MESH_DIALS {
+        let mut short = sessions;
+        short[down].held = false;
+        let reading = MeshReading {
+            sessions: short,
+            tips,
+        };
+        assert!(!reading.whole(), "dial {down} down reads whole");
+        let Dial { from, to, .. } = short[down];
+        assert!(reading.to_string().contains(&format!("{from}→{to} down")));
     }
-    .whole());
 
-    // No tips read is not a whole mesh.
-    assert!(!MeshReading {
+    // Each relay behind the miner's tip, one at a time; a relay past the
+    // tip is at it.
+    for behind in 1..MESH_NODES {
+        let mut lagging = tips;
+        lagging[behind].height = 389;
+        assert!(
+            !MeshReading {
+                sessions,
+                tips: lagging,
+            }
+            .whole(),
+            "relay {behind} behind reads whole"
+        );
+    }
+    let mut ahead = tips;
+    ahead[MESH_RELAYS].height = 391;
+    assert!(MeshReading {
         sessions,
-        tips: Vec::new(),
+        tips: ahead,
     }
     .whole());
 }
@@ -332,13 +385,13 @@ impl RegtestDaemon {
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
         tor_file: PathBuf,
-    ) -> (RegtestDaemon, Vec<RegtestDaemon>) {
+    ) -> (RegtestDaemon, [RegtestDaemon; MESH_RELAYS]) {
         let serial = serial_lock().lock_owned().await;
         // The relays start from the last named, E, to B: each dials the
-        // relays started before it, so their onions are published and
-        // reachable first.
-        let mut started: Vec<(RegtestDaemon, OnionPeer)> = Vec::with_capacity(MESH_NODES - 1);
-        for _ in 1..MESH_NODES {
+        // relays started before it ([`DIALS`]), so their onions are
+        // published and reachable first.
+        let mut started: Vec<(RegtestDaemon, OnionPeer)> = Vec::with_capacity(MESH_RELAYS);
+        for _ in 0..MESH_RELAYS {
             let peering = if started.is_empty() {
                 Peering::Listening {
                     p2p_port: Self::free_port(),
@@ -373,22 +426,24 @@ impl RegtestDaemon {
                 .with_ports_taken(started.iter().map(|(relay, _)| relay.rpc_port)),
         )
         .await;
-        // Dial order from A: B, the last started, first.
+        // Node order: B, the last started, first.
         started.reverse();
-        a.relays = Some(MeshRelays(
-            started
-                .iter()
-                .zip(&NODE_NAMES[1..])
-                .map(|((relay, onion), &name)| MeshRelay {
-                    name,
-                    rpc: relay.rpc.clone(),
-                    onion: *onion,
-                })
-                .collect(),
-        ));
+        let relays: [(RegtestDaemon, OnionPeer); MESH_RELAYS] =
+            started.try_into().unwrap_or_else(|started: Vec<_>| {
+                panic!(
+                    "the mesh started {} of its {MESH_RELAYS} relays",
+                    started.len()
+                )
+            });
+        a.relays = Some(MeshRelays(relays.each_ref().map(|(relay, onion)| {
+            MeshRelay {
+                rpc: relay.rpc.clone(),
+                onion: *onion,
+            }
+        })));
         a.shown_pool = ShownPool::covering_origins();
         a.await_mesh(MESH_LIMIT).await;
-        (a, started.into_iter().map(|(relay, _)| relay).collect())
+        (a, relays.map(|(relay, _)| relay))
     }
 
     /// The mesh, rendered for a pool-wait failure. Empty when this daemon
@@ -405,22 +460,25 @@ impl RegtestDaemon {
     /// or past it has every block A had then.
     async fn read_mesh(&self) -> Option<MeshReading> {
         let MeshRelays(relays) = self.relays.as_ref()?;
-        let miner = NODE_NAMES[0];
-        let miner_tip = tip_height(&self.rpc).await;
-        let mut sessions = Vec::new();
-        for relay in relays {
-            let held = holds_outbound_to(&self.rpc, relay.onion).await;
-            sessions.push((miner, relay.name, held));
+        let mut tips = NODE_NAMES.map(|node| Tip { node, height: 0 });
+        tips[0].height = tip_height(&self.rpc).await;
+        for (tip, relay) in tips[1..].iter_mut().zip(relays) {
+            tip.height = tip_height(&relay.rpc).await;
         }
-        for (i, dialer) in relays.iter().enumerate() {
-            for dialed in &relays[i + 1..] {
-                let held = holds_outbound_to(&dialer.rpc, dialed.onion).await;
-                sessions.push((dialer.name, dialed.name, held));
-            }
-        }
-        let mut tips = vec![(miner, miner_tip)];
-        for relay in relays {
-            tips.push((relay.name, tip_height(&relay.rpc).await));
+        let mut sessions = DIALS.map(|(from, to)| Dial {
+            from: NODE_NAMES[from],
+            to: NODE_NAMES[to],
+            held: false,
+        });
+        // The miner is node 0 and relay `i` node `i + 1`; no dial is to
+        // the miner.
+        for (dial, &(from, to)) in sessions.iter_mut().zip(&DIALS) {
+            let dialer = if from == 0 {
+                &self.rpc
+            } else {
+                &relays[from - 1].rpc
+            };
+            dial.held = holds_outbound_to(dialer, relays[to - 1].onion).await;
         }
         Some(MeshReading { sessions, tips })
     }

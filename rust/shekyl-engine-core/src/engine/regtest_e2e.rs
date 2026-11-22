@@ -548,22 +548,26 @@ impl RegtestSpawn {
 /// the relay fluffs at once, and the follower rebuilds on the wake.
 const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
 
-/// The miner's wait on the Tor mesh ([`RegtestDaemon::start_tor_mesh`]).
-/// A transaction it originates is unbroadcast until a fluff comes back
-/// from a peer A did not hand it to. A stem hop waits at most one carrier
-/// slot (`NOISE_MIN_DELAY_MS` + `NOISE_DELAY_JITTER_MS`, 6.67 s); a fluff
-/// flush toward a peer is a Poisson draw over quarter-seconds with λ = 20
-/// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile; an
-/// onion circuit is 5 s. A relay in a stem epoch passes a stem on to a
-/// relay named after it, and E, which dials nobody, fluffs it, so the
-/// longest path is A → B → C → D → E (stems) and E → A (fluff): 26.7 +
-/// 8.75 + 25 ≈ 60.4 s with every term at its bound at once. A stem the
-/// first relay fluffs goes to every peer but A and comes back in a second
-/// flush: 6.67 + 17.5 + 15 ≈ 39 s. The wait is 60 s (Rick, 2026-11-22:
-/// the mesh is five nodes and the wait is unchanged).
+/// The miner's wait on the Tor mesh ([`RegtestDaemon::start_tor_mesh`]): an
+/// acceptance threshold, not a latency bound (Rick, 2026-11-22: the mesh is
+/// five nodes and the wait stays 60 s).
 ///
-/// The derivation assumes the whole mesh. A session down at this limit
-/// fails the wait, and the walk is rerun.
+/// A transaction A originates is unbroadcast until its fluff comes back
+/// from a peer A did not hand it to. A relay in a stem epoch passes a stem
+/// on to a relay named after it, and E, which dials nobody, fluffs it, so
+/// the longest path is four stem hops, A → B → C → D → E, and one fluff,
+/// E → A; a stem the first relay fluffs comes back after two fluffs. A
+/// stem hop waits for the next carrier slot, at most 6.67 s
+/// (`NOISE_MIN_DELAY_MS` plus `NOISE_DELAY_JITTER_MS`). A fluff waits a
+/// memoryless draw (`FluffScheduler::memoryless`, geometric over
+/// quarter-seconds) with a mean of 5 s toward an inbound peer and 2.5 s
+/// toward an outbound one (`FLUFF_AVERAGE_IN_QUARTER_SECS`,
+/// `FLUFF_AVERAGE_OUT_QUARTER_SECS`), and no upper bound. Every hop also
+/// crosses an onion circuit. No path is bounded under 60 s: a return that
+/// comes later fails the wait, and the walk is rerun. A walk on three
+/// nodes on 2026-11-22 had 289 returns, the longest 38 s.
+///
+/// A session down at this limit fails the wait too, and the walk is rerun.
 const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
 
 /// How [`RegtestDaemon::wait_shown_pool_in_template`] reads the pool.
