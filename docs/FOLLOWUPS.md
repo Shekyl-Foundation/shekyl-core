@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The two body-fill walks run in full every night as a stopgap, until forged-chain walks replace them.** `e2e_complete_tree_bond_fills_serves_pulls_and_reconciles` and `e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves` (`shekyl-engine-core` `regtest_e2e_body_fill.rs`) mine their own chain (the CompleteTree leg 117 minutes of a hosted runner on 2026-11-22; the market leg not yet measured to its end); each is its own leg of `nightly-live-daemon-slow.yml`'s `body-fill` job (lanes `ARMED_BODY_FILL_COMPLETE_TREE`, `ARMED_BODY_FILL_MARKET` in `run_live_daemon_gates.sh`). When the walks start from a forged chain, they leave the nightly's full-length legs.
+  - Owner: the CI lane, with the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md); `scripts/ci/run_live_daemon_gates.sh`
+  - Target: pre-genesis (trigger: the forged-chain body-fill walks land)
 - **The harness network id outlives the chains that need it unless `CF-5` deletes it.** `HARNESS_NETWORK_ID`, the all-zero id that chains which mine their own genesis sign under (`Trust::UNPINNED`), stays beside regtest's identity from `CF-1a` on. It is test-only: since `CF-1b` it sits behind the `TEST_ONLY` `harness` feature on `shekyl-network`, which the test-only feature gate holds to dev edges and the production graph check holds off in every shipped build, and `Spender::over`, which signed under it implicitly, is gone. `CF-5` deletes it, with `Trust::UNPINNED`, `GenesisPin::NONE` and `Persona::at`'s mainnet derivation, once every chain judged under `Trust::UNPINNED` is held to a genesis (`CHAIN_FORGE.md` §12.2). Falsify by: a build of the workspace at `CF-5`'s merge in which the name does not resolve.
   - Owner: the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md) (`CF-R15`, `CF-5`)
   - Target: pre-genesis

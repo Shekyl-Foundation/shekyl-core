@@ -399,7 +399,7 @@ impl Draws {
 ///    shard; the refusal names the node's recovery fetch, the only way the
 ///    bodies come back (§6.5.4). The reconcile's alarm says the same.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes two shards with some four hundred real spends, stakes, and walks past the discard boundary"]
+#[ignore = "body-fill-complete-tree lane (run_live_daemon_gates.sh ARMED_BODY_FILL_COMPLETE_TREE): requires SHEKYLD_BIN; closes two shards with some four hundred real spends, stakes, and walks past the discard boundary"]
 async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
     let seed = [0x5Au8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;
@@ -665,7 +665,7 @@ async fn e2e_complete_tree_bond_fills_serves_pulls_and_reconciles() {
 /// while the node holds it, posts at its first admissible join (§6.5.2) and
 /// is served.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "slow lane (run_live_daemon_gates.sh ARMED_SLOW): requires SHEKYLD_BIN; closes a shard with some two hundred real spends and stakes a market bond onto it"]
+#[ignore = "body-fill-market lane (run_live_daemon_gates.sh ARMED_BODY_FILL_MARKET): requires SHEKYLD_BIN; closes a shard with some two hundred real spends and stakes a market bond onto it"]
 async fn e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves() {
     let seed = [0x5Bu8; shekyl_crypto_pq::account::SEED_BYTES];
     let daemon = armed_daemon(&seed).await;
