@@ -9,14 +9,38 @@ use crate::error::Error;
 /// 64-bit `size_t`: 2^62 − 1).
 pub(crate) const VARINT_MAX: u64 = 4_611_686_018_427_387_903;
 
+/// The largest value each varint width carries: the low two bits of the
+/// first byte name the width, so a width of `n` bytes holds `8n - 2` bits.
+const ONE_BYTE_MAX: u64 = 63;
+const TWO_BYTE_MAX: u64 = 16_383;
+const FOUR_BYTE_MAX: u64 = 1_073_741_823;
+
+/// How many bytes [`write_varint`] writes for `val`: 1, 2, 4 or 8.
+///
+/// For a caller that sizes an encoding without building it (a byte budget
+/// over a list of strings). A value above the varint's range is answered
+/// with the widest form; the encoder refuses it.
+#[must_use]
+pub const fn varint_len(val: u64) -> u64 {
+    if val <= ONE_BYTE_MAX {
+        1
+    } else if val <= TWO_BYTE_MAX {
+        2
+    } else if val <= FOUR_BYTE_MAX {
+        4
+    } else {
+        8
+    }
+}
+
 pub(crate) fn write_varint(out: &mut Vec<u8>, val: u64) -> Result<(), Error> {
-    if val <= 63 {
+    if val <= ONE_BYTE_MAX {
         let packed = u8::try_from(val << 2).expect("val <= 63");
         out.push(packed);
-    } else if val <= 16_383 {
+    } else if val <= TWO_BYTE_MAX {
         let packed = u16::try_from((val << 2) | 1).expect("val <= 16383");
         out.extend_from_slice(&packed.to_le_bytes());
-    } else if val <= 1_073_741_823 {
+    } else if val <= FOUR_BYTE_MAX {
         let packed = u32::try_from((val << 2) | 2).expect("val <= 2^30-1");
         out.extend_from_slice(&packed.to_le_bytes());
     } else if val <= VARINT_MAX {
@@ -84,6 +108,35 @@ mod tests {
             let mut rest = expected;
             assert_eq!(read_varint(&mut rest).expect("decode"), val);
             assert!(rest.is_empty());
+        }
+    }
+
+    /// `varint_len` is the encoder's own width at every band edge.
+    ///
+    /// Red edit: answer any band in `varint_len` with another band's
+    /// width, or compare with `<` in place of `<=`, and that band's edge
+    /// fails.
+    #[test]
+    fn the_counted_width_is_the_written_width() {
+        for val in [
+            0,
+            1,
+            ONE_BYTE_MAX,
+            ONE_BYTE_MAX + 1,
+            TWO_BYTE_MAX,
+            TWO_BYTE_MAX + 1,
+            1_000_000,
+            FOUR_BYTE_MAX,
+            FOUR_BYTE_MAX + 1,
+            VARINT_MAX,
+        ] {
+            let mut buf = Vec::new();
+            write_varint(&mut buf, val).expect("in range");
+            assert_eq!(
+                u64::try_from(buf.len()).expect("a few bytes"),
+                varint_len(val),
+                "width of {val}"
+            );
         }
     }
 }

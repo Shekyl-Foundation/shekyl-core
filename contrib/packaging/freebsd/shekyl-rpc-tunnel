@@ -19,14 +19,22 @@
 #   install -m 0555 shekyl-rpc-tunnel /usr/local/bin/shekyl-rpc-tunnel
 #   pw useradd shekyl-tunnel -d /nonexistent -s /usr/sbin/nologin -c "Shekyl RPC tunnel"
 #   install -m 0555 rc.d/shekyl-rpc-tunnel /usr/local/etc/rc.d/shekyl-rpc-tunnel
+#   install -d -o root -g shekyl-tunnel -m 0750 /usr/local/etc/shekyl
+#   write the node's bundle (the node's `rpc bundle show`) and the
+#     configuration: daemon-endpoint, daemon-bundle-file =
+#     "/usr/local/etc/shekyl/node.bundle", and listen, a loopback address
+#     and port; each root:shekyl-tunnel 0640, which the tunnel reads and
+#     cannot write, and the daemon's group cannot read (the daemon's own
+#     configuration is in /etc/shekyl):
+#   install -m 0640 -o root -g shekyl-tunnel node.bundle /usr/local/etc/shekyl/node.bundle
+#   install -m 0640 -o root -g shekyl-tunnel shekyl-rpc-tunnel.toml \
+#       /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml
 #   install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel
 #   su -m shekyl-tunnel -c "shekyl-rpc-tunnel --rpc-key-create \
+#       --config-file /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml \
 #       --rpc-key-file /var/db/shekyl-tunnel/rpc-shekyl-rpc-tunnel.key"
 #     (prints the fingerprint; enroll it on the node with
 #      `shekyl-cli rpc client add FINGERPRINT --ceiling GRANTS`)
-#   write /usr/local/etc/shekyl/shekyl-rpc-tunnel.toml: daemon-endpoint,
-#     daemon-bundle-file (the node's `rpc bundle show`), and listen, a
-#     loopback address and port
 #   sysrc shekyl_rpc_tunnel_enable=YES
 #   service shekyl-rpc-tunnel start
 #
@@ -110,6 +118,10 @@ shekyl_rpc_tunnel_prestart()
 	if ! pw usershow shekyl-tunnel >/dev/null 2>&1; then
 		err 1 "the account shekyl-tunnel does not exist; create it with: pw useradd shekyl-tunnel -d /nonexistent -s /usr/sbin/nologin -c \"Shekyl RPC tunnel\""
 	fi
+	# The configuration's directory: root's, the tunnel's group may read it,
+	# no one else may (the daemon's group included). Made, or put back to
+	# that, before every start.
+	install -d -o root -g shekyl-tunnel -m 0750 /usr/local/etc/shekyl || return 1
 	install -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel || return 1
 	install -d -o shekyl-tunnel -g shekyl-tunnel -m 0750 /var/log/shekyl-tunnel || return 1
 }

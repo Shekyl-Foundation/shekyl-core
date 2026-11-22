@@ -1,0 +1,27 @@
+# The Levin reader on bytes from a peer (PWD-B12). One target:
+# `fuzz_reader_trains` drives `BucketReader` with buckets it frames from
+# the input (fragments, dummies, ordinary buckets), fed in pieces, and
+# holds the fragment-train bounds after every bucket. Locally:
+#   cargo +nightly fuzz run fuzz_reader_trains
+
+[package]
+name = "shekyl-levin-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shekyl-levin = { path = ".." }
+
+[[bin]]
+name = "fuzz_reader_trains"
+path = "fuzz_targets/fuzz_reader_trains.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

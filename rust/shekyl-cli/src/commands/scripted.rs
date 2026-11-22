@@ -144,9 +144,10 @@ pub fn run_create(rpc: &RpcSession, args: &CreateArgs) -> CommandResult<CreatedW
 }
 
 pub(crate) fn show_created_wallet(created: &CreatedWallet) {
-    println!(
+    crate::out_line!(
         "Created wallet '{}'. Seed written to {} (mode 0600) — protect or delete it.",
-        created.name, created.seed_out
+        created.name,
+        created.seed_out
     );
 }
 
@@ -191,7 +192,7 @@ fn post_restore(rpc: &RpcSession, args: &RestoreArgs) -> CommandResult<()> {
 }
 
 pub(crate) fn show_restored_wallet(restored: &RestoredWallet) {
-    println!("Restored wallet '{}'.", restored.name);
+    crate::out_line!("Restored wallet '{}'.", restored.name);
 }
 
 /// Print a file-backed create or restore through the shared printer.
