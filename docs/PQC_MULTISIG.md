@@ -693,20 +693,28 @@ When sending to a multisig recipient, the sender's wallet MUST:
 
 ### 8.1 Scanning as the group
 
-Every member scans with the **solo scanner**, as the group: its view pair is
-the group KEM secret with spend point `B_group + Y_group`, and its spend
-secret is `b`. An output paid to the group is found exactly as a solo
-wallet finds its own: the `0x06` ciphertext decapsulates, the view tag
-matches, `recover_recipient_spend_pubkey` returns `B_group + Y_group`, the
-amount opens, and the key image is `compute_output_key_image` with `b`. So
-balance and spent-detection are local: no member needs another to see what
-the group holds.
+Every member scans as the group: its view pair is the group KEM secret with
+spend point `B_group + Y_group`, and its spend secret is `b`. An output
+paid to the group is found exactly as a solo wallet finds its own: the
+`0x06` ciphertext decapsulates, the view tag matches,
+`recover_recipient_spend_pubkey` returns `B_group + Y_group`, the amount
+opens, and the key image is `compute_output_key_image` with `b`. So balance
+and spent-detection are local: no member needs another to see what the
+group holds.
+
+The scanner is the solo scanner with a different receive step
+(`shekyl-scanner`: `GroupScanner`, `MultisigMemberScan`). The step hands
+each candidate output to `shekyl-crypto-pq`'s group receive check
+(`receive_group_output`), which recovers the output, checks it is the
+group's, computes its key image and runs §8.2. It returns a receipt
+(`GroupReceipt`) or a refusal (`GroupRefusal`), and only that crate can make
+either. The scanner adds the output's place on the chain and nothing else.
 
 ### 8.2 The multisig check
 
-For each output the group's view pair matches, the member then runs
-`open_multisig_entry` in place of the solo leaf comparison
-(`shekyl-scanner`, `MultisigMemberScan`):
+The check runs the group's own checks first and this member's after, so a
+refusal at a member step always means the group can still spend the output
+(R-35):
 
 1. Find the `0x0D` entry for the output's index. A missing entry is
    `UnspendableReason::MultisigEntryAbsent`.
@@ -716,22 +724,28 @@ For each output the group's view pair matches, the member then runs
 3. Refuse a repeated decrypted hash (`MultisigDuplicateKeyHash`). Every
    member sees the whole list, and `verify_multisig` would refuse the same
    bytes as duplicate keys.
-4. Decapsulate `ct_i` with the member's own KEM secret
+4. Rebuild the committed form from the `n` hashes and the group's `m`, and
+   check that the published `0x07` entry is its leaf commitment
+   (`MultisigLeafMismatch`). A sender lying about any member, while
+   leaving the leaf over the honest list, is caught here.
+5. Decapsulate `ct_i` with the member's own KEM secret
    (`MultisigMemberDecap`), derive `pk_i`, and check `h_i` against it
    (`MultisigMemberKeyHash`). A sender lying about *this* member is caught
-   here.
-5. Rebuild the committed form from the `n` hashes and the group's `m`, and
-   check that the published `0x07` entry is its leaf commitment
-   (`MultisigLeafMismatch`). A sender lying about *any other* member, while
-   leaving the leaf over the honest list, is caught here. A sender who
-   keeps every `ss_i`, replaces another member's hash, and recomputes the
-   leaf is not caught by this member: that member does not hold the other
-   member's KEM secret. The cosigners refuse that committed form before
-   they sign (§11.2).
+   here. A sender who keeps every `ss_i`, replaces another member's hash,
+   and recomputes the leaf is not caught by this member: that member does
+   not hold the other member's KEM secret. The cosigners refuse that
+   committed form before they sign (§11.2).
 
 A missing `0x07` entry stays `PqcLeafEntryAbsent`. The solo leaf comparison
 never runs for a group output: its leaf never commits to the solo
 per-output key.
+
+A refused output is lost to one of two reaches (R-35):
+
+| Refusal | Lost to |
+| --- | --- |
+| `PqcLeafEntryAbsent`, `MultisigEntryAbsent`, `MultisigGroupSize`, `MultisigHashesUndecryptable`, `MultisigDuplicateKeyHash`, `MultisigLeafMismatch` (steps 1–4) | every member: no one can spend it, and it counts in no balance |
+| `MultisigMemberDecap`, `MultisigMemberKeyHash` (step 5) | this member only: the group can spend it, it counts in the group's balance as funds this member cannot sign for, and this member is not a signer of an intent that spends it |
 
 ### 8.3 Versions
 
@@ -741,12 +755,23 @@ consensus (`PqcVerifyError::ContainerVersion`); `0x01` was never issued.
 
 ### 8.4 Persistence
 
-A group output is persisted as a solo output is. Nothing multisig-specific
-is stored at receive time: at spend time each signer re-derives its `pk_i`
-by decapsulating `ct_i` again, and the committed form is rebuilt from the
-transaction's `0x0D` entry, as the solo spend path re-derives its secrets
-from chain data. Restoring a member from its member file and rescanning
-reproduces everything.
+A group wallet's ledger is its own type (`GroupWalletLedger`, its own
+version and schema snapshot; R-36), with no staking and no send journal
+(R-32). It holds two kinds of record, both built only from what §8.1's
+receive check returned and the output's place on the chain:
+
+- a **group coin** (`GroupCoin`): the output's key, commitment, amount and
+  key image, its `0x06` ciphertexts, the leaf point and committed form it
+  was checked against, and this member's own `0x0D` ciphertext, with its
+  place and spend state;
+- a **refused output** (`RefusedGroupOutput`): the same place, amount and
+  public values, the reason, and the kind of §8.2's table (lost to every
+  member or to this member only). It is never a coin.
+
+Nothing secret is stored: at spend time each signer decapsulates its own
+`ct_i` again for `pk_i`, and R-27 checks the stored commitment against
+the stated amount again. Restoring a member from its member file and
+rescanning reproduces everything.
 
 ### 8.5 Cost
 
@@ -1361,7 +1386,25 @@ used:
 
 A held nonce is used once: signing takes it out of the store.
 
-### 13.2 Disagreement resolution
+### 13.2 The durable records: `.wallet.multisig`
+
+A group wallet keeps what changes as its member takes part in ceremonies
+in `.wallet.multisig`, beside `.wallet`, sealed under the wallet's
+second-region key with its own payload kind (`0x04`), so a swapped sibling
+file is refused by its kind (R-30). It holds no nonce (R-20) and no key
+(the member's keys are in `.wallet.keys`). Each record tolerates rollback,
+and what a lost one costs is stated beside it:
+
+| Record | What it holds | Lost |
+| --- | --- | --- |
+| Input reservations | intent hash → the inputs it spends, with the intent's reference block height so the reservation ages out | two of this member's ceremonies can share an input; consensus's key image lets only one land |
+| The responder's approvals | the intents this member approved as their responder | the responder's second visit for that intent is refused, and the ceremony starts again |
+| Seen-seed fingerprints | the one-way fingerprint of every intent seed this member has seen, never the seed | a malicious proposer can reuse a seed, which links two attempts and loses nothing |
+
+Before a member's first ceremony there is no file. A file of another
+version is refused, not migrated (`MULTISIG_STATE_VERSION`, rule 42).
+
+### 13.3 Disagreement resolution
 
 **Conflicting intents spending one input** → a member commits to at most
 one of them (§9.2 item 6); the other times out

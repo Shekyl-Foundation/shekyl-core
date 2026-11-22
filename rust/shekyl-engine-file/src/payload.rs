@@ -16,7 +16,7 @@
 //!   future bug happened to feed to `open_state_file`." (`SWSP` magic)
 //! - "Which payload schema am I?" (`payload_kind`:
 //!   `WalletLedgerPostcard = 0x01`, `PScanStatePostcard = 0x02`,
-//!   `PendingPostBlockPostcard = 0x03`)
+//!   `PendingPostBlockPostcard = 0x03`, `MultisigStatePostcard = 0x04`)
 //! - "Which version of that schema?" (`payload_version`, currently `0x01`)
 //! - "How long is the body?" (`body_len`, u32 LE)
 //!
@@ -59,7 +59,7 @@
 //! |--------|-------|-------------------|---------------------------------|
 //! | 0      | 4     | `magic = "SWSP"`  | ASCII, fixed                    |
 //! | 4      | 1     | `payload_version` | `0x01` for V3.0                 |
-//! | 5      | 1     | `payload_kind`    | `0x01`=ledger, `0x02`=pscan-state, `0x03`=pending-post |
+//! | 5      | 1     | `payload_kind`    | `0x01`=ledger, `0x02`=pscan-state, `0x03`=pending-post, `0x04`=multisig-state |
 //! | 6      | 2     | `_reserved = 00`  | must be zero on V3.0            |
 //! | 8      | 4     | `body_len` (LE)   | u32, length of `body` in bytes  |
 //! | 12     | N     | `body`            | kind-specific bytes             |
