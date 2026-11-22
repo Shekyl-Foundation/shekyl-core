@@ -23,12 +23,10 @@
 //!
 //! # Incremental, and equal to the rebuild
 //!
-//! The C++ (`db_lmdb.cpp:8403–8615`) grows the leaf layer incrementally and
-//! then **recomposes every upper layer from all layer-0 chunks** — because
-//! its earlier incremental deepening "built a newly-created parent chunk
-//! from only the deepening child and dropped the pre-existing sibling" (the
-//! depth-3 consensus divergence). Here every layer is incremental, and the
-//! property the C++ lost is the test: for any sequence of grows, the
+//! Every layer is incremental. The hazard is the depth-3 consensus
+//! divergence: an incremental deepening that builds a newly-created parent
+//! chunk from only the deepening child drops the pre-existing sibling. The
+//! property that rules it out is the test: for any sequence of grows, the
 //! accumulated writes and the root equal `shekyl_fcmp::tree::try_build_layers`
 //! over the whole leaf set. Per layer `L ≥ 1`, the parent chunks that can
 //! change are those over the changed children of `L − 1`; a parent that

@@ -127,9 +127,8 @@ jobs:
 
       - name: Run DRS-P0d digest-v0 coverage check
         # The logical-state digest v0 must name its three families
-        # (core chain, spent_keys, curve root) at the hasher, the FFI,
-        # and the audit read-set — and must record the archival-journal
-        # exclusion. The C++ walker left with the LMDB store.
+        # (core chain, spent_keys, curve root) at the hasher and the audit
+        # read-set — and must record the archival-journal exclusion.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_drs_p0d_digest_coverage.py

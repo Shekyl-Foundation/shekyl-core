@@ -24,6 +24,8 @@ shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
 # (RPC_CHANNEL.md RT-15).
 shekyl-os-account = { path = "../shekyl-os-account" }
 tracing = "0.1"
+# The stop triggers' streams and the owner's runtime (`stop`).
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "signal", "sync"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

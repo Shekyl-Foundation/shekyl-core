@@ -78,9 +78,9 @@ pub struct RecordedRow {
     pub total_staked: u64,
     /// `calc_burn_pct_from_activity(...) / 100` (SCALE → basis points).
     pub burn_pct_bp: u64,
-    /// Low / high 64 bits of the `u128` pool-weighted total — exercises
-    /// the reconstruction the chain mirror performs at the LMDB/FFI
-    /// boundary (§5.4).
+    /// Low / high 64 bits of the `u128` pool-weighted total. The engine's
+    /// economics differential reads the recorded rows but does not consume
+    /// these two fields.
     pub total_weighted_stake_lo: u64,
     pub total_weighted_stake_hi: u64,
     pub staker_emission: u64,

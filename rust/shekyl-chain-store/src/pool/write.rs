@@ -92,9 +92,9 @@ impl PoolBatch {
     ///
     /// # Errors
     ///
-    /// [`PoolCannot::AlreadyHeld`] if the pool holds `txid` (the C++
-    /// `MDB_KEYEXIST` throw, typed and non-fatal — the pool upserts by
-    /// removing first); [`PoolCannot::EmptyBlob`] if `blob` is empty;
+    /// [`PoolCannot::AlreadyHeld`] if the pool holds `txid` (typed and
+    /// non-fatal — the pool upserts by removing first);
+    /// [`PoolCannot::EmptyBlob`] if `blob` is empty;
     /// [`StoreInvariant::PoolEntryUnpaired`] (SI-16) if `txid` has a row in
     /// one table and not the other.
     pub fn insert(
@@ -145,7 +145,7 @@ impl PoolBatch {
     }
 
     /// **P3.** Remove an entry: both rows. Idempotent — an absent entry is
-    /// not an error (the C++ ignores `MDB_NOTFOUND` on each).
+    /// not an error.
     ///
     /// # Errors
     ///

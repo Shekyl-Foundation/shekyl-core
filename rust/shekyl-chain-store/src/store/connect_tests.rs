@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! `connect` tests (S-CHAIN-W commit 6): the write set row by row against
-//! the LMDB layouts, a two-block batch with a spend, connect → pop →
+//! the codec layouts, a two-block batch with a spend, connect → pop →
 //! digest-equal, and every belt fired from a hand-built violation.
 //!
 //! Blocks go through the real `validate` under `RuleSet::GENESIS` — the

@@ -55,7 +55,7 @@ fn block(height: u64, timestamp: u64) -> Block {
             nonce: 7,
             // Recorded blocks are written straight into the tables here
             // (not through `validate`), so this header is not judged under
-            // CEN-B5; the value is a placeholder, as it is in LMDB fixtures.
+            // CEN-B5; the value is a placeholder.
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
             section_root: SectionRoot::from_bytes([0x33; 32]),
         },
@@ -251,9 +251,9 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
 }
 
 /// A root row missing **inside** `1..=tip + 1` is store corruption, not
-/// "above the tip": SI-7 with `Absent`, and the batch is poisoned. This is
-/// the shape the LMDB reader got wrong (32 zero bytes for a missing key,
-/// CEN-I12's absent-key walk) made unrepresentable.
+/// "above the tip": SI-7 with `Absent`, and the batch is poisoned. 32 zero
+/// bytes for a missing key (CEN-I12's absent-key walk) is the shape this
+/// makes unrepresentable.
 #[test]
 fn a_root_hole_below_the_tip_is_si7_not_above_tip() {
     let path = tmp("view-root-hole");
