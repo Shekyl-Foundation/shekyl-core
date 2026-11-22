@@ -464,7 +464,7 @@ fn main() {
 /// operator can still fix it (rule 82). The session comes first so that an
 /// address the session itself refused is never announced — the self-hosted
 /// server validates the daemon endpoint as it starts, the same order
-/// `shekyl-wallet-rpc` keeps in `run_server`. The REPL's `DaemonClient`
+/// `shekyl-wallet-rpc` keeps in `arm_server`. The REPL's `DaemonClient`
 /// comes after, deliberately: it can fail for reasons that are not the
 /// endpoint's (an unusable `--proxy`), and such a
 /// failure reports itself without retracting what the configured address

@@ -1283,10 +1283,6 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
 
-- **Three binaries have three copies of the stop-signal handling, and on Windows the tunnel stops cleanly only on Ctrl-C and gives no notice when Ctrl-C is ignored.** `shekyl-daemon` `signals.rs`, `shekyl-wallet-rpc` `stop_signals.rs` and `shekyl-rpc-tunnel` `serve.rs` (`Stop`) each register their own stops. The tunnel's Windows arm holds Ctrl-C alone, so Ctrl-Break, a closed console, logoff and shutdown end it by Windows' default action. A tunnel started with Ctrl-C ignored has no stop but a kill, and says nothing. On Unix the tunnel and the wallet RPC open `SIGINT` even when the parent left it `SIG_IGN`, which the daemon keeps (`DAEMON_CONFIG_CUTOVER.md` §2.2 step 9). The job is one stop-signal module in `shekyl-process`, started from the daemon's `signals.rs`: every Windows console event, and the notice when the parent set Ctrl-C to be ignored. The daemon, `shekyl-wallet-rpc` and `shekyl-rpc-tunnel` all use it, and their own copies are deleted (Rick, 2026-11-20). Falsify by, on Windows: the tunnel stopping cleanly on Ctrl-Break and when its console closes; the tunnel giving the notice when started with Ctrl-C ignored; the daemon and the wallet RPC stopping exactly as they do today.
-  - Owner: the RPC channel lane (RT-W11) — [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2 step 9 (the daemon's stop path, the module's start)
-  - Target: pre-genesis
-
 ## Post-genesis
 
 Exceptional deferral with a named blocker. This list stays tiny.

@@ -19,7 +19,7 @@ use clap::builder::TypedValueParser as _;
 use clap::Parser;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
-use shekyl_wallet_rpc::{run_server, AuthConfig, ListenAddr, ServerConfig};
+use shekyl_wallet_rpc::{arm_server, AuthConfig, ListenAddr, ServerConfig};
 use zeroize::Zeroizing;
 
 /// No `Debug`: `rpc_login` is a secret (rule 35), and a derived `Debug` on
@@ -164,9 +164,13 @@ async fn serve(cli: Cli) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
             .map_err(|e| e.to_string())?,
     };
 
-    // `run_server` serves until a stop signal (SIGTERM, SIGINT, SIGHUP; on
-    // Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
-    // events), then closes the open wallet and returns. A second signal
-    // exits at once.
-    run_server(server).await
+    // Armed before the bind, then served until a stop (SIGTERM, SIGINT,
+    // SIGHUP; on Windows every console event), which closes the open
+    // wallet; a second stop exits at once. The line the start owes about
+    // an inherited ignore is said here, on standard error (IG-14).
+    let armed = arm_server(server)?;
+    if let Some(line) = armed.notice() {
+        eprintln!("shekyl-wallet-rpc: {line}");
+    }
+    armed.serve().await
 }

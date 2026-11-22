@@ -290,6 +290,15 @@ impl RpcSession {
         tor_file: shekyl_wallet_rpc::server::TorFile,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // What this process can know about an inherited ignore, read before
+        // anything in it installs a stop handler (the line editor takes
+        // none). On Unix an ignored SIGINT is kept and said once; the
+        // operator's console is this program's own, so Windows' every-start
+        // line is not said (Rick, 2026-11-20).
+        let inherited = shekyl_process::stop::Inherited::at_start();
+        if let Some(line) = inherited.observed_line("shekyl-cli") {
+            eprintln!("shekyl-cli: {line}");
+        }
         // Multi-thread runtime: Engine create/open paths use
         // `tokio::task::block_in_place`, which a current-thread runtime
         // does not support.
@@ -304,13 +313,13 @@ impl RpcSession {
                 tor_file,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
-        // A stop signal (SIGTERM, SIGINT, SIGHUP; the Windows console's
-        // close, logoff and shutdown events) closes the open wallet through
-        // the server's own close, then ends the process. Without this a
+        // A stop (SIGTERM, SIGINT, SIGHUP; every Windows console event)
+        // closes the open wallet through the server's own close, then ends
+        // the process; a second stop ends it at once. Without this a
         // signal killed the CLI with the wallet open and nothing saved
         // since the last close (A19).
         runtime
-            .block_on(async { handle.exit_on_stop_signal() })
+            .block_on(async { handle.exit_on_stop_signal(inherited) })
             .map_err(|e| format!("failed to watch stop signals: {e}"))?;
         let transport = match &handle.listen {
             #[cfg(unix)]

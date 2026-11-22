@@ -10,7 +10,7 @@
 //! in-process server without shelling out (`WALLET_REWRITE_PLAN.md` Phase 3).
 //!
 //! The platform seam is [`BoundListener`]: **one** `cfg` split, at listener
-//! construction, shared by [`run_server`] and [`spawn_in_process_with`] so the
+//! construction, shared by [`ArmedServer::serve`] and [`spawn_in_process_with`] so the
 //! two cannot drift (`WINDOWS_WALLET_SUPPORT.md` §8.1). Everything
 //! Windows-specific below it lives in `shekyl-win-sec`, the crate built to
 //! hold the `unsafe` this one denies (WP-D2).
@@ -29,6 +29,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::Network;
+use shekyl_process::stop::{FirstStop, Inherited, Stops};
 use shekyl_rpc_transport::network_posture::{DaemonDisclosures, ProxyResolution};
 use shekyl_rpc_types::endpoint::{unrouted_path, JSON_RPC_PATH};
 use tokio::net::TcpListener;
@@ -567,16 +568,33 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
     }
 }
 
-/// Run the server until a stop signal, then close the open wallet and
-/// return. Blocks the calling task.
+/// The program's name in the line its start says about its stops.
+const PROGRAM: &str = "shekyl-wallet-rpc";
+
+/// A checked configuration whose stops are armed, before anything that
+/// needs a clean stop to be released exists: a stop from here on, the bind
+/// included, is a clean stop that removes the socket.
+pub struct ArmedServer {
+    config: ServerConfig,
+    stops: Stops,
+    notice: Option<String>,
+}
+
+/// Check `config` and arm the stops: the first of the server's two start
+/// steps, then [`ArmedServer::serve`].
 ///
-/// The stop signals are SIGTERM, SIGINT and SIGHUP on Unix, and on
-/// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and shutdown
-/// events ([`crate::stop_signals`]). The first stops the listener, lets
-/// in-flight requests finish, and closes the wallet through the
-/// `close_wallet` choreography with the shutdown save; a second exits at
-/// once.
-pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
+/// The stops are `shekyl_process::stop`'s: `SIGTERM`, `SIGINT` and
+/// `SIGHUP` on Unix, every console event on Windows. The first stops the
+/// listener, lets in-flight requests finish, and closes the wallet through
+/// the `close_wallet` choreography with the shutdown save; a second exits
+/// at once with status 130 and no cleanup. An inherited ignore is kept,
+/// and the line the start owes for it is [`ArmedServer::notice`], for the
+/// binary to say on standard error (IG-14; Rick, 2026-11-20).
+///
+/// # Errors
+/// The configuration is refused, or the stops could not be armed.
+pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
+    let inherited = Inherited::at_start();
     validate_daemon_endpoint(&config)?;
     validate_listen(&config)?;
     // The binary's own `--daemon-address`, said once at startup. The
@@ -585,18 +603,75 @@ pub async fn run_server(config: ServerConfig) -> Result<(), BoxErr> {
     for warning in daemon_disclosures(&config) {
         warn!("{warning}");
     }
-    let bound = BoundListener::bind(&config.listen).await?;
-    let state = AppState::new(config);
-    let app = build_router(state.clone());
+    let notice = inherited.line(PROGRAM);
+    let stops = Stops::arm(inherited)
+        .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
+    Ok(ArmedServer {
+        config,
+        stops,
+        notice,
+    })
+}
 
-    crate::stop_signals::watch(Arc::clone(&state), crate::stop_signals::AfterClose::Return)?;
-    bound.log_ready("shekyl-wallet-rpc listening")?;
-    serve_then_close(bound, app, state).await?;
-    Ok(())
+impl ArmedServer {
+    /// The IG-14 line this start owes about its stops, naming the program:
+    /// on Unix when `SIGINT` was ignored, on Windows on every start.
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    /// Bind, serve until the first stop, then close the open wallet.
+    ///
+    /// # Errors
+    /// The listener could not be bound or served.
+    pub async fn serve(self) -> Result<(), BoxErr> {
+        let Self { config, stops, .. } = self;
+        let bound = BoundListener::bind(&config.listen).await?;
+        let state = AppState::new(config);
+        let app = build_router(state.clone());
+        watch_stops(stops, Arc::clone(&state), AfterClose::Return);
+        bound.log_ready("shekyl-wallet-rpc listening")?;
+        serve_then_close(bound, app, state).await?;
+        Ok(())
+    }
+}
+
+/// The status a host that ends on its stop exits with once the wallet is
+/// closed: 128 plus `SIGINT`, the status a shell gives a program its
+/// interrupt ended.
+const EXIT_STOPPED: i32 = 130;
+
+/// What the watcher does once the wallet is closed.
+#[derive(Clone, Copy)]
+enum AfterClose {
+    /// Nothing: the host's own serve call returns.
+    Return,
+    /// End the process with [`EXIT_STOPPED`]. For a host whose main thread
+    /// is not waiting on the server (`shekyl-cli`).
+    Exit,
+}
+
+/// The first stop asks `state`'s server to stop; the serve task closes
+/// the open wallet. A second stop is `shekyl_process::stop`'s: it exits at
+/// once.
+fn watch_stops(mut stops: Stops, state: Arc<AppState>, after: AfterClose) {
+    tokio::spawn(async move {
+        let FirstStop::Stop(first) = stops.first().await else {
+            // A later arm replaced this one. That start has its own watcher.
+            return;
+        };
+        info!("stop requested by {first}: closing the open wallet; a second stop exits at once");
+        state.shutdown.notify_one();
+        if let AfterClose::Exit = after {
+            state.closed.notified().await;
+            std::process::exit(EXIT_STOPPED);
+        }
+    });
 }
 
 /// Serve until shutdown is requested, then close the open wallet — the one
-/// stopping path both hosts share ([`run_server`], and the in-process
+/// stopping path both hosts share ([`ArmedServer::serve`], and the in-process
 /// server behind [`InProcessHandle::shutdown`]). The wallet is closed even
 /// when the serve loop failed, and [`AppState::closed`] is notified last.
 async fn serve_then_close(
@@ -612,7 +687,7 @@ async fn serve_then_close(
 
 /// A listener bound to its address, per platform — **the** `cfg` seam.
 ///
-/// [`run_server`] and [`spawn_in_process_with`] both go through
+/// [`ArmedServer::serve`] and [`spawn_in_process_with`] both go through
 /// [`Self::bind`] and [`Self::serve`], so there is one place the platform
 /// decision is made and one place the serve loop is written. Five `cfg`
 /// splits at five call sites would scatter the boundary across a file whose
@@ -634,7 +709,7 @@ impl BoundListener {
             ListenAddr::Tcp(addr) => Ok(Self::Tcp(TcpListener::bind(addr).await?)),
             #[cfg(unix)]
             ListenAddr::Uds(path) => {
-                prepare_uds_path(path)?;
+                prepare_uds_path(path).await?;
                 let listener = UnixListener::bind(path)?;
                 // Own the socket path for cleanup BEFORE restrict_socket_perms
                 // so a chmod failure still unlinks the bound socket.
@@ -761,14 +836,63 @@ impl axum::serve::Listener for PipeListener {
 }
 
 #[cfg(unix)]
-fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
+async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
+    use shekyl_rpc_transport::listen::{
+        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
+    };
+    use std::os::unix::fs::DirBuilderExt;
+    // The socket's mode is set only after its bind; until then the
+    // directory is what keeps another account from connecting. It is made
+    // 0700 whatever the umask, or, if it is there, held to the tunnel's
+    // rule: this account's alone (Rick, 2026-11-21).
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let not_owner_only = || -> BoxErr {
+        format!(
+            "{} must be a directory only this account can enter (owned by this account, no \
+             group or other access); the wallet RPC's socket is not bound there",
+            dir.display()
+        )
+        .into()
+    };
+    match owner_only_socket_dir(dir) {
+        Ok(()) => {}
+        Err(SocketDirRefusal::Missing) => {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)?;
+            owner_only_socket_dir(dir).map_err(|_| not_owner_only())?;
+        }
+        Err(SocketDirRefusal::NotOwnerOnly) => return Err(not_owner_only()),
+        Err(SocketDirRefusal::Unreadable(why)) => {
+            return Err(format!("{}: {why}", dir.display()).into());
         }
     }
-    if path.exists() {
-        std::fs::remove_file(path)?;
+    // A socket a server still answers on is not taken over; one a stopped
+    // or killed server left is removed. Anything else at the path is not
+    // this server's to remove.
+    match clear_replaceable_socket(path).await {
+        Ok(()) => {}
+        Err(SocketRefusal::Answers) => {
+            return Err(format!("another server answers on {}", path.display()).into());
+        }
+        Err(SocketRefusal::NotASocket) => {
+            return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
+        }
+        Err(SocketRefusal::Unknown(why)) => {
+            return Err(format!(
+                "{}: whether a server still holds this socket is not known ({why}); it is not \
+                 replaced",
+                path.display()
+            )
+            .into());
+        }
+        Err(SocketRefusal::NotRemoved(why)) => {
+            return Err(format!("{}: {why}", path.display()).into());
+        }
     }
     Ok(())
 }
@@ -876,21 +1000,20 @@ pub struct InProcessHandle {
 }
 
 impl InProcessHandle {
-    /// Make the process's stop signals (SIGTERM, SIGINT, SIGHUP; on
-    /// Windows the console's Ctrl-C, Ctrl-Break, close, logoff and
-    /// shutdown events) stop this server, close the open wallet, and then
-    /// end the process with status 130; a second signal ends it at once.
-    /// For a host whose main thread is not waiting on the server
-    /// (`shekyl-cli`). Call from inside the host's runtime.
+    /// Make the process's stops (`shekyl_process::stop`: SIGTERM, SIGINT,
+    /// SIGHUP; on Windows every console event) stop this server, close the
+    /// open wallet, and then end the process with status 130; a second
+    /// stop ends it at once. For a host whose main thread is not waiting
+    /// on the server (`shekyl-cli`), which read `inherited` before
+    /// anything installed a handler. Call from inside the host's runtime.
     ///
     /// # Errors
     ///
-    /// The signal handlers could not be registered.
-    pub fn exit_on_stop_signal(&self) -> std::io::Result<()> {
-        crate::stop_signals::watch(
-            Arc::clone(&self.state),
-            crate::stop_signals::AfterClose::Exit,
-        )
+    /// The stops could not be armed.
+    pub fn exit_on_stop_signal(&self, inherited: Inherited) -> std::io::Result<()> {
+        let stops = Stops::arm(inherited)?;
+        watch_stops(stops, Arc::clone(&self.state), AfterClose::Exit);
+        Ok(())
     }
 
     /// Request graceful shutdown and wait for the serve task to finish; the
@@ -1192,9 +1315,8 @@ mod tests {
     /// call at that site. The oracle is the wildcard message itself, not a
     /// bare `is_err()`: `validate_daemon_endpoint` runs first on both paths,
     /// and any refusal of the fixture's daemon address would otherwise
-    /// satisfy the test with the listen check gone. `run_server` would
-    /// block forever if the refusal did not fire, hence the timeout — a
-    /// hang here is a failure, not a pass.
+    /// satisfy the test with the listen check gone. `arm_server` refuses
+    /// before anything binds.
     #[tokio::test]
     async fn both_bind_paths_refuse_a_wildcard_before_binding() {
         let config = listen_config("0.0.0.0:0", basic());
@@ -1203,12 +1325,11 @@ mod tests {
         };
         let err = err.to_string();
         assert!(err.contains("wildcard"), "spawn_in_process_with: {err}");
-        let err = tokio::time::timeout(std::time::Duration::from_secs(5), run_server(config))
-            .await
-            .expect("run_server must return (refuse) rather than bind and block")
-            .expect_err("run_server must refuse a wildcard bind")
-            .to_string();
-        assert!(err.contains("wildcard"), "run_server: {err}");
+        let Err(err) = arm_server(config) else {
+            panic!("arm_server must refuse a wildcard bind");
+        };
+        let err = err.to_string();
+        assert!(err.contains("wildcard"), "arm_server: {err}");
     }
 
     /// RT-W7's binary-specific facts — the predicate itself is pinned in the
@@ -1249,10 +1370,11 @@ mod tests {
         assert!(proxied.operator.is_some(), "{proxied:?}");
     }
 
-    /// The wiring: `run_server` logs the disclosure before it binds. The
-    /// edit that turns this red is deleting the `daemon_disclosures` loop in
-    /// `run_server`. This test holds the listen port first, so `run_server`
-    /// returns (address in use) right after the disclosure — no timer to
+    /// The wiring: the binary's start (`arm_server`, then `serve`) logs the
+    /// disclosure before it binds. The edit that turns this red is deleting
+    /// the `daemon_disclosures` loop in `arm_server`. This test holds the
+    /// listen port first, so `serve` returns (address in use) right after the
+    /// disclosure — no timer to
     /// wait out, and "said before bound" is pinned with it.
     ///
     /// The subscriber rides the future (`with_subscriber`) rather than the
@@ -1263,7 +1385,7 @@ mod tests {
     /// capture that cannot be broken by where the future runs needs one
     /// fewer thing held true elsewhere.
     #[tokio::test]
-    async fn run_server_logs_the_operator_statement_before_binding() {
+    async fn the_start_logs_the_operator_statement_before_binding() {
         #[derive(Clone)]
         struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
         impl std::io::Write for Sink {
@@ -1286,7 +1408,7 @@ mod tests {
         let port = held.local_addr().expect("local addr").port();
         let mut config = listen_config(&format!("127.0.0.1:{port}"), AuthConfig::Disabled);
         config.daemon = DaemonTarget::address("http://203.0.113.7:11029");
-        let err = run_server(config)
+        let err = async { arm_server(config)?.serve().await }
             .with_subscriber(subscriber)
             .await
             .expect_err("the held port refuses the bind");

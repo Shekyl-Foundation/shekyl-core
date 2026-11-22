@@ -627,7 +627,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | — | `config-file` | path | the account root (IG-13) + `shekyl-wallet-rpc-<network>.toml` | CLI | | N (IG-Q29) |
 | `wallet-dir` | `wallet-dir` | path | the account root + `wallets/<network>` | both | | K; the default is no longer the working directory (IG-Q9) |
 | `rpc-bind` (IP:port) | `rpc-listen` | endpoint | `127.0.0.1:29500` | both | | R; a wildcard is refused (RT-1); a non-loopback bind is accepted only with `rpc-username` and `rpc-password` set, and every such start carries an IG-14 announcement that credentials and traffic cross the network in the clear; when the RPC channel's wallet leg lands (RT-W10), `rpc-listen` becomes the channel listener and the plaintext non-loopback arm is refused (FOLLOWUPS); the daemon's table reserves the same name for the same meaning |
-| `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | | N; Unix only; refused on Windows |
+| `rpc-bind` (`uds://`) | `rpc-socket-file` | path | unset | both | | N; Unix only; refused on Windows; its directory is the account's alone, made 0700 if missing and refused otherwise, and a socket there is replaced only when its server refuses the connection (`shekyl_rpc_transport::listen`, the tunnel's rule; Rick, 2026-11-21) |
 | `rpc-login` | `rpc-username`, `rpc-password` | secret | unset | file | | R (IG-Q29); both set or neither |
 | `disable-rpc-login` | — | | | | | – (IG-4): no credentials is the absence of the two rows, accepted on loopback or a socket |
 | `daemon-address` | `daemon-endpoint`, `daemon-socket-file` | peer-endpoint; path | unset: "this computer" (RT-15); unset | both | | R (IG-Q31; default amended by RT-W10 step 5, Rick 2026-11-17, as `shekyl-cli`'s row) |
