@@ -11,9 +11,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **The scheduled workflows' late starts are measured before the cron move and not after it.** Every scheduled run started six to eight and a half hours after its cron in the week of 2026-11-14 to 21 (`nightly.yml` at 03:00 UTC created 09:42 to 11:23; the slow lane at 03:30, 10:42 to 12:09; the RandomX differential at 05:00, 11:58 to 15:11; fuzzing at 15:17, 20:55 to 22:15), so the nightly block landed in the working day on the pull requests' runners. Every cron on the hour or a quarter of it moved to its own minute (ruled 2026-11-22); scheduled runs use the default branch's files, so the move takes effect at the next release. Record each scheduled run's cron time against its creation time for the first week after it, and the next step from what that shows.
-  - Owner: the CI lane — `.github/workflows/` (the `schedule` triggers)
-  - Target: pre-genesis (trigger: the first week of scheduled runs after the next release)
 - **The two body-fill walks run in full every night as a stopgap, until forged-chain walks replace them.** `e2e_complete_tree_bond_fills_serves_pulls_and_reconciles` and `e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves` (`shekyl-engine-core` `regtest_e2e_body_fill.rs`) mine their own chain (the CompleteTree leg 117 minutes of a hosted runner on 2026-11-22; the market leg not yet measured to its end); each is its own leg of `nightly-live-daemon-slow.yml`'s `body-fill` job (lanes `ARMED_BODY_FILL_COMPLETE_TREE`, `ARMED_BODY_FILL_MARKET` in `run_live_daemon_gates.sh`). When the walks start from a forged chain, they leave the nightly's full-length legs.
   - Owner: the CI lane, with the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md); `scripts/ci/run_live_daemon_gates.sh`
   - Target: pre-genesis (trigger: the forged-chain body-fill walks land)
