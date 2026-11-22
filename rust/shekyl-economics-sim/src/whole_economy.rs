@@ -81,6 +81,10 @@ const C_TOGETHER_KNEE: u64 = KNEE_BAND[1];
 
 /// The years a row prints. Every year is in the JSON summary.
 const SAMPLE_YEARS: [u64; 8] = [1, 5, 10, 20, 30, 60, 100, 135];
+/// The share of a year's blocks paying the tail above which the year is in
+/// the tail era: the narration marks it, and the derived table reads the
+/// tail test from it.
+const TAIL_ERA_SHARE: f64 = 0.5;
 /// The years the miner's-net fee revenue's deciles print.
 const DECILE_YEARS: [u64; 3] = [60, 100, 135];
 /// The years the adversaries are priced at, at the first block of each.
@@ -424,6 +428,14 @@ pub(crate) struct YearFig {
     /// Stakers' income from every source over the year, per gigabyte held
     /// at its end, SKL.
     pub(crate) staker_income_per_gb_year: f64,
+}
+
+impl YearFig {
+    /// Whether more than [`TAIL_ERA_SHARE`] of the year's blocks paid the
+    /// tail.
+    fn in_tail_era(&self) -> bool {
+        self.tail_share > TAIL_ERA_SHARE
+    }
 }
 
 /// One adversary pricing, at a year's first block.
@@ -1141,7 +1153,7 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
         write!(
             tail,
             " | y{year}{} {} / {} / {} (fees gross p95 {} net p95 {} var {})",
-            if at_year(row, year).any(|y| y.tail_share > 0.5) {
+            if at_year(row, year).any(YearFig::in_tail_era) {
                 " tail-era"
             } else {
                 ""
@@ -1310,7 +1322,8 @@ fn table(summary: &Summary) -> String {
 }
 
 /// The derived table's columns, in order: the row's names, then security,
-/// release and burn, inclusion, bloat, distribution, archival and the tail.
+/// release and burn, inclusion, bloat, distribution, archival, and the
+/// reward against the fees with the year the tail era begins.
 #[cfg(test)]
 const TABLE_COLUMNS: [&str; 41] = [
     "scenario",
@@ -1350,10 +1363,10 @@ const TABLE_COLUMNS: [&str; 41] = [
     "stakers_per_gb_year_y30",
     "staker_pool_y10",
     "staker_penalty_y10",
-    "tail_net_over_fees_p95_y60",
-    "tail_net_over_fees_p95_y100",
-    "tail_net_over_fees_p95_y135",
-    "tail_era_y135",
+    "reward_net_over_fees_p95_y60",
+    "reward_net_over_fees_p95_y100",
+    "reward_net_over_fees_p95_y135",
+    "tail_era_year",
 ];
 
 /// The narration's median of `values` ([`median_and_range`]), as `digits`
@@ -1372,12 +1385,18 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
         "# THREE ECONOMIES GRADED WHOLE, the derived table (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).\n\
          # One line per economy, template rule, scenario, zone and w_ref; each figure is the median\n\
          # across the row's seeds, '-' where no seed has it (past a stop, or never reached). SKL per\n\
-         # block unless named; tau in ms/KB; m_r and burn are yearly means; the tail column is a ratio\n\
-         # with no unit: the miner's-net tail (SKL a block) over the 95th-percentile block's miner's-net\n\
-         # fees (SKL a block). role 'stress' marks {SUSTAINED_GROWTH}: it runs to its edge and is not\n\
-         # read for the tail, which is read from the 'read' rows. stops names, per seed, where the fold\n\
-         # ended: the horizon (year {HORIZON_YEARS}), the supply's break, or the reward's domain edge.\n\
-         # The narration and the JSON summary are the full record."
+         # block unless named; tau in ms/KB; m_r and burn are yearly means. reward_net_over_fees_p95 is\n\
+         # a ratio with no unit: the miner's-net emission (the paid reward's miner leg, a yearly mean,\n\
+         # SKL a block) over the 95th-percentile block's miner's-net fees (SKL a block). tail_era_year is\n\
+         # the first year more than half a fold's blocks pay the tail; from it on, the emission is the\n\
+         # tail and the ratio is the tail test, read against k = 1; before it, the ratio is the emission\n\
+         # a miner is paid then. adoption_year is the year the honest carried count's trailing mean over\n\
+         # {TX_VOLUME_WINDOW} blocks first reaches the baseline: the year blocks first carry it, not the\n\
+         # year demand reaches it ({SLOW_ADOPTION}'s demand reaches it at year {SLOW_ADOPTION_YEARS});\n\
+         # adoption_fraction is the supply emitted by then. role 'stress' marks {SUSTAINED_GROWTH}: it\n\
+         # runs to its edge and is not read for the tail, which is read from the 'read' rows. stops\n\
+         # names, per seed, where the fold ended: the horizon (year {HORIZON_YEARS}), the supply's break,\n\
+         # or the reward's domain edge. The narration and the JSON summary are the full record."
     )?;
     writeln!(out, "{}", TABLE_COLUMNS.join(","))?;
     let gb = BYTES_PER_GB as f64;
@@ -1412,13 +1431,23 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
             .iter()
             .filter_map(|f| f.adoption.map(|a| a.1))
             .collect();
-        let tail = |y: &YearFig| {
+        let reward = |y: &YearFig| {
             if y.fee_net.p95 > 0.0 {
-                y.tail_net / y.fee_net.p95
+                (y.miner_income - y.miner_fee) / y.fee_net.p95
             } else {
                 f64::INFINITY
             }
         };
+        let tail_era: Vec<f64> = row
+            .folds
+            .iter()
+            .map(|f| {
+                f.years
+                    .iter()
+                    .find(|y| y.in_tail_era())
+                    .map_or(f64::INFINITY, |y| y.year as f64)
+            })
+            .collect();
         let cells = [
             row.scenario.clone(),
             row.place.zone.clone(),
@@ -1462,10 +1491,10 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
             fig(30, &|y| y.staker_income_per_gb_year, 3),
             fig(10, &|y| y.staker_pool, 4),
             fig(10, &|y| y.staker_penalty, 4),
-            fig(60, &tail, 1),
-            fig(100, &tail, 1),
-            fig(135, &tail, 1),
-            fig(135, &|y| if y.tail_share > 0.5 { 1.0 } else { 0.0 }, 0),
+            fig(60, &reward, 1),
+            fig(100, &reward, 1),
+            fig(135, &reward, 1),
+            med(&tail_era, 0),
         ];
         writeln!(out, "{}", cells.join(","))?;
     }
@@ -1884,14 +1913,18 @@ mod tests {
         assert_eq!(column(lines[1], "income_y10"), "200.00");
         assert_eq!(column(lines[1], "half_year"), "22.00");
         assert_eq!(column(lines[1], "first_1gb_day_year"), "3");
-        assert_eq!(column(lines[1], "tail_net_over_fees_p95_y135"), "2.0");
-        assert_eq!(column(lines[1], "tail_era_y135"), "1");
+        // Each seed's emission is 99 times its p95 fees, and its tail era
+        // begins at year 101.
+        assert_eq!(column(lines[1], "reward_net_over_fees_p95_y60"), "99.0");
+        assert_eq!(column(lines[1], "reward_net_over_fees_p95_y135"), "99.0");
+        assert_eq!(column(lines[1], "tail_era_year"), "101");
         assert_eq!(column(lines[1], "role"), "read");
         assert_eq!(column(lines[1], "stops"), "horizon;horizon;horizon");
         // The growth row is a stress, and reads nothing past year 7.
         assert_eq!(column(lines[2], "role"), "stress");
         assert_eq!(column(lines[2], "income_y1"), "200.00");
         assert_eq!(column(lines[2], "income_y10"), "-");
+        assert_eq!(column(lines[2], "tail_era_year"), "-");
         assert_eq!(
             column(lines[2], "stops"),
             "domain y8 at 4.0 TB;domain y8 at 4.0 TB;domain y8 at 4.0 TB"
