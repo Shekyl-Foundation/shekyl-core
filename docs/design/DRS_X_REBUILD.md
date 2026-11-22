@@ -2,6 +2,8 @@
 
 **Status:** OPEN — Round 1, 2026-11-21, for Rick to rule; then its own brief. Round 1 (at the end) replaces Round 0's corpus (RB-Q1), which S-PRUNE made unbuildable; settles what a rebuild verifies below the body horizon; and carries RB-Q2–Q4. Round 0 below is the record of what was posed on 2026-10-21 and never ruled.
 
+# Round 0 (2026-10-21)
+
 **For:** Rick to rule; then its own brief. **From:** design review, 2026-10-21.
 **Ground:** `dev` at `ba0b28379`. The trigger was #1147's S0 (the node opens `chain.db` at every start, and a layout mismatch refuses).
 
@@ -91,7 +93,7 @@ What follows is the inventory the brief asked for and the questions it surfaced.
 
 `S/` is `rust/shekyl-chain-store/src/`. Table types are `rust/shekyl-chain-store/schemas/tables.snap`; classes are `S/accumulator/class.rs` `TABLE_CLASSES`; writers are `S/store/connect.rs` unless named.
 
-**Corpus: what the node received, kept forever.** Each row is bound to proof of work, so a tampered or corrupted row cannot replay clean (Rick, 2026-10-21):
+**Corpus: what the node received, kept forever.** Each row is bound to proof of work, so a tampered or corrupted row cannot replay cleanly (Rick, 2026-10-21):
 
 | Table | What it is | Bound by |
 | --- | --- | --- |
