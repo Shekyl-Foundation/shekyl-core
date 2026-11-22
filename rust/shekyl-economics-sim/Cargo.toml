@@ -59,6 +59,10 @@ serde_json = "1"
 # `arch` feature only reaches x87 on 32-bit x86 without SSE.
 libm = { version = "0.2.16", default-features = false }
 
+# The heartbeat's UTC date and time (`utc_clock`). The workspace's pin as
+# shekyl-logging declares it, same features: already in the tree.
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "macros"] }
+
 [dev-dependencies]
 # The full table's on-demand pin compares its narration and JSON summary
 # with their recorded SHA-256 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1);

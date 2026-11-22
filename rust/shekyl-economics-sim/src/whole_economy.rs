@@ -549,22 +549,20 @@ struct Heartbeat {
 /// Years between two heartbeat lines.
 const HEARTBEAT_YEARS: u64 = 5;
 
-/// The wall clock's time of day, UTC, as `HH:MM:SSZ`, on each heartbeat
-/// and end line: a host shared with another run is then read by when, not
-/// only by how long (§5.37.1).
+/// The wall clock, UTC, as `YYYY-MM-DDTHH:MM:SSZ`, on each heartbeat and
+/// end line: a host shared with another run is then read by when, not only
+/// by how long (§5.37.1), and a run that crosses midnight stays unambiguous.
 fn utc_clock() -> String {
-    const SECONDS_PER_HOUR: u64 = 3_600;
-    const SECONDS_PER_MINUTE: u64 = 60;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
-        % SECONDS_PER_DAY;
-    format!(
-        "{:02}:{:02}:{:02}Z",
-        now / SECONDS_PER_HOUR,
-        now % SECONDS_PER_HOUR / SECONDS_PER_MINUTE,
-        now % SECONDS_PER_MINUTE
-    )
+    utc_stamp(time::OffsetDateTime::now_utc())
+}
+
+/// `at` as `YYYY-MM-DDTHH:MM:SSZ`.
+fn utc_stamp(at: time::OffsetDateTime) -> String {
+    const STAMP: &[time::format_description::FormatItem<'static>] =
+        time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    at.to_offset(time::UtcOffset::UTC)
+        .format(STAMP)
+        .expect("a compile-time format description formats every date")
 }
 
 impl<'p> EconomyProbe<'p> {
@@ -1898,6 +1896,19 @@ mod tests {
             column(lines[2], "stops"),
             "domain y8 at 4.0 TB;domain y8 at 4.0 TB;domain y8 at 4.0 TB"
         );
+    }
+
+    /// The heartbeat's stamp is the UTC date and time, through a leap day
+    /// and a century's end.
+    #[test]
+    fn the_utc_stamp_reads_the_calendar() {
+        let at = |seconds: i64| {
+            utc_stamp(time::OffsetDateTime::from_unix_timestamp(seconds).expect("in range"))
+        };
+        assert_eq!(at(0), "1970-01-01T00:00:00Z");
+        assert_eq!(at(951_786_061), "2000-02-29T01:01:01Z");
+        assert_eq!(at(1_795_391_999), "2026-11-22T23:59:59Z");
+        assert_eq!(at(4_102_444_799), "2099-12-31T23:59:59Z");
     }
 
     /// The JSON summary `--economies` writes reads back to the same table.

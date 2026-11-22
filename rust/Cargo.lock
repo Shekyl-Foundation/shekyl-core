@@ -3972,6 +3972,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
+ "time",
 ]
 
 [[package]]
