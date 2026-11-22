@@ -19,8 +19,9 @@
 # - The workspace is copied into the VM (rsync; a shared NFS workspace
 #   does not work: cargo cannot take its lock on Cargo.lock there) and the
 #   target lives on the VM's own disk, so only fbsd-results/ comes back.
-#   The VM step itself always succeeds, so the action copies the results
-#   back; the verdict step reads the statuses they record.
+#   Once the test user's home is found, the VM step succeeds whatever the
+#   phases do, so the action copies the results back; the verdict step
+#   reads the statuses they record.
 # - Memory headroom is held to at least 1 GB: free + inactive + laundry
 #   pages (on UFS the page cache is in the inactive queue and reclaimable),
 #   sampled every 30 s. A run that dips under it is red even if every test
@@ -110,8 +111,9 @@ jobs:
             sampler=$!
 
             # The test user's own copy of the workspace (the action's is
-            # under /root, mode 0700).
-            T=/home/shekyltest
+            # under /root, mode 0700), in the home `pw useradd -m` made.
+            T=$(getent passwd shekyltest | cut -d: -f6)
+            [ -n "$T" ] && [ -d "$T" ] || { echo "no home for shekyltest: '$T'"; exit 1; }
             rsync -a "$W/" "$T/ws/" --exclude fbsd-results
             mkdir -p "$T/results"
             chown -R shekyltest "$T/ws" "$T/results"
@@ -152,7 +154,9 @@ jobs:
             # nextest's final status lines, into the job log, where
             # report-dev-red's failed_tests.py names the failing tests.
             sed -n '/^ *Summary \[/,$p' "$R/test.log"
-            find "$CARGO_TARGET_DIR/nextest" -name junit.xml -exec cp {} "$R/junit.xml" \;
+            # The `ci` profile's one report (rust/.config/nextest.toml), the
+            # file the Linux Rust job uploads.
+            cp "$CARGO_TARGET_DIR/nextest/ci/junit.xml" "$R/junit.xml" || echo "no nextest junit.xml written"
             stamp doctest-start
             doc_rc=0
             RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1 || doc_rc=$?
