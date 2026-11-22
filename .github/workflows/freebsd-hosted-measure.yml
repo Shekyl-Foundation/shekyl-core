@@ -13,8 +13,11 @@
 # (scripts/ci/rust_scoped_tests.sh with RUST_TESTS=all: the nextest `ci`
 # profile, `--locked`, the same exclusion), on the pinned toolchain.
 #
-# The workspace is copied into the VM (rsync) and the target lives on the
-# VM's own disk, outside the workspace, so only fbsd-results/ comes back.
+# The workspace is copied into the VM (rsync), then into the home of an
+# unprivileged test user, who builds and runs the tests; the target lives
+# on the VM's own disk, outside the workspace, so only fbsd-results/ comes
+# back. Memory headroom (free + inactive + laundry, and swap use) is
+# sampled every 30 s into fbsd-results/memory.log.
 # An NFS-shared workspace does not work: cargo cannot take its lock on
 # Cargo.lock there ("No locks available"). Timings are stamped per phase
 # into fbsd-results/timings.txt and uploaded with the logs.
@@ -71,7 +74,10 @@ jobs:
           disable-cache: true
           prepare: |
             # ca_root_nss: cargo's TLS finds no CA bundle in the base image.
-            pkg install -y bash ca_root_nss curl git python3
+            pkg install -y bash ca_root_nss curl git python3 rsync
+            # The tests run as an unprivileged user: root passes checks a
+            # user's process cannot (P2_NOTRACE, file modes, memlock).
+            pw useradd -n shekyltest -m -s /bin/sh -c 'unprivileged test user'
           run: |
             # The action runs this under `sh -e`: each phase's status is
             # captured with `|| rc=$?`, so a failure is recorded, not fatal.
@@ -83,14 +89,38 @@ jobs:
             stamp vm-run-start
             {
               uname -a
-              sysctl kern.vm_guest hw.ncpu hw.physmem hw.usermem hw.model
+              sysctl kern.vm_guest hw.ncpu hw.physmem hw.usermem hw.model vm.max_user_wired
+              swapinfo -k
               df -h
               mount
+              su -l shekyltest -c 'id; ulimit -a'
             } > "$R/vm-facts.txt" 2>&1
             cat "$R/vm-facts.txt"
-            vmstat -w 30 > "$R/vmstat.log" 2>&1 &
+            # Headroom, not just `fre`: on UFS the page cache sits in the
+            # inactive queue and is reclaimable, so free + inactive +
+            # laundry is what a new allocation can have; swap use is the
+            # sign it ran out.
+            (
+              ps=$(sysctl -n vm.stats.vm.v_page_size)
+              while :; do
+                set -- $(sysctl -n vm.stats.vm.v_free_count vm.stats.vm.v_inactive_count vm.stats.vm.v_laundry_count)
+                sw=$(swapinfo -k | awk 'NR>1 { u += $3 } END { print u + 0 }')
+                echo "$(date +%s) free_mb=$(( $1 * ps / 1048576 )) inact_mb=$(( $2 * ps / 1048576 )) laundry_mb=$(( $3 * ps / 1048576 )) avail_mb=$(( ($1 + $2 + $3) * ps / 1048576 )) swap_used_kb=$sw"
+                sleep 30
+              done
+            ) > "$R/memory.log" 2>&1 &
             sampler=$!
 
+            # A copy of the workspace the test user owns (the action's
+            # workspace is under /root, mode 0700).
+            T=/home/shekyltest
+            rsync -a "$W/" "$T/ws/" --exclude fbsd-results
+            mkdir -p "$T/results"
+            chown -R shekyltest "$T/ws" "$T/results"
+            cat > "$T/phases.sh" <<'PHASES'
+            set -u
+            R=$HOME/results
+            stamp() { echo "$1 $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> "$R/timings.txt"; }
             git config --global --add safe.directory '*'
             export CARGO_TARGET_DIR="$HOME/fbsd-target"
             export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
@@ -109,16 +139,16 @@ jobs:
             tar -xzf "/tmp/$nx" -C "$CARGO_HOME/bin"
             stamp toolchain-end
             echo "toolchain rc=$tc_rc" >> "$R/timings.txt"
-            if [ "$tc_rc" -ne 0 ]; then kill "$sampler" || true; exit 0; fi
+            [ "$tc_rc" -eq 0 ] || exit 0
 
-            cd "$W/rust"
+            cd "$HOME/ws/rust"
             stamp build-start
             build_rc=0
             cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential > "$R/build.log" 2>&1 || build_rc=$?
             stamp build-end
             echo "build rc=$build_rc" >> "$R/timings.txt"
             echo "--- build.log tail"; tail -n 40 "$R/build.log"
-            du -sk "$CARGO_TARGET_DIR" >> "$R/vm-facts.txt" 2>&1 || true
+            du -sk "$CARGO_TARGET_DIR" >> "$R/target-size.txt" 2>&1
 
             test_rc=skipped
             doc_rc=skipped
@@ -127,10 +157,10 @@ jobs:
               # rust_scoped_tests.sh's `nextest` with RUST_TESTS=all, minus
               # its chain fetch (done on the runner, above).
               test_rc=0
-              cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1 || test_rc=$?
+              cargo nextest run --locked --profile ci --no-fail-fast --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1 || test_rc=$?
               stamp test-end
               echo "--- test.log tail"; tail -n 60 "$R/test.log"
-              cp "$CARGO_TARGET_DIR/nextest/ci/junit.xml" "$R/junit.xml" 2>> "$R/vm-facts.txt" || true
+              find "$CARGO_TARGET_DIR/nextest" -name junit.xml -exec cp {} "$R/junit.xml" \;
               stamp doctest-start
               doc_rc=0
               RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1 || doc_rc=$?
@@ -138,8 +168,21 @@ jobs:
               stamp doctest-end
             fi
             echo "test rc=$test_rc doctest rc=$doc_rc" >> "$R/timings.txt"
+            PHASES
+            stamp user-phases-start
+            su -l shekyltest -c "sh $T/phases.sh" || echo "phases script rc=$?" >> "$R/timings.txt"
+            # The user's stamps and statuses join the root's, in order.
+            if [ -f "$T/results/timings.txt" ]; then
+              cat "$T/results/timings.txt" >> "$R/timings.txt"
+              rm "$T/results/timings.txt"
+            else
+              echo "the user phases wrote no timings" >> "$R/timings.txt"
+            fi
+            stamp user-phases-end
             kill "$sampler" || true
+            cp -R "$T/results/." "$R/"
             grep -E '^ +(TRY [0-9]+ )?FAIL \[|^ +Summary \[|tests run:' "$R/test.log" || true
+            awk '{ split($5, a, "="); if (min == "" || a[2] + 0 < min) { min = a[2] + 0; at = $0 } } END { print "least available: " at }' "$R/memory.log" | tee -a "$R/timings.txt"
             cat "$R/timings.txt"
             # The step succeeds so the action copies fbsd-results/ back (it
             # copies nothing after a failed step); the verdict step below
