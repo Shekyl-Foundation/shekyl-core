@@ -44,11 +44,16 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 # The managed Tor's owner (§2.2 steps 6, 8, 9) and its binary discovery.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# This node's persistent onion (`tor-onion-key-file`): Tor's own key file,
+# read through the one key-file reader (only this account and the
+# superuser may reach it) and parsed where onion secrets live (rule 36).
+shekyl-onion-key = { path = "../shekyl-onion-key" }
+shekyl-os-account = { path = "../shekyl-os-account" }
 # The process's one spawn lock and the notify runner's descriptor hygiene,
 # shared with the managed Tor's launcher.
 shekyl-spawn = { path = "../shekyl-spawn" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
-tokio = { version = "1", default-features = false, features = ["signal", "macros", "sync", "rt"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync", "rt"] }
 tracing = "0.1"
 
 # `GetSystemWindowsDirectoryW` for the notify command's `SystemRoot`
@@ -58,9 +63,6 @@ tracing = "0.1"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
-# A late start fault's status test builds the held-file fault the one
-# replace reports (`run_tests.rs`).
-shekyl-os-account = { path = "../shekyl-os-account" }
 tempfile = "3"
 # The owning connection's tests (tests/owning_connection.rs) call the
 # daemon as a GUI does: "this computer"'s client on the owner's leg, the

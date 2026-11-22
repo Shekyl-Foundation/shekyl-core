@@ -6,11 +6,13 @@
 //! Per-boot tor `DataDirectory` for the daemon overlay (PWD-E7).
 //!
 //! The wallet supervisor keeps a durable data directory — vanguards and a
-//! stable onion need one. The daemon posture is ephemeral for identity: a new
-//! onion every boot, and nothing identity-bearing (guards, keys, the onion)
-//! joins this boot to the next. Tor's public directory cache is the exception
-//! (`TSR-Q8`): it lives in [`CACHE_DIR_NAME`], a sibling this sweep does not
-//! touch. The per-boot directory is a unique 0700 subdirectory, never reused.
+//! stable onion need one. The daemon posture is ephemeral for identity by
+//! default: a new onion every boot, and nothing identity-bearing (guards,
+//! keys, the onion) joins this boot to the next. Tor's public directory cache
+//! is the exception (`TSR-Q8`): it lives in [`CACHE_DIR_NAME`], a sibling this
+//! sweep does not touch. So is a persistent onion's guard state
+//! (`TSR-Q15`): `tor-guard-state-<service id>`, also a sibling the sweep
+//! leaves, and its key is the operator's file, never in this directory. The per-boot directory is a unique 0700 subdirectory, never reused.
 //!
 //! A directory ends by being retired (`TOR_SUPERVISOR.md` §4.7, §4.10): Tor's
 //! log moves out to `ephemeral-tor-<id>.log` beside it, then the directory is
@@ -396,6 +398,21 @@ mod tests {
         sweep_stale_data_dirs(parent.path(), None);
         assert!(cache.join("cached-certs").is_file());
         assert!(!stale.exists());
+    }
+
+    /// **The sweep leaves a persistent onion's guards** (`TSR-Q15`): its
+    /// `state` lives beside the per-boot directories, and the next boot
+    /// copies it in. Fails if the guard-state prefix ever matches the sweep.
+    #[test]
+    fn sweep_leaves_a_persistent_onions_guard_state() {
+        use shekyl_tor_control_client::directory_cache::{GuardState, GUARD_STATE_PREFIX};
+        assert!(!is_sweep_target(&format!("{GUARD_STATE_PREFIX}abc")));
+        let parent = tempfile::tempdir().unwrap();
+        let guards = GuardState::for_onion(parent.path(), "abc");
+        fs::create_dir(guards.path()).unwrap();
+        fs::write(guards.path().join("state"), b"Guard in=default\n").unwrap();
+        sweep_stale_data_dirs(parent.path(), None);
+        assert!(guards.path().join("state").is_file());
     }
 
     /// Creating a directory sweeps nothing: the sweep is the caller's, so a

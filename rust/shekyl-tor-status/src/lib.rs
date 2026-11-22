@@ -537,6 +537,9 @@ pub enum OnionCause {
     /// This computer's clock is behind the consensus by at least this many
     /// seconds.
     ClockBehind(u64),
+    /// Another Tor holding this onion's key is publishing it: a directory
+    /// holds a copy newer than any this node published.
+    PublishedElsewhere,
     /// A key this build does not know.
     Unknown {
         /// The key as it arrived.
@@ -551,6 +554,7 @@ impl Serialize for OnionCause {
             Self::UploadsRefused => one_key(serializer, "uploads-refused", &()),
             Self::DescriptorMissing => one_key(serializer, "descriptor-missing", &()),
             Self::ClockBehind(seconds) => one_key(serializer, "clock-behind", seconds),
+            Self::PublishedElsewhere => one_key(serializer, "published-elsewhere", &()),
             Self::Unknown { tag } => one_key(serializer, tag, &()),
         }
     }
@@ -575,6 +579,10 @@ one_key_visitor!(
                 OnionCause::DescriptorMissing
             }
             "clock-behind" => OnionCause::ClockBehind(map.next_value()?),
+            "published-elsewhere" => {
+                map.next_value::<()>()?;
+                OnionCause::PublishedElsewhere
+            }
             _ => return Ok(None),
         }))
     },

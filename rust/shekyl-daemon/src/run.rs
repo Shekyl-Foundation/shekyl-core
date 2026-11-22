@@ -38,7 +38,7 @@ use shekyl_spawn::owning::OwningConnection;
 use shekyl_daemon_config::{load, Loaded};
 
 use crate::options::DaemonOptions;
-use crate::{help, levers, network, notify, signals, tor, verify};
+use crate::{help, levers, network, notify, stop, tor, verify};
 use shekyl_daemon_rpc::options::OptionsHandle;
 
 pub use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
@@ -161,8 +161,8 @@ pub fn main(args: &[OsString], platform: &Platform) -> i32 {
 #[must_use]
 pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i32 {
     // Before any handler: what this process can know about an inherited
-    // ignore. On Unix that is `SIGINT`'s disposition.
-    let interrupt = signals::InheritedInterrupt::at_start();
+    // ignore. On Unix those are `SIGINT`'s and `SIGHUP`'s dispositions.
+    let inherited = shekyl_process::stop::Inherited::at_start();
     let mut end = StartEnd::Stderr;
     let (program, rest) = match args.split_first() {
         Some((p, rest)) => (p.clone(), rest.to_vec()),
@@ -297,7 +297,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     announced.rest.extend(mining_notice(&config));
     announced
         .rest
-        .extend(interrupt.line(owning.is_some()).map(str::to_owned));
+        .extend(stop::notice(inherited, owning.is_some()));
     announced.rest.extend(
         walked
             .owner_socket
@@ -371,7 +371,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // The managed Tor's inbox, before the node: the network publishes into
     // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
     // starts on it once the node is open.
-    let (tor_inbox, tor_feeds) = tor::prepare();
+    let (tor_inbox, tor_feeds) = tor::prepare(walked.persistent_onion);
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
@@ -383,7 +383,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         // `SHEKYL_VERSION_IS_RELEASE`, the constant the version string is
         // built from. `debug_assertions` is not that flag (FLIP-Q3).
         release_build: shekyl_version::IS_RELEASE,
-        request_stop: Arc::new(signals::request_stop),
+        request_stop: Arc::new(stop::request_stop),
         plan: network::plan(&config, network_id),
         supervisor: Some(tor_feeds),
     }) {
@@ -405,8 +405,12 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         tracing::info!(target: "global", "clearnet bound to {bound}");
     }
 
-    // The one signal owner, on a runtime of its own.
-    signals::install_dispositions();
+    // The supervision runtime: the stop latch's wait, the notify runner
+    // (§2.10) and the Tor supervisor. The stop streams live on
+    // `shekyl-process`'s `shekyl-stops` thread for the life of the process.
+    // This thread keeps the name `shekyld-signals`: TOR_SUPERVISOR.md §10
+    // (TSR-M15) measured it under that name, and the latch wait still runs here.
+    stop::install_dispositions();
     let budget = RuntimeBudget {
         workers: NonZeroUsize::MIN,
         blocking: NonZeroUsize::MIN,
@@ -415,10 +419,10 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     let pool = match shekyl_runtime::runtime(budget, &name) {
         Ok(p) => p,
         Err(e) => {
-            return end.fail(format!("the signal owner's runtime could not start: {e}"));
+            return end.fail(format!("the supervision runtime could not start: {e}"));
         }
     };
-    if let Err(e) = signals::own(pool.handle(), interrupt) {
+    if let Err(e) = stop::own(pool.handle(), inherited) {
         return end.fail(format!("the stop triggers could not be owned: {e}"));
     }
     // The options handle: the resolved values, the runtime rows' owners
@@ -455,8 +459,8 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
 /// moves the value out to where the report is made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RunWait {
-    /// [`signals::stop_requested`] resolved with this cause.
-    StopRequested(signals::StopCause),
+    /// [`stop::stop_requested`] resolved with this cause.
+    StopRequested(stop::StopCause),
     /// A task the node owns ended on its own ([`shekyl_node::Node::ended`]):
     /// the daemon would stay up and never sync, or never connect a block,
     /// so it stops and exits failed.
@@ -483,7 +487,7 @@ fn supervise(
     // going stops the daemon through the one stop owner. The RPC asks the
     // supervisor for `daemon_status`'s Tor fields; its inbox is made
     // already, so an ask before the loop starts waits for it.
-    let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(signals::rendezvous_gone);
+    let gone: shekyl_daemon_rpc::run::OnRendezvousGone = Arc::new(stop::rendezvous_gone);
     let (rpc, refused) = match shekyl_daemon_rpc::run::start(
         &config.rpc,
         options,
@@ -511,7 +515,7 @@ fn supervise(
         }
     }
     // The notify runner, pushed from the chain's tip watch; its children
-    // run on the signal owner's runtime (§2.10).
+    // run on the supervision runtime (§2.10).
     let runner = Arc::new(notify::Runner::new(&config.notify, pool.handle().clone()));
     let notify_driver = pool.spawn(notify::drive_blocks(runner, node.tips()));
     // The supervisor starts with the node, under every `tor` setting. A
@@ -601,7 +605,7 @@ async fn run_or_stop(ended: &mut watch::Receiver<Option<shekyl_node::NodeEnd>>) 
     tokio::select! {
         biased;
         end = node_ended(ended) => RunWait::NodeEnded(end),
-        cause = signals::stop_requested() => RunWait::StopRequested(cause),
+        cause = stop::stop_requested() => RunWait::StopRequested(cause),
     }
 }
 
@@ -628,21 +632,21 @@ async fn node_ended(
 fn note_run(preserve_status: &mut bool, wait: RunWait) {
     match wait {
         RunWait::StopRequested(cause) => {
-            if matches!(cause, signals::StopCause::Fatal(_)) {
+            if matches!(cause, stop::StopCause::Fatal(_)) {
                 *preserve_status = false;
             }
             deliver(stop_report(cause));
         }
         RunWait::NodeEnded(end) => {
-            deliver(stop_report(signals::StopCause::Fatal(end.clone())));
-            signals::fatal(end);
+            deliver(stop_report(stop::StopCause::Fatal(end.clone())));
+            stop::fatal(end);
             *preserve_status = false;
         }
     }
 }
 
 /// What the operator is told about one stop. The match is the whole
-/// policy: a new [`signals::StopCause`] variant has to choose here.
+/// policy: a new [`stop::StopCause`] variant has to choose here.
 #[derive(Debug, PartialEq, Eq)]
 enum StopReport {
     /// An IG-14 announcement: standard error and the log, whatever the
@@ -652,17 +656,17 @@ enum StopReport {
     Error(String),
 }
 
-fn stop_report(cause: signals::StopCause) -> StopReport {
+fn stop_report(cause: stop::StopCause) -> StopReport {
     match cause {
-        signals::StopCause::Signal(_)
-        | signals::StopCause::Requested
-        | signals::StopCause::RendezvousGone => {
+        stop::StopCause::Signal(_)
+        | stop::StopCause::Requested
+        | stop::StopCause::RendezvousGone => {
             StopReport::Announce(format!("stop requested by {cause}"))
         }
-        signals::StopCause::OwningConnectionClosed => StopReport::Announce(
+        stop::StopCause::OwningConnectionClosed => StopReport::Announce(
             "the process that started this daemon closed its owning connection".to_owned(),
         ),
-        signals::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
+        stop::StopCause::Fatal(end) => StopReport::Error(format!("{end}; the daemon stops")),
     }
 }
 
@@ -719,7 +723,7 @@ fn watch_owning_connection(owning: OwningConnection) -> std::io::Result<OwningCo
             if let Err(e) = closed {
                 tracing::debug!(target: "daemon", "the owning connection failed: {e}");
             }
-            signals::owning_connection_closed();
+            stop::owning_connection_closed();
         })?;
     Ok(ready)
 }

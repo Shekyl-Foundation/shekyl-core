@@ -166,6 +166,7 @@ listing none of them, so its accounts are not seen: keep the daemon's group
 a local group.
 
 <!-- shekyld-example: begin -->
+```toml
 # shekyld configuration file. Every key is an option's name, spelled
 # as on the command line without the leading dashes. The network is
 # always given on the command line, because it chooses the file.
@@ -215,6 +216,10 @@ a local group.
 # The local endpoint the operator's Tor forwards tor-onion to; required
 # with it.
 # tor-onion-listen = "127.0.0.1:11029"
+
+# This node's persistent onion: Tor's own hs_ed25519_secret_key; tor =
+# managed only. Unset, the managed Tor's onion is new at every boot.
+# tor-onion-key-file = "/path"
 
 # The managed Tor binary; tor = managed only. It is verified against the
 # pin wherever it is.
@@ -305,6 +310,7 @@ a local group.
 
 # The RPC connection cap.
 # rpc-connections-max = 25
+```
 <!-- shekyld-example: end -->
 
 Every option's name, kind and default is in `shekyld --help`.
@@ -340,6 +346,7 @@ whether `option_set` changes it while the daemon runs.
 | `tor-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for tor-socks. |
 | `tor-onion` | v3 onion with a port | — | both | no | This node's onion service and virtual port, on the operator's Tor. |
 | `tor-onion-listen` | IP endpoint (`address:port`) | — | both | no | The local endpoint the operator's Tor forwards tor-onion to; required with it. |
+| `tor-onion-key-file` | absolute path | — | both | no | This node's persistent onion: Tor's own hs_ed25519_secret_key; tor = managed only. Unset, the managed Tor's onion is new at every boot. |
 | `tor-file` | absolute path | tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix | both | no | The managed Tor binary; tor = managed only. It is verified against the pin wherever it is. |
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
@@ -1108,7 +1115,7 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 | Flag | Description |
 |------|-------------|
 | `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
-| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
+| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix; the socket's directory must be yours alone: it is made 0700 if missing, and one that group or others can enter is refused). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
 | `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
 | `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
 | `--daemon-address <url>` | Your node's RPC URL. Default: this machine's daemon at the RPC port for `--network`. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (see "Connecting to a daemon" above) |

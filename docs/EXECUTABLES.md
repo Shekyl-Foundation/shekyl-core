@@ -71,6 +71,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `tor-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for tor-socks. |
 | `tor-onion` | v3 onion with a port | — | both | no | This node's onion service and virtual port, on the operator's Tor. |
 | `tor-onion-listen` | IP endpoint (`address:port`) | — | both | no | The local endpoint the operator's Tor forwards tor-onion to; required with it. |
+| `tor-onion-key-file` | absolute path | — | both | no | This node's persistent onion: Tor's own hs_ed25519_secret_key; tor = managed only. Unset, the managed Tor's onion is new at every boot. |
 | `tor-file` | absolute path | tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix | both | no | The managed Tor binary; tor = managed only. It is verified against the pin wherever it is. |
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
@@ -336,7 +337,7 @@ shekyl-wallet-rpc [--wallet-dir <dir>] [--rpc-bind <addr>] [--rpc-login <user:pa
 | Option | Description |
 |--------|-------------|
 | `--wallet-dir <dir>` | Directory of wallet files (default `.`); `create_wallet` / `open_wallet` operate here |
-| `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
+| `--rpc-bind <addr>` | Listen address: a numeric `IP:PORT` (TCP; default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames such as `localhost` are **not** resolved) or `uds:///path/to.sock` (Unix only; the socket's directory is this account's alone, made 0700 if it is missing and refused if group or others have any access). **Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are refused** — bind a specific IP address. **A non-loopback address refuses to start without `--rpc-login`** |
 | `--rpc-login <user:pass>` | HTTP basic authentication, `NAME:PASSWORD` with **both halves non-empty** — a value without `:`, or with a blank half, is refused at startup. Required for any non-loopback `--rpc-bind` (where the server also logs that Basic travels in the clear until the TLS leg lands); omitted = auth disabled, accepted only on loopback or a UDS socket |
 | `--disable-rpc-login` | Run without authentication. Refused on a non-loopback bind, and refused together with `--rpc-login` (a contradiction, not a precedence) |
 | `--daemon-address <url>` | Daemon JSON-RPC base URL. Default: "this computer", the node this account runs for `--network`, on its own socket or pipe; a node run as a service is refused with its view listener as the address to set (`-29214`). `--proxy` without an address is refused. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (`RPC_TRANSPORT_POSTURE.md` §1) |

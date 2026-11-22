@@ -44,7 +44,9 @@ Five checks over an enumerated set of files:
    `RuntimeDirectoryMode`. daemon(8) is not passed
    `-r` or `-R`: FreeBSD 14 restarts every termination under those flags,
    including a clean exit. The script's `restart_seconds` equals the
-   shipped unit's `RestartSec`, and that unit is `Restart=on-failure`.
+   shipped unit's `RestartSec`, and that unit is `Restart=on-failure` with
+   `SuccessExitStatus=130`: a second stop's exit is the operator's, not a
+   failure (Rick, 2026-11-21), and the script's clean set has 130.
    The daemon creates none of these directories; it checks them.
 6. The RPC tunnel's unit and rc.d script (RPC_CHANNEL.md §8; Rick,
    2026-11-16) run `shekyl-rpc-tunnel` with only command-line rows of its
@@ -54,7 +56,7 @@ Five checks over an enumerated set of files:
    directory, `/var/lib/<StateDirectory>` at mode 0700 (`/var/db/...` made
    0700 by the rc.d prestart), and its log in its own log directory; and
    pass `--listen`, if they pass it, as a loopback address. The unit is
-   `Restart=on-failure`, and the rc.d script's restart loop and clean-exit
+   `Restart=on-failure` with `SuccessExitStatus=130`, and the rc.d script's restart loop and clean-exit
    rule are the daemon script's, at the tunnel unit's `RestartSec`. The
    unit carries the hardening set (Rick, 2026-11-16), each directive at its
    ruled value (`TUNNEL_HARDENING`).
@@ -125,6 +127,12 @@ TUNNEL_RC = "contrib/packaging/freebsd/shekyl-rpc-tunnel"
 TUNNEL_BINARY = "/usr/local/bin/shekyl-rpc-tunnel"
 # Its own account (Rick, 2026-11-16): never the daemon's, never root.
 TUNNEL_ACCOUNT = "shekyl-tunnel"
+# A second stop's exit status (`shekyl_process::stop::EXIT_SECOND_STOP`):
+# the operator forced the stop, so a unit does not restart on it (Rick,
+# 2026-11-21). It is 128 + SIGINT, which the rc.d scripts' clean set
+# already holds as a shell reports it.
+SECOND_STOP_STATUS = "130"
+
 # The tunnel unit's hardening set, each at its ruled value (Rick,
 # 2026-11-16). shekyld's unit is not held to it: RandomX's JIT needs W^X
 # off.
@@ -354,8 +362,11 @@ def check_rc_script(
     restart = re.search(r"^\s*restart_seconds=(\d+)\s*$", body, flags=re.M)
     unit_restart = shipped.get("Restart")
     unit_delay = shipped.get("RestartSec")
-    if unit_restart != "on-failure" or not unit_delay:
-        errors.append(f"{rel}: the shipped unit's restart policy is not Restart=on-failure with RestartSec")
+    if unit_restart != "on-failure" or not unit_delay or shipped.get("SuccessExitStatus") != SECOND_STOP_STATUS:
+        errors.append(
+            f"{rel}: the shipped unit's restart policy is not Restart=on-failure with RestartSec "
+            f"and SuccessExitStatus={SECOND_STOP_STATUS}"
+        )
     elif restart is None:
         errors.append(f"{rel}: {called}() sets no restart_seconds")
     elif restart.group(1) != unit_delay:
@@ -444,8 +455,15 @@ def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
     if "log-file" in values and (not logs or str(Path(values["log-file"]).parent) != f"/var/log/{logs}"):
         errors.append(f"{rel}: --log-file {values['log-file']} is not under /var/log/<LogsDirectory>")
     errors.extend(loopback_listen(rel, values))
-    if fields.get("Restart") != "on-failure" or not fields.get("RestartSec"):
-        errors.append(f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec")
+    if (
+        fields.get("Restart") != "on-failure"
+        or not fields.get("RestartSec")
+        or fields.get("SuccessExitStatus") != SECOND_STOP_STATUS
+    ):
+        errors.append(
+            f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec "
+            f"and SuccessExitStatus={SECOND_STOP_STATUS}"
+        )
     for key, value in TUNNEL_HARDENING.items():
         if fields.get(key) != value:
             errors.append(f"{rel}: {key}={fields.get(key)}; the hardening set is {key}={value}")
@@ -688,7 +706,7 @@ def selftest() -> int:
     unit_ok = (
         "[Service]\nExecStart=/usr/local/bin/shekyld --service --log-file /var/log/shekyl/shekyld.log\n"
         "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl\nStateDirectoryMode=0700\nLogsDirectory=shekyl\n"
-        "Restart=on-failure\nRestartSec=30\n"
+        "Restart=on-failure\nRestartSec=30\nSuccessExitStatus=130\n"
     )
     fleet_ok = (
         "[Service]\nExecStart=/usr/local/bin/shekyld --network stagenet --config-file /etc/f/node-%i.toml --rpc-socket-dir /run/f/%i\n"
@@ -777,6 +795,7 @@ def selftest() -> int:
         ("an rc.d script that restarts a death by SIGTERM is named", rc_ok.replace("0 | 129 | 130 | 141 | 143)", "0 | 129 | 130 | 141)"), platform_ok, unit_ok, ["retries a clean exit"]),
         ("an rc.d script that passes daemon -R is named", rc_ok.replace("-f -S", "-f -R 30 -S"), platform_ok, unit_ok, ["daemon(8) is passed -R"]),
         ("an rc.d restart delay off the shipped unit is named", rc_ok.replace("restart_seconds=30", "restart_seconds=5"), platform_ok, unit_ok, ["restart_seconds is 5, not the shipped unit's RestartSec=30"]),
+        ("a shipped unit that restarts a second stop's exit 130 is named", rc_ok, platform_ok, unit_ok.replace("SuccessExitStatus=130\n", ""), ["and SuccessExitStatus=130"]),
     ]
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -821,7 +840,7 @@ def selftest() -> int:
             "[Service]\nExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl/t.toml"
             " --rpc-key-file /var/lib/shekyl-tunnel/k.key --log-file /var/log/shekyl-tunnel/t.log\n"
             "User=shekyl-tunnel\nGroup=shekyl-tunnel\nStateDirectory=shekyl-tunnel\nStateDirectoryMode=0700\n"
-            "LogsDirectory=shekyl-tunnel\nRestart=on-failure\nRestartSec=30\n"
+            "LogsDirectory=shekyl-tunnel\nRestart=on-failure\nRestartSec=30\nSuccessExitStatus=130\n"
             + "".join(f"{key}={value}\n" for key, value in TUNNEL_HARDENING.items())
         )
         t_rc = (
@@ -851,6 +870,7 @@ def selftest() -> int:
             ("a tunnel rc.d script run as the daemon's account is named", t_unit, t_rc.replace("-u shekyl-tunnel", "-u shekyl"), ["does not run the tunnel as shekyl-tunnel"]),
             ("a tunnel key directory the prestart makes 0755 is named", t_unit, t_rc.replace("-m 0700 /var/db/shekyl-tunnel", "-m 0755 /var/db/shekyl-tunnel"), ["is not made at mode 0700 as shekyl-tunnel"]),
             ("a tunnel rc.d restart delay off its unit is named", t_unit, t_rc.replace("restart_seconds=30", "restart_seconds=5"), ["restart_seconds is not the tunnel unit's RestartSec=30"]),
+            ("a tunnel unit that restarts a second stop's exit 130 is named", t_unit.replace("SuccessExitStatus=130\n", ""), t_rc, ["and SuccessExitStatus=130"]),
             ("a tunnel unit with W^X off is named", t_unit.replace("MemoryDenyWriteExecute=true", "MemoryDenyWriteExecute=false"), t_rc, ["MemoryDenyWriteExecute=false; the hardening set is MemoryDenyWriteExecute=true"]),
             ("a tunnel unit without a capability bound is named", t_unit.replace("CapabilityBoundingSet=\n", ""), t_rc, ["CapabilityBoundingSet=None; the hardening set is CapabilityBoundingSet="]),
             ("a tunnel unit with a wider address set is named", t_unit.replace("AF_INET AF_INET6 AF_UNIX", "AF_INET AF_INET6 AF_UNIX AF_NETLINK"), t_rc, ["the hardening set is RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"]),
@@ -872,7 +892,7 @@ def selftest() -> int:
         template_ok = (
             f"[Service]\nExecStartPre={start} --config-verify\nExecStart={start}\n"
             "RuntimeDirectory=shekyl\nRuntimeDirectoryMode=0755\nStateDirectory=shekyl/%i\nStateDirectoryMode=0700\n"
-            "LogsDirectory=shekyl/%i\nRestart=on-failure\nRestartSec=30\n"
+            "LogsDirectory=shekyl/%i\nRestart=on-failure\nRestartSec=30\nSuccessExitStatus=130\n"
         )
         template_cases = [
             ("the shipped template passes", "u/shekyld@.service", template_ok, []),

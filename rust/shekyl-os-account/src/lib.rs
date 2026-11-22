@@ -36,11 +36,14 @@
 //!   that way in the creating call and refused when read if they are not,
 //!   and files it publishes for every account to read; each written
 //!   durably, or staged beside its destination and renamed over it.
+//! - [`key_file`]: a key file this account or the superuser may read. It is
+//!   opened, judged, and then read; a systemd credential qualifies.
 
 #![deny(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 
+pub mod key_file;
 pub mod private_file;
 
 /// This process's effective user id.
