@@ -2,667 +2,667 @@
 ==== shekyl-engine-state::ledger_iai ====
 ledger_iai::ledger::hot_path_bench_ledger_postcard_serialize with_setup_0:(build_ledger(100))
   Instructions:                     4396192|4396192              (No change)
-  L1 Hits:                          4969277|4969275              (+0.00004%) [+1.00000x]
+  L1 Hits:                          4969274|4969277              (-0.00006%) [-1.00000x]
   LL Hits:                                4|4                    (No change)
-  RAM Hits:                            1457|1459                 (-0.13708%) [-1.00137x]
+  RAM Hits:                            1460|1457                 (+0.20590%) [+1.00206x]
   Total read+write:                 4970738|4970738              (No change)
-  Estimated Cycles:                 5020292|5020360              (-0.00135%) [-1.00001x]
+  Estimated Cycles:                 5020394|5020292              (+0.00203%) [+1.00002x]
 ledger_iai::ledger::hot_path_bench_ledger_postcard_serialize with_setup_1:(build_ledger(1_000))
   Instructions:                    44069501|44069501             (No change)
-  L1 Hits:                         50052064|50052060             (+0.00001%) [+1.00000x]
-  LL Hits:                             2124|2126                 (-0.09407%) [-1.00094x]
-  RAM Hits:                           13828|13830                (-0.01446%) [-1.00014x]
+  L1 Hits:                         50052061|50052064             (-0.00001%) [-1.00000x]
+  LL Hits:                             2124|2124                 (No change)
+  RAM Hits:                           13831|13828                (+0.02170%) [+1.00022x]
   Total read+write:                50068016|50068016             (No change)
-  Estimated Cycles:                50546664|50546740             (-0.00015%) [-1.00000x]
+  Estimated Cycles:                50546766|50546664             (+0.00020%) [+1.00000x]
 ledger_iai::ledger::hot_path_bench_ledger_postcard_serialize with_setup_2:(build_ledger(10_000))
   Instructions:                   439480752|439480752            (No change)
-  L1 Hits:                        496975542|496975538            (+0.00000%) [+1.00000x]
-  LL Hits:                             2148|2150                 (-0.09302%) [-1.00093x]
-  RAM Hits:                          116845|116847               (-0.00171%) [-1.00002x]
+  L1 Hits:                        496975538|496975542            (-0.00000%) [-1.00000x]
+  LL Hits:                             2148|2148                 (No change)
+  RAM Hits:                          116849|116845               (+0.00342%) [+1.00003x]
   Total read+write:               497094535|497094535            (No change)
-  Estimated Cycles:               501075857|501075933            (-0.00002%) [-1.00000x]
+  Estimated Cycles:               501075993|501075857            (+0.00003%) [+1.00000x]
 ledger_iai::ledger::hot_path_bench_ledger_postcard_deserialize with_setup_0:(build_bytes(100))
-  Instructions:                     5129386|5127480              (+0.03717%) [+1.00037x]
-  L1 Hits:                          5995995|5992856              (+0.05238%) [+1.00052x]
-  LL Hits:                              283|270                  (+4.81481%) [+1.04815x]
-  RAM Hits:                            1820|1814                 (+0.33076%) [+1.00331x]
-  Total read+write:                 5998098|5994940              (+0.05268%) [+1.00053x]
-  Estimated Cycles:                 6061110|6057696              (+0.05636%) [+1.00056x]
+  Instructions:                     5129386|5129386              (No change)
+  L1 Hits:                          5995999|5995995              (+0.00007%) [+1.00000x]
+  LL Hits:                              280|283                  (-1.06007%) [-1.01071x]
+  RAM Hits:                            1819|1820                 (-0.05495%) [-1.00055x]
+  Total read+write:                 5998098|5998098              (No change)
+  Estimated Cycles:                 6061064|6061110              (-0.00076%) [-1.00001x]
 ledger_iai::ledger::hot_path_bench_ledger_postcard_deserialize with_setup_1:(build_bytes(1_000))
-  Instructions:                    51281279|51263173             (+0.03532%) [+1.00035x]
-  L1 Hits:                         59943416|59913275             (+0.05031%) [+1.00050x]
-  LL Hits:                             3080|3068                 (+0.39113%) [+1.00391x]
-  RAM Hits:                           12161|12156                (+0.04113%) [+1.00041x]
-  Total read+write:                59958657|59928499             (+0.05032%) [+1.00050x]
-  Estimated Cycles:                60384451|60354075             (+0.05033%) [+1.00050x]
+  Instructions:                    51281279|51281279             (No change)
+  L1 Hits:                         59943420|59943416             (+0.00001%) [+1.00000x]
+  LL Hits:                             3076|3080                 (-0.12987%) [-1.00130x]
+  RAM Hits:                           12161|12161                (No change)
+  Total read+write:                59958657|59958657             (No change)
+  Estimated Cycles:                60384435|60384451             (-0.00003%) [-1.00000x]
 ledger_iai::ledger::hot_path_bench_ledger_postcard_deserialize with_setup_2:(build_bytes(10_000))
-  Instructions:                   513257495|513077381            (+0.03510%) [+1.00035x]
-  L1 Hits:                        600001172|599701087            (+0.05004%) [+1.00050x]
-  LL Hits:                            89960|89920                (+0.04448%) [+1.00044x]
-  RAM Hits:                          186827|186786               (+0.02195%) [+1.00022x]
-  Total read+write:               600277959|599977793            (+0.05003%) [+1.00050x]
-  Estimated Cycles:               606989917|606688197            (+0.04973%) [+1.00050x]
+  Instructions:                   513257495|513257495            (No change)
+  L1 Hits:                        600001190|600001172            (+0.00000%) [+1.00000x]
+  LL Hits:                            89948|89960                (-0.01334%) [-1.00013x]
+  RAM Hits:                          186821|186827               (-0.00321%) [-1.00003x]
+  Total read+write:               600277959|600277959            (No change)
+  Estimated Cycles:               606989665|606989917            (-0.00004%) [-1.00000x]
 
-Gungraun result: Ok. 6 without regressions; 0 regressed; 0 filtered; 6 benchmarks finished in 17.4414s
+Gungraun result: Ok. 6 without regressions; 0 regressed; 0 filtered; 6 benchmarks finished in 17.1469s
 
 ==== shekyl-engine-state::balance_iai ====
 balance_iai::balance::hot_path_bench_balance_compute with_setup_0:(build_transfers(100))
   Instructions:                        2040|2040                 (No change)
-  L1 Hits:                             2495|2496                 (-0.04006%) [-1.00040x]
+  L1 Hits:                             2494|2495                 (-0.04008%) [-1.00040x]
   LL Hits:                              188|188                  (No change)
-  RAM Hits:                              34|33                   (+3.03030%) [+1.03030x]
+  RAM Hits:                              35|34                   (+2.94118%) [+1.02941x]
   Total read+write:                    2717|2717                 (No change)
-  Estimated Cycles:                    4625|4591                 (+0.74058%) [+1.00741x]
+  Estimated Cycles:                    4659|4625                 (+0.73514%) [+1.00735x]
 balance_iai::balance::hot_path_bench_balance_compute with_setup_1:(build_transfers(1_000))
   Instructions:                       17178|17178                (No change)
-  L1 Hits:                            20380|20381                (-0.00491%) [-1.00005x]
+  L1 Hits:                            20379|20380                (-0.00491%) [-1.00005x]
   LL Hits:                             1887|1887                 (No change)
-  RAM Hits:                              34|33                   (+3.03030%) [+1.03030x]
+  RAM Hits:                              35|34                   (+2.94118%) [+1.02941x]
   Total read+write:                   22301|22301                (No change)
-  Estimated Cycles:                   31005|30971                (+0.10978%) [+1.00110x]
+  Estimated Cycles:                   31039|31005                (+0.10966%) [+1.00110x]
 balance_iai::balance::hot_path_bench_balance_compute with_setup_2:(build_transfers(10_000))
   Instructions:                      168487|168487               (No change)
-  L1 Hits:                           199251|199252               (-0.00050%) [-1.00001x]
+  L1 Hits:                           199250|199251               (-0.00050%) [-1.00001x]
   LL Hits:                            18762|18762                (No change)
-  RAM Hits:                              34|33                   (+3.03030%) [+1.03030x]
+  RAM Hits:                              35|34                   (+2.94118%) [+1.02941x]
   Total read+write:                  218047|218047               (No change)
-  Estimated Cycles:                  294251|294217               (+0.01156%) [+1.00012x]
+  Estimated Cycles:                  294285|294251               (+0.01155%) [+1.00012x]
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 19.9863s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 20.0875s
 
 ==== shekyl-engine-file::open_iai ====
 open_iai::open_cold::crypto_bench_wallet_open_cold kat_kdf:(prepared_wallet())
-  Instructions:                     1985856|1987849              (-0.10026%) [-1.00100x]
-  L1 Hits:                          2488115|2490673              (-0.10270%) [-1.00103x]
-  LL Hits:                            23588|24128                (-2.23806%) [-1.02289x]
-  RAM Hits:                             438|427                  (+2.57611%) [+1.02576x]
-  Total read+write:                 2512141|2515228              (-0.12273%) [-1.00123x]
-  Estimated Cycles:                 2621385|2626258              (-0.18555%) [-1.00186x]
+  Instructions:                     1985856|1985856              (No change)
+  L1 Hits:                          2488082|2488115              (-0.00133%) [-1.00001x]
+  LL Hits:                            23626|23588                (+0.16110%) [+1.00161x]
+  RAM Hits:                             433|438                  (-1.14155%) [-1.01155x]
+  Total read+write:                 2512141|2512141              (No change)
+  Estimated Cycles:                 2621367|2621385              (-0.00069%) [-1.00001x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.50512s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.50411s
 
 ==== shekyl-scanner::scan_block_iai ====
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_0:(build_state_and_outputs(0))
-  Instructions:                         487|515                  (-5.43689%) [-1.05749x]
-  L1 Hits:                              698|743                  (-6.05653%) [-1.06447x]
+  Instructions:                         487|487                  (No change)
+  L1 Hits:                              697|698                  (-0.14327%) [-1.00143x]
   LL Hits:                                9|9                    (No change)
-  RAM Hits:                              32|34                   (-5.88235%) [-1.06250x]
-  Total read+write:                     739|786                  (-5.97964%) [-1.06360x]
-  Estimated Cycles:                    1863|1978                 (-5.81395%) [-1.06173x]
+  RAM Hits:                              33|32                   (+3.12500%) [+1.03125x]
+  Total read+write:                     739|739                  (No change)
+  Estimated Cycles:                    1897|1863                 (+1.82501%) [+1.01825x]
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_1:(build_state_and_outputs(5))
-  Instructions:                      230634|230378               (+0.11112%) [+1.00111x]
-  L1 Hits:                           265176|264956               (+0.08303%) [+1.00083x]
-  LL Hits:                              142|142                  (No change)
-  RAM Hits:                             279|288                  (-3.12500%) [-1.03226x]
-  Total read+write:                  265597|265386               (+0.07951%) [+1.00080x]
-  Estimated Cycles:                  275651|275746               (-0.03445%) [-1.00034x]
+  Instructions:                      230639|230634               (+0.00217%) [+1.00002x]
+  L1 Hits:                           265184|265176               (+0.00302%) [+1.00003x]
+  LL Hits:                              140|142                  (-1.40845%) [-1.01429x]
+  RAM Hits:                             280|279                  (+0.35842%) [+1.00358x]
+  Total read+write:                  265604|265597               (+0.00264%) [+1.00003x]
+  Estimated Cycles:                  275684|275651               (+0.01197%) [+1.00012x]
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_2:(build_state_and_outputs(50))
-  Instructions:                     2309159|2306338              (+0.12232%) [+1.00122x]
-  L1 Hits:                          2684609|2682054              (+0.09526%) [+1.00095x]
-  LL Hits:                             1839|1837                 (+0.10887%) [+1.00109x]
-  RAM Hits:                            1096|1102                 (-0.54446%) [-1.00547x]
-  Total read+write:                 2687544|2684993              (+0.09501%) [+1.00095x]
-  Estimated Cycles:                 2732164|2729809              (+0.08627%) [+1.00086x]
+  Instructions:                     2309195|2309159              (+0.00156%) [+1.00002x]
+  L1 Hits:                          2684654|2684609              (+0.00168%) [+1.00002x]
+  LL Hits:                             1840|1839                 (+0.05438%) [+1.00054x]
+  RAM Hits:                            1094|1096                 (-0.18248%) [-1.00183x]
+  Total read+write:                 2687588|2687544              (+0.00164%) [+1.00002x]
+  Estimated Cycles:                 2732144|2732164              (-0.00073%) [-1.00001x]
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 0.95549s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 1.00565s
 
 ==== shekyl-tx-builder::transfer_e2e_iai ====
 transfer_e2e_iai::transfer_e2e::crypto_bench_bulletproofs_plus_2_outputs bp_plus_2_outputs:(fresh_2out_commitments())
-  Instructions:                   295422000|298847089            (-1.14610%) [-1.01159x]
-  L1 Hits:                        392316999|396821556            (-1.13516%) [-1.01148x]
-  LL Hits:                          1078369|1070553              (+0.73009%) [+1.00730x]
-  RAM Hits:                           24857|24883                (-0.10449%) [-1.00105x]
-  Total read+write:               393420225|397916992            (-1.13008%) [-1.01143x]
-  Estimated Cycles:               398578839|403045226            (-1.10816%) [-1.01121x]
+  Instructions:                   295422000|295422000            (No change)
+  L1 Hits:                        392317212|392316999            (+0.00005%) [+1.00000x]
+  LL Hits:                          1078158|1078369              (-0.01957%) [-1.00020x]
+  RAM Hits:                           24855|24857                (-0.00805%) [-1.00008x]
+  Total read+write:               393420225|393420225            (No change)
+  Estimated Cycles:               398577927|398578839            (-0.00023%) [-1.00000x]
 transfer_e2e_iai::transfer_e2e::crypto_bench_hybrid_sign_1_input hybrid_sign_1_input:(seeded_signing_state())
-  Instructions:                     7182680|7199625              (-0.23536%) [-1.00236x]
-  L1 Hits:                          9068828|9089941              (-0.23227%) [-1.00233x]
-  LL Hits:                            22444|22083                (+1.63474%) [+1.01635x]
-  RAM Hits:                            1039|1176                 (-11.6497%) [-1.13186x]
-  Total read+write:                 9092311|9113200              (-0.22922%) [-1.00230x]
-  Estimated Cycles:                 9217413|9241516              (-0.26081%) [-1.00261x]
+  Instructions:                     7182680|7182680              (No change)
+  L1 Hits:                          9068833|9068828              (+0.00006%) [+1.00000x]
+  LL Hits:                            22441|22444                (-0.01337%) [-1.00013x]
+  RAM Hits:                            1037|1039                 (-0.19249%) [-1.00193x]
+  Total read+write:                 9092311|9092311              (No change)
+  Estimated Cycles:                 9217333|9217413              (-0.00087%) [-1.00001x]
 
-Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 4.26166s
+Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 4.31285s
 
 ==== shekyl-engine-core::engine_trait_bench_ledger_synced_height_iai ====
 engine_trait_bench_ledger_synced_height_iai::engine_trait_bench_ledger_synced_height_group::engine_trait_bench_ledger_synced_height fresh_engine:(build_engine_fixture())
   Instructions:                          50|50                   (No change)
-  L1 Hits:                               75|76                   (-1.31579%) [-1.01333x]
+  L1 Hits:                               75|75                   (No change)
   LL Hits:                                1|1                    (No change)
-  RAM Hits:                               4|3                    (+33.3333%) [+1.33333x]
+  RAM Hits:                               4|4                    (No change)
   Total read+write:                      80|80                   (No change)
-  Estimated Cycles:                     220|186                  (+18.2796%) [+1.18280x]
+  Estimated Cycles:                     220|220                  (No change)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 18.3350s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 18.4389s
 
 ==== shekyl-engine-core::engine_trait_bench_ledger_balance_iai ====
 engine_trait_bench_ledger_balance_iai::engine_trait_bench_ledger_balance_group::engine_trait_bench_ledger_balance balance:(build_engine_fixture_with_default_balance())
-  Instructions:                       15604|15602                (+0.01282%) [+1.00013x]
-  L1 Hits:                            18774|18777                (-0.01598%) [-1.00016x]
-  LL Hits:                             2074|2072                 (+0.09653%) [+1.00097x]
-  RAM Hits:                              31|28                   (+10.7143%) [+1.10714x]
-  Total read+write:                   20879|20877                (+0.00958%) [+1.00010x]
-  Estimated Cycles:                   30229|30117                (+0.37188%) [+1.00372x]
+  Instructions:                       15604|15604                (No change)
+  L1 Hits:                            18774|18774                (No change)
+  LL Hits:                             2074|2074                 (No change)
+  RAM Hits:                              31|31                   (No change)
+  Total read+write:                   20879|20879                (No change)
+  Estimated Cycles:                   30229|30229                (No change)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 18.4344s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 18.5894s
 
 ==== shekyl-engine-core::engine_trait_bench_key_dispatch_baseline_iai ====
 engine_trait_bench_key_dispatch_baseline_iai::engine_trait_bench_key_dispatch_baseline_group::engine_trait_bench_key_dispatch_baseline_claim_mine claim_mine:(build_key_baseline_fixture())
-  Instructions:                    11333155|11356835             (-0.20851%) [-1.00209x]
-  L1 Hits:                         14697852|14723960             (-0.17732%) [-1.00178x]
-  LL Hits:                            17511|17256                (+1.47775%) [+1.01478x]
-  RAM Hits:                            9184|9170                 (+0.15267%) [+1.00153x]
-  Total read+write:                14724547|14750386             (-0.17518%) [-1.00175x]
-  Estimated Cycles:                15106847|15131190             (-0.16088%) [-1.00161x]
+  Instructions:                    11333837|11333155             (+0.00602%) [+1.00006x]
+  L1 Hits:                         14698495|14697852             (+0.00437%) [+1.00004x]
+  LL Hits:                            17519|17511                (+0.04569%) [+1.00046x]
+  RAM Hits:                            9181|9184                 (-0.03267%) [-1.00033x]
+  Total read+write:                14725195|14724547             (+0.00440%) [+1.00004x]
+  Estimated Cycles:                15107425|15106847             (+0.00383%) [+1.00004x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 2.10792s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 2.10839s
 
 ==== shekyl-engine-core::engine_trait_bench_key_merge_projection_iai ====
 engine_trait_bench_key_merge_projection_iai::engine_trait_bench_key_merge_projection_group::engine_trait_bench_key_merge_projection projection:(build_merge_projection_fixture())
-  Instructions:                     5155209|5155447              (-0.00462%) [-1.00005x]
-  L1 Hits:                          6978949|6979432              (-0.00692%) [-1.00007x]
-  LL Hits:                              427|433                  (-1.38568%) [-1.01405x]
-  RAM Hits:                           10496|10496                (No change)
-  Total read+write:                 6989872|6990361              (-0.00700%) [-1.00007x]
-  Estimated Cycles:                 7348444|7348957              (-0.00698%) [-1.00007x]
+  Instructions:                     5155137|5155209              (-0.00140%) [-1.00001x]
+  L1 Hits:                          6978857|6978949              (-0.00132%) [-1.00001x]
+  LL Hits:                              424|427                  (-0.70258%) [-1.00708x]
+  RAM Hits:                           10499|10496                (+0.02858%) [+1.00029x]
+  Total read+write:                 6989780|6989872              (-0.00132%) [-1.00001x]
+  Estimated Cycles:                 7348442|7348444              (-0.00003%) [-1.00000x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.30314s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.30340s
 
 ==== shekyl-verify-cost::relay_admission_verify_iai ====
 relay_admission_verify_iai::relay_admission_verify_group::crypto_bench_relay_admission_verify modal:(modal_shape())
-  Instructions:                   381719737|384123304            (-0.62573%) [-1.00630x]
-  L1 Hits:                        497015695|501619714            (-0.91783%) [-1.00926x]
-  LL Hits:                           365931|368686               (-0.74725%) [-1.00753x]
-  RAM Hits:                              13|13                   (No change)
-  Total read+write:               497381639|501988413            (-0.91771%) [-1.00926x]
-  Estimated Cycles:               498845805|503463599            (-0.91721%) [-1.00926x]
+  Instructions:                   381724903|381719737            (+0.00135%) [+1.00001x]
+  L1 Hits:                        497022251|497015695            (+0.00132%) [+1.00001x]
+  LL Hits:                           366375|365931               (+0.12133%) [+1.00121x]
+  RAM Hits:                              12|13                   (-7.69231%) [-1.08333x]
+  Total read+write:               497388638|497381639            (+0.00141%) [+1.00001x]
+  Estimated Cycles:               498854546|498845805            (+0.00175%) [+1.00002x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 208.918s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 207.613s
 
 ==== shekyl-p-serve::serve_response_iai ====
 serve_response_iai::serve_response_group::crypto_bench_serve_response one_leaf:(one_leaf())
-  Instructions:                       34296|34298                (-0.00583%) [-1.00006x]
-  L1 Hits:                            46173|46186                (-0.02815%) [-1.00028x]
-  LL Hits:                               95|85                   (+11.7647%) [+1.11765x]
+  Instructions:                       34296|34296                (No change)
+  L1 Hits:                            46171|46173                (-0.00433%) [-1.00004x]
+  LL Hits:                               97|95                   (+2.10526%) [+1.02105x]
   RAM Hits:                              33|33                   (No change)
-  Total read+write:                   46301|46304                (-0.00648%) [-1.00006x]
-  Estimated Cycles:                   47803|47766                (+0.07746%) [+1.00077x]
+  Total read+write:                   46301|46301                (No change)
+  Estimated Cycles:                   47811|47803                (+0.01674%) [+1.00017x]
 serve_response_iai::serve_response_group::crypto_bench_serve_response eighth_segment:(eighth_segment())
-  Instructions:                    19819749|19819751             (-0.00001%) [-1.00000x]
-  L1 Hits:                         28076476|28076472             (+0.00001%) [+1.00000x]
-  LL Hits:                            26434|26441                (-0.02647%) [-1.00026x]
+  Instructions:                    19819749|19819749             (No change)
+  L1 Hits:                         28076471|28076476             (-0.00002%) [-1.00000x]
+  LL Hits:                            26439|26434                (+0.01892%) [+1.00019x]
   RAM Hits:                            6526|6526                 (No change)
-  Total read+write:                28109436|28109439             (-0.00001%) [-1.00000x]
-  Estimated Cycles:                28437056|28437087             (-0.00011%) [-1.00000x]
+  Total read+write:                28109436|28109436             (No change)
+  Estimated Cycles:                28437076|28437056             (+0.00007%) [+1.00000x]
 serve_response_iai::serve_response_group::crypto_bench_serve_response full_segment:(full_segment())
-  Instructions:                   158339488|158339490            (-0.00000%) [-1.00000x]
-  L1 Hits:                        224312975|224312920            (+0.00002%) [+1.00000x]
-  LL Hits:                           212662|212711               (-0.02304%) [-1.00023x]
-  RAM Hits:                           52141|52150                (-0.01726%) [-1.00017x]
-  Total read+write:               224577778|224577781            (-0.00000%) [-1.00000x]
-  Estimated Cycles:               227201220|227201725            (-0.00022%) [-1.00000x]
+  Instructions:                   158339488|158339488            (No change)
+  L1 Hits:                        224312975|224312975            (No change)
+  LL Hits:                           212662|212662               (No change)
+  RAM Hits:                           52141|52141                (No change)
+  Total read+write:               224577778|224577778            (No change)
+  Estimated Cycles:               227201220|227201220            (No change)
 serve_response_iai::serve_response_group::crypto_bench_serve_sign pinned_transcript:(one_leaf())
-  Instructions:                     6743324|6749435              (-0.09054%) [-1.00091x]
-  L1 Hits:                          8988686|8994824              (-0.06824%) [-1.00068x]
-  LL Hits:                            21190|21226                (-0.16960%) [-1.00170x]
-  RAM Hits:                              11|11                   (No change)
-  Total read+write:                 9009887|9016061              (-0.06848%) [-1.00069x]
-  Estimated Cycles:                 9095021|9101339              (-0.06942%) [-1.00069x]
+  Instructions:                     6743324|6743324              (No change)
+  L1 Hits:                          8988686|8988686              (No change)
+  LL Hits:                            21189|21190                (-0.00472%) [-1.00005x]
+  RAM Hits:                              12|11                   (+9.09091%) [+1.09091x]
+  Total read+write:                 9009887|9009887              (No change)
+  Estimated Cycles:                 9095051|9095021              (+0.00033%) [+1.00000x]
 serve_response_iai::serve_response_group::crypto_bench_serve_prehead one_leaf:(one_leaf())
-  Instructions:                       12834|12835                (-0.00779%) [-1.00008x]
-  L1 Hits:                            16786|16781                (+0.02980%) [+1.00030x]
-  LL Hits:                               49|57                   (-14.0351%) [-1.16327x]
-  RAM Hits:                              21|20                   (+5.00000%) [+1.05000x]
-  Total read+write:                   16856|16858                (-0.01186%) [-1.00012x]
-  Estimated Cycles:                   17766|17766                (No change)
+  Instructions:                       12834|12834                (No change)
+  L1 Hits:                            16787|16786                (+0.00596%) [+1.00006x]
+  LL Hits:                               49|49                   (No change)
+  RAM Hits:                              20|21                   (-4.76190%) [-1.05000x]
+  Total read+write:                   16856|16856                (No change)
+  Estimated Cycles:                   17732|17766                (-0.19138%) [-1.00192x]
 serve_response_iai::serve_response_group::crypto_bench_serve_prehead full_segment:(full_segment())
-  Instructions:                       12860|12861                (-0.00778%) [-1.00008x]
-  L1 Hits:                            16779|16768                (+0.06560%) [+1.00066x]
-  LL Hits:                                9|8                    (+12.5000%) [+1.12500x]
-  RAM Hits:                             100|114                  (-12.2807%) [-1.14000x]
-  Total read+write:                   16888|16890                (-0.01184%) [-1.00012x]
-  Estimated Cycles:                   20324|20798                (-2.27907%) [-1.02332x]
+  Instructions:                       12860|12860                (No change)
+  L1 Hits:                            16782|16779                (+0.01788%) [+1.00018x]
+  LL Hits:                                9|9                    (No change)
+  RAM Hits:                              97|100                  (-3.00000%) [-1.03093x]
+  Total read+write:                   16888|16888                (No change)
+  Estimated Cycles:                   20222|20324                (-0.50187%) [-1.00504x]
 serve_response_iai::serve_response_group::crypto_bench_serve_read_and_fold one_leaf:(one_leaf())
-  Instructions:                       26642|26643                (-0.00375%) [-1.00004x]
-  L1 Hits:                            36180|36184                (-0.01105%) [-1.00011x]
-  LL Hits:                               45|43                   (+4.65116%) [+1.04651x]
-  RAM Hits:                               4|4                    (No change)
-  Total read+write:                   36229|36231                (-0.00552%) [-1.00006x]
-  Estimated Cycles:                   36545|36539                (+0.01642%) [+1.00016x]
+  Instructions:                       26642|26642                (No change)
+  L1 Hits:                            36178|36180                (-0.00553%) [-1.00006x]
+  LL Hits:                               46|45                   (+2.22222%) [+1.02222x]
+  RAM Hits:                               5|4                    (+25.0000%) [+1.25000x]
+  Total read+write:                   36229|36229                (No change)
+  Estimated Cycles:                   36583|36545                (+0.10398%) [+1.00104x]
 serve_response_iai::serve_response_group::crypto_bench_serve_read_and_fold eighth_segment:(eighth_segment())
-  Instructions:                    19395809|19395810             (-0.00001%) [-1.00000x]
-  L1 Hits:                         26831673|26831676             (-0.00001%) [-1.00000x]
-  LL Hits:                            19736|19735                (+0.00507%) [+1.00005x]
-  RAM Hits:                               6|6                    (No change)
-  Total read+write:                26851415|26851417             (-0.00001%) [-1.00000x]
-  Estimated Cycles:                26930563|26930561             (+0.00001%) [+1.00000x]
+  Instructions:                    19395809|19395809             (No change)
+  L1 Hits:                         26831670|26831673             (-0.00001%) [-1.00000x]
+  LL Hits:                            19738|19736                (+0.01013%) [+1.00010x]
+  RAM Hits:                               7|6                    (+16.6667%) [+1.16667x]
+  Total read+write:                26851415|26851415             (No change)
+  Estimated Cycles:                26930605|26930563             (+0.00016%) [+1.00000x]
 serve_response_iai::serve_response_group::crypto_bench_serve_read_and_fold full_segment:(full_segment())
-  Instructions:                   155005508|155005509            (-0.00000%) [-1.00000x]
-  L1 Hits:                        214433828|214433779            (+0.00002%) [+1.00000x]
-  LL Hits:                           157913|157963               (-0.03165%) [-1.00032x]
-  RAM Hits:                            1070|1071                 (-0.09337%) [-1.00093x]
-  Total read+write:               214592811|214592813            (-0.00000%) [-1.00000x]
-  Estimated Cycles:               215260843|215261079            (-0.00011%) [-1.00000x]
+  Instructions:                   155005508|155005508            (No change)
+  L1 Hits:                        214433826|214433828            (-0.00000%) [-1.00000x]
+  LL Hits:                           157913|157913               (No change)
+  RAM Hits:                            1072|1070                 (+0.18692%) [+1.00187x]
+  Total read+write:               214592811|214592811            (No change)
+  Estimated Cycles:               215260911|215260843            (+0.00003%) [+1.00000x]
 serve_response_iai::serve_response_group::crypto_bench_serve_digest_alone one_leaf:(one_leaf())
-  Instructions:                       25805|25806                (-0.00388%) [-1.00004x]
-  L1 Hits:                            34940|34943                (-0.00859%) [-1.00009x]
-  LL Hits:                               31|30                   (+3.33333%) [+1.03333x]
-  RAM Hits:                               3|3                    (No change)
-  Total read+write:                   34974|34976                (-0.00572%) [-1.00006x]
-  Estimated Cycles:                   35200|35198                (+0.00568%) [+1.00006x]
+  Instructions:                       25805|25805                (No change)
+  L1 Hits:                            34939|34940                (-0.00286%) [-1.00003x]
+  LL Hits:                               31|31                   (No change)
+  RAM Hits:                               4|3                    (+33.3333%) [+1.33333x]
+  Total read+write:                   34974|34974                (No change)
+  Estimated Cycles:                   35234|35200                (+0.09659%) [+1.00097x]
 serve_response_iai::serve_response_group::crypto_bench_serve_digest_alone eighth_segment:(eighth_segment())
-  Instructions:                    18973093|18973094             (-0.00001%) [-1.00000x]
-  L1 Hits:                         25587990|25587998             (-0.00003%) [-1.00000x]
-  LL Hits:                             6562|6555                 (+0.10679%) [+1.00107x]
-  RAM Hits:                               2|3                    (-33.3333%) [-1.50000x]
-  Total read+write:                25594554|25594556             (-0.00001%) [-1.00000x]
-  Estimated Cycles:                25620870|25620878             (-0.00003%) [-1.00000x]
+  Instructions:                    18973093|18973093             (No change)
+  L1 Hits:                         25587989|25587990             (-0.00000%) [-1.00000x]
+  LL Hits:                             6562|6562                 (No change)
+  RAM Hits:                               3|2                    (+50.0000%) [+1.50000x]
+  Total read+write:                25594554|25594554             (No change)
+  Estimated Cycles:                25620904|25620870             (+0.00013%) [+1.00000x]
 serve_response_iai::serve_response_group::crypto_bench_serve_digest_alone full_segment:(full_segment())
-  Instructions:                   151641284|151641285            (-0.00000%) [-1.00000x]
-  L1 Hits:                        204509711|204509717            (-0.00000%) [-1.00000x]
-  LL Hits:                            52013|52012                (+0.00192%) [+1.00002x]
-  RAM Hits:                              36|33                   (+9.09091%) [+1.09091x]
-  Total read+write:               204561760|204561762            (-0.00000%) [-1.00000x]
-  Estimated Cycles:               204771036|204770932            (+0.00005%) [+1.00000x]
+  Instructions:                   151641284|151641284            (No change)
+  L1 Hits:                        204509713|204509711            (+0.00000%) [+1.00000x]
+  LL Hits:                            52013|52013                (No change)
+  RAM Hits:                              34|36                   (-5.55556%) [-1.05882x]
+  Total read+write:               204561760|204561760            (No change)
+  Estimated Cycles:               204770968|204771036            (-0.00003%) [-1.00000x]
 
-Gungraun result: Ok. 12 without regressions; 0 regressed; 0 filtered; 12 benchmarks finished in 33.5683s
+Gungraun result: Ok. 12 without regressions; 0 regressed; 0 filtered; 12 benchmarks finished in 35.2822s
 
 ==== shekyl-crypto-pq::fn_dsa_hybrid_iai ====
 fn_dsa_hybrid_iai::fn_dsa_hybrid::crypto_bench_fn_dsa_hybrid_sign receipt:(keypair())
-  Instructions:                     6672578|6679583              (-0.10487%) [-1.00105x]
-  L1 Hits:                          8901178|8908209              (-0.07893%) [-1.00079x]
-  LL Hits:                            17349|17392                (-0.24724%) [-1.00248x]
-  RAM Hits:                            3834|3830                 (+0.10444%) [+1.00104x]
-  Total read+write:                 8922361|8929431              (-0.07918%) [-1.00079x]
-  Estimated Cycles:                 9122113|9129219              (-0.07784%) [-1.00078x]
+  Instructions:                     6672578|6672578              (No change)
+  L1 Hits:                          8901151|8901178              (-0.00030%) [-1.00000x]
+  LL Hits:                            17374|17349                (+0.14410%) [+1.00144x]
+  RAM Hits:                            3836|3834                 (+0.05216%) [+1.00052x]
+  Total read+write:                 8922361|8922361              (No change)
+  Estimated Cycles:                 9122281|9122113              (+0.00184%) [+1.00002x]
 fn_dsa_hybrid_iai::fn_dsa_hybrid::crypto_bench_fn_dsa_hybrid_sign_held receipt:(held_key())
-  Instructions:                     6014477|6014534              (-0.00095%) [-1.00001x]
-  L1 Hits:                          7794352|7794378              (-0.00033%) [-1.00000x]
-  LL Hits:                            11310|11394                (-0.73723%) [-1.00743x]
-  RAM Hits:                             547|553                  (-1.08499%) [-1.01097x]
-  Total read+write:                 7806209|7806325              (-0.00149%) [-1.00001x]
-  Estimated Cycles:                 7870047|7870703              (-0.00833%) [-1.00008x]
+  Instructions:                     6014477|6014477              (No change)
+  L1 Hits:                          7794336|7794352              (-0.00021%) [-1.00000x]
+  LL Hits:                            11323|11310                (+0.11494%) [+1.00115x]
+  RAM Hits:                             550|547                  (+0.54845%) [+1.00548x]
+  Total read+write:                 7806209|7806209              (No change)
+  Estimated Cycles:                 7870201|7870047              (+0.00196%) [+1.00002x]
 fn_dsa_hybrid_iai::fn_dsa_hybrid::crypto_bench_fn_dsa_hybrid_verify receipt:(signed())
-  Instructions:                      997926|997927               (-0.00010%) [-1.00000x]
-  L1 Hits:                          1264997|1264992              (+0.00040%) [+1.00000x]
-  LL Hits:                              758|767                  (-1.17340%) [-1.01187x]
-  RAM Hits:                             442|440                  (+0.45455%) [+1.00455x]
-  Total read+write:                 1266197|1266199              (-0.00016%) [-1.00000x]
-  Estimated Cycles:                 1284257|1284227              (+0.00234%) [+1.00002x]
+  Instructions:                      997926|997926               (No change)
+  L1 Hits:                          1265001|1264997              (+0.00032%) [+1.00000x]
+  LL Hits:                              758|758                  (No change)
+  RAM Hits:                             438|442                  (-0.90498%) [-1.00913x]
+  Total read+write:                 1266197|1266197              (No change)
+  Estimated Cycles:                 1284121|1284257              (-0.01059%) [-1.00011x]
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 3.41175s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 3.51108s
 
 ==== shekyl-pow-randomx::cache_derive_iai ====
 cache_derive_iai::cache_derive_group::hot_path_bench_cache_derive fixed_seed:(Seedhash :: from_bytes(SEED))
-  Instructions:                  2352081003|2352081058           (-0.00000%) [-1.00000x]
-  L1 Hits:                       2951247762|2951247872           (-0.00000%) [-1.00000x]
-  LL Hits:                          2419627|2419626              (+0.00004%) [+1.00000x]
-  RAM Hits:                        26811900|26811908             (-0.00003%) [-1.00000x]
-  Total read+write:              2980479289|2980479406           (-0.00000%) [-1.00000x]
-  Estimated Cycles:              3901762397|3901762782           (-0.00001%) [-1.00000x]
+  Instructions:                  2352081003|2352081003           (No change)
+  L1 Hits:                       2951247762|2951247762           (No change)
+  LL Hits:                          2419627|2419627              (No change)
+  RAM Hits:                        26811900|26811900             (No change)
+  Total read+write:              2980479289|2980479289           (No change)
+  Estimated Cycles:              3901762397|3901762397           (No change)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 22.3426s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 21.9482s
 
 ==== shekyl-chain-ingest::block_path_iai ====
 block_path_iai::block_path_group::crypto_bench_block_form spend_1in_2out:(before_form(SPEND_1IN_2OUT))
-  Instructions:                  1819002483|1827758294           (-0.47905%) [-1.00481x]
-  L1 Hits:                       2364890958|2382814572           (-0.75220%) [-1.00758x]
-  LL Hits:                          1304266|1295868              (+0.64806%) [+1.00648x]
-  RAM Hits:                          634092|636403               (-0.36313%) [-1.00364x]
-  Total read+write:              2366829316|2384746843           (-0.75134%) [-1.00757x]
-  Estimated Cycles:              2393605508|2411568017           (-0.74485%) [-1.00750x]
+  Instructions:                  1819008717|1819002483           (+0.00034%) [+1.00000x]
+  L1 Hits:                       2364915923|2364890958           (+0.00106%) [+1.00001x]
+  LL Hits:                          1300143|1304266              (-0.31612%) [-1.00317x]
+  RAM Hits:                          637007|634092               (+0.45971%) [+1.00460x]
+  Total read+write:              2366853073|2366829316           (+0.00100%) [+1.00001x]
+  Estimated Cycles:              2393711883|2393605508           (+0.00444%) [+1.00004x]
 block_path_iai::block_path_group::crypto_bench_block_form spend_8in_2out:(before_form(SPEND_8IN_2OUT))
-  Instructions:                  4905810586|4934817883           (-0.58781%) [-1.00591x]
-  L1 Hits:                       6421070114|6477809955           (-0.87591%) [-1.00884x]
-  LL Hits:                          6650660|6666520              (-0.23791%) [-1.00238x]
-  RAM Hits:                          971013|957099               (+1.45377%) [+1.01454x]
-  Total read+write:              6428691787|6485433574           (-0.87491%) [-1.00883x]
-  Estimated Cycles:              6488308869|6544641020           (-0.86074%) [-1.00868x]
+  Instructions:                  4905649056|4905810586           (-0.00329%) [-1.00003x]
+  L1 Hits:                       6420687036|6421070114           (-0.00597%) [-1.00006x]
+  LL Hits:                          6668364|6650660              (+0.26620%) [+1.00266x]
+  RAM Hits:                          943047|971013               (-2.88009%) [-1.02965x]
+  Total read+write:              6428298447|6428691787           (-0.00612%) [-1.00006x]
+  Estimated Cycles:              6487035501|6488308869           (-0.01963%) [-1.00020x]
 block_path_iai::block_path_group::crypto_bench_block_form spend_1in_16out:(before_form(SPEND_1IN_16OUT))
-  Instructions:                  2175338684|2187629239           (-0.56182%) [-1.00565x]
-  L1 Hits:                       2836422699|2860330774           (-0.83585%) [-1.00843x]
-  LL Hits:                          1833547|1823190              (+0.56807%) [+1.00568x]
-  RAM Hits:                          664859|666884               (-0.30365%) [-1.00305x]
-  Total read+write:              2838921105|2862820848           (-0.83483%) [-1.00842x]
-  Estimated Cycles:              2868860499|2892787664           (-0.82713%) [-1.00834x]
+  Instructions:                  2175338260|2175338684           (-0.00002%) [-1.00000x]
+  L1 Hits:                       2836419116|2836422699           (-0.00013%) [-1.00000x]
+  LL Hits:                          1833635|1833547              (+0.00480%) [+1.00005x]
+  RAM Hits:                          665876|664859               (+0.15296%) [+1.00153x]
+  Total read+write:              2838918627|2838921105           (-0.00009%) [-1.00000x]
+  Estimated Cycles:              2868892951|2868860499           (+0.00113%) [+1.00001x]
 block_path_iai::block_path_group::crypto_bench_block_form bond_post:(before_form(BOND_POST))
-  Instructions:                  1840884259|1849614973           (-0.47203%) [-1.00474x]
-  L1 Hits:                       2393739940|2411630592           (-0.74185%) [-1.00747x]
-  LL Hits:                          1360444|1354727              (+0.42200%) [+1.00422x]
-  RAM Hits:                          635682|638738               (-0.47844%) [-1.00481x]
-  Total read+write:              2395736066|2413624057           (-0.74113%) [-1.00747x]
-  Estimated Cycles:              2422791030|2440760057           (-0.73621%) [-1.00742x]
+  Instructions:                  1840895430|1840884259           (+0.00061%) [+1.00001x]
+  L1 Hits:                       2393756816|2393739940           (+0.00071%) [+1.00001x]
+  LL Hits:                          1360862|1360444              (+0.03073%) [+1.00031x]
+  RAM Hits:                          635995|635682               (+0.04924%) [+1.00049x]
+  Total read+write:              2395753673|2395736066           (+0.00073%) [+1.00001x]
+  Estimated Cycles:              2422820951|2422791030           (+0.00123%) [+1.00001x]
 block_path_iai::block_path_group::crypto_bench_block_connect spend_1in_2out:(before_connect(SPEND_1IN_2OUT))
-  Instructions:                    23890767|23913779             (-0.09623%) [-1.00096x]
-  L1 Hits:                         32172465|32208460             (-0.11176%) [-1.00112x]
-  LL Hits:                           131463|131806               (-0.26023%) [-1.00261x]
-  RAM Hits:                           14266|14301                (-0.24474%) [-1.00245x]
-  Total read+write:                32318194|32354567             (-0.11242%) [-1.00113x]
-  Estimated Cycles:                33329090|33368025             (-0.11668%) [-1.00117x]
+  Instructions:                    23873908|23890767             (-0.07057%) [-1.00071x]
+  L1 Hits:                         32149531|32172465             (-0.07128%) [-1.00071x]
+  LL Hits:                           130707|131463               (-0.57507%) [-1.00578x]
+  RAM Hits:                           14296|14266                (+0.21029%) [+1.00210x]
+  Total read+write:                32294534|32318194             (-0.07321%) [-1.00073x]
+  Estimated Cycles:                33303426|33329090             (-0.07700%) [-1.00077x]
 block_path_iai::block_path_group::crypto_bench_block_connect spend_8in_2out:(before_connect(SPEND_8IN_2OUT))
-  Instructions:                    42975380|42965449             (+0.02311%) [+1.00023x]
-  L1 Hits:                         59605737|59565622             (+0.06735%) [+1.00067x]
-  LL Hits:                           182056|181274               (+0.43139%) [+1.00431x]
-  RAM Hits:                           19722|19488                (+1.20074%) [+1.01201x]
-  Total read+write:                59807515|59766384             (+0.06882%) [+1.00069x]
-  Estimated Cycles:                61206287|61154072             (+0.08538%) [+1.00085x]
+  Instructions:                    42979724|42975380             (+0.01011%) [+1.00010x]
+  L1 Hits:                         59632673|59605737             (+0.04519%) [+1.00045x]
+  LL Hits:                           182994|182056               (+0.51523%) [+1.00515x]
+  RAM Hits:                           19361|19722                (-1.83044%) [-1.01865x]
+  Total read+write:                59835028|59807515             (+0.04600%) [+1.00046x]
+  Estimated Cycles:                61225278|61206287             (+0.03103%) [+1.00031x]
 block_path_iai::block_path_group::crypto_bench_block_connect spend_1in_16out:(before_connect(SPEND_1IN_16OUT))
-  Instructions:                    34060288|34041433             (+0.05539%) [+1.00055x]
-  L1 Hits:                         46588178|46537762             (+0.10833%) [+1.00108x]
-  LL Hits:                           175158|172568               (+1.50086%) [+1.01501x]
-  RAM Hits:                           14670|14683                (-0.08854%) [-1.00089x]
-  Total read+write:                46778006|46725013             (+0.11341%) [+1.00113x]
-  Estimated Cycles:                47977418|47914507             (+0.13130%) [+1.00131x]
+  Instructions:                    34013705|34060288             (-0.13677%) [-1.00137x]
+  L1 Hits:                         46462227|46588178             (-0.27035%) [-1.00271x]
+  LL Hits:                           174553|175158               (-0.34540%) [-1.00347x]
+  RAM Hits:                           14724|14670                (+0.36810%) [+1.00368x]
+  Total read+write:                46651504|46778006             (-0.27043%) [-1.00271x]
+  Estimated Cycles:                47850332|47977418             (-0.26489%) [-1.00266x]
 block_path_iai::block_path_group::crypto_bench_block_connect bond_post:(before_connect(BOND_POST))
-  Instructions:                    29757623|29709134             (+0.16321%) [+1.00163x]
-  L1 Hits:                         40371679|40306641             (+0.16136%) [+1.00161x]
-  LL Hits:                           151605|150745               (+0.57050%) [+1.00570x]
-  RAM Hits:                           15087|15072                (+0.09952%) [+1.00100x]
-  Total read+write:                40538371|40472458             (+0.16286%) [+1.00163x]
-  Estimated Cycles:                41657749|41587886             (+0.16799%) [+1.00168x]
+  Instructions:                    29767365|29757623             (+0.03274%) [+1.00033x]
+  L1 Hits:                         40384375|40371679             (+0.03145%) [+1.00031x]
+  LL Hits:                           152056|151605               (+0.29748%) [+1.00297x]
+  RAM Hits:                           15118|15087                (+0.20547%) [+1.00205x]
+  Total read+write:                40551549|40538371             (+0.03251%) [+1.00033x]
+  Estimated Cycles:                41673785|41657749             (+0.03849%) [+1.00038x]
 block_path_iai::block_path_group::crypto_bench_block_pop spend_1in_2out:(connected(SPEND_1IN_2OUT))
-  Instructions:                    28167989|28278549             (-0.39097%) [-1.00393x]
-  L1 Hits:                         36867580|37064158             (-0.53037%) [-1.00533x]
-  LL Hits:                            81468|82374                (-1.09986%) [-1.01112x]
-  RAM Hits:                            3620|3667                 (-1.28170%) [-1.01298x]
-  Total read+write:                36952668|37150199             (-0.53171%) [-1.00535x]
-  Estimated Cycles:                37401620|37604373             (-0.53917%) [-1.00542x]
+  Instructions:                    28164224|28167989             (-0.01337%) [-1.00013x]
+  L1 Hits:                         36863155|36867580             (-0.01200%) [-1.00012x]
+  LL Hits:                            81053|81468                (-0.50940%) [-1.00512x]
+  RAM Hits:                            3662|3620                 (+1.16022%) [+1.01160x]
+  Total read+write:                36947870|36952668             (-0.01298%) [-1.00013x]
+  Estimated Cycles:                37396590|37401620             (-0.01345%) [-1.00013x]
 block_path_iai::block_path_group::crypto_bench_block_pop spend_8in_2out:(connected(SPEND_8IN_2OUT))
-  Instructions:                    75734100|76120887             (-0.50812%) [-1.00511x]
-  L1 Hits:                         98622393|99351190             (-0.73356%) [-1.00739x]
-  LL Hits:                           128611|130168               (-1.19615%) [-1.01211x]
-  RAM Hits:                            3652|3711                 (-1.58987%) [-1.01616x]
-  Total read+write:                98754656|99485069             (-0.73419%) [-1.00740x]
-  Estimated Cycles:                99393268|100131915            (-0.73767%) [-1.00743x]
+  Instructions:                    75735989|75734100             (+0.00249%) [+1.00002x]
+  L1 Hits:                         98625894|98622393             (+0.00355%) [+1.00004x]
+  LL Hits:                           128123|128611               (-0.37944%) [-1.00381x]
+  RAM Hits:                            3701|3652                 (+1.34173%) [+1.01342x]
+  Total read+write:                98757718|98754656             (+0.00310%) [+1.00003x]
+  Estimated Cycles:                99396044|99393268             (+0.00279%) [+1.00003x]
 block_path_iai::block_path_group::crypto_bench_block_pop spend_1in_16out:(connected(SPEND_1IN_16OUT))
-  Instructions:                    35194627|35304709             (-0.31181%) [-1.00313x]
-  L1 Hits:                         46489238|46682573             (-0.41415%) [-1.00416x]
-  LL Hits:                           144219|148171               (-2.66719%) [-1.02740x]
-  RAM Hits:                            3741|3674                 (+1.82363%) [+1.01824x]
-  Total read+write:                46637198|46834418             (-0.42110%) [-1.00423x]
-  Estimated Cycles:                47341268|47552018             (-0.44320%) [-1.00445x]
+  Instructions:                    35195803|35194627             (+0.00334%) [+1.00003x]
+  L1 Hits:                         46491526|46489238             (+0.00492%) [+1.00005x]
+  LL Hits:                           143718|144219               (-0.34739%) [-1.00349x]
+  RAM Hits:                            3723|3741                 (-0.48115%) [-1.00483x]
+  Total read+write:                46638967|46637198             (+0.00379%) [+1.00004x]
+  Estimated Cycles:                47340421|47341268             (-0.00179%) [-1.00002x]
 block_path_iai::block_path_group::crypto_bench_block_pop bond_post:(connected(BOND_POST))
-  Instructions:                    31447931|31564488             (-0.36927%) [-1.00371x]
-  L1 Hits:                         41298778|41502629             (-0.49118%) [-1.00494x]
-  LL Hits:                            86265|87211                (-1.08473%) [-1.01097x]
-  RAM Hits:                            3779|3723                 (+1.50416%) [+1.01504x]
-  Total read+write:                41388822|41593563             (-0.49224%) [-1.00495x]
-  Estimated Cycles:                41862368|42068989             (-0.49115%) [-1.00494x]
+  Instructions:                    31450254|31447931             (+0.00739%) [+1.00007x]
+  L1 Hits:                         41302609|41298778             (+0.00928%) [+1.00009x]
+  LL Hits:                            85844|86265                (-0.48803%) [-1.00490x]
+  RAM Hits:                            3806|3779                 (+0.71447%) [+1.00714x]
+  Total read+write:                41392259|41388822             (+0.00830%) [+1.00008x]
+  Estimated Cycles:                41865039|41862368             (+0.00638%) [+1.00006x]
 block_path_iai::block_path_group::crypto_bench_ingest_route spend_1in_2out:(before_route(SPEND_1IN_2OUT))
-  Instructions:                     9414770|9414680              (+0.00096%) [+1.00001x]
-  L1 Hits:                         12902919|12911353             (-0.06532%) [-1.00065x]
-  LL Hits:                            72513|64606                (+12.2388%) [+1.12239x]
-  RAM Hits:                             584|579                  (+0.86356%) [+1.00864x]
-  Total read+write:                12976016|12976538             (-0.00402%) [-1.00004x]
-  Estimated Cycles:                13285924|13254648             (+0.23596%) [+1.00236x]
+  Instructions:                     9408260|9414770              (-0.06915%) [-1.00069x]
+  L1 Hits:                         12898805|12902919             (-0.03188%) [-1.00032x]
+  LL Hits:                            69662|72513                (-3.93171%) [-1.04093x]
+  RAM Hits:                             537|584                  (-8.04795%) [-1.08752x]
+  Total read+write:                12969004|12976016             (-0.05404%) [-1.00054x]
+  Estimated Cycles:                13265910|13285924             (-0.15064%) [-1.00151x]
 block_path_iai::block_path_group::crypto_bench_store_read_block tip:(readable(SPEND_1IN_16OUT))
-  Instructions:                      143743|143835               (-0.06396%) [-1.00064x]
-  L1 Hits:                           195854|196035               (-0.09233%) [-1.00092x]
-  LL Hits:                              931|901                  (+3.32963%) [+1.03330x]
-  RAM Hits:                              95|95                   (No change)
-  Total read+write:                  196880|197031               (-0.07664%) [-1.00077x]
-  Estimated Cycles:                  203834|203865               (-0.01521%) [-1.00015x]
+  Instructions:                      144122|143743               (+0.26367%) [+1.00264x]
+  L1 Hits:                           196394|195854               (+0.27572%) [+1.00276x]
+  LL Hits:                              906|931                  (-2.68528%) [-1.02759x]
+  RAM Hits:                              93|95                   (-2.10526%) [-1.02151x]
+  Total read+write:                  197393|196880               (+0.26056%) [+1.00261x]
+  Estimated Cycles:                  204179|203834               (+0.16926%) [+1.00169x]
 block_path_iai::block_path_group::crypto_bench_store_read_header_range below_tip:(readable_history(SPEND_1IN_16OUT))
-  Instructions:                      342618|342681               (-0.01838%) [-1.00018x]
-  L1 Hits:                           493502|491685               (+0.36955%) [+1.00370x]
-  LL Hits:                              415|2033                 (-79.5868%) [-4.89880x]
-  RAM Hits:                             133|137                  (-2.91971%) [-1.03008x]
-  Total read+write:                  494050|493855               (+0.03949%) [+1.00039x]
-  Estimated Cycles:                  500232|506645               (-1.26578%) [-1.01282x]
+  Instructions:                      342816|342618               (+0.05779%) [+1.00058x]
+  L1 Hits:                           493759|493502               (+0.05208%) [+1.00052x]
+  LL Hits:                              418|415                  (+0.72289%) [+1.00723x]
+  RAM Hits:                             137|133                  (+3.00752%) [+1.03008x]
+  Total read+write:                  494314|494050               (+0.05344%) [+1.00053x]
+  Estimated Cycles:                  500644|500232               (+0.08236%) [+1.00082x]
 block_path_iai::block_path_group::crypto_bench_store_read_tree_leaves first_run:(readable_history(SPEND_1IN_16OUT))
-  Instructions:                       17491|17493                (-0.01143%) [-1.00011x]
-  L1 Hits:                            25668|25721                (-0.20606%) [-1.00206x]
-  LL Hits:                              408|374                  (+9.09091%) [+1.09091x]
-  RAM Hits:                               9|10                   (-10.0000%) [-1.11111x]
-  Total read+write:                   26085|26105                (-0.07661%) [-1.00077x]
-  Estimated Cycles:                   28023|27941                (+0.29348%) [+1.00293x]
+  Instructions:                       17535|17491                (+0.25156%) [+1.00252x]
+  L1 Hits:                            25709|25668                (+0.15973%) [+1.00160x]
+  LL Hits:                              435|408                  (+6.61765%) [+1.06618x]
+  RAM Hits:                              10|9                    (+11.1111%) [+1.11111x]
+  Total read+write:                   26154|26085                (+0.26452%) [+1.00265x]
+  Estimated Cycles:                   28234|28023                (+0.75295%) [+1.00753x]
 
-Gungraun result: Ok. 16 without regressions; 0 regressed; 0 filtered; 16 benchmarks finished in 2742.97s
+Gungraun result: Ok. 16 without regressions; 0 regressed; 0 filtered; 16 benchmarks finished in 2786.57s
 
 ==== shekyl-pow-randomx::verify_header_iai ====
 verify_header_iai::verify_header_group::crypto_bench_randomx_verify_header header:(prepared())
-  Instructions:                  1696447427|1695916731           (+0.03129%) [+1.00031x]
-  L1 Hits:                       2179475472|2178430625           (+0.04796%) [+1.00048x]
-  LL Hits:                          9651136|9634566              (+0.17198%) [+1.00172x]
-  RAM Hits:                          165009|165034               (-0.01515%) [-1.00015x]
-  Total read+write:              2189291617|2188230225           (+0.04850%) [+1.00049x]
-  Estimated Cycles:              2233506467|2232379645           (+0.05048%) [+1.00050x]
+  Instructions:                  1696447427|1696447427           (No change)
+  L1 Hits:                       2179475472|2179475472           (No change)
+  LL Hits:                          9651136|9651136              (No change)
+  RAM Hits:                          165009|165009               (No change)
+  Total read+write:              2189291617|2189291617           (No change)
+  Estimated Cycles:              2233506467|2233506467           (No change)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 39.8784s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 39.4788s
 
 ==== shekyl-chain-ingest::serve_bodies_iai ====
 serve_bodies_iai::serve_bodies_group::crypto_bench_sync_serve_bodies tip_run:(before_serve(SPEND_1IN_2OUT))
-  Instructions:                     1371349|1374087              (-0.19926%) [-1.00200x]
-  L1 Hits:                          1892786|1896345              (-0.18768%) [-1.00188x]
-  LL Hits:                            18995|19188                (-1.00584%) [-1.01016x]
-  RAM Hits:                              69|10                   (+590.000%) [+6.90000x]
-  Total read+write:                 1911850|1915543              (-0.19279%) [-1.00193x]
-  Estimated Cycles:                 1990176|1992635              (-0.12340%) [-1.00124x]
+  Instructions:                     1370767|1371349              (-0.04244%) [-1.00042x]
+  L1 Hits:                          1891691|1892786              (-0.05785%) [-1.00058x]
+  LL Hits:                            19438|18995                (+2.33219%) [+1.02332x]
+  RAM Hits:                              34|69                   (-50.7246%) [-2.02941x]
+  Total read+write:                 1911163|1911850              (-0.03593%) [-1.00036x]
+  Estimated Cycles:                 1990071|1990176              (-0.00528%) [-1.00005x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 167.755s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 170.089s
 
 ==== shekyl-chain-ingest::levin_bodies_iai ====
 levin_bodies_iai::levin_bodies_group::crypto_bench_levin_frame_read bodies_response:(framed(SPEND_1IN_2OUT))
-  Instructions:                      130900|130918               (-0.01375%) [-1.00014x]
-  L1 Hits:                           386598|386626               (-0.00724%) [-1.00007x]
-  LL Hits:                             4126|4124                 (+0.04850%) [+1.00048x]
-  RAM Hits:                              35|34                   (+2.94118%) [+1.02941x]
-  Total read+write:                  390759|390784               (-0.00640%) [-1.00006x]
-  Estimated Cycles:                  408453|408436               (+0.00416%) [+1.00004x]
+  Instructions:                      130902|130900               (+0.00153%) [+1.00002x]
+  L1 Hits:                           386547|386598               (-0.01319%) [-1.00013x]
+  LL Hits:                             4119|4126                 (-0.16966%) [-1.00170x]
+  RAM Hits:                              36|35                   (+2.85714%) [+1.02857x]
+  Total read+write:                  390702|390759               (-0.01459%) [-1.00015x]
+  Estimated Cycles:                  408402|408453               (-0.01249%) [-1.00012x]
 levin_bodies_iai::levin_bodies_group::crypto_bench_levin_bodies_decode bodies_response:(served(SPEND_1IN_2OUT))
-  Instructions:                     1011496|1013175              (-0.16572%) [-1.00166x]
-  L1 Hits:                          1545406|1547692              (-0.14770%) [-1.00148x]
-  LL Hits:                             5639|5853                 (-3.65624%) [-1.03795x]
-  RAM Hits:                             682|552                  (+23.5507%) [+1.23551x]
-  Total read+write:                 1551727|1554097              (-0.15250%) [-1.00153x]
-  Estimated Cycles:                 1597471|1596277              (+0.07480%) [+1.00075x]
+  Instructions:                     1013485|1011496              (+0.19664%) [+1.00197x]
+  L1 Hits:                          1548090|1545406              (+0.17368%) [+1.00174x]
+  LL Hits:                             5767|5639                 (+2.26991%) [+1.02270x]
+  RAM Hits:                             580|682                  (-14.9560%) [-1.17586x]
+  Total read+write:                 1554437|1551727              (+0.17464%) [+1.00175x]
+  Estimated Cycles:                 1597225|1597471              (-0.01540%) [-1.00015x]
 
-Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 333.663s
+Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 339.311s
 
 ==== shekyl-chain-ingest::block_template_iai ====
 block_template_iai::block_template_group::crypto_bench_block_template_build design_load:(operands(DESIGN_LOAD))
-  Instructions:                    52152853|52204435             (-0.09881%) [-1.00099x]
-  L1 Hits:                         69747820|69797328             (-0.07093%) [-1.00071x]
-  LL Hits:                           119593|118496               (+0.92577%) [+1.00926x]
-  RAM Hits:                             169|170                  (-0.58824%) [-1.00592x]
-  Total read+write:                69867582|69915994             (-0.06924%) [-1.00069x]
-  Estimated Cycles:                70351700|70395758             (-0.06259%) [-1.00063x]
+  Instructions:                    52155325|52152853             (+0.00474%) [+1.00005x]
+  L1 Hits:                         69750417|69747820             (+0.00372%) [+1.00004x]
+  LL Hits:                           119673|119593               (+0.06689%) [+1.00067x]
+  RAM Hits:                             170|169                  (+0.59172%) [+1.00592x]
+  Total read+write:                69870260|69867582             (+0.00383%) [+1.00004x]
+  Estimated Cycles:                70354732|70351700             (+0.00431%) [+1.00004x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 1.90762s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 1.95821s
 
 ==== shekyl-chain-ingest::wallet_block_read_iai ====
 wallet_block_read_iai::wallet_block_read_group::crypto_bench_rpc_block_list tip_run:(prepared(SPEND_1IN_2OUT))
-  Instructions:                     5107714|5138717              (-0.60332%) [-1.00607x]
-  L1 Hits:                          7370666|7464479              (-1.25679%) [-1.01273x]
-  LL Hits:                            47011|49602                (-5.22358%) [-1.05511x]
-  RAM Hits:                            1570|561                  (+179.857%) [+2.79857x]
-  Total read+write:                 7419247|7514642              (-1.26946%) [-1.01286x]
-  Estimated Cycles:                 7660671|7732124              (-0.92411%) [-1.00933x]
+  Instructions:                     5137181|5107714              (+0.57691%) [+1.00577x]
+  L1 Hits:                          7461853|7370666              (+1.23716%) [+1.01237x]
+  LL Hits:                            49027|47011                (+4.28836%) [+1.04288x]
+  RAM Hits:                             446|1570                 (-71.5924%) [-3.52018x]
+  Total read+write:                 7511326|7419247              (+1.24108%) [+1.01241x]
+  Estimated Cycles:                 7722598|7660671              (+0.80838%) [+1.00808x]
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 167.714s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 169.839s
 
 ==== shekyl-p2p-transport::c5_iai ====
 c5_iai::c5_group::crypto_bench_noise_handshake_message1 initiator
-  Instructions:                     1089064|1085405              (+0.33711%) [+1.00337x]
-  L1 Hits:                          1361036|1358112              (+0.21530%) [+1.00215x]
-  LL Hits:                              356|492                  (-27.6423%) [-1.38202x]
-  RAM Hits:                            1550|1808                 (-14.2699%) [-1.16645x]
-  Total read+write:                 1362942|1360412              (+0.18597%) [+1.00186x]
-  Estimated Cycles:                 1417066|1423852              (-0.47659%) [-1.00479x]
+  Instructions:                     1087916|1089064              (-0.10541%) [-1.00106x]
+  L1 Hits:                          1359580|1361036              (-0.10698%) [-1.00107x]
+  LL Hits:                              356|356                  (No change)
+  RAM Hits:                            1550|1550                 (No change)
+  Total read+write:                 1361486|1362942              (-0.10683%) [-1.00107x]
+  Estimated Cycles:                 1415610|1417066              (-0.10275%) [-1.00103x]
 c5_iai::c5_group::crypto_bench_noise_handshake_message2 responder:(message1())
-  Instructions:                     2070953|2060169              (+0.52345%) [+1.00523x]
-  L1 Hits:                          2607170|2594647              (+0.48265%) [+1.00483x]
-  LL Hits:                             1427|1445                 (-1.24567%) [-1.01261x]
-  RAM Hits:                             591|636                  (-7.07547%) [-1.07614x]
-  Total read+write:                 2609188|2596728              (+0.47983%) [+1.00480x]
-  Estimated Cycles:                 2634990|2624132              (+0.41377%) [+1.00414x]
+  Instructions:                     2065373|2070953              (-0.26944%) [-1.00270x]
+  L1 Hits:                          2599587|2607170              (-0.29085%) [-1.00292x]
+  LL Hits:                             1427|1427                 (No change)
+  RAM Hits:                             591|591                  (No change)
+  Total read+write:                 2601605|2609188              (-0.29063%) [-1.00291x]
+  Estimated Cycles:                 2627407|2634990              (-0.28778%) [-1.00289x]
 c5_iai::c5_group::crypto_bench_noise_handshake_finish initiator:(answered())
-  Instructions:                     2005642|2003309              (+0.11646%) [+1.00116x]
-  L1 Hits:                          2495555|2495562              (-0.00028%) [-1.00000x]
-  LL Hits:                             1066|1157                 (-7.86517%) [-1.08537x]
-  RAM Hits:                             266|340                  (-21.7647%) [-1.27820x]
-  Total read+write:                 2496887|2497059              (-0.00689%) [-1.00007x]
-  Estimated Cycles:                 2510195|2513247              (-0.12144%) [-1.00122x]
+  Instructions:                     2005729|2005642              (+0.00434%) [+1.00004x]
+  L1 Hits:                          2495651|2495555              (+0.00385%) [+1.00004x]
+  LL Hits:                             1066|1066                 (No change)
+  RAM Hits:                             266|266                  (No change)
+  Total read+write:                 2496983|2496887              (+0.00384%) [+1.00004x]
+  Estimated Cycles:                 2510291|2510195              (+0.00382%) [+1.00004x]
 c5_iai::c5_group::crypto_bench_noise_record_seal body_1024:(before_seal(1024))
-  Instructions:                       21851|22322                (-2.11003%) [-1.02156x]
-  L1 Hits:                            29998|30739                (-2.41062%) [-1.02470x]
-  LL Hits:                              221|248                  (-10.8871%) [-1.12217x]
-  RAM Hits:                              35|33                   (+6.06061%) [+1.06061x]
-  Total read+write:                   30254|31020                (-2.46937%) [-1.02532x]
-  Estimated Cycles:                   32328|33134                (-2.43255%) [-1.02493x]
+  Instructions:                       21851|21851                (No change)
+  L1 Hits:                            29998|29998                (No change)
+  LL Hits:                              221|221                  (No change)
+  RAM Hits:                              35|35                   (No change)
+  Total read+write:                   30254|30254                (No change)
+  Estimated Cycles:                   32328|32328                (No change)
 c5_iai::c5_group::crypto_bench_noise_record_seal body_65535:(before_seal(MAX_BODY))
-  Instructions:                      641278|641749               (-0.07339%) [-1.00073x]
-  L1 Hits:                          1000148|1000887              (-0.07383%) [-1.00074x]
-  LL Hits:                             4635|4665                 (-0.64309%) [-1.00647x]
-  RAM Hits:                            2097|2094                 (+0.14327%) [+1.00143x]
-  Total read+write:                 1006880|1007646              (-0.07602%) [-1.00076x]
-  Estimated Cycles:                 1096718|1097502              (-0.07143%) [-1.00071x]
+  Instructions:                      641278|641278               (No change)
+  L1 Hits:                          1000148|1000148              (No change)
+  LL Hits:                             4635|4635                 (No change)
+  RAM Hits:                            2097|2097                 (No change)
+  Total read+write:                 1006880|1006880              (No change)
+  Estimated Cycles:                 1096718|1096718              (No change)
 c5_iai::c5_group::crypto_bench_noise_record_open body_1024:(before_open(1024))
-  Instructions:                       21227|21690                (-2.13462%) [-1.02181x]
-  L1 Hits:                            29457|30202                (-2.46672%) [-1.02529x]
-  LL Hits:                               35|38                   (-7.89474%) [-1.08571x]
-  RAM Hits:                              21|22                   (-4.54545%) [-1.04762x]
-  Total read+write:                   29513|30262                (-2.47505%) [-1.02538x]
-  Estimated Cycles:                   30367|31162                (-2.55118%) [-1.02618x]
+  Instructions:                       21227|21227                (No change)
+  L1 Hits:                            29457|29457                (No change)
+  LL Hits:                               35|35                   (No change)
+  RAM Hits:                              21|21                   (No change)
+  Total read+write:                   29513|29513                (No change)
+  Estimated Cycles:                   30367|30367                (No change)
 c5_iai::c5_group::crypto_bench_noise_record_open body_65535:(before_open(MAX_BODY))
-  Instructions:                      575293|575756               (-0.08042%) [-1.00080x]
-  L1 Hits:                           805553|806281               (-0.09029%) [-1.00090x]
-  LL Hits:                             4403|4423                 (-0.45218%) [-1.00454x]
-  RAM Hits:                              26|27                   (-3.70370%) [-1.03846x]
-  Total read+write:                  809982|810731               (-0.09239%) [-1.00092x]
-  Estimated Cycles:                  828478|829341               (-0.10406%) [-1.00104x]
+  Instructions:                      575293|575293               (No change)
+  L1 Hits:                           805553|805553               (No change)
+  LL Hits:                             4403|4403                 (No change)
+  RAM Hits:                              26|26                   (No change)
+  Total read+write:                  809982|809982               (No change)
+  Estimated Cycles:                  828478|828478               (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_256:(window_before_seal(256))
-  Instructions:                        8891|9123                 (-2.54302%) [-1.02609x]
-  L1 Hits:                            12659|13019                (-2.76519%) [-1.02844x]
-  LL Hits:                              154|172                  (-10.4651%) [-1.11688x]
+  Instructions:                        8891|8891                 (No change)
+  L1 Hits:                            12659|12659                (No change)
+  LL Hits:                              154|154                  (No change)
   RAM Hits:                              14|14                   (No change)
-  Total read+write:                   12827|13205                (-2.86255%) [-1.02947x]
-  Estimated Cycles:                   13919|14369                (-3.13174%) [-1.03233x]
+  Total read+write:                   12827|12827                (No change)
+  Estimated Cycles:                   13919|13919                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_512:(window_before_seal(512))
-  Instructions:                       10866|11098                (-2.09047%) [-1.02135x]
-  L1 Hits:                            15028|15389                (-2.34583%) [-1.02402x]
-  LL Hits:                              156|173                  (-9.82659%) [-1.10897x]
+  Instructions:                       10866|10866                (No change)
+  L1 Hits:                            15028|15028                (No change)
+  LL Hits:                              156|156                  (No change)
   RAM Hits:                              14|14                   (No change)
-  Total read+write:                   15198|15576                (-2.42681%) [-1.02487x]
-  Estimated Cycles:                   16298|16744                (-2.66364%) [-1.02737x]
+  Total read+write:                   15198|15198                (No change)
+  Estimated Cycles:                   16298|16298                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_1024:(window_before_seal(1_024))
-  Instructions:                       14763|14995                (-1.54718%) [-1.01571x]
-  L1 Hits:                            19685|20046                (-1.80086%) [-1.01834x]
-  LL Hits:                              180|197                  (-8.62944%) [-1.09444x]
+  Instructions:                       14763|14763                (No change)
+  L1 Hits:                            19685|19685                (No change)
+  LL Hits:                              180|180                  (No change)
   RAM Hits:                              14|14                   (No change)
-  Total read+write:                   19879|20257                (-1.86602%) [-1.01902x]
-  Estimated Cycles:                   21075|21521                (-2.07239%) [-1.02116x]
+  Total read+write:                   19879|19879                (No change)
+  Estimated Cycles:                   21075|21075                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_1400:(window_before_seal(1_400))
-  Instructions:                       18300|18532                (-1.25189%) [-1.01268x]
-  L1 Hits:                            23868|24221                (-1.45741%) [-1.01479x]
-  LL Hits:                              169|195                  (-13.3333%) [-1.15385x]
-  RAM Hits:                              17|16                   (+6.25000%) [+1.06250x]
-  Total read+write:                   24054|24432                (-1.54715%) [-1.01571x]
-  Estimated Cycles:                   25308|25756                (-1.73940%) [-1.01770x]
+  Instructions:                       18300|18300                (No change)
+  L1 Hits:                            23868|23868                (No change)
+  LL Hits:                              169|169                  (No change)
+  RAM Hits:                              17|17                   (No change)
+  Total read+write:                   24054|24054                (No change)
+  Estimated Cycles:                   25308|25308                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_2048:(window_before_seal(2_048))
-  Instructions:                       22595|22827                (-1.01634%) [-1.01027x]
-  L1 Hits:                            29102|29455                (-1.19844%) [-1.01213x]
-  LL Hits:                              161|186                  (-13.4409%) [-1.15528x]
+  Instructions:                       22595|22595                (No change)
+  L1 Hits:                            29102|29102                (No change)
+  LL Hits:                              161|161                  (No change)
   RAM Hits:                              24|24                   (No change)
-  Total read+write:                   29287|29665                (-1.27423%) [-1.01291x]
-  Estimated Cycles:                   30747|31225                (-1.53082%) [-1.01555x]
+  Total read+write:                   29287|29287                (No change)
+  Estimated Cycles:                   30747|30747                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_4096:(window_before_seal(4_096))
-  Instructions:                       38255|38487                (-0.60280%) [-1.00606x]
-  L1 Hits:                            47869|48229                (-0.74644%) [-1.00752x]
-  LL Hits:                              151|169                  (-10.6509%) [-1.11921x]
+  Instructions:                       38255|38255                (No change)
+  L1 Hits:                            47869|47869                (No change)
+  LL Hits:                              151|151                  (No change)
   RAM Hits:                              78|78                   (No change)
-  Total read+write:                   48098|48476                (-0.77977%) [-1.00786x]
-  Estimated Cycles:                   51354|51804                (-0.86866%) [-1.00876x]
+  Total read+write:                   48098|48098                (No change)
+  Estimated Cycles:                   51354|51354                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_8192:(window_before_seal(8_192))
-  Instructions:                       69583|69815                (-0.33231%) [-1.00333x]
-  L1 Hits:                            85429|85781                (-0.41035%) [-1.00412x]
-  LL Hits:                              159|185                  (-14.0541%) [-1.16352x]
+  Instructions:                       69583|69583                (No change)
+  L1 Hits:                            85429|85429                (No change)
+  LL Hits:                              159|159                  (No change)
   RAM Hits:                             142|142                  (No change)
-  Total read+write:                   85730|86108                (-0.43898%) [-1.00441x]
-  Estimated Cycles:                   91194|91676                (-0.52576%) [-1.00529x]
+  Total read+write:                   85730|85730                (No change)
+  Estimated Cycles:                   91194|91194                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_16384:(window_before_seal(16_384))
-  Instructions:                      147033|147265               (-0.15754%) [-1.00158x]
-  L1 Hits:                           206794|207146               (-0.16993%) [-1.00170x]
-  LL Hits:                              341|367                  (-7.08447%) [-1.07625x]
+  Instructions:                      147033|147033               (No change)
+  L1 Hits:                           206794|206794               (No change)
+  LL Hits:                              341|341                  (No change)
   RAM Hits:                             272|272                  (No change)
-  Total read+write:                  207407|207785               (-0.18192%) [-1.00182x]
-  Estimated Cycles:                  218019|218501               (-0.22059%) [-1.00221x]
+  Total read+write:                  207407|207407               (No change)
+  Estimated Cycles:                  218019|218019               (No change)
 c5_iai::c5_group::crypto_bench_noise_window_seal w_65535:(window_before_seal(MAX_BODY))
-  Instructions:                      568614|568846               (-0.04078%) [-1.00041x]
-  L1 Hits:                           795462|795829               (-0.04612%) [-1.00046x]
-  LL Hits:                             3415|3427                 (-0.35016%) [-1.00351x]
-  RAM Hits:                            1052|1051                 (+0.09515%) [+1.00095x]
-  Total read+write:                  799929|800307               (-0.04723%) [-1.00047x]
-  Estimated Cycles:                  849357|849749               (-0.04613%) [-1.00046x]
+  Instructions:                      568614|568614               (No change)
+  L1 Hits:                           795462|795462               (No change)
+  LL Hits:                             3415|3415                 (No change)
+  RAM Hits:                            1052|1052                 (No change)
+  Total read+write:                  799929|799929               (No change)
+  Estimated Cycles:                  849357|849357               (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_256:(window_before_open(256))
-  Instructions:                        9058|9288                 (-2.47631%) [-1.02539x]
-  L1 Hits:                            13082|13451                (-2.74329%) [-1.02821x]
-  LL Hits:                               31|35                   (-11.4286%) [-1.12903x]
-  RAM Hits:                              13|12                   (+8.33333%) [+1.08333x]
-  Total read+write:                   13126|13498                (-2.75596%) [-1.02834x]
-  Estimated Cycles:                   13692|14046                (-2.52029%) [-1.02585x]
+  Instructions:                        9058|9058                 (No change)
+  L1 Hits:                            13082|13082                (No change)
+  LL Hits:                               31|31                   (No change)
+  RAM Hits:                              13|13                   (No change)
+  Total read+write:                   13126|13126                (No change)
+  Estimated Cycles:                   13692|13692                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_512:(window_before_open(512))
-  Instructions:                       11010|11240                (-2.04626%) [-1.02089x]
-  L1 Hits:                            15424|15792                (-2.33029%) [-1.02386x]
-  LL Hits:                               34|39                   (-12.8205%) [-1.14706x]
-  RAM Hits:                              13|12                   (+8.33333%) [+1.08333x]
-  Total read+write:                   15471|15843                (-2.34804%) [-1.02404x]
-  Estimated Cycles:                   16049|16407                (-2.18200%) [-1.02231x]
+  Instructions:                       11010|11010                (No change)
+  L1 Hits:                            15424|15424                (No change)
+  LL Hits:                               34|34                   (No change)
+  RAM Hits:                              13|13                   (No change)
+  Total read+write:                   15471|15471                (No change)
+  Estimated Cycles:                   16049|16049                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_1024:(window_before_open(1_024))
-  Instructions:                       14907|15137                (-1.51946%) [-1.01543x]
-  L1 Hits:                            20098|20468                (-1.80770%) [-1.01841x]
-  LL Hits:                               41|44                   (-6.81818%) [-1.07317x]
-  RAM Hits:                              13|12                   (+8.33333%) [+1.08333x]
-  Total read+write:                   20152|20524                (-1.81251%) [-1.01846x]
-  Estimated Cycles:                   20758|21108                (-1.65814%) [-1.01686x]
+  Instructions:                       14907|14907                (No change)
+  L1 Hits:                            20098|20098                (No change)
+  LL Hits:                               41|41                   (No change)
+  RAM Hits:                              13|13                   (No change)
+  Total read+write:                   20152|20152                (No change)
+  Estimated Cycles:                   20758|20758                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_1400:(window_before_open(1_400))
-  Instructions:                       18505|18735                (-1.22765%) [-1.01243x]
-  L1 Hits:                            24338|24703                (-1.47755%) [-1.01500x]
-  LL Hits:                               40|47                   (-14.8936%) [-1.17500x]
+  Instructions:                       18505|18505                (No change)
+  L1 Hits:                            24338|24338                (No change)
+  LL Hits:                               40|40                   (No change)
   RAM Hits:                              29|29                   (No change)
-  Total read+write:                   24407|24779                (-1.50127%) [-1.01524x]
-  Estimated Cycles:                   25553|25953                (-1.54125%) [-1.01565x]
+  Total read+write:                   24407|24407                (No change)
+  Estimated Cycles:                   25553|25553                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_2048:(window_before_open(2_048))
-  Instructions:                       22819|23049                (-0.99787%) [-1.01008x]
-  L1 Hits:                            29582|29949                (-1.22542%) [-1.01241x]
-  LL Hits:                               31|37                   (-16.2162%) [-1.19355x]
-  RAM Hits:                              49|48                   (+2.08333%) [+1.02083x]
-  Total read+write:                   29662|30034                (-1.23860%) [-1.01254x]
-  Estimated Cycles:                   31452|31814                (-1.13786%) [-1.01151x]
+  Instructions:                       22819|22819                (No change)
+  L1 Hits:                            29582|29582                (No change)
+  LL Hits:                               31|31                   (No change)
+  RAM Hits:                              49|49                   (No change)
+  Total read+write:                   29662|29662                (No change)
+  Estimated Cycles:                   31452|31452                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_4096:(window_before_open(4_096))
-  Instructions:                       38484|38714                (-0.59410%) [-1.00598x]
-  L1 Hits:                            48363|48730                (-0.75313%) [-1.00759x]
-  LL Hits:                               32|38                   (-15.7895%) [-1.18750x]
-  RAM Hits:                              83|82                   (+1.21951%) [+1.01220x]
-  Total read+write:                   48478|48850                (-0.76151%) [-1.00767x]
-  Estimated Cycles:                   51428|51790                (-0.69898%) [-1.00704x]
+  Instructions:                       38484|38484                (No change)
+  L1 Hits:                            48363|48363                (No change)
+  LL Hits:                               32|32                   (No change)
+  RAM Hits:                              83|83                   (No change)
+  Total read+write:                   48478|48478                (No change)
+  Estimated Cycles:                   51428|51428                (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_8192:(window_before_open(8_192))
-  Instructions:                       77209|77439                (-0.29701%) [-1.00298x]
-  L1 Hits:                           109133|109491               (-0.32697%) [-1.00328x]
-  LL Hits:                               36|51                   (-29.4118%) [-1.41667x]
-  RAM Hits:                             149|148                  (+0.67568%) [+1.00676x]
-  Total read+write:                  109318|109690               (-0.33914%) [-1.00340x]
-  Estimated Cycles:                  114528|114926               (-0.34631%) [-1.00348x]
+  Instructions:                       77209|77209                (No change)
+  L1 Hits:                           109133|109133               (No change)
+  LL Hits:                               36|36                   (No change)
+  RAM Hits:                             149|149                  (No change)
+  Total read+write:                  109318|109318               (No change)
+  Estimated Cycles:                  114528|114528               (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_16384:(window_before_open(16_384))
-  Instructions:                      147298|147528               (-0.15590%) [-1.00156x]
-  L1 Hits:                           207292|207643               (-0.16904%) [-1.00169x]
-  LL Hits:                              321|343                  (-6.41399%) [-1.06854x]
-  RAM Hits:                             274|273                  (+0.36630%) [+1.00366x]
-  Total read+write:                  207887|208259               (-0.17862%) [-1.00179x]
-  Estimated Cycles:                  218487|218913               (-0.19460%) [-1.00195x]
+  Instructions:                      147298|147298               (No change)
+  L1 Hits:                           207292|207292               (No change)
+  LL Hits:                              321|321                  (No change)
+  RAM Hits:                             274|274                  (No change)
+  Total read+write:                  207887|207887               (No change)
+  Estimated Cycles:                  218487|218487               (No change)
 c5_iai::c5_group::crypto_bench_noise_window_open w_65535:(window_before_open(MAX_BODY))
-  Instructions:                      568994|569224               (-0.04041%) [-1.00040x]
-  L1 Hits:                           796228|796583               (-0.04457%) [-1.00045x]
-  LL Hits:                             3304|3321                 (-0.51189%) [-1.00515x]
+  Instructions:                      568994|568994               (No change)
+  L1 Hits:                           796228|796228               (No change)
+  LL Hits:                             3304|3304                 (No change)
   RAM Hits:                            1045|1045                 (No change)
-  Total read+write:                  800577|800949               (-0.04644%) [-1.00046x]
-  Estimated Cycles:                  849323|849763               (-0.05178%) [-1.00052x]
+  Total read+write:                  800577|800577               (No change)
+  Estimated Cycles:                  849323|849323               (No change)
 c5_iai::c5_group::crypto_bench_noise_rekey one_hkdf
-  Instructions:                       21839|21846                (-0.03204%) [-1.00032x]
-  L1 Hits:                            29623|29634                (-0.03712%) [-1.00037x]
-  LL Hits:                               11|12                   (-8.33333%) [-1.09091x]
-  RAM Hits:                             173|175                  (-1.14286%) [-1.01156x]
-  Total read+write:                   29807|29821                (-0.04695%) [-1.00047x]
-  Estimated Cycles:                   35733|35819                (-0.24010%) [-1.00241x]
+  Instructions:                       21839|21839                (No change)
+  L1 Hits:                            29623|29623                (No change)
+  LL Hits:                               11|11                   (No change)
+  RAM Hits:                             173|173                  (No change)
+  Total read+write:                   29807|29807                (No change)
+  Estimated Cycles:                   35733|35733                (No change)
 
-Gungraun result: Ok. 26 without regressions; 0 regressed; 0 filtered; 26 benchmarks finished in 11.4400s
+Gungraun result: Ok. 26 without regressions; 0 regressed; 0 filtered; 26 benchmarks finished in 11.4486s
