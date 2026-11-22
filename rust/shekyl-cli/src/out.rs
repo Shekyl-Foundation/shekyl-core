@@ -11,9 +11,9 @@
 //! close, no save, the server's socket directory left behind (Rick,
 //! 2026-11-21). These writers return the error instead. The first failed
 //! write to standard output marks the output closed; later writes to it are
-//! not attempted. The session checks [`output_closed`] after each command
-//! and ends through its normal shutdown, then [`end_for_closed_output`]
-//! writes one line to standard error and exits 1.
+//! not attempted. The session checks [`output_closed`] and ends through its
+//! normal shutdown. The line it then writes depends on whether that close
+//! saved the wallet (`rpc_client::WalletClose`).
 //!
 //! Every write in the crate goes through the four macros here; a test holds
 //! the sources to it (`no_write_bypasses_the_writer`).
@@ -69,20 +69,6 @@ pub fn stderr(args: fmt::Arguments<'_>, line: bool) -> io::Result<()> {
 #[must_use]
 pub fn output_closed() -> bool {
     OUTPUT_CLOSED.load(Ordering::Relaxed)
-}
-
-/// The end of a session whose output was closed, after its shutdown has
-/// closed the wallet and stopped the server: one line on standard error,
-/// then exit status [`CLOSED_OUTPUT_EXIT`].
-pub fn end_for_closed_output() -> ! {
-    drop(stderr(
-        format_args!(
-            "shekyl-cli: the output was closed, so the session ended; \
-             any open wallet was closed and saved"
-        ),
-        true,
-    ));
-    std::process::exit(CLOSED_OUTPUT_EXIT);
 }
 
 /// A line to standard output (in place of `println!`). A failure marks the

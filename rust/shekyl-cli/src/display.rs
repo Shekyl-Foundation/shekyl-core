@@ -63,15 +63,32 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     Ok(())
 }
 
+/// Whether [`show_secret`] put the secret on standard output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum SecretDisplay {
+    /// The secret was written, and standard output accepted the write.
+    Shown,
+    /// Standard output closed before the secret was written. `secret` is wiped.
+    NotShown,
+}
+
 /// Display a secret to the terminal and best-effort clear it afterwards, then
 /// zeroize `secret`. Call ONLY after [`preflight_secret_display`] returned
 /// `Ok` (stdout is a TTY and any multiplexer warning was accepted); there is
 /// deliberately no non-TTY fallback here, so the secret can never reach a pipe
 /// or file.
-pub fn show_secret(label: &str, secret: &mut String) {
+///
+/// [`SecretDisplay::NotShown`] means the secret lines did not land. The caller
+/// must not report the wallet as created successfully: the seed is shown once.
+pub fn show_secret(label: &str, secret: &mut String) -> SecretDisplay {
     crate::out_line!("\n{label}:");
     crate::out_line!("{secret}");
     crate::out_line!();
+    if crate::out::output_closed() {
+        secret.zeroize();
+        return SecretDisplay::NotShown;
+    }
 
     crate::err_inline!("Press Enter to clear screen...");
     drop(io::stderr().flush());
@@ -91,6 +108,7 @@ pub fn show_secret(label: &str, secret: &mut String) {
     );
 
     secret.zeroize();
+    SecretDisplay::Shown
 }
 
 /// Check for well-known terminal multiplexer environment variables.

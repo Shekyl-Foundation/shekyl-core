@@ -110,7 +110,7 @@ pub fn run(
                 Err(error) => {
                     // `process::exit` in the caller skips destructors, so the
                     // self-hosted server has to stop before this returns.
-                    rpc.shutdown();
+                    crate::rpc_client::exit_if_output_closed(rpc.shutdown());
                     return Err(error.into());
                 }
             };
@@ -135,12 +135,11 @@ pub fn run(
 
     loop {
         // The output is gone (a reader that ended, `| head`): end the session
-        // the way the end of input does — the shutdown closes and saves the
-        // wallet and removes the server's socket directory — then say so on
-        // standard error and exit 1 (`crate::out`).
+        // the way the end of input does. The shutdown closes the wallet and
+        // removes the server's socket directory; the line says the wallet was
+        // saved only when that close succeeded.
         if crate::out::output_closed() {
-            rpc.shutdown();
-            crate::out::end_for_closed_output();
+            crate::rpc_client::end_for_closed_output(rpc.shutdown());
         }
         let prompt = crate::session::prompt(network.name(), rpc.open_wallet_name().as_deref());
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
@@ -164,7 +163,7 @@ pub fn run(
             Line::Skip => continue,
             Line::Done => break,
             Line::Broken(error) => {
-                rpc.shutdown();
+                crate::rpc_client::exit_if_output_closed(rpc.shutdown());
                 return Err(error);
             }
         };
@@ -602,7 +601,7 @@ pub fn run(
             }
         };
         if !ok && !presentation.interactive() {
-            rpc.shutdown();
+            crate::rpc_client::exit_if_output_closed(rpc.shutdown());
             std::process::exit(1);
         }
         if matches!(reader, LineReader::One(_)) {
@@ -614,8 +613,8 @@ pub fn run(
         drop(editor.save_history(hist));
     }
     // Closes any open wallet and stops the self-hosted server (removing its
-    // private UDS socket directory).
-    rpc.shutdown();
+    // private UDS socket directory). A closed output exits from that result.
+    crate::rpc_client::exit_if_output_closed(rpc.shutdown());
     Ok(())
 }
 

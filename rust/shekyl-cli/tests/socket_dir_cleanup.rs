@@ -15,22 +15,24 @@
 //!
 //! The tests after the first: a CLI whose output is closed mid-session ends
 //! through that same shutdown (before, `println!` panicked and the abort
-//! skipped it), and a server's start removes the directories a killed
-//! process left, never a running process's (Rick, 2026-11-21).
+//! skipped it), and a server's start removes directories this account owns
+//! that no server still holds. A directory whose lock is held stays. The
+//! derivation check has no wallet; a closed output there exits 1 and does
+//! not claim one was saved (Rick, 2026-11-21).
 //!
 //! **What turns these red.** `InProcessHandle::shutdown` not removing the
 //! directory, or the CLI ending without calling it; a write that panics on
-//! a closed output; a start without the sweep, or a sweep that does not ask
-//! whether the pid runs.
+//! a closed output; a start without the sweep; a sweep that decides by pid
+//! instead of the lock; a sweep that removes a directory whose lock is held;
+//! the derivation check returning before the closed-output exit.
 
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// The directory's name begins with this (`private_socket_dir`).
-const PRIVATE_DIR_PREFIX: &str = "shekyl-rpc-";
+use shekyl_wallet_rpc::{DIR_PREFIX, LOCK_FILE, SOCKET_FILE};
 
 #[test]
 fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
@@ -48,7 +50,7 @@ fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
                     .to_string_lossy()
                     .into_owned()
             })
-            .filter(|n| n.starts_with(PRIVATE_DIR_PREFIX))
+            .filter(|n| n.starts_with(DIR_PREFIX))
             .collect()
     };
 
@@ -122,7 +124,7 @@ fn socket_dirs(runtime: &Path) -> Vec<String> {
                 .to_string_lossy()
                 .into_owned()
         })
-        .filter(|n| n.starts_with(PRIVATE_DIR_PREFIX))
+        .filter(|n| n.starts_with(DIR_PREFIX))
         .collect();
     names.sort();
     names
@@ -226,6 +228,10 @@ fn a_cli_whose_output_is_closed_closes_its_wallet_and_leaves_no_socket_directory
         "no line says why the session ended; stderr:\n{said}"
     );
     assert!(
+        said.contains("the open wallet was closed and saved"),
+        "the wallet was open and its state was saved, and the line does not say so; stderr:\n{said}"
+    );
+    assert!(
         socket_dirs(&runtime).is_empty(),
         "the CLI left its socket directory behind: {:?}; stderr:\n{said}",
         socket_dirs(&runtime)
@@ -237,74 +243,162 @@ fn a_cli_whose_output_is_closed_closes_its_wallet_and_leaves_no_socket_directory
     );
 }
 
-/// A process this account ran was killed and left its socket directory, the
-/// socket in it. The next CLI's server removes it at start. The pid is one
-/// that ran and ended a moment ago, so no process runs under it.
+/// A directory named for a private socket, with no lock held.
+fn plant_socket_dir(runtime: &Path, pid: u32, spawn: u64) -> std::path::PathBuf {
+    let dir = runtime.join(format!("{DIR_PREFIX}{pid}-{spawn}"));
+    std::fs::create_dir(&dir).expect("plant a socket directory");
+    std::fs::write(dir.join(SOCKET_FILE), b"").expect("plant its socket");
+    dir
+}
+
+/// No held lock means the directory is not a running server's, whatever pid
+/// is in the name. One is named for this test, which is running, and has no
+/// lock. One is named for a process that has ended and has a lock file nobody
+/// holds. The next CLI removes both. Red edit: keep a directory because its
+/// pid runs, or keep one because a lock file exists.
 #[test]
-fn a_stale_socket_directory_of_an_ended_process_is_removed_at_the_next_start() {
+fn a_directory_without_a_held_lock_is_removed_at_the_next_start() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let runtime = scratch.path().join("runtime");
+    std::fs::create_dir(&runtime).expect("runtime dir");
+    // Spawn 1 and 3, not 0: the CLI's own server is `<its pid>-0`, and the
+    // kernel may reuse the ended process's pid for that CLI.
+    let running_name = plant_socket_dir(&runtime, std::process::id(), 1);
+    let mut ended = Command::new("true").spawn().expect("run true");
+    let ended_pid = ended.id();
+    ended.wait().expect("reap true");
+    let released = plant_socket_dir(&runtime, ended_pid, 3);
+    drop(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(released.join(LOCK_FILE))
+            .expect("a lock file nobody holds"),
+    );
+
+    let out = cli(scratch.path(), &runtime)
+        .arg("version")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run shekyl-cli");
+    assert!(
+        out.status.success(),
+        "shekyl-cli version failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !running_name.exists(),
+        "a directory named for a running pid, with no lock, was left behind"
+    );
+    assert!(
+        !released.exists(),
+        "a directory whose lock is not held was left behind"
+    );
+}
+
+/// A dead pid is not what makes a directory stale. The test holds the lock,
+/// so the CLI is another process and must leave the directory in place.
+/// Waiting is bounded: a sweep that blocks on the lock instead of skipping
+/// it would not finish. Red edit: remove the directory because its pid runs
+/// no process.
+#[test]
+fn a_directory_whose_lock_is_held_is_left_in_place() {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
     let scratch = tempfile::tempdir().expect("tempdir");
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     let mut ended = Command::new("true").spawn().expect("run true");
-    let pid = ended.id();
+    let ended_pid = ended.id();
     ended.wait().expect("reap true");
-    let stale = runtime.join(format!("{PRIVATE_DIR_PREFIX}{pid}-0"));
-    std::fs::create_dir(&stale).expect("plant the stale directory");
-    std::fs::write(stale.join("wallet-rpc.sock"), b"").expect("plant its socket");
+    // Not spawn 0: that is the name the CLI's own server takes if it is given
+    // this pid.
+    let held = plant_socket_dir(&runtime, ended_pid, 3);
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(held.join(LOCK_FILE))
+        .expect("lock file");
+    lock.lock().expect("hold the lock");
 
-    let out = cli(scratch.path(), &runtime)
+    let mut child = cli(scratch.path(), &runtime)
         .arg("version")
         .stdin(Stdio::null())
-        .output()
-        .expect("run shekyl-cli");
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shekyl-cli");
+    let started = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            drop(child.kill());
+            drop(child.wait());
+            panic!("shekyl-cli did not finish; a held lock must be skipped, not waited on");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let mut stderr = String::new();
+    drop(
+        child
+            .stderr
+            .take()
+            .expect("stderr")
+            .read_to_string(&mut stderr),
+    );
+    drop(lock);
     assert!(
-        out.status.success(),
-        "shekyl-cli version failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        status.success(),
+        "shekyl-cli version failed ({status}); stderr:\n{stderr}"
     );
     assert!(
-        !stale.exists(),
-        "the stale directory of ended pid {pid} is still there: {:?}",
-        socket_dirs(&runtime)
+        held.join(SOCKET_FILE).exists(),
+        "a directory whose lock is held was removed"
     );
 }
 
-/// A running process's socket directory is never touched: one named for a
-/// process that runs while the CLI starts, and one named for this test
-/// process, both stay, their sockets in them.
+/// The derivation check writes one line and returns from the command before
+/// any session. Its output is a pipe whose read end is already closed, so
+/// the write fails. The process exits 1 and does not claim a wallet was
+/// saved: there was none. Red edit: return from `main` before the
+/// closed-output exit.
 #[test]
-fn a_running_process_socket_directory_is_left_alone() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let runtime = scratch.path().join("runtime");
-    std::fs::create_dir(&runtime).expect("runtime dir");
-    let mut running = Command::new("sleep").arg("60").spawn().expect("run sleep");
-    let planted: Vec<_> = [running.id(), std::process::id()]
-        .iter()
-        .map(|pid| {
-            let dir = runtime.join(format!("{PRIVATE_DIR_PREFIX}{pid}-0"));
-            std::fs::create_dir(&dir).expect("plant a live directory");
-            std::fs::write(dir.join("wallet-rpc.sock"), b"").expect("plant its socket");
-            dir
-        })
-        .collect();
-
-    let out = cli(scratch.path(), &runtime)
-        .arg("version")
+fn a_closed_output_on_the_derivation_check_does_not_claim_a_saved_wallet() {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"))
+        .arg("derivation-freeze-self-check")
         .stdin(Stdio::null())
-        .output()
-        .expect("run shekyl-cli");
-    drop(running.kill());
-    running.wait().expect("reap sleep");
-    assert!(
-        out.status.success(),
-        "shekyl-cli version failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn shekyl-cli");
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("read stderr");
+    let status = child.wait().expect("reap shekyl-cli");
+    assert_eq!(
+        status.code(),
+        Some(1),
+        "a closed output exited {status}; stderr:\n{stderr}"
     );
-    for dir in &planted {
-        assert!(
-            dir.join("wallet-rpc.sock").exists(),
-            "a running process's directory was touched: {}",
-            dir.display()
-        );
-    }
+    assert!(
+        stderr.contains("the output was closed"),
+        "no line says why it ended; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("wallet"),
+        "a command with no wallet claimed one; stderr:\n{stderr}"
+    );
 }

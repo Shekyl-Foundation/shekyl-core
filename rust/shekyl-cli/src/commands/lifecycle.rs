@@ -18,6 +18,11 @@ Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
 For a script or for JSON output, use:\n  \
 shekyl-cli create <name> --seed-out <path> --password-file <path>";
 
+const SEED_NOT_SHOWN: &str = "\
+The output closed before the seed backup could be shown. \
+The wallet was created, and its seed is shown only once. \
+Delete the wallet and create it again where you can read the output.";
+
 pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
     require_closed(rpc)?;
     // Gate the one-time seed display BEFORE creating anything. The server never
@@ -57,10 +62,17 @@ pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str)
                 .get(concat!("mne", "monic"))
                 .or_else(|| val.get("raw_seed_hex"))
                 .and_then(|v| v.as_str());
-            if let Some(backup) = backup {
+            let shown = if let Some(backup) = backup {
                 let mut secret = backup.to_owned();
                 crate::out_line!("Write down your seed backup NOW. It is shown only once.");
-                crate::display::show_secret("Seed backup", &mut secret);
+                crate::display::show_secret("Seed backup", &mut secret)
+            } else if crate::out::output_closed() {
+                crate::display::SecretDisplay::NotShown
+            } else {
+                crate::display::SecretDisplay::Shown
+            };
+            if shown == crate::display::SecretDisplay::NotShown {
+                return failed(SEED_NOT_SHOWN);
             }
             Ok(json!({"name": filename}))
         }

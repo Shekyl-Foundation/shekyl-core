@@ -153,7 +153,21 @@ impl Presentation {
     }
 
     /// Whether a money move may post, before any prompt is read.
+    ///
+    /// A closed standard output refuses every transcript. In human mode the
+    /// summary was written there, and a confirmation the operator did not
+    /// see must not post. The refusal is the one a declined confirmation
+    /// returns, so a pending reservation is released.
     pub fn money_gate(self, action: &str, yes: bool) -> MoneyGate {
+        self.money_gate_when(action, yes, crate::out::output_closed())
+    }
+
+    fn money_gate_when(self, action: &str, yes: bool, output_closed: bool) -> MoneyGate {
+        if output_closed {
+            return MoneyGate::Refuse(nothing_sent(
+                "The output was closed, so this was not confirmed. Nothing was sent.",
+            ));
+        }
         match self.transcript {
             Transcript::Scripted if yes => MoneyGate::Proceed,
             Transcript::Scripted => MoneyGate::Refuse(nothing_sent(format!(
@@ -367,6 +381,35 @@ mod tests {
             scripted(Render::Human).money_gate("stake release", true),
             MoneyGate::Proceed
         ));
+    }
+
+    /// A closed output refuses before the prompt, `--yes` included. Red edit:
+    /// consult the flag only for an interactive terminal.
+    #[test]
+    fn a_closed_output_refuses_money_before_any_confirmation() {
+        for presentation in [
+            interactive_human(),
+            scripted(Render::Human),
+            scripted(Render::Json),
+        ] {
+            for yes in [false, true] {
+                match presentation.money_gate_when("send", yes, true) {
+                    MoneyGate::Refuse(error) => {
+                        assert!(
+                            error.message.contains("Nothing was sent."),
+                            "{}",
+                            error.message
+                        );
+                        assert!(
+                            error.message.contains("output was closed"),
+                            "{}",
+                            error.message
+                        );
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
     }
 
     #[test]
