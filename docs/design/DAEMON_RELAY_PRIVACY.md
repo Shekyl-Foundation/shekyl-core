@@ -12674,8 +12674,8 @@ They are a separate surface and a separate curve.)*
 > 1770 ms; the clearnet embargo draw's mean 194 s and the Tor draw's 511 s.
 > Each deadline is that draw plus the connector's floor (§100), so the
 > figures read from the timer are later by it: the wallet wait
-> (`ADOPTED_PROPAGATION_TIMEOUT_SECS`) is 2375 s, and one fire of the
-> overdue budget is 1199 s (§92.5c; the origin retry that figure once
+> (`ADOPTED_PROPAGATION_TIMEOUT_SECS`) is 2409 s, and one fire of the
+> overdue budget is 1233 s (§92.5c; the origin retry that figure once
 > timed was REVERSED 2026-11-18). §97's register carries them.
 
 §71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
@@ -14563,7 +14563,7 @@ usability cost (rules 80, 82) and becomes an honest disclosure.
 
 ### 89.6.4 Interim, and who owns the fix
 
-**The interim is the worst-zone global — 2375 s, one value, no zone parameter.**
+**The interim is the worst-zone global — 2409 s, one value, no zone parameter.**
 Chosen *because* it requires no machinery: it is the cheapest thing to delete
 when the wallet stops holding a relay constant. The per-zone accessor and the
 per-zone FFI argument added earlier in this round were **removed rather than
@@ -15851,7 +15851,7 @@ interval's own symbols are deleted, as the block below records).
 > also stays, as the confidence of a **status** figure: the age at which
 > the daemon reports an unpublished own transaction overdue is the shared
 > timer's 1-in-10 quantile over two fires
-> (`origin_publication_budget_ms`, 2398 s). Nothing is sent on that figure.
+> (`origin_publication_budget_ms`, 2466 s). Nothing is sent on that figure.
 >
 > **Recorded when the write lands.** The zone asks for a reshape or a held
 > origin's first send and arms nothing; the stem is recorded, and its
@@ -17457,8 +17457,8 @@ row. Pins below were read at `98fbd20acb`.
 | Flush averages: `FLUFF_AVERAGE_IN_SECS` 5, `FLUFF_AVERAGE_OUT_QUARTER_SECS` 10, `FLUFF_AVERAGE_IN_QUARTER_SECS` 20 | `params.rs:597` to `:603` | **Assumption** for the parameters: inherited from the paper's implementation, never derived for Shekyl. The **realised** flush distribution (decision to bytes on the wire) is implementation timing, **RustPath since 2026-11-05 (fleet hosts, not the floor device).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** on the Rust path the realised flush is the drawn delay plus the `Relay`-class wake delay (the `hop` row: ≤ 0.33 ms idle, ≤ 2.3 ms on a busy lab host without the carrier) plus the transport's write, read at session close as the write-stall histogram with `in_flight_at_close=0` on every session: lab-local sessions finished writes under 4 ms (max 1.1–3.9 ms); the cloud host's inbound sessions across the public internet carried a 17–57 ms tail (2^24–2^25 ns bins, four writes). The implementation adds milliseconds to averages drawn in seconds; a full realised-versus-drawn distribution was not taken (the fluff lines carry no draw). | `FluffScheduler` (`DandelionParams::inherited`), the flood model's flush draw | The parameters are parameters and are not measured. The realised distribution's floor-device reading, with the draw logged beside the write, when the parameters are derived |
 | Dandelion++ epoch: `CRYPTONOTE_DANDELIONPP_MIN_EPOCH` 10 min, `EPOCH_RANGE` 30 s, `STEMS` 2 | `shekyl-relay/src/owner/actor.rs` `RelayConfig::inherited` (`stems` 2, `min_epoch_secs` 600, `epoch_jitter_secs` 30); mirrored by `DandelionParams::inherited`. *Records-was:* `src/cryptonote_config.h` at `ac3836de90` (lines 115–117), read by `public_zone_params()` in `levin_notify.cpp`, deleted 2026-11-05 | **Assumption.** The paper's parameters, inherited. Epoch length is a privacy parameter (§23), not a reading | `EpochScheduler`, `StemMap` width | Not measured. Reopened by a design round, not by a run |
 | Embargo tick, `DEFAULT_EMBARGO_TICK_MILLIS` 250 | `schedule.rs:435` | **Assumption.** A discretisation choice argued on instant preemption; §94.10 says the step-density argument is its own round | `derive_embargo` | Not a measurement. §94.10's tick round |
-| The embargo floor, 5.5 s on clearnet and 22.75 s on Tor | `params.rs` `DandelionParams::embargo_floor_ms`, carried by `EmbargoTimer::adopted` (`floor_millis`) | **Derived** (§100) from the hop row, `fluff_return_ms`, `fluff_probability_pct` and `EMBARGO_FULL_TRAVEL_PROBABILITY`: the stem length one stem in ten exceeds (11 hops), times the hop, plus one fluff return, rounded up to a tick | Every embargo deadline, and so every figure read from the timer | Moves with its inputs. `fluff_return_ms` is transit-free and provisional (§96 item 2), and the floor is short on a transit-bearing return by the same amount |
-| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2375 s | `schedule.rs` | **Derived** from the Tor transit row, the hop row, `fluff_return_ms` and the floor row: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
+| The embargo floor, 36.5 s on clearnet and 57 s on Tor | `schedule.rs` `EmbargoTimer::adopted_floor_millis`, from `DandelionParams::embargo_floor_hops_ms` and `FluffScheduler::single_path_return_millis`; carried by `EmbargoTimer::adopted` (`floor_millis`) | **Derived** (§100) from the hop row, `fluff_probability_pct`, `EMBARGO_FULL_TRAVEL_PROBABILITY`, the inbound fluff-flush mean and `PROPAGATION_FALSE_FAIL_ONE_IN`: the stem length one stem in ten exceeds (11 hops) and the two hops of the shortest return, times the hop, plus the 1-in-100 quantile of two inbound flush waits (33.75 s), rounded up to a tick | Every embargo deadline, and so every figure read from the timer | Moves with its inputs. It does not read `fluff_return_ms`; §100.2 says why |
+| `ADOPTED_PROPAGATION_TIMEOUT_SECS`, 2409 s | `schedule.rs` | **Derived** from the Tor transit row, the hop row, `fluff_return_ms` and the floor row: the longest transit's 1-in-100 survival quantile | `shekyl_dandelionpp_propagation_timeout_seconds` (the wallet's wait) | Moves with its inputs, pins second (§94.10) |
 | `INHERITED_EMBARGO_SECS`, 39 s | `params.rs:486` | **Assumption.** The inherited daemon's `CRYPTONOTE_DANDELIONPP_EMBARGO_AVERAGE`, kept as the records-was the tests pin against | Tests only: `adopted_params_change_provenance_not_behaviour` and the FFI's "not the inherited 39 s" assertion. No production consumer | Not measured; it is the number F-1 replaced |
 | Carrier cadence: `NOISE_MIN_DELAY_MS` 3333, `NOISE_DELAY_JITTER_MS` 3334, `MEAN_CADENCE_MS` 5000 | `params/carrier.rs:136`, `:178`, `:189` | **Derived** from the 16 KiB/s bandwidth ceiling, which is a ruling (`COVER_TRAFFIC_RESTORATION.md` §2.8, §3.1), so **Assumption**-based. The realised cadence is **RustPath since 2026-11-05 (fleet hosts, `--dev-relay-cover`, clearnet only).** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the relay owner transports each window; the written lines carry timestamp and size only. On a lab host with two open links: 275 windows, gaps per channel n=273 min 3340 p50 5078 p90 6334 max 6663 ms against the drawn 3333 + U(0, 3334) ms (min 3333, mean 5000, max 6667) — the realised cadence is the drawn one end to end; every window 20 480 bytes. On the origin host: 258 windows, gaps n=256 with the same body (min 3339 p50 5083 p90 6466 ms) and two gaps of 28.3 and 32.3 s on both channels at once — the relay-owner stall in the `hop` row, during which the carrier is silent: **an observable timing event on the cover link**, reported with the record. Two things the run also shows: the carrier refuses a Tor-only node (`NoiseWithoutOpenLink`: Tor is volume cover), so no Tor cadence exists to read; and an embargo reshape is written as a direct 2002 outside the windows (`Effect::Stem` → `send_batch`), a non-cadenced write on the link, raised as a design question, not ruled. | `NoiseCadence`, the carrier schedule, behind `set_carrier_development` (off in every shipped build) | §3.1c's budget-versus-actual reading on the floor device, development flag only; and whichever ruling the stall and the reshape questions get |
 | Connector deadlines (`shekyl-transport-layer::spans`; *records-was* `transport_spans` in C++, moved 2026-10-13): clearnet dial 1.415 s, handshake 1.426 s, gap 1.430 s; Tor dial 120 s, gap 37.4 s | `rust/shekyl-transport-layer/src/spans.rs:52` to `:81`; D9 (`P2P_TRANSPORT_LAYER.md`, 2026-09-30); clearnet from `docs/benchmarks/p2p_cutover_crossbuild_20260929.md`, Tor from `docs/benchmarks/p2p_tor_gap_cold_20261014.md` | **Clearnet: CppPath for the adopted values; a RustPath reading recorded 2026-11-05, outside D9's conditions.** **UPDATE 2026-11-05 (shekyl-dev `infrastructure/captures/p2p-remnant/README.md`):** the Rust dialer's spans over twelve clearnet dials (two dialers, two targets each, three legs; lab-local and lab-to-cloud across the public internet, x86 hosts): connect 2.3–39.8 ms, handshake 2.0–35.2 ms, dial-to-established 4.3–65.1 ms, every one under the 1.415 s / 1.426 s deadlines by a wide margin. Twelve samples on fleet hosts are not D9's measurement conditions (the floor device, the stated RTT ceiling), so the values stand as written. *Records-was:* **Clearnet: CppPath.** The distributions were taken with the C++ dial path in front (`idle_worker` on the two-worker io pool, the starvation defect the dialer brief records) and the C++ Levin handshake inside the gap. The 700 ms GEO-satellite RTT ceiling in the clearnet form is an **Assumption**, stated. **Tor: RustPath** (`TOR_SPANS_BASIS`; Rick, 2026-10-14): cold first contact on the Rust dialer, 189 sessions pooled from two responders. The dial is bounded by Tor's own SOCKS timeout, where the distribution is censored; the gap is twice the pooled p99, 18.69 s, rounded up. Reopen at 500 pooled Rust-path samples. **Ruled 2026-10-08 (Rick):** each connector's gap is the outbound handshake's only clock, armed by the connector | The connector's armed deadlines (`shekyl_zone_params`), the shutdown wait; the dialer's handshake clock | Clearnet: after PR-3, on the Rust dialer, under D9's measurement conditions; into this register. Tor: at 500 pooled Rust-path samples |
@@ -18192,16 +18192,14 @@ row and this section.
 **Status: IMPLEMENTED. Ruling: "fix the minimum for the timer such that a
 transaction can reasonably propagate."** Every embargo deadline is a floor
 plus the memoryless draw. The floor is one figure per connector, the same
-for a node's own transaction and a relayed one.
+for a node's own transaction and a relayed one, and the same on every node.
 
 ### 100.1 What went wrong without it
 
 A memoryless draw has no minimum. Since §92.5c item 3's reversal
 (2026-11-18) a node's own transaction draws the shared embargo, where it
 used to wait a fixed interval, so a short draw now lands on the origin too.
-About one draw in a hundred on the Tor timer came out under the time a
-fluff takes to return. The sequence, read from one origin's relay log on a
-three-node Tor mesh:
+The sequence, read from one origin's relay log on a three-node Tor mesh:
 
 1. The origin stems its transaction and arms a 5.25 s embargo.
 2. The embargo fires while the stem is completing. The origin re-stems to
@@ -18215,34 +18213,70 @@ A fire inside the return time is not evidence of a black hole. It is the
 timer answering before the question could have an answer, and it spends the
 one re-stem the cap allows (§12.3).
 
+On a node with one return path the fire is worse than wasted. A node that
+fluffs sends to every session but the one the transaction came from, so the
+fluff never comes straight back up the stem: it reaches the node that
+stemmed through a third node. With two peers that third node is the
+alternate, every time, so an early fire always strands the entry.
+
 ### 100.2 The floor, derived
 
 ```text
-floor = H · hop + F
+floor = (H + 2) · hop + R
 H     = the smallest h with (1 - q)^h <= 1 - alpha
+R     = the 1-in-N survival quantile of two inbound fluff-flush waits
 ```
 
-`H · hop + F` is the origin's slack on a stem of length `H`: the hops out,
-and one fluff return. The origin has the longest slack on any stem (node `i`
-of a stem of length `h` waits `(h - i)·hop + F`), and every node takes the
-one figure, because a node does not know its place on a stem and a floor
-that read whether a transaction is the node's own would be the difference
-§92.5c item 3 removed. `H` is the stem length the network's own confidence
-covers: `alpha` is `EMBARGO_FULL_TRAVEL_PROBABILITY` and `q` the fluff
-probability, the two inputs the embargo mean is solved from, so the floor
-has no bar of its own.
+- `H · hop` is the stem out, on a stem of the length the network's own
+  confidence covers: `alpha` is `EMBARGO_FULL_TRAVEL_PROBABILITY` and `q`
+  the fluff probability, the inputs the embargo mean is solved from. The
+  origin has the longest slack on any stem, and every node takes the one
+  figure, because a node does not know its place on a stem and a floor that
+  read whether a transaction is the node's own would be the difference
+  §92.5c item 3 removed.
+- `2 · hop + R` is the shortest return: two fluff hops
+  (`SINGLE_PATH_RETURN_HOPS`), each a flush wait and a hop. The wait is
+  drawn from the inbound table, the slower of the scheduler's two means
+  (5 s), since a node cannot tell which way the sessions on its return path
+  were opened.
+- `N` is `PROPAGATION_FALSE_FAIL_ONE_IN`, 100. A fire is the embargo judging
+  the stem failed, and that is the rate a wrong failure judgment is already
+  provisioned at. At most one return in a hundred is still in flight when
+  the floor ends, and a fire then still needs a short draw on top.
 
 | | clearnet | Tor |
 |---|---|---|
 | `H` at `q = 20 %`, `alpha = 0.90` | 11 hops | 11 hops |
 | hop | 195 ms | 1770 ms |
-| `F` (`fluff_return_ms`) | 3250 ms | 3250 ms |
-| floor, rounded up to the 250 ms tick | 5.5 s | 22.75 s |
+| `(H + 2) · hop` | 2.5 s | 23.0 s |
+| `R` at 1 in 100 | 33.75 s | 33.75 s |
+| floor, rounded up to the 250 ms tick | 36.5 s | 57 s |
+
+**Why the single path, and not `fluff_return_ms`.** `fluff_return_ms`
+(3250 ms) is a first passage over twelve peers with no transit in it. It
+describes the provisioned network the embargo *mean* is solved for, and it
+still feeds that mean. It does not describe a node whose fluff can come
+back only one way. Measured on the three-node Tor mesh of the emission walk
+(one origin, 289 own transactions, the relay logged at debug, stem written
+to fluff counted):
+
+| | measured | two inbound flush waits, modelled |
+|---|---|---|
+| median | 7.8 s | 9.9 s |
+| p90 | 19.8 s | 21.0 s |
+| p99 | 36.1 s | 34.7 s |
+| longest | 44.8 s | |
+
+A floor built on the 3250 ms figure (22.75 s on Tor) left 20 of those 289
+returns outside it, and about one walk in four still met an early fire. A
+floor that followed a node's own peer count would be a timing signature
+per node, so every node takes the slowest case. A floor is a bound: it has
+to hold where the return is slowest.
 
 The floor is added to the draw. It is not the larger of the two, which
 would put a point mass at the floor; past the floor the draw is the
 memoryless one it was (D-1, F-4's residual argument holds from the floor
-on). `DandelionParams::embargo_floor_ms` owns the figure and
+on). `EmbargoTimer::adopted_floor_millis` owns the figure and
 `EmbargoTimer::adopted` carries it; the measurement constructors have no
 floor.
 
@@ -18254,33 +18288,37 @@ sits above its target.
 
 | | before | with the floor |
 |---|---|---|
-| clearnet deadline mean | 194 s | 199 s |
-| Tor deadline mean | 511 s | 534 s |
-| one fire at 1 in 10, longest transit (`embargo_quiet_wait_secs`) | 1176 s | 1199 s |
-| overdue budget, two fires (`origin_publication_budget_ms`, status only) | 2352 s | 2398 s |
-| wallet wait at 1 in 100 (`ADOPTED_PROPAGATION_TIMEOUT_SECS`) | 2352 s | 2375 s |
-| full travel, clearnet (`full_travel_probability_with_floor`) | 0.9001 | 0.9979 |
-| full travel, Tor | 0.9000 | 0.9937 |
-| §6.6 passive inbound-supernode leak, `phi = 0.10`, 10^6 trials | 0.0109 | 0.0002 |
-| δ at `f = 0.05 / 0.10 / 0.30`, no reshape, 10^6 trials | 0.0010 / 0.0021 / 0.0048 | under 0.0001 each |
+| clearnet deadline mean | 194 s | 230 s |
+| Tor deadline mean | 511 s | 568 s |
+| one fire at 1 in 10, longest transit (`embargo_quiet_wait_secs`) | 1176 s | 1233 s |
+| overdue budget, two fires (`origin_publication_budget_ms`, status only) | 2352 s | 2466 s |
+| wallet wait at 1 in 100 (`ADOPTED_PROPAGATION_TIMEOUT_SECS`) | 2352 s | 2409 s |
+| full travel on the modelled network, clearnet (`full_travel_probability_with_floor`) | 0.9001 | 1.0000 |
+| full travel on the modelled network, Tor | 0.9000 | 0.9999 |
+| §6.6 passive inbound-supernode leak, `phi = 0.10`, 10^6 trials | 0.0109 | no event |
+| δ at `f = 0.05 / 0.10 / 0.30`, no reshape, 10^6 trials | 0.0010 / 0.0021 / 0.0048 | no event |
 
-The two leak rows fall because both channels are fed by a timer that fires
-on a stem still in flight (§6.7), and the floor removes those fires for
-every stem of up to `H` hops. The cost is black-hole recovery: each fire is
-later by the floor, about 3 % of the mean on clearnet and 4.5 % on Tor.
+The last four rows are read on the modelled network, where the fluff
+returns in `fluff_return_ms`. There the floor outlasts every stem slack the
+instruments reach, so the channels fed by a timer firing on a stem still in
+flight (§6.7) read nothing. On a network whose returns are slower than the
+model, the measured table in §100.2 is the guide, not these rows.
+
+The cost is black-hole recovery: each fire is later by the floor, 19 % of
+the mean on clearnet and 11 % on Tor.
 
 **Not done here.** With the floor in place the solved mean over-provisions
-full travel (0.998 against a target of 0.90). Solving the mean again with
-the floor inside the survival equation would shorten it, and with it every
-recovery time. That is a new derivation of the embargo, not this ruling;
-it reopens on Rick's word.
+full travel. Solving the mean again with the floor inside the survival
+equation would shorten it, and with it every recovery time. That is a new
+derivation of the embargo, not this ruling; it reopens on Rick's word.
 
 ### 100.4 The timing a stem peer can read
 
 The floor is the same for own and relayed transactions, measured from the
 send a stem peer sees, so the reaction to a dropped stem still does not
 sort a node's own transactions from the ones it relays
-(`a_dropped_stem_gets_one_reaction_own_or_relayed`).
+(`a_dropped_stem_gets_one_reaction_own_or_relayed`). It is the same on every
+node, so it says nothing about a node's connections.
 
 A hard minimum does give one thing a memoryless draw does not. A peer that
 drops a stem knows its predecessor cannot react inside the floor. If the
@@ -18294,14 +18332,19 @@ origin by the same fraction of a percent. The rate at which the first fire
 comes already carries more than this: with `s` nodes upstream it is
 `s + 1` times the origin-alone rate, floor or no floor.
 
-### 100.5 What it inherits
+### 100.5 What it does not cover
 
-`fluff_return_ms` is the transit-free model figure, provisional under §96
-item 2. On a connector with real transit the return is longer than `F`, and
-the floor is short by what the embargo mean is short by. The traced return
-above took 5.7 s from submit on a three-node Tor mesh, inside the 22.75 s
-floor; a return slower than the floor plus the draw still reshapes, as
-§92.5c prices.
+- **A return slower than the floor.** One return in a hundred on a single
+  path outlasts `R`. A fire then needs a draw shorter than the excess. On
+  the Tor mesh above that is under one walk in a thousand; a one-hop stem
+  on a single-path clearnet mesh has less hop slack and meets it about two
+  transactions in ten thousand.
+- **A stem lost with its session.** A stem written to a session that then
+  closes is held on its embargo like any other, floor and draw. Whether a
+  node should react to its successor's session closing is a separate
+  question: a peer can close a session at will, so any reaction to it is a
+  reaction a peer can trigger.
+- **The hop.** Both hop figures are the assumptions §97 registers.
 
 ### 100.6 Tests
 
@@ -18311,10 +18354,13 @@ floor; a return slower than the floor plus the draw still reshapes, as
   `EmbargoTimer::deadline`.
 - `an_adopted_deadline_is_the_floor_plus_the_draw` (`shekyl-relay-privacy`):
   the deadline, the mean and three quantiles are the bare draw's plus the
-  floor, on both transits.
+  floor, on both transits, and the floor is the hops and the two flush
+  waits.
+- `the_single_path_return_is_two_inbound_flush_waits`: the quantile against
+  400,000 walked pairs of draws, at three rates.
 - `the_floor_stem_length_follows_the_fluff_probability` and
-  `the_embargo_floor_is_the_covered_stem_and_its_fluff_return`: `H` and the
-  two floor figures.
+  `the_embargo_floor_counts_the_covered_stem_and_the_return_hops`: `H` and
+  the hop figures.
 - `analytic_alpha_agrees_with_the_empirical_walk` reads full travel on the
   shipped timer both ways; `leak_at_each_candidate_region` and
   `precision_increment_reproduces_delta_table` keep their records on the

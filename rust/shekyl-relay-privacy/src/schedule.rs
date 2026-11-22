@@ -128,6 +128,10 @@ pub struct FluffScheduler {
     pending: BTreeMap<ConnectionId, Millis>,
 }
 
+/// The tick a fluff flush delay is drawn in: a quarter second, the unit of
+/// the scheduler's means (`inherited::FLUFF_AVERAGE_*_QUARTER_SECS`).
+pub const FLUFF_TICK_MILLIS: u64 = 250;
+
 /// Walk a quantized table's masses until the remaining tail is within budget.
 ///
 /// The masses partition `2^64` exactly (see `quantized_mass`), so the tail after
@@ -212,6 +216,48 @@ impl DelayTable {
             Self::Geometric(t) => t.is_truncated(),
         }
     }
+
+    /// The table's quantized masses, outcome by outcome. They partition
+    /// `2^64` exactly.
+    fn masses(&self) -> Vec<u64> {
+        match self {
+            Self::Poisson(t) => (0..=t.max_support()).map(|k| t.quantized_mass(k)).collect(),
+            Self::Geometric(t) => t.masses(),
+        }
+    }
+
+    /// The smallest total `t`, in ticks, that two independent draws from
+    /// this table exceed no more often than `1 / one_in`: the survival
+    /// quantile of their sum, from the table's own masses.
+    ///
+    /// Integer throughout, like [`Self::survival_quantile_ticks`]. Each mass
+    /// is halved first so the products of two masses sum inside a `u128`;
+    /// that drops one part in `2^63` of each mass, far below any rate asked
+    /// here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `one_in` is zero.
+    fn two_draw_survival_quantile_ticks(&self, one_in: u64) -> u64 {
+        assert!(one_in > 0, "the rate must be a positive 1/n");
+        let masses: Vec<u128> = self.masses().iter().map(|m| u128::from(m >> 1)).collect();
+        let whole: u128 = masses.iter().sum();
+        let total = whole * whole;
+        let allowed_tail = total / u128::from(one_in);
+        let top = 2 * (masses.len() - 1);
+        let mut cumulative: u128 = 0;
+        for sum in 0..=top {
+            let first = sum.saturating_sub(masses.len() - 1);
+            let last = sum.min(masses.len() - 1);
+            for i in first..=last {
+                cumulative += masses[i] * masses[sum - i];
+            }
+            if total - cumulative <= allowed_tail {
+                return sum as u64;
+            }
+        }
+        top as u64
+    }
 }
 
 impl FluffScheduler {
@@ -283,6 +329,35 @@ impl FluffScheduler {
         self.family
     }
 
+    /// How long a fluff waits in flush queues on the shortest way back to
+    /// the node that stemmed the transaction, in milliseconds, at a miss
+    /// rate of `1 / one_in`.
+    ///
+    /// The shortest return is two fluff hops
+    /// ([`crate::params::SINGLE_PATH_RETURN_HOPS`]), and each is one flush
+    /// wait. This is the survival quantile of two waits drawn from the
+    /// **inbound** table, the slower of the two means: a node cannot tell
+    /// which direction the sessions on its return path were opened in, so
+    /// the figure takes the direction that waits longer.
+    ///
+    /// It is the return on **one** path. A node with many peers hears a
+    /// fluff sooner, by the first of many paths; `fluff_return_ms` models
+    /// that at degree 12. A node whose fluff can only come back one way (a
+    /// small network, or an under-connected node) waits this long, and it is
+    /// the figure the embargo floor is built on
+    /// ([`EmbargoTimer::adopted_floor_millis`]), because a floor is a bound
+    /// and has to hold where the return is slowest.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `one_in` is zero.
+    #[must_use]
+    pub fn single_path_return_millis(&self, one_in: u64) -> u64 {
+        self.inbound
+            .two_draw_survival_quantile_ticks(one_in)
+            .saturating_mul(FLUFF_TICK_MILLIS)
+    }
+
     /// Queue a peer for fluffing at `now`, returning the earliest pending
     /// deadline across all peers.
     ///
@@ -304,7 +379,7 @@ impl FluffScheduler {
                 PeerDirection::Outbound => &self.outbound,
             };
             let quarter_secs = table.draw(rng);
-            now.saturating_add(quarter_secs.saturating_mul(250))
+            now.saturating_add(quarter_secs.saturating_mul(FLUFF_TICK_MILLIS))
         });
         self.next_deadline()
             .expect("a peer was just queued, so a deadline exists")
@@ -399,7 +474,7 @@ pub type EmbargoDistribution = DelayFamily;
 /// # The shipped value, and why it is not 39 s
 ///
 /// The daemon draws from [`Self::adopted`] — **a memoryless draw of mean
-/// 194 s on clearnet, on top of a 5.5 s floor** — and
+/// 194 s on clearnet, on top of a 36.5 s floor** — and
 /// carries no embargo constant of its own (`DAEMON_RELAY_PRIVACY.md` §17). It
 /// replaced an inherited `39 s` that was wrong three ways, each of which this
 /// type is shaped to prevent recurring:
@@ -473,11 +548,11 @@ pub const PROPAGATION_FALSE_FAIL_ONE_IN: u64 = 100;
 /// is the cheapest thing to remove. Do not make it per-zone, and do not grow it
 /// — the reasoning lives in §89.6, not here. It follows the timer: the
 /// embargo floor (Rick, 2026-11-22) moved every quantile by the longest
-/// transit's 22.75 s, and this pin with them, from 2 352 s.
+/// transit's 57 s, and this pin with them, from 2 352 s.
 ///
 /// Cost of the interim, stated: a clearnet send reports failure at ~39 minutes
 /// rather than ~15.
-pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_375;
+pub const ADOPTED_PROPAGATION_TIMEOUT_SECS: u32 = 2_409;
 
 /* `ADOPTED_FORWARD_DELAY_MEAN_SECS` and `ForwardDelay` were here, and Q12-U2
 deleted them with `relay_method::forward`.
@@ -530,8 +605,57 @@ impl EmbargoTimer {
         .expect("full-travel target reachable below 1");
         Self::geometric_with_floor(
             d.mean_ticks,
-            params.embargo_floor_ms().div_ceil(d.tick_millis),
+            Self::adopted_floor_millis(params).div_ceil(d.tick_millis),
             d.tick_millis,
+        )
+    }
+
+    /// The least time an adopted embargo waits before it may fire, in
+    /// milliseconds: what a stem and its fluff return can reasonably take
+    /// (Rick, 2026-11-22). [`Self::adopted`] rounds it up to its tick.
+    ///
+    /// ```text
+    /// floor = (H + 2) · hop + R
+    /// ```
+    ///
+    /// - `(H + 2) · hop` is [`DandelionParams::embargo_floor_hops_ms`]: the
+    ///   stem out, on a stem of the length the network's full-travel
+    ///   confidence covers, and the two hops of the shortest return.
+    /// - `R` is [`FluffScheduler::single_path_return_millis`] on the
+    ///   scheduler the relay ships ([`FluffScheduler::memoryless`]), at
+    ///   [`PROPAGATION_FALSE_FAIL_ONE_IN`]: the two flush waits on that
+    ///   return.
+    ///
+    /// **Why there is a floor.** A memoryless draw has no minimum, and an
+    /// embargo that fires while the fluff is on its way back is a wrong
+    /// judgment that the stem failed. On a node with one return path it is
+    /// worse than wasted: the node re-stems to its alternate, the fluff then
+    /// arrives from that alternate, and the stem watch does not count an
+    /// arrival from the peer a stem was last sent to (F-10), so the node goes
+    /// on holding a transaction the network already has.
+    ///
+    /// **Why this rate.** A fire is the embargo judging the stem failed, and
+    /// [`PROPAGATION_FALSE_FAIL_ONE_IN`] is the rate this crate already
+    /// provisions a wrong failure judgment at. So at most one return in that
+    /// many is still in flight when the floor ends, and a fire then still
+    /// needs a short draw on top.
+    ///
+    /// **Why the single path.** `fluff_return_ms` is the first passage over
+    /// twelve peers and has no transit in it; it describes the provisioned
+    /// network the embargo *mean* is solved for. Measured on a three-node Tor
+    /// mesh the return ran a median of 8 s and reached 45 s
+    /// (`DAEMON_RELAY_PRIVACY.md` §100). A floor that follows a node's own
+    /// peer count would be a timing signature per node, so every node takes
+    /// the slowest case.
+    ///
+    /// The mean of the draw is not solved again with the floor in it
+    /// ([`crate::derive::derive_embargo`] does not read this): a deadline is
+    /// the floor plus the draw, so the full-travel probability sits above
+    /// its target and every figure read from the timer is later by the floor.
+    #[must_use]
+    pub fn adopted_floor_millis(params: &DandelionParams) -> u64 {
+        params.embargo_floor_hops_ms().saturating_add(
+            FluffScheduler::memoryless().single_path_return_millis(PROPAGATION_FALSE_FAIL_ONE_IN),
         )
     }
 
@@ -545,7 +669,7 @@ impl EmbargoTimer {
     /// [`Self::judge_failed_after_secs`] carry it.
     ///
     /// [`Self::adopted`] takes the floor from
-    /// [`DandelionParams::embargo_floor_ms`], rounded **up** to a whole tick
+    /// [`Self::adopted_floor_millis`], rounded **up** to a whole tick
     /// (a short floor fires early, the privacy-losing direction). The other
     /// constructors build the configurations a measurement compares against
     /// and have no floor, which is what those configurations are.
@@ -704,9 +828,9 @@ impl EmbargoTimer {
 
     /// The least a deadline waits, in milliseconds. No fire comes sooner.
     ///
-    /// On [`Self::adopted`] it is [`DandelionParams::embargo_floor_ms`]
-    /// rounded up to a tick: what a stem and its fluff return can reasonably
-    /// take. Zero on the measurement constructors.
+    /// On [`Self::adopted`] it is [`Self::adopted_floor_millis`] rounded up
+    /// to a tick: what a stem and its fluff return can reasonably take. Zero
+    /// on the measurement constructors.
     #[must_use]
     pub const fn floor_millis(&self) -> u64 {
         self.floor_ticks.saturating_mul(self.tick_millis)
@@ -1102,6 +1226,51 @@ mod tests {
         );
     }
 
+    /// The single-path return is the survival quantile of two inbound flush
+    /// waits, read from the shipped table: walked draws exceed it no more
+    /// often than the stated rate, and exceed one tick less more often.
+    /// Red edit: one wait where there are two, or the outbound table.
+    #[test]
+    fn the_single_path_return_is_two_inbound_flush_waits() {
+        const DRAWS: u64 = 400_000;
+        let scheduler = FluffScheduler::memoryless();
+        let mut rng = SplitMix64::new(0x51_F1);
+        let mut sums: Vec<u64> = (0..DRAWS)
+            .map(|_| scheduler.inbound.draw(&mut rng) + scheduler.inbound.draw(&mut rng))
+            .collect();
+        sums.sort_unstable();
+        for one_in in [10_u64, PROPAGATION_FALSE_FAIL_ONE_IN, 1_000] {
+            let millis = scheduler.single_path_return_millis(one_in);
+            let ticks = millis / FLUFF_TICK_MILLIS;
+            let over = |t: u64| sums.iter().filter(|s| **s > t).count() as u64;
+            println!(
+                "single-path return at 1 in {one_in}: {millis} ms ({} of {DRAWS} walked sums exceed it)",
+                over(ticks)
+            );
+            // The quantile's own rate, with room for the walk's noise.
+            assert!(
+                over(ticks) * one_in <= DRAWS + DRAWS / 5,
+                "1 in {one_in}: {} of {DRAWS} sums exceed {ticks} ticks",
+                over(ticks)
+            );
+            assert!(
+                over(ticks.saturating_sub(4)) * one_in > DRAWS - DRAWS / 5,
+                "1 in {one_in}: {ticks} ticks is later than the rate needs"
+            );
+        }
+        assert_eq!(
+            scheduler.single_path_return_millis(1),
+            0,
+            "a 1-in-1 rate is met at once"
+        );
+        // Twice the mean wait is far inside any rate asked of it.
+        assert!(
+            scheduler.single_path_return_millis(PROPAGATION_FALSE_FAIL_ONE_IN)
+                > 2 * u64::from(crate::params::inherited::FLUFF_AVERAGE_IN_QUARTER_SECS)
+                    * FLUFF_TICK_MILLIS
+        );
+    }
+
     /// Every adopted deadline is the floor plus the draw (Rick, 2026-11-22):
     /// none comes sooner, the floor is the parameter set's own figure on the
     /// tick grid, and the mean and each quantile sit later than the bare
@@ -1128,10 +1297,16 @@ mod tests {
             assert_eq!(bare.floor_millis(), 0);
             assert_eq!(
                 floor,
-                params
-                    .embargo_floor_ms()
+                EmbargoTimer::adopted_floor_millis(&params)
                     .next_multiple_of(DEFAULT_EMBARGO_TICK_MILLIS),
-                "the floor is the parameter set's, rounded up to a tick"
+                "the floor is the adopted figure, rounded up to a tick"
+            );
+            let flushes = FluffScheduler::memoryless()
+                .single_path_return_millis(PROPAGATION_FALSE_FAIL_ONE_IN);
+            assert_eq!(
+                EmbargoTimer::adopted_floor_millis(&params),
+                params.embargo_floor_hops_ms() + flushes,
+                "the floor is the hops and the two flush waits"
             );
 
             let mut earliest = Millis::MAX;

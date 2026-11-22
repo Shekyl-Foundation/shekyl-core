@@ -82,7 +82,7 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
 fn the_overdue_budget_is_two_fires_of_the_shared_timer() {
     /// The longest-transit timer's 1-in-10 quantile at the shipped terms
     /// (`DAEMON_RELAY_PRIVACY.md` §92.5c item 3).
-    const PER_FIRE_SECS: u32 = 1_199;
+    const PER_FIRE_SECS: u32 = 1_233;
     let params = DandelionParams::adopted_for_transit_ms(longest_transit());
     let timer = EmbargoTimer::adopted(&params);
     let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");

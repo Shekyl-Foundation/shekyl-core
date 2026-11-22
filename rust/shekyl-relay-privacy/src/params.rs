@@ -243,6 +243,17 @@ impl StemGraph {
     }
 }
 
+/// The fewest hops a fluff takes back to the node that stemmed the
+/// transaction: two.
+///
+/// A node that fluffs sends to every session but the one the transaction
+/// came from, so the stem's last hop never sends the fluff straight back up
+/// the stem. The shortest return is the fluffing node to a third node, and
+/// that node to the one that stemmed. Each of the two is a flush wait
+/// ([`crate::schedule::FluffScheduler::single_path_return_millis`]) and one
+/// hop ([`DandelionParams::embargo_floor_hops_ms`]).
+pub const SINGLE_PATH_RETURN_HOPS: u32 = 2;
+
 /// The complete Dandelion++ parameter set, expressed as design inputs.
 ///
 /// Every derived quantity is a method, never a stored field: a caller cannot
@@ -432,7 +443,7 @@ impl DandelionParams {
     /// against the inherited set's 190 s. (A longer measured transit takes a
     /// longer hop — see [`Self::adopted_for_transit_ms`]. The wallet
     /// failed-send wait is the longest measured transit's quantile, floor
-    /// included, currently 2375 s —
+    /// included, currently 2409 s —
     /// `ADOPTED_PROPAGATION_TIMEOUT_SECS` — and is a deletion target per
     /// §89.6.)
     ///
@@ -560,47 +571,33 @@ impl DandelionParams {
         hops
     }
 
-    /// The least time an embargo waits before it may fire, in milliseconds:
-    /// what a stem and its fluff return can reasonably take (Rick,
-    /// 2026-11-22).
+    /// The hop part of the embargo floor, in milliseconds: every hop a
+    /// stemmed transaction and its returning fluff cross before the node
+    /// that stemmed it can hear it again (Rick, 2026-11-22).
     ///
     /// ```text
-    /// floor = full_travel_stem_hops · hop + F
+    /// (full_travel_stem_hops + SINGLE_PATH_RETURN_HOPS) · hop
     /// ```
     ///
-    /// That is the origin's slack on a stem of the length the network's
-    /// confidence covers ([`Self::full_travel_stem_hops`]): the hops out, and
-    /// one fluff return ([`Self::fluff_return_ms`]). The origin has the
-    /// longest slack on any stem ([`crate::derive`]: node `i` of a stem of
-    /// length `h` waits `(h - i)·hop + F`), and every node takes this one
-    /// figure. A node does not know its place on a stem, and a floor that
-    /// read whether a transaction is the node's own would be the own/relayed
-    /// difference `shekyl-relay`'s embargo removed.
+    /// The stem's hops out, on a stem of the length the network's confidence
+    /// covers ([`Self::full_travel_stem_hops`]), and the hops of the shortest
+    /// way a fluff can come back ([`SINGLE_PATH_RETURN_HOPS`]). The origin
+    /// has the longest slack on any stem ([`crate::derive`]: node `i` of a
+    /// stem of length `h` waits `(h - i)·hop` plus the return), and every
+    /// node takes this one figure. A node does not know its place on a stem,
+    /// and a floor that read whether a transaction is the node's own would be
+    /// the own/relayed difference `shekyl-relay`'s embargo removed.
     ///
-    /// **Why there is a floor at all.** A memoryless draw has no minimum.
-    /// About one draw in a hundred came out at a few seconds, inside the time
-    /// the fluff takes to come back. The embargo then fired on a stem that
-    /// was completing, the node re-stemmed to its alternate, and the fluff
-    /// arriving from that alternate did not count as circulation (F-10, the
-    /// charged-successor echo), so the node went on holding a transaction
-    /// the network already had. A fire inside this floor says nothing about
-    /// a black hole: no stem of ordinary length could have come back yet.
-    ///
-    /// **What it inherits.** [`Self::fluff_return_ms`] is the transit-free
-    /// model figure, provisional under `DAEMON_RELAY_PRIVACY.md` §96 item 2.
-    /// On a connector with real transit the return takes longer than `F`, and
-    /// this floor is short by the same amount the embargo mean is. It moves
-    /// when that input does.
-    ///
-    /// The mean of the draw is not solved again with the floor in it
-    /// ([`crate::derive::derive_embargo`] does not read this): a deadline is
-    /// the floor plus the draw, so the full-travel probability sits above
-    /// its target and every figure read from the timer is later by the floor.
+    /// The floor's other part is the wait at each returning hop, which is the
+    /// flush scheduler's and lives beside it:
+    /// [`crate::schedule::FluffScheduler::single_path_return_millis`]. The
+    /// sum is [`crate::schedule::EmbargoTimer::adopted_floor_millis`], which
+    /// states why there is a floor at all.
     #[must_use]
-    pub fn embargo_floor_ms(&self) -> u64 {
+    pub fn embargo_floor_hops_ms(&self) -> u64 {
         u64::from(self.full_travel_stem_hops())
-            .checked_mul(u64::from(self.time_between_hop_ms.ms()))
-            .and_then(|out| out.checked_add(u64::from(self.fluff_return_ms.ms())))
+            .checked_add(u64::from(SINGLE_PATH_RETURN_HOPS))
+            .and_then(|hops| hops.checked_mul(u64::from(self.time_between_hop_ms.ms())))
             .expect("embargo floor fits u64")
     }
 
@@ -876,24 +873,25 @@ mod tests {
         assert_eq!(DandelionParams::adopted().full_travel_stem_hops(), 11);
     }
 
-    /// The floor is that many hops out and one fluff return, per transit.
-    /// The figures are the ones `DAEMON_RELAY_PRIVACY.md` states.
-    /// Red edit: any term dropped from `embargo_floor_ms`.
+    /// The floor's hop part is the covered stem out and the two hops of the
+    /// shortest return, per transit. The figures are the ones
+    /// `DAEMON_RELAY_PRIVACY.md` §100 states.
+    /// Red edit: either term dropped from `embargo_floor_hops_ms`.
     #[test]
-    fn the_embargo_floor_is_the_covered_stem_and_its_fluff_return() {
-        for (transit, floor_ms) in [
-            (crate::verify_cost::ADOPTED_TRANSIT, 5_395_u64),
-            (crate::verify_cost::ANON_ZONE_TRANSIT, 22_720),
+    fn the_embargo_floor_counts_the_covered_stem_and_the_return_hops() {
+        for (transit, hops_ms) in [
+            (crate::verify_cost::ADOPTED_TRANSIT, 2_535_u64),
+            (crate::verify_cost::ANON_ZONE_TRANSIT, 23_010),
         ] {
             let p = DandelionParams::adopted_for_transit_ms(transit);
             assert_eq!(
-                p.embargo_floor_ms(),
-                u64::from(p.full_travel_stem_hops()) * u64::from(p.time_between_hop_ms.ms())
-                    + u64::from(p.fluff_return_ms.ms())
+                p.embargo_floor_hops_ms(),
+                (u64::from(p.full_travel_stem_hops()) + u64::from(SINGLE_PATH_RETURN_HOPS))
+                    * u64::from(p.time_between_hop_ms.ms())
             );
             assert_eq!(
-                p.embargo_floor_ms(),
-                floor_ms,
+                p.embargo_floor_hops_ms(),
+                hops_ms,
                 "transit {} ms",
                 transit.ms()
             );

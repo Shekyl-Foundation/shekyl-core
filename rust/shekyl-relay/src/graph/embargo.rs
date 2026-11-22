@@ -13,7 +13,7 @@
 //! **The embargo is the stem watch's observation.** Every successful stem
 //! send records one (`Relay::record_stem`) with a deadline: its connector's
 //! floor, the time a stem and its fluff return can reasonably take (Rick,
-//! 2026-11-22; `DandelionParams::embargo_floor_ms`), plus that connector's
+//! 2026-11-22; `EmbargoTimer::adopted_floor_millis`), plus that connector's
 //! memoryless draw (D-1, F-7). Disarm is the watch's predicate, not a timer:
 //! the transaction arrived from somewhere other than where this node sent it
 //! (F-10). An observation that resolves silent is the embargo firing.

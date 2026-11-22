@@ -437,7 +437,7 @@ fn dependents_at_each_candidate_boundary() {
     // **Calibration against the shipped constants, which is what makes this a
     // test rather than a report.** The first row is the pair in force today, so
     // it must reproduce the three values the tree pins independently — the
-    // clearnet and anonymity embargo means, 199 s and 534 s (each its solved
+    // clearnet and anonymity embargo means, 230 s and 568 s (each its solved
     // draw mean, 194 s and 511 s, plus its floor), and
     // `ADOPTED_PROPAGATION_TIMEOUT_SECS`. If the derivation
     // drifts, every other row is wrong by the same amount and nothing else here
@@ -448,13 +448,13 @@ fn dependents_at_each_candidate_boundary() {
         "the first row must be the shipped pair for the calibration below to mean anything"
     );
     assert_eq!(
-        shipped_clear, 199,
-        "the shipped clearnet embargo is pinned at 199 s (EmbargoTimer::adopted); this \
+        shipped_clear, 230,
+        "the shipped clearnet embargo is pinned at 230 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_clear} s"
     );
     assert_eq!(
-        shipped_anon, 534,
-        "the shipped anonymity embargo is pinned at 534 s (EmbargoTimer::adopted); this \
+        shipped_anon, 568,
+        "the shipped anonymity embargo is pinned at 568 s (EmbargoTimer::adopted); this \
          derivation gives {shipped_anon} s"
     );
     assert_eq!(
@@ -759,12 +759,12 @@ fn leak_at_each_candidate_region() {
     // **The shipped timer.** Every deadline is the solved draw plus the
     // floor (`EmbargoTimer::floor_millis`; Rick, 2026-11-22), so a timer
     // cannot fire while a stem of ordinary length is still out. This channel
-    // is fed by exactly those fires, and the floor removes most of it.
-    /// The shipped reading, `DAEMON_RELAY_PRIVACY.md` §100.
-    const SHIPPED_LEAK: f64 = 0.000_22;
-    /// Three binomial standard errors at `CANDIDATE_TRIALS` and
-    /// [`SHIPPED_LEAK`], rounded up.
-    const SHIPPED_3SIGMA: f64 = 5e-5;
+    // is fed by exactly those fires, and on the modelled network the floor
+    // removes it: the reading is no event in `CANDIDATE_TRIALS`
+    // (`DAEMON_RELAY_PRIVACY.md` §100).
+    /// Ten events in `CANDIDATE_TRIALS`. A reading of none stays under it;
+    /// one tenth of a percent of the solved draw's rate does not.
+    const SHIPPED_LEAK_CEILING: f64 = 1e-5;
     let shipped_params = DandelionParams::adopted();
     let shipped_timer = EmbargoTimer::adopted(&shipped_params);
     let mut sr = SplitMix64::new(0x1EA4_F100);
@@ -783,8 +783,8 @@ fn leak_at_each_candidate_region() {
         shipped.leak_rate
     );
     assert!(
-        (shipped.leak_rate - SHIPPED_LEAK).abs() < SHIPPED_3SIGMA,
-        "the shipped timer reads {:.5} against the recorded {SHIPPED_LEAK}",
+        shipped.leak_rate < SHIPPED_LEAK_CEILING,
+        "the shipped timer reads {:.6}, at or over {SHIPPED_LEAK_CEILING}",
         shipped.leak_rate
     );
     for (f_prime, rate) in &rows[1..] {

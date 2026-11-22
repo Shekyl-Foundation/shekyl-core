@@ -232,8 +232,8 @@ fn precision_increment_reproduces_delta_table() {
             p.delta
         );
         assert!(
-            p.delta < 0.0003,
-            "the floor should take δ at f={f} to the reshape level, got {:.5}",
+            p.delta < 0.0001,
+            "the floor should take δ at f={f} under the reshape level, got {:.5}",
             p.delta
         );
     }

@@ -268,7 +268,7 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 /// later than that limit is a disarmed origin fluffing, and fails at once.
 ///
 /// **The race needs a slow walk, not a short draw.** The walk's sessions
-/// are clearnet, whose adopted embargo is a 5.5 s floor plus a memoryless
+/// are clearnet, whose adopted embargo is a 36.5 s floor plus a memoryless
 /// draw of mean 194 s (`DAEMON_RELAY_PRIVACY.md` §100). The second embargo
 /// cannot fire inside the floor, and the gap is one [`POLL`] and two
 /// loopback round trips, a second or two. So the race is open only to a
@@ -277,11 +277,10 @@ async fn an_origin_with_no_alternate_fluffs_at_its_first_fire_and_is_mined() {
 ///
 /// **The retry does not let a broken disarm pass.** An attempt passes
 /// only by staying quiet through the whole wait. An origin whose disarm
-/// did nothing fires again at the timer's floor plus its draw: it lands
-/// inside the tolerated window about one time in eight (30 s, less the
-/// floor, against the draw's 194 s) and is retried, and otherwise fluffs
-/// later and fails at once; it survives a whole quiet wait about one time
-/// in 900 (`e^(-1314/194)`).
+/// did nothing fires again at the timer's floor plus its draw, which is
+/// later than the tolerated window ([`FLUFF_FLUSH_LIMIT`], shorter than
+/// the floor): its fluff fails the attempt at once. It survives a whole
+/// quiet wait about one time in 900 (`e^(-1316/194)`).
 ///
 /// What it does not see: a node that sent both stems at once. The record
 /// of a zero first draw is the same.
