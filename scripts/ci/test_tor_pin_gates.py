@@ -850,6 +850,93 @@ def _(b):
     expect(b.tie(b.upstream["tor"]), 1, "exactly one 16-byte load command")
 
 
+# --- the tie over a file Tor ships linker-signed (arm64 from 16.0.1) -------
+
+LINKER_ADHOC = 0x20002  # CS_LINKER_SIGNED | CS_ADHOC, as Tor's arm64 files carry
+DEVELOPER_ID = 0x10000  # CS_RUNTIME, as a Developer ID signature carries
+
+
+def superblob(flags, pad=0):
+    """A code-signing superblob with one CodeDirectory whose flags are
+    `flags`, padded by `pad` bytes. Big-endian, as Apple writes it."""
+    directory = (0xFADE0C02).to_bytes(4, "big") + (44).to_bytes(4, "big")
+    directory += (0x20400).to_bytes(4, "big") + flags.to_bytes(4, "big") + bytes(28)
+    head = (0xFADE0CC0).to_bytes(4, "big") + (20 + len(directory)).to_bytes(4, "big")
+    head += (1).to_bytes(4, "big") + (0).to_bytes(4, "big") + (20).to_bytes(4, "big")
+    return head + directory + bytes(pad)
+
+
+def resign(linked, flags=DEVELOPER_ID, pad=200):
+    """What codesign does to a linker-signed file (measured on the macOS build
+    host, 2026-11-21, Tor 16.0.1 arm64): the same load commands, the new blob
+    from the old dataoff, its datasize, and `__LINKEDIT` to the new end with
+    its vmsize rounded up to 16 KiB."""
+    image = bytearray(linked)
+    sizeofcmds = int.from_bytes(image[20:24], "little")
+    at = 32 + sizeofcmds - 16
+    dataoff = int.from_bytes(image[at + 8 : at + 12], "little")
+    blob = superblob(flags, pad)
+    image = image[:dataoff] + blob
+    image[at + 12 : at + 16] = len(blob).to_bytes(4, "little")
+    linkedit = 32 + 72
+    fileoff = int.from_bytes(image[linkedit + 40 : linkedit + 48], "little")
+    filesize = len(image) - fileoff
+    image[linkedit + 32 : linkedit + 40] = (-(-filesize // 0x4000) * 0x4000).to_bytes(8, "little")
+    image[linkedit + 48 : linkedit + 56] = filesize.to_bytes(8, "little")
+    return bytes(image)
+
+
+def linker_signed_bench(b, upstream_flags=LINKER_ADHOC):
+    """`b.macos()`, then Tor's `tor` in the tarball carries a signature
+    with `upstream_flags`, as the linker leaves one."""
+    b.macos()
+    b.upstream["tor"] = sign(b.upstream["tor"], blob=superblob(upstream_flags))
+    members = {f"tor/{n}": d for n, d in b.upstream.items()}
+    make_tarball(b.tarball, members)
+
+
+@case("tie: Tor's linker-signed file re-signed ties (arm64 from 16.0.1)")
+def _(b):
+    linker_signed_bench(b)
+    shipped = resign(b.upstream["tor"])
+    proc = b.tie(shipped)
+    expect(proc, 0)
+    report = json.loads(proc.stdout)
+    assert report["files"] == [{"name": "tor", "sha256": sha(shipped)}], report
+
+
+@case("tie: refuses Tor's linker-signed file offered as the re-signed one")
+def _(b):
+    linker_signed_bench(b)
+    expect(b.tie(b.upstream["tor"]), 1, "still carries the linker's ad-hoc signature")
+
+
+@case("tie: refuses re-signing over an upstream signature not the linker's")
+def _(b):
+    linker_signed_bench(b, upstream_flags=DEVELOPER_ID)
+    expect(b.tie(resign(b.upstream["tor"])), 1, "not the linker's ad-hoc one")
+
+
+RESIGN_BITES = [
+    ("a byte of Tor's code", lambda i: i.__setitem__(0x900, i[0x900] ^ 1),
+     "differs from the upstream file re-signed"),
+    ("the blob moved", lambda i: i.__setitem__(slice(176 + 8, 176 + 12), (0).to_bytes(4, "little")),
+     "does not start where Tor's did"),
+    ("__LINKEDIT vmsize rounded to 4 KiB", lambda i: i.__setitem__(slice(104 + 32, 104 + 40), (0x1000).to_bytes(8, "little")),
+     "differs from the upstream file re-signed"),
+    ("a byte after the blob", lambda i: i.extend(b"\0"),
+     "does not run to the end of the file"),
+]
+
+for _label, _edit, _needle in RESIGN_BITES:
+    def _resign_bite(b, edit=_edit, needle=_needle):
+        linker_signed_bench(b)
+        image = bytearray(resign(b.upstream["tor"]))
+        edit(image)
+        expect(b.tie(bytes(image)), 1, needle)
+    case(f"tie: refuses a re-signed file with {_label}")(_resign_bite)
+
+
 # --- check_tor_pin_targets.py ---------------------------------------------
 
 

@@ -108,6 +108,7 @@ fn onion_cause_arm(cause: &OnionCause) -> u8 {
         OnionCause::UploadsRefused => 1,
         OnionCause::DescriptorMissing => 2,
         OnionCause::ClockBehind(_) => 3,
+        OnionCause::PublishedElsewhere => 5,
         OnionCause::Unknown { .. } => 4,
     }
 }
@@ -118,6 +119,7 @@ fn onion_causes() -> Vec<OnionCause> {
         OnionCause::UploadsRefused,
         OnionCause::DescriptorMissing,
         OnionCause::ClockBehind(3_600),
+        OnionCause::PublishedElsewhere,
         OnionCause::Unknown {
             tag: unknown("blinded"),
         },
@@ -302,7 +304,7 @@ fn the_table_covers_every_arm() {
             .as_ref()
             .map(onion_cause_arm)
     });
-    assert_eq!(onion.len(), 5, "{onion:?}");
+    assert_eq!(onion.len(), 6, "{onion:?}");
     let quiet = seen(&|s| s.tor_quiet.as_ref().map(quiet_arm));
     assert_eq!(quiet.len(), 2, "{quiet:?}");
     let skews: HashSet<_> = causes_of(&table)

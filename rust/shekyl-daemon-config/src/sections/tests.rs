@@ -72,7 +72,13 @@ fn the_defaults_build_a_managed_tor_clearnet_node_on_mainnet() {
         home_root().join("logs").join("shekyld-mainnet.log")
     );
     assert_eq!(c.logging.directive().as_str(), "warn");
-    assert_eq!(c.tor, Tor::Managed { binary: None });
+    assert_eq!(
+        c.tor,
+        Tor::Managed {
+            binary: None,
+            onion_key: None
+        }
+    );
     assert!(
         matches!(&c.clearnet, Clearnet::On { listen, socks: None, advertise } if listen.len() == 1 && listen[0].port() == 11021 && advertise.is_empty())
     );
@@ -239,6 +245,40 @@ fn a_connector_that_is_off_cannot_carry_its_endpoints_or_its_peers() {
     assert_eq!(d, vec![(Code::ValueConflict, "tor-file".into())]);
     let c = build_from(&["--clearnet", "off", "--tor", "off"], "").unwrap();
     assert!(c.offline());
+}
+
+/// **`tor-onion-key-file` is the managed Tor's, and only its.** Under
+/// `tor = managed` (the default) the path reaches `Tor::Managed`; under
+/// `tor = off` and `tor = operator` it is a conflict, as `tor-file` is. Red
+/// edit: drop either `CHILDREN` row, or the read in `managed_binary`.
+#[test]
+fn the_onion_key_file_is_the_managed_tors_alone() {
+    let key = abs("/var/lib/shekyl/onion/hs_ed25519_secret_key");
+    let c = build_from(&["--tor-onion-key-file", &key], "").unwrap();
+    assert_eq!(
+        c.tor,
+        Tor::Managed {
+            binary: None,
+            onion_key: Some(PathBuf::from(&key)),
+        }
+    );
+    let d = codes(build_from(
+        &["--tor-onion-key-file", &key, "--tor", "off"],
+        "",
+    ));
+    assert_eq!(d, vec![(Code::ValueConflict, "tor-onion-key-file".into())]);
+    let d = codes(build_from(
+        &[
+            "--tor-onion-key-file",
+            &key,
+            "--tor",
+            "operator",
+            "--tor-socks",
+            "127.0.0.1:9050",
+        ],
+        "",
+    ));
+    assert_eq!(d, vec![(Code::ValueConflict, "tor-onion-key-file".into())]);
 }
 
 #[test]

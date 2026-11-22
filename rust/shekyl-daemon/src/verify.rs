@@ -33,6 +33,10 @@ pub(crate) struct Walked {
     /// A service's rendezvous directory, checked; `None` for a daemon run
     /// as its user (`RPC_CHANNEL.md` §7.1).
     pub(crate) service_rendezvous: Option<std::path::PathBuf>,
+    /// The managed Tor's persistent onion (`tor-onion-key-file`), loaded
+    /// here so the key the check judged is the key the start hands Tor;
+    /// `None` when the onion is new at every boot.
+    pub(crate) persistent_onion: Option<shekyl_tor_control_client::onion_identity::OnionIdentity>,
 }
 
 /// The walk (IG-Q59), in a start's order, stopping at the first refusal
@@ -115,8 +119,25 @@ pub(crate) fn walk(
             )]);
         }
     }
+    // A named onion key that cannot be used refuses the start: the node
+    // never falls back to a new onion (Rick, 2026-11-21).
+    let persistent_onion = match &config.tor {
+        Tor::Managed {
+            onion_key: Some(path),
+            ..
+        } => Some(
+            crate::tor::onion_key::load(
+                path,
+                resolved
+                    .source("tor-onion-key-file")
+                    .unwrap_or(&Source::Cli),
+            )
+            .map_err(one)?,
+        ),
+        _ => None,
+    };
     let mut warnings = Vec::new();
-    if let Tor::Managed { binary } = &config.tor {
+    if let Tor::Managed { binary, .. } = &config.tor {
         warnings.extend(crate::tor::pin_warning(
             binary.as_deref(),
             config.clearnet_on(),
@@ -127,6 +148,7 @@ pub(crate) fn walk(
         warnings,
         owner_socket,
         service_rendezvous,
+        persistent_onion,
     })
 }
 
@@ -350,6 +372,94 @@ mod tests {
         assert_eq!(ds[0].get("value"), Some("3"));
         assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
         assert!(!data.exists());
+    }
+
+    /// A key Tor 0.4.9.14 wrote, and the address Tor published for it
+    /// (`shekyl-onion-key`'s vector).
+    const TOR_SECRET_KEY: &[u8] = include_bytes!(
+        "../../shekyl-onion-key/testdata/tor_0_4_9_14_hidden_service/hs_ed25519_secret_key"
+    );
+    const TOR_HOSTNAME: &str =
+        include_str!("../../shekyl-onion-key/testdata/tor_0_4_9_14_hidden_service/hostname");
+
+    /// Regtest with a managed Tor whose onion is the key at `key`, checked.
+    fn persistent_onion_regtest(data: &Path, log: &Path, key: &Path) -> Vec<OsString> {
+        args(&[
+            "--config-verify",
+            "--network",
+            "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "managed",
+            "--tor-onion-key-file",
+            key.to_str().unwrap(),
+            "--data-dir",
+            data.to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
+        ])
+    }
+
+    /// **The walk loads the onion key the start hands Tor.** A key file Tor
+    /// wrote, this account's alone, is loaded once by the walk: its service
+    /// id is the address Tor published, and the check accepts. Red edit:
+    /// drop the load from [`walk`] (`persistent_onion` is `None`).
+    #[test]
+    fn the_walk_loads_the_onion_key_tor_wrote() {
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        let log = d.path().join("shekyld.log");
+        let key = d.path().join("hs_ed25519_secret_key");
+        shekyl_os_account::private_file::write_private(&key, TOR_SECRET_KEY).unwrap();
+        let a = persistent_onion_regtest(&data, &log, &key);
+        let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+        let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+        let walked = walk(&loaded.config, &loaded.resolved, &platform(d.path())).unwrap();
+        let onion = walked
+            .persistent_onion
+            .expect("the walk loaded the named key");
+        assert_eq!(onion.service_id().hostname(), TOR_HOSTNAME.trim_end());
+        assert_eq!(start(&a, &platform(d.path())), 0);
+        assert!(!data.exists());
+    }
+
+    /// **A named onion key the start cannot use refuses it, by why** (Rick,
+    /// 2026-11-21: never a fallback to a new onion). Missing, readable by
+    /// every account, and not Tor's key file are three codes; each refuses
+    /// the start with nothing created. Red edit: map a load failure to a
+    /// warning, or to `None` (a per-boot onion).
+    #[cfg(unix)]
+    #[test]
+    fn a_named_onion_key_that_cannot_be_used_refuses_the_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        let log = d.path().join("shekyld.log");
+        let missing = d.path().join("missing");
+        let exposed = d.path().join("exposed");
+        shekyl_os_account::private_file::write_private(&exposed, TOR_SECRET_KEY).unwrap();
+        std::fs::set_permissions(&exposed, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let not_a_key = d.path().join("not-a-key");
+        shekyl_os_account::private_file::write_private(&not_a_key, &[0; 96]).unwrap();
+        for (key, code) in [
+            (&missing, Code::OnionKeyMissing),
+            (&exposed, Code::OnionKeyExposed),
+            (&not_a_key, Code::OnionKeyNotAKey),
+        ] {
+            let a = persistent_onion_regtest(&data, &log, key);
+            let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
+            let loaded = after_file(cli, &platform(d.path()), None).unwrap();
+            let ds = walk(&loaded.config, &loaded.resolved, &platform(d.path()))
+                .err()
+                .unwrap_or_else(|| panic!("{} was accepted", key.display()));
+            assert_eq!(ds.len(), 1);
+            assert_eq!(ds[0].code, code);
+            assert_eq!(ds[0].option.as_deref(), Some("tor-onion-key-file"));
+            assert_eq!(ds[0].get("path"), key.to_str());
+            assert_eq!(start(&a, &platform(d.path())), EXIT_REFUSED);
+            assert!(!data.exists());
+        }
     }
 
     /// The managed Tor's pin is read and not started. A named binary that

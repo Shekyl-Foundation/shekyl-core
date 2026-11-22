@@ -370,6 +370,10 @@ fn onion_sentence(tor: &ManagedTor, unknown: &mut bool) -> Option<String> {
             "The Tor network is not accepting this node's address right now. Others may not be able to reach this node."
                 .to_owned(),
         ),
+        (OnionState::Unreachable, Some(OnionCause::PublishedElsewhere)) => Some(
+            "Another computer is using this node's Tor address and key, so peers may reach it instead of this node. Stop the other one, or give this node its own key."
+                .to_owned(),
+        ),
         (OnionState::Unknown { .. }, _) | (_, Some(OnionCause::Unknown { .. })) => {
             *unknown = true;
             None

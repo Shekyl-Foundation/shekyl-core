@@ -2065,7 +2065,9 @@ fn the_tor_vectors_read_through_the_client() {
         daemon.daemon_status()
     };
     let known = tor_vectors("known");
-    assert_eq!(known.len(), 26);
+    // The known directory, the same count `the_vector_set_is_there` pins
+    // (`onion-published-elsewhere` is one of them).
+    assert_eq!(known.len(), 27);
     for (name, value) in known {
         let status = read(value).unwrap_or_else(|error| panic!("{name}: {error}"));
         let tor = status.tor_status().expect("Status is shown");
