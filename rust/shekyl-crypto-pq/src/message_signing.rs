@@ -288,9 +288,9 @@ fn slh_identity_from_okm(
     pk_seed.copy_from_slice(&okm[2 * SLH_192S_N..]);
 
     // fips205's deterministic keygen (FIPS 205 Algorithm 18 via
-    // KeyGen::keygen_with_seeds). PrivateKey is ZeroizeOnDrop (verified
-    // at the crate, SM-R-4 R4-b).
-    slh_dsa_sha2_192s::KG::keygen_with_seeds(&sk_seed, &sk_prf, &pk_seed)
+    // KeyGen::keygen_from_seed). PrivateKey is ZeroizeOnDrop (verified at
+    // the crate, SM-R-4 R4-b; again at 0.5.0, `lib.rs:147`).
+    slh_dsa_sha2_192s::KG::keygen_from_seed(&sk_seed, &sk_prf, &pk_seed)
 }
 
 /// The 48-byte public half of the signing identity — what the v2 address
@@ -606,7 +606,7 @@ pub fn verify_message(
 
     // Inner half: SLH-DSA over the preimage, ctx empty. The AND is
     // structural — a verifier without this dependency cannot get here.
-    let slh_public = slh_dsa_sha2_192s::PublicKey::try_from_bytes(segment.msg_sign_pk())
+    let slh_public = slh_dsa_sha2_192s::PublicKey::try_from_bytes(*segment.msg_sign_pk())
         .map_err(|_| MessageSigError::InvalidKey)?;
     if !slh_public.verify(preimage.as_bytes(), &sig.sig_pq, b"") {
         return Err(MessageSigError::VerifyFailed);

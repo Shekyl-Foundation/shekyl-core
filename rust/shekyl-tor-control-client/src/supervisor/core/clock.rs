@@ -344,6 +344,9 @@ impl Core {
         if self.clock_is_behind() || !newly {
             return actions;
         }
+        // A refusal names itself over another publisher: the refused-upload
+        // path is the one that names a clock run, and a newer copy is never
+        // let swallow it (Rick, 2026-11-21).
         self.inbound_unreachable(now, InboundCause::UploadsRefused);
         actions.extend(self.say(now, Cadence::Due));
         actions
@@ -393,9 +396,28 @@ impl Core {
     }
 
     /// While the clock is named, or either descriptor's latest round was
-    /// refused, a republish cannot help.
+    /// refused, a republish cannot help, and the probe stands down.
     pub(super) fn republish_cannot_help(&self) -> bool {
         self.clock_is_behind() || self.any_refused()
+    }
+
+    /// No republish is sent: it cannot help, or another publisher is named
+    /// and a republish would only race it. Unlike standing down, another
+    /// publisher leaves the probe and the directory check running, so a
+    /// later check sees whether the other copy is still there.
+    pub(super) fn republish_held_off(&self) -> bool {
+        self.republish_cannot_help() || self.published_elsewhere()
+    }
+
+    /// Another Tor holding this onion's key is named as publishing it.
+    pub(super) fn published_elsewhere(&self) -> bool {
+        matches!(
+            self.inbound,
+            Inbound::Unreachable {
+                cause: InboundCause::PublishedElsewhere,
+                ..
+            }
+        )
     }
 
     /// The republish is waiting on its own round's probe.
@@ -407,7 +429,7 @@ impl Core {
     /// hold that expired during standing down does not spin; the original
     /// instant is still there and fires once standing down clears.
     pub(super) fn republish_due(&self) -> Option<u64> {
-        if self.republish_cannot_help() {
+        if self.republish_held_off() {
             None
         } else {
             self.republish.due()
@@ -457,7 +479,7 @@ impl Core {
     /// driver may still withhold the send: a liveness sample queued ahead of
     /// it can name the clock first ([`Self::republish_withheld`]).
     pub(super) fn republish(&mut self, now: u64) -> Vec<Action> {
-        if self.republish_cannot_help() {
+        if self.republish_held_off() {
             return Vec::new();
         }
         if self.republish.judging || self.republish.until.is_some_and(|until| now < until) {
@@ -536,7 +558,7 @@ impl Core {
     /// this does not spin). A phase that can no longer send drops the debt
     /// rather than arming a past instant forever.
     pub(super) fn on_republish_deadline(&mut self, now: u64) -> Vec<Action> {
-        if self.republish_cannot_help() {
+        if self.republish_held_off() {
             return Vec::new();
         }
         let actions = self.republish(now);
@@ -560,7 +582,7 @@ impl Core {
         self.queued_send = None;
     }
 
-    fn inbound_unreachable(&mut self, now: u64, cause: InboundCause) {
+    pub(super) fn inbound_unreachable(&mut self, now: u64, cause: InboundCause) {
         let since = match self.inbound {
             Inbound::Unreachable { since, .. } => since,
             _ => now,

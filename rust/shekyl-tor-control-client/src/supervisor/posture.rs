@@ -136,6 +136,12 @@ pub enum InboundCause {
     /// but the directories its uploads reached no longer had it (§4.5, the
     /// directory check).
     DescriptorNotFound,
+    /// A directory holds this onion's descriptor at a counter above ours,
+    /// while neither the clock nor a refused round is named: another Tor
+    /// holding this onion's key is publishing it (§4.5; Rick, 2026-11-21).
+    /// Clients reach whichever copy is newest. A republish would only race
+    /// it, so none is sent.
+    PublishedElsewhere,
 }
 
 /// Can peers reach this node's onion (`TOR_SUPERVISOR.md` §4.1), in the

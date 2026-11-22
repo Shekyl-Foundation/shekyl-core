@@ -4,3 +4,9 @@
 # their post-install script. The data and log directories are not here:
 # the unit's StateDirectory and LogsDirectory create them.
 d /etc/shekyl 0750 root shekyl -
+
+# The RPC tunnel's configuration directory (Rick, 2026-11-21): root's,
+# readable by the tunnel's group and by no one else. The tunnel's
+# configuration file and the node's bundle file live here as
+# root:shekyl-tunnel 0640: the tunnel reads them and cannot write them.
+d /etc/shekyl-tunnel 0750 root shekyl-tunnel -

@@ -45,6 +45,13 @@ use crate::handlers;
 use crate::tenant::{DaemonTarget, TenantState};
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
+#[cfg(unix)]
+#[path = "private_socket.rs"]
+mod private_socket;
+
+#[cfg(unix)]
+pub use private_socket::{DIR_PREFIX, LOCK_FILE, SOCKET_FILE};
+
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 
 /// Default max JSON-RPC body size (1 MiB). Wallet RPC payloads are small;
@@ -401,13 +408,23 @@ async fn json_rpc_handler(
 }
 
 /// Removes a UDS path on drop so serve errors cannot leave a stale socket.
+/// A removal that fails for any reason but the path being gone is logged:
+/// it leaves a socket behind, and nothing else would say so (rule 82).
 #[cfg(unix)]
 struct UdsCleanup(PathBuf);
 
 #[cfg(unix)]
 impl Drop for UdsCleanup {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.0));
+        match std::fs::remove_file(&self.0) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %self.0.display(),
+                error = %e,
+                "the wallet RPC socket could not be removed"
+            ),
+        }
     }
 }
 
@@ -723,10 +740,10 @@ impl BoundListener {
                 // is applied at creation, and `first_pipe_instance(true)`
                 // refuses a name someone else already holds — both inside
                 // `shekyl-win-sec`. There is no post-bind step to mirror
-                // `restrict_socket_perms`, and no directory to mirror
-                // `private_socket_dir`: the containment those gave the Unix
-                // socket is rebuilt as the loud create here plus the peer
-                // check at the client's dial (§8.1).
+                // `restrict_socket_perms`, and no directory to mirror the
+                // Unix private socket directory: the containment that
+                // directory gave the Unix socket is rebuilt as the loud
+                // create here plus the peer check at the client's dial (§8.1).
                 let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind(pipe.name.clone())?;
                 Ok(Self::Pipe(PipeListener(listener)))
             }
@@ -922,40 +939,6 @@ fn next_spawn() -> u64 {
     SPAWN_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Create the private, per-spawn runtime directory that holds the
-/// in-process UDS socket.
-///
-/// Prefers `$XDG_RUNTIME_DIR` (user-private tmpfs per the XDG base-dir
-/// spec; `WALLET_REWRITE_PLAN.md` Phase 3 deliverables), falling back to
-/// the system temp dir. Created 0700. The name is pid- **and**
-/// spawn-counter-scoped ([`next_spawn`]). A pre-existing entry at the path
-/// is removed if we own it; if removal fails (e.g. an attacker-planted entry
-/// under a sticky-bit temp dir) creation fails loud rather than reusing it.
-///
-/// Unix only. Its four jobs on Windows: access control → the pipe's DACL;
-/// collision avoidance → the per-spawn pipe name; stale-directory cleanup →
-/// no analogue (a pipe is a kernel object); **containment** — nobody else
-/// can place an object at the name we are about to dial — → the loud
-/// first-instance create plus the client's peer check
-/// (`WINDOWS_WALLET_SUPPORT.md` §8.1, corrected 2026-08-20).
-#[cfg(unix)]
-fn private_socket_dir() -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join(format!(
-        "shekyl-rpc-{}-{}",
-        std::process::id(),
-        next_spawn()
-    ));
-    // Stale leftover from a crashed run with a recycled pid: remove if ours.
-    drop(std::fs::remove_dir_all(&dir));
-    std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
-    Ok(dir)
-}
-
 /// Where an in-process server listens.
 #[derive(Clone)]
 pub enum InProcessListen {
@@ -994,9 +977,10 @@ pub struct InProcessHandle {
     join: JoinHandle<Result<(), std::io::Error>>,
     /// Where the server listens.
     pub listen: InProcessListen,
-    /// Private socket dir removed on shutdown ([`spawn_in_process`] only).
+    /// Private directory and the lock held for its life
+    /// ([`spawn_in_process`] only).
     #[cfg(unix)]
-    socket_dir: Option<PathBuf>,
+    socket: Option<private_socket::PrivateDir>,
 }
 
 impl InProcessHandle {
@@ -1017,17 +1001,29 @@ impl InProcessHandle {
     }
 
     /// Request graceful shutdown and wait for the serve task to finish; the
-    /// serve task closes the open wallet before it ends.
+    /// serve task closes the open wallet before it ends. Then the private
+    /// socket directory [`spawn_in_process`] made is removed, whatever the
+    /// serve task's end; a pipe leaves nothing behind.
+    ///
+    /// # Errors
+    ///
+    /// The serve task's failure, the directory's removal failing, or both.
+    /// A removal failure names its path, including when the serve task
+    /// failed as well, so a directory left behind is said.
     pub async fn shutdown(self) -> Result<(), BoxErr> {
         self.state.shutdown.notify_one();
-        self.join.await??;
-        // The serve task's UdsCleanup already unlinked the socket; remove
-        // the private dir that held it. A pipe leaves nothing behind.
-        #[cfg(unix)]
-        if let Some(dir) = &self.socket_dir {
-            drop(std::fs::remove_dir(dir));
-        }
-        Ok(())
+        let served = self.join.await;
+        let removed = {
+            #[cfg(unix)]
+            {
+                self.socket.map(|socket| socket.remove().map(|_| ()))
+            }
+            #[cfg(not(unix))]
+            {
+                None
+            }
+        };
+        combine_shutdown(served, removed)
     }
 
     /// UDS socket path (`None` when listening on TCP).
@@ -1056,9 +1052,10 @@ impl InProcessHandle {
 /// local process drive the open wallet. The daemon is not dialed until
 /// refresh/send, so an unreachable daemon is fine for offline commands.
 ///
-/// **Unix:** the socket lives in a fresh 0700, pid-scoped directory (under
-/// `$XDG_RUNTIME_DIR`, temp-dir fallback) and is itself 0600, so only the
-/// owning user can connect — that filesystem gate is why
+/// **Unix:** the socket lives in a fresh 0700 directory (under
+/// `$XDG_RUNTIME_DIR`, temp-dir fallback), published under its final name
+/// only while this process holds that directory's lock, and is itself 0600,
+/// so only the owning user can connect — that filesystem gate is why
 /// [`AuthConfig::Disabled`] is sound here.
 ///
 /// **Windows:** an owner-only named pipe, `\\.\pipe\shekyl-wallet-<sid>-<pid>-<n>`,
@@ -1077,14 +1074,27 @@ pub async fn spawn_in_process(
 ) -> Result<InProcessHandle, BoxErr> {
     #[cfg(unix)]
     {
-        let socket_dir = private_socket_dir()?;
-        let listen = ListenAddr::Uds(socket_dir.join("wallet-rpc.sock"));
-        let mut handle = spawn_in_process_with(private_config(
+        let socket = private_socket::create(next_spawn())?;
+        let listen = ListenAddr::Uds(socket.path().join(SOCKET_FILE));
+        match spawn_in_process_with(private_config(
             listen, wallet_dir, network, daemon, tor_file,
         ))
-        .await?;
-        handle.socket_dir = Some(socket_dir);
-        Ok(handle)
+        .await
+        {
+            Ok(mut handle) => {
+                handle.socket = Some(socket);
+                Ok(handle)
+            }
+            Err(error) => {
+                // Nothing is listening. The directory was published; remove it
+                // now. Drop only releases the lock, and the next start's sweep
+                // is the backstop when this removal fails.
+                match socket.remove() {
+                    Ok(_) => Err(error),
+                    Err(removed) => Err(format!("{error}; {removed}").into()),
+                }
+            }
+        }
     }
     #[cfg(windows)]
     {
@@ -1139,13 +1149,66 @@ pub async fn spawn_in_process_with(config: ServerConfig) -> Result<InProcessHand
         join,
         listen,
         #[cfg(unix)]
-        socket_dir: None,
+        socket: None,
     })
+}
+
+/// The serve task's end and the directory removal, as one error when both fail.
+///
+/// The removal's error already names its path. Dropping it because the serve
+/// task also failed is how a directory left behind went unsaid.
+fn combine_shutdown(
+    served: Result<Result<(), std::io::Error>, tokio::task::JoinError>,
+    removed: Option<std::io::Result<()>>,
+) -> Result<(), BoxErr> {
+    let served = match served {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(BoxErr::from(error)),
+        Err(error) => Err(BoxErr::from(error)),
+    };
+    let removed = match removed {
+        None | Some(Ok(())) => Ok(()),
+        Some(Err(error)) => Err(error),
+    };
+    combine_ends(served, removed)
+}
+
+fn combine_ends(
+    served: Result<(), BoxErr>,
+    removed: Result<(), std::io::Error>,
+) -> Result<(), BoxErr> {
+    match (served, removed) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(served), Ok(())) => Err(served),
+        (Ok(()), Err(removed)) => Err(removed.into()),
+        (Err(served), Err(removed)) => Err(format!("{served}; {removed}").into()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both failures are one error, and the removal's path survives the
+    /// serve task's failure. Red edit: return `served` and drop `removed`.
+    #[test]
+    fn a_removal_failure_is_kept_when_the_serve_task_also_fails() {
+        let removal = || {
+            Err(std::io::Error::other(
+                "/tmp/shekyl-rpc-9-1: directory not empty",
+            ))
+        };
+        assert!(combine_ends(Ok(()), Ok(())).is_ok());
+        let served = combine_ends(Err("the serve task ended".into()), Ok(())).unwrap_err();
+        assert!(served.to_string().contains("the serve task ended"));
+        let removed = combine_ends(Ok(()), removal()).unwrap_err();
+        assert!(removed.to_string().contains("shekyl-rpc-9-1"), "{removed}");
+        let both = combine_ends(Err("the serve task ended".into()), removal()).unwrap_err();
+        let text = both.to_string();
+        assert!(text.contains("the serve task ended"), "{text}");
+        assert!(text.contains("shekyl-rpc-9-1"), "{text}");
+    }
+
     use tracing::instrument::WithSubscriber as _;
 
     /// With no `--daemon-address` the daemon is "this computer" on the

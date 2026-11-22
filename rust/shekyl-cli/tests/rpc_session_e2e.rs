@@ -14,7 +14,7 @@
 //! with typed wallet-RPC errors (never transport errors or hangs).
 
 use serde_json::json;
-use shekyl_cli::rpc_client::{RpcError, RpcSession};
+use shekyl_cli::rpc_client::{RpcError, RpcSession, WalletClose};
 use shekyl_wallet_rpc::Network;
 
 /// Never-connecting daemon: port 1 refuses immediately.
@@ -72,7 +72,7 @@ fn session_serves_over_private_local_endpoint_and_cleans_up() {
     );
     assert!(version.get("version").and_then(|v| v.as_str()).is_some());
 
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
     #[cfg(unix)]
     assert!(
         !socket_dir.exists(),
@@ -136,7 +136,7 @@ fn create_restore_round_trip_reproduces_the_primary_address() {
     assert_eq!(orig_addr, rest_addr, "restore must reproduce the account");
 
     rpc.call("close_wallet", json!({})).expect("close");
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
 /// The send lifecycle the CLI confirmation flow rides on: build refusals and
@@ -198,7 +198,7 @@ fn send_lifecycle_errors_are_typed_end_to_end() {
     );
 
     rpc.call("close_wallet", json!({})).expect("close");
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
 /// The non-interactive `create`/`restore` subcommands (the scriptable path
@@ -283,7 +283,7 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
     );
 
     rpc.call("close_wallet", json!({})).expect("close");
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
 /// A self-hosted session makes its wallet directory only to make a wallet:
@@ -320,7 +320,7 @@ fn the_wallet_dir_is_made_only_to_make_a_wallet() {
     assert!(wallets.is_dir(), "a create makes the wallet folder");
 
     rpc.call("close_wallet", json!({})).expect("close");
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
 /// WI-RPC-2a grep gate: the CLI has no wallet2 / EngineContext /

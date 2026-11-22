@@ -352,7 +352,7 @@ impl HybridEd25519MlDsa {
                 .map_err(|_| CryptoError::InvalidKeyMaterial)?,
         );
         let ml_dsa_private = ml_dsa_65::PrivateKey::try_from_bytes(*ml_dsa_secret)
-            .map_err(|e| CryptoError::SerializationError(e.into()))?;
+            .map_err(|e| CryptoError::MalformedSigningKey(e.into()))?;
 
         let (ed25519_signature, ml_dsa_signature) = hybrid_combiner::sign_nested(
             HYBRID_SCHEME_ID_ED25519_ML_DSA_65,
@@ -366,6 +366,24 @@ impl HybridEd25519MlDsa {
             ed25519: ed25519_signature.to_vec(),
             ml_dsa: ml_dsa_signature.to_vec(),
         })
+    }
+}
+
+/// fips204's refusal when no signing attempt is accepted: FIPS 204
+/// Appendix C's limit of 814 attempts, which only a malformed private key
+/// reaches (fips204 0.5.0 `traits.rs`; before 0.5.0 signing looped forever).
+/// The crate reports it as this string alone; the exact pin keeps it, and
+/// `tests::a_signing_key_no_attempt_accepts_is_malformed_within_a_bound`
+/// fails if it moves.
+const ML_DSA_TOO_MANY_ATTEMPTS: &str = "ML-DSA.Sign: too many attempts";
+
+/// A fips204 signing error as Shekyl's: the attempt limit is a malformed
+/// key; anything else (the RNG) keeps its existing class.
+fn ml_dsa_sign_error(e: &'static str) -> CryptoError {
+    if e == ML_DSA_TOO_MANY_ATTEMPTS {
+        CryptoError::MalformedSigningKey(e.into())
+    } else {
+        CryptoError::SerializationError(e.into())
     }
 }
 
@@ -419,7 +437,7 @@ impl HybridEd25519MlDsa {
     ) -> Result<HybridSignature, CryptoError> {
         Self::sign_nested(secret_key, domain, message, |pk, inner| {
             pk.try_sign_with_seed(ml_dsa_seed, inner, &[])
-                .map_err(|e| CryptoError::SerializationError(e.into()))
+                .map_err(ml_dsa_sign_error)
         })
     }
 }
@@ -437,8 +455,7 @@ impl SignatureScheme for HybridEd25519MlDsa {
     ) -> Result<HybridSignature, CryptoError> {
         // PQ half: hedged OsRng, empty ML-DSA ctx (SA-R-3, KAT-pinned).
         Self::sign_nested(secret_key, domain, message, |pk, inner| {
-            pk.try_sign(inner, &[])
-                .map_err(|e| CryptoError::SerializationError(e.into()))
+            pk.try_sign(inner, &[]).map_err(ml_dsa_sign_error)
         })
     }
 
@@ -625,6 +642,106 @@ mod tests {
 
     fn kp() -> (HybridPublicKey, HybridSecretKey) {
         scheme().generate_ephemeral_keypair_for_tests().unwrap()
+    }
+
+    /// Where s1 starts in ML-DSA-65's serialized private key: after
+    /// rho || K || tr (128 bytes). s1 and s2 follow as 256-coefficient
+    /// polynomials of 4 bits each (eta = 4, stored as eta - x).
+    const ML_DSA_65_S_START: usize = 128;
+
+    /// A hybrid secret whose ML-DSA half is the deterministic key of
+    /// `[9; 32]`, its bytes changed by `edit`.
+    fn secret_with(edit: impl FnOnce(&mut [u8])) -> HybridSecretKey {
+        let (_, sk) = crate::derivation::keygen_from_seed(&[9u8; 32]).unwrap();
+        let mut ml_dsa = sk.into_bytes();
+        edit(&mut ml_dsa);
+        HybridSecretKey {
+            ed25519: vec![7u8; 32],
+            ml_dsa: ml_dsa.to_vec(),
+        }
+    }
+
+    /// fips204 0.5.0 refuses a signing key whose s1 holds a coefficient
+    /// outside [-eta, eta]: the stored field 15 decodes to 4 - 15 = -11.
+    /// Shekyl reports a malformed signing key, not a serialization error.
+    #[test]
+    fn a_signing_key_with_s1_out_of_range_is_malformed() {
+        let sk = secret_with(|b| b[ML_DSA_65_S_START] |= 0x0F);
+        let err = scheme().sign(&sk, D, b"m").unwrap_err();
+        assert!(
+            matches!(err, CryptoError::MalformedSigningKey(_)),
+            "{err:?}"
+        );
+        let err = scheme()
+            .sign_with_ml_dsa_seed(&sk, D, b"m", &[0u8; ML_DSA_SIGNING_SEED_LEN])
+            .unwrap_err();
+        assert!(
+            matches!(err, CryptoError::MalformedSigningKey(_)),
+            "{err:?}"
+        );
+    }
+
+    /// fips204 0.5.0 stops signing after FIPS 204 Appendix C's 814 attempts
+    /// (before 0.5.0 it looped forever) and reports it as one string, which
+    /// [`ml_dsa_sign_error`] turns into a malformed signing key. No
+    /// ML-DSA-65 key that parses reaches the limit: its c*t0 bound cannot
+    /// trip (tau * 2^12 = 200,704 < gamma2 = 261,888), s1 and s2 are
+    /// range-checked at parse, and the z, r0 and hint checks draw fresh y on
+    /// every attempt; two adversarial t0 patterns signed within the limit for
+    /// 256 seeds each. So this pins the string and the mapping with
+    /// upstream's own ML-DSA-44 key (`tests/negative.rs`
+    /// `sign_attempt_limit_44`: t0 coefficients of 2^12 or -2^12 + 1, signing
+    /// seed 12), on its own thread bounded at 60 s so a return to the loop
+    /// fails here instead of hanging.
+    #[test]
+    fn a_signing_key_no_attempt_accepts_is_malformed_within_a_bound() {
+        use fips204::ml_dsa_44;
+        use fips204::traits::{KeyGen as _, SerDes as _, Signer as _};
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (_pk, sk) = ml_dsa_44::KG::keygen_from_seed(&[9u8; 32]);
+            let mut sk_bytes = sk.into_bytes();
+            // rho || K || tr, then s1 and s2 (4 polynomials each, 3 bits).
+            let t0_start = 128 + 2 * 4 * 96;
+            sk_bytes[t0_start..].fill(0);
+            let mut state: u64 = 0x1234_5678_9abc_def1;
+            for i in 0..(4 * 256) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let field: u32 = if state & 1 == 0 { 0 } else { 8191 };
+                for k in 0..13 {
+                    let bit = t0_start * 8 + i * 13 + k;
+                    if (field >> k) & 1 == 1 {
+                        sk_bytes[bit / 8] |= 1 << (bit % 8);
+                    }
+                }
+            }
+            let sk = ml_dsa_44::PrivateKey::try_from_bytes(sk_bytes).expect("t0 always parses");
+            let mut seed = [0u8; 32];
+            seed[..4].copy_from_slice(&12u32.to_le_bytes());
+            tx.send(sk.try_sign_with_seed(&seed, b"m", &[]).map(|_| ()))
+                .expect("the receiver waits");
+        });
+        let signed = rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("signing with a malformed key returns within 60 s");
+        let refusal = signed.expect_err("no attempt accepts this key");
+        assert_eq!(refusal, ML_DSA_TOO_MANY_ATTEMPTS, "fips204's string moved");
+        assert!(
+            matches!(
+                ml_dsa_sign_error(refusal),
+                CryptoError::MalformedSigningKey(_)
+            ),
+            "the attempt limit is a malformed key"
+        );
+        assert!(
+            matches!(
+                ml_dsa_sign_error("RNG failed"),
+                CryptoError::SerializationError(_)
+            ),
+            "any other signing error keeps its class"
+        );
     }
 
     #[allow(clippy::cast_possible_truncation)]

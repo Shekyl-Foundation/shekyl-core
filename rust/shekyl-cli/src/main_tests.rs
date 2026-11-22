@@ -256,7 +256,7 @@ fn a_session_start_makes_the_root_and_not_the_wallet_dir() {
         !wallets.exists(),
         "a session that makes no wallet makes no wallet folder"
     );
-    rpc.shutdown();
+    assert_eq!(rpc.shutdown(), rpc_client::WalletClose::NotOpen);
 }
 
 /// The daemon-down hint (F1) fires for this machine only, this computer
