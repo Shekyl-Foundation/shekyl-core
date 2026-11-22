@@ -67,8 +67,13 @@ dependency, not by topic:
   crate whose test reads a workflow file or a script (the same literal scan,
   over `.github/` and `scripts/` paths too), or that compiles another
   crate's file through `#[path = "…"]`, which cargo has no edge for, is in
-  scope when that file changes. `none` is a job that runs for its own gate
-  steps (a changed script it executes) with no test to run. `all` is for an
+  scope when that file changes. A fuzz crate's file (`rust/<crate>/fuzz/`)
+  is no package's: the fuzz workflows build the harness, and its manifest
+  and lockfile run this job for the crypto closure step, which reads every
+  fuzz lock, with no test (ruled 2026-11-22; a lockfile regeneration ran the
+  fuzzed crate's whole reverse closure and every OS build). `none` is a job
+  that runs for its own gate steps (a changed script it executes) with no
+  test to run. `all` is for an
   input every crate shares: the workspace manifest and lock, the toolchain,
   the cargo and nextest configuration, `config/` (read by build scripts), the
   job's own workflow file, this classifier and its ownership table, any path
@@ -150,6 +155,14 @@ RUST_JOB = "rust-audit-test:rust-audit-and-test"
 BUILD_WORKFLOW = ".github/workflows/build.yml"
 BUILD_JOBS = frozenset({"build:build-macos", "build:build-ubuntu", "build:build-windows-msvc"})
 BUILD_GATE = "if: needs.changes.outputs.work != 'false'"
+# A fuzz crate (`rust/<crate>/fuzz/`) is no workspace member and no crate's
+# test: the fuzz workflows build and run it. Its manifest and lockfile are
+# also read by the CI scripts that glob every fuzz crate's (the crypto
+# closure record, the fuzz inventory), whose jobs own them too.
+FUZZ_CRATE = re.compile(r"^rust/[^/]+/fuzz/")
+FUZZ_MANIFEST = re.compile(r"^rust/[^/]+/fuzz/Cargo\.(?:toml|lock)$")
+FUZZ_WORKFLOWS = (".github/workflows/fuzz-harness.yml", ".github/workflows/fuzz-nightly.yml")
+FUZZ_MANIFEST_GLOB = re.compile(r"rust/\*/fuzz/Cargo\.(?:toml|lock)")
 # The economics sim and the job that runs its narration pins.
 SIM = "shekyl-economics-sim"
 SIM_NARRATIONS_JOB = "rust-audit-test:economics-sim-narrations"
@@ -570,6 +583,27 @@ def workflow_owners(path, workflows):
     return owners
 
 
+def fuzz_manifest_readers():
+    """The CI scripts whose code (comments aside) globs every fuzz crate's
+    manifest or lockfile, read from the tree."""
+    return sorted(
+        s for s in git("ls-files", "scripts/ci/").splitlines()
+        if s.endswith((".py", ".sh")) and FUZZ_MANIFEST_GLOB.search(code_text(s))
+    )
+
+
+def fuzz_owners(path, owners, workflows, readers=None):
+    """The jobs a fuzz crate's file is for: the fuzz workflows' jobs, and for
+    its manifest or lockfile the jobs of each script that globs them."""
+    jobs = set()
+    for wf in FUZZ_WORKFLOWS:
+        jobs |= workflow_owners(wf, workflows)
+    if FUZZ_MANIFEST.match(path):
+        for s in fuzz_manifest_readers() if readers is None else readers:
+            jobs |= owners.get(s, set())
+    return jobs
+
+
 def rust_scope(files, inputs, trees, workspace, owners, workflows, jobs=frozenset({RUST_JOB}),
                own=RUST_WORKFLOW, name="the Rust job"):
     """(rust_job, rust_tests, reasons): `rust_tests` is 'all', 'none' or a
@@ -630,6 +664,13 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows, jobs=frozense
                 reasons.append(f"{f}: a file {name} runs")
             else:
                 reasons.append(f"{f}: owned by {', '.join(sorted(owners[f])) or 'no job'}")
+        elif FUZZ_CRATE.match(f):
+            claimed = True
+            if jobs & fuzz_owners(f, owners, workflows):
+                job_run = True
+                reasons.append(f"{f}: a fuzz crate's file {name} reads")
+            else:
+                reasons.append(f"{f}: a fuzz crate's file: the fuzz jobs build it, no crate tests it")
         elif (d := dir_claim(f, owners)) is not None:
             claimed = True
             if jobs & owners[d]:
@@ -848,6 +889,7 @@ def selftest():
         bad += 1
     bad += rust_selftest(inputs, trees)
     bad += build_selftest(inputs, trees)
+    bad += fuzz_selftest()
     print(f"selftest: {'FAILED' if bad else 'ok'} ({bad} wrong)")
     return 1 if bad else 0
 
@@ -855,7 +897,8 @@ def selftest():
 # (path, expected build_jobs) for a change of that file alone
 BUILD_SELFTEST = [
     ("rust/shekyl-units/src/lib.rs", "run"),                    # a package: the builds compile it
-    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run"),         # maps to the fuzzed crate
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "skip"),        # a fuzz harness: the fuzz jobs build it
+    ("rust/shekyl-levin/fuzz/Cargo.lock", "skip"),              # read by the fuzz and Rust jobs' scripts, not the builds
     ("docs/test_vectors/PQC_HYBRID_V2_KAT.json", "run"),        # read by crates' tests
     ("rust/Cargo.lock", "run"),
     ("config/anything.h", "run"),
@@ -916,11 +959,32 @@ def build_selftest(inputs, trees):
     return bad
 
 
+def fuzz_selftest():
+    """The subjects the fuzz placement reads exist (rule 47): the fuzz
+    workflows, a fuzz crate, and the crypto closure script among the
+    readers of every fuzz manifest, which is why a fuzz lockfile runs the
+    Rust job."""
+    bad = 0
+    tracked = set(git("ls-files").splitlines())
+    for wf in FUZZ_WORKFLOWS:
+        if wf not in tracked:
+            print(f"WRONG: FUZZ_WORKFLOWS names {wf}, which is not tracked")
+            bad += 1
+    if not any(FUZZ_MANIFEST.match(f) for f in tracked):
+        print("WRONG: no rust/<crate>/fuzz/Cargo.toml or Cargo.lock is tracked")
+        bad += 1
+    if "scripts/ci/check_crypto_closure.py" not in fuzz_manifest_readers():
+        print(f"WRONG: the crypto closure script is not among the fuzz manifest readers {fuzz_manifest_readers()}")
+        bad += 1
+    return bad
+
+
 # (path, expected rust_job, expected rust_tests) for a change of that file alone
 RUST_SELFTEST = [
     ("rust/shekyl-units/src/lib.rs", "run", {"shekyl-units"}),
-    ("rust/shekyl-wire/fuzz/Cargo.toml", "run", {"shekyl-wire"}),          # an excluded crate maps to the member above it
-    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run", {"shekyl-fcmp"}),   # maps to the fuzzed crate; fuzz-harness.yml builds the harness
+    ("rust/shekyl-wire/fuzz/Cargo.toml", "run", "none"),                   # a fuzz crate: no crate's test; the crypto closure step reads it
+    ("rust/shekyl-levin/fuzz/Cargo.lock", "run", "none"),                  # likewise its lockfile
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "skip", "none"),           # a harness: fuzz-harness.yml builds it, no crate tests it
     ("rust/shekyl-mempool/Cargo.toml", "run", {"shekyl-mempool"}),         # a dependency edit: rdeps covers the consumers
     ("rust/Cargo.toml", "run", "all"),
     ("rust/Cargo.lock", "run", "all"),

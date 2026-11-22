@@ -958,8 +958,9 @@ def selftest() -> int:
             ("name: '#${{ github.event.pull_request.number }}'", "the re-test caller named by the pull request"),
             ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
              "the label check's script from the base branch"),
-            ('run: git checkout "origin/${BASE}" -- scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py '
-             'scripts/ci/change_scope.py\n', "the plan's scripts from the base branch"),
+            ('git checkout "origin/${BASE}" --\n          scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py '
+             'scripts/ci/change_scope.py\n          scripts/ci/check_fuzz_inventory.py\n',
+             "the plan's scripts from the base branch, the overlap's imports among them"),
         ]),
         (".github/workflows/merge-ready-dev.yml", [
             ("name: '#${{ matrix.pr }}'", "the re-test caller named by the pull request"),
