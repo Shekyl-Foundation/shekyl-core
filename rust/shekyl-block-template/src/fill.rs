@@ -933,16 +933,11 @@ mod tests {
             fee in proptest::prop_oneof![0u64..1 << 20, 0u64..1 << 42, proptest::prelude::any::<u64>()],
             count in proptest::prop_oneof![0u64..1 << 12, 0u64..1 << 22, proptest::prelude::Just(u64::MAX)],
         ) {
-            let p = params_at(tenths * SCALE / 10);
-            let v = TxVolume::per_block(volume);
-            let Ok(empty) = Fill::empty(median, coinbase, already_generated, v, &p) else {
-                return Err(proptest::test_runner::TestCaseError::reject("not priced"));
-            };
-            let mut base = empty;
-            if !base.admit(start, start_fee) {
-                base = empty;
-            }
-            proptest::prop_assume!(parity(base, weight, fee, &[count], "random"));
+            let ran = random_operands(
+                median, coinbase, already_generated, volume, tenths, start, start_fee, weight, fee,
+                count,
+            );
+            proptest::prop_assume!(ran == Some(true), "not priced, or the walk is too long");
         }
 
         /// The same at the growth schedule's medians, 2³⁶ to 2⁵⁰ bytes, with
@@ -958,17 +953,88 @@ mod tests {
             fee in proptest::prop_oneof![0u64..1 << 20, 0u64..1 << 42, proptest::prelude::any::<u64>()],
             count in proptest::prop_oneof![0u64..1 << 12, proptest::prelude::Just(u64::MAX)],
         ) {
-            let p = params_at(tenths * SCALE / 10);
-            let v = TxVolume::per_block(volume);
-            let Ok(empty) = Fill::empty(median, coinbase_weight(), already_generated, v, &p) else {
-                return Err(proptest::test_runner::TestCaseError::reject("not priced"));
-            };
-            let mut base = empty;
-            if !base.admit(median / 10 * start_tenths, u64::MAX / 4) {
-                base = empty;
-            }
-            proptest::prop_assume!(parity(base, median >> shift, fee, &[count], "large"));
+            let ran = large_median(median, already_generated, volume, tenths, start_tenths, shift, fee, count);
+            proptest::prop_assume!(ran == Some(true), "not priced, or the walk is too long");
         }
+    }
+
+    /// One case of `admit_up_to_is_the_walk_on_random_operands`: `None` when
+    /// the empty fill is not priced, else whether the walk was short enough
+    /// to run (`parity` asserts the equality itself).
+    #[allow(clippy::too_many_arguments)] // a case is the property's operands, one argument each
+    fn random_operands(
+        median: u64,
+        coinbase: u64,
+        already_generated: u64,
+        volume: u64,
+        tenths: u64,
+        start: u64,
+        start_fee: u64,
+        weight: u64,
+        fee: u64,
+        count: u64,
+    ) -> Option<bool> {
+        let p = params_at(tenths * SCALE / 10);
+        let v = TxVolume::per_block(volume);
+        let empty = Fill::empty(median, coinbase, already_generated, v, &p).ok()?;
+        let mut base = empty;
+        if !base.admit(start, start_fee) {
+            base = empty;
+        }
+        Some(parity(base, weight, fee, &[count], "random"))
+    }
+
+    /// One case of `admit_up_to_is_the_walk_at_random_large_medians`, as
+    /// [`random_operands`].
+    #[allow(clippy::too_many_arguments)] // a case is the property's operands, one argument each
+    fn large_median(
+        median: u64,
+        already_generated: u64,
+        volume: u64,
+        tenths: u64,
+        start_tenths: u64,
+        shift: u32,
+        fee: u64,
+        count: u64,
+    ) -> Option<bool> {
+        let p = params_at(tenths * SCALE / 10);
+        let v = TxVolume::per_block(volume);
+        let empty = Fill::empty(median, coinbase_weight(), already_generated, v, &p).ok()?;
+        let mut base = empty;
+        if !base.admit(median / 10 * start_tenths, u64::MAX / 4) {
+            base = empty;
+        }
+        Some(parity(base, median >> shift, fee, &[count], "large"))
+    }
+
+    /// The two failures `proptest-regressions/fill.txt` records, run by
+    /// value. The file replays them by seed, and a seed names a case only
+    /// under the generator that drew it, which a proptest or rand release
+    /// may change (proptest 1.12 moved to rand 0.10); the shrunk operands
+    /// the file's comments carry are the cases.
+    #[test]
+    fn the_recorded_property_failures_hold_by_value() {
+        assert_eq!(
+            random_operands(
+                23_443_938_952,
+                0,
+                4_293_030_197_789_196_289,
+                0,
+                25,
+                12_272_188_685,
+                0,
+                12_380_038,
+                27,
+                904
+            ),
+            Some(true),
+            "the recorded random-operands case is priced and runs"
+        );
+        assert_eq!(
+            large_median(68_719_476_736, 0, 0, 11, 10, 9, 0, 1),
+            Some(true),
+            "the recorded large-median case is priced and runs"
+        );
     }
 
     fn params() -> EconomicParams {
