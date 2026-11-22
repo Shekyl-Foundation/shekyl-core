@@ -165,54 +165,55 @@ said about a row on its own.
 Every tarball carries a valid signature (`VALIDSIG`, not only `GOODSIG`) from
 the Tor Browser Developers key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`
 (signing subkey `022DA248432D2A0E0F54E65E316C1FACD62D07D9`), the key
-`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. Every bundle below was downloaded
-from the Tor Project's archive on 2026-10-17 and ships tor `0.4.9.14`.
+`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. The Linux and Windows bundles below
+were downloaded from the Tor Project's archive on 2026-11-21 and ship tor
+`0.4.9.16`; the macOS ones too, the same day.
 
 | Target | Bundle | Tarball SHA-256 |
 | --- | --- | --- |
-| `linux-x86_64` | 15.0.25 (stable) | `19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a` |
-| `linux-aarch64` | 16.0a14 (alpha) | `6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2` |
-| `windows-x86_64` | 15.0.25 (stable) | `c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252` |
-| `macos-aarch64` | 15.0.26 (stable) | `a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c` |
-| `macos-x86_64` | 15.0.26 (stable) | `e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95` |
+| `linux-x86_64` | 16.0.1 (stable) | `7039cb16060ab22e669852e55774d894b55f25ea8bd0ab7194d3478429a58725` |
+| `linux-aarch64` | 16.0.1 (stable) | `67040520d44c87ccaaf5aa7df0dc1ff122eb938dbb600ae7722e8b6b75282a4b` |
+| `windows-x86_64` | 16.0.1 (stable) | `9eed3c3ff1fe43df034ce360196c9ec95472560d77ff55614d0cd5120edea27b` |
+| `macos-aarch64` | 16.0.1 (stable) | `0b7d022017c31e3f972d06465bcd7ac50feb66ac825547419a934914fe4bb156` |
+| `macos-x86_64` | 16.0.1 (stable) | `15464d99adc3bb4de1308260d79878336b04a1ac1aeff83e10f192de7d235946` |
 
-The macOS tarballs of 15.0.26 (published 2026-10-21; its one change is
-browser-side, tor-browser#45397) are byte-identical to 15.0.25's, so the
-digests above are both releases' (VALIDSIG, checked 2026-10-22).
+From 16.0.1 the `macos-aarch64` `tor` and `libevent` arrive carrying the
+linker's ad-hoc signature (`adhoc,linker-signed`); the `macos-x86_64` files
+are unsigned, as every macOS file was through 15.0.26.
 
 Extracted files, by target:
 
 | Target | File | SHA-256 |
 | --- | --- | --- |
-| `linux-x86_64` | `tor` | `39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3` |
-| | `libevent-2.1.so.7` | `b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff` |
-| | `libssl.so.3` | `9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac` |
-| | `libcrypto.so.3` | `418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05` |
-| `linux-aarch64` | `tor` | `0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b` |
+| `linux-x86_64` | `tor` | `0769509fb10e5b916d91f824fdb7575ae142f5afe134b16e9ea174074a327ccf` |
+| | `libevent-2.1.so.7` | `d252ad9c63de5ac276bdcf73f466ecf6ce0b390f33c3d241b6a32ea4e2f59ef6` |
+| | `libssl.so.3` | `cb31eaf171a10f660137b6c3d1ff552c2e89fdedd20e8523a7bf30cc06727457` |
+| | `libcrypto.so.3` | `e2c0901c520c07cdaab4af3507bf20f6c80273571764b4dc9b3b0b4a75621052` |
+| `linux-aarch64` | `tor` | `689da686cdc64d2238430a5100460dd45fc045dabed88989dfcf553e06b48609` |
 | | `libevent-2.1.so.7` | `097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577` |
 | | `libssl.so.3` | `080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf` |
 | | `libcrypto.so.3` | `f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3` |
-| `windows-x86_64` | `tor.exe` | `8c38513b3c4584154158e7c584f4144849dc679a64cd679553d72dad28230c54` |
-| `macos-aarch64` | `tor` | `7d5a89b6cec99aab47420040ad86dd5fd5174192e71b6c201b0b10170ba57ebb` |
-| | `libevent-2.1.7.dylib` | `6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739` |
-| `macos-x86_64` | `tor` | `e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14` |
-| | `libevent-2.1.7.dylib` | `38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b` |
+| `windows-x86_64` | `tor.exe` | `da22856f95ee24f8ace4ad1ab04acbd818fd6c3042bc3cf8f1d7cc3fa3edcb2b` |
+| `macos-aarch64` | `tor` | `1a910d08cc88e23d5823554272dc1722c6275e322230455ea4dddf9c99e4de7a` |
+| | `libevent-2.1.7.dylib` | `d51339ae695865b911c56c6d4da9a4084a74c9484c856c4fa5c22440ba82e0b9` |
+| `macos-x86_64` | `tor` | `41ac55a641569ddb94fbd42059799bcf4c00291b6cd8a607aed53e5eaa5ba016` |
+| | `libevent-2.1.7.dylib` | `25646a77c3f71f62f7cc3756320e6f7c3cc48174d5763b11ba03148daaae81e9` |
 
 The macOS files above are the rows' `upstream`. What ships is Shekyl's
 Developer ID-signed copy of each (TB-7 part 1, TB-11), signed once on
-2026-10-23, hardened runtime on, and published in the
-`tor-macos-15.0.26-signed` release on this repository. These are the rows'
+2026-11-21, hardened runtime on, and published in the
+`tor-macos-16.0.1-signed` release on this repository. These are the rows'
 `files`, the digests the daemon checks at launch:
 
 | Target | File | Signed SHA-256 |
 | --- | --- | --- |
-| `macos-aarch64` | `tor` | `23829c8c47c8a13a391d7c0870666d571a65ab71167d0de7b9a560b0a5a76838` |
-| | `libevent-2.1.7.dylib` | `cc12c96e43d0806e5c1767f6880c96fac3e6d77e7fbc325e47513a4fe1d2eeb2` |
-| `macos-x86_64` | `tor` | `81c00fb8fa85194ad853a9160d8c57029f01aac5e2cdd741b3a057e988a942b9` |
-| | `libevent-2.1.7.dylib` | `afdbfe863b8dff0d8d23e20073d7f5f1d785fab72df953faa6bc5f2af5933394` |
+| `macos-aarch64` | `tor` | `f1e7283007c79f50d46428923238b432959c25370ee22a5af96de8e6508faef1` |
+| | `libevent-2.1.7.dylib` | `bf940212466065cea143c7c157c26eb46bc8d206d1c36ad8d1beb71daf1e0a79` |
+| `macos-x86_64` | `tor` | `3533d0debc16ad65a15fb1e9840d3e2f1d78ae5384a623750d11d40d99f2815d` |
+| | `libevent-2.1.7.dylib` | `3c7c2bab19e7457f2abac8f2ea977a764552a18ecee35e24dc390f6db7e3e62f` |
 
-Every pinned bundle carries OpenSSL **3.5.9** (29 Sep 2026), read on
-2026-10-17 from the version string in the staged files: `libcrypto.so.3` in
+Every pinned bundle carries OpenSSL **3.5.9** (29 Sep 2026), read again on
+2026-11-21 at 16.0.1 from the version string in the staged files: `libcrypto.so.3` in
 both Linux bundles, and the statically linked copy in `tor.exe` and in both
 macOS `tor` binaries. The `linux-aarch64` libraries are byte-identical to
 16.0a13's, so the floor device already ran 3.5.9; the 15.0.24 `tor.exe`
@@ -320,7 +321,7 @@ current" procedure.
    GUI wallet's installers (TB-12), in `shekyl-gui-wallet`. **The Windows
    and macOS halves are LANDED**; the GUI wallet's installers are not. The
    macOS half:
-   - The pin: both `macos` rows at 15.0.26, each with two digest sets, `files`
+   - The pin: both `macos` rows at 16.0.1, each with two digest sets, `files`
      (the Developer ID-signed bytes the daemon checks) and `upstream` (Tor's).
      `build.rs` and `load_pins` refuse a macOS row without `upstream` and any
      other row with it.
@@ -378,10 +379,10 @@ canonical location, watching the network recover from each dropped node.
 The pin cannot cover a file Shekyl has no source for. With the loader pointed
 at the bundle, the Linux `tor` still takes these from the system (observed on
 `linux-x86_64`; the `linux-aarch64` `tor` names the same set — `readelf -d`
-lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically. The
-16.0a14 bundle carries a `docs/zlib.txt` that the 15.0.25 bundle does not;
-that is a licence text for a library the bundle does not ship, and Shekyl
-does not stage it):
+lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically; so
+again at 16.0.1. The `linux-aarch64` bundle carries a `docs/zlib.txt` that the
+`linux-x86_64` bundle does not; that is a licence text for a library the
+bundle does not ship, and Shekyl does not stage it):
 
 - the glibc family — the dynamic loader, `libc`, `libm`, `libdl`,
   `libpthread` — and `libgcc_s`;
@@ -405,8 +406,10 @@ that probe as the answer.
   write it can replace `shekyld`; the pin was never a defence against root.
 - **macOS `DYLD_*` variables.** TB-7 part 2 clears them from the child's
   environment, and the library is named by `@executable_path`, which no search
-  path overrides. Tor's macOS binaries ship unsigned; Shekyl's Developer ID
-  signature turns on the hardened runtime, which ignores `DYLD_*` variables,
+  path overrides. Tor's macOS binaries carry no identity (x86_64 unsigned;
+  arm64, from 16.0.1, the linker's ad-hoc signature, which Shekyl's replaces
+  and the tie accepts as exactly that); Shekyl's Developer ID signature turns
+  on the hardened runtime, which ignores `DYLD_*` variables,
   and library validation, which refuses a `libevent` signed by another team
   (TB-11). These are a second layer, not the one relied on.
 - **A local attacker who can write tor's directory between the check and the
