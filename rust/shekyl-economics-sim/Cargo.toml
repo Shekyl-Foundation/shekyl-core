@@ -51,7 +51,13 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 thiserror.workspace = true
 serde = { workspace = true }
-serde_json = "1"
+# `float_roundtrip`: the whole-economy JSON summary reads back as the run's
+# own f64s, bit for bit. The default parse can land one ULP off, and the
+# full narration prints fee variances past an f64's precision, so a summary
+# read without it renders a narration that differs in those last digits
+# (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1). Cargo unifies the feature
+# into any build that includes this crate, such as a workspace test build.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # Standard traffic's draw (`rng::block_interval`, `rng::rung_arrivals`;
 # ECONOMICS_SIM_PRODUCTION_REBASE.md §5.35): `exp` and `log` in pure Rust,
 # the same bits on every host, where std's call the platform's C runtime.

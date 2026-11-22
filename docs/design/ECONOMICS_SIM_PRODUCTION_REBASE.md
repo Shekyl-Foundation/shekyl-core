@@ -5507,6 +5507,16 @@ rule, unless named.
   folds the table once, compares both digests, and derives the table from
   that run's summary. The two files are kept privately, not in this
   repository.
+- **The JSON summary reads back as the run's own numbers, bit for bit.**
+  Rendered from the recorded summary, the narration first differed from
+  the run's in 36 of its 15 431 lines. Each difference was in the last
+  digits of a fee variance near 2 × 10¹⁰ on a growth row. The narration
+  prints those variances to six decimals, past an f64's precision, and
+  serde_json's default parse can land one ULP off. The sim now parses
+  with serde_json's `float_roundtrip`. The narration rendered from the
+  summary is then the run's, digest for digest. The on-demand
+  `economies_narration_renders_from_the_recorded_summary` pins that, in
+  seconds. A unit test pins one of those variances reading back exactly.
 - **The nightly derives a table from its own slice and pins it**
   (`tests/fixtures/economies_nightly_table.csv`). The derive function runs
   on real output every night, with nothing fetched. The slice's narration

@@ -1595,13 +1595,15 @@ mod tests {
         )
     }
 
-    /// The JSON summary's recorded SHA-256, read from [`FULL_DIGESTS`].
-    fn recorded_summary_digest() -> String {
+    /// The recorded SHA-256 of the full run's file `name`
+    /// ([`FULL_NARRATION_NAME`] or [`FULL_SUMMARY_NAME`]), read from
+    /// [`FULL_DIGESTS`].
+    fn recorded_digest(name: &str) -> String {
         let digests = std::fs::read_to_string(FULL_DIGESTS).expect("read the recorded digests");
         digests
             .lines()
-            .find_map(|line| line.strip_suffix(&format!("  {FULL_SUMMARY_NAME}")))
-            .expect("the digests record the JSON summary")
+            .find_map(|line| line.strip_suffix(&format!("  {name}")))
+            .unwrap_or_else(|| panic!("{FULL_DIGESTS} records no {name}"))
             .to_owned()
     }
 
@@ -1953,6 +1955,25 @@ mod tests {
         assert_eq!(table(&back), table(&summary));
     }
 
+    /// A summary's f64 reads back bit for bit. The literal is a fee variance
+    /// from the recorded full run that serde_json's default parse reads one
+    /// ULP off. The narration prints it to six decimals, past an f64's
+    /// precision, so without `float_roundtrip` the summary renders a
+    /// different narration from the run's.
+    #[test]
+    fn a_summary_float_reads_back_bit_for_bit() {
+        let recorded = "21231060353.333294";
+        let x: f64 = recorded.parse().expect("std parses a decimal exactly");
+        let json = serde_json::to_string(&x).expect("serialize");
+        assert_eq!(json, recorded);
+        let back: f64 = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(
+            back.to_bits(),
+            x.to_bits(),
+            "{recorded} read back as {back}"
+        );
+    }
+
     /// Names a full run's JSON summary on disk, for deriving the table
     /// without folding it again (a 13.9-hour run, §5.37.1).
     const SUMMARY_PATH_ENV: &str = "SHEKYL_ECONOMIES_SUMMARY";
@@ -1970,7 +1991,7 @@ mod tests {
         let json = std::fs::read_to_string(&path).expect("read the JSON summary");
         assert_eq!(
             sha256_hex(&json),
-            recorded_summary_digest(),
+            recorded_digest(FULL_SUMMARY_NAME),
             "{path} is not the JSON summary whose SHA-256 {FULL_DIGESTS} records"
         );
         serde_json::from_str(&json).expect("the JSON summary parses")
@@ -1985,6 +2006,22 @@ mod tests {
             "--economies derived table",
             TABLE_FIXTURE,
             &table(&recorded_summary()),
+        );
+    }
+
+    /// The full narration rendered from the recorded JSON summary, against
+    /// the narration's recorded SHA-256: the summary is the run's record, so
+    /// it renders the run's narration byte for byte without folding again.
+    #[test]
+    #[ignore = "--economies, the full narration: renders the recorded JSON summary (379 MB) SHEKYL_ECONOMIES_SUMMARY names — on demand"]
+    fn economies_narration_renders_from_the_recorded_summary() {
+        let mut narration = String::new();
+        write_report(&mut narration, &recorded_summary().rows, Scope::Full)
+            .expect("String sink is infallible");
+        assert_eq!(
+            sha256_hex(&narration),
+            recorded_digest(FULL_NARRATION_NAME),
+            "the narration rendered from the recorded JSON summary is not the one {FULL_DIGESTS} records"
         );
     }
 
