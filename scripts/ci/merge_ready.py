@@ -66,12 +66,13 @@ by name alike.
                      head's checks have only just started
   labeled            `checking`, then every check run and status on the
                      head, this flow's own, `EXCLUDED` by name and
-                     `EXCLUDED_APPS` by app aside,
-                     must have concluded, none red (of a workflow run twice
-                     on the head, its newest run's only; a review bot's job
-                     is judged by its review instead, `REVIEW_JOBS`); no
-                     review thread may be open; the pull request may not be a draft. Anything
-                     else: `refused`. Then the plan: the tests the head
+                     `EXCLUDED_APPS` by app aside, must have concluded,
+                     none red (of a workflow's `pull_request` runs on the
+                     head, its newest one's only, `SUPERSEDING_EVENTS`; a
+                     review bot's job is judged by its review instead,
+                     `REVIEW_JOBS`); no review thread may be open; the
+                     pull request may not be a draft. Anything else:
+                     `refused`. Then the plan: the tests the head
                      shares with the merges since its merge base, `ready`
                      at once when there are none, else `re-testing` and a
                      re-test (merge-ready-retest.yml)
@@ -171,6 +172,17 @@ REVIEW_JOBS: dict[str, tuple[str, str]] = {
         "Copilot's review job can end red after its review is posted",
     ),
 }
+# The events whose newer run of a workflow on the head replaces its older
+# runs there (`superseded_suites`). A `pull_request` run's scope is the head
+# and the pull request's diff, so a newer one covers an older one: a draft's
+# run skips the heavy jobs and the run when it is marked ready runs them all
+# (#1497). A run of any other event is never replaced and replaces nothing:
+# a `workflow_dispatch` on the head is chosen by its inputs, narrower than
+# the pull request's run (benchmarks.yml's capture skips its `compare` job,
+# nightly.yml's `job` picks one leg), and a `push` run's scope is measured
+# from the branch's previous tip, not the head alone. Each such run's reds
+# stay judged until a re-run attempt clears them.
+SUPERSEDING_EVENTS = frozenset({"pull_request"})
 # A check run the labelling itself started (a workflow listening for
 # labels, its jobs skipped at once) concludes within seconds.
 SETTLE_SECONDS = 90
@@ -401,17 +413,20 @@ def superseded_suites(workflow_runs: list[dict]) -> set[int]:
     cancelled jobs, its `(draft)` pass jobs and a matrix job cancelled
     before its name expanded (`matrix.name`) stay on the head beside the
     newer runs' green ones (#1497 at fc1cf82f33, 2026-11-22: 14 of its 15
-    reasons). Only each workflow's newest run on the head is judged. A check
-    run from a suite no workflow run names (another app's) is always judged.
+    reasons). Of each workflow's runs of a `SUPERSEDING_EVENTS` event, only
+    the newest is judged; every run of another event is judged in full. A
+    check run from a suite no workflow run names (another app's) is always
+    judged.
     """
-    newest: dict[object, dict] = {}
-    for run in workflow_runs:
-        key = run.get("workflow_id")
+    replaceable = [run for run in workflow_runs if run.get("event") in SUPERSEDING_EVENTS]
+    newest: dict[tuple[object, object], dict] = {}
+    for run in replaceable:
+        key = (run.get("workflow_id"), run.get("event"))
         if key not in newest or (run.get("created_at") or "", run.get("id", 0)) > (
                 newest[key].get("created_at") or "", newest[key].get("id", 0)):
             newest[key] = run
     current = {run.get("check_suite_id") for run in newest.values()}
-    return {run.get("check_suite_id") for run in workflow_runs} - current
+    return {run.get("check_suite_id") for run in replaceable} - current
 
 
 def reviewers_on(reviews: list[dict], head: str) -> set[str]:
@@ -697,11 +712,11 @@ def selftest() -> int:
     def suite(c, sid):
         return {**c, "check_suite": {"id": sid}}
 
-    wf = [
-        {"id": 1, "workflow_id": 10, "created_at": "2026-11-22T01:32:00Z", "check_suite_id": 101},
-        {"id": 2, "workflow_id": 10, "created_at": "2026-11-22T05:00:00Z", "check_suite_id": 102},
-        {"id": 3, "workflow_id": 20, "created_at": "2026-11-22T01:32:00Z", "check_suite_id": 201},
-    ]
+    def wf_run(rid, wid, created, sid, event="pull_request"):
+        return {"id": rid, "workflow_id": wid, "created_at": f"2026-11-22T{created}:00Z",
+                "check_suite_id": sid, "event": event}
+
+    wf = [wf_run(1, 10, "01:32", 101), wf_run(2, 10, "05:00", 102), wf_run(3, 20, "01:32", 201)]
     stale = [suite(done("Rust: audit, test, determinism", "cancelled"), 101),
              suite(done("rust-pass (draft)", "failure"), 101), suite(done("matrix.name", "cancelled"), 101)]
     fresh = [suite(done("Rust: audit, test, determinism"), 102), suite(done("rust-pass"), 102),
@@ -722,6 +737,31 @@ def selftest() -> int:
             problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
     if superseded_suites(wf[:1] + wf[2:]):
         problems.append("superseded runs: a workflow's only run was superseded")
+    # Only a `pull_request` run replaces, and only another `pull_request`
+    # run: a narrower run of another event never hides a red (Copilot on
+    # #1521: benchmarks.yml's capture-only dispatch skips `compare`).
+    pr_red = [suite(done("compare & post PR comment", "failure"), 501)]
+    for label, runs_wf, runs, want in [
+        ("a pull_request run's red beside a newer dispatch of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501), wf_run(7, 50, "02:00", 502, "workflow_dispatch")],
+         pr_red + [suite(done("capture-pr"), 502)], 1),
+        ("an older dispatch's red beside a newer dispatch of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "workflow_dispatch"), wf_run(7, 50, "02:00", 502, "workflow_dispatch")],
+         [suite(done("proptest-exhaustive", "failure"), 501), suite(done("store-ignored"), 502)], 1),
+        ("a dispatch's red beside a newer pull_request run of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "workflow_dispatch"), wf_run(7, 50, "02:00", 502)],
+         [suite(done("capture-pr", "failure"), 501), suite(done("capture-pr"), 502)], 1),
+        ("a push run's red beside a newer pull_request run of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "push"), wf_run(7, 50, "02:00", 502)],
+         [suite(done("rust", "failure"), 501), suite(done("rust"), 502)], 1),
+        # Control: a draft's run and the ready run, both pull_request (#1497).
+        ("a draft's pull_request red beside the newer ready run is not judged",
+         [wf_run(6, 50, "01:00", 501), wf_run(7, 50, "02:00", 502)],
+         [suite(done("rust-pass (draft)", "failure"), 501), suite(done("rust-pass"), 502)], 0),
+    ]:
+        got = len(judge(current_runs(runs, superseded_suites(runs_wf)), [], 0, False))
+        if got != want:
+            problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
     # A review bot's job is judged by its review on the head (#1497).
     bot_path, (bot, _) = next(iter(REVIEW_JOBS.items()))
     head, older_head = "f" * 40, "b" * 40
