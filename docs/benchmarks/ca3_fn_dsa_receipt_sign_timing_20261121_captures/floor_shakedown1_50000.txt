@@ -1,0 +1,72 @@
+CA-3 FN-DSA receipt countersignature timing (fn-dsa 0.4.0, held signer), inputs prepared before the loop
+arch=aarch64 os=linux cpu_avx2=n/a samples_per_comparison=50000 calibration=10000 crops=100 slots=256 inputs=NOT-REGISTERED
+pass: |t| and restart |z| < 4.5 on fixed-a-vs-fixed-b; null comparisons: both < 4.5; control: |t| > 10; fixed-vs-varied is information (ruled 2026-11-21)
+  quantile=1 class0=2079922 class1=2081885 diff=-1963
+  quantile=5 class0=2097996 class1=2099126 diff=-1130
+  quantile=10 class0=2105422 class1=2106569 diff=-1147
+  quantile=25 class0=2116995 class1=2118162 diff=-1167
+  quantile=50 class0=2129254 class1=2130366 diff=-1112
+  quantile=75 class0=2141495 class1=2142402 diff=-907
+  quantile=90 class0=2152958 class1=2153698 diff=-740
+  quantile=95 class0=2160013 class1=2161291 diff=-1278
+  quantile=99 class0=2175439 class1=2176624 diff=-1185
+  crop=raw n0=25049 n1=24851 mean0=2129434.5 mean1=2130491.2 diff=-1056.7 t=-5.15
+  max_at_crop=72 cutoff=2193383 n0=24960 n1=24771 diff=-1050.3 t=-6.18
+  check entries=60000 failed=0 not_verified=0 nonce_unmatched=0 measured0=25096 restarted0=47 measured1=24904 restarted1=53 restart_z=-0.64 verdict=as-intended
+information=fixed-vs-varied max_abs_t=6.18 restart_abs_z=0.64 median_ns=2130476 n0=25049 n1=24851 verdict=information
+  quantile=1 class0=2073589 class1=2071496 diff=2093
+  quantile=5 class0=2095348 class1=2094107 diff=1241
+  quantile=10 class0=2103923 class1=2103164 diff=759
+  quantile=25 class0=2116237 class1=2115978 diff=259
+  quantile=50 class0=2129070 class1=2128774 diff=296
+  quantile=75 class0=2141774 class1=2141476 diff=298
+  quantile=90 class0=2153199 class1=2152902 diff=297
+  quantile=95 class0=2160532 class1=2160105 diff=427
+  quantile=99 class0=2178070 class1=2177476 diff=594
+  crop=raw n0=25000 n1=24884 mean0=2129187.5 mean1=2128899.4 diff=288.1 t=1.19
+  max_at_crop=69 cutoff=2185550 n0=24854 n1=24717 diff=492.6 t=2.76
+  check entries=60000 failed=0 not_verified=0 nonce_unmatched=0 measured0=25049 restarted0=49 measured1=24951 restarted1=67 restart_z=-1.69 verdict=as-intended
+pass-line=fixed-a-vs-fixed-b max_abs_t=2.76 restart_abs_z=1.69 median_ns=2129069 n0=25000 n1=24884 verdict=no-evidence
+  quantile=1 class0=2077090 class1=2069534 diff=7556
+  quantile=5 class0=2096793 class1=2092978 diff=3815
+  quantile=10 class0=2104830 class1=2102552 diff=2278
+  quantile=25 class0=2116866 class1=2115552 diff=1314
+  quantile=50 class0=2129236 class1=2128811 diff=425
+  quantile=75 class0=2141515 class1=2141292 diff=223
+  quantile=90 class0=2152940 class1=2152681 diff=259
+  quantile=95 class0=2160236 class1=2159773 diff=463
+  quantile=99 class0=2175366 class1=2175569 diff=-203
+  crop=raw n0=24912 n1=24971 mean0=2129407.3 mean1=2128408.2 diff=999.1 t=4.19
+  max_at_crop=7 cutoff=2125626 n0=10507 n1=10785 diff=1584.7 t=8.54
+  check entries=60000 failed=0 not_verified=0 nonce_unmatched=0 measured0=24970 restarted0=58 measured1=25030 restarted1=59 restart_z=-0.08 verdict=as-intended
+null=fixed-a-vs-fixed-a-other-slots max_abs_t=8.54 restart_abs_z=0.08 median_ns=2129237 n0=24912 n1=24971 verdict=INCONCLUSIVE
+  quantile=1 class0=2069182 class1=2077479 diff=-8297
+  quantile=5 class0=2092145 class1=2097181 diff=-5036
+  quantile=10 class0=2102367 class1=2105385 diff=-3018
+  quantile=25 class0=2115793 class1=2117182 diff=-1389
+  quantile=50 class0=2128811 class1=2129514 diff=-703
+  quantile=75 class0=2141330 class1=2141607 diff=-277
+  quantile=90 class0=2152755 class1=2153144 diff=-389
+  quantile=95 class0=2160181 class1=2160199 diff=-18
+  quantile=99 class0=2176625 class1=2176347 diff=278
+  crop=raw n0=24927 n1=24968 mean0=2128365.8 mean1=2129599.7 diff=-1233.9 t=-5.43
+  max_at_crop=15 cutoff=2137496 n0=16917 n1=16902 diff=-1662.7 t=-10.17
+  check entries=60000 failed=0 not_verified=0 nonce_unmatched=0 measured0=24987 restarted0=60 measured1=25013 restarted1=45 restart_z=1.47 verdict=as-intended
+null=varied-vs-varied-other-slots max_abs_t=10.17 restart_abs_z=1.47 median_ns=2129182 n0=24927 n1=24968 verdict=LEAK
+  quantile=1 class0=2071053 class1=2083146 diff=-12093
+  quantile=5 class0=2094552 class1=2105737 diff=-11185
+  quantile=10 class0=2103812 class1=2114015 diff=-10203
+  quantile=25 class0=2116719 class1=2126829 diff=-10110
+  quantile=50 class0=2129274 class1=2139292 diff=-10018
+  quantile=75 class0=2142051 class1=2151829 diff=-9778
+  quantile=90 class0=2153495 class1=2163458 diff=-9963
+  quantile=95 class0=2160421 class1=2170439 diff=-10018
+  quantile=99 class0=2175810 class1=2186958 diff=-11148
+  crop=raw n0=24897 n1=24990 mean0=2129248.1 mean1=2139350.9 diff=-10102.7 t=-44.07
+  max_at_crop=76 cutoff=2204346 n0=24829 n1=24904 diff=-10112.8 t=-56.08
+  check entries=60000 failed=0 not_verified=0 nonce_unmatched=0 measured0=24951 restarted0=54 measured1=25049 restarted1=59 restart_z=-0.45 verdict=as-intended
+control=fixed-a-vs-fixed-a-other-slots max_abs_t=56.08 restart_abs_z=0.45 median_ns=2135347 n0=24897 n1=24990 verdict=control
+control=planted-leak fraction=0.005 planted_ns=10646 max_abs_t=56.08 verdict=detected
+check=keys replicated=true verdict=as-intended
+result=VOID (a null comparison is over the line, so the harness is biased) fixed_pair=2.76 worst_null=10.17 control_abs_t=56.08 information_fixed_vs_varied=6.18
+exit=1
