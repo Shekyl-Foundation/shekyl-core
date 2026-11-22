@@ -112,6 +112,15 @@ MATRIX = re.compile(
 # a leg skipped six nights runs on the seventh.
 MAX_AGE = timedelta(days=6, hours=12)
 
+
+def span(delta: timedelta) -> str:
+    """`delta` in days and hours, as a reason names it (`6 days 12 hours`)."""
+    hours = int(delta.total_seconds() // 3600)
+    days, hours = divmod(hours, 24)
+    parts = [f"{days} day{'s' * (days != 1)}"] if days else []
+    parts += [f"{hours} hour{'s' * (hours != 1)}"] if hours or not days else []
+    return " ".join(parts)
+
 # The key's components, in order; a missing one makes the leg run.
 COMPONENTS = ("leg", "commit", "workflow", "toolchain", "chains", "image", "container")
 
@@ -182,7 +191,7 @@ def decide(legs: list[dict], candidates: list[dict], now: datetime, event: str,
                         decision["reason"] = f"changed since {run['url']}: {', '.join(diff)}"
                     else:
                         decision["reason"] = (f"the last run that passed it with this key, "
-                                              f"{run['url']}, is {MAX_AGE.days} or more days old "
+                                              f"{run['url']}, is {span(MAX_AGE)} old or more "
                                               f"(the weekly full run)")
         out.append(decision)
     return out
@@ -473,7 +482,12 @@ def selftest() -> int:
                "components": comps(**{name: "changed"}), "never": None}], [prior(same)], True,
                reason_has=name)
     expect("a match older than the weekly bound runs (the weekly full run)", leg,
-           [prior(same, days=6.6)], True, reason_has="weekly")
+           [prior(same, days=6.6)], True, reason_has="is 6 days 12 hours old or more (the weekly")
+    for delta, words in ((MAX_AGE, "6 days 12 hours"), (timedelta(days=7), "7 days"),
+                         (timedelta(days=1, hours=1), "1 day 1 hour"), (timedelta(hours=5), "5 hours"),
+                         (timedelta(0), "0 hours")):
+        if span(delta) != words:
+            failures.append(f"span({delta}): {span(delta)!r}, want {words!r}")
     expect("a match inside the weekly bound still skips", leg, [prior(same, days=6.4)], False)
     expect("a run with no keys artifact is not relied on", leg, [prior(same, keyed=False)], True)
     expect("a dispatched run is not relied on", leg, [prior(same, event="workflow_dispatch")], True)

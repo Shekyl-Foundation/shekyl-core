@@ -387,25 +387,43 @@ jobs:
               'body-fill-complete-tree': 'the body-store fill\'s CompleteTree walk',
               'body-fill-market': 'the body-store fill\'s market walk',
             };
+            // A leg is routed by its job's id (nightly_red.py's `key`), never
+            // by parsing its name alone: `plan` has no matrix values. A lane
+            // job's leg is named `<job> (<branch>, <lane>)`; the values are
+            // read from the name as data, and nothing here evaluates them. A
+            // red leg of a job named nowhere here fails this job by name
+            // (nightly_red.py --check holds the jobs named here to `needs`).
+            const laneJobs = ['slow-gates', 'body-fill'];
             for (const leg of red) {
-              // A leg is named `<job> (<branch>, <lane>)`; the values are read
-              // from the name as data, and nothing here evaluates them.
-              const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
-              if (!m) {
-                core.setFailed(`report-red cannot read the branch and lane from the leg "${leg.name}"`);
+              let title;
+              let how;
+              if (leg.key === 'plan') {
+                title = 'nightly slow-lane planner RED';
+                how = {
+                  'failed': 'The `plan` job (`nightly_skip.py --plan`) failed. Every lane job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref. The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
+                  'timed out': `The \`plan\` job timed out after ${leg.minutes} minutes, its \`timeout-minutes\`. Every lane job ran its full fallback matrix; read the log for the API call it was in.`,
+                  'cancelled': `The \`plan\` job was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit. Every lane job ran its full fallback matrix; read the log for what stopped it.`,
+                }[leg.kind];
+              } else if (laneJobs.includes(leg.key)) {
+                const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
+                if (!m) {
+                  core.setFailed(`report-red cannot read the branch and lane from the leg "${leg.name}"`);
+                  continue;
+                }
+                const [, branch, lane] = m;
+                title = `nightly ${lane} live-daemon gates RED (${branch})`;
+                how = {
+                  'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
+                  'timed out': `The leg timed out after ${leg.minutes} minutes, its \`timeout-minutes\` (${what[lane] || lane}). This is not a test failure: the leg ran out of time. Read the log for the gate it was in when it was cut.`,
+                  'cancelled': `The leg was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
+                }[leg.kind];
+              } else {
+                core.setFailed(`report-red has no route for the red leg "${leg.name}": name its job here`);
                 continue;
               }
-              const [, branch, lane] = m;
-              const title = `nightly ${lane} live-daemon gates RED (${branch})`;
-              const how = {
-                'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
-                'timed out': `The leg timed out after ${leg.minutes} minutes, its \`timeout-minutes\` (${what[lane] || lane}). This is not a test failure: the leg ran out of time. Read the log for the gate it was in when it was cut.`,
-                'cancelled': `The leg was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
-              }[leg.kind];
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
                 `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
-                `Branch: ${branch}`,
                 how,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);

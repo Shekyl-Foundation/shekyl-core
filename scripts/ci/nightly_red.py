@@ -34,8 +34,11 @@ run), limit (its `timeout-minutes`), and kind: `failed`, `timed out` or
 `cancelled`.
 
 `--check` holds each nightly workflow's `report-red` job to the file: it
-`needs` every other job, no more and no fewer, and its `if` is exactly
-`CONDITION`. A job left out of `needs` could go red with no issue; a
+`needs` every other job, no more and no fewer, its `if` is exactly
+`CONDITION`, and its script names each of those jobs (`'<job>'`), routing a
+red leg by its `key`. A job left out of `needs` could go red with no issue;
+a job the script does not name reaches the script and fails it with no
+issue (a planner job has no matrix values to read from its name); a
 condition on `failure()` misses every timeout; one on `always()` would
 report a run a newer run superseded. Rule 47: the workflows are named here,
 so a renamed one, or a reporter removed from one, fails by name.
@@ -143,6 +146,13 @@ def problems_in(filename: str, doc: object) -> list[str]:
         problems.append(f"{filename}: {REPORTER} needs {', '.join(extra)}, which is not a job here")
     if job.get("if") != CONDITION:
         problems.append(f"{filename}: {REPORTER}'s `if` is {job.get('if')!r}, not {CONDITION!r}")
+    scripts = [str((st.get("with") or {}).get("script", "")) for st in job.get("steps", [])
+               if isinstance(st, dict) and str(st.get("uses", "")).startswith("actions/github-script")]
+    if len(scripts) != 1:
+        problems.append(f"{filename}: {REPORTER} has {len(scripts)} github-script steps, not the one that opens issues")
+    elif unrouted := sorted(n for n in needs & others if f"'{n}'" not in scripts[0]):
+        problems.append(f"{filename}: {REPORTER}'s script names no route for {', '.join(unrouted)}; "
+                        f"a red there would fail the reporter and open no issue")
     return problems
 
 
@@ -181,8 +191,8 @@ def check() -> int:
     for p in problems:
         print(f"FATAL: {p}")
     if not problems:
-        print(f"nightly reporters: {', '.join(SUBJECTS)} each need every job and report on {CONDITION}; "
-              f"{LANE_JOBS[0]}'s lane jobs run one set of steps")
+        print(f"nightly reporters: {', '.join(SUBJECTS)} each need every job, name a route for each, "
+              f"and report on {CONDITION}; {LANE_JOBS[0]}'s lane jobs run one set of steps")
     return 1 if problems else 0
 
 
@@ -218,7 +228,8 @@ def selftest() -> int:
            [job("renamed-job (dev)", "cancelled", 400)], [("renamed-job (dev)", "cancelled")])
 
     # The reporter's `if`: a superseded run never reaches it.
-    good = {"jobs": {"a": {}, "b": {}, REPORTER: {"needs": ["a", "b"], "if": CONDITION}}}
+    routes = {"uses": "actions/github-script@v8", "with": {"script": "const lanes = {'a': {}, 'b': {}};"}}
+    good = {"jobs": {"a": {}, "b": {}, REPORTER: {"needs": ["a", "b"], "if": CONDITION, "steps": [routes]}}}
 
     def variant(edit):
         doc = yaml.safe_load(yaml.safe_dump(good))
@@ -236,6 +247,13 @@ def selftest() -> int:
         ("the parts joined by ||",
          variant(lambda j: j[REPORTER].__setitem__("if", CONDITION.replace("&&", "||"))), 1),
         ("no reporter", variant(lambda j: j.pop(REPORTER)), 1),
+        # A job the reporter's script has no route for (2026-11-22: `plan`,
+        # whose leg has no matrix values, failed both scripts' name parse).
+        ("a needed job the script names no route for",
+         variant(lambda j: j[REPORTER]["steps"][0]["with"].__setitem__("script", "const lanes = {'a': {}};")), 1),
+        ("a job named only inside a longer name is not routed",
+         variant(lambda j: j[REPORTER]["steps"][0]["with"].__setitem__("script", "{'a': {}, 'bb': {}}")), 1),
+        ("no github-script step", variant(lambda j: j[REPORTER].__setitem__("steps", [])), 1),
     ):
         got = len(problems_in("fixture.yml", doc))
         if got != want:
@@ -262,7 +280,7 @@ def selftest() -> int:
           "a cancellation short of its limit, or of an untimed job, is red and not called a timeout; green, "
           "skipped and unfinished legs are not; the reporter needs every job and runs on !cancelled(), so a "
           "superseded run reports nothing, and failure(), always(), || and a missing reporter each fail; "
-          "lane jobs whose steps differ, or one gone, fail")
+          "a needed job the script names no route for fails; lane jobs whose steps differ, or one gone, fail")
     return 0
 
 

@@ -815,6 +815,13 @@ jobs:
         with:
           script: |
             const lanes = {
+              'plan': {
+                title: 'nightly planner RED',
+                lines: [
+                  'The `plan` job (`nightly_skip.py --plan`) failed. Every planned job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref.',
+                  'The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
+                ],
+              },
               'proptest-exhaustive': {
                 title: 'nightly proptest-exhaustive RED',
                 lines: [
@@ -905,18 +912,24 @@ jobs:
               core.notice('No red leg in this run.');
               return;
             }
-            // A leg is named `<job> (<branch>)`. The branch is read from the
-            // name as data; nothing here evaluates it. A red leg of a job
-            // this table does not name fails this job by name: it would
-            // otherwise reach no one.
+            // A leg is routed by its job's id (nightly_red.py's `key`), never
+            // by parsing its name: a job with no matrix, `plan` among them,
+            // has no values in its name. A matrix leg's values follow the id
+            // in its name, `<job> (<values>)`, and are read as data; nothing
+            // here evaluates them. A red leg of a job this table does not
+            // name fails this job by name: it would otherwise reach no one
+            // (nightly_red.py --check holds the table to `needs`).
             const red = [];
             for (const leg of legs) {
-              const m = /^(\S+) \((.+)\)$/.exec(leg.name);
-              if (!m || !lanes[m[1]]) {
+              if (!lanes[leg.key]) {
                 core.setFailed(`report-red has no lane for the red leg "${leg.name}": add it to the table`);
                 continue;
               }
-              red.push([leg, m[1], m[2]]);
+              const prefix = `${leg.key} (`;
+              const values = leg.name.startsWith(prefix) && leg.name.endsWith(')')
+                ? leg.name.slice(prefix.length, -1)
+                : '';
+              red.push([leg, leg.key, values]);
             }
             // Exact-title match over open issues, not text search: the search
             // API's in:title is a substring match and lags on freshly created
@@ -927,8 +940,8 @@ jobs:
               state: 'open',
               per_page: 100,
             });
-            for (const [leg, lane, branch] of red) {
-              const title = `${lanes[lane].title} (${branch})`;
+            for (const [leg, lane, values] of red) {
+              const title = values ? `${lanes[lane].title} (${values})` : lanes[lane].title;
               // A timeout is named as one, so nobody reads it as a test
               // failure; the lane's own lines are for a leg that failed.
               const what = {
@@ -939,7 +952,6 @@ jobs:
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
                 `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
-                `Branch: ${branch}`,
                 ...what,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);
