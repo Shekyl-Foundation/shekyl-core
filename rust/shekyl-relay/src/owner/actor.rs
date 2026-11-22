@@ -239,8 +239,10 @@ pub(super) enum Cmd {
         stem: Vec<(TxId, TxBlob)>,
         fluff: Vec<(TxId, TxBlob)>,
         /// The session's permit for the batch, dropped once the arrival
-        /// is in the zone: the session reads its next frame then.
-        taken: Taken,
+        /// is in the zone: the session reads its next frame then. `None`
+        /// for a batch that was held while the node was not synchronised,
+        /// which gave its permit back when it was held.
+        taken: Option<Taken>,
     },
     /// A transaction this node originated.
     Local { tx: TxId, blob: TxBlob },
@@ -389,6 +391,7 @@ pub fn start<C: Clock + Clone + Send + Sync + 'static>(
         origins,
     };
     runtime.spawn(actor.run());
+    runtime.spawn(Arc::clone(&port).admit_held_on_sync());
     Ok(Started { port, handle })
 }
 

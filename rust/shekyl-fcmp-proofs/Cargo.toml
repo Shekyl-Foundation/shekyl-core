@@ -26,7 +26,7 @@ generic-array = { version = "1", default-features = false, features = ["alloc"] 
 
 blake2 = { version = "0.10", default-features = false }
 
-multiexp = { version = "0.4", default-features = false }
+multiexp = { workspace = true }
 dalek-ff-group = { version = "0.5", default-features = false }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene", default-features = false }
 ciphersuite = { version = "0.4", default-features = false }

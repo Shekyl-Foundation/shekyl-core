@@ -18365,3 +18365,180 @@ comes already carries more than this: with `s` nodes upstream it is
   shipped timer both ways; `leak_at_each_candidate_region` and
   `precision_increment_reproduces_delta_table` keep their records on the
   solved draw and add the shipped timer's row.
+
+## 101. A batch received while the node is behind is held — IMPLEMENTED 2026-11-22
+
+**Status: IMPLEMENTED 2026-11-22.** The
+relay ignored every transaction batch that arrived while the node was not
+synchronised. This section records why that loses stems, and the hold that
+replaces it.
+
+### 101.1 The loss
+
+The relay's reading of chain sync is synchronised only in the `Synced`
+state. A node leaves that state each time it hears of a block it has not
+connected, and returns to it when the block is in. Between the two, the
+relay's seat (`shekyl-relay` `owner/port.rs`) returned from a 2002 without
+looking at it. The inherited C++ handler made the same return while the
+core reported itself not synchronised.
+
+A stem dropped there is lost with nothing to tell its sender. The sender
+cannot tell it from a stem a peer black-holed, so it waits out its whole
+embargo, floor and draw (§100), and then spends its one re-stem. On a node
+with one return path the re-stem's fluff comes back from the alternate,
+which F-10 does not count, so the entry waits for a second fire.
+
+Read from an emission walk on a three-node Tor mesh, with the relay logged
+at debug: one node ignored three stems in the second before it reached a
+new tip, and seventeen batches in the walk's twenty-seven minutes. The
+origin's embargo for one of the three fired 75.5 s after its send, past the
+57 s floor, as it should for a stem that was lost.
+
+How often the gap opens on a network that is not mining in bursts over Tor
+is not measured.
+
+### 101.2 The hold
+
+A batch that arrives while the node is not synchronised is kept, with its
+stem or fluff flag, and admitted when the node turns synchronised: offered
+to the pool then, and stemmed, fluffed or counted as an arrival exactly as
+if it had arrived at that moment. The pool cannot judge a transaction
+against a chain the node is still catching up to, so nothing is admitted
+or relayed before the turn.
+
+- **The bound is one 2002's worth for each session.** A synchronised
+  node is bounded by the session's permit: one batch in flight for each
+  session. A held batch cannot keep that permit, because the session reads
+  one frame at a time under it and the block the node is waiting for may be
+  that session's next frame. One message's worth is the same bound stated
+  without the permit. What a session sends past it while the node is
+  behind is ignored. The figure is the 2002's own cap and is as tight as
+  that cap: PWD-B12 is what binds it.
+- **A held batch is charged the memory it keeps,** not its transactions'
+  bytes alone: each transaction's bytes and its vector, and the batch's own
+  record (`held_form`). A notice's padding is not kept, and a notice with
+  no transaction is not held. Charged by bytes alone, padded notices with
+  no transaction, or many batches of one small transaction, would fill a
+  behind node's memory at no charge. A session that holds nothing has its
+  one batch held whatever the charge: it came in under the 2002's cap.
+- **The turn admits one held batch at a time,** each taken from the hold
+  under the lock and the sync reading an arrival uses. A node that falls
+  behind again part-way admits no further batch; the rest stays held, in
+  order and charged, for the next turn.
+- **A session that closes takes its held batches with it,** during the
+  turn's admission as before it. Their source is gone from the zone.
+- **A held batch the pool refuses as malformed closes its session and ends
+  that session's replay.** Nothing more of it is offered to the pool.
+- **Fluffs are held too.** A fluff dropped at a node that is behind is a
+  missed return for a stem that node sent.
+- **A long first sync.** The hold is the same bound for a node syncing from
+  nothing. What it holds is judged by the pool at the turn, which refuses
+  what the chain has since made stale.
+- **Admission runs beside the relay's task,** never on its timer path.
+
+### 101.3 Tests
+
+`shekyl-relay` `tests/owner.rs`, on live sessions:
+`stems_received_while_behind_are_held_and_stemmed_at_sync` (the walk's
+sequence: three stem batches on one session inside one gap),
+`a_fluff_received_while_behind_is_shown_at_sync`,
+`a_session_that_closes_takes_its_held_batches`,
+`a_node_that_falls_behind_again_holds_again`,
+`a_node_that_falls_behind_mid_admission_keeps_the_rest` (a slow pool, the
+turn back landing part-way),
+`a_session_that_closes_during_admission_takes_the_rest` and
+`a_malformed_held_transaction_ends_its_sessions_replay`. The bound is
+`a_sessions_hold_ends_at_one_messages_worth` and
+`a_held_batch_is_charged_what_it_keeps_and_keeps_no_padding` in
+`owner/port.rs`.
+
+### 101.4 Read on a walk
+
+The emission walk on a three-node Tor mesh, with this hold and §100's floor
+both in the tree and the relay logged at debug (2026-11-22): the origin
+sent 289 transactions and every stem's fluff came back, with a longest wait
+of 38.0 s against the 57 s floor; no embargo fired on any node. The other
+two nodes held 13 and 6 batches while behind and admitted each at its turn;
+none was past a session's hold. With the floor alone the same walk loses
+stems in the gap and goes red at its shown-pool wait (§101.1). That walk
+ended later, in its mining leg, at a harness timeout that is no part of the
+relay.
+
+## 102. F-10 after a re-stem: every peer the transaction was handed to — IMPLEMENTED 2026-11-22
+
+**Status: IMPLEMENTED 2026-11-22. Ruled (Rick, 2026-11-22): F-10 is not
+weakened; the emission walk's mesh is five nodes, each connected to the
+others, and its shown-pool wait stays 60 s.**
+
+### 102.1 The strand on a small mesh
+
+F-10 (§49) counts an arrival only from a peer this node did not hand the
+transaction to. A first fire re-stems once, to the alternate captured at
+the first stem, and the alternate becomes the charged successor
+(`fire_embargoes`, `StemWatch::stemmed`). A node stems a transaction to at
+most two peers, so it needs a third for a return it can trust.
+
+On a three-node mesh the origin has two peers and after a fire has handed
+the transaction to both. The first successor fluffs to the other peer
+only, never back to its source; the other peer is now the alternate, and
+its fluff is not counted. The entry waits for the second fire, which
+fluffs and marks it shown. The transaction is not lost: it has reached
+every node, the origin's shown mark is late, and the origin fluffs once
+more. Every relay does the same on its own second fire, so the late fluff
+does not mark the origin.
+
+That is the "15 shown, 1 unbroadcast" of every red emission walk of
+2026-11-22, whatever made the return late: an early fire (§100), a stem
+dropped at a node that was behind (§101), or a block that took 79 s to
+cross a slow path and held the stems behind it on the same session.
+
+The mesh is the defect, not the rule. A production node is provisioned
+for 12 outbound peers (`MIN_PROVISIONED_OUT_PEERS`); a three-node mesh
+tests a shape production does not have. Four nodes is the least that
+leaves a trusted return; five leaves one when a peer is slow. A test mesh
+is sized to the production shape, not to the smallest that passes. The
+walk's change is the walk's own and is not in this section's PR.
+
+Refused: counting the alternate's arrival inside a window (the alternate
+is a peer the transaction was handed to; a dropper in that seat would
+clear itself), and shortening the wait for the second fire (a reaction on
+a timer; it would need a round of its own).
+
+A real node with only two peers still strands an entry after a fire, with
+the cost above and no loss.
+
+### 102.2 The gap: the first successor was forgotten at the re-stem
+
+The watch kept one peer for each transaction. A re-stem replaced the
+record, so after the fire an arrival from the **first** successor counted
+as propagation.
+
+The attack: the first successor drops the stem, waits for the origin's
+embargo to fire and the re-stem to go out, then echoes the bytes back.
+The origin's embargo is disarmed and the transaction marked shown on the
+word of a peer it gave the transaction to. The first successor's silence
+was tallied at the fire and stands; what is lost is the origin's failsafe,
+the last-resort fluff of the second fire.
+
+The watch now keeps every peer this node handed the transaction to, at
+most two, and an arrival from either resolves nothing: the rule's own
+wording, "the peer I gave it to gave it back" is nothing. The embargo's
+held row keeps the first successor and names it to the watch at each later
+record of that transaction.
+
+It costs an honest peer nothing. An honest first successor never returns
+a transaction to the node that stemmed it: it fluffs to every peer but
+its source, and it does not relay what it already holds. Any arrival from
+it is an echo. The three-node strand is no worse for it, since that
+successor never returned the transaction there.
+
+### 102.3 Tests
+
+`shekyl-relay` `stem_watch.rs`:
+`the_first_successor_cannot_resolve_by_echoing_after_a_re_stem`.
+`graph/embargo_tests.rs`:
+`after_a_re_stem_neither_handed_peer_disarms_the_embargo` (the second fire
+and its fluff still come after an echo from either handed peer; a third
+peer's arrival still disarms). Red edit for both: compare against the
+current successor only.
+
