@@ -137,6 +137,31 @@ impl EmbargoDerivation {
 /// meaningless rather than merely extreme.
 #[must_use]
 pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_millis: u64) -> f64 {
+    full_travel_probability_with_floor(params, mean_ticks, 0, tick_millis)
+}
+
+/// [`full_travel_probability`] for a timer whose every deadline is the draw
+/// plus `floor_ticks` ([`crate::schedule::EmbargoTimer::floor_millis`]).
+///
+/// A node's timer cannot fire inside the floor, so only the part of its
+/// slack past the floor is exposed: the exponent is
+/// `Σ_{k=1}^{h} max(0, ceil((k·hop + F)/τ) - floor)`. At a floor of zero it is
+/// [`full_travel_probability`] exactly.
+///
+/// This is a **reading**. [`derive_embargo`] solves the draw's mean with no
+/// floor, so the shipped timer's full-travel probability sits above the
+/// target by what the floor adds; this function says by how much.
+///
+/// # Panics
+///
+/// As [`full_travel_probability`].
+#[must_use]
+pub fn full_travel_probability_with_floor(
+    params: &DandelionParams,
+    mean_ticks: u32,
+    floor_ticks: u64,
+    tick_millis: u64,
+) -> f64 {
     assert!(mean_ticks > 0, "embargo mean must be non-zero");
     assert!(tick_millis > 0, "embargo tick must be non-zero");
     assert!(
@@ -180,7 +205,7 @@ pub fn full_travel_probability(params: &DandelionParams, mean_ticks: u32, tick_m
         // prevent that recurring.) The terminal node itself contributes no
         // slack — it disarms its own embargo the moment it fluffs.
         let slack_ticks = div_ceil(u64::from(h) * hop_ms + return_ms, tick_millis);
-        timer_mass *= pow_exact(timer_survives, slack_ticks);
+        timer_mass *= pow_exact(timer_survives, slack_ticks.saturating_sub(floor_ticks));
 
         // P(stem length = h) = (1-q)^{h-1} · q, on {1, 2, …}.
         total += stem_mass * q * timer_mass;

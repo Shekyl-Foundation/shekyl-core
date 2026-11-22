@@ -11,7 +11,7 @@
 //! crate's bundled copies — with provenance (source commit + sha256 of
 //! the source files) in the manifest. This is the check that forecloses
 //! the one implementation-defect branch that could not be fixed after
-//! the genesis freeze: a nonconforming `keygen_with_seeds` would commit
+//! the genesis freeze: a nonconforming `keygen_from_seed` would commit
 //! nonconforming public keys into frozen addresses, and a corrected
 //! crate could never re-derive them. With keygen proven conforming
 //! before the freeze, any later sign/verify defect is patchable without
@@ -54,18 +54,18 @@ struct KeygenCase {
     sk: String,
 }
 
-/// Every ACVP keyGen case: `keygen_with_seeds(skSeed, skPrf, pkSeed)`
+/// Every ACVP keyGen case: `keygen_from_seed(skSeed, skPrf, pkSeed)`
 /// must reproduce NIST's expected public AND secret key bytes. This is
 /// the conformance the in-module derivation KAT (a freeze-pin) rests on.
 #[test]
-fn keygen_with_seeds_matches_nist_acvp() {
+fn keygen_from_seed_matches_nist_acvp() {
     let file: KeygenFile = serde_json::from_str(KEYGEN).expect("keygen.json");
     assert_eq!(file.cases.len(), 10, "the imported group carries 10 cases");
     for case in &file.cases {
         let sk_seed: [u8; 24] = unhex_n(&case.sk_seed);
         let sk_prf: [u8; 24] = unhex_n(&case.sk_prf);
         let pk_seed: [u8; 24] = unhex_n(&case.pk_seed);
-        let (pk, sk) = slh::KG::keygen_with_seeds(&sk_seed, &sk_prf, &pk_seed);
+        let (pk, sk) = slh::KG::keygen_from_seed(&sk_seed, &sk_prf, &pk_seed);
         assert_eq!(
             pk.into_bytes().to_vec(),
             unhex(&case.pk),
@@ -107,7 +107,7 @@ fn deterministic_sign_matches_nist_acvp() {
     let mut ctx_lens = Vec::new();
     for case in &file.cases {
         let sk_bytes: [u8; slh::SK_LEN] = unhex_n(&case.sk);
-        let sk = slh::PrivateKey::try_from_bytes(&sk_bytes).expect("sk parses");
+        let sk = slh::PrivateKey::try_from_bytes(sk_bytes).expect("sk parses");
         let ctx = unhex(&case.context);
         ctx_lens.push(ctx.len());
         let sig = sk
@@ -155,7 +155,7 @@ fn verify_matches_nist_acvp() {
     let mut failed_seen = 0u32;
     for case in &file.cases {
         let pk_bytes: [u8; slh::PK_LEN] = unhex_n(&case.pk);
-        let pk = slh::PublicKey::try_from_bytes(&pk_bytes).expect("pk parses");
+        let pk = slh::PublicKey::try_from_bytes(pk_bytes).expect("pk parses");
         let sig = unhex(&case.signature);
         let verdict = match <&[u8; slh::SIG_LEN]>::try_from(sig.as_slice()) {
             Ok(sig_arr) => pk.verify(&unhex(&case.message), sig_arr, &unhex(&case.context)),

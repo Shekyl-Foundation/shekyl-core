@@ -3,8 +3,9 @@
 # --after-install / --after-upgrade), once pre-install.sh has refused any
 # shekyl account that is a login.
 #
-# It applies what the package declares: the account (shekyl.sysusers) and
-# /etc/shekyl (shekyl.tmpfiles); places each network's settings file when
+# It applies what the package declares: the daemon's and the tunnel's
+# accounts (shekyl.sysusers) and /etc/shekyl and /etc/shekyl-tunnel
+# (shekyl.tmpfiles); places each network's settings file when
 # none is there; then reloads systemd so the units it ships (shekyld@.service,
 # shekyl.slice and the tunnel's) are known. It neither enables, starts nor
 # restarts the daemon: the operator runs `systemctl enable --now

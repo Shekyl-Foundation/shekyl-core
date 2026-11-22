@@ -218,6 +218,7 @@ fn link_inbound(inbound: Inbound) -> shekyl_p2p::InboundFacet {
                 InboundCause::UploadsRefused => LinkCause::UploadsRefused,
                 InboundCause::ClockBehind { .. } => LinkCause::ClockBehind,
                 InboundCause::DescriptorNotFound => LinkCause::DescriptorNotFound,
+                InboundCause::PublishedElsewhere => LinkCause::PublishedElsewhere,
             },
             since: Tick::new(since),
         },

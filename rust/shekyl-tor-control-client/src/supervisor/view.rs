@@ -177,6 +177,7 @@ fn onion(inbound: Inbound, now: u64) -> Option<wire::Onion> {
                 InboundCause::ProbeTimedOut => wire::OnionCause::ProbeMissed,
                 InboundCause::UploadsRefused => wire::OnionCause::UploadsRefused,
                 InboundCause::DescriptorNotFound => wire::OnionCause::DescriptorMissing,
+                InboundCause::PublishedElsewhere => wire::OnionCause::PublishedElsewhere,
                 InboundCause::ClockBehind { behind } => {
                     wire::OnionCause::ClockBehind(behind.as_secs())
                 }
