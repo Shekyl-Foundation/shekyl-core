@@ -170,7 +170,7 @@ pub struct EmissionClaimParts<'a> {
 }
 
 /// Assemble `parts` at the fee the daemon asks of it ([`crate::priced`]):
-/// the economy rung served for the block it is listed in, over a sizing
+/// the rung a wallet pays by default for the block it is listed in, over a sizing
 /// assembly from the OS's randomness and a fresh transaction key, then
 /// assembled once from `parts`' own seeds and key and held to that price.
 ///
@@ -183,7 +183,7 @@ pub async fn priced_emission_claim(
     scenario: &mut Scenario<FreeHash>,
     parts: EmissionClaimParts<'_>,
 ) -> Transaction {
-    let rate = scenario.connecting_economy_rate().await;
+    let rate = scenario.connecting_default_rate().await;
     let assemble = |seeds: Option<&EmissionSeeds>, tx_key: &TxKey, fee: u64| {
         let backing = parts
             .spender

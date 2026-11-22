@@ -9,8 +9,8 @@
 //! and start it again the way [`Scenario::reopen`] does, so a test can read
 //! the store the connector owns. [`Scenario::reorganize_with_pool`] offers
 //! a switch's returned transactions to the pool after the switch lands.
-//! [`Scenario::connecting_economy_rate`] is the fee the daemon serves for
-//! the next block, and [`Scenario::admit`] is the daemon's pool admission:
+//! [`Scenario::connecting_default_rate`] is the fee the daemon serves for
+//! the next block at a wallet's default tier, and [`Scenario::admit`] is the daemon's pool admission:
 //! the chain forge prices every transaction it lists at the one and passes
 //! it through the other (`CHAIN_FORGE.md` §11.4).
 
@@ -158,15 +158,17 @@ impl<P: Pow> Scenario<P> {
     }
 
     /// The fee per weight a transaction listed in the next block pays: the
-    /// economy rung of the fee ladder the daemon serves at the height that
-    /// block connects at (`shekyl_chain_rules::fee_ladder_at`, the node's
-    /// `fee_estimate`; FL-R6: the economy rung is the relay floor).
+    /// rung of the fee ladder the daemon serves at the height that block
+    /// connects at (`shekyl_chain_rules::fee_ladder_at`, the node's
+    /// `fee_estimate`) for the tier a wallet pays by default
+    /// ([`FeePriority::default`](shekyl_economics::FeePriority), the
+    /// standard rung, FL-R17): a forged transaction is one a wallet sent.
     ///
     /// # Panics
     ///
     /// If the ladder cannot be read: the chain this driver just held has no
     /// fee, which is not a scenario outcome.
-    pub async fn connecting_economy_rate(&mut self) -> u64 {
+    pub async fn connecting_default_rate(&mut self) -> u64 {
         self.read_chain(|view, _| {
             let connecting = shekyl_chain_rules::Tip::connecting_height(
                 shekyl_chain_rules::HeaderView::tip(view)
@@ -174,7 +176,9 @@ impl<P: Pow> Scenario<P> {
                     .as_ref(),
             );
             match shekyl_chain_rules::fee_ladder_at(view, connecting).expect("the fee ladder") {
-                shekyl_chain_rules::AtHeight::Recorded(ladder) => ladder.economy,
+                shekyl_chain_rules::AtHeight::Recorded(ladder) => {
+                    ladder.rung(shekyl_economics::FeePriority::default())
+                }
                 shekyl_chain_rules::AtHeight::AboveTip => {
                     unreachable!("the connecting height is recorded")
                 }

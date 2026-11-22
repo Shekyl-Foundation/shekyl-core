@@ -5,8 +5,8 @@
 
 //! What a forged transaction pays (`CHAIN_FORGE.md` §11.4).
 //!
-//! The fee is the one the daemon would ask of it: the economy rung it
-//! serves for the block that lists it ([`Scenario::connecting_economy_rate`](crate::scenario::Scenario::connecting_economy_rate)),
+//! The fee is the one a wallet pays by default: the rung the daemon
+//! serves at the default tier for the block that lists it ([`Scenario::connecting_default_rate`](crate::scenario::Scenario::connecting_default_rate)),
 //! on the fee lattice, over the transaction's own weight, the weight
 //! carrying the fee's varint (`shekyl_tx_weight::converge_fee_by`, the
 //! wallet's loop).

@@ -613,7 +613,7 @@ impl Forge {
             .collect::<Result<Vec<_>, _>>()?;
         let spend = self.next_spend();
         let seeds = self.seeds.spend(spend);
-        let rate = self.scenario().connecting_economy_rate().await;
+        let rate = self.scenario().connecting_default_rate().await;
         let spender = self.spender();
         let wallet = self.scenario().wallet();
         let (sized, _) = spender.spend_coinbases(wallet, &heights, connecting, SIZING_FEE);
@@ -704,7 +704,7 @@ impl Forge {
         let coinbase = self.reserve(join_height)?;
         let spend = self.next_spend();
         let seeds = self.seeds.spend(spend);
-        let rate = self.scenario().connecting_economy_rate().await;
+        let rate = self.scenario().connecting_default_rate().await;
         let spender = self.spender();
         let wallet = self.scenario().wallet();
         // The sizing build's post is signed from the OS's randomness, by the

@@ -446,7 +446,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
 }
 
 /// The chain forge's price and its pool (`CHAIN_FORGE.md` §11.4): a spend
-/// priced by [`crate::priced`] at the economy rung served for its block is
+/// priced by [`crate::priced`] at the default tier's rung for its block is
 /// admitted, and kept for the block that lists it, once; the same spend one
 /// lattice step under what the shipped policy admits is refused on CEN-M3,
 /// by name; and a second spend of one coinbase in the same listing is
@@ -458,7 +458,25 @@ async fn a_spend_at_its_price_is_admitted_and_one_lattice_step_under_the_floor_i
     let (mut scenario, mined) = matured("pool-door-priced").await;
     let spender = Spender::on(scenario.network_id(), &mined);
     let wallet = scenario.wallet();
-    let rate = scenario.connecting_economy_rate().await;
+    let rate = scenario.connecting_default_rate().await;
+    let ladder = scenario
+        .read_chain(|view, _| {
+            let connecting = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(view)
+                    .expect("a tip")
+                    .as_ref(),
+            );
+            match shekyl_chain_rules::fee_ladder_at(view, connecting).expect("the ladder") {
+                shekyl_chain_rules::AtHeight::Recorded(ladder) => ladder,
+                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("recorded"),
+            }
+        })
+        .await;
+    assert_eq!(
+        rate, ladder.standard,
+        "a forged spend pays the standard rung (CF-R29)"
+    );
+    assert!(ladder.standard > ladder.economy, "above the relay floor");
     let sized = spender.spend_coinbase(wallet, h(0), h(AT), SIZING_FEE);
     let fee = fee_at(&sized, rate);
     let priced = spender.spend_coinbase(wallet, h(0), h(AT), fee);

@@ -346,7 +346,7 @@ fn next_height(chain: &[Mined]) -> BlockHeight {
 /// which are measured and never listed, draw from the OS.
 ///
 /// Every spend pays what the daemon asks of it (§11.4): each fill block's
-/// batch is priced at the economy rung served for that block, over a
+/// batch is priced at the rung a wallet pays by default for that block, over a
 /// sizing spend of the batch's shape, and the block is mined only once the
 /// daemon's pool has admitted every spend it lists.
 ///
@@ -440,7 +440,7 @@ pub async fn close_shards_drawing(
         // daemon serves for this block (§11.4). Every spend in the batch is
         // one coinbase against this block's reference, so one weighs what
         // another does.
-        let rate = scenario.connecting_economy_rate().await;
+        let rate = scenario.connecting_default_rate().await;
         let sized = spender.spend_coinbase(
             scenario.wallet(),
             BlockHeight::from_raw(coinbases[0]),
