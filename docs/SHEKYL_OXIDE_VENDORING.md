@@ -27,8 +27,8 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`68d12b975b0005e04e5f03e8fa3d6a43f3982713` on `chore/crypto-resync-from-tip`,
-  fork PR #8: upstream `497f60b`'s multiexp hunks, which move
+  (`4ea2c0321544fa1e78469121a5703b4e77fb47ba` on `chore/crypto-resync-from-tip`,
+  the merge of fork PR #8: upstream `497f60b`'s multiexp hunks, which move
   `generalized-bulletproofs` and `fcmps` to multiexp 0.5 so the prover's
   non-vartime multiexp selects in constant time, with MSRV 1.81 on them and on
   the two gadget crates above them. Its parent `3abb123` carries the
