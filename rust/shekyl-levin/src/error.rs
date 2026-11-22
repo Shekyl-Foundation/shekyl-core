@@ -52,6 +52,54 @@ pub enum Error {
         available: u64,
     },
 
+    /// A fragment train's inner message claims more payload than its
+    /// command's cap (or the packet limit) allows. Refused when the inner
+    /// header's last byte arrives, which may be many fragments before the
+    /// train ends: the reassembly buffer never grows toward a length this
+    /// node would refuse. The outer bucket's own refusal is
+    /// [`Error::OversizePacket`].
+    #[error("fragmented inner message length {claimed} exceeds the limit {limit}")]
+    InnerOversize {
+        /// The inner header's `length` field.
+        claimed: u64,
+        /// The limit in force for the inner command.
+        limit: u64,
+    },
+
+    /// A fragment that does not end its train left the reassembly buffer
+    /// holding the whole inner message, or more. A conforming sender pads
+    /// only its last fragment, so every fragment before the last leaves the
+    /// inner message incomplete; this train can only be growing past what
+    /// its own inner header declared.
+    #[error("fragment train holds {held} bytes of a {inner}-byte inner message and has not ended")]
+    FragmentOverrun {
+        /// The inner message's whole length: its header and its payload.
+        inner: u64,
+        /// Bytes the train would hold with this fragment.
+        held: u64,
+    },
+
+    /// A fragment train's inner message is itself of the noise / fragment
+    /// class: its header sets neither `REQUEST` nor `RESPONSE`. A train
+    /// carries one request or response and nothing else; a dummy or a
+    /// fragment inside a train takes no command cap and has no receiver.
+    #[error("fragmented inner message is not a request or response (flags {flags:#x})")]
+    InnerNotDispatch {
+        /// The inner header's flag word.
+        flags: u32,
+    },
+
+    /// A fragment train's inner message is a request or response of a
+    /// command other than the transaction notice. A train carries pieces
+    /// of a transaction notice and nothing else (PWD-B12); any other
+    /// command travels as one bucket under its own cap. Refused when the
+    /// inner header's last byte arrives.
+    #[error("fragmented inner message is command {command}, not the transaction notice")]
+    InnerNotTransactionNotice {
+        /// The command the inner header named.
+        command: u32,
+    },
+
     /// The reader already returned a fatal error and was used again. In the
     /// C++ oracle `handle_recv` returning `false` *is* the disconnect, so the
     /// question cannot arise; here the reader latches so a caller that logs

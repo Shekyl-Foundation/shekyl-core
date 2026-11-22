@@ -26,7 +26,7 @@ use shekyl_levin::{
     Received, TimedSyncRequest, TimedSyncResponse, DEFAULT_MAX_PACKET_SIZE,
 };
 use shekyl_timing_engine::{Clock, OwnerClass};
-use shekyl_transport_layer::{ConnectorId, DialEnd, SocketId, StreamEnd};
+use shekyl_transport_layer::{CloseCause, ConnectorId, DialEnd, SocketId, StreamEnd};
 use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::handle::{Established, SendRefused};
@@ -201,7 +201,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                     Ok(None) => {}
                     Err(error) => {
                         tracing::debug!(id = ?self.id, ?error, "levin framing error");
-                        self.close(self.form_end());
+                        self.close(self.framing_end(&error));
                         return Stop::Told;
                     }
                 }
@@ -231,7 +231,7 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
                         };
                         if let Err(error) = self.reader.feed(&frame) {
                             tracing::debug!(id = ?self.id, ?error, "levin framing error");
-                            self.close(self.form_end());
+                            self.close(self.framing_end(&error));
                             return Stop::Told;
                         }
                     }
@@ -254,6 +254,18 @@ impl<'a, C: Clock + Clone + Send + Sync + 'static> Task<'a, C> {
             State::Handshaking(Role::Inbound) | State::Established(_) | State::Closing => {
                 handshake::form_failure()
             }
+        }
+    }
+
+    /// The end a Levin framing error carries. What it is evidence of is
+    /// [`Self::form_end`]'s for the session's state, whichever error it
+    /// was; the D12 cause beside it is the error's own where it has one
+    /// (`handshake::framing_kind`), and the form end's otherwise.
+    fn framing_end(&self, error: &shekyl_levin::Error) -> DialEnd {
+        let form = self.form_end();
+        match handshake::framing_kind(error) {
+            Some(kind) => DialEnd::new(form.failure(), CloseCause::new(kind)),
+            None => form,
         }
     }
 

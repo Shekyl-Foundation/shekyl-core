@@ -99,7 +99,8 @@ proptest! {
     /// bucket (`length` covers the padding in that case — C++ parity).
     #[test]
     fn fragmented_notify_roundtrips_at_noise_granularity(
-        command in prop::sample::select(WIDE_CAP_COMMANDS),
+        // A train carries the transaction notice and nothing else (PWD-B12).
+        command in Just(2002u32),
         payload in proptest::collection::vec(any::<u8>(), 0..8192),
         noise_size in (HEADER_SIZE * 2)..2048usize,
         chunk in 1usize..512,
