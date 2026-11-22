@@ -609,7 +609,9 @@ impl Message<AssembleTx> for CurveTreeActor {
     ) -> Self::Reply {
         // Handler-boundary bound (Q2): refuse an over-length batch before the
         // loop so a buggy or hostile caller cannot spin the single-writer actor.
-        // The engine's selection is independently bounded, so this never fires
+        // The engine's selection is independently bounded (the send's build
+        // refuses a selection past the cap as `SignFault::TooManyInputs`; the
+        // drain, bond and release selections stop at it), so this never fires
         // in production — it makes the bad state unrepresentable at the actor
         // boundary, not merely upstream of it. `shekyl_tx_builder::MAX_INPUTS`
         // is `= shekyl_fcmp::MAX_INPUTS` (a re-export), so this is the canonical

@@ -561,6 +561,82 @@ async fn an_out_of_set_selection_is_the_wallets_fault() {
     assert_eq!(pending.outstanding(), 0, "nothing is reserved");
 }
 
+/// Each of the fragmented ledger's outputs: the amount a miner's wallet
+/// holds as many like-sized coinbases.
+const FRAGMENT_ATOMIC: u64 = 1_000_000;
+
+/// A ledger of more like-sized outputs than one transaction spends, as a
+/// miner's wallet holds its coinbases.
+fn fragmented_ledger() -> Arc<LocalLedger> {
+    let count = u8::try_from(shekyl_tx_builder::MAX_INPUTS + 4).expect("a small count");
+    let ledger = Arc::new(test_ledger());
+    let outputs = (1..=count)
+        .map(|seed| make_recovered_output(seed, 100 + u64::from(seed), FRAGMENT_ATOMIC))
+        .collect();
+    populate_ledger(ledger.as_ref(), 1, outputs, 20);
+    ledger
+}
+
+/// A send the wallet holds enough for, but only across more inputs than one
+/// transaction spends, is refused as too many inputs with the count it needs
+/// and the cap named, with the request-shape diagnostic and nothing reserved.
+/// Bites if the build lets the batch through to the curve-tree actor, whose
+/// own bound reports it as an outage (the forged chain's coinbase spend,
+/// 2026-11-22: 240 inputs reached it).
+#[tokio::test]
+async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
+    use crate::engine::diagnostics::BuildErrorKind;
+    use shekyl_tx_builder::{SignFault, MAX_INPUTS};
+
+    let sink = Arc::new(AssertionSink::new());
+    let pending = test_pending_tx_with_sink(
+        fragmented_ledger(),
+        Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
+    );
+
+    // The cap's worth of outputs and half of one more: covered by the
+    // balance, never by `MAX_INPUTS` of its outputs.
+    let ask = FRAGMENT_ATOMIC * MAX_INPUTS as u64 + FRAGMENT_ATOMIC / 2;
+    let err = pending.build(standard_request(ask)).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SendError::Sign(SignFault::TooManyInputs { count }) if count == MAX_INPUTS + 1
+        ),
+        "the send needs one input past the cap: {err:?}"
+    );
+    assert!(
+        sink.recorded_pending().iter().any(|event| matches!(
+            event,
+            PendingTxDiagnostic::BuildFailed {
+                kind: BuildErrorKind::TransactionTooLarge
+            }
+        )),
+        "the build reports the request's shape against the cap"
+    );
+    assert_eq!(pending.outstanding(), 0, "nothing is reserved");
+}
+
+/// A send that takes exactly the cap's inputs clears selection: with no
+/// curve tree configured it is refused for the tree, the step after
+/// selection, never as too many inputs. Bites on an off-by-one that refuses
+/// the cap itself.
+#[tokio::test]
+async fn a_send_of_exactly_the_input_cap_clears_selection() {
+    use shekyl_tx_builder::MAX_INPUTS;
+
+    let pending = test_pending_tx(fragmented_ledger());
+    let ask = FRAGMENT_ATOMIC * (MAX_INPUTS as u64 - 1) + FRAGMENT_ATOMIC / 2;
+    let err = pending
+        .build(standard_request(ask))
+        .await
+        .expect_err("no curve tree is configured");
+    assert!(
+        matches!(err, SendError::BuildInvariant { reason } if reason.contains("curve tree")),
+        "the cap's own count clears selection: {err:?}"
+    );
+}
+
 // --- CT-5a commit 4b-1: curve-tree spend-gate KATs (D1/D3) --------------
 
 /// A fresh, empty curve-tree handle over a tempdir store. Its

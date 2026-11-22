@@ -173,6 +173,16 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// construction or silently corrupts; the caller-side
     /// check is the structural defense.
     ///
+    /// # Input cap
+    ///
+    /// The selector is not told the cap: one transaction
+    /// spends at most `shekyl_tx_builder::MAX_INPUTS`, and the
+    /// caller refuses a selection longer than that as the
+    /// signer's `SignFault::TooManyInputs`, before reserving
+    /// anything. An implementor should return the fewest
+    /// inputs it can, since the refusal reads a longer
+    /// selection as "no selection fits".
+    ///
     /// # `target` semantics
     ///
     /// `target` is the total amount-plus-fee the selector

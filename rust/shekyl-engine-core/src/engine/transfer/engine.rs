@@ -521,6 +521,20 @@ where
                     mapped
                 })?;
         }
+        // One transaction spends at most `MAX_INPUTS`. Largest-first takes the
+        // fewest inputs that cover the amount, so a selection past the cap means
+        // no selection fits: the send is refused here with the cap named, the
+        // refusal the signer gives a batch past it, before any output is
+        // reserved and before the batch reaches the curve-tree actor, whose own
+        // bound would report it as an outage.
+        if selected.indices.len() > shekyl_tx_builder::MAX_INPUTS {
+            return Err(fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs {
+                    count: selected.indices.len(),
+                }),
+            ));
+        }
         let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
