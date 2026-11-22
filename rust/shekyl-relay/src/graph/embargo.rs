@@ -11,7 +11,9 @@
 //! shown, and the zone sets it through the FFI's existing `note_shown` path.
 //!
 //! **The embargo is the stem watch's observation.** Every successful stem
-//! send records one (`Relay::record_stem`) with a deadline, its connector's
+//! send records one (`Relay::record_stem`) with a deadline: its connector's
+//! floor, the time a stem and its fluff return can reasonably take (Rick,
+//! 2026-11-22; `EmbargoTimer::adopted_floor_millis`), plus that connector's
 //! memoryless draw (D-1, F-7). Disarm is the watch's predicate, not a timer:
 //! the transaction arrived from somewhere other than where this node sent it
 //! (F-10). An observation that resolves silent is the embargo firing.
@@ -115,8 +117,9 @@ pub const FIRE_WAIT_MISS_ONE_IN: u64 = 1_000;
 
 /// How long a test may wait for one embargo fire over the longest declared
 /// transit before calling it late, in seconds: the shared timer's survival
-/// quantile at [`FIRE_WAIT_MISS_ONE_IN`]. The draw is memoryless, so a fire
-/// has no earliest time, only this late bound.
+/// quantile at [`FIRE_WAIT_MISS_ONE_IN`]. A fire's earliest time is the
+/// timer's floor (`EmbargoTimer::floor_millis`); past it the draw is
+/// memoryless, and this is its late bound.
 #[must_use]
 pub fn embargo_fire_wait_secs() -> u32 {
     longest_transit_timer().judge_failed_after_secs(FIRE_WAIT_MISS_ONE_IN)
@@ -253,8 +256,9 @@ impl Relay {
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
     /// (`None` = this node's own), and arm each one's embargo.
     ///
-    /// The deadline is drawn from the successor's connector, the same draw
-    /// whether the transaction is this node's own or relayed, and a connector
+    /// The deadline is drawn from the successor's connector, the same floor
+    /// and the same draw whether the transaction is this node's own or
+    /// relayed, and a connector
     /// with no assessed transit records nothing. The first
     /// stem of a transaction captures its reshape alternate; a later record
     /// of the same transaction keeps what it has.

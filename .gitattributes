@@ -15,6 +15,10 @@ cmake/Version.cmake export-subst
 docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011_captures/laptop_samples.tsv -text
 docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/example_rustc_line.txt -text
 docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_excerpts_crt_static.txt -text
+# RT-P4 captures committed byte for byte as they left the measuring machine,
+# Windows' CRLF included: the record's SHA256SUMS holds those bytes.
+docs/benchmarks/rt_p4_mlkem_decaps_timing_20261121_captures/** -text
+docs/benchmarks/rt_p4_mlkem_decaps_timing_20261121_message_captures/** -text
 docs/design/refs/zawy12_issue_24_history.md -text
 docs/design/refs/zawy12_issue_3_lwma1.md -text
 docs/design/refs/zawy12_issue_3_lwma3.md -text

@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The hash rate over a stated window: one ring of one-second buckets per
-//! worker, written by that worker alone and summed by the status reader.
+//! worker, written by that worker alone and summed by the status reader;
+//! and beside it, each worker's count of every hash it has tried.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -50,6 +51,13 @@ impl HashRate {
 /// never a stamp read before the bucket was reused and a count read after.
 pub(crate) struct RateRing {
     buckets: [AtomicU64; BUCKETS],
+    /// Every hash this worker has recorded since the miner started, never
+    /// reset and never windowed: what [`Miner::hashes_tried`] sums. One
+    /// writer, and a monotone count read as telemetry, with nothing to
+    /// order against, so `Relaxed` both ways.
+    ///
+    /// [`Miner::hashes_tried`]: crate::Miner::hashes_tried
+    total: AtomicU64,
 }
 
 /// The low half of a bucket word: its hash count.
@@ -69,6 +77,7 @@ impl RateRing {
     pub(crate) fn new() -> Self {
         Self {
             buckets: std::array::from_fn(|_| AtomicU64::new(0)),
+            total: AtomicU64::new(0),
         }
     }
 
@@ -77,10 +86,12 @@ impl RateRing {
     }
 
     /// One hash in `second` (seconds since the miner started). The owning
-    /// worker is the only writer. A second past `u32::MAX - 1` (136 years
-    /// of mining) is not counted, and a count saturates at `u32::MAX` hashes
-    /// in one second, far beyond any RandomX worker.
+    /// worker is the only writer. The total counts it whatever the second.
+    /// The window does not count a second past `u32::MAX - 1` (136 years
+    /// of mining), and a bucket saturates at `u32::MAX` hashes in one
+    /// second, far beyond any RandomX worker.
     pub(crate) fn record(&self, second: u64) {
+        self.total.fetch_add(1, Ordering::Relaxed);
         let Ok(stamp) = u32::try_from(second.saturating_add(1)) else {
             return;
         };
@@ -93,6 +104,11 @@ impl RateRing {
             1
         };
         bucket.store(stamp << 32 | count, Ordering::Release);
+    }
+
+    /// Every hash recorded since the miner started.
+    pub(crate) fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
     }
 
     /// Every non-empty bucket's second and count, each read whole.
@@ -150,6 +166,31 @@ mod tests {
             }
         );
         assert!((young.rate(2).per_second() - 1.5).abs() < f64::EPSILON);
+    }
+
+    /// The total counts every recorded hash: across seconds, past the
+    /// window, and past the second the window can stamp, where the bucket
+    /// write returns early.
+    #[test]
+    fn the_total_counts_every_hash_the_window_does_not() {
+        let ring = RateRing::new();
+        let mut recorded = 0u64;
+        for second in 0..30u64 {
+            for _ in 0..=second % 4 {
+                ring.record(second);
+                recorded += 1;
+            }
+        }
+        let beyond = u64::from(u32::MAX);
+        ring.record(beyond);
+        ring.record(beyond + 1);
+        recorded += 2;
+        assert_eq!(ring.total(), recorded);
+        // The window still counts only its own seconds.
+        assert_eq!(
+            ring.rate(30).hashes,
+            (20..30u64).map(|s| s % 4 + 1).sum::<u64>()
+        );
     }
 
     /// A bucket's second and count are read as one pair while its worker

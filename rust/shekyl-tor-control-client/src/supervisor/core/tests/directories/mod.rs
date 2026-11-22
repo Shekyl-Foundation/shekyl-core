@@ -21,6 +21,8 @@ use super::probe::{
 use super::replied;
 use crate::control::{RelayFingerprint, RoundUpload, ServiceDescriptor, UploadEnd};
 
+mod contested;
+
 /// This service's revision counter in these tests: a directory's copy carrying it
 /// is the current one.
 pub(super) const OURS: u64 = 7;
@@ -94,6 +96,13 @@ pub(super) fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Inpu
 /// due at the floor too: their delays count from the round's end. Returns
 /// the core and the 15 s step, every request's actions joined to it.
 fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
+    checking_in_flight_with(fetches, Vec::new())
+}
+
+/// [`checking_in_flight`], with `while_drawn` folded after the probe asks
+/// for its check's list and before the list is folded: what Tor said while
+/// this service's counter was being read off the loop.
+fn checking_in_flight_with(fetches: Vec<DirectoryFetch>, while_drawn: Vec<Input>) -> (Core, Step) {
     let mut core = published();
     let ended = core.on(uploaded(0), 0);
     assert!(
@@ -119,6 +128,9 @@ fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
         "the probe asks for its check's list as it goes out"
     );
     step.actions.extend(fired.actions);
+    for input in while_drawn {
+        step.actions.extend(core.on(input, secs(15)).actions);
+    }
     let drawn = core.on(
         Input::DirectoriesDrawn {
             fetches,
@@ -189,7 +201,16 @@ pub(super) fn drive(
 /// probe in flight, minted at 15 s. Returns the core and the fetches asked
 /// at 15 s.
 pub(super) fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
-    let (mut core, step) = checking_in_flight(fetches);
+    checking_with(fetches, Vec::new())
+}
+
+/// [`checking`], with `while_drawn` folded while the check's list is drawn
+/// ([`checking_in_flight_with`]).
+pub(super) fn checking_with(
+    fetches: Vec<DirectoryFetch>,
+    while_drawn: Vec<Input>,
+) -> (Core, Vec<RelayFingerprint>) {
+    let (mut core, step) = checking_in_flight_with(fetches, while_drawn);
     // The sample is answered already: what is left in flight is fetches.
     let mut asked = fetched(&step);
     let rest = served(
@@ -771,22 +792,20 @@ fn a_queued_fetch_is_not_open_and_its_window_runs_from_its_send() {
 /// **A stale copy is a miss for that directory** (Rick, 2026-11-01). The
 /// directory check compares each directory's copy with this service's
 /// current counter: a copy numbered below ours is one a later upload never
-/// reached, and one numbered above ours is the clock run's, a copy uploaded
-/// before the clock went back that the directory keeps serving. Reachable
-/// needs our copy at more than half. Fails if `answered` counts any
-/// `Received` as found, whatever its counter.
+/// reached. Reachable needs our copy at more than half. A copy numbered
+/// above ours is not stale: it is a newer copy, its own verdict
+/// ([`contested::a_newer_copy_names_another_publisher_and_sends_nothing`]; Rick,
+/// 2026-11-21). Fails if `answered` counts any `Received` as found,
+/// whatever its counter.
 #[test]
 fn a_stale_directory_copy_is_a_miss() {
     let stale = |counter| DirectoryAnswer::Received {
         revision_counter: Some(counter),
     };
-    // Every copy stale, below and above ours: a miss, with the probe in.
+    // Every copy stale: a miss, with the probe in.
     let (mut core, _) = checking(sent(1..=8, "cur", 0));
-    for n in 1..=4 {
+    for n in 1..=8 {
         core.on(answered(n, "cur", stale(OURS - 1)), secs(16));
-    }
-    for n in 5..=8 {
-        core.on(answered(n, "cur", stale(OURS + 1)), secs(16));
     }
     let first = core.on(arrival(secs(15), secs(18)), secs(18));
     assert_eq!(refetches(&first), 1, "every copy stale: a miss");
@@ -808,7 +827,7 @@ fn a_stale_directory_copy_is_a_miss() {
     // Ours at five of eight: Reachable.
     let (mut core, _) = checking(sent(1..=8, "cur", 0));
     for n in 1..=8 {
-        let answer = if n <= 5 { stale(OURS) } else { stale(OURS + 1) };
+        let answer = if n <= 5 { stale(OURS) } else { stale(OURS - 1) };
         core.on(answered(n, "cur", answer), secs(16));
     }
     core.on(arrival(secs(15), secs(18)), secs(18));

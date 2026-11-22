@@ -14,7 +14,11 @@
 //! (`derive_p_onion_keypair`). That function calls [`OnionKeypair::from_seed`]
 //! and the seed never leaves the derivation. The daemon's onion for one
 //! boot is [`OnionKeypair::ephemeral`], which draws its seed from the
-//! operating system's CSPRNG and does not return it.
+//! operating system's CSPRNG and does not return it. A daemon given a
+//! persistent onion (`tor-onion-key-file`) takes Tor's own
+//! `hs_ed25519_secret_key` through [`OnionKeypair::from_tor_secret_key_file`]:
+//! Tor stores the expanded secret, not a seed, so that file is parsed here
+//! and its public key computed here too.
 //!
 //! Every other crate takes an [`OnionKeypair`]. The Tor control client
 //! builds an `OnionIdentity` from one, the address from
@@ -72,6 +76,51 @@ const CLAMP_CLEAR_LOW_THREE_BITS: u8 = 0xf8;
 const CLAMP_CLEAR_HIGH_BIT: u8 = 0x7f;
 /// Sets bit 254, the second-highest bit of [`CLAMP_LAST_SCALAR_BYTE`].
 const CLAMP_SET_SECOND_HIGH_BIT: u8 = 0x40;
+
+/// The tag at the head of Tor's `hs_ed25519_secret_key` file (Tor's
+/// `crypto_write_tagged_contents_to_file`, tag `ed25519v1-secret`, type 0),
+/// NUL-padded to [`TOR_SECRET_KEY_HEADER_BYTES`].
+const TOR_SECRET_KEY_TAG: &[u8] = b"== ed25519v1-secret: type0 ==";
+
+/// Length of the header in Tor's `hs_ed25519_secret_key` file.
+pub const TOR_SECRET_KEY_HEADER_BYTES: usize = 32;
+
+/// Length of Tor's `hs_ed25519_secret_key` file: the header, then the
+/// expanded secret.
+pub const TOR_SECRET_KEY_FILE_BYTES: usize =
+    TOR_SECRET_KEY_HEADER_BYTES + ONION_EXPANDED_SECRET_BYTES;
+
+const _: () = assert!(TOR_SECRET_KEY_TAG.len() <= TOR_SECRET_KEY_HEADER_BYTES);
+
+/// Why the bytes of a Tor `hs_ed25519_secret_key` file are not a key.
+/// No variant carries a byte of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorSecretKeyError {
+    /// The file is not [`TOR_SECRET_KEY_FILE_BYTES`] long; this many bytes
+    /// were given.
+    Length(usize),
+    /// The header is not Tor's `ed25519v1-secret` tag, type 0.
+    Header,
+    /// The scalar half does not carry the RFC 8032 clamp, so Tor would
+    /// publish a different address than the one this key names.
+    NotClamped,
+}
+
+impl std::fmt::Display for TorSecretKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Length(given) => write!(
+                f,
+                "is {given} bytes, not the {TOR_SECRET_KEY_FILE_BYTES} of Tor's \
+                 hs_ed25519_secret_key"
+            ),
+            Self::Header => f.write_str("does not begin with Tor's ed25519v1-secret header"),
+            Self::NotClamped => f.write_str("holds a secret that is not a clamped Ed25519 scalar"),
+        }
+    }
+}
+
+impl std::error::Error for TorSecretKeyError {}
 
 /// The operating system's CSPRNG refused to fill an onion seed.
 ///
@@ -151,6 +200,42 @@ impl OnionKeypair {
             expanded,
             public_key,
         }
+    }
+
+    /// The keypair in Tor's own `hs_ed25519_secret_key` file: the header,
+    /// then the expanded secret Tor stores (it keeps no seed). The secret is
+    /// copied into this keypair's heap buffer and nowhere else; the caller
+    /// still holds and wipes `file`. The public key is computed from it as
+    /// [`Self::from_seed`]'s is, so a file Tor wrote names the address Tor
+    /// published for it.
+    ///
+    /// # Errors
+    ///
+    /// [`TorSecretKeyError`] when `file` is not that file: the wrong length,
+    /// another header, or a scalar without the clamp.
+    pub fn from_tor_secret_key_file(file: &[u8]) -> Result<Self, TorSecretKeyError> {
+        if file.len() != TOR_SECRET_KEY_FILE_BYTES {
+            return Err(TorSecretKeyError::Length(file.len()));
+        }
+        let (header, secret) = file.split_at(TOR_SECRET_KEY_HEADER_BYTES);
+        let (tag, padding) = header.split_at(TOR_SECRET_KEY_TAG.len());
+        if tag != TOR_SECRET_KEY_TAG || padding.iter().any(|&b| b != 0) {
+            return Err(TorSecretKeyError::Header);
+        }
+        let mut expanded = HeapSecret::<ONION_EXPANDED_SECRET_BYTES>::zeroed();
+        expanded.as_array_mut().copy_from_slice(secret);
+        let scalar = expanded.as_array();
+        let clamped = scalar[CLAMP_FIRST_BYTE] & !CLAMP_CLEAR_LOW_THREE_BITS == 0
+            && scalar[CLAMP_LAST_SCALAR_BYTE] & !CLAMP_CLEAR_HIGH_BIT == 0
+            && scalar[CLAMP_LAST_SCALAR_BYTE] & CLAMP_SET_SECOND_HIGH_BIT != 0;
+        if !clamped {
+            return Err(TorSecretKeyError::NotClamped);
+        }
+        let public_key = public_key_of(expanded.as_array());
+        Ok(Self {
+            expanded,
+            public_key,
+        })
     }
 
     /// The Ed25519 public key, which the v3 `.onion` address encodes.
@@ -283,6 +368,79 @@ mod tests {
         assert_eq!(a.public_key(), d.public_key());
         assert_eq!(a.expanded_secret(), d.expanded_secret());
         assert!(!std::ptr::eq(a.expanded_secret(), d.expanded_secret()));
+    }
+
+    /// A key Tor wrote: Tor 0.4.9.14 (the pinned Expert Bundle,
+    /// `linux-x86_64` 15.0.25), offline, with a `HiddenServiceDir`, kept as
+    /// its three files. A throwaway key that serves nothing.
+    const TOR_SECRET_KEY: &[u8] =
+        include_bytes!("../testdata/tor_0_4_9_14_hidden_service/hs_ed25519_secret_key");
+    const TOR_PUBLIC_KEY: &[u8] =
+        include_bytes!("../testdata/tor_0_4_9_14_hidden_service/hs_ed25519_public_key");
+    const TOR_HOSTNAME: &str = include_str!("../testdata/tor_0_4_9_14_hidden_service/hostname");
+
+    /// **A key file Tor wrote names the address Tor published for it.** The
+    /// public key equals Tor's `hs_ed25519_public_key` (after its 32-byte
+    /// header), the address equals Tor's `hostname`, and the expanded secret
+    /// is the file's tail, byte for byte. Red edit: take the secret through
+    /// a `Scalar` (the module doc's trap), or skip the header.
+    #[test]
+    fn a_key_file_tor_wrote_names_the_address_tor_published() {
+        let keypair =
+            OnionKeypair::from_tor_secret_key_file(TOR_SECRET_KEY).expect("Tor's own key file");
+        assert_eq!(
+            &keypair.public_key()[..],
+            &TOR_PUBLIC_KEY[TOR_SECRET_KEY_HEADER_BYTES..]
+        );
+        assert_eq!(
+            shekyl_onion_v3::v3_onion_hostname(&keypair.public_key()),
+            TOR_HOSTNAME.trim_end()
+        );
+        assert_eq!(
+            &keypair.expanded_secret()[..],
+            &TOR_SECRET_KEY[TOR_SECRET_KEY_HEADER_BYTES..]
+        );
+    }
+
+    /// **Bytes that are not Tor's key file are refused, each by its own
+    /// reason**: a byte short, a byte long, another tag (Tor's public-key
+    /// file's), a non-NUL pad byte, and a scalar that lost each of its three
+    /// clamp bits. Red edit: drop any one check in
+    /// [`OnionKeypair::from_tor_secret_key_file`].
+    #[test]
+    fn bytes_that_are_not_tors_key_file_are_refused_by_reason() {
+        let refused = |bytes: &[u8]| OnionKeypair::from_tor_secret_key_file(bytes).err();
+        assert_eq!(
+            refused(&TOR_SECRET_KEY[..TOR_SECRET_KEY_FILE_BYTES - 1]),
+            Some(TorSecretKeyError::Length(TOR_SECRET_KEY_FILE_BYTES - 1))
+        );
+        let mut long = TOR_SECRET_KEY.to_vec();
+        long.push(0);
+        assert_eq!(
+            refused(&long),
+            Some(TorSecretKeyError::Length(TOR_SECRET_KEY_FILE_BYTES + 1))
+        );
+        let mut public_tag = TOR_SECRET_KEY.to_vec();
+        public_tag[..TOR_SECRET_KEY_HEADER_BYTES]
+            .copy_from_slice(&TOR_PUBLIC_KEY[..TOR_SECRET_KEY_HEADER_BYTES]);
+        assert_eq!(refused(&public_tag), Some(TorSecretKeyError::Header));
+        let mut padded = TOR_SECRET_KEY.to_vec();
+        padded[TOR_SECRET_KEY_HEADER_BYTES - 1] = b' ';
+        assert_eq!(refused(&padded), Some(TorSecretKeyError::Header));
+        let scalar = TOR_SECRET_KEY_HEADER_BYTES;
+        for (byte, flip) in [
+            (scalar + CLAMP_FIRST_BYTE, 0x01),
+            (scalar + CLAMP_LAST_SCALAR_BYTE, 0x80),
+            (scalar + CLAMP_LAST_SCALAR_BYTE, CLAMP_SET_SECOND_HIGH_BIT),
+        ] {
+            let mut unclamped = TOR_SECRET_KEY.to_vec();
+            unclamped[byte] ^= flip;
+            assert_eq!(
+                refused(&unclamped),
+                Some(TorSecretKeyError::NotClamped),
+                "byte {byte} ^ {flip:#04x}"
+            );
+        }
     }
 
     #[test]

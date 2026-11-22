@@ -54,7 +54,7 @@ shekyl-types = { path = "../shekyl-types" }
 
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
-fips204 = "0.4.6"
+fips204 = { workspace = true }
 rand_core = { version = "0.6", features = ["std"] }
 # The seeded entry points' generator (`seeded-rng` only).
 rand_chacha = { version = "0.3", optional = true }

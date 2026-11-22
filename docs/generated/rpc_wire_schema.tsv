@@ -312,7 +312,7 @@ daemon_status	field	tor	fix	status	list of one-of restore-managed|operator|clear
 daemon_status	field	tor	onion	status	object (tor onion) or null
 daemon_status	field	tor onion	state	status	one-of publishing|reachable|unreachable
 daemon_status	field	tor onion	age	status	duration
-daemon_status	field	tor onion	cause	status	state probe-missed|uploads-refused|descriptor-missing|clock-behind or null
+daemon_status	field	tor onion	cause	status	state probe-missed|uploads-refused|descriptor-missing|clock-behind|published-elsewhere or null
 daemon_status	field	tor	bootstrap	status	object (tor bootstrap) or null
 daemon_status	field	tor bootstrap	pace	status	one-of advancing|slow|stalled|held
 daemon_status	field	tor bootstrap	unchanged	status	duration
