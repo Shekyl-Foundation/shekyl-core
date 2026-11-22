@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA registered (§3.1); ML-DSA-65 and SLH-DSA-192s harness built, unregistered (§3.2, §3.3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA, ML-DSA-65 and SLH-DSA-192s registered, unmeasured (§3.1 to §3.3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -619,7 +619,11 @@ above. None is chosen before then.
 
 ### 3.2 ML-DSA-65, transaction authorisation
 
-**Status: harness built, registration not yet made.** The harness is
+**Status: registered, unmeasured.** The registration is
+[`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
+Its pass line is a fixed pair matched on the work key generation does by
+design (ExpandS bytes, ExpandA rejections), and `fixed-vs-varied` is
+information (the maintainer's rulings, 2026-11-21). The harness is
 `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`, mode `ml-dsa`. It
 times `sign_pqc_auth_for_output` (`shekyl-crypto-pq/src/output.rs:1182`)
 through its seeded twin (`:1206`).
@@ -688,8 +692,12 @@ through its seeded twin (`:1206`).
 
 ### 3.3 SLH-DSA-SHA2-192s, message signing
 
-**Status: harness built, registration not yet made.** The harness is the
-same example, mode `slh-dsa`. It times `sign_message_pq_half`
+**Status: registered, unmeasured.** The registration is
+[`ca3_slh_dsa_msg_sign_timing_20261122.md`](../benchmarks/ca3_slh_dsa_msg_sign_timing_20261122.md).
+It has three comparisons (the fixed pair, the a/a null, and the control on
+it) at 1,000 signatures per class, and its control is sized from each
+device's measured noise (the maintainer's rulings, 2026-11-21). The harness
+is the same example, mode `slh-dsa`. It times `sign_message_pq_half`
 (`shekyl-crypto-pq/src/message_signing.rs:385`) as the wallet calls it:
 hedged with the OS's randomness (`try_sign(..., true)`), on one fixed
 message.
