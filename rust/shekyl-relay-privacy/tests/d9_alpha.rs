@@ -47,16 +47,24 @@ const SEEDS: [u64; 6] = [
 const NODES: usize = 512;
 const MEAN_QUARTER_SECS: u32 = 20;
 
-/// The shipped embargo, in ticks: 194 s at the 250 ms tick.
+/// The shipped embargo draw's solved mean, in ticks: 194 s at the 250 ms
+/// tick. A shipped deadline is that draw plus the timer's floor
+/// (`EmbargoTimer::floor_millis`), which only raises full travel, so every
+/// alpha in this file is the draw's alone and a lower bound on what ships.
 const SHIPPED_EMBARGO_SECS: u32 = 194;
 fn shipped_mean_ticks() -> u32 {
-    // The literal is the shipped clearnet embargo, read back from the
+    // The literal is the shipped clearnet draw's mean, read back from the
     // production derivation so it cannot drift from it: a stale literal here
     // measures alpha against an embargo nothing ships.
     assert_eq!(
         SHIPPED_EMBARGO_SECS,
-        shekyl_relay_privacy::schedule::EmbargoTimer::adopted(&DandelionParams::adopted())
-            .mean_secs(),
+        shekyl_relay_privacy::derive_embargo(
+            &DandelionParams::adopted(),
+            DEFAULT_EMBARGO_TICK_MILLIS,
+            shekyl_relay_privacy::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
+        )
+        .expect("the adopted target is reachable")
+        .mean_secs(),
         "the shipped clearnet embargo moved; re-pin it from the derivation"
     );
     let embargo_ms = u64::from(SHIPPED_EMBARGO_SECS) * 1000;
@@ -273,9 +281,10 @@ fn analytic_alpha_agrees_with_the_empirical_walk() {
     use shekyl_relay_privacy::EmbargoTimer;
 
     let params = DandelionParams::adopted();
-    let embargo = EmbargoTimer::adopted(&params);
-    let analytic =
-        full_travel_probability(&params, shipped_mean_ticks(), DEFAULT_EMBARGO_TICK_MILLIS);
+    let ticks = shipped_mean_ticks();
+    // The draw alone, which is what every alpha in this file is read on.
+    let embargo = EmbargoTimer::geometric_from_ticks(ticks, DEFAULT_EMBARGO_TICK_MILLIS);
+    let analytic = full_travel_probability(&params, ticks, DEFAULT_EMBARGO_TICK_MILLIS);
 
     let mut rng = SplitMix64::new(0xD9A1_EA01);
     let empirical = simulate_propagation(&params, &embargo, 40_000, &mut rng).full_travel_rate;
@@ -292,5 +301,40 @@ fn analytic_alpha_agrees_with_the_empirical_walk() {
         "analytic {analytic:.6} vs empirical {empirical:.6} — the closed form \
          and the walked simulation disagree beyond noise; one of them has a \
          modeling error and the sweep's alpha readings inherit it"
+    );
+
+    // The shipped timer: the same draw plus the floor on every deadline
+    // (Rick, 2026-11-22). The pair is the floor-aware closed form against
+    // the walk on `EmbargoTimer::adopted`, whose deadlines carry the floor.
+    let shipped = EmbargoTimer::adopted(&params);
+    // The floor in the timer's own ticks, which must be the tick the draw's
+    // mean above is counted in for the closed form to read one timer.
+    assert_eq!(
+        shipped.tick_millis(),
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        "the shipped timer left the default tick; count the draw's mean at its tick"
+    );
+    let floor_ticks = shipped.floor_ticks();
+    let analytic_shipped = shekyl_relay_privacy::full_travel_probability_with_floor(
+        &params,
+        ticks,
+        floor_ticks,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+    );
+    let mut rng = SplitMix64::new(0xD9A1_F100);
+    let empirical_shipped =
+        simulate_propagation(&params, &shipped, 40_000, &mut rng).full_travel_rate;
+    println!("  shipped timer, analytic alpha  = {analytic_shipped:.6}");
+    println!("  shipped timer, empirical alpha = {empirical_shipped:.6}   (40k walked stems)");
+    assert!(
+        analytic_shipped > analytic,
+        "the floor can only raise full travel"
+    );
+    // ±0.2 points absolute: 3σ of 40k trials at p≈0.998 is ~0.07 points.
+    assert!(
+        (analytic_shipped - empirical_shipped).abs() < 0.002,
+        "shipped timer: analytic {analytic_shipped:.6} vs empirical \
+         {empirical_shipped:.6}: the floor-aware closed form and the walk on \
+         the shipped timer disagree beyond noise"
     );
 }

@@ -158,6 +158,15 @@ The `Q` and `S` bits are never set and the `Expect Response` field must always
 be zero. The first fragment has the `B` bit set, neither `B` nor `E` is set for
 "middle" fragments, and `E` is set for the last fragment.
 
+A receiver bounds a fragmented message by its own inner header (`PWD-B12`,
+`rust/shekyl-levin/src/reader.rs`). The inner header is read as soon as its
+29 bytes have arrived, and the connection is closed there if the inner message
+is not a request or a response (its `Q` or `S` bit must be set), if its
+command is not defined, or if its length is over that command's limit. Every
+fragment before the last must leave the inner message incomplete: only the
+last fragment is padded, so a fragment without `E` that brings the buffered
+bytes to the inner message's full length, or past it, closes the connection.
+
 ### Dummy
 Dummy messages have the `B` and `E` bits set, the `Q` and `S` bits unset, and
 the `Expect Response` field zeroed. When a message of this type is received, the

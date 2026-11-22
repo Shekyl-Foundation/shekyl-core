@@ -247,7 +247,7 @@ pub(super) struct RegtestDaemon {
     /// data directory, ports and rows.
     recipe: Vec<std::ffi::OsString>,
     /// How [`Self::wait_shown_pool_in_template`] reads the pool. Every
-    /// spawn starts at [`ShownPool::broadcast_only`]; the Tor trio's miner
+    /// spawn starts at [`ShownPool::broadcast_only`]; the Tor mesh's miner
     /// switches to [`ShownPool::covering_origins`].
     shown_pool: ShownPool,
     /// The draws [`Self::generate_blocks`] gives a read window to: the walk
@@ -259,9 +259,9 @@ pub(super) struct RegtestDaemon {
     /// so the closed-peer address in that recipe is still this socket.
     /// `None` for every other peering.
     unanswered: Option<UnansweredPort>,
-    /// The Tor trio's relays, on the miner only ([`Self::start_tor_trio`]).
+    /// The Tor mesh's relays, on the miner only ([`Self::start_tor_mesh`]).
     /// The pool wait names the mesh when an origin has not come back.
-    relays: Option<tor::TrioRelays>,
+    relays: Option<tor::MeshRelays>,
     /// Blocks connected while `SHEKYL_CAPTURE_CHAIN_VECTORS` is set, read
     /// at the block that connected them. A later fetch meets the archival
     /// horizon and the undo retention; the corpus is this record.
@@ -310,7 +310,7 @@ impl UnansweredPort {
 }
 
 /// How a spawned daemon takes part in peer-to-peer.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Peering {
     /// `--clearnet off --tor off`: no listener and no dial. Both
     /// connectors off is the operator's declaration that the node has no
@@ -361,12 +361,10 @@ enum Peering {
     /// Clearnet off, and the closed peers named by their onions: the
     /// daemon's managed Tor dials each, so the node has outbound sessions
     /// that hide its address and its relay originates its own transactions
-    /// (`DAEMON_RELAY_PRIVACY.md` §98.5). The emission walk's miner and its
-    /// first relay ([`RegtestDaemon::start_tor_trio`]).
-    TorPeers {
-        first: tor::OnionPeer,
-        second: Option<tor::OnionPeer>,
-    },
+    /// (`DAEMON_RELAY_PRIVACY.md` §98.5). The emission walk's miner and
+    /// every relay of its mesh but the one that dials nobody
+    /// ([`RegtestDaemon::start_tor_mesh`]).
+    TorPeers { peers: Vec<tor::OnionPeer> },
 }
 
 impl Peering {
@@ -377,7 +375,7 @@ impl Peering {
     /// has looped. Linked and the two-peer closed rig dial a partner the
     /// test starts beside them; their template follows that session, and
     /// readiness stays the RPC.
-    fn posts_at_open(self) -> bool {
+    fn posts_at_open(&self) -> bool {
         matches!(
             self,
             Self::Offline | Self::Listening { .. } | Self::TorPeers { .. }
@@ -550,25 +548,33 @@ impl RegtestSpawn {
 /// the relay fluffs at once, and the follower rebuilds on the wake.
 const SHOWN_POOL_LIMIT: Duration = Duration::from_secs(30);
 
-/// The miner's wait on the Tor trio ([`RegtestDaemon::start_tor_trio`]).
-/// A transaction it originates is unbroadcast until a fluff comes back.
-/// The longest path is A → C (stem), C → B (fluff), B → A (fluff), or
-/// A → B → C (stems) and C → A (fluff): at most two stem hops, each waiting
-/// at most one carrier slot (`NOISE_MIN_DELAY_MS` + `NOISE_DELAY_JITTER_MS`,
-/// 6.67 s), and at most two fluff flushes toward an inbound peer, each a
-/// Poisson draw over quarter-seconds with λ = 20
-/// (`FLUFF_AVERAGE_IN_QUARTER_SECS`), 8.75 s at its 99.9th percentile, plus
-/// three onion circuits at 5 s each: 13.3 + 17.5 + 15 ≈ 46 s, so 60 s.
+/// The miner's wait on the Tor mesh ([`RegtestDaemon::start_tor_mesh`]): an
+/// acceptance threshold, not a latency bound (Rick, 2026-11-22: the mesh is
+/// five nodes and the wait stays 60 s).
 ///
-/// The derivation assumes the whole mesh. A session down at this limit
-/// fails the wait, and the walk is rerun.
+/// A transaction A originates is unbroadcast until its fluff comes back
+/// from a peer A did not hand it to. A relay in a stem epoch passes a stem
+/// on to a relay named after it, and E, which dials nobody, fluffs it, so
+/// the longest path is four stem hops, A → B → C → D → E, and one fluff,
+/// E → A; a stem the first relay fluffs comes back after two fluffs. A
+/// stem hop waits for the next carrier slot, at most 6.67 s
+/// (`NOISE_MIN_DELAY_MS` plus `NOISE_DELAY_JITTER_MS`). A fluff waits a
+/// memoryless draw (`FluffScheduler::memoryless`, geometric over
+/// quarter-seconds) with a mean of 5 s toward an inbound peer and 2.5 s
+/// toward an outbound one (`FLUFF_AVERAGE_IN_QUARTER_SECS`,
+/// `FLUFF_AVERAGE_OUT_QUARTER_SECS`), and no upper bound. Every hop also
+/// crosses an onion circuit. No path is bounded under 60 s: a return that
+/// comes later fails the wait, and the walk is rerun. A walk on three
+/// nodes on 2026-11-22 had 289 returns, the longest 38 s.
+///
+/// A session down at this limit fails the wait too, and the walk is rerun.
 const TOR_SHOWN_POOL_LIMIT: Duration = Duration::from_secs(60);
 
 /// How [`RegtestDaemon::wait_shown_pool_in_template`] reads the pool.
 struct ShownPool {
     limit: Duration,
     /// Cover entries this node originated and has not broadcast. The Tor
-    /// trio's miner only: a fluff has to come back before the job lists
+    /// mesh's miner only: a fluff has to come back before the job lists
     /// the spend.
     covers_origins: bool,
 }
@@ -582,7 +588,7 @@ impl ShownPool {
         }
     }
 
-    /// The trio's miner, at [`TOR_SHOWN_POOL_LIMIT`].
+    /// The mesh's miner, at [`TOR_SHOWN_POOL_LIMIT`].
     fn covering_origins() -> Self {
         Self {
             limit: TOR_SHOWN_POOL_LIMIT,
@@ -595,8 +601,8 @@ impl ShownPool {
 /// late. The relay owns the derivation
 /// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-1000
 /// quantile, so a walk calls a fire that does come late at most once in a
-/// thousand. The fire is a memoryless draw, the same for this node's own
-/// transaction as for a relayed one, so it has no earliest time. The submit
+/// thousand. The fire is the timer's floor plus a memoryless draw, the same
+/// for this node's own transaction as for a relayed one. The submit
 /// watchdog does not read it: overdue is the daemon's judgment.
 fn embargo_fire_wait() -> Duration {
     Duration::from_secs(u64::from(shekyl_relay::embargo_fire_wait_secs()))
@@ -961,6 +967,7 @@ impl RegtestDaemon {
         let released = binary.is_some();
         let bin = binary.unwrap_or_else(Self::binary);
         let offline = matches!(peering, Peering::Offline);
+        let posts_at_open = peering.posts_at_open();
         let p2p_ports: Vec<u16> = match &peering {
             // Neither binds a loopback port: no listener, or Tor's alone.
             Peering::Offline | Peering::TorPeers { .. } => Vec::new(),
@@ -1105,9 +1112,9 @@ impl RegtestDaemon {
                     cmd.args(["--p2p-closed-peer", &peer.to_string()]);
                 }
             }
-            Peering::TorPeers { first, second } => {
+            Peering::TorPeers { peers } => {
                 cmd.args(["--clearnet", "off"]);
-                for onion in std::iter::once(first).chain(second) {
+                for onion in peers {
                     cmd.args(["--p2p-closed-peer", &onion.to_string()]);
                 }
             }
@@ -1168,7 +1175,7 @@ impl RegtestDaemon {
             },
             armed: matches!(network, SpawnNetwork::Regtest),
             offline,
-            posts_at_open: peering.posts_at_open(),
+            posts_at_open,
             keep_data,
             _serial: serial,
             recipe,
@@ -1706,7 +1713,7 @@ impl RegtestDaemon {
                     if returned {
                         String::new()
                     } else {
-                        "; on the Tor trio an origin is shown when its fluff comes back".to_owned()
+                        "; on the Tor mesh an origin is shown when its fluff comes back".to_owned()
                     },
                 );
             }
@@ -5096,7 +5103,7 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 /// `ToKey` fee inputs (`fee_gindexes` non-empty), not the Q11 zero-fee
 /// form, so the fee-subset battery leg runs live.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about six hours: three daemons on the pinned managed Tor over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun (docs/FOLLOWUPS.md, the emission walk); needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
+#[ignore = "acceptance lane (run_live_daemon_gates.sh GATE_LANE=acceptance), about thirteen hours: five daemons on the pinned managed Tor, each connected to the others, over the public Tor network; waits on a healthy public onion network, and a failure on propagation is a rerun (docs/FOLLOWUPS.md, the emission walk); needs SHEKYLD_BIN and SHEKYL_TEST_TOR_BINARY"]
 async fn e2e_emission_claim_accepted_and_applied() {
     use super::bond_assembly::SpentRecordsDurablyPruned;
     use super::claim_dispatch::EmissionClaimRequestError;
@@ -5167,14 +5174,14 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the regtest e2es in separate processes (the module docs' one-test
     // invocation) for green runs.
     let seed = [0x55u8; shekyl_crypto_pq::account::SEED_BYTES];
-    // Three daemons on the pinned Tor (`RegtestDaemon::start_tor_trio`):
-    // the miner, which the wallet uses and whose producer reads each drawn
-    // pair's shard over its Tor, and two relays, so a transaction the miner
-    // originates leaves on an address-hiding session and comes back as a
-    // fluff in seconds.
+    // Five daemons on the pinned Tor, each connected to the others
+    // (`RegtestDaemon::start_tor_mesh`): the miner, which the wallet uses
+    // and whose producer reads each drawn pair's shard over its Tor, and
+    // four relays, so a transaction the miner originates leaves on an
+    // address-hiding session and comes back as a fluff from a peer it did
+    // not hand it to.
     let tor = RegtestDaemon::live_tor_binary();
-    let (daemon, _relay_b, _relay_c) =
-        RegtestDaemon::start_tor_trio(&seed, Some(SCHEDULE), tor.clone()).await;
+    let (daemon, _relays) = RegtestDaemon::start_tor_mesh(&seed, Some(SCHEDULE), tor.clone()).await;
     // The levers are set and deliberately NOT restored afterwards: they are the
     // only input `arm` reads, and once armed the schedule latch is
     // irreversible, so leaving the variable set keeps the process's two
@@ -7226,7 +7233,11 @@ async fn maybe_capture_chain_vector(
              CorpusWriter (RD-F15). trace.e2: the Rust baseline \
              (shekyl-chain-replay baseline): the corpus replayed against a \
              fresh store, then each height's facts and the tip's digest and \
-             archival rows read off it, pinned at built_at_dev_sha. A \
+             archival rows read off it, pinned at baseline_built_at_dev_sha. \
+             trace_rebaseline_decision, when present, cites the decision that \
+             re-baselined trace.e2 over this corpus at baseline_built_at_dev_sha; \
+             absent, the trace is unchanged since capture, and the capture never \
+             writes it. A \
              regression gate, not a conformance oracle. Consumed by replay: \
              shekyl-chain-ingest connects the chain against a real store, so \
              the state the 4.I rules read is derived, not asserted. \

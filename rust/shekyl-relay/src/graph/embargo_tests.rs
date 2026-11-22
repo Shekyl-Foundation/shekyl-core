@@ -82,7 +82,7 @@ fn originate(z: &mut Relay, sent: &(TxId, TxBlob), rng: &mut SplitMix64) -> Conn
 fn the_overdue_budget_is_two_fires_of_the_shared_timer() {
     /// The longest-transit timer's 1-in-10 quantile at the shipped terms
     /// (`DAEMON_RELAY_PRIVACY.md` §92.5c item 3).
-    const PER_FIRE_SECS: u32 = 1_176;
+    const PER_FIRE_SECS: u32 = 1_233;
     let params = DandelionParams::adopted_for_transit_ms(longest_transit());
     let timer = EmbargoTimer::adopted(&params);
     let fires = u32::try_from(params.graph.stem_count()).expect("stem count fits u32");
@@ -199,6 +199,88 @@ fn a_dropped_stem_gets_one_reaction_own_or_relayed() {
          reshape, mean {} s to the broadcast",
         to_reshape / SEEDS / 1_000,
         to_broadcast / SEEDS / 1_000
+    );
+}
+
+/// **No embargo fires before a stem could have come back** (Rick,
+/// 2026-11-22). Every deadline is the connector's floor plus the memoryless
+/// draw, the same for this node's own transaction and a relayed one. A poll
+/// one millisecond inside the floor finds nothing to do, and the fluff that
+/// returns inside it, from a peer the stem was not sent to, is counted and
+/// ends the hold.
+///
+/// Without the floor about one draw in a hundred fired inside the fluff's
+/// return time: the node re-stemmed to its alternate, the fluff then came
+/// from that alternate, and F-10 does not count an arrival from the peer a
+/// stem was last sent to. The seeds here reach draws that short, which is
+/// what the last assertion says.
+/// Red edit: drop the floor from `EmbargoTimer::deadline`.
+#[test]
+fn no_embargo_fires_before_a_stem_could_return() {
+    /// Seeds walked: enough that the shortest draw among them is a small
+    /// part of the floor.
+    const SEEDS: u64 = 1_024;
+    let floor = embargo_timer(&declaration(ConnectorId::Clearnet.column()))
+        .expect("the clearnet transit is assessed")
+        .floor_millis();
+    assert!(floor > 0, "the shipped timer has a floor");
+    let run = |seed: u64, own: bool| {
+        let mut rng = SplitMix64::new(0xF1 + seed);
+        let mut z = stem_zone(&[1, 2], &mut rng);
+        z.on_session_established(
+            id(9),
+            PeerDirection::Inbound,
+            ConnectorId::Clearnet,
+            &mut rng,
+        );
+        z.set_node_sync(NodeSync::Synchronised, 0);
+        let source = (!own).then_some(id(9));
+        let RelayPlan::Stem(successor) =
+            z.plan_relay(source, own, NodeSync::Synchronised, &mut rng)
+        else {
+            panic!("a stem epoch stems");
+        };
+        let sent = tx(41);
+        z.record_stem(
+            std::slice::from_ref(&sent),
+            successor,
+            source,
+            0,
+            &mut SplitMix64::new(seed),
+        );
+        let deadline = z.stem_observation_deadline().expect("armed");
+        let early = z.fire_embargoes(floor - 1, &mut rng);
+        assert!(
+            early.stems.is_empty() && early.published.is_empty(),
+            "seed {seed}: a fire inside the floor"
+        );
+        let other = [1, 2]
+            .map(id)
+            .into_iter()
+            .find(|peer| *peer != successor)
+            .expect("two outbound peers");
+        assert_eq!(
+            z.record_arrival(&[sent.0], Some(other)),
+            vec![sent.0],
+            "seed {seed}: the fluff returning inside the floor is counted"
+        );
+        assert_eq!(z.relay_state_len(), 0, "seed {seed}");
+        deadline
+    };
+    let mut earliest = Millis::MAX;
+    for seed in 0..SEEDS {
+        let own = run(seed, true);
+        assert_eq!(own, run(seed, false), "seed {seed}: own and relayed alike");
+        assert!(
+            own >= floor,
+            "seed {seed}: deadline {own} ms, floor {floor} ms"
+        );
+        earliest = earliest.min(own);
+    }
+    assert!(
+        earliest - floor < floor,
+        "no seed drew inside one floor ({earliest} ms against a floor of {floor} ms): \
+         the draws would not have reached the case the floor is for"
     );
 }
 
@@ -363,8 +445,8 @@ fn an_own_transaction_re_stems_once_to_its_alternate_then_is_broadcast() {
     assert_eq!(second.published, vec![sent.0], "the second fire publishes");
     for peer in [successor, alternate] {
         assert_eq!(
-            z.peer(&peer).expect("connected").queued.as_slice(),
-            std::slice::from_ref(&sent.1),
+            z.peer(&peer).expect("connected").queued,
+            [TxBlob::clone(&sent.1)],
             "the last resort fluffs to every session"
         );
     }
@@ -420,8 +502,8 @@ fn no_live_alternate_ends_the_stem_at_the_first_fire() {
     assert!(fired.stems.is_empty());
     assert_eq!(fired.published, vec![forwarded.0], "published");
     assert_eq!(
-        relay.peer(&successor).expect("connected").queued.as_slice(),
-        std::slice::from_ref(&forwarded.1),
+        relay.peer(&successor).expect("connected").queued,
+        [TxBlob::clone(&forwarded.1)],
         "fluffed to the sessions other than its source"
     );
     assert!(
@@ -502,6 +584,57 @@ fn circulation_disarms_and_an_echo_does_not() {
         "a disarmed embargo never fires"
     );
     assert_eq!(z.relay_state_len(), 0);
+}
+
+/// F-10 after a re-stem (`DAEMON_RELAY_PRIVACY.md` §102): once the embargo
+/// has fired and the re-stem is out, the transaction has been handed to two
+/// peers, and an arrival from either disarms nothing. The first successor
+/// dropping the stem and echoing it after the fire is the attack; the second
+/// fire and its fluff still come. A peer the transaction was never handed to
+/// still disarms.
+/// Red edit: compare against the current successor only (`StemWatch::seen`).
+#[test]
+fn after_a_re_stem_neither_handed_peer_disarms_the_embargo() {
+    let run = |echo_from_first: bool| {
+        let mut rng = SplitMix64::new(0xE6);
+        let mut z = stem_zone(&[1, 2, 3], &mut rng);
+        let sent = tx(12);
+        let first = originate(&mut z, &sent, &mut rng);
+        let fire = z.stem_observation_deadline().expect("armed");
+        let fired = z.fire_embargoes(fire, &mut rng);
+        let [restem] = fired.stems.as_slice() else {
+            panic!("the first fire re-stems once");
+        };
+        let alternate = restem.peer;
+        assert_ne!(alternate, first, "to the alternate");
+        z.commit_stem(restem, fire, &mut rng);
+
+        let echo = if echo_from_first { first } else { alternate };
+        assert!(
+            z.record_arrival(&[sent.0], Some(echo)).is_empty(),
+            "an arrival from a peer the transaction was handed to resolves nothing"
+        );
+        let second = z.stem_observation_deadline().expect("still armed");
+        let other = [1, 2, 3]
+            .map(id)
+            .into_iter()
+            .find(|peer| *peer != first && *peer != alternate)
+            .expect("three peers");
+        (z, sent, second, other, rng)
+    };
+
+    for echo_from_first in [true, false] {
+        // Nothing else arrives: the second fire ends the stem phase.
+        let (mut z, sent, second, _, mut rng) = run(echo_from_first);
+        let fired = z.fire_embargoes(second, &mut rng);
+        assert!(fired.stems.is_empty(), "one re-stem is the cap");
+        assert_eq!(fired.published, vec![sent.0], "the last-resort fluff comes");
+
+        // A third peer has it: that is circulation.
+        let (mut z, sent, _, other, _) = run(echo_from_first);
+        assert_eq!(z.record_arrival(&[sent.0], Some(other)), vec![sent.0]);
+        assert_eq!(z.relay_state_len(), 0);
+    }
 }
 
 /// W3c: churn that refills a slot within the epoch does not hand the

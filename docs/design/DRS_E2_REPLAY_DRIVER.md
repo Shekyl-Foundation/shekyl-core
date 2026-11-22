@@ -443,8 +443,9 @@ naming what it found.
 | header | magic `"SHKTRAC\0"` (`TRACE_MAGIC`) ‖ version u8 ‖ reserved[7] = 0 | version bump on any layout change; a reader refuses every other value |
 | **facts** × n | tag `0x01` ‖ `height` u64 ‖ `weight` u64 ‖ `long_term_weight` u64 ‖ `coins_generated` u64 ‖ `burned` u64 ‖ `root_after`[32] ‖ `long_term_effective_median` u64 ‖ `cumulative_difficulty` u128 | one 88-byte row per height, consecutive from the first; the six passed-through `ConnectFacts` fields + the accumulator SI-10 reads; `Trace::borrow(h)` yields `Borrowed<Facts>`, convertible only into `ConnectFacts` with every origin `PassedThrough` |
 | **checkpoint** × k | tag `0x02` ‖ `height` u64 ‖ `digest`[32] | the **outer** `digest_v0` of the store's state at `height`: the store's `logical_state_digest_v0`, which `TraceWriter::push_checkpoint` records; anchored (its height has a facts row), unique; `Trace::expect(h)` yields `Expected<Digest>` for the comparison only. The writer takes one, at the covered tip (RD-F18) |
-| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows: the store's `ReadSnapshot::archival_snapshot()` when the trace was written, which a replay compares row by row against its own. Exactly one per trace, at the tip, paired with the checkpoint — under `0x01` a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); `0x00` is no longer read at all — the six corpus traces were re-captured under `0x01` and the `0x00` arm deleted with them (E4 commit 7), so a `0x00` header is `UnsupportedVersion`; the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
-| trailer | tag `0xFF` ‖ `n_facts` u64 ‖ `n_checkpoints` u64 | both counts re-derived by the reader |
+| **archival snapshot** × 1 | tag `0x04` ‖ `height` u64 ‖ ten families × (`n_rows` u64 ‖ (`len` u32 ‖ row bytes) × n) | *added 2026-10-01, DRS-E4 commit 6 (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`), under `TRACE_VERSION 0x01`:* the archival state at the covered tip as rows: the store's `ReadSnapshot::archival_snapshot()` when the trace was written, which a replay compares row by row against its own. Exactly one per trace, at the tip, paired with the checkpoint — a trace carries both `0x02` and `0x04` or neither (the writer's `finish()` and the reader refuse one without the other); the family order and row encodings are E4 §3.8.1's; an empty state is ten zero counts (88 bytes after the tag), never omitted |
+| **event digest** × e | tag `0x05` ‖ `record` u64 ‖ `tables_digest`[32] | *added with `TRACE_VERSION 0x02` (`CHAIN_FORGE.md` §8, `CF-4b`):* the store's tables digest (`shekyl_chain_store::tables_digest`, every table it holds, row for row) right after an indexed event's corpus record; records strictly ascend. The replay takes the digest at every record its trace names and holds it to the trace's (`Disagreement::EventDiverged`, `EventUnreached`); a baseline takes it at the records it is asked for (`Trace::capturing`). A captured chain, with no indexed events, carries none |
+| trailer | tag `0xFF` ‖ `n_facts` u64 ‖ `n_checkpoints` u64 ‖ `n_events` u64 | every count re-derived by the reader |
 
 Tag `0x03` (**Verdict**, the mutation family's expected verdicts, §7 item 8d)
 is RESERVED: named here so the byte is not re-minted, no code until that PR
@@ -452,11 +453,10 @@ is RESERVED: named here so the byte is not re-minted, no code until that PR
 minted the snapshot as `0x03` and was corrected to `0x04` at the code
 reading (2026-10-01).*
 
-**`TRACE_VERSION` moved `0x00 → 0x01` with the snapshot record** (E4 commit
-6). Through E4 commit 7 the reader keeps both arms — the six committed
-corpus traces are `0x00` until that commit re-captures them, and a `0x00`
-trace's run reports the snapshot *not compared* — after which the `0x00`
-arm is deleted.
+**`TRACE_VERSION` is `0x02`**, the layout with the event digest record. The
+reader accepts it alone: every committed trace (the five vectors and the
+forged chains) is baselined at it, and an older trace is
+`UnsupportedVersion`.
 
 ### 3.10 The mutation family — spec-first expected verdicts (increment 3, §7 item 8d)
 

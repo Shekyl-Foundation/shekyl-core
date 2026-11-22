@@ -103,6 +103,40 @@ close_kinds! {
     // an invoke whose response did not arrive within INVOKE_TIMEOUT.
     (18, NetworkMismatch, Gap),
     (19, InvokeTimeout, ChannelExists),
+    // The Levin reader's three fragment-train refusals (PWD-B12,
+    // `shekyl-levin`'s `Error`, the variant each is named for): an inner
+    // message over its command's cap, a train that holds its whole inner
+    // message and has not ended, and an inner message that is not a
+    // request or a response. Each is the peer breaking the session's
+    // form, as `SessionRefused` is ([`CloseKind::refuses_session`]), with
+    // a kind of its own so the log names which bound refused.
+    (20, InnerMessageOversize, ChannelExists),
+    (21, FragmentTrainOverrun, ChannelExists),
+    (22, InnerMessageNotDispatch, ChannelExists),
+    // A fourth, of the same class (PWD-B12, 2026-11-21): a train whose
+    // inner message is a request or response of a command other than the
+    // transaction notice (`shekyl-levin`'s
+    // `Error::InnerNotTransactionNotice`).
+    (23, InnerMessageNotTransactionNotice, ChannelExists),
+}
+
+impl CloseKind {
+    /// Whether this node closed the session because the peer broke the
+    /// session's form: [`Self::SessionRefused`], and the refusals of that
+    /// class that carry a kind of their own. A reader that treats
+    /// `SessionRefused` as a class (the dialer's lists) asks this, so a
+    /// refusal given its own kind stays in the class it came from.
+    #[must_use]
+    pub const fn refuses_session(self) -> bool {
+        matches!(
+            self,
+            Self::SessionRefused
+                | Self::InnerMessageOversize
+                | Self::FragmentTrainOverrun
+                | Self::InnerMessageNotDispatch
+                | Self::InnerMessageNotTransactionNotice
+        )
+    }
 }
 
 /// One close cause. `reply_code` is the overlay reply for
@@ -182,6 +216,10 @@ mod tests {
             CloseKind::LocalClose,
             CloseKind::NetworkMismatch,
             CloseKind::InvokeTimeout,
+            CloseKind::InnerMessageOversize,
+            CloseKind::FragmentTrainOverrun,
+            CloseKind::InnerMessageNotDispatch,
+            CloseKind::InnerMessageNotTransactionNotice,
         ];
         let after = [
             CloseKind::PeerClosed,
@@ -191,6 +229,10 @@ mod tests {
             CloseKind::SendQueueFull,
             CloseKind::LocalClose,
             CloseKind::InvokeTimeout,
+            CloseKind::InnerMessageOversize,
+            CloseKind::FragmentTrainOverrun,
+            CloseKind::InnerMessageNotDispatch,
+            CloseKind::InnerMessageNotTransactionNotice,
         ];
         assert_eq!(kinds_in(Phase::BeforeChannel), before);
         assert_eq!(kinds_in(Phase::Gap), gap);
@@ -203,6 +245,49 @@ mod tests {
             .copied()
             .filter(|kind| kind.applies_in(phase))
             .collect()
+    }
+
+    /// The session-refusal class is `SessionRefused` and the four
+    /// fragment-train refusals, and nothing else: a kind added to the
+    /// table is outside the class until someone puts it in.
+    ///
+    /// Red edit: drop one of the four from `refuses_session`; the dialer
+    /// then reads that close as an ordinary drop.
+    #[test]
+    fn the_session_refusal_class_is_five_kinds() {
+        let class: Vec<CloseKind> = CloseKind::ALL
+            .iter()
+            .copied()
+            .filter(|kind| kind.refuses_session())
+            .collect();
+        assert_eq!(
+            class,
+            [
+                CloseKind::SessionRefused,
+                CloseKind::InnerMessageOversize,
+                CloseKind::FragmentTrainOverrun,
+                CloseKind::InnerMessageNotDispatch,
+                CloseKind::InnerMessageNotTransactionNotice,
+            ]
+        );
+        for kind in class {
+            assert!(kind.applies_in(Phase::Gap) && kind.applies_in(Phase::AfterChannel));
+            assert!(!kind.applies_in(Phase::BeforeChannel));
+        }
+    }
+
+    /// The table's discriminants are a record: a kind keeps its number.
+    ///
+    /// Red edit: renumber a row, or reuse a number.
+    #[test]
+    fn the_fragment_train_kinds_keep_their_numbers() {
+        assert_eq!(CloseKind::InnerMessageOversize.code(), 20);
+        assert_eq!(CloseKind::FragmentTrainOverrun.code(), 21);
+        assert_eq!(CloseKind::InnerMessageNotDispatch.code(), 22);
+        assert_eq!(CloseKind::InnerMessageNotTransactionNotice.code(), 23);
+        for kind in CloseKind::ALL {
+            assert_eq!(CloseKind::from_code(kind.code()), Some(*kind));
+        }
     }
 
     #[test]

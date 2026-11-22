@@ -58,6 +58,7 @@ use shekyl_chain_ingest::scenario_shard::{
     settled_epoch_blocks, ClosedShard, FILL_FROM_COINBASE,
 };
 use shekyl_chain_ingest::schedule::ChainRules;
+use shekyl_chain_ingest::source::SequenceNo;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
@@ -821,6 +822,16 @@ impl Forge {
             shekyl_hasher::Hasher::start(shekyl_hash_budget::Budget::new(hashers))
                 .map_err(|fault| ForgeFault::Hasher(format!("{fault:?}")))?;
         let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
+        // The trace carries the store's tables digest right after each
+        // indexed event's record (`CHAIN_FORGE.md` §8): the expectation a
+        // replay, and a snapshot opened at the event, are held to.
+        let event_records: Vec<SequenceNo> = self
+            .events
+            .iter()
+            .map(|event| SequenceNo::from_raw(event.record))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let replayed = baseline(
             &corpus_path,
             &store.path().join("trace.redb"),
@@ -833,6 +844,7 @@ impl Forge {
             pow,
             metrics,
             &trace_path,
+            &event_records,
         )
         .await;
         owner.stop();

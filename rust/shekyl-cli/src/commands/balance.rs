@@ -61,10 +61,10 @@ pub(crate) fn show_balance(val: &Value) {
             n => format!("  (the first spendable in {n} blocks)"),
         })
         .unwrap_or_default();
-    println!("Balance:              {} SKL", field("balance"));
-    println!("  Spendable:          {} SKL", field("spendable"));
-    println!("  Incoming:           {} SKL{wait}", field("incoming"));
-    println!(
+    crate::out_line!("Balance:              {} SKL", field("balance"));
+    crate::out_line!("  Spendable:          {} SKL", field("spendable"));
+    crate::out_line!("  Incoming:           {} SKL{wait}", field("incoming"));
+    crate::out_line!(
         "Outgoing:             {} SKL  (sends in flight, not in the balance)",
         field("outgoing")
     );
@@ -76,14 +76,14 @@ pub(crate) fn show_balance(val: &Value) {
         .and_then(|v| v.as_str())
         .filter(|v| *v != "0")
     {
-        println!(
+        crate::out_line!(
             "  Unspendable:        {} SKL  (received but unspendable — \
              see \"tx list\" rows in state UNSPENDABLE)",
             format_amount_str(unspendable)
         );
     }
-    println!("  Staked:             {}", staking_field("staked"));
-    println!(
+    crate::out_line!("  Staked:             {}", staking_field("staked"));
+    crate::out_line!(
         "  Claimable rewards:  {}",
         staking_field("claimable_rewards")
     );
@@ -136,12 +136,12 @@ pub(crate) fn show_address(val: &Value) {
     match val.get("form").and_then(|v| v.as_str()) {
         Some("file") => {
             let path = val.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Full address ({characters} characters) written to {path}.");
+            crate::out_line!("Full address ({characters} characters) written to {path}.");
         }
-        Some("full") => println!("{address}"),
+        Some("full") => crate::out_line!("{address}"),
         _ => {
-            println!("{}", short_address(address));
-            println!(
+            crate::out_line!("{}", short_address(address));
+            crate::out_line!(
                 "(short display form of the {characters}-character address — not valid for \
                  pasting; \"address --full\" prints it all, \"address --out <path>\" \
                  writes it to a file)"
@@ -195,17 +195,17 @@ fn block_lines(val: &Value) -> [String; 3] {
 
 pub(crate) fn show_wallet(val: &Value) {
     let s = |name: &str| val.get(name).and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Wallet: {}", s("name"));
-    println!("  Network:         {}", s("network"));
-    println!("  Capability:      {}", s("capability"));
+    crate::out_line!("Wallet: {}", s("name"));
+    crate::out_line!("  Network:         {}", s("network"));
+    crate::out_line!("  Capability:      {}", s("capability"));
     let addr = s("address");
     let shown = short_address(addr);
-    println!("  Address:         {shown}");
+    crate::out_line!("  Address:         {shown}");
     if shown != addr {
-        println!("                   (display only; \"address --full\" prints it all)");
+        crate::out_line!("                   (display only; \"address --full\" prints it all)");
     }
     for line in block_lines(val) {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
     if let Some(bal) = val.get("balance") {
         let field = |name: &str| {
@@ -214,8 +214,8 @@ pub(crate) fn show_wallet(val: &Value) {
                 .map(format_amount_str)
                 .unwrap_or_else(|| "?".to_owned())
         };
-        println!("  Balance:          {} SKL", field("balance"));
-        println!("  Spendable:        {} SKL", field("spendable"));
+        crate::out_line!("  Balance:          {} SKL", field("balance"));
+        crate::out_line!("  Spendable:        {} SKL", field("spendable"));
     }
     match val.get("staking") {
         Some(staking) => {
@@ -223,14 +223,14 @@ pub(crate) fn show_wallet(val: &Value) {
                 .get("staking_enabled")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
-            println!("  Staking enabled:  {enabled}");
+            crate::out_line!("  Staking enabled:  {enabled}");
         }
         // The staking block is ABSENT when the wallet's staking state
         // cannot be read (the wire degrade contract). Omitting the
         // line would read as though the question was never asked
         // (rule 82) — say what happened instead.
         None => {
-            println!("  Staking:          unavailable (staking state could not be read)");
+            crate::out_line!("  Staking:          unavailable (staking state could not be read)");
         }
     }
 }

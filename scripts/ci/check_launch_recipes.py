@@ -11,7 +11,9 @@ Five checks over an enumerated set of files:
 1. Every `--flag` a unit's `ExecStart` passes to `shekyld` is a row of the
    table (the generated fragment `docs/generated/shekyld_options.md`, which
    a `shekyl-daemon-config` test holds equal to the table). A command-line
-   row is fine there; a file-only row is not.
+   row is fine there; a file-only row is not. A unit that restarts
+   `shekyld` counts exit 130 clean (`SuccessExitStatus=130`): a second
+   stop is the operator's, never restarted (Rick, 2026-11-21).
 2. A unit that names `--data-dir` names `/var/lib/<StateDirectory>`, and a
    unit that names `--log-file` names a file under `/var/log/<LogsDirectory>`:
    the paths systemd creates and the paths the daemon writes are one pair,
@@ -67,6 +69,16 @@ Five checks over an enumerated set of files:
    `--log-file` (check 2 pairs those with the directories); and
    `ExecStartPre` is that command line plus `--config-verify`, so the check
    and the start share one environment.
+8. The package declares the tunnel's account and its configuration
+   directory (Rick, 2026-11-21): `shekyl.sysusers` declares `shekyl-tunnel`
+   once, a system user with no home (`/nonexistent`) and no login
+   (`/usr/sbin/nologin`), never a member of the daemon's group;
+   `shekyl.tmpfiles` makes `/etc/shekyl-tunnel` exactly
+   `d /etc/shekyl-tunnel 0750 root shekyl-tunnel -`; and the tunnel unit's
+   `--config-file` is in that directory. The daemon's `/etc/shekyl` is its
+   group's alone, which the tunnel is not in. On FreeBSD the rc.d script's
+   prestart makes the configuration's directory root:shekyl-tunnel 0750
+   before every start.
 
 Exit 0 when every check holds; 1 naming each failure; 2 on a subject that
 could not be read (rule 47: a gate asserts its own subject).
@@ -133,6 +145,13 @@ TUNNEL_ACCOUNT = "shekyl-tunnel"
 # already holds as a shell reports it.
 SECOND_STOP_STATUS = "130"
 
+# The package's account and directory declarations (check 8).
+SYSUSERS = "contrib/packaging/linux/shekyl.sysusers"
+TMPFILES = "contrib/packaging/linux/shekyl.tmpfiles"
+# The tunnel's configuration directory and the one tmpfiles line that makes
+# it: root's, readable by the tunnel's group alone.
+TUNNEL_CONFIG_DIR = "/etc/shekyl-tunnel"
+TUNNEL_CONFIG_DIR_LINE = ["d", TUNNEL_CONFIG_DIR, "0750", "root", TUNNEL_ACCOUNT, "-"]
 # The tunnel unit's hardening set, each at its ruled value (Rick,
 # 2026-11-16). shekyld's unit is not held to it: RandomX's JIT needs W^X
 # off.
@@ -185,6 +204,11 @@ def tunnel_rows(table_rs: str) -> dict[str, str]:
     return out
 
 
+# Settings systemd adds to on each line, as a list of words; an empty
+# assignment clears the list. Every other setting is the last line's value.
+LIST_SETTINGS = ("SuccessExitStatus",)
+
+
 def unit_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for line in text.splitlines():
@@ -192,8 +216,16 @@ def unit_fields(text: str) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        fields[key.strip()] = value.strip()
+        key, value = key.strip(), value.strip()
+        if key in LIST_SETTINGS and value and fields.get(key):
+            value = f"{fields[key]} {value}"
+        fields[key] = value
     return fields
+
+
+def second_stop_is_clean(fields: dict[str, str]) -> bool:
+    """The unit counts a second stop's exit as success: 130 is one of its SuccessExitStatus words."""
+    return SECOND_STOP_STATUS in fields.get("SuccessExitStatus", "").split()
 
 
 def exec_flags(exec_start: str) -> tuple[list[str], dict[str, str]]:
@@ -234,6 +266,12 @@ def check_unit(rel: str, text: str, live: dict[str, str], service_home: str) -> 
         return [f"{rel}: no ExecStart that runs shekyld"]
     flags, values = exec_flags(exec_start)
     errors.extend(command_line_rows(rel, "ExecStart", flags, live))
+    restart = fields.get("Restart")
+    if restart not in (None, "no") and not second_stop_is_clean(fields):
+        errors.append(
+            f"{rel}: Restart={restart} without SuccessExitStatus={SECOND_STOP_STATUS}; a second stop's "
+            "exit is the operator's and must not restart shekyld"
+        )
     state = fields.get("StateDirectory")
     logs = fields.get("LogsDirectory")
     if "data-dir" in values:
@@ -362,7 +400,7 @@ def check_rc_script(
     restart = re.search(r"^\s*restart_seconds=(\d+)\s*$", body, flags=re.M)
     unit_restart = shipped.get("Restart")
     unit_delay = shipped.get("RestartSec")
-    if unit_restart != "on-failure" or not unit_delay or shipped.get("SuccessExitStatus") != SECOND_STOP_STATUS:
+    if unit_restart != "on-failure" or not unit_delay or not second_stop_is_clean(shipped):
         errors.append(
             f"{rel}: the shipped unit's restart policy is not Restart=on-failure with RestartSec "
             f"and SuccessExitStatus={SECOND_STOP_STATUS}"
@@ -458,7 +496,7 @@ def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
     if (
         fields.get("Restart") != "on-failure"
         or not fields.get("RestartSec")
-        or fields.get("SuccessExitStatus") != SECOND_STOP_STATUS
+        or not second_stop_is_clean(fields)
     ):
         errors.append(
             f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec "
@@ -467,6 +505,45 @@ def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
     for key, value in TUNNEL_HARDENING.items():
         if fields.get(key) != value:
             errors.append(f"{rel}: {key}={fields.get(key)}; the hardening set is {key}={value}")
+    return errors
+
+
+def declaration_lines(text: str) -> list[list[str]]:
+    """A sysusers or tmpfiles file's declarations, each split into its fields."""
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            lines.append(shlex.split(line))
+    return lines
+
+
+def check_tunnel_packaging(
+    sysusers_rel: str, sysusers: str, tmpfiles_rel: str, tmpfiles: str, unit_rel: str, unit_values: dict[str, str]
+) -> list[str]:
+    """Check 8: the tunnel's account and its configuration directory."""
+    errors: list[str] = []
+    declared = declaration_lines(sysusers)
+    users = [d for d in declared if d[:2] == ["u", TUNNEL_ACCOUNT]]
+    if len(users) != 1:
+        errors.append(f"{sysusers_rel}: declares the account {TUNNEL_ACCOUNT} {len(users)} times; the package declares it once")
+    elif len(users[0]) != 6 or users[0][2] != "-" or users[0][4:] != ["/nonexistent", "/usr/sbin/nologin"]:
+        errors.append(
+            f"{sysusers_rel}: {TUNNEL_ACCOUNT} is not a system user with no home and no login "
+            f"(`u {TUNNEL_ACCOUNT} - \"...\" /nonexistent /usr/sbin/nologin`)"
+        )
+    for d in declared:
+        if d[:1] == ["m"] and TUNNEL_ACCOUNT in d[1:2] and SERVICE_ACCOUNT in d[2:3]:
+            errors.append(f"{sysusers_rel}: puts {TUNNEL_ACCOUNT} in the group {SERVICE_ACCOUNT}; the daemon's group is the daemon's alone")
+    dirs = [d for d in declaration_lines(tmpfiles) if d[1:2] == [TUNNEL_CONFIG_DIR]]
+    if dirs != [TUNNEL_CONFIG_DIR_LINE]:
+        errors.append(
+            f"{tmpfiles_rel}: the tunnel's configuration directory is not `{' '.join(TUNNEL_CONFIG_DIR_LINE)}` "
+            f"(found {[' '.join(d) for d in dirs]})"
+        )
+    config = unit_values.get("config-file")
+    if config is not None and str(Path(config).parent) != TUNNEL_CONFIG_DIR:
+        errors.append(f"{unit_rel}: --config-file {config} is not in {TUNNEL_CONFIG_DIR}, the tunnel's configuration directory")
     return errors
 
 
@@ -523,6 +600,15 @@ def check_tunnel_rc(rel: str, text: str, rows: dict[str, str], unit: dict[str, s
         parent = str(Path(values["log-file"]).parent)
         if made.get(parent) != LOG_DIRECTORY_MODE:
             errors.append(f"{rel}: the log directory {parent} is not made at mode {LOG_DIRECTORY_MODE} by {prestart}()")
+    config = values.get("config-file")
+    if config is not None:
+        config_dir = str(Path(config).parent)
+        pattern = rf"^\s*install -d -o root -g {re.escape(TUNNEL_ACCOUNT)} -m 0750 {re.escape(config_dir)}(\s|$)"
+        if not re.search(pattern, pre_body, flags=re.M):
+            errors.append(
+                f"{rel}: the configuration's directory {config_dir} is not made root:{TUNNEL_ACCOUNT} 0750 by {prestart}(); "
+                "the tunnel reads it and the daemon's group must not"
+            )
     return errors
 
 
@@ -600,7 +686,7 @@ def check(
     generators: dict[str, list[str]],
     rc_scripts: list[str] | None = None,
     shipped_unit: str | None = None,
-    tunnel: tuple[str, str] | None = None,
+    tunnel: tuple[str, str, str, str] | None = None,
     template: str | None = None,
 ) -> list[str]:
     errors: list[str] = []
@@ -671,14 +757,21 @@ def check(
             return errors + [f"cannot read {TUNNEL_TABLE_RS}: {e}"]
         if len(tunnel_live) < 10:
             return errors + [f"{TUNNEL_TABLE_RS} names {len(tunnel_live)} rows — the table or the pattern is wrong"]
-        unit_rel, rc_rel = tunnel
+        unit_rel, rc_rel, sysusers_rel, tmpfiles_rel = tunnel
         try:
             unit_text = (repo / unit_rel).read_text(encoding="utf-8")
             rc_text = (repo / rc_rel).read_text(encoding="utf-8")
+            sysusers_text = (repo / sysusers_rel).read_text(encoding="utf-8")
+            tmpfiles_text = (repo / tmpfiles_rel).read_text(encoding="utf-8")
         except OSError as e:
-            return errors + [f"cannot read the tunnel's launchers: {e}"]
+            return errors + [f"cannot read the tunnel's launchers or the package's declarations: {e}"]
         errors.extend(check_tunnel_unit(unit_rel, unit_text, tunnel_live))
         errors.extend(check_tunnel_rc(rc_rel, rc_text, tunnel_live, unit_fields(unit_text)))
+        exec_start = unit_fields(unit_text).get("ExecStart") or ""
+        _, unit_values = exec_flags(exec_start)
+        errors.extend(
+            check_tunnel_packaging(sysusers_rel, sysusers_text, tmpfiles_rel, tmpfiles_text, unit_rel, unit_values)
+        )
     if not units and not generators and not scripts and tunnel is None:
         errors.append("no unit, rc.d script, or generator is listed — the gate has no subject")
     return errors
@@ -726,6 +819,12 @@ def selftest() -> int:
         ("a service data home not 0700 is named", unit_ok.replace("StateDirectoryMode=0700", "StateDirectoryMode=0755"), fleet_ok, gen_ok, ["is not StateDirectoryMode=0700"]),
         ("a service unit without a StateDirectory is named", unit_ok.replace("\nStateDirectory=shekyl\nStateDirectoryMode=0700", ""), fleet_ok, gen_ok, ["has no StateDirectory for its data home"]),
         ("a log file off LogsDirectory is named", unit_ok.replace("/var/log/shekyl/shekyld.log", "/var/log/other/shekyld.log"), fleet_ok, gen_ok, ["is not under /var/log/shekyl (LogsDirectory)"]),
+        ("a fleet unit that restarts a second stop's exit 130 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
+        ("a fleet unit that counts 130 clean passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=130\n", gen_ok, []),
+        ("a fleet unit listing 130 among other statuses passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=129 130 SIGUSR1\n", gen_ok, []),
+        ("a fleet unit adding 130 on a second line passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=129\nSuccessExitStatus=130\n", gen_ok, []),
+        ("a fleet unit whose empty assignment clears 130 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=130\nSuccessExitStatus=\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
+        ("a fleet unit with 1300 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=1300\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
         ("a dead key written by a generator is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"no-igd = '), ["`no-igd = …`, which is not a row"]),
         ("a command-line row written into a file is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"network = '), ["`network = …`, a command-line-only row"]),
         ("a generator root off the fleet unit is named", unit_ok, fleet_ok, gen_ok.replace("/var/lib/f", "/var/lib/g"), ["DATA_ROOT defaults to /var/lib/g"]),
@@ -795,7 +894,7 @@ def selftest() -> int:
         ("an rc.d script that restarts a death by SIGTERM is named", rc_ok.replace("0 | 129 | 130 | 141 | 143)", "0 | 129 | 130 | 141)"), platform_ok, unit_ok, ["retries a clean exit"]),
         ("an rc.d script that passes daemon -R is named", rc_ok.replace("-f -S", "-f -R 30 -S"), platform_ok, unit_ok, ["daemon(8) is passed -R"]),
         ("an rc.d restart delay off the shipped unit is named", rc_ok.replace("restart_seconds=30", "restart_seconds=5"), platform_ok, unit_ok, ["restart_seconds is 5, not the shipped unit's RestartSec=30"]),
-        ("a shipped unit that restarts a second stop's exit 130 is named", rc_ok, platform_ok, unit_ok.replace("SuccessExitStatus=130\n", ""), ["and SuccessExitStatus=130"]),
+        ("a shipped unit that restarts a second stop's exit 130 is named", rc_ok, platform_ok, unit_ok.replace("SuccessExitStatus=130\n", ""), ["and SuccessExitStatus=130", "Restart=on-failure without SuccessExitStatus=130"]),
     ]
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -837,7 +936,7 @@ def selftest() -> int:
             )
         )
         t_unit = (
-            "[Service]\nExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl/t.toml"
+            "[Service]\nExecStart=/usr/local/bin/shekyl-rpc-tunnel --config-file /etc/shekyl-tunnel/t.toml"
             " --rpc-key-file /var/lib/shekyl-tunnel/k.key --log-file /var/log/shekyl-tunnel/t.log\n"
             "User=shekyl-tunnel\nGroup=shekyl-tunnel\nStateDirectory=shekyl-tunnel\nStateDirectoryMode=0700\n"
             "LogsDirectory=shekyl-tunnel\nRestart=on-failure\nRestartSec=30\nSuccessExitStatus=130\n"
@@ -854,6 +953,7 @@ def selftest() -> int:
             '\tcase "$status" in\n\t0 | 129 | 130 | 141 | 143) exit 0 ;;\n\tesac\n}\n'
             'if [ "${1:-}" = "supervise" ]; then\n\tshift\n\tshekyl_rpc_tunnel_supervise "$@"\nfi\n'
             "shekyl_rpc_tunnel_prestart()\n{\n"
+            "\tinstall -d -o root -g shekyl-tunnel -m 0750 /usr/local/etc/shekyl || return 1\n"
             "\tinstall -d -o shekyl-tunnel -g shekyl-tunnel -m 0700 /var/db/shekyl-tunnel || return 1\n"
             "\tinstall -d -o shekyl-tunnel -g shekyl-tunnel -m 0750 /var/log/shekyl-tunnel || return 1\n}\n"
         )
@@ -864,26 +964,56 @@ def selftest() -> int:
             ("a tunnel key outside the state directory is named", t_unit.replace("/var/lib/shekyl-tunnel/k.key", "/etc/k.key"), t_rc, ["is not in /var/lib/shekyl-tunnel (StateDirectory)"]),
             ("a tunnel state directory not 0700 is named", t_unit.replace("StateDirectoryMode=0700", "StateDirectoryMode=0755"), t_rc, ["is not StateDirectoryMode=0700"]),
             ("a dead flag on the tunnel unit is named", t_unit.replace("--config-file", "--detach --config-file"), t_rc, ["`--detach`, which is not a row of the tunnel's table"]),
-            ("a tunnel unit without a configuration file is named", t_unit.replace("--config-file /etc/shekyl/t.toml ", ""), t_rc, ["names no --config-file"]),
+            ("a tunnel unit without a configuration file is named", t_unit.replace("--config-file /etc/shekyl-tunnel/t.toml ", ""), t_rc, ["names no --config-file"]),
             ("a tunnel listening off loopback is named", t_unit.replace("--log-file", "--listen 192.0.2.7:1 --log-file"), t_rc, ["is not a loopback address"]),
             ("a loopback tunnel listener passes", t_unit.replace("--log-file", "--listen [::1]:1 --log-file"), t_rc, []),
             ("a tunnel rc.d script run as the daemon's account is named", t_unit, t_rc.replace("-u shekyl-tunnel", "-u shekyl"), ["does not run the tunnel as shekyl-tunnel"]),
             ("a tunnel key directory the prestart makes 0755 is named", t_unit, t_rc.replace("-m 0700 /var/db/shekyl-tunnel", "-m 0755 /var/db/shekyl-tunnel"), ["is not made at mode 0700 as shekyl-tunnel"]),
             ("a tunnel rc.d restart delay off its unit is named", t_unit, t_rc.replace("restart_seconds=30", "restart_seconds=5"), ["restart_seconds is not the tunnel unit's RestartSec=30"]),
             ("a tunnel unit that restarts a second stop's exit 130 is named", t_unit.replace("SuccessExitStatus=130\n", ""), t_rc, ["and SuccessExitStatus=130"]),
+            ("a tunnel rc.d script that does not make the configuration's directory is named", t_unit, t_rc.replace("\tinstall -d -o root -g shekyl-tunnel -m 0750 /usr/local/etc/shekyl || return 1\n", ""), ["is not made root:shekyl-tunnel 0750"]),
+            ("a tunnel configuration directory the daemon's group can read is named", t_unit, t_rc.replace("-o root -g shekyl-tunnel -m 0750 /usr/local/etc/shekyl", "-o root -g shekyl -m 0750 /usr/local/etc/shekyl"), ["is not made root:shekyl-tunnel 0750"]),
             ("a tunnel unit with W^X off is named", t_unit.replace("MemoryDenyWriteExecute=true", "MemoryDenyWriteExecute=false"), t_rc, ["MemoryDenyWriteExecute=false; the hardening set is MemoryDenyWriteExecute=true"]),
             ("a tunnel unit without a capability bound is named", t_unit.replace("CapabilityBoundingSet=\n", ""), t_rc, ["CapabilityBoundingSet=None; the hardening set is CapabilityBoundingSet="]),
             ("a tunnel unit with a wider address set is named", t_unit.replace("AF_INET AF_INET6 AF_UNIX", "AF_INET AF_INET6 AF_UNIX AF_NETLINK"), t_rc, ["the hardening set is RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX"]),
             ("a tunnel rc.d script that runs another binary is named", t_unit, t_rc.replace('/usr/local/bin/shekyl-rpc-tunnel "$@"', '/usr/local/bin/shekyld "$@"'), ["does not run /usr/local/bin/shekyl-rpc-tunnel"]),
         ]
+        t_sysusers = (
+            '# the daemon\nu shekyl - "Shekyl daemon" /nonexistent /usr/sbin/nologin\n'
+            '# the tunnel\nu shekyl-tunnel - "Shekyl RPC tunnel" /nonexistent /usr/sbin/nologin\n'
+        )
+        t_tmpfiles = "d /etc/shekyl 0750 root shekyl -\nd /etc/shekyl-tunnel 0750 root shekyl-tunnel -\n"
+        package_cases = [
+            ("the package's tunnel declarations pass", t_unit, t_sysusers, t_tmpfiles, []),
+            ("a package that does not declare the tunnel's account is named", t_unit, t_sysusers.split("# the tunnel")[0], t_tmpfiles, ["declares the account shekyl-tunnel 0 times"]),
+            ("a tunnel account with a home is named", t_unit, t_sysusers.replace('"Shekyl RPC tunnel" /nonexistent', '"Shekyl RPC tunnel" /var/lib/shekyl-tunnel'), t_tmpfiles, ["is not a system user with no home and no login"]),
+            ("a tunnel account that can log in is named", t_unit, t_sysusers.replace("tunnel\" /nonexistent /usr/sbin/nologin", "tunnel\" /nonexistent /bin/sh"), t_tmpfiles, ["is not a system user with no home and no login"]),
+            ("the tunnel put in the daemon's group is named", t_unit, t_sysusers + "m shekyl-tunnel shekyl\n", t_tmpfiles, ["puts shekyl-tunnel in the group shekyl"]),
+            ("a configuration directory the daemon's group can read is named", t_unit, t_sysusers, t_tmpfiles.replace("0750 root shekyl-tunnel", "0750 root shekyl"), ["the tunnel's configuration directory is not"]),
+            ("a world-readable configuration directory is named", t_unit, t_sysusers, t_tmpfiles.replace("/etc/shekyl-tunnel 0750", "/etc/shekyl-tunnel 0755"), ["the tunnel's configuration directory is not"]),
+            ("a package without the configuration directory is named", t_unit, t_sysusers, "d /etc/shekyl 0750 root shekyl -\n", ["the tunnel's configuration directory is not"]),
+            ("a tunnel reading its configuration from the daemon's directory is named", t_unit.replace("/etc/shekyl-tunnel/t.toml", "/etc/shekyl/t.toml"), t_sysusers, t_tmpfiles, ["--config-file /etc/shekyl/t.toml is not in /etc/shekyl-tunnel"]),
+        ]
         (repo / "rust" / "shekyl-rpc-tunnel" / "src").mkdir(parents=True)
         (repo / TUNNEL_TABLE_RS).write_text(t_table)
         (repo / PLATFORM_RS).write_text(platform_ok)
         (repo / PLACE_RS).write_text(place_of(platform_ok))
+        tunnel_paths = ("u/tunnel.service", "u/tunnel-rc", "u/sysusers", "u/tmpfiles")
+        (repo / "u" / "sysusers").write_text(t_sysusers)
+        (repo / "u" / "tmpfiles").write_text(t_tmpfiles)
         for title, unit, rc, expect in tunnel_cases:
             (repo / "u" / "tunnel.service").write_text(unit)
             (repo / "u" / "tunnel-rc").write_text(rc)
-            errors = check(repo, [], {}, tunnel=("u/tunnel.service", "u/tunnel-rc"))
+            errors = check(repo, [], {}, tunnel=tunnel_paths)
+            ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
+            print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
+            failures += 0 if ok else 1
+        for title, unit, sysusers, tmpfiles, expect in package_cases:
+            (repo / "u" / "tunnel.service").write_text(unit)
+            (repo / "u" / "tunnel-rc").write_text(t_rc)
+            (repo / "u" / "sysusers").write_text(sysusers)
+            (repo / "u" / "tmpfiles").write_text(tmpfiles)
+            errors = check(repo, [], {}, tunnel=tunnel_paths)
             ok = (not errors) if not expect else len(errors) == len(expect) and all(any(e in err for err in errors) for e in expect)
             print(f"{'ok' if ok else 'FAIL'}: {title}" + ("" if ok else f" — got {errors}"))
             failures += 0 if ok else 1
@@ -920,7 +1050,7 @@ def main(argv: list[str]) -> int:
     if "--selftest" in argv:
         return selftest()
     repo = Path(__file__).resolve().parents[2]
-    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT, (TUNNEL_UNIT, TUNNEL_RC), SHIPPED_UNIT)
+    errors = check(repo, UNITS, GENERATORS, RC_SCRIPTS, SHIPPED_UNIT, (TUNNEL_UNIT, TUNNEL_RC, SYSUSERS, TMPFILES), SHIPPED_UNIT)
     if errors:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)

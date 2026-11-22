@@ -224,11 +224,27 @@ jobs:
 
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
-    # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
-    # against their committed fixtures (150 s and 100 s in release), the
-    # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
-    # test, and ESR-10's nightly scope. This job is the lane that invokes
-    # them.
+    # The economics sim's `#[ignore]`d set, one job per lane
+    # (scripts/ci/ignored_set_economics_sim.sh names each lane's tests):
+    #   pins    the narrations against their committed fixtures (the
+    #           `--stage2` pair, ESR-10's, EUP-4 prep 2's and the J x G
+    #           grid's nightly scopes), the steady control's pins, and the
+    #           secret draw at ESR-11's timing on ESR-13's loop;
+    #   reader  the per-mode reader test,
+    #           `baseline::tests::every_declared_reader_moves_its_report`.
+    # Each (branch, lane) leg is its own job on its own runner with its own
+    # timeout, so one slow test cannot cut the others and a test that grows
+    # shows in its own lane.
+    #
+    # Measured one test at a time on a 16-vCPU build host at dev 46f266ac08
+    # (2026-11-22), wall seconds: the reader test 4 273 of the set's 9 007;
+    # the three `--stage2` pins 1 402, 839 and 727, each on one thread; the
+    # EUP-4 pair 558 and 532; ESR-10's pair 241 and 227; the J x G slice 177;
+    # ESR-11's set 31. In one job the set ran 6 111 to 8 001 s on dev over
+    # 2026-11-17 to 11-20 against 180 minutes, and main's leg (07c8abba5f)
+    # passed in 10 299 s one night and was cut at 10 817 s the next on the
+    # same commit. The script stamps every line of its output with the UTC
+    # time it arrived, so a cut leg names the test still running.
     #
     # ESR-10's split (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.29): its full
     # narration, every cell on both w_ref arms over all nine scenarios, is
@@ -256,18 +272,35 @@ jobs:
     # The crate's regeneration helpers WRITE the committed fixtures and are
     # never run here; the script names them so the set is exact.
     #
-    # Same matrix as above. The schedule runs main's copy of this file over
-    # both branches, but the set is read from the checked-out ref's
-    # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
-    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
-    # The per-PR Rust job runs this script with `--check` and stops after
-    # that judgement.
+    # Same matrix as above, crossed with the lanes. The schedule runs
+    # main's copy of this file over both branches, but the set is read from
+    # the checked-out ref's scripts/ci/ignored_set_economics_sim.sh, so each
+    # leg is judged by its own tree; `workflow_dispatch` with `ref` proves
+    # one branch's set. The per-PR Rust job runs this script with `--check`
+    # and stops after that judgement.
+    #
+    # A leg runs its lane only where the CHECKED-OUT revision has it, as
+    # nightly-live-daemon-slow.yml does: a dispatch from a branch whose
+    # matrix names a lane the other branch's script does not know would
+    # fail there as an unknown argument and open a tracking issue for
+    # nothing. The step after checkout asks the checked-out tree:
+    #   - does its script have the lane's `--<lane>)` arm? Yes: the leg runs.
+    #   - if not, does its own copy of this file name the lane in
+    #     `sim_lane:`? Yes: the revision claims a lane it cannot run, and the
+    #     leg is RED. No: the revision predates the lane; the leg ends green
+    #     with a notice that says so, and builds nothing.
+    # The skip ends by itself when the lane reaches the other branch. The
+    # probe reads text, so `sim_lane:` stays on one line and the script's
+    # arms stay `--<lane>)`.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+        # One line: the lane probe below reads this list from the
+        # checked-out copy of this file.
+        sim_lane: [pins, reader]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -277,16 +310,46 @@ jobs:
           # credential to find in .git/config.
           persist-credentials: false
 
+      - name: does this revision have the ${{ matrix.sim_lane }} lane
+        # See the job's comment: run where the checked-out script has the
+        # lane, red where the checked-out workflow names a lane its script
+        # lacks, a visible skip where the revision predates the lane.
+        id: lane
+        env:
+          LANE: ${{ matrix.sim_lane }}
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/ignored_set_economics_sim.sh
+          workflow=.github/workflows/nightly.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the economics sim's ignored set has no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*--${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*sim_lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
+            echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '--$LANE)' arm: the lane cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the economics sim's $LANE lane (neither its $script nor its $workflow names it). This leg ran nothing. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
 
-      - name: Run the economics sim's ignored tests
+      - name: Run the economics sim's ${{ matrix.sim_lane }} lane
+        if: steps.lane.outputs.run == 'true'
         # The set, the helpers and their assertions are
         # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
         # each branch judges itself.
         env:
           BRANCH: ${{ matrix.branch }}
-        run: bash scripts/ci/ignored_set_economics_sim.sh
+          LANE: ${{ matrix.sim_lane }}
+        run: bash scripts/ci/ignored_set_economics_sim.sh "--$LANE"
 
   staking-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
@@ -652,18 +715,57 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
-    if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
+    #
+    # It runs on every such run not cancelled as a whole, red or green: a
+    # leg past its `timeout-minutes` ends `cancelled`, not `failure`, and is
+    # red (scripts/ci/nightly_red.py names it a timeout). On `failure()`
+    # alone, 2026-11-21's economics-sim-ignored legs, cut at 180 minutes on
+    # both branches, opened no issue. A run cancelled as a whole reports
+    # nothing: this workflow has no concurrency group, so no newer run
+    # supersedes a scheduled one, and a run cancelled by hand was cancelled
+    # by someone who already knows (ruled 2026-11-22). A job timeout leaves
+    # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
+    # --check holds `needs` and this condition.
+    needs: [proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
+      contents: read
       issues: write
     steps:
+      # The classifier and this file, at the run's own commit: merged code,
+      # so the job that can write runs nothing a review has not passed.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_red.py
+            scripts/ci/check_workflows_parse.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: the red legs, a timeout among them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
+          cat "$RUNNER_TEMP/red.json"
       - uses: actions/github-script@v8
+        env:
+          RED: ${{ runner.temp }}/red.json
         with:
           script: |
             const lanes = {
+              'proptest-exhaustive': {
+                title: 'nightly proptest-exhaustive RED',
+                lines: [
+                  'The `proptest-exhaustive` job failed. It runs `shekyl-crypto-pq`\'s `prop_round_trip` at 200 000 cases, the timing engine\'s model (`model::random_ops_match_a_scanned_reference`) and the hasher core\'s model at 8 192 cases each, in release.',
+                  'A failure names its shrunk case in the log: keep it as a regression case beside the property before fixing the code.',
+                ],
+              },
               'chain-ingest-ignored': {
                 title: 'nightly chain-ingest ignored set RED',
                 lines: [
@@ -711,9 +813,10 @@ jobs:
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs five `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `esr10_nightly_narration_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
-                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with `regen_stage2_narration_fixtures` or `regen_esr10_narration_fixtures` under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
+                  'A leg of the `economics-sim-ignored` job failed. Each leg runs one lane of `scripts/ci/ignored_set_economics_sim.sh` on one branch; the leg\'s name says which. The `pins` lane runs the `#[ignore]`d narration pins of `shekyl-economics-sim` (the `--stage2` pair, ESR-10\'s, EUP-4 prep 2\'s and the J x G grid\'s nightly scopes), the steady control\'s pins and the ESR-11 timing set; the `reader` lane runs `baseline::tests::every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
+                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with the pin\'s `regen_*` helper under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
+                  'If a leg timed out, its log stamps each line with the UTC time: the tests with no `... ok` line were still running. Compare with the measurements in nightly.yml\'s economics-sim-ignored comment before raising the budget.',
+                  'If a leg stopped before running anything, the crate\'s ignored set changed (decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run, is a regeneration helper or runs on demand), or the branch names a lane its script lacks.',
                 ],
               },
               'trybuild-ignored': {
@@ -739,22 +842,25 @@ jobs:
                 ],
               },
             };
+            const fs = require('fs');
             const { owner, repo } = context.repo;
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
-              owner,
-              repo,
-              run_id: context.runId,
-              per_page: 100,
-            });
-            // A leg is named `<job> (<branch>)`. The branch is read from the
-            // name as data; nothing here evaluates it.
-            const red = jobs
-              .filter((job) => job.conclusion === 'failure')
-              .map((job) => /^(\S+) \((.+)\)$/.exec(job.name))
-              .filter((m) => m && lanes[m[1]]);
-            if (red.length === 0) {
-              core.setFailed('report-red ran and found no red leg of a lane it reports: a job was renamed, or the run failed somewhere this job does not read.');
+            const legs = JSON.parse(fs.readFileSync(process.env.RED, 'utf8'));
+            if (legs.length === 0) {
+              core.notice('No red leg in this run.');
               return;
+            }
+            // A leg is named `<job> (<branch>)`. The branch is read from the
+            // name as data; nothing here evaluates it. A red leg of a job
+            // this table does not name fails this job by name: it would
+            // otherwise reach no one.
+            const red = [];
+            for (const leg of legs) {
+              const m = /^(\S+) \((.+)\)$/.exec(leg.name);
+              if (!m || !lanes[m[1]]) {
+                core.setFailed(`report-red has no lane for the red leg "${leg.name}": add it to the table`);
+                continue;
+              }
+              red.push([leg, m[1], m[2]]);
             }
             // Exact-title match over open issues, not text search: the search
             // API's in:title is a substring match and lags on freshly created
@@ -765,12 +871,23 @@ jobs:
               state: 'open',
               per_page: 100,
             });
-            for (const [, lane, branch] of red) {
+            for (const [leg, lane, branch] of red) {
               const title = `${lanes[lane].title} (${branch})`;
+              // A timeout is named as one, so nobody reads it as a test
+              // failure; the lane's own lines are for a leg that failed.
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
+              const what = {
+                'failed': lanes[lane].lines,
+                'timed out': [`The leg ran out of time${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}. This is not a test failure. Read the log for the test it was in when it was cut.`],
+                'cancelled': [`The leg was cancelled${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}: not a timeout, and not a test failure. Read the log for what stopped it.`],
+              }[leg.kind];
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+                `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
                 `Branch: ${branch}`,
-                ...lanes[lane].lines,
+                ...what,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);
               if (existing) {
