@@ -176,7 +176,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -271,7 +271,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -308,6 +308,9 @@ jobs:
     timeout-minutes: 10  # API calls only; nightly.yml's report-red p90 is 0.1 min
     permissions:
       actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
       contents: read
       issues: write
     steps:
@@ -316,15 +319,13 @@ jobs:
           sparse-checkout: |
             scripts/ci/nightly_red.py
             scripts/ci/check_workflows_parse.py
-            .github/workflows/nightly-live-daemon-slow.yml
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: the red legs, a timeout among them
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" \
-            --workflow .github/workflows/nightly-live-daemon-slow.yml > "$RUNNER_TEMP/red.json"
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
           cat "$RUNNER_TEMP/red.json"
       - uses: actions/github-script@v8
         env:
@@ -363,10 +364,14 @@ jobs:
               }
               const [, branch, lane] = m;
               const title = `nightly ${lane} live-daemon gates RED (${branch})`;
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
+              const said = leg.why ? ` (GitHub: "${leg.why}")` : '';
               const how = {
                 'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
-                'timed out': `The leg timed out after ${leg.minutes} minutes, its \`timeout-minutes\` (${what[lane] || lane}). This is not a test failure: the leg ran out of time. Read the log for the gate it was in when it was cut.`,
-                'cancelled': `The leg was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
+                'timed out': `The leg ran out of time${ran}${said} (${what[lane] || lane}). This is not a test failure. Read the log for the gate it was in when it was cut.`,
+                'cancelled': `The leg was cancelled${ran}${said} (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
               }[leg.kind];
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
