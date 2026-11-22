@@ -147,7 +147,7 @@ What was read for it stands as fact (dev `ac63d95d`):
 | Successor learns its role | Dummy windows arriving | Closed: nothing is sent unless a stem is. |
 | Watcher on two nodes | Compares both ends of a link | Unchanged. Stated limit; Dandelion++ does not claim it either. |
 | Malicious successor | Reads the stem flag | Unchanged. Dandelion++'s own floor. |
-| Junk fragments | Sends pieces that never complete | Needs a bound on incomplete transactions held per peer. |
+| Junk fragments | Sends pieces that never complete | Needs a bound on incomplete transactions held per peer. The per-train bound is built (`PWD-B12`, 2026-11-20): an unfinished train holds less than one inner message its command admits. A bound across trains, and on one fragment's own size, is not. |
 
 ## 8. Not yet read
 

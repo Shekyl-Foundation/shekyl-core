@@ -60,7 +60,7 @@ use shekyl_peerlist::{
 };
 use shekyl_timing_engine::{Clock, Handle, OwnerHandle, Stamp};
 use shekyl_transport_layer::{
-    BanEvent, BanFeed, CloseKind, DialEnd, Links, PathReady, Retry, SocketId, Sockets, Subscription,
+    BanEvent, BanFeed, DialEnd, Links, PathReady, Retry, SocketId, Sockets, Subscription,
 };
 
 use self::address::live_sessions;
@@ -578,9 +578,10 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
 
     /// The session `id` closed, with the cause that won.
     ///
-    /// A kept session leaves the kept count. `CloseKind::SessionRefused`
-    /// is the lists' `PayloadRefused`: the payload owner declined a
-    /// delivery. The address stays as `SessionAccepted` left it, which is
+    /// A kept session leaves the kept count. A session refusal
+    /// (`CloseKind::refuses_session`: `SessionRefused` and the framing
+    /// refusals that carry a kind of their own) is the lists'
+    /// `PayloadRefused`: the payload owner declined a delivery. The address stays as `SessionAccepted` left it, which is
     /// white. That close is not a dial. The stream was counted when the
     /// session was accepted, and folding the refusal as one would clear
     /// the failed dials since that open. Any other cause only drops the
@@ -594,7 +595,7 @@ impl<C: Clock + Clone + Send + Sync + 'static> Dialer<C> {
             *adopting = Some(end);
         } else if let Some(address) = shared.kept.remove(&id.get()) {
             if let Some(connector) = Peerlist::connector_of(&address) {
-                if end.cause().kind() == CloseKind::SessionRefused {
+                if end.cause().kind().refuses_session() {
                     // A payload refusal is not a dial. The stream was
                     // counted when the session was accepted, so this does
                     // not finish a test and does not fold the tally. It
