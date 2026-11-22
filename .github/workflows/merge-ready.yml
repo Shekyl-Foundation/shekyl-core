@@ -76,7 +76,8 @@ jobs:
     permissions:
       # actions: the head's workflow runs, so a run a newer run of the same
       # workflow replaced on this head is not judged (merge_ready.py
-      # superseded_suites).
+      # superseded_suites), and a review bot's run is known by its path
+      # (review_job_suites; its review is read with pull-requests).
       actions: read
       checks: read
       contents: read

@@ -67,8 +67,9 @@ by name alike.
   labeled            `checking`, then every check run and status on the
                      head, this flow's own and `EXCLUDED` by name aside,
                      must have concluded, none red (of a workflow run twice
-                     on the head, its newest run's only); no review thread may be
-                     open; the pull request may not be a draft. Anything
+                     on the head, its newest run's only; a review bot's job
+                     is judged by its review instead, `REVIEW_JOBS`); no
+                     review thread may be open; the pull request may not be a draft. Anything
                      else: `refused`. Then the plan: the tests the head
                      shares with the merges since its merge base, `ready`
                      at once when there are none, else `re-testing` and a
@@ -146,6 +147,19 @@ SELF_LEG = re.compile(rf"^#\d+ / ({RETEST_JOB}|{REPORT_JOB})$")
 # Checks that never conclude on this repository, each with why. A check
 # left out of a judgment is named here, never dropped silently.
 EXCLUDED: dict[str, str] = {}
+# Review bots whose job is judged by the review it posts, not by how the job
+# ends: the workflow run's path, the reviewer's login, and why. Copilot's
+# review job ended red 19 minutes after it had posted its review on the head
+# (#1497 at fc1cf82f33, 2026-11-22). With a review from the bot on this head,
+# its job is not judged, running or red; without one, it is judged as any
+# other check, and a red one says that no review came. Matched by the run's
+# path, never the check's name, which any workflow's job can take.
+REVIEW_JOBS: dict[str, tuple[str, str]] = {
+    "dynamic/agents/copilot-pull-request-reviewer": (
+        "copilot-pull-request-reviewer[bot]",
+        "Copilot's review job can end red after its review is posted",
+    ),
+}
 # A check run the labelling itself started (a workflow listening for
 # labels, its jobs skipped at once) concludes within seconds.
 SETTLE_SECONDS = 90
@@ -311,20 +325,26 @@ def is_self(name: str) -> bool:
 
 
 def judge(check_runs: list[dict], sts: list[dict], open_threads: int, draft: bool,
-          labelled_at: str | None = None) -> list[tuple[str, bool]]:
+          labelled_at: str | None = None,
+          review_suites: tuple[set[int], set[int]] = (set(), set())) -> list[tuple[str, bool]]:
     """Why the label cannot stand on this head, each with whether it may
     still settle: each check still running (settling when the labelling may
     have started it) or red, by name, an open review thread, a draft. Empty
-    means it stands."""
+    means it stands. `review_suites` is `review_job_suites`' pair: the
+    review jobs whose review is on the head, not judged, and those whose
+    review is not, a red one saying so."""
+    reviewed, unreviewed = review_suites
     out = []
     for c in check_runs:
         name = c.get("name", "")
-        if is_self(name) or name in EXCLUDED:
+        suite = (c.get("check_suite") or {}).get("id")
+        if is_self(name) or name in EXCLUDED or suite in reviewed:
             continue
         if c.get("status") != "completed":
             out.append((f"`{name}` is {c.get('status')}", settling(c, labelled_at)))
         elif c.get("conclusion") not in GREEN:
-            out.append((f"`{name}` concluded {c.get('conclusion')}", False))
+            no_review = ", and its review is not on this head" if suite in unreviewed else ""
+            out.append((f"`{name}` concluded {c.get('conclusion')}{no_review}", False))
     for s in sts:
         context = s.get("context", "")
         if context == CONTEXT or context in EXCLUDED:
@@ -381,6 +401,22 @@ def superseded_suites(workflow_runs: list[dict]) -> set[int]:
     return {run.get("check_suite_id") for run in workflow_runs} - current
 
 
+def reviewers_on(reviews: list[dict], head: str) -> set[str]:
+    """The logins that posted a review on this head."""
+    return {(r.get("user") or {}).get("login", "") for r in reviews if r.get("commit_id") == head}
+
+
+def review_job_suites(workflow_runs: list[dict], reviewers: set[str]) -> tuple[set[int], set[int]]:
+    """The check suites of `REVIEW_JOBS` runs on the head: those whose bot
+    posted a review on it, and those whose bot did not."""
+    reviewed, unreviewed = set(), set()
+    for run in workflow_runs:
+        bot = REVIEW_JOBS.get(run.get("path", ""))
+        if bot is not None:
+            (reviewed if bot[0] in reviewers else unreviewed).add(run.get("check_suite_id"))
+    return reviewed, unreviewed
+
+
 def current_runs(check_runs: list[dict], superseded: set[int]) -> list[dict]:
     """The check runs not in a superseded suite."""
     return [c for c in check_runs if (c.get("check_suite") or {}).get("id") not in superseded]
@@ -390,6 +426,13 @@ def workflow_runs(sha: str) -> list[dict]:
     out = subprocess.run(
         ["gh", "api", "--paginate", f"repos/{repo()}/actions/runs?head_sha={sha}&per_page=100",
          "--jq", ".workflow_runs[]"], check=True, capture_output=True, text=True).stdout
+    return [json.loads(x) for x in out.splitlines() if x]
+
+
+def reviews(pr: int) -> list[dict]:
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/pulls/{pr}/reviews?per_page=100", "--jq", ".[]"],
+        check=True, capture_output=True, text=True).stdout
     return [json.loads(x) for x in out.splitlines() if x]
 
 
@@ -453,8 +496,10 @@ def run() -> int:
     deadline = time.monotonic() + SETTLE_SECONDS
     labelled_at = os.environ.get("LABELLED_AT")
     while True:
-        runs = current_runs(check_runs(head), superseded_suites(workflow_runs(head)))
-        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at)
+        wf = workflow_runs(head)
+        runs = current_runs(check_runs(head), superseded_suites(wf))
+        bots = review_job_suites(wf, reviewers_on(reviews(pr), head))
+        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at, bots)
         if not found or not all(may_settle for _, may_settle in found) or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
@@ -662,6 +707,36 @@ def selftest() -> int:
             problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
     if superseded_suites(wf[:1] + wf[2:]):
         problems.append("superseded runs: a workflow's only run was superseded")
+    # A review bot's job is judged by its review on the head (#1497).
+    bot_path, (bot, _) = next(iter(REVIEW_JOBS.items()))
+    head, older_head = "f" * 40, "b" * 40
+    bot_wf = wf + [{"id": 4, "workflow_id": 30, "created_at": "2026-11-22T01:40:43Z", "check_suite_id": 301,
+                    "path": bot_path},
+                   {"id": 5, "workflow_id": 40, "created_at": "2026-11-22T01:40:43Z", "check_suite_id": 401,
+                    "path": ".github/workflows/lookalike.yml"}]
+    bot_red = [suite(done("copilot-pull-request-reviewer", "failure"), 301)]
+    bot_running = [suite(going("copilot-pull-request-reviewer"), 301)]
+    lookalike_red = [suite(done("copilot-pull-request-reviewer", "failure"), 401)]
+    on_head = [{"user": {"login": bot}, "commit_id": head}]
+    on_older = [{"user": {"login": bot}, "commit_id": older_head}]
+    by_human = [{"user": {"login": "a-maintainer"}, "commit_id": head}]
+    for label, runs, revs, want, says in [
+        ("a red review job whose review is on the head is not judged", fresh + bot_red, on_head, 0, None),
+        ("a running review job whose review is on the head is not judged", fresh + bot_running, on_head, 0, None),
+        # Negative controls.
+        ("a red review job with its review on an older head only", fresh + bot_red, on_older, 1,
+         "its review is not on this head"),
+        ("a red review job with no review", fresh + bot_red, [], 1, "its review is not on this head"),
+        ("a red review job when only someone else reviewed the head", fresh + bot_red, by_human, 1,
+         "its review is not on this head"),
+        ("a running review job with no review waits", fresh + bot_running, [], 1, "is in_progress"),
+        ("a job named like the bot in another workflow is judged", fresh + lookalike_red, on_head, 1,
+         "concluded failure"),
+    ]:
+        found = judge(current_runs(runs, superseded_suites(bot_wf)), [], 0, False, None,
+                      review_job_suites(bot_wf, reviewers_on(revs, head)))
+        if len(found) != want or (says and not all(says in w for w, _ in found)):
+            problems.append(f"review jobs, {label}: {[w for w, _ in found]}, want {want}")
     for name in EXCLUDED:
         if judge(ok + [going(name, "queued")], [], 0, False):
             problems.append(f"judge: {name!r} is in EXCLUDED and still refused the label")
