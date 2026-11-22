@@ -2,7 +2,7 @@ name: nightly/proptest-exhaustive
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -44,6 +44,54 @@ jobs:
   # GitHub has evicted what a lane saved. The saves only pushed the
   # per-PR jobs' caches out, which are the ones that hit. A lane builds
   # from source; a nightly has the time and a PR does not.
+  plan:
+    # Which legs run tonight (scripts/ci/nightly_skip.py): a leg whose key
+    # (the commit it tests, this file, the toolchain pin, the pinned test
+    # chains, the runner image) matches a scheduled run in the last week
+    # where it passed is skipped, and the summary names that run. Fuzzing,
+    # property tests with no fixed seed, benchmarks and anything whose
+    # verdict is about an outside host are never skipped; a dispatch runs
+    # every leg it selects. If this job does not succeed, every planned job
+    # falls back to its full matrix (its `matrix` expression): the failure
+    # runs more, never less.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API reads only: the last week's scheduled runs, their jobs and keys
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      store-ignored: ${{ steps.plan.outputs['store-ignored'] }}
+      producer-gate: ${{ steps.plan.outputs['producer-gate'] }}
+      economics-sim-ignored: ${{ steps.plan.outputs['economics-sim-ignored'] }}
+      staking-sim-ignored: ${{ steps.plan.outputs['staking-sim-ignored'] }}
+      chain-ingest-ignored: ${{ steps.plan.outputs['chain-ingest-ignored'] }}
+      hasher-ignored: ${{ steps.plan.outputs['hasher-ignored'] }}
+      wire-ignored: ${{ steps.plan.outputs['wire-ignored'] }}
+      trybuild-ignored: ${{ steps.plan.outputs['trybuild-ignored'] }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_skip.py
+            scripts/ci/check_workflows_parse.py
+            .github/workflows/nightly.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: plan tonight's legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_REF: ${{ inputs.ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: python3 scripts/ci/nightly_skip.py --plan --workflow .github/workflows/nightly.yml
+      - name: the keys, for the nights after
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-keys
+          path: nightly-keys.json
+          retention-days: 8
+
   proptest-exhaustive:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
@@ -115,7 +163,9 @@ jobs:
           cargo test --locked --release -p shekyl-hasher --lib -- --exact core::tests::random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request --nocapture
 
   store-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
+    name: store-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored') && needs.plan.outputs['store-ignored'] != '{"include":[]}' }}
     # The chain store's `#[ignore]`d set: the two benches
     # (`weights_read_bench`, `slash_scan_bench`, which starts from the
     # forged shard-fill chain) and the RT-W10 harness. This job is the
@@ -141,12 +191,11 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['store-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -175,7 +224,9 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_store.sh
 
   producer-gate:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
+    name: producer-gate (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate') && needs.plan.outputs['producer-gate'] != '{"include":[]}' }}
     # The bundle producer's gate (`SO-D12` increment 4c,
     # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
     # admitted by the bundle verifier (CEN-J29 to J37) on a driven chain and
@@ -190,12 +241,11 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['producer-gate'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -223,7 +273,9 @@ jobs:
         run: bash scripts/ci/producer_gate.sh
 
   economics-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
+    name: economics-sim-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored') && needs.plan.outputs['economics-sim-ignored'] != '{"include":[]}' }}
     # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
     # against their committed fixtures (150 s and 100 s in release), the
     # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
@@ -266,12 +318,11 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['economics-sim-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -289,7 +340,9 @@ jobs:
         run: bash scripts/ci/ignored_set_economics_sim.sh
 
   staking-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
+    name: staking-sim-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored') && needs.plan.outputs['staking-sim-ignored'] != '{"include":[]}' }}
     # The staking sim's `#[ignore]`d set: the five-seed L11/L13 pins on both
     # reward arms (EUP-3 check half). The registered plateau arm is the check
     # half's falsifier; the production arm is the default the documents
@@ -302,12 +355,11 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['staking-sim-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -324,7 +376,9 @@ jobs:
         run: bash scripts/ci/ignored_set_staking_sim.sh
 
   chain-ingest-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    name: chain-ingest-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored') && needs.plan.outputs['chain-ingest-ignored'] != '{"include":[]}' }}
     # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
     # shards with real proofs (the emission claims, the levered slash chain,
     # the join, the pool-shim posts), the miner over real RandomX, the
@@ -349,12 +403,11 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['chain-ingest-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -382,7 +435,9 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_ingest.sh
 
   hasher-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored' }}
+    name: hasher-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored') && needs.plan.outputs['hasher-ignored'] != '{"include":[]}' }}
     # The hasher's `#[ignore]`d set (scripts/ci/ignored_set_hasher.sh): the
     # core's property test driven through the real shell, with threads and
     # hundreds of real 256 MiB RandomX derives
@@ -398,12 +453,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['hasher-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -420,7 +474,9 @@ jobs:
         run: bash scripts/ci/ignored_set_hasher.sh
 
   wire-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
+    name: wire-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored') && needs.plan.outputs['wire-ignored'] != '{"include":[]}' }}
     # shekyl-wire's `#[ignore]`d set: the RT-W10 listed-tx parse harness,
     # run with RT_W10_OUT unset so it writes a few samples to a scratch
     # directory and removes it (the run proves the harness works; its
@@ -439,12 +495,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['wire-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -462,7 +517,9 @@ jobs:
         run: bash scripts/ci/ignored_set_wire.sh
 
   trybuild-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored' }}
+    name: trybuild-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored') && needs.plan.outputs['trybuild-ignored'] != '{"include":[]}' }}
     # The trybuild harnesses of shekyl-chain-rules, shekyl-mempool and
     # shekyl-crypto-pq: programs compiled as a downstream crate whose whole
     # stderr must match a snapshot (the brand gate on `validate`, the pool
@@ -484,12 +541,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['trybuild-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -659,7 +715,7 @@ jobs:
     # alone, 2026-11-21's economics-sim-ignored legs, cut at 180 minutes on
     # both branches, opened no issue. A run a newer one superseded reports
     # nothing. nightly_red.py --check holds `needs` and this condition.
-    needs: [proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor

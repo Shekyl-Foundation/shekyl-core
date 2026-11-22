@@ -73,7 +73,7 @@ name: nightly/live-daemon-slow-gates
 
 on:
   schedule:
-    - cron: "30 3 * * *"
+    - cron: "43 3 * * *"
   workflow_dispatch:
     inputs:
       lane:
@@ -105,7 +105,52 @@ env:
     EOF
 
 jobs:
+  plan:
+    # Which legs run tonight (scripts/ci/nightly_skip.py): a leg whose key
+    # (the commit it tests, this file, the toolchain pin, the pinned test
+    # chains, the runner image) matches a scheduled run in the last week
+    # where it passed is skipped, and the summary names that run. Fuzzing,
+    # property tests with no fixed seed, benchmarks and anything whose
+    # verdict is about an outside host are never skipped; a dispatch runs
+    # every leg it selects. If this job does not succeed, every planned job
+    # falls back to its full matrix (its `matrix` expression): the failure
+    # runs more, never less.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API reads only: the last week's scheduled runs, their jobs and keys
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      slow-gates: ${{ steps.plan.outputs['slow-gates'] }}
+      body-fill: ${{ steps.plan.outputs['body-fill'] }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_skip.py
+            scripts/ci/check_workflows_parse.py
+            .github/workflows/nightly-live-daemon-slow.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: plan tonight's legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_REF: ${{ inputs.ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: python3 scripts/ci/nightly_skip.py --plan --workflow .github/workflows/nightly-live-daemon-slow.yml
+      - name: the keys, for the nights after
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-keys
+          path: nightly-keys.json
+          retention-days: 8
+
   slow-gates:
+    name: slow-gates (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['slow-gates'] != '{"include":[]}' }}
     # Scheduled workflows execute from the default branch (main); the branch
     # matrix makes each run cover both active branches, the nightly.yml
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
@@ -121,11 +166,7 @@ jobs:
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
-        # One line: the lane probe below reads this list from the
-        # checked-out copy of this file.
-        lane: [slow, embargo]
+      matrix: ${{ fromJSON(needs.plan.outputs['slow-gates'] || '{"include":[{"branch":"main","lane":"slow"},{"branch":"main","lane":"embargo"},{"branch":"dev","lane":"slow"},{"branch":"dev","lane":"embargo"}]}') }}
     container:
       image: ubuntu:24.04
       env:
@@ -141,7 +182,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
       - name: does this revision have the ${{ matrix.lane }} lane
         # See the header: run where the checked-out script has the lane,
@@ -198,6 +239,9 @@ jobs:
         run: scripts/ci/run_live_daemon_gates.sh
 
   body-fill:
+    name: body-fill (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['body-fill'] != '{"include":[]}' }}
     runs-on: ubuntu-latest
     # One leg per walk; one number for both (the timeout gate takes a whole
     # number per job), sized for the longer and set generously below the
@@ -213,11 +257,7 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
-        # One line: the lane probe reads this list from the checked-out
-        # copy of this file.
-        lane: [body-fill-complete-tree, body-fill-market]
+      matrix: ${{ fromJSON(needs.plan.outputs['body-fill'] || '{"include":[{"branch":"main","lane":"body-fill-complete-tree"},{"branch":"main","lane":"body-fill-market"},{"branch":"dev","lane":"body-fill-complete-tree"},{"branch":"dev","lane":"body-fill-market"}]}') }}
     # The steps are slow-gates' own, written out (actionlint cannot check
     # a job behind a YAML alias); scripts/ci/nightly_red.py --check holds
     # the two copies equal.
@@ -236,7 +276,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
       - name: does this revision have the ${{ matrix.lane }} lane
         # See the header: run where the checked-out script has the lane,
@@ -296,7 +336,7 @@ jobs:
     # The route to a human (header). Every leg, red or green, scheduled or
     # dispatched with `report`; not a run cancelled as a whole.
     # scripts/ci/nightly_red.py --check holds `needs` and this condition.
-    needs: [slow-gates, body-fill]
+    needs: [plan, slow-gates, body-fill]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # API calls only; nightly.yml's report-red p90 is 0.1 min
