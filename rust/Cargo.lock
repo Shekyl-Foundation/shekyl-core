@@ -4026,6 +4026,7 @@ dependencies = [
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-harness-wallet",
  "shekyl-levin",
  "shekyl-multisig",
  "shekyl-network",

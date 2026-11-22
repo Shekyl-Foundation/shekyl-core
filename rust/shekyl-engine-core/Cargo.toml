@@ -350,6 +350,9 @@ shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = fals
 # The capture test writes its corpus through the format's one writer
 # (`regtest_e2e.rs`).
 shekyl-corpus = { path = "../shekyl-corpus" }
+# HARNESS_SEED: the wallet a forged chain's coinbases pay (CHAIN_FORGE.md §6),
+# restored by the walks that run on one.
+shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 # PR 7 C4 `EconomicsEngine` differential
 # (`engine::economics_differential`): deserialize the sim-recorded
 # `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and
