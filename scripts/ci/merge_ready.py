@@ -65,7 +65,8 @@ by name alike.
                      vouches for a head its owner did not see, and the new
                      head's checks have only just started
   labeled            `checking`, then every check run and status on the
-                     head, this flow's own and `EXCLUDED` by name aside,
+                     head, this flow's own, `EXCLUDED` by name and
+                     `EXCLUDED_APPS` by app aside,
                      must have concluded, none red (of a workflow run twice
                      on the head, its newest run's only; a review bot's job
                      is judged by its review instead, `REVIEW_JOBS`); no
@@ -147,6 +148,16 @@ SELF_LEG = re.compile(rf"^#\d+ / ({RETEST_JOB}|{REPORT_JOB})$")
 # Checks that never conclude on this repository, each with why. A check
 # left out of a judgment is named here, never dropped silently.
 EXCLUDED: dict[str, str] = {}
+# Apps whose check runs are never judged, running or concluded, each with
+# why; known by the app's slug, never the check's name, which any
+# workflow's job can take. Named in every refusal comment beside EXCLUDED.
+EXCLUDED_APPS: dict[str, str] = {
+    # Rick, 2026-11-22: Bugbot is informational only, too unreliable to
+    # wait on. Its check run on #1489's head sat queued from 10:52Z and
+    # refused the label at 12:26Z. A red Bugbot refuses nothing either;
+    # what it posts is a review thread, and an open thread is judged.
+    "cursor": "Cursor Bugbot, informational only",
+}
 # Review bots whose job is judged by the review it posts, not by how the job
 # ends: the workflow run's path, the reviewer's login, and why. Copilot's
 # review job ended red 19 minutes after it had posted its review on the head
@@ -340,6 +351,8 @@ def judge(check_runs: list[dict], sts: list[dict], open_threads: int, draft: boo
         suite = (c.get("check_suite") or {}).get("id")
         if is_self(name) or name in EXCLUDED or suite in reviewed:
             continue
+        if (c.get("app") or {}).get("slug") in EXCLUDED_APPS:
+            continue
         if c.get("status") != "completed":
             out.append((f"`{name}` is {c.get('status')}", settling(c, labelled_at)))
         elif c.get("conclusion") not in GREEN:
@@ -516,6 +529,8 @@ def run() -> int:
         *[f"- {w}" for w in why],
         "",
         *([f"Not judged here, by name: {', '.join(f'`{n}` ({r})' for n, r in EXCLUDED.items())}."] if EXCLUDED else []),
+        *([f"Not judged here, by app: {', '.join(f'`{a}` ({r})' for a, r in EXCLUDED_APPS.items())}."]
+          if EXCLUDED_APPS else []),
     ])
     return 0
 
@@ -740,6 +755,23 @@ def selftest() -> int:
     for name in EXCLUDED:
         if judge(ok + [going(name, "queued")], [], 0, False):
             problems.append(f"judge: {name!r} is in EXCLUDED and still refused the label")
+    # An excluded app's check runs are never judged, whatever their state
+    # (#1489: Bugbot queued); a job of another app taking its name is.
+    by_app = lambda c, slug: {**c, "app": {"slug": slug}}  # noqa: E731
+    for slug in EXCLUDED_APPS:
+        for label, c, want in [
+            ("queued", going("Cursor Bugbot", "queued"), 0),
+            ("in progress", going("Cursor Bugbot"), 0),
+            ("concluded failure", done("Cursor Bugbot", "failure"), 0),
+            ("concluded neutral", done("Cursor Bugbot", "neutral"), 0),
+            # Negative controls.
+            ("taken by a workflow's job, red", by_app(done("Cursor Bugbot", "failure"), "github-actions"), 1),
+            ("taken by a workflow's job, queued", by_app(going("Cursor Bugbot", "queued"), "github-actions"), 1),
+        ]:
+            run_ = c if "app" in c else by_app(c, slug)
+            got = len(judge(ok + [run_], [], 0, False))
+            if got != want:
+                problems.append(f"excluded app {slug!r}, {label}: {got} reason(s), want {want}")
     t = "2026-11-19T22:10:24Z"
     for label, created, want in [
         ("a check whose run began before the label", "2026-11-19T22:10:06Z", False),
