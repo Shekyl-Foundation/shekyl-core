@@ -217,16 +217,18 @@ Both packages, the same way:
 - Ship each public network's settings file under `/usr/share/shekyl/` and
   copy it to `/etc/shekyl/shekyld-<network>.toml`, `root:shekyl` `0640`,
   when none is there; an upgrade never overwrites one (IG-Q64)
-- Declare the daemon's account and its configuration directory
-  (`INPUT_GRAMMAR.md` IG-Q64): `/usr/lib/sysusers.d/shekyl.conf`, the system
-  account `shekyl` with no home and no login shell, and
-  `/usr/lib/tmpfiles.d/shekyl.conf`, `/etc/shekyl` as `root:shekyl` `0750`.
+- Declare the daemon's and the tunnel's accounts and their configuration
+  directories (`INPUT_GRAMMAR.md` IG-Q64; `RPC_CHANNEL.md` §8):
+  `/usr/lib/sysusers.d/shekyl.conf`, the system accounts `shekyl` and
+  `shekyl-tunnel` with no home and no login shell, and
+  `/usr/lib/tmpfiles.d/shekyl.conf`, `/etc/shekyl` as `root:shekyl` `0750`
+  and `/etc/shekyl-tunnel` as `root:shekyl-tunnel` `0750`.
   `post-install.sh` applies both
 - Refuse to install, before any file is unpacked, when an account or group
-  named `shekyl` already exists and is a login (a shell, an administrators'
-  group, a sudo rule) or another account's group (`pre-install.sh`). The
-  daemon would run with that login's rights. The refusal names the rename
-  that frees the name
+  named `shekyl` or `shekyl-tunnel` already exists and is a login (a shell,
+  an administrators' group, a sudo rule) or another account's group
+  (`pre-install.sh`). The service would run with that login's rights. The
+  refusal names the rename that frees the name
 - Do not enable, start or restart the daemon. Set what you need in
   `/etc/shekyl/shekyld-<network>.toml`, then run
   `sudo systemctl enable --now shekyld@<network>`; after an upgrade,
