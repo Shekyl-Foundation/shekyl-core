@@ -195,6 +195,8 @@ impl<P: Pow> Scenario<P> {
     /// earlier ones held (a second spend of one key image is refused). The
     /// admitted transactions are kept for [`Self::take_admitted`].
     ///
+    /// [`Self::mine_admitted`] keeps them only once their block connects.
+    ///
     /// The receive time is the driver's clock: the node this driver stands
     /// in for has no other, and the pool's receive time enters no rule.
     ///
@@ -208,50 +210,64 @@ impl<P: Pow> Scenario<P> {
     /// If the pool cannot be opened or faults: a fresh pool over a chain
     /// this driver just held, which is not a scenario outcome.
     pub async fn admit(&mut self, listed: &[Transaction]) -> Result<(), PoolRefused> {
-        let network = self.network_id();
-        let now = UnixSeconds::from_raw(self.substrate.now().to_raw());
-        let dir = tempfile::tempdir_in(self.path.dir()).expect("a pool directory");
-        let policy = shekyl_chain_rules::AdmissionPolicy::GENESIS;
-        let admitted = self
-            .read_chain(|view, rule_set| {
-                let (mut pool, _, _) = Pool::open(
-                    dir.path().join("pool.redb"),
-                    now,
-                    view,
-                    rule_set,
-                    &network,
-                    &policy,
-                )
-                .unwrap_or_else(|fault| panic!("the pool opens: {fault:?}"));
-                let mut admitted = Vec::with_capacity(listed.len());
-                for tx in listed {
-                    let txid = tx.txid_parts().hash;
-                    let answer = pool
-                        .admit(tx.clone(), now, view, rule_set, &policy)
-                        .unwrap_or_else(|fault| panic!("the pool judges {txid}: {fault:?}"));
-                    match answer {
-                        Admission::Admitted { evicted } if evicted.is_empty() => {
-                            admitted.push(txid);
-                        }
-                        answer => return Err(PoolRefused { txid, answer }),
-                    }
-                }
-                Ok(admitted)
-            })
-            .await?;
+        let admitted = self.judge(listed).await?;
         self.admitted.extend(admitted);
         Ok(())
     }
 
-    /// [`Self::admit`] `listed`, then [`Self::mine_listing`] it.
+    /// [`Self::admit`]'s judgement, keeping nothing: the txids of `listed`
+    /// if the pool admits every one of them.
+    async fn judge(&mut self, listed: &[Transaction]) -> Result<Vec<TxHash>, PoolRefused> {
+        let network = self.network_id();
+        let now = UnixSeconds::from_raw(self.substrate.now().to_raw());
+        let dir = tempfile::tempdir_in(self.path.dir()).expect("a pool directory");
+        let policy = shekyl_chain_rules::AdmissionPolicy::GENESIS;
+        self.read_chain(|view, rule_set| {
+            let (mut pool, _, _) = Pool::open(
+                dir.path().join("pool.redb"),
+                now,
+                view,
+                rule_set,
+                &network,
+                &policy,
+            )
+            .unwrap_or_else(|fault| panic!("the pool opens: {fault:?}"));
+            let mut admitted = Vec::with_capacity(listed.len());
+            for tx in listed {
+                let txid = tx.txid_parts().hash;
+                let answer = pool
+                    .admit(tx.clone(), now, view, rule_set, &policy)
+                    .unwrap_or_else(|fault| panic!("the pool judges {txid}: {fault:?}"));
+                match answer {
+                    Admission::Admitted { evicted } if evicted.is_empty() => {
+                        admitted.push(txid);
+                    }
+                    answer => return Err(PoolRefused { txid, answer }),
+                }
+            }
+            Ok(admitted)
+        })
+        .await
+    }
+
+    /// [`Self::admit`] `listed`, then [`Self::mine_listing`] it. The
+    /// admitted transactions are kept for [`Self::take_admitted`] only once
+    /// the block that lists them connects, so a listing that did not
+    /// connect leaves nothing a later block could take.
     ///
     /// # Errors
     ///
     /// [`ListingFault::Pool`] when the pool refuses one, and nothing is
-    /// mined; [`ListingFault::Step`] when the block does not connect.
+    /// mined; [`ListingFault::Step`] when the block does not connect. Either
+    /// way nothing of `listed` is kept.
     pub async fn mine_admitted(&mut self, listed: Vec<Transaction>) -> Result<Mined, ListingFault> {
-        self.admit(&listed).await.map_err(ListingFault::Pool)?;
-        self.mine_listing(listed).await.map_err(ListingFault::Step)
+        let admitted = self.judge(&listed).await.map_err(ListingFault::Pool)?;
+        let mined = self
+            .mine_listing(listed)
+            .await
+            .map_err(ListingFault::Step)?;
+        self.admitted.extend(admitted);
+        Ok(mined)
     }
 
     /// Whether the daemon's pool admitted `txid` ([`Self::admit`]), taking
