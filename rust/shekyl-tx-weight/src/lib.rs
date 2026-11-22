@@ -474,9 +474,29 @@ pub fn converge_weight_fee_by(
     seed: u64,
     price: impl Fn(u64) -> Option<u64>,
 ) -> Option<u64> {
+    let solo = SpendShape {
+        n_in,
+        n_out,
+        tree_depth,
+        signer: Signer::Solo,
+        group_payees: &[],
+    };
+    converge_spend_fee_by(&solo, seed, price)
+}
+
+/// [`converge_weight_fee_by`] for any [`SpendShape`]: the fee fixed point
+/// of [`predict_spend_weight`]. A solo shape paying no group converges to
+/// what [`converge_weight_fee_by`] does, through this same loop. `None`
+/// also when the shape pays more groups than it has outputs.
+#[must_use]
+pub fn converge_spend_fee_by(
+    shape: &SpendShape<'_>,
+    seed: u64,
+    price: impl Fn(u64) -> Option<u64>,
+) -> Option<u64> {
     let mut fee = seed;
     for _ in 0..WEIGHT_FEE_FIXPOINT_PASSES {
-        let weight = u64::try_from(predict_weight(n_in, n_out, tree_depth, fee)).ok()?;
+        let weight = u64::try_from(predict_spend_weight(shape, fee)?).ok()?;
         let next = price(weight)?;
         if next == fee {
             return Some(fee);

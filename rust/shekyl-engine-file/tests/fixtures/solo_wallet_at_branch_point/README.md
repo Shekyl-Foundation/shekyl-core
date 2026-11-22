@@ -9,14 +9,19 @@ BSD-3-Clause
 
 `solo.wallet.keys` and `solo.wallet` are a solo wallet written by `dev` at
 `25745115a4`, the commit multisig slice 4a-2a branched from (wallet ledger
-format 26, ledger block 15, send journal block 6). The test
-`tests/solo_wallet_at_branch_point.rs` holds R-36: the group ledger changes
-nothing in the solo ledger, so this branch opens these files and saves the
-same ledger bytes back.
+format 26, ledger block 15, send journal block 6).
+
+R-36 (the group ledger changes nothing in the solo ledger) was shown with
+them at `6e35cbef15`: the branch opened these files and saved the same
+ledger bytes back. R-37 then moved the send journal to version 7 and the
+wallet ledger to 27, so `tests/solo_wallet_at_branch_point.rs` now holds the
+other side: the same files are refused by their ledger version, the one
+refusal that names the remedy.
 
 ## What the wallet holds
 
-The ledger is `populated_solo_ledger()` in that test, every block filled:
+The ledger is `populated_solo_ledger()` in that test as it stands at
+`6e35cbef15`, every block filled:
 four transfers (one spent, one refused for its leaf, one attributed to a
 payment request), a reorg trail, an address book, a note, a retained
 transaction key for each of two sends, a restore anchor, staking with a bond
@@ -29,8 +34,8 @@ key-derivation cost the smallest the format takes (`m_log2` 8, `t` 1,
 ## How it was written
 
 At a clean checkout of `25745115a4`, the test file as committed with this
-fixture was copied into `rust/shekyl-engine-file/tests/`, with this one test
-added, and run with
+fixture (`6e35cbef15`) was copied into `rust/shekyl-engine-file/tests/`,
+with this one test added, and run with
 `cargo test -p shekyl-engine-file --test solo_wallet_at_branch_point -- --ignored --exact write_the_fixture_at_the_branch_point`:
 
 ```rust

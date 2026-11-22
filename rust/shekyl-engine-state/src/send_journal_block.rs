@@ -37,7 +37,10 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use shekyl_address::MultisigAddressPayload;
 use shekyl_types::BlockHeight;
+
+use crate::group_payee::{GroupFingerprint, StoredGroupAddress};
 
 /// Current send-journal block schema version.
 ///
@@ -65,7 +68,12 @@ use shekyl_types::BlockHeight;
 /// verdict a restart crossed can still be resent, by the user's decision
 /// (`DAEMON_SUBMIT_VERDICT.md` §5.3). Strict-equality gating, pre-genesis,
 /// no migration.
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 6;
+/// Version `7` (2026-11-22, R-37): [`SendDestination::Group`] — a payment
+/// to a multisig group names the group by its address's fingerprint, and
+/// the block stores each paid group's address once
+/// ([`SendJournalBlock::group_address`]). Strict-equality gating,
+/// pre-genesis, no migration: a version-6 wallet is restored from its seed.
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 7;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
 /// `global_output_index`: for each, a transaction spending it is already
@@ -159,6 +167,11 @@ pub enum SendDestination {
     /// A persona has no address, and the row records the kind of
     /// destination, never the persona's keys.
     OwnPersonaFunding,
+    /// A multisig group (R-37), named by its address's fingerprint. The
+    /// address itself is stored once per group in the block
+    /// ([`SendJournalBlock::group_address`]); a fingerprint is never
+    /// written as an [`Self::Address`].
+    Group(GroupFingerprint),
 }
 
 /// One recipient of a recorded send, exactly as realized in the built
@@ -405,6 +418,11 @@ pub struct SendJournalBlock {
     /// Send records by canonical txid.
     #[serde(default = "BTreeMap::new")]
     pub rows: BTreeMap<[u8; 32], SendRecord>,
+
+    /// The address of every group a row pays, once per group, keyed by
+    /// its fingerprint (R-37). A group stays here while a row names it.
+    #[serde(default = "BTreeMap::new")]
+    group_payees: BTreeMap<GroupFingerprint, StoredGroupAddress>,
 }
 
 impl SendJournalBlock {
@@ -413,7 +431,55 @@ impl SendJournalBlock {
         Self {
             block_version: SEND_JOURNAL_BLOCK_VERSION,
             rows: BTreeMap::new(),
+            group_payees: BTreeMap::new(),
         }
+    }
+
+    /// Store the address of a group a send pays, the first time a send
+    /// pays it, and return its fingerprint: the name a row's
+    /// [`SendDestination::Group`] gives it. Storing a group again changes
+    /// nothing.
+    pub fn store_group_payee(&mut self, address: &MultisigAddressPayload) -> GroupFingerprint {
+        let fingerprint = GroupFingerprint::of(address);
+        self.group_payees
+            .entry(fingerprint)
+            .or_insert_with(|| StoredGroupAddress::new(address));
+        fingerprint
+    }
+
+    /// The stored address of the group `fingerprint` names.
+    #[must_use]
+    pub fn group_address(&self, fingerprint: &GroupFingerprint) -> Option<&StoredGroupAddress> {
+        self.group_payees.get(fingerprint)
+    }
+
+    /// Every stored group address, by fingerprint.
+    pub fn group_payees(
+        &self,
+    ) -> impl Iterator<Item = (&GroupFingerprint, &StoredGroupAddress)> + '_ {
+        self.group_payees.iter()
+    }
+
+    /// Put `stored` under `fingerprint` as a file could: the load check's
+    /// tests.
+    #[cfg(test)]
+    pub(crate) fn insert_group_payee_as_read(
+        &mut self,
+        fingerprint: GroupFingerprint,
+        stored: StoredGroupAddress,
+    ) {
+        self.group_payees.insert(fingerprint, stored);
+    }
+
+    /// The groups the rows pay.
+    pub(crate) fn groups_paid(&self) -> impl Iterator<Item = &GroupFingerprint> + '_ {
+        self.rows
+            .values()
+            .flat_map(|row| row.recipients.iter())
+            .filter_map(|recipient| match &recipient.destination {
+                SendDestination::Group(fingerprint) => Some(fingerprint),
+                SendDestination::Address(_) | SendDestination::OwnPersonaFunding => None,
+            })
     }
 
     /// Enforce the block version gate at load.
@@ -557,6 +623,12 @@ impl SendJournalBlock {
     /// on the next submit (mirrors the retention record).
     pub fn undo_dispatch(&mut self, txid: &[u8; 32]) {
         self.rows.remove(txid);
+        // A group no remaining row pays is not kept: the wallet stores a
+        // group's address because it paid that group.
+        let paid: std::collections::BTreeSet<GroupFingerprint> =
+            self.groups_paid().copied().collect();
+        self.group_payees
+            .retain(|fingerprint, _| paid.contains(fingerprint));
     }
 
     /// Release a send that will never confirm: display-state flip and

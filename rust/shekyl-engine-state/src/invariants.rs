@@ -47,6 +47,11 @@
 //! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfer tx_hash / spending_tx_hash, pool, pending, or a non-terminal-or-abandoned send-journal row) |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
+//! | `group-payees-stored`                | Within `send_journal`: every group a row pays has its address stored, every stored address parses and hashes to the fingerprint it is kept under, and every stored group is one a row pays (R-37) |
+//!
+//! The last is the load check that holds a fingerprint read from a file
+//! to what [`crate::GroupFingerprint`] promises in memory: it names a
+//! group address the wallet holds.
 //!
 //! # Cost
 //!
@@ -57,12 +62,13 @@
 //! commit-3.2 benchmark — far below the Argon2id cost already paid on
 //! the open path, and not a concern for any `crypto_bench_*` threshold.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use shekyl_crypto_pq::key_image::KeyImage;
 
 use crate::{
-    error::WalletLedgerError, ledger_block::LedgerBlock, sync_state_block::SyncStateBlock,
+    error::WalletLedgerError, group_payee::GroupFingerprint, ledger_block::LedgerBlock,
+    send_journal_block::SendJournalBlock, sync_state_block::SyncStateBlock,
     transfer::TransferDetails, tx_meta_block::TxMetaBlock, wallet_ledger::WalletLedger,
 };
 use shekyl_types::BlockHeight;
@@ -78,6 +84,10 @@ pub const INV_REORG_TRAIL_MONOTONIC: &str = "reorg-trail-monotonic";
 
 /// Stable machine-readable name for invariant I-4.
 pub const INV_SPENT_STATE_CONSISTENT: &str = "spent-state-consistent";
+
+/// Stable machine-readable name for invariant I-6 (I-5 is retired; module
+/// docs).
+pub const INV_GROUP_PAYEES_STORED: &str = "group-payees-stored";
 
 impl WalletLedger {
     /// Run every aggregator-level invariant against `self` and return
@@ -98,6 +108,7 @@ impl WalletLedger {
         )?;
         check_reorg_trail_monotonic(&self.ledger)?;
         check_spent_state_consistent(&self.ledger)?;
+        check_group_payees_stored(&self.send_journal)?;
         Ok(())
     }
 
@@ -327,6 +338,44 @@ fn check_spent_state_consistent(ledger: &LedgerBlock) -> Result<(), WalletLedger
                     ),
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+fn check_group_payees_stored(journal: &SendJournalBlock) -> Result<(), WalletLedgerError> {
+    let paid: BTreeSet<&GroupFingerprint> = journal.groups_paid().collect();
+    if let Some(missing) = paid
+        .iter()
+        .find(|fingerprint| journal.group_address(fingerprint).is_none())
+    {
+        return Err(invariant_error(
+            INV_GROUP_PAYEES_STORED,
+            format!(
+                "a send-journal row pays the group {} and the journal stores no address for it",
+                hex::encode(missing.as_bytes())
+            ),
+        ));
+    }
+    for (fingerprint, stored) in journal.group_payees() {
+        let named = hex::encode(fingerprint.as_bytes());
+        let address = stored.address().map_err(|err| {
+            invariant_error(
+                INV_GROUP_PAYEES_STORED,
+                format!("the stored address of the group {named} does not parse: {err}"),
+            )
+        })?;
+        if GroupFingerprint::of(&address) != *fingerprint {
+            return Err(invariant_error(
+                INV_GROUP_PAYEES_STORED,
+                format!("the address stored for the group {named} is another group's"),
+            ));
+        }
+        if !paid.contains(fingerprint) {
+            return Err(invariant_error(
+                INV_GROUP_PAYEES_STORED,
+                format!("the journal stores the group {named} and no row pays it"),
+            ));
         }
     }
     Ok(())
@@ -887,6 +936,90 @@ mod tests {
         assert_invariant(
             w.check_invariants().unwrap_err(),
             INV_SPENT_STATE_CONSISTENT,
+        );
+    }
+
+    fn paying_a_group(fingerprint: crate::GroupFingerprint) -> WalletLedger {
+        let mut w = WalletLedger::empty();
+        w.send_journal.record_dispatched(
+            [0x71; 32],
+            BlockHeight::from_raw(0),
+            1,
+            vec![crate::SendRecipient {
+                destination: crate::SendDestination::Group(fingerprint),
+                amount: 2,
+                rid: None,
+            }],
+            vec![crate::SendInputRef {
+                gindex: 9,
+                amount: 3,
+            }],
+            vec![0xAB],
+        );
+        w
+    }
+
+    #[test]
+    fn a_group_paid_and_stored_passes() {
+        let address = crate::group_payee::tests::group(0x21);
+        let mut w = paying_a_group(crate::GroupFingerprint::of(&address));
+        w.send_journal.store_group_payee(&address);
+        w.check_invariants()
+            .expect("the group a row pays is stored");
+    }
+
+    #[test]
+    fn a_group_paid_and_not_stored_is_refused() {
+        let address = crate::group_payee::tests::group(0x21);
+        let w = paying_a_group(crate::GroupFingerprint::of(&address));
+        assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
+    }
+
+    #[test]
+    fn a_group_stored_and_not_paid_is_refused() {
+        let paid = crate::group_payee::tests::group(0x21);
+        let mut w = paying_a_group(crate::GroupFingerprint::of(&paid));
+        w.send_journal.store_group_payee(&paid);
+        w.send_journal
+            .store_group_payee(&crate::group_payee::tests::group(0x22));
+        assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
+    }
+
+    #[test]
+    fn a_group_stored_under_another_groups_fingerprint_is_refused() {
+        let paid = crate::group_payee::tests::group(0x21);
+        let fingerprint = crate::GroupFingerprint::of(&paid);
+        let mut w = paying_a_group(fingerprint);
+        w.send_journal.insert_group_payee_as_read(
+            fingerprint,
+            crate::StoredGroupAddress::new(&crate::group_payee::tests::group(0x22)),
+        );
+        assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
+    }
+
+    #[test]
+    fn a_stored_group_that_does_not_parse_is_refused() {
+        let paid = crate::group_payee::tests::group(0x21);
+        let fingerprint = crate::GroupFingerprint::of(&paid);
+        let mut w = paying_a_group(fingerprint);
+        w.send_journal.insert_group_payee_as_read(
+            fingerprint,
+            crate::StoredGroupAddress::from_file_bytes(vec![0x5A; 40]),
+        );
+        assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
+    }
+
+    /// The load path runs the check: a file whose journal names a group
+    /// it does not store is refused when it is read, not when it is next
+    /// saved.
+    #[test]
+    fn a_file_naming_a_group_it_does_not_store_is_refused_at_load() {
+        let address = crate::group_payee::tests::group(0x21);
+        let w = paying_a_group(crate::GroupFingerprint::of(&address));
+        let bytes = postcard::to_allocvec(&w).expect("serialize");
+        assert_invariant(
+            WalletLedger::from_postcard_bytes(&bytes).unwrap_err(),
+            INV_GROUP_PAYEES_STORED,
         );
     }
 

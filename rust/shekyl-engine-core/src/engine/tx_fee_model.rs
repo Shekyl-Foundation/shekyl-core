@@ -24,7 +24,8 @@ use super::traits::key::FeeDirective;
 // predict_size_and_weight}` and the `kat_*` tests below resolve unchanged — the
 // move is invisible to every caller (§12.3 D-1 constraint).
 pub(crate) use shekyl_tx_weight::{
-    converge_weight_fee_by, predict_size_and_weight, predict_weight, InputCount, OutputCount,
+    converge_spend_fee_by, predict_size_and_weight, predict_weight, GroupSize, InputCount,
+    OutputCount, Signer, SpendShape,
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
@@ -35,11 +36,15 @@ pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
     tx_fee::fee_from_weight(rate, weight)
 }
 
-/// Fee fixpoint for one output-count variant (§3.3 / §3.10.1).
+/// Fee fixpoint for one output-count variant (§3.3 / §3.10.1) of a solo
+/// spend paying `group_payees`, one size per output paying a group.
 ///
-/// The body is [`converge_weight_fee_by`] with the lattice pricer
-/// `quantized_fee`. `None` is a fee that does not fit in `u64`; it is not a
-/// number, and it is not the unbuildable with-change sentinel.
+/// The body is [`converge_spend_fee_by`] with the lattice pricer
+/// `quantized_fee`, so each group payee's `0x0D` entry is priced (R-37):
+/// a solo spend paying a group is heavier than one paying an address.
+/// `None` is a fee that does not fit in `u64`, or a shape paying more
+/// groups than it has outputs; it is not a number, and it is not the
+/// unbuildable with-change sentinel.
 ///
 /// A non-zero seed is the with-change call, which starts from the no-change
 /// fee. That seed is at or below this variant's least fixed point; a higher
@@ -51,13 +56,21 @@ pub(crate) fn converge_fee(
     n_in: InputCount,
     n_out: OutputCount,
     tree_depth: u8,
+    group_payees: &[GroupSize],
     initial_fee: u64,
 ) -> Option<u64> {
     let per_weight = rate.per_weight();
     let price = |weight: u64| shekyl_economics::quantized_fee(weight, per_weight);
-    let fee = converge_weight_fee_by(n_in, n_out, tree_depth, initial_fee, price)?;
+    let shape = SpendShape {
+        n_in,
+        n_out,
+        tree_depth,
+        signer: Signer::Solo,
+        group_payees,
+    };
+    let fee = converge_spend_fee_by(&shape, initial_fee, price)?;
     if initial_fee != 0 {
-        let least = converge_weight_fee_by(n_in, n_out, tree_depth, 0, price)?;
+        let least = converge_spend_fee_by(&shape, 0, price)?;
         debug_assert!(
             initial_fee <= least && fee == least,
             "seed {initial_fee} is above the least fixed point {least}"
@@ -66,15 +79,18 @@ pub(crate) fn converge_fee(
     Some(fee)
 }
 
-/// Populate [`FeeDirective`] for the selected input count and payment outputs `N`.
+/// Populate [`FeeDirective`] for the selected input count and payment
+/// outputs `N`, `group_payees` among them. The change output is the
+/// wallet's own, never a group's.
 pub(crate) fn build_fee_directive(
     rate: &FeeRate,
     n_in: InputCount,
     payment_output_count: OutputCount,
     tree_depth: u8,
+    group_payees: &[GroupSize],
 ) -> Option<FeeDirective> {
     let n_no_change = payment_output_count;
-    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, 0)?;
+    let fee_no_change = converge_fee(rate, n_in, n_no_change, tree_depth, group_payees, 0)?;
 
     // With-change adds one output. At the output limit a change output would exceed
     // MAX_OUTPUTS, so that variant is *unbuildable* (tx-builder would reject it with
@@ -93,6 +109,7 @@ pub(crate) fn build_fee_directive(
             n_in,
             n_with_change,
             tree_depth,
+            group_payees,
             fee_no_change,
         )?)
     };
@@ -182,7 +199,7 @@ mod tests {
         let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
 
-        let fee = converge_fee(&rate, n_in, n_out, depth, 0).expect("the fee fits");
+        let fee = converge_fee(&rate, n_in, n_out, depth, &[], 0).expect("the fee fits");
         // The (1,1,depth 1) weight at this rate prices just over 2^28, so
         // the varint grows from four bytes to five; the fixed point is that
         // product rounded up to the fee lattice (`FEE_QUANTIZATION_MASK`).
@@ -211,8 +228,8 @@ mod tests {
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
         let warm = fee_from_weight(&rate, predict_weight(n_in, n_out, depth, 0));
         assert_eq!(
-            converge_fee(&rate, n_in, n_out, depth, 0),
-            converge_fee(&rate, n_in, n_out, depth, warm),
+            converge_fee(&rate, n_in, n_out, depth, &[], 0),
+            converge_fee(&rate, n_in, n_out, depth, &[], warm),
             "the quote path and the build path must converge to one fee"
         );
     }
@@ -253,7 +270,7 @@ mod tests {
                         let Ok(rate) = FeeRate::new(pw) else {
                             continue;
                         };
-                        let Some(fee) = converge_fee(&rate, n_in, n_out, depth, 0) else {
+                        let Some(fee) = converge_fee(&rate, n_in, n_out, depth, &[], 0) else {
                             continue;
                         };
                         let priced =
@@ -280,8 +297,14 @@ mod tests {
     fn with_change_is_impossible_at_the_output_limit() {
         let rate = FeeRate::new(10).unwrap();
         // Below the limit: with-change is a real, finite fee.
-        let below = build_fee_directive(&rate, InputCount::clamped(1), OutputCount::clamped(2), 1)
-            .expect("the fee fits");
+        let below = build_fee_directive(
+            &rate,
+            InputCount::clamped(1),
+            OutputCount::clamped(2),
+            1,
+            &[],
+        )
+        .expect("the fee fits");
         assert!(below.fee_no_change > 0);
         let with_change = below.fee_with_change.expect("a change output fits");
         assert!(
@@ -297,6 +320,7 @@ mod tests {
             InputCount::clamped(1),
             OutputCount::clamped(usize::MAX),
             1,
+            &[],
         )
         .expect("the no-change fee fits");
         assert!(at_limit.fee_no_change > 0 && at_limit.fee_no_change < u64::MAX);
@@ -314,8 +338,8 @@ mod tests {
     fn a_seed_above_the_least_fixed_point_is_refused() {
         let rate = FeeRate::new(24_184).unwrap();
         let (n_in, n_out) = (InputCount::clamped(1), OutputCount::clamped(2));
-        let least = converge_fee(&rate, n_in, n_out, 1, 0).unwrap();
-        let refused = converge_fee(&rate, n_in, n_out, 1, least.saturating_mul(2));
+        let least = converge_fee(&rate, n_in, n_out, 1, &[], 0).unwrap();
+        let refused = converge_fee(&rate, n_in, n_out, 1, &[], least.saturating_mul(2));
         panic!("seed above {least} was accepted as {refused:?}");
     }
 }

@@ -60,6 +60,14 @@ rust/shekyl-engine-state/src/payment_request.rs|matched_tx_hash: Option<[u8; 32]
 # scation is applied separately by the tx-builder.
 rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 
+# ── group_payee.rs ────────────────────────────────────────────────────
+# A group the wallet paid (R-37). The fingerprint is the cSHAKE hash of the
+# group's public address, the name the wallet shows for the payee; the
+# stored address is that public address's canonical bytes (group points and
+# KEM public keys), which every payer of the group holds.
+rust/shekyl-engine-state/src/group_payee.rs|pub struct GroupFingerprint([u8; FINGERPRINT_LEN]);
+rust/shekyl-engine-state/src/group_payee.rs|pub struct StoredGroupAddress(Vec<u8>);
+
 # ── group_ledger.rs ───────────────────────────────────────────────────
 # A group wallet's persisted records (R-30, R-35). The output key `O`, the
 # commitment `C` and the leaf commitment point `CM` are on-chain public

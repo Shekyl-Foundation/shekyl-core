@@ -108,6 +108,7 @@ fn large_ledger() -> WalletLedger {
                 amount: 1,
                 rid: None,
             }],
+            &[],
             vec![SendInputRef {
                 gindex: 1_000 + n,
                 amount: 1_000_000 + n,

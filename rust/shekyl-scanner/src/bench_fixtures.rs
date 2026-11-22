@@ -347,7 +347,13 @@ fn assemble_scannable_block(
             prunable: Some(fixture_prunable(1)),
         },
     };
+    scannable_block_carrying(&tx)
+}
 
+/// A block whose one non-miner transaction is `tx`, its first output at
+/// global index 0: a transaction a test built, as a scanner receives it.
+#[must_use]
+pub fn scannable_block_carrying(tx: &Transaction) -> ScannableBlock {
     // The scanner reads only the *count* of `block.transaction_hashes` (it
     // must equal `transactions.len()`), never the hash values themselves, so
     // a placeholder hash is structurally sufficient and invariant across
@@ -389,7 +395,7 @@ fn assemble_scannable_block(
 
     let mut scannable = ScannableBlock {
         block,
-        transactions: vec![bound(&tx)],
+        transactions: vec![bound(tx)],
         first_output_index: Some(0),
         archival_cumulative: shekyl_types::ArchivalLength::ZERO,
     };

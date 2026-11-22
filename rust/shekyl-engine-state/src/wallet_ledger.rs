@@ -52,11 +52,16 @@
 
 use serde::{Deserialize, Serialize};
 
+use shekyl_address::MultisigAddressPayload;
+
 use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
+    group_payee::GroupFingerprint,
     ledger_block::LedgerBlock,
-    send_journal_block::{AbandonEdge, SendInputRef, SendJournalBlock, SendRecipient, SendState},
+    send_journal_block::{
+        AbandonEdge, SendDestination, SendInputRef, SendJournalBlock, SendRecipient, SendState,
+    },
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     transfer::TransferDetails,
@@ -157,7 +162,12 @@ use crate::{
 /// `26` (2026-11-15): `TransferDetails::frozen` is removed, with the user
 /// freeze (`LEDGER_BLOCK_VERSION` 15). A version-25 wallet file is refused;
 /// pre-genesis does not migrate it.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 26;
+///
+/// `27` (2026-11-22, R-37): a send can pay a multisig group, and the send
+/// journal names the group and stores its address
+/// (`SEND_JOURNAL_BLOCK_VERSION` 7). A version-26 wallet file is refused
+/// and restored from its seed; pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 27;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -422,15 +432,36 @@ impl WalletLedger {
 
     /// Birth the send-journal row for a dispatch (same guard as
     /// [`Self::record_retained_tx_key`] — pin-1 form). See
-    /// [`SendJournalBlock::record_dispatched`].
+    /// [`SendJournalBlock::record_dispatched`]. `group_payees` are the
+    /// addresses of the groups the send pays, stored with the row (R-37).
+    ///
+    /// # Panics
+    ///
+    /// When a recipient names a group whose address is not among
+    /// `group_payees`: the dispatch path builds both from one request, so
+    /// that is a build-path defect.
     pub fn record_dispatched_send(
         &mut self,
         txid: [u8; 32],
         fee: u64,
         recipients: Vec<SendRecipient>,
+        group_payees: &[MultisigAddressPayload],
         inputs: Vec<SendInputRef>,
         tx_bytes: Vec<u8>,
     ) {
+        let stored: Vec<GroupFingerprint> = group_payees
+            .iter()
+            .map(|address| self.send_journal.store_group_payee(address))
+            .collect();
+        assert!(
+            recipients
+                .iter()
+                .all(|recipient| match &recipient.destination {
+                    SendDestination::Group(fingerprint) => stored.contains(fingerprint),
+                    SendDestination::Address(_) | SendDestination::OwnPersonaFunding => true,
+                }),
+            "every group a send pays has its address recorded with the row"
+        );
         let height = self.ledger.height();
         self.send_journal
             .record_dispatched(txid, height, fee, recipients, inputs, tx_bytes);
@@ -1486,7 +1517,7 @@ mod tests {
                 shekyl_crypto_pq::TxKey::seeded([0x5C; 32]).store(),
             ),
         );
-        w.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), vec![0xAA]);
+        w.record_dispatched_send(txid, 0, Vec::new(), &[], Vec::new(), vec![0xAA]);
         assert!(w.send_journal.rows.contains_key(&txid));
         assert!(w.tx_meta.tx_keys.contains_key(&txid));
         assert!(w.sync_state.pending_tx_hashes.contains(&txid));
@@ -1520,6 +1551,7 @@ mod tests {
                 amount: 1,
                 rid: None,
             }],
+            &[],
             vec![SendInputRef {
                 gindex: 300,
                 amount: 10,

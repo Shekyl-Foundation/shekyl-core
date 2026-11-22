@@ -11,13 +11,14 @@ use std::num::NonZeroU64;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
-use shekyl_address::{Network, PaymentAddress, ShekylAddress};
+use shekyl_address::{MultisigAddressPayload, Network, PaymentAddress, ShekylAddress};
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::label::sentinel_plaintext;
 use shekyl_crypto_pq::TxKey;
+use shekyl_network::NetworkId;
 use shekyl_tx_builder::outputs::{BuildSpendError, BuiltSpend, Payee, Recipient, RecipientKeys};
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
@@ -163,7 +164,7 @@ fn decode_recipient(address: &str, network: Network) -> Result<ShekylAddress, Ke
 fn recipient_keys(
     destination: &TxDestination,
     network: Network,
-) -> Result<RecipientKeys<'_>, KeyEngineError> {
+) -> Result<PaymentKeys<'_>, KeyEngineError> {
     let (spend_key, view_key, ml_kem_ek): (_, _, Cow<'_, [u8]>) = match destination {
         TxDestination::Address(address) => {
             let decoded = decode_recipient(address, network)?;
@@ -178,12 +179,35 @@ fn recipient_keys(
             *persona.view_pk().as_canonical_bytes(),
             Cow::Borrowed(persona.ml_kem_ek().as_slice()),
         ),
+        // A group's address is its keys: the builder encapsulates to the
+        // group's KEM key and each member's (`Payee::Group`).
+        TxDestination::Group(group) => return Ok(PaymentKeys::Group(group.address())),
     };
-    RecipientKeys::from_edwards(spend_key, &view_key, ml_kem_ek).map_err(|_| {
-        KeyEngineError::Primitive {
+    RecipientKeys::from_edwards(spend_key, &view_key, ml_kem_ek)
+        .map(PaymentKeys::Single)
+        .map_err(|_| KeyEngineError::Primitive {
             detail: "recipient view key does not map to a valid X25519 point",
+        })
+}
+
+/// What one payment's output is built to: a single signer's keys, or a
+/// group's address (R-37).
+enum PaymentKeys<'a> {
+    Single(RecipientKeys<'a>),
+    Group(&'a MultisigAddressPayload),
+}
+
+impl PaymentKeys<'_> {
+    /// The payee the builder takes. A group output's label is always the
+    /// sentinel, so `label_plaintext` is a single signer's alone; the
+    /// request refuses a payment request (`rid`) for a group before any
+    /// selection.
+    fn payee<'p>(&'p self, label_plaintext: &'p [u8; 8], network: &'p NetworkId) -> Payee<'p> {
+        match self {
+            Self::Single(keys) => keys.payee(label_plaintext),
+            Self::Group(address) => Payee::Group { address, network },
         }
-    })
+    }
 }
 
 fn spend_input_from_context(
@@ -322,11 +346,12 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         .collect::<Result<Vec<_>, _>>()?;
     let change_pk = derived.change_spend_pk();
     let sentinel = sentinel_plaintext();
+    let network_id = network.network_id();
     let mut recipients: Vec<Recipient<'_>> = payment_outputs
         .iter()
         .zip(&payment_keys)
         .map(|(payment, keys)| Recipient {
-            payee: keys.payee(&payment.label_plaintext),
+            payee: keys.payee(&payment.label_plaintext, &network_id),
             amount: payment.amount,
         })
         .collect();
@@ -710,7 +735,11 @@ mod tests {
         let persona = derive_bundle(2);
         let destination = TxDestination::OwnPersona(persona.payment_destination());
         // The network is the wallet's; a persona arm reads none of it.
-        let resolved = recipient_keys(&destination, Network::Testnet).expect("resolve");
+        let PaymentKeys::Single(resolved) =
+            recipient_keys(&destination, Network::Testnet).expect("resolve")
+        else {
+            panic!("a persona resolves to a single signer's keys");
+        };
         assert_eq!(resolved.spend_key(), persona.spend_pk.as_canonical_bytes());
         assert_eq!(
             resolved.view_x25519(),

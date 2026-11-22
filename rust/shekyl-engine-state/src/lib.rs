@@ -34,6 +34,7 @@
 pub mod bookkeeping_block;
 pub mod error;
 pub mod group_ledger;
+pub mod group_payee;
 pub mod invariants;
 pub mod ledger_block;
 pub mod ledger_indexes;
@@ -67,6 +68,7 @@ pub use group_ledger::{
     ChainPlace, GroupCoin, GroupLedgerBlock, GroupOutput, GroupRefusalKind, GroupWalletLedger,
     RefusedGroupOutput, SpentAt, GROUP_LEDGER_BLOCK_VERSION, GROUP_WALLET_LEDGER_FORMAT_VERSION,
 };
+pub use group_payee::{GroupFingerprint, StoredGroupAddress};
 pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};

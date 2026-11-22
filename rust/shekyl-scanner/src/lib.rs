@@ -71,6 +71,8 @@ pub mod view_pair;
 /// module via the existing self-dep with `features = ["test-utils"]`.
 #[cfg(any(test, feature = "test-utils"))]
 pub mod bench_fixtures;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod group_fixtures;
 
 #[cfg(test)]
 pub(crate) mod tests;

@@ -485,9 +485,9 @@ pub use output_selector::{
     OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
-    FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
-    SubmitOutcome, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    DEFAULT_RESERVATION_TTL,
+    FeePriority, GroupDestination, PendingTx, ReservationExtension, ReservationId,
+    ReservationTTLConfig, SnapshotId, SubmitOutcome, TxDestination, TxHash, TxRecipient,
+    TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 pub use submit::SubmitReceipt;
 // The P-scan lifecycle surface (WI-1): handle + start error + cadence default,
