@@ -44,6 +44,7 @@ use shekyl_tor_control_client::control::{
     parse_event, resume_lateness, BootstrapState, ControlReply, EventSink, LogEvent, LogSeverity,
     Resume, ServiceId, SocksTimeout, TorEvent, UploadRounds,
 };
+use shekyl_tor_control_client::directory_cache::GuardState;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use shekyl_tor_control_client::supervisor::{
     clock_evidence_of, directory_content_input_of, input_of, wire_cause, Action, Cause, Connectors,
@@ -52,7 +53,7 @@ use shekyl_tor_control_client::supervisor::{
 };
 use shekyl_tor_control_daemon::{
     space_needed, sweep_stale_data_dirs, CacheSave, DaemonTorControl, DaemonTorStartError,
-    IsolationPair, KeptDataDir, KeptLog, Retirement, TombstoneEnd, TorDeath,
+    IsolationPair, KeptDataDir, KeptLog, KeptSave, Retirement, TombstoneEnd, TorDeath,
 };
 use shekyl_tor_status::{held_at_start_sentence, install_sentence, render, TorStatus};
 use tokio::sync::watch;
@@ -61,6 +62,7 @@ use tokio::task::JoinHandle;
 mod inbox;
 #[cfg(all(test, unix))]
 mod loop_tests;
+pub(crate) mod onion_key;
 mod probe;
 mod requests;
 
@@ -112,6 +114,8 @@ fn sample_keys(reads_network: bool) -> Vec<String> {
 pub struct Prepared {
     owner: Owner,
     inbox: Inbox,
+    /// The managed Tor's persistent onion, until [`begin`] takes it.
+    persistent_onion: Option<OnionIdentity>,
 }
 
 impl Prepared {
@@ -151,11 +155,21 @@ async fn answered<T>(answer: Option<tokio::sync::oneshot::Receiver<T>>) -> Resul
 
 /// The supervisor's inbox, and the feeds the network publishes into, under
 /// every `tor` setting: the supervisor answers the node's status whether
-/// or not it runs the Tor (Rick, 2026-11-10).
+/// or not it runs the Tor (Rick, 2026-11-10). `persistent_onion` is the
+/// managed Tor's key the walk loaded (`tor-onion-key-file`), held here
+/// until [`begin`] hands it to the supervisor; `None`, the onion is new at
+/// that boot.
 #[must_use]
-pub fn prepare() -> (Prepared, SupervisorFeeds) {
+pub fn prepare(persistent_onion: Option<OnionIdentity>) -> (Prepared, SupervisorFeeds) {
     let (owner, inbox, feeds) = inbox();
-    (Prepared { owner, inbox }, feeds)
+    (
+        Prepared {
+            owner,
+            inbox,
+            persistent_onion,
+        },
+        feeds,
+    )
 }
 
 /// The running supervisor. Dropping it stops the loop, as
@@ -300,10 +314,11 @@ impl PinCheck {
 /// supervisor runs nothing and answers the status from what the network
 /// publishes. `network` is where the route, the onion and the inbound facet
 /// are published, and whose timing engine the supervisor's waits are owned
-/// by.
+/// by. The managed Tor's onion is the one `prepared` carries, or new at
+/// this boot.
 #[must_use]
 pub fn begin(
-    prepared: Prepared,
+    mut prepared: Prepared,
     tor: &Tor,
     clearnet_on: bool,
     virtual_port: u16,
@@ -312,12 +327,18 @@ pub fn begin(
     network: Network,
 ) -> Supervisor {
     let supervises = match tor {
-        Tor::Managed { binary } => Supervises::Managed(PinSource::Discover(binary.clone())),
+        Tor::Managed { binary, .. } => Supervises::Managed {
+            pin: PinSource::Discover(binary.clone()),
+            onion: prepared
+                .persistent_onion
+                .take()
+                .map_or(OnionSource::PerBoot, OnionSource::Persistent),
+        },
         Tor::Operator { .. } => Supervises::Unmanaged(TorSetting::Operator),
         Tor::Off => Supervises::Unmanaged(TorSetting::Off),
     };
-    let managed = matches!(supervises, Supervises::Managed(_));
-    let Prepared { owner, inbox } = prepared;
+    let managed = matches!(supervises, Supervises::Managed { .. });
+    let Prepared { owner, inbox, .. } = prepared;
     let data_dir = data_dir.to_path_buf();
     let task = handle.spawn(async move {
         drive(
@@ -362,6 +383,23 @@ fn tor_log_text(message: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Say a clean stop's write-back when it failed. The next start then fetches
+/// the network directory again, or keeps the guards saved before this stop.
+fn say_kept(saved: &KeptSave) {
+    if let CacheSave::Failed(error) = &saved.cache {
+        tracing::warn!(
+            target: "global",
+            "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
+        );
+    }
+    if let Some(CacheSave::Failed(error)) = &saved.guards {
+        tracing::warn!(
+            target: "global",
+            "this onion's Tor guards were not saved ({error}); the next start keeps the guards saved before"
+        );
+    }
 }
 
 /// Say what became of a retired directory. Tor's kept log is where a run
@@ -458,10 +496,24 @@ fn sessions_input(held: PerConnector<u32>) -> Input {
 
 /// What the supervisor supervises.
 enum Supervises {
-    /// A Tor this daemon launches, from this binary.
-    Managed(PinSource),
+    /// A Tor this daemon launches, from this binary, publishing this onion.
+    Managed {
+        /// Where the binary comes from.
+        pin: PinSource,
+        /// Where the onion's key comes from.
+        onion: OnionSource,
+    },
     /// A Tor this node does not run: `off`, or an operator's.
     Unmanaged(TorSetting),
+}
+
+/// Where the managed Tor's onion key comes from.
+enum OnionSource {
+    /// A new key at this boot (PWD-E7), held for the boot.
+    PerBoot,
+    /// The operator's key (`tor-onion-key-file`), loaded by the walk: the
+    /// same onion at every boot.
+    Persistent(OnionIdentity),
 }
 
 /// Where the binary a launch runs comes from.
@@ -517,12 +569,25 @@ impl Drive {
                 return None;
             }
         };
-        let onion = match DaemonTorControl::mint_identity() {
-            Ok(onion) => onion,
-            Err(error) => {
-                tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
-                return None;
+        let (tor, binary, onion) = match supervises {
+            Supervises::Managed { pin, onion } => (TorSetting::Managed, Some(pin), onion),
+            Supervises::Unmanaged(setting) => (setting, None, OnionSource::PerBoot),
+        };
+        // A persistent onion keeps its guards beside the directory cache, in
+        // a directory of its own (`TSR-Q2` as amended); a per-boot onion keeps
+        // none.
+        let (onion, guard_state) = match onion {
+            OnionSource::Persistent(onion) => {
+                let guards = GuardState::for_onion(&data_dir, onion.service_id().as_str());
+                (onion, Some(guards))
             }
+            OnionSource::PerBoot => match DaemonTorControl::mint_identity() {
+                Ok(onion) => (onion, None),
+                Err(error) => {
+                    tracing::error!(target: "global", "the Tor supervisor has no onion key: {error}");
+                    return None;
+                }
+            },
         };
         // The probe's isolation pair, minted beside the onion and held with it
         // for the boot (§4.5): the probe's circuits are its own.
@@ -532,10 +597,6 @@ impl Drive {
                 tracing::error!(target: "global", "the Tor supervisor has no probe isolation: {error}");
                 return None;
             }
-        };
-        let (tor, binary) = match supervises {
-            Supervises::Managed(source) => (TorSetting::Managed, Some(source)),
-            Supervises::Unmanaged(setting) => (setting, None),
         };
         let connectors = Connectors { tor, clearnet_on };
         let clock = owner.clock().clone();
@@ -549,6 +610,7 @@ impl Drive {
             clock,
             binary,
             data_dir,
+            guard_state,
             events: poster.events(),
             poster,
             inbox,
@@ -591,6 +653,9 @@ struct Drive {
     /// The binary's source, for a Tor this daemon launches.
     binary: Option<PinSource>,
     data_dir: PathBuf,
+    /// A persistent onion's kept guards, handed to every launch; `None` for
+    /// a per-boot onion.
+    guard_state: Option<GuardState>,
     /// The sink Tor's control connection routes its events into. Each
     /// incarnation gets a clone; the drop count spans them all.
     events: EventSink,
@@ -678,12 +743,7 @@ impl Drive {
         }
         if let Some(control) = self.control.take() {
             let teardown = control.shutdown().await;
-            if let CacheSave::Failed(error) = teardown.cache {
-                tracing::warn!(
-                    target: "global",
-                    "Tor's directory cache was not saved ({error}); the next start fetches the network directory again"
-                );
-            }
+            say_kept(&teardown.saved);
             if let Some(retirement) = teardown.retirement {
                 say_retirement(&retirement);
             }

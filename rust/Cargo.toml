@@ -620,10 +620,11 @@ zeroize = { version = "1.5", features = ["derive"] }
 # `aes` provides the `hazmat::cipher_round` / `equiv_inv_cipher_round`
 # round primitives for AesGenerator1R/4R and AesHash1R per `specs.md`
 # §§3.2-3.4. The `hazmat` feature gates the single-round API per
-# `aes-0.9.0/Cargo.toml:43-44`; without it the API is unreachable.
-# Soft fallback is constant-time fixslicing per `aes-0.9.0/src/lib.rs:20-22`
+# `aes-0.9.4/Cargo.toml:43`; without it the API is unreachable.
+# Soft fallback is constant-time fixslicing per `aes-0.9.4/src/lib.rs:20-22`
 # (not load-bearing for RandomX since the "keys" are public, but
-# strictly better than `soft_aes.cpp`'s LUT path).
+# strictly better than `soft_aes.cpp`'s LUT path). The locked release is
+# the crypto-closure record's (`.cargo/crypto-closure.toml`).
 aes = { version = "0.9", default-features = false, features = ["hazmat"] }
 #
 # `blake2` provides `Blake2b512` for the §3.5 BlakeGenerator's
@@ -749,6 +750,24 @@ redb = "4.6"
 # carries the same line through tauri, so core's config parser is never
 # chosen by the GTK3 compile-time chain's toml 0.8.
 toml = { version = "1.2", default-features = false, features = ["std", "serde", "parse"] }
+
+# FIPS 203 (ML-KEM), 204 (ML-DSA) and 205 (SLH-DSA): one declaration each,
+# every consumer inherits it. Pinned EXACT, all three: each crate's seeded
+# entry points (fips203 `KeyGen::keygen_from_seed` / `encaps_from_seed`,
+# fips204 `try_sign_with_seed` and seeded keygen, fips205
+# `KeyGen::keygen_from_seed`) serve the seed through an internal
+# `DummyRng` whose `fill_bytes` (and `next_u32` / `next_u64`) is
+# `unimplemented!()`, safe only while the internals draw through
+# `try_fill_bytes`. An upstream refactor that calls `fill_bytes` is a
+# runtime panic, so a version moves only by a deliberate bump, re-reading
+# `traits.rs`, with the KAT battery re-run (KEM_DERIVE_V1_KAT.json,
+# PQC_HYBRID_V2_KAT.json, the SLH-DSA ACVP vectors; WALLET_MESSAGE_SIGNING.md
+# SM-R-8). Checked again at 0.5.0 (rule 17): `DummyRng` is unchanged in
+# all three (fips203 `traits.rs:313`, fips204 `traits.rs:391`, fips205
+# `traits.rs:163`); all three still build on rand_core 0.6.
+fips203 = "=0.5.0"
+fips204 = "=0.5.0"
+fips205 = "=0.5.0"
 
 # `kameo` actor framework — pinned per the 2026-04-27 *Engine binary
 # boundary* decision in

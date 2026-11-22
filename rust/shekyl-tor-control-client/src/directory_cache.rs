@@ -6,7 +6,10 @@
 //! Tor's public directory cache, copied file by file (`TSR-Q8`).
 //!
 //! The daemon keeps four files across boots and nothing else. Guards, keys
-//! and the onion stay in the per-boot directory. A file is copied by reading
+//! and the onion stay in the per-boot directory, with one exception: a
+//! persistent onion (`tor-onion-key-file`) keeps its guards too, in Tor's
+//! `state` file, in a directory of that onion's own ([`GuardState`];
+//! `TSR-Q2` and `TSR-Q8` as amended, Rick, 2026-11-21). A file is copied by reading
 //! the descriptor that was opened, never by trusting the path and never by
 //! hard link: Tor appends to `cached-microdescs.new` in place, so a link
 //! would be a second name for a file Tor is still writing.
@@ -126,6 +129,81 @@ pub const FILES: &[CacheFile] = &[
         limit: CERTS_LIMIT,
     },
 ];
+
+/// Tor's `state` file: its sampled and primary guards, the circuit-build-time
+/// histogram and little else, a few kilobytes on a client. The cap is far
+/// past that; it bounds a file that is not Tor's.
+pub const STATE_LIMIT: u64 = 1 << 20;
+
+/// The one file a persistent onion's guard state keeps.
+const STATE_FILES: &[CacheFile] = &[CacheFile {
+    name: "state",
+    limit: STATE_LIMIT,
+}];
+
+/// The name of a persistent onion's guard-state directory, before the
+/// onion's service id. Not the per-boot sweep's prefix.
+pub const GUARD_STATE_PREFIX: &str = "tor-guard-state-";
+
+/// A persistent onion's guards across boots (`TSR-Q2` as amended, Rick,
+/// 2026-11-21): Tor's `state` file, kept in a directory named by the onion's
+/// service id.
+///
+/// With a persistent onion, one hostile guard draw exposes the service's
+/// location for good, and fresh guards at every boot draw again each time;
+/// a kept guard links nothing the onion does not already link. A per-boot
+/// onion has none of this and keeps no guards. One directory per onion, so a
+/// key changed or removed never starts with another onion's guards.
+///
+/// The file is copied as the directory cache's files are: into a fresh
+/// per-boot directory at launch, and back after a clean stop of a Tor that
+/// bootstrapped, by the descriptor opened, a link or an oversize file
+/// counting as missing. Stock Tor keeps its second-layer guards in memory
+/// only, so those are still drawn again at every start; keeping them is the
+/// next increment's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardState {
+    path: PathBuf,
+}
+
+impl GuardState {
+    /// The guard state of the onion `service_id`, under `parent` beside the
+    /// directory cache.
+    #[must_use]
+    pub fn for_onion(parent: &Path, service_id: &str) -> Self {
+        Self {
+            path: parent.join(format!("{GUARD_STATE_PREFIX}{service_id}")),
+        }
+    }
+
+    /// The directory the state is kept in.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Copy the kept `state` into `data_dir`, a fresh per-boot directory.
+    /// Nothing kept yet (this onion's first boot) copies nothing.
+    ///
+    /// # Errors
+    ///
+    /// The copy's write into `data_dir` failed.
+    pub fn copy_into(&self, data_dir: &Path) -> io::Result<bool> {
+        Ok(!copy_files(&self.path, data_dir, STATE_FILES)?.is_empty())
+    }
+
+    /// Keep `data_dir`'s `state`, replacing the previous one; the directory
+    /// is made owner-only first.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be made, or the write-back failed; the previous
+    /// file stays.
+    pub fn save_from(&self, data_dir: &Path) -> io::Result<()> {
+        ensure_directory(&self.path)?;
+        save_files(data_dir, &self.path, STATE_FILES)
+    }
+}
 
 /// Environment variable the live-test lane sets to the cache this job's first
 /// boot wrote. Absent from production builds: the read is compiled only into
@@ -880,6 +958,64 @@ mod tests {
         assert_eq!(copied, vec!["cached-certs"]);
         assert!(!data.join("state").exists());
         assert_eq!(fs::read(data.join("cached-certs")).unwrap(), b"certs");
+    }
+
+    /// **A persistent onion's guards come back at its next boot, and only
+    /// its.** A clean stop saves `state` into the onion's own directory; the
+    /// next fresh directory gets it; another onion's directory, and the
+    /// directory cache, never hold it. Its first boot copies nothing. Red
+    /// edit: name the directory without the service id, or save into the
+    /// cache directory.
+    #[test]
+    fn a_persistent_onions_guards_return_to_it_alone() {
+        let (parent, cache, data) = dirs();
+        let ours = GuardState::for_onion(parent.path(), "ours");
+        let theirs = GuardState::for_onion(parent.path(), "theirs");
+        assert!(
+            !ours.copy_into(&data).unwrap(),
+            "a first boot copies nothing"
+        );
+        fs::write(data.join("state"), b"Guard in=default rsa_id=AA\n").unwrap();
+        ours.save_from(&data).unwrap();
+        assert_eq!(
+            ours.path(),
+            parent.path().join(format!("{GUARD_STATE_PREFIX}ours"))
+        );
+        assert!(!cache.join("state").exists(), "the cache keeps no guards");
+
+        let next = parent.path().join("next");
+        fs::create_dir(&next).unwrap();
+        assert!(ours.copy_into(&next).unwrap());
+        assert_eq!(
+            fs::read(next.join("state")).unwrap(),
+            b"Guard in=default rsa_id=AA\n"
+        );
+        let other = parent.path().join("other");
+        fs::create_dir(&other).unwrap();
+        assert!(!theirs.copy_into(&other).unwrap());
+        assert!(!other.join("state").exists(), "another onion's boot");
+    }
+
+    /// **A kept `state` that is a link or oversize is missing**, as a cache
+    /// file is. Red edit: copy `state` by path, or drop its cap.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_state_that_is_a_link_or_oversize_is_missing() {
+        let (parent, _cache, data) = dirs();
+        let ours = GuardState::for_onion(parent.path(), "ours");
+        fs::create_dir(ours.path()).unwrap();
+        let elsewhere = parent.path().join("elsewhere");
+        fs::write(&elsewhere, b"not ours").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, ours.path().join("state")).unwrap();
+        assert!(!ours.copy_into(&data).unwrap(), "a link is missing");
+        fs::remove_file(ours.path().join("state")).unwrap();
+        let oversize = File::create(ours.path().join("state")).unwrap();
+        oversize.set_len(STATE_LIMIT + 1).unwrap();
+        assert!(
+            !ours.copy_into(&data).unwrap(),
+            "an oversize file is missing"
+        );
+        assert!(!data.join("state").exists());
     }
 
     #[test]

@@ -135,6 +135,7 @@ impl Schema for OnionCause {
             ("uploads-refused", None),
             ("descriptor-missing", None),
             ("clock-behind", Some(Duration::shape())),
+            ("published-elsewhere", None),
         ])
     }
 }

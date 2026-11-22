@@ -5,3 +5,10 @@
 # An existing account of that name is used as it is, so pre-install.sh
 # refuses one that is a login.
 u shekyl - "Shekyl daemon" /nonexistent /usr/sbin/nologin
+
+# The RPC tunnel's account (RPC_CHANNEL.md §8; Rick, 2026-11-21): the group
+# shekyl-tunnel and the system user shekyl-tunnel in it, no home and no
+# login. Never the daemon's account and never in its group: the tunnel is a
+# consumer of the node, and the daemon's configuration is not its to read.
+# shekyl-rpc-tunnel.service runs as this account.
+u shekyl-tunnel - "Shekyl RPC tunnel" /nonexistent /usr/sbin/nologin

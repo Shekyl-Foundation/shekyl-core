@@ -22,20 +22,15 @@
 #                SHA-256 (`comparison_sha256`). A build whose decapsulation
 #                code differs needs a timing run.
 #
-# The floor device's entry is its 2026-10-11 timing run (ba4677446, no
-# rustflags).
-#
-# The laptop's entry is a disassembly entry. Its 2026-10-11 timing run
-# (7b7046579) was built before `+crt-static` reached the MSVC targets on
-# 2026-10-19. The shipped build with the flag (caca14a3f) was compared with
-# it: the decapsulation path's code is identical, the only code that
-# changed on the path being the statically linked C runtime's
-# memcpy/memset. A timing run of that build on 2026-10-25 failed the
-# registered lines on its valid-vs-invalid comparisons, by about 16 ns
-# (0.03 % of a decapsulation). The maintainer ruled on 2026-10-25 that the
-# difference is an observed platform property, accepted under the bounds
-# in RPC_CHANNEL.md §4.3, and that RT-P4 stays met
-# (rt_p4_mlkem_decaps_timing_20261023.md).
+# Both entries are timing runs under the 2026-10-25 pass line
+# (invalid-vs-invalid differing only in the decrypted message), registered
+# 2026-11-21 and run on the commit that carries the registration,
+# 7297b5cfbc (rt_p4_mlkem_decaps_timing_20261121_message.md): the floor
+# device a second Raspberry Pi 4 (its binary cross-built for aarch64 with the
+# same toolchain and no rustflags), the laptop with +crt-static from
+# rust/.cargo/config.toml. Both passed. The valid-against-invalid difference
+# the laptop shows is information under those lines, accepted by the
+# maintainer at the figures that record states (2026-11-21).
 #
 # What `rustflags` leaves out, and why:
 #   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
@@ -88,20 +83,20 @@ version = "0.2.17"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
 
 [crates.crypto-common]
-version = "0.1.6"
-checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
+version = "0.1.7"
+checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 
 [crates.digest]
 version = "0.10.7"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 
 [crates.fips203]
-version = "0.4.3"
-checksum = "c8bdb6454f692ca2a2b45cd554c6828c639d7f9c968cf83a678899ec4443a280"
+version = "0.5.0"
+checksum = "602e37d80ffd53e1b6037a91bbc471d94bd18a6d1f86493b721b7ef4609a013c"
 
 [crates.generic-array]
-version = "0.14.9"
-checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
+version = "0.14.7"
+checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 
 [crates.keccak]
 version = "0.1.6"
@@ -120,16 +115,16 @@ version = "2.6.1"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [crates.typenum]
-version = "1.20.0"
-checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
+version = "1.20.1"
+checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [crates.zeroize]
-version = "1.8.2"
-checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+version = "1.9.2"
+checksum = "85ccff8a4805aba1eaa4cd4afcd49f7557dd2cf5fd79ffc37f8959466effc5aa"
 
 [crates.zeroize_derive]
-version = "1.4.3"
-checksum = "85a5b4158499876c763cb03bc4e49185d3cccbabb15b33c627f7884f43db852e"
+version = "1.5.0"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
 
 [[unmeasured]]
 target = "aarch64-pc-windows-msvc"
@@ -138,8 +133,8 @@ reason = "the other MSVC triple carries the same +crt-static rustflags, and RT-P
 [[run]]
 device = "the floor device (Raspberry Pi 4, Cortex-A72)"
 basis = "timing"
-record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
-commit = "ba4677446"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md"
+commit = "7297b5cfbc"
 target = "aarch64-unknown-linux-gnu"
 toolchain = "1.94.0"
 rustflags = []
@@ -150,14 +145,10 @@ overflow-checks = true
 
 [[run]]
 device = "the maintainer's Windows laptop (Intel Core i9-11950H, Tiger Lake)"
-basis = "disassembly"
-record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023.md"
-commit = "caca14a3f"
+basis = "timing"
+record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md"
+commit = "7297b5cfbc"
 target = "x86_64-pc-windows-msvc"
-identical_to_record = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md"
-identical_to_commit = "7b7046579"
-comparison = "docs/benchmarks/rt_p4_mlkem_decaps_timing_20261023_captures/laptop_x86_disasm_excerpts_crt_static.txt"
-comparison_sha256 = "35187d42d894826941dea0008997c8c9c7daab05ca53848630bfb12521818041"
 toolchain = "1.94.0"
 rustflags = ["-C", "target-feature=+crt-static"]
 
