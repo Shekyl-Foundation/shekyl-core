@@ -83,14 +83,14 @@ fn connections_line(status: &DaemonStatus) -> String {
 /// The human lines, from the typed reply. The tip is shown by its own
 /// number, the wire's `height` unchanged (`HEIGHT_SEMANTICS.md` §1).
 pub(crate) fn show_chain(status: &DaemonStatus) {
-    println!("Chain health:");
-    println!("  Block number: {}", status.height.0);
+    crate::out_line!("Chain health:");
+    crate::out_line!("  Block number: {}", status.height.0);
     if let Some(line) = sync_line(status) {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
-    println!("{}", difficulty_line(status));
-    println!("{}", tx_count_line(status));
-    println!("{}", connections_line(status));
+    crate::out_line!("{}", difficulty_line(status));
+    crate::out_line!("{}", tx_count_line(status));
+    crate::out_line!("{}", connections_line(status));
 }
 
 fn require_daemon(
@@ -112,16 +112,19 @@ pub fn cmd_shard_list_all(daemon: Option<&DaemonClient>) -> CommandResult<Covera
 }
 
 pub(crate) fn show_coverage(list: &Coverage) {
-    println!(
+    crate::out_line!(
         "{:<8} {:>16} {:>8} {:>8}",
-        "Shard", "Pay", "Bonded", "Served"
+        "Shard",
+        "Pay",
+        "Bonded",
+        "Served"
     );
     if list.shard.is_empty() {
-        println!("No shards.");
+        crate::out_line!("No shards.");
         return;
     }
     for row in &list.shard {
-        println!("{}", coverage_row_line(row));
+        crate::out_line!("{}", coverage_row_line(row));
     }
 }
 
@@ -164,7 +167,7 @@ const CHECK_CADENCE: &str =
 
 pub(crate) fn show_shard_alarm(val: &Value) {
     for line in shard_alarm_lines(val) {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
 }
 
@@ -242,7 +245,7 @@ pub fn cmd_shard_show(
 }
 
 pub(crate) fn show_shard(row: &CoverageShard) {
-    println!("{}", coverage_row_line(row));
+    crate::out_line!("{}", coverage_row_line(row));
 }
 
 /// The edge length `shard fetch --png` draws at when `--size` is not given.
@@ -306,25 +309,25 @@ pub fn cmd_shard_fetch(
 
 pub(crate) fn show_fetch(val: &Value) {
     let field = |name: &str| val.get(name).and_then(Value::as_u64).unwrap_or(0);
-    println!("Shard {} retrieved.", field("shard_id"));
-    println!(
+    crate::out_line!("Shard {} retrieved.", field("shard_id"));
+    crate::out_line!(
         "  View hash:        {}",
         val.get("shard_hash")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
     );
-    println!("  Closed at block:  {}", field("close_height"));
-    println!("  Archival bytes:   {}", field("archival_len"));
-    println!("  Blocks:           {}", field("block_count"));
-    println!("  Transactions:     {}", field("tx_count"));
-    println!(
+    crate::out_line!("  Closed at block:  {}", field("close_height"));
+    crate::out_line!("  Archival bytes:   {}", field("archival_len"));
+    crate::out_line!("  Blocks:           {}", field("block_count"));
+    crate::out_line!("  Transactions:     {}", field("tx_count"));
+    crate::out_line!(
         "  Outputs:          {} ({} coinbase)",
         field("output_count"),
         field("coinbase_output_count")
     );
-    println!("  Time span:        {} s", field("time_range_seconds"));
+    crate::out_line!("  Time span:        {} s", field("time_range_seconds"));
     if let Some(png) = val.get("png") {
-        println!(
+        crate::out_line!(
             "  Image:            candidate.v1 ({}px) written to {}",
             png.get("size").and_then(Value::as_u64).unwrap_or(0),
             png.get("path").and_then(|v| v.as_str()).unwrap_or("?")

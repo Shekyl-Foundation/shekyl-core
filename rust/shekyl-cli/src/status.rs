@@ -92,7 +92,7 @@ fn format_civil(when: OffsetDateTime) -> String {
 pub fn print_above_prompt(line: &str) {
     use std::io::IsTerminal;
     if std::io::stdout().is_terminal() {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
 }
 

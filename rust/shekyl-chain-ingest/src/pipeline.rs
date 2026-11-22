@@ -71,7 +71,7 @@ use tokio::task::JoinSet;
 use crate::connector::{
     Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, ObserveTarget,
     OfferAlt, Offered, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind, Rewound, RunFault,
-    SwitchDone, SwitchPlan, Switched,
+    SwitchDone, SwitchPlan, Switched, TablesDigest,
 };
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::plan_form::{form_plan, FormedPlan, PlanStop};
@@ -204,6 +204,35 @@ pub struct RunReport {
     /// (`CHAIN_FORGE.md` §7.1). A forged chain's manifest names the
     /// switches its forge expects, and the replay test holds the two equal.
     pub switches: Vec<Switch>,
+    /// The store's tables digest right after each record the trace names
+    /// (`Trace::event_records`), beside the trace's expectation where it
+    /// carries one (`CHAIN_FORGE.md` §8). A baseline writes these into the
+    /// trace it writes; a replay holds each to the trace's.
+    pub events: Vec<EventDigest>,
+    /// The records the trace names whose digest the run never took, in
+    /// record order: the source ended before them, or a refusal ended the
+    /// run before or at them (a refused block's record has no state after
+    /// it to digest).
+    pub events_unreached: Vec<SequenceNo>,
+}
+
+/// The store's tables digest right after one indexed event's record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventDigest {
+    /// The event's corpus record.
+    pub record: SequenceNo,
+    /// This run's tables digest after it.
+    pub ours: crate::trace::Digest,
+    /// The trace's, where it carries one.
+    pub theirs: Option<crate::trace::Digest>,
+}
+
+impl EventDigest {
+    /// Whether the trace carried a digest here and this run's differed.
+    #[must_use]
+    pub fn diverged(&self) -> bool {
+        self.theirs.is_some_and(|theirs| theirs != self.ours)
+    }
 }
 
 /// The per-height root oracle's results (`RunReport::roots`), one per
@@ -496,6 +525,18 @@ pub enum Disagreement {
         /// The verdict.
         verdict: InvalidBlock,
     },
+    /// The store's tables digest right after an indexed event's record
+    /// differed from the trace's there (`CHAIN_FORGE.md` §8).
+    EventDiverged {
+        /// The event's corpus record.
+        record: SequenceNo,
+    },
+    /// The trace names an indexed event whose digest the run never took
+    /// ([`RunReport::events_unreached`]).
+    EventUnreached {
+        /// The event's corpus record.
+        record: SequenceNo,
+    },
     /// The redb digest differed from the trace's checkpoint.
     Diverged {
         /// The checkpoint height.
@@ -575,12 +616,25 @@ impl RunReport {
                 height: *height,
                 verdict: *verdict,
             });
+        let events = self
+            .events
+            .iter()
+            .filter(|event| event.diverged())
+            .map(|event| Disagreement::EventDiverged {
+                record: event.record,
+            });
+        let unreached = self
+            .events_unreached
+            .iter()
+            .map(|record| Disagreement::EventUnreached { record: *record });
         roots
             .chain(weights)
             .chain(emission)
             .chain(diverged)
             .chain(archival)
             .chain(refused)
+            .chain(events)
+            .chain(unreached)
     }
 }
 
@@ -877,6 +931,8 @@ where
         hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
         pending: None,
+        capture: trace.event_records().collect(),
+        pending_digest: None,
         exhausted: false,
         unclaimable: None,
     };
@@ -930,6 +986,13 @@ where
     /// barrier, so `fill` reads nothing past it and it is carried out once
     /// nothing is in flight ahead of it.
     pending: Option<Sequenced<Barrier>>,
+    /// The records to take the tables digest after, ascending, not yet
+    /// reached (`Trace::event_records`).
+    capture: std::collections::VecDeque<SequenceNo>,
+    /// A capture record read but not yet digested: a barrier, so `fill`
+    /// reads nothing past it and the digest is taken once the record has
+    /// committed with nothing in flight ahead of it.
+    pending_digest: Option<SequenceNo>,
     /// No further event is read: the source ended, or a block was refused
     /// or found unclaimable before it was formed. A refusal ends the run,
     /// and nothing past an unformed block has a target to claim.
@@ -957,7 +1020,12 @@ where
             if self.report.refused.is_some() {
                 break;
             }
-            if self.exhausted && self.in_flight.is_empty() && self.pending.is_none() {
+            self.try_event_digest().await?;
+            if self.exhausted
+                && self.in_flight.is_empty()
+                && self.pending.is_none()
+                && self.pending_digest.is_none()
+            {
                 // Every block ahead of an unclaimable one has been judged,
                 // so the writer's tip is its parent: the writer re-derives
                 // the window over its own view and halts on what it sees.
@@ -978,6 +1046,18 @@ where
                 break;
             }
         }
+        // A record whose digest the run never took: the source ended, or a
+        // refusal ended the run, before it or at it. A record read and not
+        // yet digested is one of them: it left `capture` when it was read,
+        // and `fill` read nothing past it, so a refusal that ended the run
+        // was of its block or of one ahead of it. It precedes every record
+        // still in `capture`.
+        self.report.events_unreached = self
+            .pending_digest
+            .take()
+            .into_iter()
+            .chain(self.capture.drain(..))
+            .collect();
         self.compare_checkpoint().await?;
         self.report.metrics = self.metrics.snapshot(self.pow.derives());
         Ok(std::mem::take(&mut self.report))
@@ -989,6 +1069,7 @@ where
     async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
         while !self.exhausted
             && self.pending.is_none()
+            && self.pending_digest.is_none()
             && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
         {
             // The permit is taken before the event is read, so no event is
@@ -1001,6 +1082,9 @@ where
                 break;
             };
             self.take_sequence(event.seq)?;
+            if self.capture.front() == Some(&event.seq) {
+                self.pending_digest = self.capture.pop_front();
+            }
             match event.event {
                 IngestEvent::Rewind { to } => {
                     self.pending = Some(Sequenced {
@@ -1342,6 +1426,30 @@ where
             at,
             diff: ours.archival.diff(theirs.value()),
         });
+        Ok(())
+    }
+
+    /// Take the tables digest after the pending capture record, once it has
+    /// committed and nothing is in flight ahead of it (`CHAIN_FORGE.md`
+    /// §8), beside the trace's expectation there.
+    async fn try_event_digest(&mut self) -> Result<(), PipelineFault<Src::Fault, P::Fault>> {
+        let Some(record) = self.pending_digest else {
+            return Ok(());
+        };
+        if !(self.in_flight.is_empty() && self.sequencer.pending() == 0 && self.pending.is_none()) {
+            return Ok(());
+        }
+        let ours = self.connector.ask(TablesDigest).await.map_err(collapse)?;
+        let theirs = self
+            .trace
+            .event_digest(record)
+            .map(|expected| *expected.value());
+        self.report.events.push(EventDigest {
+            record,
+            ours,
+            theirs,
+        });
+        self.pending_digest = None;
         Ok(())
     }
 

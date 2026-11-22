@@ -62,6 +62,9 @@ shekyl-wallet-contract = { path = "../shekyl-wallet-contract" }
 # The process hardening, the first statement of `main` (rule 35, DC-Q21):
 # no core and no same-account tracer before an argument is read.
 shekyl-process = { path = "../shekyl-process" }
+# The account's effective user id: the start-up sweep removes only this
+# account's stale socket directories.
+shekyl-os-account = { path = "../shekyl-os-account" }
 
 # WP-W2: the in-process host's named-pipe listener. The `unsafe`
 # `create_with_security_attributes_raw` call and the owner-only descriptor

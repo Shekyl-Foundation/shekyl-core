@@ -595,8 +595,8 @@ impl ShownPool {
 /// late. The relay owns the derivation
 /// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-1000
 /// quantile, so a walk calls a fire that does come late at most once in a
-/// thousand. The fire is a memoryless draw, the same for this node's own
-/// transaction as for a relayed one, so it has no earliest time. The submit
+/// thousand. The fire is the timer's floor plus a memoryless draw, the same
+/// for this node's own transaction as for a relayed one. The submit
 /// watchdog does not read it: overdue is the daemon's judgment.
 fn embargo_fire_wait() -> Duration {
     Duration::from_secs(u64::from(shekyl_relay::embargo_fire_wait_secs()))
@@ -7226,7 +7226,11 @@ async fn maybe_capture_chain_vector(
              CorpusWriter (RD-F15). trace.e2: the Rust baseline \
              (shekyl-chain-replay baseline): the corpus replayed against a \
              fresh store, then each height's facts and the tip's digest and \
-             archival rows read off it, pinned at built_at_dev_sha. A \
+             archival rows read off it, pinned at baseline_built_at_dev_sha. \
+             trace_rebaseline_decision, when present, cites the decision that \
+             re-baselined trace.e2 over this corpus at baseline_built_at_dev_sha; \
+             absent, the trace is unchanged since capture, and the capture never \
+             writes it. A \
              regression gate, not a conformance oracle. Consumed by replay: \
              shekyl-chain-ingest connects the chain against a real store, so \
              the state the 4.I rules read is derived, not asserted. \

@@ -151,19 +151,26 @@ fn precision_increment_reproduces_delta_table() {
     use shekyl_relay_privacy::conformance::simulate_precision_increment;
 
     let base = DandelionParams::adopted();
-    // The ADOPTED configuration: F-7-corrected `fluff_return_ms`, the shipped
-    // clearnet hop and its derived 194 s embargo, obtained through the
+    // The SOLVED configuration: F-7-corrected `fluff_return_ms`, the shipped
+    // clearnet hop and its derived 194 s draw mean, obtained through the
     // production derivation path —
     // not a hand-transcribed tick count, so when `fluff_return_ms` next moves
-    // this test measures what ships by construction and the δ pins below go
-    // red for a deliberate re-pin. The review's table was measured at the
+    // this test measures the solved draw by construction and the δ pins below
+    // go red for a deliberate re-pin. The shipped timer adds its floor to the
+    // draw; it is read at the end of this test. The review's table was measured at the
     // F = 2250 / 144 s pair; re-measured here at the shipping pair the values
     // are nearly unchanged (0.0010/0.0021/0.0048 vs 0.0010/0.0019/0.0045)
     // because the derivation lengthens the embargo in step with F, holding the
     // prefix-fire leak at its designed level (§44.3).
-    let e = EmbargoTimer::adopted(&base);
+    let solved = shekyl_relay_privacy::derive_embargo(
+        &base,
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        shekyl_relay_privacy::params::EMBARGO_FULL_TRAVEL_PROBABILITY,
+    )
+    .expect("the adopted target is reachable");
+    let e = EmbargoTimer::geometric_from_ticks(solved.mean_ticks, solved.tick_millis);
 
-    println!("\nδ increment re-run (independent-neighbour lower bound, 194s embargo)");
+    println!("\nδ increment re-run (independent-neighbour lower bound, 194s draw mean)");
     println!(
         "{:>6} {:>12} {:>14} {:>12} {:>12}",
         "f", "Prec(C1)", "Prec(C1+C3)", "δ", "review"
@@ -210,6 +217,26 @@ fn precision_increment_reproduces_delta_table() {
         "reshape should collapse δ toward zero, got {:.5}",
         reshaped.delta
     );
+
+    // **The shipped timer** (Rick, 2026-11-22): the same draw plus the
+    // floor, so no timer fires while a stem of ordinary length is out. δ is
+    // the precision a prefix fire hands a spy, and with no reshape at all
+    // the floor already takes it to the level reshape reaches above.
+    let shipped = EmbargoTimer::adopted(&base);
+    for (i, (f, solved_delta)) in cases.iter().enumerate() {
+        let mut rng = SplitMix64::new(0xF100 + i as u64);
+        let p = simulate_precision_increment(&base, &shipped, *f, 0, 1_000_000, &mut rng);
+        println!(
+            "  shipped timer (floor {} ms) at f={f:.2}: δ = {:.5} (solved draw alone {solved_delta})",
+            shipped.floor_millis(),
+            p.delta
+        );
+        assert!(
+            p.delta < 0.0001,
+            "the floor should take δ at f={f} under the reshape level, got {:.5}",
+            p.delta
+        );
+    }
 }
 
 /// **§14 — reshape's recovery latency is a cost, not a break.** The one place

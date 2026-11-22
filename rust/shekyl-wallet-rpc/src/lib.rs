@@ -47,6 +47,8 @@ pub use server::{
     arm_server, build_router, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     InProcessListen, ListenAddr, ServerConfig,
 };
+#[cfg(unix)]
+pub use server::{DIR_PREFIX, LOCK_FILE, SOCKET_FILE};
 // Re-exported so in-process hosts (shekyl-cli) can name the network a
 // spawned server binds to without a direct shekyl-engine-core dependency.
 pub use shekyl_engine_core::Network;

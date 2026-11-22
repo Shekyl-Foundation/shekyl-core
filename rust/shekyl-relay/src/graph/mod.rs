@@ -18,11 +18,12 @@
 //! A transaction body is still an opaque blob here. See
 //! `DAEMON_RELAY_PRIVACY.md` criterion 4 and `TOR_COVER_POSTURE.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use shekyl_draw_rng::RelayRng;
+use shekyl_levin::{NewTransactionsSize, CAP_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::basis::DerivationMs;
 use shekyl_relay_privacy::params::{carrier, inherited, DandelionParams};
 use shekyl_relay_privacy::schedule::{
@@ -182,7 +183,7 @@ pub struct PeerFluff {
     /// N full payload copies of every accepted batch. The deadline itself is
     /// **not** here — `FluffScheduler` owns pending deadlines, and a copy in
     /// this struct would be a second owner of the same fact (§18.5).
-    pub queued: Vec<TxBlob>,
+    pub queued: VecDeque<TxBlob>,
     /// Who dialed whom — the inherited code gives outbound peers half the
     /// inbound fluff delay, and [`shekyl_relay_privacy::schedule::FluffScheduler`]
     /// keeps that asymmetry.
@@ -197,12 +198,54 @@ pub struct PeerFluff {
 impl PeerFluff {
     fn new(direction: PeerDirection, connector: ConnectorId) -> Self {
         Self {
-            queued: Vec::new(),
+            queued: VecDeque::new(),
             direction,
             connector,
             declaration: declaration(connector.column()),
         }
     }
+}
+
+/// Take from the front of `queued` the transactions one fluff notice
+/// carries, leaving the rest queued in the order they arrived.
+///
+/// Whole transactions are taken, in arrival order, while the notice they
+/// encode to stays within [`CAP_NEW_TRANSACTIONS`]. The size is levin's
+/// own count of that notice ([`NewTransactionsSize`]), the count the
+/// receiver's cap is derived from, so a notice this fills is one the peer
+/// admits.
+///
+/// **The first transaction is always taken.** The cap is a notice of one
+/// largest transaction, so one transaction fits whatever its size, and a
+/// queue that is not empty always makes progress: no transaction is split
+/// and none waits behind a notice that cannot be built.
+///
+/// **Arrival order, not sorted order, decides what waits.** Taking the
+/// smallest blobs first would let a stream of low-sorting transactions hold
+/// a high-sorting one back for ever. The released batch is still sorted
+/// before it leaves ([`Relay::flush_fluff`]); what a capped flush shows is
+/// only that the transactions of a later notice arrived after those of an
+/// earlier one.
+///
+/// A repeat inside the taken run is counted twice here and removed by the
+/// caller, so the notice can be smaller than the count and never larger. A
+/// repeat that lies beyond this run goes on a later flush.
+fn take_one_notice(queued: &mut VecDeque<TxBlob>) -> Vec<TxBlob> {
+    // A fluff leaves the flag at its default.
+    const FLUFF: bool = true;
+    let mut size = NewTransactionsSize::EMPTY;
+    let mut taken = 0;
+    for blob in queued.iter() {
+        let with = size.with(blob.len());
+        if taken > 0 && with.encoded_len(FLUFF) > CAP_NEW_TRANSACTIONS {
+            break;
+        }
+        size = with;
+        taken += 1;
+    }
+    // A queue with a front: what is taken leaves without the rest being
+    // copied, so draining a backlog costs its length once, not once a flush.
+    queued.drain(..taken).collect()
 }
 
 /// Whether this node has finished synchronizing its chain.
@@ -1052,14 +1095,27 @@ impl Relay {
         accepted
     }
 
-    /// Release every batch whose deadline has passed, and any batch at all when
-    /// `force` is set.
+    /// Release one notice's worth from every queue whose deadline has passed,
+    /// and from every queue at all when `force` is set.
+    ///
+    /// **A flush releases at most [`CAP_NEW_TRANSACTIONS`] encoded bytes per
+    /// peer (PWD-B12).** It takes whole transactions from the front of the
+    /// queue, in arrival order, while the notice they make stays within the
+    /// cap ([`take_one_notice`]). What does not fit stays queued, and that
+    /// peer draws a fresh deadline here, from the same scheduler a first
+    /// batch draws from: the remainder goes on a later flush, at a delay of
+    /// the same distribution, with no arrival needed to send it.
     ///
     /// `force` is what the daemon's `run_fluff()` test hook drives. It runs the
     /// same release path as the deadline, which is why forcing a flush in a
     /// test is not a special case — the only difference is which batches are
     /// considered due.
-    pub fn flush_fluff(&mut self, now: Millis, force: bool) -> Vec<(ConnectionId, Vec<TxBlob>)> {
+    pub fn flush_fluff<R: RelayRng + ?Sized>(
+        &mut self,
+        now: Millis,
+        force: bool,
+        rng: &mut R,
+    ) -> Vec<(ConnectionId, Vec<TxBlob>)> {
         let due = if force {
             self.fluff.drain()
         } else {
@@ -1068,7 +1124,13 @@ impl Relay {
         let mut released = Vec::with_capacity(due.len());
         for id in due {
             if let Some(peer) = self.contexts.get_mut(&id) {
-                let mut batch = std::mem::take(&mut peer.queued);
+                let mut batch = take_one_notice(&mut peer.queued);
+                if !peer.queued.is_empty() {
+                    // `due` and `drain` took this peer's deadline, and
+                    // `queue` draws only when none is pending: without this
+                    // draw the remainder would wait for the next arrival.
+                    let _ = self.fluff.queue(now, id, peer.direction, rng);
+                }
                 if !batch.is_empty() {
                     // Sort and de-duplicate before release. The inherited code
                     // does this at the send site with the comment "don't leak
@@ -1277,7 +1339,7 @@ impl Relay {
         self.contexts.insert(
             id,
             PeerFluff {
-                queued: Vec::new(),
+                queued: VecDeque::new(),
                 direction,
                 connector,
                 declaration: column,

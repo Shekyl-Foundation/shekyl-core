@@ -32,7 +32,8 @@ use shekyl_difficulty::{check_hash, Difficulty};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_hasher::{Class, Ranked};
 use shekyl_miner::{
-    found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, SearchBound, RATE_WINDOW,
+    found_blocks, Found, FoundInbox, FoundWait, Job, JobBoard, Miner, MinerConfig, MiningAddress,
+    SearchBound, RATE_WINDOW,
 };
 use shekyl_pow_randomx::Seedhash;
 use shekyl_thread_ledger::RowKind;
@@ -53,28 +54,104 @@ const DIFFICULTY: u128 = 8;
 const RULES: ChainRules =
     ChainRules::harness_regtest(NonZeroU128::new(DIFFICULTY), CappedEpoch::PRODUCTION);
 
-/// One light-mode RandomX hash on the floor device (rule 76): about 1.25 s
-/// per core (`DRS_X_STORE_FLIP.md`, PR2-Q2). The workers hash in light
-/// mode under the cache the hasher lends.
-const FLOOR_HASH: Duration = Duration::from_millis(1_250);
+/// The most blocks any test here waits for in turn: five, in
+/// [`the_miner_extends_the_chain_block_after_block`], whose loop runs to it,
+/// so the count the bound is derived from is the count the test mines.
+const MOST_BLOCKS: u32 = 5;
 
-/// Hashes a search tries before missing is less likely than one in a
-/// billion. Each hash wins with probability `1 / DIFFICULTY`, so a search
-/// misses after `n` with probability `(1 − 1/8)^n`, below `1e-9` from
-/// `n = 156` ([`the_search_bound_is_derived_from_the_difficulty`]).
-const SEARCH_HASHES: u32 = 156;
-
-/// How long a test waits for a block before calling the search broken:
-/// [`SEARCH_HASHES`] at [`FLOOR_HASH`] on one worker, the fewest any
-/// search here starts — 195 s. A search with two workers has twice the
-/// margin.
+/// How many times the expected hash count a block's search may try before
+/// the test calls the miner broken.
 ///
-/// The bound is the floor device's, uncontended. The workers run at the
-/// lowest priority by design, so on a host whose cores other work holds
-/// they can be starved past it: the 2026-11-11 nightly-set run at load 12
-/// to 32 timed out once here, and the test passed three times in about
-/// 16 s each on the same host once it was quiet.
-const FIND_WITHIN: Duration = FLOOR_HASH.saturating_mul(SEARCH_HASHES);
+/// Each hash meets the target with probability `1/D` at [`DIFFICULTY`]
+/// (`D = 8`), independently of every other, so a working search misses
+/// all of its first `k·D` hashes with probability `(1 − 1/D)^(k·D)`, about
+/// `e^(−k)`. A test that waits for `b` blocks fails falsely with
+/// probability at most `b` times that. The bound is one in a million for a
+/// whole test (Rick, 2026-11-22): at [`MOST_BLOCKS`], `k = 15` is the least
+/// that meets it, `5 × (7/8)^120 ≈ 5.5e-7`, where `k = 14` gives `1.6e-6`
+/// ([`the_hash_bound_is_derived_from_the_difficulty`]). A test waiting for
+/// fewer blocks has more margin.
+///
+/// The bound counts hashes, not seconds. The workers run at the lowest
+/// priority by design, so on a host whose cores other work holds they are
+/// starved, and a bound in seconds measured the host: the 2026-11-11
+/// nightly set at load 12 to 32, and a build VM at load 21 on 2026-11-21,
+/// each timed out a working miner at the old 195 s. The hashes the
+/// workers actually tried judge the search alone.
+const EXPECTED_MULTIPLE: u64 = 15;
+
+/// [`DIFFICULTY`] as a hash count: the hashes a block takes on average.
+/// [`the_hash_bound_is_derived_from_the_difficulty`] computes in `f64`
+/// and needs it within `u32`, and its multiple within `i32`; a difficulty
+/// past those is a search no test can wait for, and the conversions there
+/// say so.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the assert above the cast holds the difficulty inside u64"
+)]
+const EXPECTED_HASHES: u64 = {
+    assert!(DIFFICULTY <= u64::MAX as u128);
+    DIFFICULTY as u64
+};
+
+/// The hashes a block's search may try: [`EXPECTED_MULTIPLE`] ×
+/// [`EXPECTED_HASHES`], 120. The wait adds one hash per worker: the count
+/// is read just after the next job is posted, and each worker can finish
+/// the hash it started on the previous job after that read, which is
+/// counted against the next block. A worker checks the board before every
+/// hash, so it starts no further hash on the previous job once the next is
+/// posted. The read comes after the post, never before: a worker could
+/// finish a hash and start another on the previous job in between.
+const SEARCH_HASHES: u64 = EXPECTED_MULTIPLE * EXPECTED_HASHES;
+
+/// How long a block's search may run before the test calls it a hang: the
+/// workers stopped hashing, or the host starved them for this long. Not a
+/// verdict on the search, which only the hash count gives. Twenty minutes
+/// is far past the 120 hashes at the floor device's 1.25 s each, about
+/// 2.5 minutes on one worker (rule 76, `DRS_X_STORE_FLIP.md` PR2-Q2).
+const HANG_AFTER: Duration = Duration::from_secs(20 * 60);
+
+/// How often the wait reads the miner's count while no block has come.
+const POLL: Duration = Duration::from_millis(500);
+
+/// The block found for the job just posted, `before` being `miner`'s count
+/// read after the post ([`SEARCH_HASHES`] says why after), judged by hashes tried ([`SEARCH_HASHES`]), with [`HANG_AFTER`]
+/// as a backstop that reports a hang, not a miner failure.
+fn the_block(found: &FoundInbox, miner: &Miner, before: u64) -> Found {
+    let workers = u64::try_from(miner.status().threads).expect("a worker count");
+    let started = Instant::now();
+    loop {
+        // Read before the wait: a block among the hashes counted here is
+        // almost always delivered within the wait. The winning hash is
+        // counted before it is checked, claimed and sent, and a starved
+        // worker can be descheduled between the two for longer than the
+        // wait; a late block then needs the bound's worth of further
+        // hashes from the other workers to look like a miss, minutes on
+        // the floor device.
+        let tried = miner.hashes_tried() - before;
+        let asked = Instant::now();
+        match found.recv_timeout(POLL) {
+            Ok(block) => return block,
+            // `FoundWait` is both a wait that ran out and an inbox that
+            // ended; only an ended inbox returns before the wait is over.
+            Err(FoundWait) => assert!(
+                asked.elapsed() >= POLL,
+                "the found-block inbox returned before the {POLL:?} wait ran out, so it \
+                 ended: no block, after {tried} hashes"
+            ),
+        }
+        assert!(
+            tried <= SEARCH_HASHES + workers,
+            "miner failure: {tried} hashes tried and no block; a working search misses \
+             {SEARCH_HASHES} at difficulty {DIFFICULTY} with probability about e^-{EXPECTED_MULTIPLE}"
+        );
+        assert!(
+            started.elapsed() < HANG_AFTER,
+            "hang, not a miner verdict: no block and {tried} of the {SEARCH_HASHES} hashes \
+             the bound allows tried in {HANG_AFTER:?} (the workers stopped, or the host starved them)"
+        );
+    }
+}
 
 /// The harness miner's full address, encoded: the wallet every scenario
 /// template pays, so the address the miner is given decodes to exactly the
@@ -255,7 +332,8 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     );
     warm_job_seed(&s, &own, &next);
     let first = board.publish(job_for(&next));
-    let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
+    let before = miner.hashes_tried();
+    let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, first);
     assert_eq!(block.height, next.height);
     assert_eq!(
@@ -299,10 +377,9 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         "the hopeless job is being searched"
     );
     let second = board.publish(job_for(&next));
+    let before = miner.hashes_tried();
     assert!(second > hopeless);
-    let block = found
-        .recv_timeout(FIND_WITHIN)
-        .expect("the newer job's block is found");
+    let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, second, "the superseded job was left");
     next.template.block = block.block.clone();
     s.connect_template(next)
@@ -386,9 +463,8 @@ async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
     assert_eq!(next.height, until);
     warm_job_seed(&s, &own, &next);
     let posted = board.publish(job_for(&next));
-    let block = found
-        .recv_timeout(FIND_WITHIN)
-        .expect("the block at the bound is found");
+    let before = miner.hashes_tried();
+    let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, posted);
     assert_eq!(block.height, until);
     next.template.block = block.block.clone();
@@ -440,14 +516,15 @@ async fn the_miner_extends_the_chain_block_after_block() {
     )
     .expect("the workers start");
     s.mine(1).await;
-    for expected in 1..6u64 {
+    for expected in 1..=u64::from(MOST_BLOCKS) {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
         assert_eq!(next.height.to_raw(), expected);
         // The workers leave a job whose seed is not warm
         // (`warm_job_seed`), so each post ranks first, as the node does.
         warm_job_seed(&s, &own, &next);
         board.publish(job_for(&next));
-        let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
+        let before = miner.hashes_tried();
+        let block = the_block(&found, &miner, before);
         next.template.block = block.block;
         s.connect_template(next)
             .await
@@ -902,18 +979,27 @@ fn a_miner_on_a_one_permit_budget_is_refused() {
     ));
 }
 
-/// [`SEARCH_HASHES`] is the fewest hashes after which a search at
-/// [`DIFFICULTY`] misses with probability below one in a billion. Red edit:
-/// raise the difficulty and leave the count.
+/// [`EXPECTED_MULTIPLE`] is the least multiple of the expected hash count
+/// at which a test waiting for [`MOST_BLOCKS`] blocks at [`DIFFICULTY`]
+/// fails falsely with probability below one in a million. Red edit: raise
+/// the difficulty, or the most blocks a test waits for, and leave `k`.
 #[test]
-fn the_search_bound_is_derived_from_the_difficulty() {
-    let win = 1.0 / f64::from(u32::try_from(DIFFICULTY).expect("a small difficulty"));
-    let miss = |hashes: u32| (1.0 - win).powi(i32::try_from(hashes).expect("small"));
-    assert!(miss(SEARCH_HASHES) < 1e-9, "{}", miss(SEARCH_HASHES));
+fn the_hash_bound_is_derived_from_the_difficulty() {
+    let win =
+        1.0 / f64::from(u32::try_from(EXPECTED_HASHES).expect("a difficulty a test can wait for"));
+    let false_failure = |multiple: u64| {
+        let hashes = i32::try_from(multiple * EXPECTED_HASHES).expect("small");
+        f64::from(MOST_BLOCKS) * (1.0 - win).powi(hashes)
+    };
     assert!(
-        miss(SEARCH_HASHES - 1) >= 1e-9,
-        "one hash fewer already meets it: {}",
-        miss(SEARCH_HASHES - 1)
+        false_failure(EXPECTED_MULTIPLE) < 1e-6,
+        "{}",
+        false_failure(EXPECTED_MULTIPLE)
     );
-    assert_eq!(FIND_WITHIN, Duration::from_secs(195));
+    assert!(
+        false_failure(EXPECTED_MULTIPLE - 1) >= 1e-6,
+        "one multiple fewer already meets it: {}",
+        false_failure(EXPECTED_MULTIPLE - 1)
+    );
+    assert_eq!(SEARCH_HASHES, 120);
 }

@@ -43,8 +43,9 @@ use shekyl_corpus::CorpusFault;
 
 use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
-use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
+use crate::pipeline::{run, EventDigest, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
+use crate::source::SequenceNo;
 use crate::substrate::SubstrateFault;
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter};
 use crate::ProductionPow;
@@ -76,12 +77,18 @@ pub enum RebaselineFault {
 
 /// Write `snap`'s chain as a trace: one facts record per height from
 /// genesis to the tip, then the checkpoint (the tip's logical-state digest)
-/// and the archival snapshot beside it.
+/// and the archival snapshot beside it, then the tables digest the run
+/// took right after each indexed event's record (`events`, ascending;
+/// empty for a chain with none).
 ///
 /// # Errors
 ///
 /// [`RebaselineFault`].
-pub fn trace_of<W: Write>(snap: &ReadSnapshot<'_>, out: W) -> Result<W, RebaselineFault> {
+pub fn trace_of<W: Write>(
+    snap: &ReadSnapshot<'_>,
+    events: &[EventDigest],
+    out: W,
+) -> Result<W, RebaselineFault> {
     let tip = snap
         .tip()?
         .recorded
@@ -116,6 +123,9 @@ pub fn trace_of<W: Write>(snap: &ReadSnapshot<'_>, out: W) -> Result<W, Rebaseli
     }
     writer.push_checkpoint(&snap.logical_state_digest_v0()?)?;
     writer.push_archival_snapshot(&snap.archival_snapshot()?)?;
+    for event in events {
+        writer.push_event_digest(event.record, &event.ours)?;
+    }
     Ok(writer.finish()?)
 }
 
@@ -130,8 +140,12 @@ pub fn trace_of<W: Write>(snap: &ReadSnapshot<'_>, out: W) -> Result<W, Rebaseli
 /// # Errors
 ///
 /// [`RebaselineFault`].
-pub fn write_trace_file(snap: &ReadSnapshot<'_>, path: &Path) -> Result<(), RebaselineFault> {
-    let bytes = trace_of(snap, Vec::<u8>::new())?;
+pub fn write_trace_file(
+    snap: &ReadSnapshot<'_>,
+    events: &[EventDigest],
+    path: &Path,
+) -> Result<(), RebaselineFault> {
+    let bytes = trace_of(snap, events, Vec::<u8>::new())?;
     publish_bytes(path, &bytes)?;
     Ok(())
 }
@@ -173,6 +187,13 @@ pub enum ReplayFault {
     /// The trace could not be written.
     #[error("trace: {0}")]
     Rebaseline(#[from] RebaselineFault),
+    /// The baseline was asked for the tables digest after records the run
+    /// never reached: the corpus ends, or the chain is refused, before them.
+    #[error("the baseline never reached the indexed events at records {records:?}")]
+    EventsUnreached {
+        /// The records.
+        records: Vec<u64>,
+    },
 }
 
 /// Connect the corpus at `corpus` against the store at `store` under
@@ -217,6 +238,10 @@ pub async fn replay_corpus(
 /// [`ReplayFault::StoreExists`] before anything is read;
 /// [`ReplayFault::Refused`] when the rules refuse a block, before `out` is
 /// opened; any other [`ReplayFault`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the replay's inputs, the trace's path and the records it digests"
+)]
 pub async fn baseline(
     corpus: &Path,
     store: &Path,
@@ -225,6 +250,7 @@ pub async fn baseline(
     pow: Arc<ProductionPow>,
     metrics: Arc<Metrics>,
     out: &Path,
+    events: &[SequenceNo],
 ) -> Result<RunReport, ReplayFault> {
     if store.exists() {
         return Err(ReplayFault::StoreExists(store.to_path_buf()));
@@ -236,14 +262,23 @@ pub async fn baseline(
         cfg,
         pow,
         metrics,
-        Arc::new(Trace::empty()),
+        Arc::new(Trace::capturing(events.iter().copied())),
     )
     .await?;
     if let Some((height, verdict)) = report.refused.take() {
         return Err(ReplayFault::Refused { height, verdict });
     }
+    if !report.events_unreached.is_empty() {
+        return Err(ReplayFault::EventsUnreached {
+            records: report
+                .events_unreached
+                .iter()
+                .map(|record| record.to_raw())
+                .collect(),
+        });
+    }
     let read = ChainStore::open_read_only(store, horizons(&rules)?)?;
-    write_trace_file(&read.begin_read()?, out)?;
+    write_trace_file(&read.begin_read()?, &report.events, out)?;
     Ok(report)
 }
 
@@ -285,7 +320,7 @@ mod tests {
         let store = crate::test_support::open_store(&store_path);
         let trace = crate::test_support::tmp("rebaseline-empty-trace");
         std::fs::write(&trace, b"previous").expect("seed the previous trace");
-        let fault = write_trace_file(&store.begin_read().expect("read"), trace.path())
+        let fault = write_trace_file(&store.begin_read().expect("read"), &[], trace.path())
             .expect_err("an empty store is not a chain");
         assert!(
             matches!(fault, RebaselineFault::Empty),
