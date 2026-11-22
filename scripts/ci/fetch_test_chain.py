@@ -145,15 +145,21 @@ def check_layers(chain: dict, directory: Path) -> None:
         raise Refused(f"{chain['name']}: the artifact holds files the pin does not name: {extra}")
 
 
-def oras_platform() -> str:
-    system = {"Linux": "linux", "Darwin": "darwin", "FreeBSD": "freebsd", "Windows": "windows"}.get(
-        platform.system()
-    )
-    machine = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(
-        platform.machine()
-    )
+# What `platform.machine()` reports, per host, for the two architectures oras
+# ships: `x86_64` (Linux, macOS), `AMD64` (Windows), `amd64` (FreeBSD);
+# `aarch64` (Linux), `arm64` (macOS, FreeBSD).
+ORAS_MACHINES = {"x86_64": "amd64", "AMD64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+ORAS_SYSTEMS = {"Linux": "linux", "Darwin": "darwin", "FreeBSD": "freebsd", "Windows": "windows"}
+
+
+def oras_platform(system_name: str | None = None, machine_name: str | None = None) -> str:
+    """The oras archive's platform for this host, or for the pair given."""
+    system_name = platform.system() if system_name is None else system_name
+    machine_name = platform.machine() if machine_name is None else machine_name
+    system = ORAS_SYSTEMS.get(system_name)
+    machine = ORAS_MACHINES.get(machine_name)
     if not system or not machine:
-        raise Refused(f"no pinned oras archive for {platform.system()} {platform.machine()}")
+        raise Refused(f"no pinned oras archive for {system_name} {machine_name}")
     return f"{system}_{machine}"
 
 
@@ -403,8 +409,27 @@ def selftest() -> int:
 
     real = load_pins()
     expect("the committed pin file parses and pins oras", bool(real["oras"]["sha256"]))
-    for plat in ("darwin_amd64", "darwin_arm64", "freebsd_amd64", "linux_amd64", "linux_arm64", "windows_amd64"):
+    # Each host's own report, as `platform` gives it there, reaches a pinned
+    # archive; a pair oras does not ship for is refused by name.
+    for host, machine, plat in (
+        ("Linux", "x86_64", "linux_amd64"),
+        ("Linux", "aarch64", "linux_arm64"),
+        ("Darwin", "x86_64", "darwin_amd64"),
+        ("Darwin", "arm64", "darwin_arm64"),
+        ("FreeBSD", "amd64", "freebsd_amd64"),
+        ("Windows", "AMD64", "windows_amd64"),
+    ):
+        try:
+            got = oras_platform(host, machine)
+        except Refused:
+            got = None
+        expect(f"{host} {machine} maps to {plat}", got == plat)
         expect(f"the pin file pins oras for {plat}", plat in real["oras"]["sha256"])
+    try:
+        oras_platform("Linux", "riscv64")
+        expect("an unshipped architecture is refused", False)
+    except Refused as why:
+        expect("an unshipped architecture is refused", "riscv64" in str(why))
     print("selftest: " + ("passed" if failures == 0 else f"{failures} failure(s)"))
     return 1 if failures else 0
 

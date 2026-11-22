@@ -30,6 +30,11 @@ fn main() -> ExitCode {
         ));
         return ExitCode::FAILURE;
     }
+    // What this process can know about an inherited ignore of a stop,
+    // read before anything installs a handler: kept, and on Unix an
+    // ignored SIGINT is said once; Windows names its stops on every start
+    // (IG-14; Rick, 2026-11-20).
+    let inherited = shekyl_process::stop::Inherited::at_start();
     let platform = shekyl_process::platform::current();
     let action = match config::load(std::env::args_os().skip(1), &platform) {
         Ok(action) => action,
@@ -87,11 +92,11 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Action::Run(config) => run(*config),
+        Action::Run(config) => run(*config, inherited),
     }
 }
 
-fn run(config: config::Config) -> ExitCode {
+fn run(config: config::Config, inherited: shekyl_process::stop::Inherited) -> ExitCode {
     let key = match read_client_key(&config.key_file) {
         Ok(Some(key)) => key,
         Ok(None) => {
@@ -128,7 +133,12 @@ fn run(config: config::Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(serve::run(config, key, |line| println!("{line}"))) {
+    if let Some(line) = inherited.line("shekyl-rpc-tunnel") {
+        eprintln!("shekyl-rpc-tunnel: {line}");
+    }
+    match runtime.block_on(serve::run(config, inherited, key, |line| {
+        println!("{line}")
+    })) {
         Ok(()) => ExitCode::SUCCESS,
         Err(why) => {
             // What ended the tunnel goes to its log as well as to stderr:
