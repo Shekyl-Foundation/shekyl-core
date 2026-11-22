@@ -5475,9 +5475,29 @@ rule, unless named.
     (year 135), the supply's break, or the reward's domain edge with the
     median there. 192 growth rows stop between y107 and y127. The other 48
     reach the horizon.
-  - The tail column is a ratio and has no unit. It is the miner's-net tail,
-    in SKL a block, over the 95th-percentile block's miner's-net fees, also
-    in SKL a block.
+  - Its `reward_net_over_fees_p95` columns, at y60, y100 and y135, are
+    ratios with no unit. Each is the miner's-net emission per block (the
+    paid reward's miner leg, a yearly mean, in SKL) over the
+    95th-percentile block's miner's-net fees, also in SKL a block.
+  - Its `tail_era_year` column is the first year more than half a fold's
+    blocks pay the tail. From that year on the emission is the tail, so
+    the reward column is the tail test, read against `k` = 1. Before it,
+    the column is the emission a miner is paid in that year. Of the 720
+    read rows, the tail era begins after y100 in 672, between y96 and
+    y100 in 43, and not by y135 in 5 (all under the miner's-net rule), so
+    the y60 and y100 columns are not the tail test.
+  - Its `adoption_year` column is the year the honest carried count's
+    trailing mean first reaches the baseline: the year blocks first carry
+    the baseline, not the year demand reaches it. Where blocks have room
+    the two coincide (slow adoption's demand reaches the baseline at y5,
+    and its blocks carry it at y5.004). In the inherited zone at `w_ref`
+    3 000 they do not: under the gross rule A-honest's blocks first carry
+    it at y18.3 on the baseline and y18.8 on slow adoption, B's at y9.6 on
+    both. `adoption_fraction` is the supply emitted by then.
+  - **Rick's review of 2026-11-22 set these three columns.** The table and
+    the nightly slice's table were regenerated under it from the same runs:
+    the recorded JSON summary for the full table, one fold for the slice.
+    The narrations do not change.
 - **The full narration and the JSON summary are not committed and not
   hosted.** The repo records the SHA-256 of each in
   `tests/fixtures/economies_full_digests.txt`, in `sha256sum`'s format.
@@ -5501,7 +5521,9 @@ rule, unless named.
   inherited zone at `w_ref` 3 000.** The gap is the release multiplier
   moving a fixed supply in time, not income gained or lost.
   - Under the gross rule, A-honest's multiplier rests at its 0.8 floor
-    until demand first reaches the baseline, at y18.3. B's multiplier is
+    until its blocks first carry the baseline, at y18.3. Demand is at the
+    baseline from y1; the zone's blocks cannot carry it until the median
+    grows. B's multiplier is
     1.0 from the start, so B emits more early: 533 SKL a block of emission
     against A-honest's 481 at y10.
   - The supply A-honest held back is still unmined. Once its multiplier
@@ -5509,15 +5531,16 @@ rule, unless named.
     against 296 at y20, and 201 against 160 at y30.
   - The gap changes sign in year 17. The sum of per-block income over
     y1–y60 is 15 463 SKL for A-honest and 15 380 for B, within 0.6 %.
-  - Under the miner's-net rule, demand stays below the baseline to y60, so
-    A-honest's multiplier stays at its floor. The sign changes in year 19,
+  - Under the miner's-net rule, the blocks carry less than the baseline to
+    y60, so A-honest's multiplier stays at its floor. The sign changes in year 19,
     and A-honest still holds supply back at y60 (15 267 against 15 581).
-  - Fees are 2 % to 5 % of income in these years and follow adoption: B's
-    fall by y13 and A-honest's by y20.
+  - Fees are 2 % to 5 % of income in these years and fall once the blocks
+    carry the baseline: B's by y13 and A-honest's by y20.
   - Everywhere else, A-honest's multiplier is about 1.0 from year 1 and
     the two economies agree within 1 SKL a block.
-- **A-stuffed's tail ratio levels off.** The tail itself is the same in
-  both economies, 0.60 SKL a block. What differs is
+- **A-stuffed's tail ratio levels off.** These figures are the narration's
+  tail line: the tail over the fees, whichever year it is. The tail itself
+  is the same in both economies, 0.60 SKL a block. What differs is
   the denominator.
   - The stuffer's own bodies pay the relay floor's fee, and the block's
     fees include them (`block_space.rs`, `fees_atomic`).
