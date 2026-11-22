@@ -82,10 +82,12 @@ pub(crate) enum KeyEngineError {
     /// low-order Montgomery rejection
     /// ([`shekyl_crypto_pq::CryptoError::LowOrderPoint`]),
     /// an invalid decap-key length
-    /// ([`shekyl_crypto_pq::CryptoError::InvalidKeyMaterial`]), or
+    /// ([`shekyl_crypto_pq::CryptoError::InvalidKeyMaterial`]), a stored
+    /// decap key that does not parse
+    /// ([`shekyl_crypto_pq::CryptoError::MalformedDecapsKey`]), or
     /// an ML-KEM-768 decap rejection
     /// ([`shekyl_crypto_pq::CryptoError::DecapsulationFailed`]).
-    /// All three indicate the same operational class (corrupted /
+    /// All four indicate the same operational class (corrupted /
     /// tampered persisted state) but the inner detail names which
     /// step rejected the input.
     #[error("source ciphertext re-decapsulation failed: {0}")]

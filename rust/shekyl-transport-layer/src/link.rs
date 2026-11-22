@@ -82,6 +82,10 @@ pub enum InboundCause {
     /// though this node's own Tor still reaches it from its copy
     /// (`TOR_SUPERVISOR.md` §4.5, the directory check).
     DescriptorNotFound,
+    /// Another Tor holding this node's onion key publishes the address: a
+    /// directory holds a copy newer than any this node published
+    /// (`TOR_SUPERVISOR.md` §4.5).
+    PublishedElsewhere,
 }
 
 /// Can peers reach this node's address through the link

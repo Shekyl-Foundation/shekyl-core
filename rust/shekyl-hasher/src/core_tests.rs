@@ -752,57 +752,97 @@ proptest! {
     fn random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request(
         ops in prop::collection::vec(op(), 1..80)
     ) {
-        let mut world = World::default();
-        for op in &ops {
-            let before = Core {
-                list: world.core.list.clone(),
-                entries: world.core.entries.clone(),
-                queue: world.core.queue.clone(),
-                leases: world.core.leases.clone(),
-                closed: world.core.closed,
-                ..Core::default()
-            };
-            let Some(out) = apply(&mut world, op) else { continue };
-            check(&world, op, &before, &out);
-            // The published `quiet` is the model's own quiescence, read
-            // off its ledger of drops, claims and derives, after every
-            // event. Red edit: drop the lease term, the entry term or
-            // the claim term from `Core::quiet`.
-            let at_rest =
-                world.quiet() && world.claimed.is_none() && world.deriving.is_none();
-            prop_assert_eq!(world.core.quiet(), at_rest, "quiet after {:?}", op);
-            // A job that waits always shows: no published state has a
-            // waiter beside caches that are all warm.
-            prop_assert!(
-                world.core.queue.is_empty()
-                    || !world.core.leases.is_empty()
-                    || world
-                        .core
-                        .entries
-                        .iter()
-                        .any(|entry| entry.state != EntryState::Resident),
-                "a job waits and nothing shows it, after {:?}",
-                op
-            );
-            // HA-R5: at quiescence the entries are the list, and a fresh
-            // core fed the same list reaches the same entries.
-            if world.quiet() && world.claimed.is_none() && world.deriving.is_none() {
-                if world.core.closed {
-                    prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
-                } else if let Some(list) = world.core.list.clone() {
-                    prop_assert_eq!(entries(&world.core), listed(&world.core));
-                    prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
-                }
+        run_sequence(&ops)?;
+    }
+}
+
+/// One sequence of the property above: every invariant after every event,
+/// then liveness once drained.
+fn run_sequence(ops: &[Op]) -> Result<(), TestCaseError> {
+    let mut world = World::default();
+    for op in ops {
+        let before = Core {
+            list: world.core.list.clone(),
+            entries: world.core.entries.clone(),
+            queue: world.core.queue.clone(),
+            leases: world.core.leases.clone(),
+            closed: world.core.closed,
+            ..Core::default()
+        };
+        let Some(out) = apply(&mut world, op) else {
+            continue;
+        };
+        check(&world, op, &before, &out);
+        // The published `quiet` is the model's own quiescence, read
+        // off its ledger of drops, claims and derives, after every
+        // event. Red edit: drop the lease term, the entry term or
+        // the claim term from `Core::quiet`.
+        let at_rest = world.quiet() && world.claimed.is_none() && world.deriving.is_none();
+        prop_assert_eq!(world.core.quiet(), at_rest, "quiet after {:?}", op);
+        // A job that waits always shows: no published state has a
+        // waiter beside caches that are all warm.
+        prop_assert!(
+            world.core.queue.is_empty()
+                || !world.core.leases.is_empty()
+                || world
+                    .core
+                    .entries
+                    .iter()
+                    .any(|entry| entry.state != EntryState::Resident),
+            "a job waits and nothing shows it, after {:?}",
+            op
+        );
+        // HA-R5: at quiescence the entries are the list, and a fresh
+        // core fed the same list reaches the same entries.
+        if world.quiet() && world.claimed.is_none() && world.deriving.is_none() {
+            if world.core.closed {
+                prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
+            } else if let Some(list) = world.core.list.clone() {
+                prop_assert_eq!(entries(&world.core), listed(&world.core));
+                prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
             }
         }
-        // Liveness: draining grants every request that did not stop.
-        drain(&mut world);
-        prop_assert!(world.pending.is_empty(), "never granted: {:?}", world.pending);
-        prop_assert!(world.core.queue.is_empty());
-        if world.core.closed {
-            prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
-        } else if let Some(list) = world.core.list.clone() {
-            prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
-        }
     }
+    // Liveness: draining grants every request that did not stop.
+    drain(&mut world);
+    prop_assert!(
+        world.pending.is_empty(),
+        "never granted: {:?}",
+        world.pending
+    );
+    prop_assert!(world.core.queue.is_empty());
+    if world.core.closed {
+        prop_assert!(world.core.entries.is_empty(), "a closed core holds nothing");
+    } else if let Some(list) = world.core.list.clone() {
+        prop_assert_eq!(entries(&world.core), fresh_quiet(&list));
+    }
+    Ok(())
+}
+
+/// The two failures `proptest-regressions/core_tests.txt` records, run by
+/// value. The file replays them by seed, and a seed names a sequence only
+/// under the generator that drew it, which a proptest or rand release may
+/// change (proptest 1.12 moved to rand 0.10); the shrunk sequences the
+/// file's comments carry are the cases.
+#[test]
+fn the_recorded_property_failures_hold_by_value() {
+    use Class::Chain;
+    let first = [
+        Op::Rank(vec![0], None),
+        Op::Rank(vec![0, 1], None),
+        Op::Request(4, Chain),
+        Op::Claim,
+        Op::Claim,
+        Op::Claim,
+        Op::Request(2, Chain),
+        Op::Rank(vec![0, 1], None),
+        Op::Request(4, Chain),
+        Op::Claim,
+        Op::Begin,
+        Op::Built,
+        Op::Rank(vec![4], None),
+    ];
+    run_sequence(&first).expect("the first recorded sequence");
+    let second = [Op::Request(0, Chain), Op::Claim, Op::Leave(0)];
+    run_sequence(&second).expect("the second recorded sequence");
 }

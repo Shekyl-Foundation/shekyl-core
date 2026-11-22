@@ -72,6 +72,24 @@ fn a_generated_identity_round_trips() {
 
 /// Each way a file can be wrong is refused with its own reason. Red edit:
 /// drop the version check, and the version-2 file is read.
+/// fips203 0.5.0 refuses a decapsulation key with a secret coefficient of q
+/// or more. In a key file that is `KeyFileError::Key`, "its keys do not form
+/// a usable identity", which is the advice that fits: the file's key is
+/// corrupt. Here the first coefficient is 0xFFF (4095 >= 3329): the low 12
+/// bits of the decapsulation key's first two bytes.
+#[test]
+fn a_key_file_whose_decaps_key_holds_a_coefficient_of_q_or_more_is_refused() {
+    let mut file = expected_file();
+    let at_dk = KEY_FILE_MAGIC.len() + 1 + 32;
+    file[at_dk] = 0xFF;
+    file[at_dk + 1] |= 0x0F;
+    assert_eq!(KEY_FILE_LEN, file.len());
+    assert_eq!(
+        StaticKeypair::from_key_file(&file).err(),
+        Some(KeyFileError::Key)
+    );
+}
+
 #[test]
 fn a_file_that_is_not_this_format_is_refused() {
     let good = expected_file();
