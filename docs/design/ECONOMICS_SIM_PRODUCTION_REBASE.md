@@ -5436,10 +5436,15 @@ measured partly under that co-load. WE-12's 80 CPU-hours is a miss by
 one regeneration at `f8e6f1ec4b`: 51 022 s in all, about 13.9 hours for
 the full table. For about eight of those hours another lane's test kept
 the host's load near 28 on 16 vCPUs. From 14:00Z to 19:00Z the table ran
-alone, at 16. Two more lanes joined for its last 45 minutes. The
-committed narration is 8.4 MB, not the 1.6 MB the code's comment
-estimated, and it holds the sample years. The JSON summary holds every
-year of every cell: 379 MB, not committed. Figures below are the median
+alone, at 16. Two more lanes joined for its last 45 minutes. The full
+narration is 8.4 MB, five times the 1.6 MB the code's comment
+estimated. That estimate was written before any full run and never
+checked against one. A row prints about 16 lines averaging 545 bytes,
+because each figure carries its median and its range across the seeds,
+and the archival, median-and-fee, tail and bloat lines each print every
+sample year: those four are 53 % of the bytes, the archival line alone
+1.7 KB a row. The JSON summary holds every year of every cell: 379 MB.
+Figures below are the median
 across seeds 1–3, on the baseline at N = 90, `w_ref` 3 000 and the gross
 rule, unless named.
 
@@ -5457,6 +5462,74 @@ rule, unless named.
 | **WE-10.** In the tail era the miner's-net tail over the 95th-percentile block's fees is above 30 on the baseline at N = 90 in every economy and rule; the grown inherited median lowers it but leaves it above 10; growth stops before the tail era | **Held on the baseline; growth moot.** The lowest at N = 90 is 115.1 (A-stuffed). In the inherited zone it is 28.5 at `w_ref` 3 000 and 17.9 at 12 595. **Not predicted, and where `k` = 1 binds:** on boom and bust in the inherited zone the ratio falls to 3.3 at `w_ref` 3 000 and 0.8 at 12 595. 48 growth folds reach y135 and some reach the tail era, but under Rick's ruling above the tail is not read from growth |
 | **WE-11.** Every committed narration passes unregenerated, and production's arm equals the existing folds' figures where both read them | **Missed on the first part.** The `--esr10` narrations moved by their last digit with the eviction split (above). The second part held: the inherited baseline reads EI-1's 711.09 at y1 and EI-2's y13.83 exactly. EI-1's re-derived figures at seed 1 (871.95, 545.89, 203.34) lie inside the table's seed ranges |
 | **WE-12.** About 80 CPU-hours | **Missed, by about 2.8 times.** About 13.9 hours on 16 vCPUs, about 220 CPU-hours, partly under co-load. The pre-flight's measure was 203 |
+
+**What is committed, and what is recorded (Rick, 2026-11-22).**
+
+- **The derived table is committed:** `tests/fixtures/economies_table.csv`,
+  960 rows, one per economy, template rule, scenario, zone and `w_ref`,
+  each figure the median across the seeds. EUP-4 reads it.
+  - Its `role` column marks each growth row `stress` and every other row
+    `read`. The tail columns are read from the `read` rows: baseline, boom
+    and bust, and slow adoption.
+  - Its `stops` column names, per seed, where the fold ended: the horizon
+    (year 135), the supply's break, or the reward's domain edge with the
+    median there. 192 growth rows stop between y107 and y127. The other 48
+    reach the horizon.
+  - The tail column is a ratio and has no unit. It is the miner's-net tail,
+    in SKL a block, over the 95th-percentile block's miner's-net fees, also
+    in SKL a block.
+- **The full narration and the JSON summary are not committed and not
+  hosted.** The repo records the SHA-256 of each in
+  `tests/fixtures/economies_full_digests.txt`, in `sha256sum`'s format.
+  The run that produced them is the regeneration at `f8e6f1ec4b` above.
+  They are reproducible outputs, and the on-demand full pin
+  (`economies_full_run_matches_its_digests_and_table`) is their proof: it
+  folds the table once, compares both digests, and derives the table from
+  that run's summary. The two files are kept privately, not in this
+  repository.
+- **The nightly derives a table from its own slice and pins it**
+  (`tests/fixtures/economies_nightly_table.csv`). The derive function runs
+  on real output every night, with nothing fetched. The slice's narration
+  and table come from one fold.
+- **Hosting is a later PR, after the results are read.** It shards the
+  table (`--shard i/n` and a merge) and publishes it through the protected
+  workflow, which never publishes bytes it did not produce (CF-R11).
+
+**Two readings for EUP-4's review.**
+
+- **The income gap between B and A-honest changes sign, and only in the
+  inherited zone at `w_ref` 3 000.** The gap is the release multiplier
+  moving a fixed supply in time, not income gained or lost.
+  - Under the gross rule, A-honest's multiplier rests at its 0.8 floor
+    until demand first reaches the baseline, at y18.3. B's multiplier is
+    1.0 from the start, so B emits more early: 533 SKL a block of emission
+    against A-honest's 481 at y10.
+  - The supply A-honest held back is still unmined. Once its multiplier
+    returns to 1.0 at y20, A-honest emits from a larger remainder: 373
+    against 296 at y20, and 201 against 160 at y30.
+  - The gap changes sign in year 17. The sum of per-block income over
+    y1–y60 is 15 463 SKL for A-honest and 15 380 for B, within 0.6 %.
+  - Under the miner's-net rule, demand stays below the baseline to y60, so
+    A-honest's multiplier stays at its floor. The sign changes in year 19,
+    and A-honest still holds supply back at y60 (15 267 against 15 581).
+  - Fees are 2 % to 5 % of income in these years and follow adoption: B's
+    fall by y13 and A-honest's by y20.
+  - Everywhere else, A-honest's multiplier is about 1.0 from year 1 and
+    the two economies agree within 1 SKL a block.
+- **A-stuffed's tail ratio levels off.** The tail itself is the same in
+  both economies, 0.60 SKL a block. What differs is
+  the denominator.
+  - The stuffer's own bodies pay the relay floor's fee, and the block's
+    fees include them (`block_space.rs`, `fees_atomic`).
+  - Once honest fees fall below that floor, the 95th-percentile block's
+    miner's-net fees stop falling: 0.0054 SKL at y100 and y135, the same in
+    the inherited and re-derived zones at `w_ref` 3 000. The ratio
+    therefore sits near 111.
+  - A-honest's denominator keeps falling (0.030 to 0.0066 SKL), so its
+    ratio keeps rising (19.7 to 91.4 in the inherited zone).
+  - Those floor fees are a wash for the stuffer, which pays them to itself
+    less the burn. A-stuffed's ratio therefore understates how far the tail
+    exceeds the fees other users pay it.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
