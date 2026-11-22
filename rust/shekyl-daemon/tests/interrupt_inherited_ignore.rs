@@ -36,8 +36,7 @@ const CHILD_DIR: &str = "SHEKYL_TEST_INTERRUPT_CHILD_DIR";
 const CHILD_PORT: &str = "SHEKYL_TEST_INTERRUPT_CHILD_PORT";
 
 /// The line the start announces when `SIGINT` was `SIG_IGN`.
-const IGNORED_LINE: &str =
-    "Ctrl-C is off because the program that started this node asked for it. \
+const IGNORED_LINE: &str = "Ctrl-C is off because the program that started shekyld asked for it. \
      Stop it with SIGTERM or the service stop.";
 
 /// How long the RPC may take to listen.

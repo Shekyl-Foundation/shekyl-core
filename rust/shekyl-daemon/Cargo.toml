@@ -53,7 +53,7 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 # shared with the managed Tor's launcher.
 shekyl-spawn = { path = "../shekyl-spawn" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }
-tokio = { version = "1", default-features = false, features = ["signal", "macros", "sync", "rt"] }
+tokio = { version = "1", default-features = false, features = ["macros", "sync", "rt"] }
 tracing = "0.1"
 
 # `GetSystemWindowsDirectoryW` for the notify command's `SystemRoot`
