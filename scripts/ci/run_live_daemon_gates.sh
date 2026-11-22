@@ -41,7 +41,7 @@
 #           archival shard with real spends before they stake).
 #   embargo — ARMED_EMBARGO, its own leg of the nightly live-daemon
 #           workflow: the relay embargo's two live walks. Each waits for
-#           a real embargo fire, which is a random draw (mean 194 s on
+#           a real embargo fire, which is a random draw (mean 230 s on
 #           the clearnet connector the walks use), so their run time has
 #           no fixed bound and would time the slow lane out on a long
 #           draw. A leg of their own keeps a long draw from reddening the
@@ -497,7 +497,7 @@ case "$GATE_LANE" in
     [ -n "${SHEKYL_TEST_TOR_BINARY:-}" ] && [ -x "$SHEKYL_TEST_TOR_BINARY" ] || {
       echo "FATAL: SHEKYL_TEST_TOR_BINARY names no executable. Stage the pinned bundle:" >&2
       echo "  python3 scripts/release/tor_bundle.py fetch --host <triple> --sources <dir>" >&2
-      echo "  python3 scripts/release/tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor" >&2
+      echo "  python3 scripts/release/tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor --licenses <stage>/tor-licenses" >&2
       exit 1
     }
     ;;
