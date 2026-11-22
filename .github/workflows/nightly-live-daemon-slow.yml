@@ -111,9 +111,14 @@ jobs:
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
     # before it lands on main.
     runs-on: ubuntu-latest
-    # One number for both legs (the timeout gate takes a whole number): the
-    # hosted-runner maximum, which the embargo leg needs.
-    timeout-minutes: 360
+    # One number for both legs (the timeout gate takes a whole number), set
+    # generously below the hosted maximum for the first nightly runs and
+    # tightened from their times (ruled 2026-11-22). Measured on the hosted
+    # runner: the slow leg 146 to 159 minutes on dev, 2026-11-18 to 20,
+    # before the body-fill walks joined it and after they left; the embargo
+    # leg 43 minutes on its first run (2026-11-22, a dispatch on this
+    # branch). 330 is about twice the slow leg.
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
@@ -195,14 +200,17 @@ jobs:
   body-fill:
     runs-on: ubuntu-latest
     # One leg per walk; one number for both (the timeout gate takes a whole
-    # number per job), sized for the longer. The CompleteTree walk passed in
-    # 7,214 s on 2026-11-21, a night every gate ran 20 to 40 per cent slower
-    # than the one before, after the job's checkout and build took about 24
-    # minutes: about 145 minutes in all, and 240 is some 1.6 times that. The
-    # market walk has no finished hosted run yet (it was cut that night when
-    # the slow leg's 240 minutes ran out); locally it took 62 per cent of
-    # the CompleteTree walk's time.
-    timeout-minutes: 240
+    # number per job), sized for the longer and set generously below the
+    # hosted maximum for the first nightly runs, then tightened from their
+    # times (ruled 2026-11-22). The CompleteTree leg took 117 minutes,
+    # checkout and build included, on 2026-11-22 (a dispatch on this
+    # branch), and about 145 on 2026-11-21, a night every gate ran 20 to 40
+    # per cent slower. The market walk has no finished hosted run yet: cut
+    # with the slow leg at 240 minutes on 2026-11-21, and its 2026-11-22
+    # dispatch cancelled at 79 minutes to free runners. Locally it takes 62
+    # per cent of the CompleteTree walk's time. 300 is about twice the
+    # slower CompleteTree night.
+    timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
