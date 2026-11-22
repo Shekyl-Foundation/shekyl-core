@@ -26,6 +26,9 @@
 //!   configuration, the rendezvous and the wallets read it here.
 //!   [`ensure_per_account_root`] makes it as the daemon does, which a
 //!   wallet binary does at its start, before it makes anything in it.
+//! - [`create_account_dir_all`]: a directory and the missing ones above it,
+//!   made as the daemon makes its data directory: owner-only on Unix
+//!   ([`OWNER_ONLY_DIR_MODE`]), whatever the umask.
 //!   The wallet directory in it is the wallet file crate's
 //!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
@@ -123,9 +126,10 @@ pub fn per_account_root() -> Option<PathBuf> {
 /// spelling of the root's path (Windows matches names without regard to
 /// case), then finds the root already made with its protections. On Windows it is owner-only with the
 /// no-read-up label, made in the creating call
-/// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it has this
-/// process's mode, as the daemon's data directory does. An existing root is
-/// the operator's and is left as it is.
+/// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it is
+/// [`OWNER_ONLY_DIR_MODE`], made by [`create_account_dir_all`] as the
+/// daemon's data directory is. An existing root is the operator's and is
+/// left as it is.
 ///
 /// # Errors
 /// The create failed, or on Windows the owner or the descriptor could not
@@ -138,7 +142,68 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::fs::create_dir_all(root)
+        create_account_dir_all(root)
+    }
+}
+
+/// The mode of a directory this account alone may enter: what the daemon
+/// gives every directory it creates on Unix, whatever the umask.
+pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
+
+/// Creates `path` and every directory above it that is missing, the way
+/// the daemon creates its data directory (Rick, 2026-11-22).
+///
+/// On Unix each directory this call creates is [`OWNER_ONLY_DIR_MODE`],
+/// whatever the umask: it is created with that mode, which a umask can only
+/// narrow, and then set to it. A directory that already exists, or that
+/// another process creates first, is not this call's and keeps its mode.
+/// The data directory holds the service's console key, the host
+/// administrator's credential, and its console socket, so it is the
+/// account's alone on its own account, not only through a directory above
+/// it.
+///
+/// On Windows it is `create_dir_all`: each directory inherits its parent's
+/// access list. The files and the pipe the daemon keeps there carry their
+/// own owner-only descriptors from their creating calls, which Windows
+/// enforces on every open, so the directory is not their containment.
+///
+/// # Errors
+/// A directory could not be created or its mode set.
+pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        // The missing directories, innermost first.
+        let mut missing = Vec::new();
+        let mut at = Some(path);
+        while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
+            match std::fs::symlink_metadata(dir) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.push(dir);
+                    at = dir.parent();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        for dir in missing.into_iter().rev() {
+            match std::fs::DirBuilder::new()
+                .mode(OWNER_ONLY_DIR_MODE)
+                .create(dir)
+            {
+                Ok(()) => std::fs::set_permissions(
+                    dir,
+                    std::fs::Permissions::from_mode(OWNER_ONLY_DIR_MODE),
+                )?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
     }
 }
 
@@ -401,6 +466,38 @@ mod per_account_root_tests {
         assert!(root.join("wallets").is_dir(), "the same root");
         shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
             .expect("the root keeps its protections");
+    }
+
+    /// On Unix every directory the creator makes is owner-only, the data
+    /// home and the network directory alike, and a directory that was
+    /// already there keeps its mode. Red edit: `create_dir_all`, whose
+    /// directories take the umask's mode (`0755` under the common `022`).
+    #[cfg(unix)]
+    #[test]
+    fn every_directory_made_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |dir: &Path| {
+            std::fs::metadata(dir)
+                .expect("the directory's metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let shared = base.path().join("shared");
+        std::fs::create_dir(&shared).expect("made");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).expect("set");
+        let home = shared.join("home");
+        let data = home.join("testnet");
+        create_account_dir_all(&data).expect("made");
+        assert_eq!(mode(&home), OWNER_ONLY_DIR_MODE, "the data home");
+        assert_eq!(mode(&data), OWNER_ONLY_DIR_MODE, "the network directory");
+        assert_eq!(
+            mode(&shared),
+            0o755,
+            "an existing directory is not this call's"
+        );
+        create_account_dir_all(&data).expect("an existing directory is left as it is");
     }
 
     /// The root this account resolves is its home's, on every platform the

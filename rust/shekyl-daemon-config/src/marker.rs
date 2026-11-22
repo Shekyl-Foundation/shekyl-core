@@ -221,8 +221,9 @@ mod tests {
             MarkerRead::Absent
         );
         assert!(!data.exists());
-        // An empty directory: absent, and no marker appears.
-        std::fs::create_dir(&data).unwrap();
+        // An empty directory, made as the daemon makes one: absent, and no
+        // marker appears.
+        shekyl_os_account::create_account_dir_all(&data).unwrap();
         assert_eq!(
             read(&data, Network::Testnet, ID_A).unwrap(),
             MarkerRead::Absent

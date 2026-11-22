@@ -1987,7 +1987,10 @@ a demonstrated operator recovery need returns it as a ruled capability.
   can open, as the owner reaches a run-as-me daemon on one only it can
   open: on Unix the socket `rpc-console.sock` in the network's data
   directory, which must be the service account's alone (the socket `0600`
-  from before it listens, through the listeners' shared bind), replaced at
+  from before it listens, through the listeners' shared bind; the daemon
+  makes the data directory `0700` and refuses an existing one others can
+  enter, `config.data-dir.exposed`, since it also holds the console's key;
+  Rick, 2026-11-22), replaced at
   start under the exclusive lock and removed at a clean stop; on Windows a
   pipe under a fresh random name with the data home's ACL (the service
   account and Administrators), named in `rpc-console.pipe` beside the

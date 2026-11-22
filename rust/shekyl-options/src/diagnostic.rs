@@ -67,6 +67,16 @@ pub enum Code {
     DataDirUnusable,
     /// Another daemon holds the data directory's lock.
     DataDirLocked,
+    /// The data directory exists and accounts other than the daemon's can
+    /// enter it (Unix: its mode has a group or other bit). It holds the
+    /// daemon's keys, a service's console key (`rpc-console.key`, the
+    /// host's administrator) among them, and the console's socket, so it is
+    /// the daemon's account's alone on its
+    /// own account, which the console socket's directory check enforces;
+    /// a directory above it is not counted. The daemon refuses it and never
+    /// changes a mode it did not create; the operator's fix is
+    /// `chmod 700` (Rick, 2026-11-22).
+    DataDirExposed,
     /// The data directory's marker names another network.
     MarkerNetwork,
     /// The marker names this network with a different network id.
@@ -166,6 +176,7 @@ impl Code {
             Self::PathNoHome => "config.path.no-home",
             Self::DataDirUnusable => "config.data-dir.unusable",
             Self::DataDirLocked => "config.data-dir.locked",
+            Self::DataDirExposed => "config.data-dir.exposed",
             Self::MarkerNetwork => "config.marker.network",
             Self::MarkerNetworkId => "config.marker.network-id",
             Self::MarkerMissing => "config.marker.missing",
@@ -377,6 +388,12 @@ impl Diagnostic {
                 "another daemon is using the data directory {}; stop it, or give this one a different `--data-dir`",
                 p("path")
             ),
+            Code::DataDirExposed => format!(
+                "the data directory {} has mode {}, so other accounts on this host can enter it, and it holds the daemon's keys (a service's console key among them) and its console socket; make it this account's alone with `chmod 700 {}` (the daemon does not change a mode it did not set)",
+                p("path"),
+                p("mode"),
+                p("path")
+            ),
             Code::MarkerNetwork => format!(
                 "the data directory {} belongs to {}, and this daemon is starting on {}; start it on {}, or give it a different `--data-dir`",
                 p("path"),
@@ -586,6 +603,7 @@ mod tests {
             Code::PathNoHome,
             Code::DataDirUnusable,
             Code::DataDirLocked,
+            Code::DataDirExposed,
             Code::MarkerNetwork,
             Code::MarkerNetworkId,
             Code::MarkerMissing,

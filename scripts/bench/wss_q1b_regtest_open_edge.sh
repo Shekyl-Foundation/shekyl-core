@@ -34,7 +34,8 @@ if [ "$BLOCKS" -lt 2 ]; then
   echo "blocks must be at least 2 (one genesis, one sampled); got $BLOCKS"; exit 7
 fi
 
-rm -rf "$DATA"; mkdir -p "$DATA"
+# Owner-only: the daemon refuses an existing data directory others can enter.
+rm -rf "$DATA"; mkdir -p -m 0700 "$DATA"
 # The daemon exits on stdin EOF (its own log says so: "EOF on stdin, exiting"),
 # which is why the Rust harness gives it a piped stdin and holds the handle.
 # Nothing reads the daemon's stdin without `--console`, so a closed stdin

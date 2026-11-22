@@ -39,6 +39,40 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-22 — The daemon's data directory is its account's alone; the daemon makes it 0700 and refuses a wider one
+
+**Decision (Rick, 2026-11-22).** Every directory the daemon creates on its
+data directory's path, the data home and the network directory included, is
+`0700` on Unix whatever the umask
+(`shekyl_os_account::create_account_dir_all`, which `Lock::take` and the log
+location use, and the wallet binaries' `ensure_per_account_root` too). An
+existing data directory other accounts can enter refuses the start with
+`config.data-dir.exposed`, naming the directory and `chmod 700 <dir>`; the
+configuration check refuses it the same way. The daemon never changes a mode
+it did not create. The FreeBSD rc script already makes the service's data home
+`0700`; the network directory inside it is the daemon's, now `0700`. The
+release notes name the one-time `chmod 700` for an existing node.
+
+**Rationale.** The data directory holds an administrator's secret. A service's
+console key, `rpc-console.key`, is the host's administrator
+(`shekyl-daemon-rpc/src/authority.rs`), and it lives in the network's data
+directory beside the console's socket. A `0755` data directory lets every
+account on the host list and walk the directory where they sit. So the data
+directory is owner-only on its own account, not only through a directory
+above it, and the console socket's directory check (the entry below) enforces
+it. The check found the gap: the daemon made the network directory with the
+umask's mode (`create_dir_all`), so a FreeBSD service's `/var/db/shekyl/<network>`
+and any daemon started without `--data-dir` had a `0755` data directory, which
+the console leg's mandatory check refuses. Making it `0700` at creation fixes
+a new node; refusing an existing wider one, rather than narrowing it, leaves an
+operator's mode the operator's.
+
+**Windows.** Not checked here. The console key and the console leg's record
+are created with owner-only descriptors in their creating calls and refused
+on read when anyone else can read them, and the console's pipe is owner-only;
+Windows enforces each object's descriptor on every open, so the directory is
+not their containment the way it is for a socket on a BSD-derived system.
+
 ## 2026-11-22 — Every socket listener is 0600 before it listens; its directory stays the containment
 
 **Decision.** Every Unix socket listener — the wallet RPC server, the

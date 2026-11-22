@@ -335,7 +335,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let data = d.path().join("data");
         let log = d.path().join("shekyld.log");
-        std::fs::create_dir(&data).unwrap();
+        // Owner-only, so the refusal is the marker's and not the mode's.
+        shekyl_os_account::create_account_dir_all(&data).unwrap();
         let other = marker::render(shekyl_daemon_config::Network::Testnet, [9u8; 16]);
         std::fs::write(data.join("shekyld.network"), &other).unwrap();
         let a = offline_regtest(&data, &log);

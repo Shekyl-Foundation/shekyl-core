@@ -18,10 +18,14 @@ use std::path::Path;
 pub(crate) const PERMISSION_BITS: u32 = 0o7777;
 
 /// A directory the account alone may enter.
-pub(crate) const ACCOUNT_ONLY_MODE: u32 = 0o700;
+pub(crate) const ACCOUNT_ONLY_MODE: u32 = shekyl_os_account::OWNER_ONLY_DIR_MODE;
 
 /// Write permission for the group or for others.
 pub(crate) const GROUP_OR_OTHER_WRITE: u32 = 0o022;
+
+/// Any permission for the group or for others: a directory with none of
+/// these bits is the account's alone.
+pub(crate) const GROUP_OR_OTHER_ANY: u32 = 0o077;
 
 /// The account a service refuses to run as.
 const ROOT_ACCOUNT: u32 = 0;

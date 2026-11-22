@@ -455,7 +455,9 @@ impl Regtest {
             .port();
         let data_dir = std::env::temp_dir().join(format!("shekyl-tx-show-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("data dir");
         let config_dir = private_config_dir(rpc_port);
         let stdout = std::fs::File::create(data_dir.join("daemon.log")).expect("stdout log");
         let stderr = stdout.try_clone().expect("stderr log");

@@ -20,7 +20,7 @@ mod live_daemon;
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -178,12 +178,10 @@ impl Daemon {
         }));
         let data_dir = owner_only_base().join(format!("shekyl-{test}-{rpc_port}"));
         drop(std::fs::remove_dir_all(&data_dir));
-        // Owner-only: the daemon refuses a configuration file whose directory
-        // its group or others can write.
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&data_dir)
-            .expect("create data dir");
+        // Owner-only, as the daemon makes a data directory: the daemon refuses
+        // a configuration file whose directory its group or others can write,
+        // and an existing data directory others can enter.
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("create data dir");
         let config = data_dir.join("shekyld.toml");
         std::fs::OpenOptions::new()
             .write(true)

@@ -40,11 +40,42 @@ impl Lock {
     /// a daemon is up.
     ///
     /// # Errors
-    /// `config.data-dir.unusable`, as `take` would refuse.
+    /// `config.data-dir.unusable` or `config.data-dir.exposed`, as `take`
+    /// would refuse.
     pub fn creatable(data_dir: &Path) -> Result<(), Diagnostic> {
         let unusable = Self::unusable(data_dir);
         probe::directory_creatable(data_dir).map_err(&unusable)?;
+        Self::owner_only(data_dir)?;
         probe::file_openable(&data_dir.join(LOCK_FILE), probe::Need::ReadWrite).map_err(unusable)
+    }
+
+    /// Refuses an existing data directory other accounts can enter
+    /// (`config.data-dir.exposed`; Rick, 2026-11-22). It holds the daemon's
+    /// keys, a service's console key (the host's administrator) among them,
+    /// and the console's socket, so it is the account's alone on its own
+    /// account: a directory above it is not counted. The mode is the
+    /// operator's to change; the daemon never changes a mode it did not
+    /// create. A missing directory passes: [`Lock::take`] creates it
+    /// owner-only. Windows has no mode to read here: the keys and the
+    /// console's pipe carry owner-only descriptors of their own.
+    fn owner_only(data_dir: &Path) -> Result<(), Diagnostic> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let Ok(meta) = std::fs::metadata(data_dir) else {
+                return Ok(());
+            };
+            let mode = meta.permissions().mode() & crate::directory::PERMISSION_BITS;
+            if meta.is_dir() && mode & crate::directory::GROUP_OR_OTHER_ANY != 0 {
+                return Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
+                    .option("data-dir")
+                    .param("path", data_dir.display().to_string())
+                    .param("mode", format!("{mode:04o}")));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = data_dir;
+        Ok(())
     }
 
     fn unusable(data_dir: &Path) -> impl Fn(std::io::Error) -> Diagnostic {
@@ -59,16 +90,20 @@ impl Lock {
 
     /// Creates the data directory if it is missing, then takes the lock.
     /// [`Lock::creatable`] is asked first, so the decision is written once.
+    /// Every directory it creates, the data home and the network directory
+    /// included, is owner-only whatever the umask
+    /// (`shekyl_os_account::create_account_dir_all`).
     ///
     /// # Errors
     /// `config.data-dir.unusable` when the directory cannot be created or
-    /// the lock file cannot be opened; `config.data-dir.locked` when another
-    /// process holds the lock.
+    /// the lock file cannot be opened; `config.data-dir.exposed` when it
+    /// exists and other accounts can enter it; `config.data-dir.locked`
+    /// when another process holds the lock.
     pub fn take(data_dir: &Path) -> Result<Self, Diagnostic> {
         Self::creatable(data_dir)?;
         let shown = data_dir.display().to_string();
         let unusable = Self::unusable(data_dir);
-        std::fs::create_dir_all(data_dir).map_err(&unusable)?;
+        shekyl_os_account::create_account_dir_all(data_dir).map_err(&unusable)?;
         if !data_dir.is_dir() {
             return Err(unusable(std::io::Error::other("not a directory")));
         }
@@ -162,6 +197,73 @@ mod tests {
         assert_eq!(Lock::take(&data).unwrap_err().code, Code::DataDirUnusable);
         assert!(!data.exists());
         std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// The permission bits of `dir`.
+    #[cfg(unix)]
+    fn mode_of(dir: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(dir).unwrap().permissions().mode() & crate::directory::PERMISSION_BITS
+    }
+
+    /// A fresh data directory, and the data home above it, are made
+    /// owner-only under the common umask `022`. Red edit: create them with
+    /// `create_dir_all` (`0755`).
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_data_directory_is_created_owner_only_under_umask_022() {
+        use rustix::fs::Mode;
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path().join("home");
+        let data = home.join("testnet");
+        let previous = rustix::process::umask(Mode::from_raw_mode(0o022));
+        let taken = Lock::take(&data);
+        rustix::process::umask(previous);
+        let _held = taken.unwrap();
+        for dir in [&home, &data] {
+            assert_eq!(
+                mode_of(dir),
+                crate::directory::ACCOUNT_ONLY_MODE,
+                "{}",
+                dir.display()
+            );
+        }
+    }
+
+    /// An existing data directory other accounts can enter is refused, by
+    /// the check as by the start, naming the directory and the fix, with
+    /// nothing made in it and its mode left as the operator set it. Red
+    /// edit: drop the check, and the lock is taken in it.
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_0755_data_directory_is_refused_with_the_named_fix() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
+        for e in [
+            Lock::creatable(&data).unwrap_err(),
+            Lock::take(&data).unwrap_err(),
+        ] {
+            assert_eq!(e.code, Code::DataDirExposed);
+            assert_eq!(e.option.as_deref(), Some("data-dir"));
+            assert_eq!(e.get("path"), data.to_str());
+            assert_eq!(e.get("mode"), Some("0755"));
+            let shown = e.render();
+            assert!(
+                shown.contains(&format!("chmod 700 {}", data.display())),
+                "{shown}"
+            );
+        }
+        assert_eq!(mode_of(&data), 0o755, "the daemon does not change it");
+        assert!(!data.join(LOCK_FILE).exists(), "nothing is made in it");
+        std::fs::set_permissions(
+            &data,
+            std::fs::Permissions::from_mode(crate::directory::ACCOUNT_ONLY_MODE),
+        )
+        .unwrap();
+        Lock::take(&data).unwrap();
     }
 
     #[test]
