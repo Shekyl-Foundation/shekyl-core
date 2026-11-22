@@ -239,10 +239,17 @@ fn create_at(base: &Path, pid: u32, spawn: u64) -> io::Result<PrivateDir> {
     let creating = base.join(format!("{DIR_PREFIX}{pid}-{spawn}{CREATING_SUFFIX}"));
     clear_stale(&final_dir)?;
     clear_stale(&creating)?;
-    std::fs::DirBuilder::new()
-        .mode(DIR_MODE)
-        .create(&creating)
-        .map_err(|error| at(&creating, &error))?;
+    // The creating name joins the set before the directory exists. Between
+    // the mkdir and the lock, a sweep in this process (another server
+    // starting on another thread) would otherwise find a directory with no
+    // lock held, and on FreeBSD and macOS its `try_lock` would be granted
+    // anyway (per-process `flock`): it would remove the directory under this
+    // start, and this start's lock would fail.
+    remember(&creating);
+    if let Err(error) = std::fs::DirBuilder::new().mode(DIR_MODE).create(&creating) {
+        forget(&creating);
+        return Err(at(&creating, &error));
+    }
     let lock_path = creating.join(LOCK_FILE);
     let lock = match OpenOptions::new()
         .read(true)
@@ -254,17 +261,18 @@ fn create_at(base: &Path, pid: u32, spawn: u64) -> io::Result<PrivateDir> {
         Ok(file) => file,
         Err(error) => {
             abandon(&creating);
+            forget(&creating);
             return Err(at(&lock_path, &error));
         }
     };
     if let Err(error) = lock.lock() {
         abandon(&creating);
+        forget(&creating);
         return Err(at(&lock_path, &error));
     }
-    // Both names, before the final one is visible. The creating name is what
-    // a same-process sweep sees until the rename; the final name is what it
-    // sees after. `flock` would not stop that sweep on FreeBSD or macOS.
-    remember(&creating);
+    // The final name too, before it is visible: what a same-process sweep
+    // sees after the rename. `flock` would not stop that sweep on FreeBSD or
+    // macOS.
     remember(&final_dir);
     // CLIPPY: disallowed_methods — the unpublished directory is renamed onto
     // its final name. That is not a file replace.
@@ -507,6 +515,52 @@ mod tests {
     /// what FreeBSD and macOS need, where `flock` is per process and a
     /// second open in this process is granted. Red edit: delete the set and
     /// decide only by the lock.
+    /// Servers starting at once in one process, each sweeping the base its
+    /// siblings are creating in: every start succeeds and keeps its own
+    /// directory. Seen red on macOS (a sibling's sweep removed a directory
+    /// between its mkdir and its lock: `wallet-rpc.lock: Invalid argument`).
+    /// Red edit: record the creating name only after the lock.
+    #[test]
+    fn starts_in_one_process_never_sweep_each_other() {
+        const STARTS: u64 = 8;
+        const ROUNDS: usize = 50;
+        for round in 0..ROUNDS {
+            let base = tempfile::tempdir().expect("tempdir");
+            let gate = std::sync::Barrier::new(usize::try_from(STARTS).expect("small"));
+            let made: Vec<PrivateDir> = std::thread::scope(|scope| {
+                let starts: Vec<_> = (0..STARTS)
+                    .map(|spawn| {
+                        let (base, gate) = (base.path(), &gate);
+                        scope.spawn(move || {
+                            gate.wait();
+                            sweep(base);
+                            create_at(base, 7, 1000 * round as u64 + spawn)
+                        })
+                    })
+                    .collect();
+                starts
+                    .into_iter()
+                    .map(|start| {
+                        start
+                            .join()
+                            .expect("a start thread")
+                            .unwrap_or_else(|e| panic!("round {round}: a start failed: {e}"))
+                    })
+                    .collect()
+            });
+            for dir in &made {
+                assert!(
+                    dir.path().join(LOCK_FILE).exists(),
+                    "round {round}: {} lost its lock file to a sibling's sweep",
+                    dir.path().display()
+                );
+            }
+            for dir in made {
+                dir.remove().expect("remove");
+            }
+        }
+    }
+
     #[test]
     fn a_directory_this_process_published_stays_even_with_no_lock() {
         let base = tempfile::tempdir().expect("tempdir");
