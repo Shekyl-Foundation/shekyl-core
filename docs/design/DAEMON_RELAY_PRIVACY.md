@@ -18365,3 +18365,82 @@ comes already carries more than this: with `s` nodes upstream it is
   shipped timer both ways; `leak_at_each_candidate_region` and
   `precision_increment_reproduces_delta_table` keep their records on the
   solved draw and add the shipped timer's row.
+
+## 101. A batch received while the node is behind is held — IMPLEMENTED 2026-11-22
+
+**Status: IMPLEMENTED 2026-11-22.** The
+relay ignored every transaction batch that arrived while the node was not
+synchronised. This section records why that loses stems, and the hold that
+replaces it.
+
+### 101.1 The loss
+
+The relay's reading of chain sync is synchronised only in the `Synced`
+state. A node leaves that state each time it hears of a block it has not
+connected, and returns to it when the block is in. Between the two, the
+relay's seat (`shekyl-relay` `owner/port.rs`) returned from a 2002 without
+looking at it. The inherited C++ handler made the same return while the
+core reported itself not synchronised.
+
+A stem dropped there is lost with nothing to tell its sender. The sender
+cannot tell it from a stem a peer black-holed, so it waits out its whole
+embargo, floor and draw (§100), and then spends its one re-stem. On a node
+with one return path the re-stem's fluff comes back from the alternate,
+which F-10 does not count, so the entry waits for a second fire.
+
+Read from an emission walk on a three-node Tor mesh, with the relay logged
+at debug: one node ignored three stems in the second before it reached a
+new tip, and seventeen batches in the walk's twenty-seven minutes. The
+origin's embargo for one of the three fired 75.5 s after its send, past the
+57 s floor, as it should for a stem that was lost.
+
+How often the gap opens on a network that is not mining in bursts over Tor
+is not measured.
+
+### 101.2 The hold
+
+A batch that arrives while the node is not synchronised is kept, with its
+stem or fluff flag, and admitted when the node turns synchronised: offered
+to the pool then, and stemmed, fluffed or counted as an arrival exactly as
+if it had arrived at that moment. The pool cannot judge a transaction
+against a chain the node is still catching up to, so nothing is admitted
+or relayed before the turn.
+
+- **The bound is bytes, one 2002's worth for each session.** A synchronised
+  node is bounded by the session's permit: one batch in flight for each
+  session. A held batch cannot keep that permit, because the session reads
+  one frame at a time under it and the block the node is waiting for may be
+  that session's next frame. One message's worth of bytes is the same bound
+  stated without the permit. What a session sends past it while the node is
+  behind is ignored. The figure is the 2002's own cap and is as tight as
+  that cap: PWD-B12 is what binds it.
+- **A session that closes takes its held batches with it.** Their source is
+  gone from the zone.
+- **Fluffs are held too.** A fluff dropped at a node that is behind is a
+  missed return for a stem that node sent.
+- **A long first sync.** The hold is the same bound for a node syncing from
+  nothing. What it holds is judged by the pool at the turn, which refuses
+  what the chain has since made stale.
+- **Admission runs beside the relay's task,** never on its timer path.
+
+### 101.3 Tests
+
+`shekyl-relay` `tests/owner.rs`, on live sessions:
+`stems_received_while_behind_are_held_and_stemmed_at_sync` (the walk's
+sequence: three stem batches on one session inside one gap),
+`a_fluff_received_while_behind_is_shown_at_sync`,
+`a_session_that_closes_takes_its_held_batches` and
+`a_node_that_falls_behind_again_holds_again`. The bound is
+`a_sessions_hold_ends_at_one_messages_worth` in `owner/port.rs`.
+
+### 101.4 Read on a walk
+
+The emission walk on a three-node Tor mesh, with this hold and §100's floor
+both in the tree and the relay logged at debug (2026-11-22): the origin
+sent 289 transactions and every stem's fluff came back, with a longest wait
+of 38.0 s against the 57 s floor; no embargo fired on any node. The other
+two nodes held 13 and 6 batches while behind and admitted each at its turn;
+none was past a session's hold. With the floor alone the same walk loses
+stems in the gap and goes red at its shown-pool wait (§101.1). That walk
+ended later, in its mining leg, at a harness timeout that is no part of the
+relay.

@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! The relay owner on live sessions (`P2P_3_REMNANT_CUTOVER_BRIEF.md`
-//! §2.1, §5): 2002 before sync is ignored, after sync admitted and
-//! relayed; a bad batch severs; 2010 is served from the pool; a local
+//! §2.1, §5): 2002 while the node is not synchronised is held and admitted
+//! at the turn, otherwise admitted and relayed; a bad batch severs; 2010 is served from the pool; a local
 //! origin waits for sync; a slow pool holds the session's reads.
 
 mod support;
@@ -16,31 +16,163 @@ use std::time::Duration;
 use shekyl_p2p_session::harness::Wire;
 use shekyl_p2p_session::CloseKind;
 use shekyl_relay::owner::Admit;
-use shekyl_relay::{transit_ms, ConnectorId, NodeSync};
+use shekyl_relay::{transit_ms, ConnectorId, NodeSync, TxId};
 use shekyl_relay_privacy::params::DandelionParams;
 use shekyl_relay_privacy::schedule::EmbargoTimer;
 use support::{
     blob, id_of, new_transactions, txpool_complement, Asked, Build, Draws, FixedDraw, Rig, SETTLE,
 };
 
+/// Wait until `wire`'s session has handled every frame injected so far. A
+/// session reads one frame at a time, so a 2010 sent after them is answered
+/// only once they are done; `mark` names this request. The empty reply is
+/// read off the wire.
+fn handled_so_far(rig: &Rig, wire: &mut Wire, mark: u8) {
+    wire.inject_blocking(txpool_complement(vec![[mark; 32]]));
+    support::wait_until("the session reached the marker", || {
+        rig.pool.asked().iter().any(|asked| {
+            matches!(asked, Asked::Complement(known) if *known == [TxId::from_bytes([mark; 32])])
+        })
+    });
+    assert!(rig.read_batch(wire).txs.is_empty(), "the marker's reply");
+}
+
+/// A node behind a block holds what arrives and admits it when it is
+/// synchronised again: nothing reaches the pool or a peer before the turn,
+/// the session stays and reads on, and after the turn every stem is stemmed.
+///
+/// The sequence is the one a live walk lost: three stem batches on one
+/// session inside one behind window, a second before the node reached the
+/// new tip. Each was ignored, their sender heard nothing, and each waited
+/// out its whole embargo.
+/// Red edit: return from `new_transactions` while unsynchronised, as it did.
 #[test]
-fn a_batch_before_sync_is_ignored_and_the_session_stays() {
+fn stems_received_while_behind_are_held_and_stemmed_at_sync() {
     let rig = Rig::build(Build {
         node_sync: NodeSync::Unsynchronised,
         ..Build::default()
     });
-    let mut peer = rig.inbound(1);
-    peer.inject_blocking(new_transactions(vec![blob(1), blob(2)], true));
-    thread::sleep(SETTLE);
+    let mut successor = rig.outbound(1);
+    let mut sender = rig.inbound(1);
+    for tag in [1, 2, 3] {
+        sender.inject_blocking(new_transactions(vec![blob(tag)], false));
+    }
+    handled_so_far(&rig, &mut sender, 0xE1);
     assert!(
         rig.pool.admits().is_empty(),
-        "nothing was offered to the pool"
+        "nothing is offered to the pool while the node is behind"
     );
     assert!(
-        rig.layer.board().get(peer.id).is_some(),
+        rig.layer.board().get(sender.id).is_some(),
         "an unsynchronised node keeps the session"
     );
-    assert!(rig.quiet(&mut peer));
+    assert!(
+        rig.quiet(&mut successor),
+        "nothing held is relayed before the turn"
+    );
+    assert!(rig.quiet(&mut sender));
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("all three were admitted", || rig.pool.admits().len() == 3);
+    assert_eq!(
+        rig.pool.admits(),
+        vec![blob(1), blob(2), blob(3)],
+        "in the order they arrived"
+    );
+    let stemmed: Vec<Vec<u8>> = rig
+        .batches(&mut successor)
+        .into_iter()
+        .inspect(|batch| assert!(!batch.dandelionpp_fluff, "a held stem is still a stem"))
+        .flat_map(|batch| batch.txs)
+        .collect();
+    assert_eq!(stemmed, vec![blob(1), blob(2), blob(3)]);
+    assert!(rig.quiet(&mut sender));
+}
+
+/// A fluff that arrives while the node is behind is held too, and counted
+/// when the node is synchronised: it is shown and fluffed on. A fluff
+/// dropped at a node that is behind is a missed return for a stem that
+/// node sent.
+/// Red edit: hold only batches whose flag is stem.
+#[test]
+fn a_fluff_received_while_behind_is_shown_at_sync() {
+    let rig = Rig::build(Build {
+        node_sync: NodeSync::Unsynchronised,
+        ..Build::default()
+    });
+    let mut sender = rig.inbound(1);
+    let mut other = rig.inbound(2);
+    sender.inject_blocking(new_transactions(vec![blob(5)], true));
+    handled_so_far(&rig, &mut sender, 0xE2);
+    assert!(rig.pool.admits().is_empty());
+    assert!(rig.pool.shown().is_empty());
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("it was shown", || rig.pool.shown().len() == 1);
+    assert_eq!(rig.pool.shown(), vec![id_of(&blob(5))]);
+    let batch = rig.read_batch_within(&mut other, 10);
+    assert!(batch.dandelionpp_fluff);
+    assert_eq!(batch.txs, vec![blob(5)]);
+}
+
+/// A session that closes takes its held batches with it: nothing of them
+/// reaches the pool at the turn.
+/// Red edit: leave the session's entry in the hold when it closes.
+#[test]
+fn a_session_that_closes_takes_its_held_batches() {
+    let rig = Rig::build(Build {
+        node_sync: NodeSync::Unsynchronised,
+        ..Build::default()
+    });
+    let mut leaver = rig.inbound(1);
+    let mut stayer = rig.inbound(2);
+    leaver.inject_blocking(new_transactions(vec![blob(7)], false));
+    stayer.inject_blocking(new_transactions(vec![blob(8)], false));
+    handled_so_far(&rig, &mut leaver, 0xE5);
+    handled_so_far(&rig, &mut stayer, 0xE6);
+    leaver.peer_closes();
+    rig.wait_closed(leaver.id);
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("the staying session's batch was admitted", || {
+        !rig.pool.admits().is_empty()
+    });
+    thread::sleep(SETTLE);
+    assert_eq!(rig.pool.admits(), vec![blob(8)]);
+}
+
+/// A node that falls behind again holds again: the hold is for every gap,
+/// not only the first sync.
+/// Red edit: admit held batches once, at the first turn only.
+#[test]
+fn a_node_that_falls_behind_again_holds_again() {
+    let rig = Rig::build(Build::default());
+    let mut sender = rig.inbound(1);
+    sender.inject_blocking(new_transactions(vec![blob(9)], true));
+    support::wait_until("a synchronised node admits at once", || {
+        rig.pool.admits().len() == 1
+    });
+
+    rig.node_sync
+        .send(NodeSync::Unsynchronised)
+        .expect("the owner listens");
+    sender.inject_blocking(new_transactions(vec![blob(10)], true));
+    handled_so_far(&rig, &mut sender, 0xE7);
+    assert_eq!(rig.pool.admits().len(), 1, "held while behind");
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("admitted at the second turn", || {
+        rig.pool.admits().len() == 2
+    });
+    assert_eq!(rig.pool.admits(), vec![blob(9), blob(10)]);
 }
 
 #[test]
