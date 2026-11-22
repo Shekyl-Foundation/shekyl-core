@@ -280,7 +280,9 @@ What the floor adds:
   every absolute floor figure in this document that comes from §2.6 is read on
   a device about 19 % slower than the one the table was measured on. Which
   Pi 4, under which governor, is *the* floor is a rule-76 question this round
-  raises and does not answer (§8).
+  raises and does not answer (§8). It has a consumer beyond this round: the
+  relay's embargo floor (#1516, merged) takes its verification term from the
+  table's door cells, so whichever way the question resolves reaches it.
 
 ## 3. Job 1: work per block
 
@@ -354,6 +356,22 @@ assumption, §97). A proof verification therefore holds one of the two
 transport workers for its whole length: 0.18 s to 1.65 s on the floor (§2.6).
 Two in flight hold both, and every session's reads, writes, handshakes and
 timed syncs on that runtime wait behind them.
+
+**A second caller is in flight (#1520, open, not on `dev`).** It holds the
+`NewTransactions` batches that arrive while the node is behind and admits them
+when it turns synchronised, in `Port::admit_held_on_sync`, a task the relay
+owner spawns beside its actor on the runtime it is started with. The node
+starts the relay owner on the transport runtime (`shekyl-p2p`'s `network.rs`,
+`relay::start` with the transport handle; read on #1520's head), so held
+batches verify there too, serially on one task. The hold is bounded per session
+at one message (the payload cap, 1 000 044 bytes since #1489), and a node is
+behind at every block, so each turn to synchronised can bring up to one
+message's worth of transactions per session to verify. At the 9 to 14 µs per
+weight byte measured in §2.6, a full message is roughly 9 to 14 s of one
+transport worker. A held batch refused on form closes its session and drops
+its other held batches, so one failed verification per session holds on this
+path too. Whatever moves verification off the transport runtime (`ICD-Q2`)
+covers both callers.
 
 What a new session costs the peer is the accept-rate bound
 (`rust/shekyl-transport-layer/src/accept_rate.rs`):
@@ -512,12 +530,15 @@ pinned by `max_inputs_is_the_consensus_cap`. It becomes a read of the constant.
 diagnostic x86 array in `tests/spec_decision_matrix.rs`, and
 `tests/carrier_window.rs`'s fragment count. **`ICD-F14` — the cover carrier's
 `MAX_FRAGMENTS` is a coupling, not only a failing test.** `MAX_FRAGMENTS = 5`
-(`shekyl-relay-privacy/src/params/carrier.rs:117`) is the number of 20 480-byte
-carrier windows the largest transaction message needs, and the largest
-transaction grows with the cap. A capacity decision then moves a cover
-constant: the §80.3 shape, named in `ICD-Q5`. Whether it binds depends on
-which shapes the carrier covers and on cover-by-shape (`CBS-`), which may
-retire the carrier; the cutover asks that lane.
+(`shekyl-relay-privacy/src/params/carrier.rs:117`) is derived, not chosen:
+⌈S_max / 20 480⌉, where S_max is the structural maximum transaction plus its
+message envelope (97 658 bytes today, so 5), pinned as an equality by
+`tests/carrier_window.rs`. At the derived cap the largest transaction is about
+145 KB, so the constant becomes 8; the epoch's ceiling of 44 windows does not
+bind at 8. A capacity decision then moves a cover constant, mechanically: the
+§80.3 shape, named in `ICD-Q5`. Whether the carrier keeps a fragment train at
+all is cover-by-shape's question (`CBS-`, not yet ruled), and it goes to Rick
+with that design, not to this round.
 
 **Benches and sims (copy):** `shekyl-verify-cost`'s
 `relay_admission_verify.rs` (`1..=8`) and `block_connect_verify.rs`'s
