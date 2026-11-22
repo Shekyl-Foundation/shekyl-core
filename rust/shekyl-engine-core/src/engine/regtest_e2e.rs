@@ -5373,16 +5373,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // the reward as the persona's rung-1 EmissionReward funding, amount
     // equal to the loud vout.
     mine_until_pool_drains(&daemon, "accepted emission claim", 1).await;
-    // Capture HERE, with the claim connected and before the A5 pops below —
-    // the chain the validator's fixtures need is the one that carries the
-    // claim, not the one that stranded it.
-    maybe_capture_chain_vector(
-        &daemon,
-        "emission-claim",
-        "e2e_emission_claim_accepted_and_applied",
-        None,
-    )
-    .await;
     let claim_mined_by_height = daemon.height().await;
     assert!(
         epoch_row.close_block_height < claim_mined_by_height,
@@ -5402,181 +5392,6 @@ async fn e2e_emission_claim_accepted_and_applied() {
         claimed.contains(&target_epoch),
         "the daemon's claimed-set row for epoch {target_epoch} must land (got {claimed:?})"
     );
-
-    // ── (A5a) Depth-1 pop: undo exactly the claim block ──
-    // The batch-1 drain left the claim block as the tip. Popping it must
-    // clear the daemon's claimed-set row and return the claim tx to the
-    // pool (`pop_block_from_blockchain` is tx-conserving), with the budget
-    // row untouched (the pop stays above the close); re-mining must
-    // re-include the identical bytes (popped txs re-enter at
-    // `relay_method::block`, broadcast-visible — no embargo) and re-apply
-    // the claimed-set row, the conservation operands byte-identical.
-    let tip_with_claim = daemon.height().await;
-    daemon.pop_blocks(1).await;
-    let src_popped = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after depth-1 pop");
-    let claimed_after_pop = &src_popped
-        .bond
-        .as_ref()
-        .expect("bond context after depth-1 pop")
-        .claimed_settlement_epochs;
-    assert!(
-        !claimed_after_pop.contains(&target_epoch),
-        "depth-1 pop must clear the claimed-set row (got {claimed_after_pop:?})"
-    );
-    let row_popped = src_popped
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the budget row must survive a pop above the close");
-    assert_eq!(
-        row_popped.budget_atomic, epoch_row.budget_atomic,
-        "the budget row must be untouched by a pop above the close"
-    );
-    let pool_after_pop = daemon.tx_pool_size().await;
-    assert_eq!(
-        pool_after_pop, 1,
-        "the popped claim tx must return to the pool"
-    );
-    daemon.generate_blocks(1).await;
-    let pool_after_remine = daemon.tx_pool_size().await;
-    assert_eq!(
-        pool_after_remine, 0,
-        "the re-mined block must re-include the claim"
-    );
-    assert_eq!(daemon.height().await, tip_with_claim);
-    let src_remined = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after depth-1 re-mine");
-    assert!(
-        src_remined
-            .bond
-            .as_ref()
-            .expect("bond context after re-mine")
-            .claimed_settlement_epochs
-            .contains(&target_epoch),
-        "re-mining the identical claim must re-apply the claimed-set row"
-    );
-    let row_remined = src_remined
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("budget row after re-mine");
-    assert_eq!(
-        (row_remined.budget_atomic, row_remined.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "conservation operands must hold byte-identically across pop + re-mine (A5a)"
-    );
-    eprintln!("A5a depth-1 pop/re-mine: claimed-set cleared and re-applied byte-identically");
-
-    // ── (A5b) Settlement-straddling pop: undo the pass that settled `J + 1` ──
-    // `J + 1`'s settlement rows are written while connecting the last block
-    // of `J + 2` (`settle_height`). The claim is admitted only against them
-    // (CEN-J23). Popping that block withdraws Σwork, so the pool drops the
-    // returned claim (CEN-K10: a refused return is not kept). The reference
-    // block is below the pop, and no block of `J + 1` is popped, so the
-    // same claim bytes are valid again once the pass is re-mined. Re-mining
-    // settles `J + 1` from the same passes with the claimed-set empty; the
-    // walk then resubmits those bytes through `tx_submit` and mines them.
-    let claim_bytes = receipt.claim.bound_tx.bytes().to_vec();
-    let claim_id = HashHex::from_bytes(
-        *shekyl_wire::Transaction::from_bytes(&claim_bytes)
-            .expect("the saved claim")
-            .hash()
-            .as_bytes(),
-    );
-    let tip = daemon.height().await;
-    let straddle_depth = tip - settle_height;
-    daemon.pop_blocks(straddle_depth).await;
-    let src_straddle = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after straddling pop");
-    assert!(
-        !src_straddle
-            .epochs
-            .iter()
-            .any(|e| e.settlement_epoch == target_epoch && e.has_budget_row),
-        "the straddling pop must withdraw the settlement (no budget shown)"
-    );
-    if let Some(bond) = src_straddle.bond.as_ref() {
-        assert!(
-            !bond.claimed_settlement_epochs.contains(&target_epoch),
-            "the straddling pop must clear the claimed-set row"
-        );
-    }
-    let pooled = daemon
-        .rpc
-        .call::<wire::TxpoolList>(NoParams)
-        .await
-        .expect("txpool_list");
-    assert!(
-        pooled.iter().all(|entry| entry.id != claim_id),
-        "the pool drops a claim whose settlement the pop withdrew (CEN-J23, CEN-K10)"
-    );
-    daemon.generate_blocks(straddle_depth).await;
-    let src_resettled = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after re-settlement");
-    let row_resettled = src_resettled
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the epoch must settle again from the same passes");
-    assert_eq!(
-        (row_resettled.budget_atomic, row_resettled.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "the re-settled epoch must be byte-identical (no block of the served epoch \
-         was popped)"
-    );
-    assert!(
-        !src_resettled
-            .bond
-            .as_ref()
-            .expect("bond context after re-settlement")
-            .claimed_settlement_epochs
-            .contains(&target_epoch),
-        "re-mining the settlement must not re-apply the dropped claim"
-    );
-    let verdict = daemon
-        .rpc
-        .call::<wire::TxSubmit>(wire::tx::TxBody {
-            body: shekyl_rpc_types::kinds::Bytes(claim_bytes),
-        })
-        .await
-        .unwrap_or_else(|error| daemon.panic_with_log("resubmit the claim", format!("{error:?}")));
-    match verdict {
-        wire::tx::Verdict::Accepted | wire::tx::Verdict::AlreadyInPool { .. } => {}
-        other => daemon.panic_with_log("resubmit the claim", format!("{other:?}")),
-    }
-    mine_until_pool_drains(&daemon, "resubmitted emission claim (A5b)", 1).await;
-    let src_reapplied = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after the resubmitted claim");
-    assert!(
-        src_reapplied
-            .bond
-            .as_ref()
-            .expect("bond context after the resubmitted claim")
-            .claimed_settlement_epochs
-            .contains(&target_epoch),
-        "the same claim bytes must apply once the settlement is back (A5b)"
-    );
-    let row_reapplied = src_reapplied
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("budget row after the resubmitted claim");
-    assert_eq!(
-        (row_reapplied.budget_atomic, row_reapplied.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "resubmitting the claim must not move the settlement"
-    );
-    eprintln!(
-        "A5b straddling pop (depth {straddle_depth}, floor {settle_height}): settlement \
-         withdrawn and made again byte-identically, the dropped claim resubmitted"
-    );
-
     daemon.generate_blocks(PSCAN_TEST_REORG_DEPTH + 2).await;
     refresh(&fixture.arc).await;
     let expected_reward = receipt.claim.total_reward;
@@ -5605,61 +5420,20 @@ async fn e2e_emission_claim_accepted_and_applied() {
          settlement pass {settle_height} < claim ≤ {claim_mined_by_height})",
         epoch_row.close_block_height,
     );
-
-    // ── (A5c) Deep pop through the claim's reference block ──
-    // The pop floor sits just below the claim's reference anchor, above
-    // `J + 1`'s blocks, so the pop undoes the claim, the settlement pass,
-    // and the block the claim's FCMP++ membership proof anchors to.
-    // Re-mined blocks carry new hashes, so the popped claim tx is
-    // structurally stranded — its proof binds a reference root that no
-    // longer exists on the rebuilt chain. The correct terminal state: the
-    // chain re-converges to the same height (the stranded tx must never
-    // re-apply or wedge the miner), the claimed epoch settles again
-    // byte-identically from the same passes, and the
-    // claimed-set stays EMPTY. Building the replacement claim against the
-    // rebuilt root is the retire/resubmit slice (the named B2 follow-on,
-    // matching the bond precedent): the wallet's one-live-claim-per-persona
-    // rule holds the pending record until that slice retires it.
-    let tip_c = daemon.height().await;
-    let pop_floor_c = reference_est - 1;
-    assert!(
-        pop_floor_c >= (target_epoch + 1) * SEB,
-        "the A5c floor ({pop_floor_c}) must stay above the served epoch's blocks (to {})",
-        (target_epoch + 1) * SEB - 1
-    );
-    let depth_c = tip_c - pop_floor_c;
-    daemon.pop_blocks(depth_c).await;
-    daemon.generate_blocks(depth_c).await;
-    assert_eq!(
-        daemon.height().await,
-        tip_c,
-        "the chain must re-converge past the stranded claim (no miner wedge)"
-    );
-    let src_c = fetch_emission_claim_source(&daemon.rpc, &p_id_bytes)
-        .await
-        .expect("claim-source after deep-pop re-mine");
-    let row_c = src_c
-        .epochs
-        .iter()
-        .find(|e| e.settlement_epoch == target_epoch && e.has_budget_row)
-        .expect("the claimed epoch must settle again on the rebuilt chain");
-    assert_eq!(
-        (row_c.budget_atomic, row_c.sigma_work_milli),
-        (epoch_row.budget_atomic, epoch_row.sigma_work_milli),
-        "the rebuilt settlement must be byte-identical (no block of the served epoch was popped)"
-    );
-    if let Some(bond) = src_c.bond.as_ref() {
-        assert!(
-            !bond.claimed_settlement_epochs.contains(&target_epoch),
-            "the stranded claim must NOT re-apply against the rebuilt root (its proof \
-             binds a popped reference)"
-        );
-    }
-    eprintln!(
-        "A5c deep pop (depth {depth_c}, floor {pop_floor_c} < ref): chain re-converged, \
-         epoch settled again byte-identically, claimed-set empty (stranded claim inert) — \
-         replacement claim is the B2 retire/resubmit slice"
-    );
+    // Capture HERE, with the claim connected and the reward re-discovered.
+    // The walk tests the network. The pops that test one daemon (the
+    // depth-1 pop and the pool return, the settlement-straddling pop and
+    // the CEN-K10 drop and resubmit, the deep pop through the reference
+    // and no miner wedge) are single-daemon tests on Chain L
+    // (`CHAIN_FORGE.md` §12.2, SO-D12's row). The capture is a run
+    // record, never a committed corpus (`CF-R6`).
+    maybe_capture_chain_vector(
+        &daemon,
+        "emission-claim",
+        "e2e_emission_claim_accepted_and_applied",
+        None,
+    )
+    .await;
 }
 
 /// DS-PR-2 **T-DS-6 ∧ T-DS-7 composite wire-shape arm — the full
