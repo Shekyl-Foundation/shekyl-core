@@ -66,7 +66,8 @@ by name alike.
                      head's checks have only just started
   labeled            `checking`, then every check run and status on the
                      head, this flow's own and `EXCLUDED` by name aside,
-                     must have concluded, none red; no review thread may be
+                     must have concluded, none red (of a workflow run twice
+                     on the head, its newest run's only); no review thread may be
                      open; the pull request may not be a draft. Anything
                      else: `refused`. Then the plan: the tests the head
                      shares with the merges since its merge base, `ready`
@@ -356,6 +357,42 @@ def decide(event: str, label: str, has: bool) -> str:
     raise ValueError(f"merge-ready.yml does not listen for {event!r}")
 
 
+def superseded_suites(workflow_runs: list[dict]) -> set[int]:
+    """The check suites of workflow runs a newer run of the same workflow
+    replaced on this head.
+
+    `filter=latest` keeps the newest check run of each name within a check
+    suite, and a re-run attempt stays in its run's suite, so it covers
+    re-runs. It does not cover a second run of a workflow on the same head:
+    a draft marked ready without a push starts new runs, and the draft's
+    cancelled jobs, its `(draft)` pass jobs and a matrix job cancelled
+    before its name expanded (`matrix.name`) stay on the head beside the
+    newer runs' green ones (#1497 at fc1cf82f33, 2026-11-22: 14 of its 15
+    reasons). Only each workflow's newest run on the head is judged. A check
+    run from a suite no workflow run names (another app's) is always judged.
+    """
+    newest: dict[object, dict] = {}
+    for run in workflow_runs:
+        key = run.get("workflow_id")
+        if key not in newest or (run.get("created_at") or "", run.get("id", 0)) > (
+                newest[key].get("created_at") or "", newest[key].get("id", 0)):
+            newest[key] = run
+    current = {run.get("check_suite_id") for run in newest.values()}
+    return {run.get("check_suite_id") for run in workflow_runs} - current
+
+
+def current_runs(check_runs: list[dict], superseded: set[int]) -> list[dict]:
+    """The check runs not in a superseded suite."""
+    return [c for c in check_runs if (c.get("check_suite") or {}).get("id") not in superseded]
+
+
+def workflow_runs(sha: str) -> list[dict]:
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/actions/runs?head_sha={sha}&per_page=100",
+         "--jq", ".workflow_runs[]"], check=True, capture_output=True, text=True).stdout
+    return [json.loads(x) for x in out.splitlines() if x]
+
+
 def check_runs(sha: str) -> list[dict]:
     out = subprocess.run(
         ["gh", "api", "--paginate", f"repos/{repo()}/commits/{sha}/check-runs?filter=latest&per_page=100",
@@ -416,7 +453,8 @@ def run() -> int:
     deadline = time.monotonic() + SETTLE_SECONDS
     labelled_at = os.environ.get("LABELLED_AT")
     while True:
-        found = judge(with_suite_times(check_runs(head)), statuses(head), open_threads(pr), draft, labelled_at)
+        runs = current_runs(check_runs(head), superseded_suites(workflow_runs(head)))
+        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at)
         if not found or not all(may_settle for _, may_settle in found) or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
@@ -594,6 +632,36 @@ def selftest() -> int:
         got = len(judge(runs, sts, threads, draft))
         if got != want:
             problems.append(f"judge, {label}: {got} reason(s), want {want}")
+    # A second run of a workflow on the same head (a draft marked ready
+    # without a push, #1497): only each workflow's newest run is judged.
+    def suite(c, sid):
+        return {**c, "check_suite": {"id": sid}}
+
+    wf = [
+        {"id": 1, "workflow_id": 10, "created_at": "2026-11-22T01:32:00Z", "check_suite_id": 101},
+        {"id": 2, "workflow_id": 10, "created_at": "2026-11-22T05:00:00Z", "check_suite_id": 102},
+        {"id": 3, "workflow_id": 20, "created_at": "2026-11-22T01:32:00Z", "check_suite_id": 201},
+    ]
+    stale = [suite(done("Rust: audit, test, determinism", "cancelled"), 101),
+             suite(done("rust-pass (draft)", "failure"), 101), suite(done("matrix.name", "cancelled"), 101)]
+    fresh = [suite(done("Rust: audit, test, determinism"), 102), suite(done("rust-pass"), 102),
+             suite(done("cli-pass"), 201)]
+    other_app = [suite(done("an app's check", "failure"), 999)]
+    sup = superseded_suites(wf)
+    for label, runs, want in [
+        ("an earlier run's cancelled and draft jobs on the same head are not judged", stale + fresh, 0),
+        # Negative controls.
+        ("the newest run's own red is judged",
+         stale + fresh + [suite(done("Windows (MSVC, daemon)", "cancelled"), 102)], 1),
+        ("a workflow with a single run is judged",
+         stale + fresh + [suite(done("cli-pass (draft)", "failure"), 201)], 1),
+        ("a suite no workflow run names (another app's) is judged", stale + fresh + other_app, 1),
+    ]:
+        got = len(judge(current_runs(runs, sup), [], 0, False))
+        if got != want:
+            problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
+    if superseded_suites(wf[:1] + wf[2:]):
+        problems.append("superseded runs: a workflow's only run was superseded")
     for name in EXCLUDED:
         if judge(ok + [going(name, "queued")], [], 0, False):
             problems.append(f"judge: {name!r} is in EXCLUDED and still refused the label")

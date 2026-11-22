@@ -74,6 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5  # API calls, and at most SETTLE_SECONDS of waiting
     permissions:
+      # actions: the head's workflow runs, so a run a newer run of the same
+      # workflow replaced on this head is not judged (merge_ready.py
+      # superseded_suites).
+      actions: read
       checks: read
       contents: read
       pull-requests: write
