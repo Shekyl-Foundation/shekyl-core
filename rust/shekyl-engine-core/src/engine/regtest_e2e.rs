@@ -1527,47 +1527,39 @@ impl RegtestDaemon {
     /// tip. A local submit is stem until the relay fluffs it; mining
     /// before that posts a coinbase-only job and the spend never lands.
     ///
-    /// One call per [`Self::MINE_CHUNK`] blocks: a block costs a few
-    /// seconds on a disk where each of its two syncs takes most of a
-    /// second, and a long stretch asked for in one call would outlive the
-    /// harness's 180 s HTTP timeout there while fitting on a fast disk,
-    /// which would make the test's result depend on its host.
+    /// One call per block, so a call lasts one block's mining on any host.
+    /// The harness gives each call 180 s. Asked for 32 blocks at a time,
+    /// the emission walk's calls took 94–116 s at 3 s a block on a build
+    /// VM it had alone, then 141–168 s as its blocks slowed to 4.5–6.7 s,
+    /// and the next call timed out (2026-11-22). A count of blocks per
+    /// call made the result depend on the host's speed. Mined one at a
+    /// time, the same walk ran 10 000 blocks at a median of 1–2 s each,
+    /// the slowest 4.7 s.
     pub(super) async fn generate_blocks(&self, n: u64) -> GenerateBlocksResp {
+        // The daemon refuses a count of zero (`COUNT_ZERO`).
+        assert!(n > 0, "generate_blocks mines at least one block");
         self.wait_shown_pool_in_template().await;
         let mut mined = 0u64;
         let mut blocks = Vec::new();
-        // A capture reads each block before the next one can pass the undo
-        // horizon (the reorg cap can be shorter than [`Self::MINE_CHUNK`]).
-        let capturing = self.capture.lock().expect("the capture lock").is_some();
         loop {
             let watch = self.watch.lock().expect("the watch lock").clone();
             // Under a watch, a block whose draws or admissions it reads is
-            // mined alone; the chain's block count is the height the next
-            // block connects at.
-            let (mut chunk, watched) = match watch {
-                None => ((n - mined).min(Self::MINE_CHUNK), false),
+            // read before the next is mined; the chain's block count is the
+            // height the next block connects at.
+            let watched = match watch {
+                None => false,
                 Some(watch) => {
                     let next = self.height().await;
-                    if !watch.open.is_empty() || watch.drawn_in.contains(&next) {
-                        (1, true)
-                    } else {
-                        let before = if next < watch.drawn_in.start {
-                            watch.drawn_in.start - next
-                        } else {
-                            u64::MAX
-                        };
-                        ((n - mined).min(Self::MINE_CHUNK).min(before), false)
-                    }
+                    !watch.open.is_empty() || watch.drawn_in.contains(&next)
                 }
             };
-            if capturing {
-                chunk = 1;
-            }
-            let resp = try_generate_blocks(&self.rpc, chunk)
+            let resp = try_generate_blocks(&self.rpc, 1)
                 .await
                 .expect("dev_block_generate");
             blocks.extend(resp.blocks);
-            mined += chunk;
+            mined += 1;
+            // A capture reads each block before the next one can pass the
+            // undo horizon.
             self.record_connected().await;
             if watched {
                 if let Some(wait) = self.after_watched_block(resp.height - 1).await {
@@ -1588,8 +1580,7 @@ impl RegtestDaemon {
     /// confirmation, the settlement loop or a pop leg's re-mine (Rick,
     /// 2026-11-14). The window runs from the block until its bundle is
     /// admitted, or until `h + W₂ − 1`, the last block that can admit it;
-    /// while one is open each block is mined alone and followed by
-    /// `per_block`. The producer's reads come due at heights it alone
+    /// while one is open each block is followed by `per_block`. The producer's reads come due at heights it alone
     /// knows, so the chain has to reach them: mining stops for none of
     /// them. A window already open stays open.
     pub(super) fn watch_draws(&self, drawn_in: std::ops::Range<u64>, w2: u64, per_block: Duration) {
@@ -1645,9 +1636,6 @@ impl RegtestDaemon {
         *self.watch.lock().expect("the watch lock") = Some(watch);
         wait
     }
-
-    /// Blocks per `dev_block_generate` call in [`Self::generate_blocks`].
-    const MINE_CHUNK: u64 = 32;
 
     /// Q9: once the relay marks the pool shown, the next template lists
     /// it. A shown pool whose backlog is short means the follower has not
