@@ -224,11 +224,30 @@ jobs:
 
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
-    # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
-    # against their committed fixtures (150 s and 100 s in release), the
-    # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
-    # test, and ESR-10's nightly scope. This job is the lane that invokes
-    # them.
+    # The economics sim's `#[ignore]`d set, one job per lane
+    # (scripts/ci/ignored_set_economics_sim.sh names each lane's tests):
+    #   pins    the narrations against their committed fixtures (the
+    #           `--stage2` pair, ESR-10's, EUP-4 prep 2's and the J x G
+    #           grid's nightly scopes), the steady control's pins, and the
+    #           secret draw at ESR-11's timing on ESR-13's loop;
+    #   reader  the per-mode reader test,
+    #           `baseline::tests::every_declared_reader_moves_its_report`;
+    #   economies  the whole-economy table's nightly slice (§5.37): its
+    #           narration and the table derived from its own summary.
+    # Each (branch, lane) leg is its own job on its own runner with its own
+    # timeout, so one slow test cannot cut the others and a test that grows
+    # shows in its own lane.
+    #
+    # Measured one test at a time on a 16-vCPU build host at dev 46f266ac08
+    # (2026-11-22), wall seconds: the reader test 4 273 of the set's 9 007;
+    # the three `--stage2` pins 1 402, 839 and 727, each on one thread; the
+    # EUP-4 pair 558 and 532; ESR-10's pair 241 and 227; the J x G slice 177;
+    # ESR-11's set 31; the economies slice 645 to 936 s on the same host
+    # (#1476). In one job the set ran 6 111 to 8 001 s on dev over
+    # 2026-11-17 to 11-20 against 180 minutes, and main's leg (07c8abba5f)
+    # passed in 10 299 s one night and was cut at 10 817 s the next on the
+    # same commit. The script stamps every line of its output with the UTC
+    # time it arrived, so a cut leg names the test still running.
     #
     # ESR-10's split (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.29): its full
     # narration, every cell on both w_ref arms over all nine scenarios, is
@@ -256,18 +275,35 @@ jobs:
     # The crate's regeneration helpers WRITE the committed fixtures and are
     # never run here; the script names them so the set is exact.
     #
-    # Same matrix as above. The schedule runs main's copy of this file over
-    # both branches, but the set is read from the checked-out ref's
-    # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
-    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
-    # The per-PR Rust job runs this script with `--check` and stops after
-    # that judgement.
+    # Same matrix as above, crossed with the lanes. The schedule runs
+    # main's copy of this file over both branches, but the set is read from
+    # the checked-out ref's scripts/ci/ignored_set_economics_sim.sh, so each
+    # leg is judged by its own tree; `workflow_dispatch` with `ref` proves
+    # one branch's set. The per-PR Rust job runs this script with `--check`
+    # and stops after that judgement.
+    #
+    # A leg runs its lane only where the CHECKED-OUT revision has it, as
+    # nightly-live-daemon-slow.yml does: a dispatch from a branch whose
+    # matrix names a lane the other branch's script does not know would
+    # fail there as an unknown argument and open a tracking issue for
+    # nothing. The step after checkout asks the checked-out tree:
+    #   - does its script have the lane's `--<lane>)` arm? Yes: the leg runs.
+    #   - if not, does its own copy of this file name the lane in
+    #     `sim_lane:`? Yes: the revision claims a lane it cannot run, and the
+    #     leg is RED. No: the revision predates the lane; the leg ends green
+    #     with a notice that says so, and builds nothing.
+    # The skip ends by itself when the lane reaches the other branch. The
+    # probe reads text, so `sim_lane:` stays on one line and the script's
+    # arms stay `--<lane>)`.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+        # One line: the lane probe below reads this list from the
+        # checked-out copy of this file.
+        sim_lane: [pins, reader, economies]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -277,16 +313,46 @@ jobs:
           # credential to find in .git/config.
           persist-credentials: false
 
+      - name: does this revision have the ${{ matrix.sim_lane }} lane
+        # See the job's comment: run where the checked-out script has the
+        # lane, red where the checked-out workflow names a lane its script
+        # lacks, a visible skip where the revision predates the lane.
+        id: lane
+        env:
+          LANE: ${{ matrix.sim_lane }}
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/ignored_set_economics_sim.sh
+          workflow=.github/workflows/nightly.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the economics sim's ignored set has no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*--${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*sim_lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+            echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '--$LANE)' arm: the lane cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the economics sim's $LANE lane (neither its $script nor its $workflow names it). This leg ran nothing. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
 
-      - name: Run the economics sim's ignored tests
+      - name: Run the economics sim's ${{ matrix.sim_lane }} lane
+        if: steps.lane.outputs.run == 'true'
         # The set, the helpers and their assertions are
         # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
         # each branch judges itself.
         env:
           BRANCH: ${{ matrix.branch }}
-        run: bash scripts/ci/ignored_set_economics_sim.sh
+          LANE: ${{ matrix.sim_lane }}
+        run: bash scripts/ci/ignored_set_economics_sim.sh "--$LANE"
 
   staking-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
@@ -711,9 +777,10 @@ jobs:
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs five `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `esr10_nightly_narration_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
-                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with `regen_stage2_narration_fixtures` or `regen_esr10_narration_fixtures` under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
+                  'A leg of the `economics-sim-ignored` job failed. Each leg runs one lane of `scripts/ci/ignored_set_economics_sim.sh` on one branch; the leg\'s name says which. The `pins` lane runs the `#[ignore]`d narration pins of `shekyl-economics-sim` (the `--stage2` pair, ESR-10\'s, EUP-4 prep 2\'s and the J x G grid\'s nightly scopes), the steady control\'s pins and the ESR-11 timing set; the `reader` lane runs `baseline::tests::every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name); the `economies` lane runs `whole_economy::tests::economies_nightly_slice_matches_its_narration_and_table` (the whole-economy table\'s nightly slice: its narration and the table derived from its own summary, each against its committed copy).',
+                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with the pin\'s `regen_*` helper under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
+                  'If a leg timed out, its log stamps each line with the UTC time: the tests with no `... ok` line were still running. Compare with the measurements in nightly.yml\'s economics-sim-ignored comment before raising the budget.',
+                  'If a leg stopped before running anything, the crate\'s ignored set changed (decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run, is a regeneration helper or runs on demand), or the branch names a lane its script lacks.',
                 ],
               },
               'trybuild-ignored': {
