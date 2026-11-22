@@ -422,13 +422,16 @@ async fn per_p_arm_dispatches_matched_bytes_over_p_s_own_circuit() {
 }
 
 /// The pairing check refuses a cross-persona dispatch **before any
-/// transport** — the `validate_handle` discipline's loud half: in a
-/// debug build the mismatch is a panic (the fail-closed
-/// `PersonaMismatch` return is the release-build behavior of the same
-/// guard). The dead proxy is the tell: if the check fell through to the
-/// wire, the outcome would be an `Ambiguous` error, not this panic.
+/// transport**, in both profiles of the `validate_handle` discipline: a
+/// debug build panics, and a release build returns the fail-closed
+/// `PersonaMismatch` naming both personas. The dead proxy is the tell: if
+/// the check fell through to the wire, the outcome would be an `Ambiguous`
+/// error, neither of these.
 #[tokio::test(flavor = "multi_thread")]
-#[should_panic(expected = "submit_bound: bytes bound to")]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "submit_bound: bytes bound to")
+)]
 async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
     use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
 
@@ -443,13 +446,22 @@ async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
     .expect("proxy config is well-formed");
 
     // A *different* persona's bytes: the §3.1 part 4 equality check must
-    // fire (panic, in this debug build) before the transport is reached —
-    // this `expect_err` is never evaluated.
-    submitter
+    // fire before the transport is reached: a panic in a debug build, the
+    // fail-closed refusal in a release build.
+    let err = submitter
         .submit_bound(confirmed_for_test(PBoundBytes::bind_for_test(
             PCanonicalId::from_bytes([23u8; 32]),
             wire_tx_bytes(),
         )))
         .await
-        .expect_err("unreachable in a debug build: the pairing check panics first");
+        .expect_err("the pairing check refuses before any transport");
+    assert!(
+        matches!(
+            err,
+            BroadcastSubmitError::PersonaMismatch { bytes_persona, submitter_persona }
+                if bytes_persona == PCanonicalId::from_bytes([23u8; 32])
+                    && submitter_persona == PCanonicalId::from_bytes([19u8; 32])
+        ),
+        "release refuses fail-closed, naming both personas: got {err:?}"
+    );
 }

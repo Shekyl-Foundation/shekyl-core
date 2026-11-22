@@ -615,9 +615,15 @@ mod tests {
     }
 
     /// GF4b-3 survivor tripwire: a rung-3 at or below `last_sweep_height`
-    /// trips the `debug_assert!` in debug/test builds.
+    /// trips the `debug_assert!` in a debug build, and in a release build the
+    /// constructor keeps filter semantics: the survivor is dropped and the
+    /// rung-1 record is the set. Both profiles test the guard; a bare
+    /// `cfg(debug_assertions)` gate would leave the release half untested.
     #[test]
-    #[should_panic(expected = "rung-3 record at or below last_sweep_height")]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "rung-3 record at or below last_sweep_height")
+    )]
     fn survivor_trips_the_debug_assert() {
         // Far-future reference: the survivor is spendable, so it reaches the
         // tripwire (the spendability filter does not mask a mature survivor).
@@ -628,11 +634,17 @@ mod tests {
             // Survivor: rung 3 that a sweep should have consumed.
             record(2, 80, 700, MintLineageOutput::ExternalTransfer),
         ];
-        let _ = BackingSet::from_spendable(
+        let set = BackingSet::from_spendable(
             &records,
             PSlot::from_raw(0),
             reference_height,
             last_sweep_height,
+        );
+        let gindexes: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
+        assert_eq!(
+            gindexes,
+            vec![1],
+            "release keeps filter semantics: the survivor is dropped"
         );
     }
 

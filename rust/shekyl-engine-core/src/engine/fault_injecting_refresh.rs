@@ -69,13 +69,12 @@
 //!   false-positive class where a test injects a failure, runs the
 //!   engine, asserts the engine handled correctly, and never
 //!   notices the injection path was not exercised.
-//! - **`debug_assert!` on Drop.** If a test leaves the wrapper
-//!   without draining, the wrapper's [`Drop`] impl fires
-//!   `debug_assert!` — panic-on-leftover in test/debug builds;
-//!   silent in release (release builds must not have the wrapper
-//!   compiled in regardless, per the
-//!   `#[cfg(any(test, feature = "test-helpers"))]` gating on the
-//!   module declaration in [`super`]).
+//! - **`assert!` on Drop.** If a test leaves the wrapper without
+//!   draining, the wrapper's [`Drop`] impl panics, in every build
+//!   profile the wrapper is compiled into: it exists only under
+//!   `#[cfg(any(test, feature = "test-helpers"))]` (the module
+//!   declaration in [`super`]), and a release-profile test run is
+//!   still a test run.
 //! - **Reentrance.** If a test injects a failure and the producer's
 //!   body internally re-enters via some path that calls back into
 //!   [`RefreshEngine`], the second call also pops from the queue
@@ -189,33 +188,28 @@ where
 }
 
 impl<R: RefreshEngine> Drop for FaultInjecting<R> {
-    /// Panic if a test left the wrapper without draining its
-    /// injected failures. Per the F-Mock-2 contract in the
-    /// module-level rustdoc, `debug_assert!` is used so the panic
-    /// fires in `cfg(test)` / debug builds but stays silent in
-    /// release; release builds should not compile the wrapper in
-    /// regardless (per the `#[cfg(any(test, feature =
-    /// "test-helpers"))]` module gate).
+    /// Panic if a test left the wrapper without draining its injected
+    /// failures (the F-Mock-2 contract in the module-level rustdoc), in
+    /// every build profile: the wrapper is compiled only for tests, so the
+    /// check is a test-discipline check, and a release-profile test run
+    /// needs it as much as a debug one.
     ///
-    /// `Mutex::get_mut` is used to bypass the lock — `Drop` is
-    /// synchronous and the wrapper is `&mut`-borrowed by its
-    /// destructor, so the lock cannot be contested. The
-    /// `PoisonError` branch returns `0` (treat a poisoned queue as
-    /// empty for assertion purposes) because the lock can only be
-    /// poisoned by a previous panic, in which case the wrapper's
-    /// `Drop` is firing during unwind and a `debug_assert!` panic
-    /// during unwind would abort the process. Production builds
-    /// have the wrapper compiled out entirely so this branch is
-    /// test/debug-only safety scaffolding.
+    /// `Mutex::get_mut` bypasses the lock: `Drop` holds `&mut self`, so
+    /// the lock cannot be contested. A poisoned queue counts as empty,
+    /// and the check is skipped while the thread is already unwinding:
+    /// a test that failed must not be turned into an abort by a second
+    /// panic here.
     fn drop(&mut self) {
         let remaining = self.queue.get_mut().map(|q| q.len()).unwrap_or(0);
-        debug_assert!(
-            remaining == 0,
-            "FaultInjecting<R> dropped with {remaining} queued failure(s) un-consumed; \
-             tests must drain by issuing enough produce_scan_result(..) calls on the \
-             wrapper to consume every queued failure (queued_failures() inspects the \
-             remaining count for debugging)"
-        );
+        if !std::thread::panicking() {
+            assert!(
+                remaining == 0,
+                "FaultInjecting<R> dropped with {remaining} queued failure(s) un-consumed; \
+                 tests must drain by issuing enough produce_scan_result(..) calls on the \
+                 wrapper to consume every queued failure (queued_failures() inspects the \
+                 remaining count for debugging)"
+            );
+        }
     }
 }
 
@@ -279,7 +273,7 @@ mod tests {
     //! Four sub-properties: empty-queue passthrough, single-
     //! injection-then-delegation, multi-injection FIFO ordering,
     //! and queue-drain-on-teardown plus the `#[should_panic]`
-    //! companion that exercises the Drop-time `debug_assert!`.
+    //! companion that exercises the Drop-time `assert!`.
     //!
     //! Class 2 (From-conversion tests against `LocalRefresh`)
     //! lives at `local_refresh.rs`'s
@@ -538,7 +532,7 @@ mod tests {
 
     /// **Property 4 (drain inspector).** Queue two failures, drain
     /// both, observe `queued_failures` reflects each step.
-    /// (Separated from the Drop-time `debug_assert!` panic test
+    /// (Separated from the Drop-time `assert!` panic test
     /// below to keep the success path independent of the panic
     /// path.)
     #[tokio::test]
@@ -588,19 +582,11 @@ mod tests {
         assert_eq!(wrapper.queued_failures(), 0);
     }
 
-    /// **Property 4 companion — Drop-time `debug_assert!` fires
-    /// on un-drained queue.** Construct a wrapper, queue a failure,
-    /// let it drop without consuming. `#[should_panic]` verifies
-    /// the debug_assert fires per the F-Mock-2 contract pin.
-    ///
-    /// `cfg(debug_assertions)` gates the test: release builds
-    /// (without `debug_assertions`) compile out the assert and
-    /// the test would falsely pass without panicking. Per the
-    /// `90-commits.mdc` scope discipline this gate matches the
-    /// `debug_assert!`'s own gate, preserving symmetry.
+    /// **Property 4 companion — the Drop-time `assert!` fires on an
+    /// un-drained queue,** in every build profile. Construct a wrapper,
+    /// queue a failure, let it drop without consuming.
     #[test]
     #[should_panic(expected = "FaultInjecting<R> dropped with 1 queued failure(s) un-consumed")]
-    #[cfg(debug_assertions)]
     fn drop_with_un_drained_queue_panics() {
         let wrapper = FaultInjecting::new(DelegationStub);
         wrapper.queue_failure(RefreshError::Cancelled);

@@ -10,9 +10,11 @@
 //! Mirrors [`super::fault_injecting_refresh::FaultInjecting`]: three
 //! independent
 //! FIFO queues for the injectable fallible paths (`build`, `submit`,
-//! `discard`), pop-before-delegate semantics, drain inspector, and
-//! `debug_assert!` on [`Drop`]. [`PendingTxEngine::signal_mempool_evicted`]
-//! delegates without a queue (V3.0 tests cover it via the inner engine).
+//! `discard`), pop-before-delegate semantics, drain inspector, and an
+//! `assert!` on [`Drop`] that holds in every build profile the wrapper is
+//! compiled into (it exists only under `test` or `test-helpers`).
+//! [`PendingTxEngine::signal_mempool_evicted`] delegates without a queue
+//! (V3.0 tests cover it via the inner engine).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -109,11 +111,16 @@ impl<P: PendingTxEngine> Drop for FaultInjecting<P> {
             .map(|q| q.len())
             .unwrap_or(0);
         let remaining = build + submit + discard;
-        debug_assert!(
-            remaining == 0,
-            "FaultInjecting<P> dropped with {remaining} queued failure(s) un-consumed \
-             (build={build}, submit={submit}, discard={discard})"
-        );
+        // A test-discipline check, so it holds in a release-profile test run
+        // too. Skipped while unwinding: a test that already failed must not
+        // be turned into an abort by a second panic here.
+        if !std::thread::panicking() {
+            assert!(
+                remaining == 0,
+                "FaultInjecting<P> dropped with {remaining} queued failure(s) un-consumed \
+                 (build={build}, submit={submit}, discard={discard})"
+            );
+        }
     }
 }
 
@@ -390,9 +397,11 @@ mod tests {
             .expect("discard");
     }
 
+    /// A wrapper dropped with a failure still queued panics, in every build
+    /// profile: the injection path was never exercised.
     #[test]
     #[should_panic(expected = "FaultInjecting<P> dropped with 1 queued failure(s) un-consumed")]
-    fn drop_debug_assert_on_leftover_build_failure() {
+    fn drop_asserts_on_leftover_build_failure() {
         let wrapper = FaultInjecting::new(DelegationStub::new());
         wrapper.queue_build_failure(SendError::InsufficientFunds {
             needed: 1,
