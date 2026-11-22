@@ -66,6 +66,10 @@
 # with it.
 # tor-onion-listen = "127.0.0.1:11029"
 
+# This node's persistent onion: Tor's own hs_ed25519_secret_key; tor =
+# managed only. Unset, the managed Tor's onion is new at every boot.
+# tor-onion-key-file = "/path"
+
 # The managed Tor binary; tor = managed only. It is verified against the
 # pin wherever it is.
 # Default: tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix.

@@ -71,6 +71,7 @@ file is TOML with the same names (see the example in `USER_GUIDE.md`).
 | `tor-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for tor-socks. |
 | `tor-onion` | v3 onion with a port | — | both | no | This node's onion service and virtual port, on the operator's Tor. |
 | `tor-onion-listen` | IP endpoint (`address:port`) | — | both | no | The local endpoint the operator's Tor forwards tor-onion to; required with it. |
+| `tor-onion-key-file` | absolute path | — | both | no | This node's persistent onion: Tor's own hs_ed25519_secret_key; tor = managed only. Unset, the managed Tor's onion is new at every boot. |
 | `tor-file` | absolute path | tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix | both | no | The managed Tor binary; tor = managed only. It is verified against the pin wherever it is. |
 | `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
 | `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |

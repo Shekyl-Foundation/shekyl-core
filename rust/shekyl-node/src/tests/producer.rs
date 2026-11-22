@@ -50,7 +50,10 @@ fn the_fetch_client_holds_its_lanes_descriptors_only_under_a_tor() {
     let address = mining_address(shekyl_address::Network::Regtest);
     let reads = u64::try_from(shekyl_bundle_producer::read::READS_AT_ONCE.get()).expect("small");
     let views = u64::try_from(shekyl_archival_fetch_sched::VIEW_SLOTS.get()).expect("small");
-    let managed = Tor::Managed { binary: None };
+    let managed = Tor::Managed {
+        binary: None,
+        onion_key: None,
+    };
 
     let mining = dev_config(dir.path(), &["--mine-address", &address]);
     for tor in [managed.clone(), operator_tor()] {

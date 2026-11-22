@@ -428,11 +428,12 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// # `Debug` is redacted
 ///
 /// Every field except [`Self::output_index`] is secret. `Debug` is
-/// implemented manually (not derived) because
-/// `Zeroizing<T>: Debug` delegates to `T: Debug`, which would print
-/// raw secret bytes. Per `35-secure-memory.mdc`, secret-bearing
-/// types redact `Debug` output rather than risk leaking via traces,
-/// panic messages, or `dbg!()` calls.
+/// implemented manually (not derived): per `35-secure-memory.mdc`,
+/// secret-bearing types redact `Debug` output themselves rather than
+/// risk leaking via traces, panic messages, or `dbg!()` calls. The
+/// redaction is this type's, not its fields': `Zeroizing<T>`'s own
+/// `Debug` is opaque (zeroize 1.9), but a field whose type changes
+/// must not change what this prints.
 ///
 /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
 /// [`shekyl_tx_builder::sign_transaction`]: shekyl_tx_builder::sign_transaction
@@ -851,16 +852,15 @@ mod tests {
     //!
     //! Per `35-secure-memory.mdc`, secret-bearing types must redact
     //! `Debug` output to prevent secret material from leaking through
-    //! traces, panic messages, or `dbg!()` calls. `Zeroizing<T>: Debug`
-    //! delegates to `T: Debug`, so deriving `Debug` on a struct that
-    //! holds a `Zeroizing<[u8; N]>` field would print the raw secret
-    //! bytes — exactly the failure mode these tests guard against.
+    //! traces, panic messages, or `dbg!()` calls. These tests hold each
+    //! shape's own `Debug`, whatever its fields' types print: a field
+    //! that leaves `Zeroizing` (whose `Debug` is opaque) for a bare
+    //! array would print its bytes through a derived impl.
     //!
     //! Each secret field is filled with a distinct sentinel byte; the
-    //! rendered string is expected to redact the field entirely. The
-    //! `Zeroizing<…>`-derived `Debug` would render bytes either as
-    //! `[171, 171, …]` (decimal) or as the slice's `Debug` form, both
-    //! of which contain the decimal repr of the sentinel byte. We
+    //! rendered string is expected to redact the field entirely. A
+    //! byte array's or slice's `Debug` renders as `[171, 171, …]`,
+    //! which contains the decimal repr of the sentinel byte. We
     //! assert the decimal repr does not appear.
     //!
     //! Hex reprs (`ab`/`AB`) are deliberately not asserted against —
