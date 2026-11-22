@@ -10,7 +10,7 @@
 
 use std::ffi::OsString;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use shekyl_daemon_config::resolve::{self, chosen_network};
 use shekyl_daemon_config::Network;
@@ -90,14 +90,18 @@ where
         return Ok(Action::Version);
     }
     let network = chosen_network(&cli);
-    let root = paths::root(platform, RunMode::User, "config-file").map_err(|d| vec![d])?;
+    // The account's root is read only for a default path, so an account
+    // with no home (a packaged service's) runs when every path it needs is
+    // given; a default that needs the root it cannot have is refused,
+    // naming the option to give.
+    let root = |option: &str| paths::root(platform, RunMode::User, option).map_err(|d| vec![d]);
     let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
         Some(g) => match &g.value {
             Value::Path(path) => (path.clone(), true),
             other => unreachable!("config-file is a path, not {other:?}"),
         },
         None => (
-            root.join(format!("shekyl-rpc-tunnel-{}.toml", network.name())),
+            root("config-file")?.join(format!("shekyl-rpc-tunnel-{}.toml", network.name())),
             false,
         ),
     };
@@ -109,8 +113,10 @@ where
         None => Vec::new(),
     };
     let resolved = resolve::resolve(&TABLE, network, cli, file_given)?;
-    let key_file = path_of(&resolved, "rpc-key-file")
-        .unwrap_or_else(|| root.join(format!("rpc-shekyl-rpc-tunnel-{}.key", network.name())));
+    let key_file = match path_of(&resolved, "rpc-key-file") {
+        Some(path) => path,
+        None => root("rpc-key-file")?.join(format!("rpc-shekyl-rpc-tunnel-{}.key", network.name())),
+    };
     if key_create {
         return Ok(Action::KeyCreate(key_file));
     }
@@ -127,10 +133,13 @@ fn path_of(resolved: &Resolved, name: &str) -> Option<PathBuf> {
     }
 }
 
+/// The account's root, for the option whose default needs it.
+type RootFor<'a> = dyn Fn(&str) -> Result<PathBuf, Vec<Diagnostic>> + 'a;
+
 fn build(
     resolved: &Resolved,
     network: Network,
-    root: &Path,
+    root: &RootFor<'_>,
     key_file: PathBuf,
 ) -> Result<Config, Vec<Diagnostic>> {
     let mut faults = Vec::new();
@@ -218,16 +227,26 @@ fn build(
             None
         }
     };
-    let log_file = path_of(resolved, "log-file").unwrap_or_else(|| {
-        root.join("logs")
-            .join(format!("shekyl-rpc-tunnel-{}.log", network.name()))
-    });
-    let logging = match shekyl_daemon_config::logging(resolved, log_file) {
-        Ok(logging) => Some(logging),
-        Err(mut more) => {
+    let log_file = match path_of(resolved, "log-file") {
+        Some(path) => Some(path),
+        None => match root("log-file") {
+            Ok(root) => Some(
+                root.join("logs")
+                    .join(format!("shekyl-rpc-tunnel-{}.log", network.name())),
+            ),
+            Err(mut more) => {
+                faults.append(&mut more);
+                None
+            }
+        },
+    };
+    let logging = match log_file.map(|file| shekyl_daemon_config::logging(resolved, file)) {
+        Some(Ok(logging)) => Some(logging),
+        Some(Err(mut more)) => {
             faults.append(&mut more);
             None
         }
+        None => None,
     };
     match (leg, bundle, listen, logging, request) {
         (Some(leg), Some(bundle), Some(listen), Some(logging), Some(request))
@@ -314,6 +333,7 @@ fn socket_listen(_path: PathBuf, faults: &mut Vec<Diagnostic>) -> Option<Listen>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn platform(home: &Path) -> Platform {
         Platform {

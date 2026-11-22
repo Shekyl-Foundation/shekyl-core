@@ -2368,14 +2368,24 @@ account `shekyl-tunnel`, never `shekyl` and never root, with its key in its
 own 0700 state directory, its configuration in a named file, and its
 listener on loopback only. The `.deb` and `.rpm` install the unit without
 enabling it: a tunnel needs a configuration and a key before its first
-start. A stop (SIGTERM) is a clean exit. The unit carries a hardening set
+start. They declare the account (`shekyl.sysusers`: no home, no login,
+never in the daemon's group) and make its configuration directory,
+`/etc/shekyl-tunnel` root:shekyl-tunnel 0750 (`shekyl.tmpfiles`); the
+configuration and the node's bundle live there as root:shekyl-tunnel 0640,
+which the tunnel reads and cannot write. The daemon's `/etc/shekyl` is its
+group's alone. On FreeBSD the directory is `/usr/local/etc/shekyl`, made
+root:shekyl-tunnel 0750 by the rc.d script before every start (the FreeBSD
+daemon's configuration is in `/etc/shekyl`). The tunnel reads its account's
+home only for a default path, so the packaged account, which has none,
+runs on the paths its launcher gives (Rick, 2026-11-21). A stop (SIGTERM) is a clean exit. The unit carries a hardening set
 (Rick, 2026-11-16): no capabilities, IP and local sockets only, W^X kept
 (`MemoryDenyWriteExecute`; the tunnel runs no JIT), the `@system-service`
 system calls, native architecture only, and `UMask=0077`, besides the
 kernel, clock, hostname, namespace, real-time and SUID protections.
 shekyld's unit does not carry it: RandomX's JIT needs W^X off. The
 launch-recipe gate holds both launchers to the tunnel's table, and the unit
-to the hardening set at each directive's value (check 6). Windows and macOS run it as a
+to the hardening set at each directive's value (check 6), and the
+package's account and directory declarations (check 8). Windows and macOS run it as a
 user process; their service support is RT-W14's.
 
 ---
