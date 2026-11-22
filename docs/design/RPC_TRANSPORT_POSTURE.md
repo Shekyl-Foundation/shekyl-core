@@ -166,7 +166,7 @@ is not redundant with refusing `0.0.0.0`.
 
 **Ruled 2026-08-21 — at startup, not at parse, and not both.** The draft
 said "at parse time". RT-W1 enforces it at **startup, before bind, on every
-path that binds** — one `validate_listen` consulted by both `run_server` and
+path that binds** — one `validate_listen` consulted by both `arm_server` and
 `spawn_in_process_with` — rather than in `ListenAddr::parse`. Reason: an
 embedder can construct `ListenAddr::Tcp(addr)` without ever calling `parse`,
 so a parse-time refusal would cover the CLI flag and miss the API; the bind

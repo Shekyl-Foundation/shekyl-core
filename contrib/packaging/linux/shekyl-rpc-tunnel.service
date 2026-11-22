@@ -39,6 +39,9 @@ LogsDirectory=shekyl-tunnel
 
 Restart=on-failure
 RestartSec=30
+# Exit 130 is a second stop: an operator forced the stop, so it is not
+# restarted (Rick, 2026-11-21). The FreeBSD script counts it clean too.
+SuccessExitStatus=130
 
 NoNewPrivileges=true
 ProtectSystem=strict
