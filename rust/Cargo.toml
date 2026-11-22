@@ -614,6 +614,14 @@ serde = { version = "1", features = ["derive"] }
 # crates keep their own `default-features = false` pins (rule 10).
 zeroize = { version = "1.5", features = ["derive"] }
 
+# Multi-scalar multiplication for the FCMP++ prover, tree roots and batch
+# verification. 0.5 is the floor: 0.4's non-vartime `multiexp` indexes its
+# Straus tables and Pippenger buckets by secret scalar bits, and the prover
+# calls it on secrets; 0.5 selects every entry with `conditional_assign`.
+# `alloc` is load-bearing: without it 0.5's `multiexp` is a naive sum. The
+# vendored `shekyl-oxide/crypto/*` crates keep their own pins (rule 10).
+multiexp = { version = "0.5.2", default-features = false, features = ["alloc"] }
+
 # RandomX v2 verifier primitives (Phase 2b). Both verified at source
 # in `RANDOMX_V2_PHASE2B_PLAN.md` §4 and §5.6.
 #

@@ -32,7 +32,7 @@ ciphersuite = "0.4"
 dalek-ff-group = "0.5"
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors" }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-multiexp = "0.4"
+multiexp = { workspace = true, features = ["std"] }
 rand_core = { version = "0.6", features = ["std"] }
 
 [features]

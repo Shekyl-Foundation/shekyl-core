@@ -168,7 +168,8 @@ Each commit is pushed as it lands. Only the PR's final head has to build.
   **handshake:** an other-network peer is dropped and never banned; a
   second handshake is refused; a self-connection is detected; nothing but
   1001 is accepted before the handshake. **Transactions:** refused before
-  the handshake, ignored while unsynchronised, admitted and relayed after.
+  the handshake, held while unsynchronised and admitted at the turn to
+  synchronised (`DAEMON_RELAY_PRIVACY.md` §101), admitted and relayed after.
   **Peer lists:** a received list is admitted under the same limits
   inbound and outbound; an unknown session is never closed. **2010:** the
   complement is served. **Backpressure:** a slow owner holds the session's

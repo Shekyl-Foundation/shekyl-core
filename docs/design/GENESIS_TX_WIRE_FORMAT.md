@@ -605,9 +605,10 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-09-29 on pin `2485a176`** (merged into the fork as
-  `3378433c`, the live pin, with an identical crypto tree), earlier the same day on
-  `a08001f14c` and on 2026-06-25 on `2753111c50`)* The wire layer
+  reference; **re-vetted 2026-11-21 on pin `4ea2c03215`** (the merge of fork PR #8,
+  the live pin), and before it on 2026-09-29 on `2485a176` (merged into the fork as
+  `3378433c`, with an identical crypto tree), earlier that day on `a08001f14c` and
+  on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
   `Prunable::write`: `V(proof_len) ‖ fcmp_proof`) and writes the Bp+ by its fixed
   fields (`BpPlus`: `a‖a1‖b‖r1‖s1‖d1‖V(|L|)·L‖V(|R|)·R`); the canonical *interiors*
@@ -658,6 +659,22 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
   `FCMP_PROOF_SIZE_KAT`, and `cargo test --locked -p shekyl-fcmp` is green
   (81 passed, 1 ignored). The freeze **holds** at `2485a176`.
+
+  **Re-vet (2026-11-21, pin `3378433c` → `4ea2c03215`, shekyl-core #1497).**
+  The prover's multiexp moves from 0.4.2 to 0.5.2, which selects table entries
+  and buckets in constant time instead of indexing them by secret scalar bits.
+  The crypto tree's diff is dependency selection and one generic bound:
+  `generalized-bulletproofs` and `fcmps` take multiexp 0.5 (MSRV 1.81, with the
+  two gadget crates above them), and `fcmps` bounds `VectorCommitmentTape::commit`'s
+  group by `ConditionallySelectable`. No serialization, proof structure or
+  transcript changes; a multiexp's result is the same group element either way, so
+  an honest prover emits the same bytes at the same lengths. The Bp+ interior is
+  `shekyl-bulletproofs`, untouched. Verified on a build VM at `47cb7acca4` (the
+  gadget crates' MSRV line since is a manifest-only change):
+  `kat_fcmp_proof_size_depth1_row` (engine-core) still matches
+  `FCMP_PROOF_SIZE_KAT`, and the workspace suite is green, `shekyl-fcmp` 112
+  passed and `shekyl-fcmp-proofs` 20 passed (9 566 passed in all). The freeze
+  **holds** at `4ea2c03215`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
