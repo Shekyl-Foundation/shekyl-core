@@ -351,6 +351,26 @@ private captures) is committed with the login in its process lines (four
 occurrences) written `<login>`, the only change; `floor_example_rustc_line.txt` with the
 clone's directory written `<clone>` and the home directory `<home>`.
 
+### The control's comparison, 2026-11-22 (review)
+
+As registered, the control plants its extra work on a `fixed-vs-invalid`
+comparison. The 2026-10-25 lines made that comparison information, and
+the laptop reads it at 29.55 unplanted, over the control's own line of 10:
+so on that machine "detected" would not, by itself, show that the planted
+0.5 % was seen. For these two runs the detection is the plant's. The
+planted comparison reads 428.23 on the laptop against 29.55 unplanted
+(314 ns planted against a 27 ns difference), and 1331.37 on the floor
+device against 1.21 unplanted.
+
+After these runs, the harness plants the control on the pass line's own
+classes (`invalid-message-fixed` against `invalid-message-random`),
+calibrated to the pass line's median. A pass needs that comparison clean
+unplanted, so whenever the control's verdict matters its detection is the
+plant's, and it shows the sensitivity on the inputs the verdict rests on;
+the message-class checks cover the control's entries too. These two runs
+are not re-run; the next registered run takes the moved control, and a
+re-run of these is the maintainer's to call.
+
 ### The attestation
 
 "What closes it" has a pass on a device replace that device's entry and
