@@ -12,8 +12,8 @@
 .github/FUNDING.yml	none
 .github/actions/build-randomx-v2-ref/action.yml	randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet
 .github/actions/fuzz-one-target/action.yml	fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly
-.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,chain-forge:aarch64,chain-forge:x86_64,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,merge-ready-retest:retest,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
-.github/actions/set-make-job-count/action.yml	build:build-macos,build:build-ubuntu,nightly-live-daemon-slow:slow-gates,weekly-os:build-arch,weekly-os:build-windows-msys2
+.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,chain-forge:aarch64,chain-forge:x86_64,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,merge-ready-retest:retest,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
+.github/actions/set-make-job-count/action.yml	build:build-macos,build:build-ubuntu,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates,weekly-os:build-arch,weekly-os:build-windows-msys2
 .github/codeql/config.yml	codeql:analyze-rust
 .github/pull_request_template.md	none
 .github/workflows/release-tagged.yml.disabled	none
@@ -115,7 +115,7 @@ scripts/ci/check_vendored_crypto_manifest.sh	vendored-crypto-content:crypto-cont
 scripts/ci/check_wallet_rpc_liveness.sh	wallet-rpc-liveness:wallet-rpc-liveness
 scripts/ci/check_wire_raw_hash_surface.py	docs-gates:check-doc-links
 scripts/ci/check_workflow_fetch_guard.py	grep-gates:grep-gates
-scripts/ci/check_workflows_parse.py	grep-gates:grep-gates,rust-audit-test:rust-audit-and-test
+scripts/ci/check_workflows_parse.py	grep-gates:grep-gates,nightly-live-daemon-slow:report-red,nightly:report-red,rust-audit-test:rust-audit-and-test
 scripts/ci/check_zeroize.sh	grep-gates:grep-gates
 scripts/ci/count_engine_pub_methods.py	grep-gates:grep-gates
 scripts/ci/daemon_boot_stop_smoke.ps1	build:build-windows-msvc
@@ -142,11 +142,12 @@ scripts/ci/merge_ready.py	grep-gates:grep-gates,merge-ready-dev:merges,merge-rea
 scripts/ci/merge_ready_overlap.py	grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
 scripts/ci/nextest_report.py	docs-gates:check-doc-links,rust-audit-test:rust-audit-and-test
+scripts/ci/nightly_red.py	grep-gates:grep-gates,nightly-live-daemon-slow:report-red,nightly:report-red
 scripts/ci/p17_remote_dial.ps1	none
 scripts/ci/producer_gate.sh	nightly:producer-gate,nightly:report-red
 scripts/ci/push_scope_base.sh	build:changes,rust-audit-test:changes
 scripts/ci/require_live_tests.sh	tor-pin-verify:verify
-scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:slow-gates
+scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates
 scripts/ci/run_live_tor_tests.sh	grep-gates:grep-gates,tor-pin-verify:verify
 scripts/ci/rust_scoped_tests.sh	merge-ready-retest:retest,rust-audit-test:rust-audit-and-test
 scripts/ci/shipped_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
