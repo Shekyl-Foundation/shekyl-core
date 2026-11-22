@@ -5574,6 +5574,65 @@ rule, unless named.
     less the burn. A-stuffed's ratio therefore understates how far the tail
     exceeds the fees other users pay it.
 
+#### 5.37.2 The stuffers' shapes start at two outputs (2026-11-22), predicted before the re-run
+
+**The finding** (the CEN-I4 lane, `ICD-F17`, verified on this branch).
+Consensus refuses a non-coinbase transaction with fewer than two outputs
+(CEN-I1). The sim's shape list, `calibration::all_shapes`, ran its outputs
+from one, and the one-shot stuffer's argmax was a one-output transaction.
+Every stuffer figure was therefore priced on a transaction no node admits.
+The builder refused only zero outputs, so nothing on the way said so.
+
+**Rick's ruling (2026-11-22).** The production half lands first, as its own
+PR: the minimum becomes one named constant at its owning type,
+`shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS`, read by CEN-I1, the
+wire's two pre-checks and the builder, which now refuses fewer. This PR
+then rebases onto it. `all_shapes` starts its outputs at that constant, and
+the pins and the full table are regenerated on a head that carries it. The
+digests the re-run replaces are kept in this section, marked superseded,
+beside the new ones. The staker-share first look follows the table.
+
+**What reads the shape list, and what each feeds.**
+- `calibration::all_shapes` feeds `stuffer_shape` (the one-shot W9
+  stuffer, the most archival bytes per fee), `max_archival_bytes_per_block`
+  (the physical ceiling on the fold's slew, read by `swing.rs`), the
+  sustained producer/consumer cycle (`sustained_stuffer_cost_per_shard_atomic`)
+  and the cost per shard (`stuffer_cost_per_shard_atomic`). `stage2.rs` reads
+  the costs into every narration's stuffer table.
+- `miner_stuffer.rs` searches `all_shapes()` twice for the miner's stuffing
+  body. Its rows feed `eup4.rs`, `window_stuffer.rs` and `stage2.rs`'s
+  envelope; the A-stuffed economy is this miner.
+- **Not readers.** The fee model prices ordinary traffic at the fixed
+  1-in/2-out shape (`burden::normal_tx_shape`), as do the honest folds'
+  bytes and the tree's depth. None of it reads the list, so the honest
+  economies are predicted not to move. That is shown by their pins
+  regenerating unchanged, not assumed.
+
+**Predictions** (written before any code moves).
+- **Rick's.** The stuffed half-supply year stays y8.51: the release clamp
+  sets it, not the attacker's cost. The attack cost per shard and the
+  break-even burn (JG-11) rise a few percent.
+- **The one-shot shape** becomes the most-input two-output transaction,
+  8-in/2-out at every depth. The second output adds about 1 270 bytes of
+  weight (the output, its KEM ciphertext, its leaf entry and its CT base),
+  none of it archival, plus one round of the range proof (two points, 64
+  bytes, padded from one output to two), which is archival. On a
+  transaction of 50 to 80 KB, the cost per shard rises 1.5 % to 3 %, most
+  at the shallowest trees.
+- **The sustained cycle rises more,** about 5 % to 15 %. Each consuming
+  transaction now nets one output fewer (six, not seven), so the cycle
+  needs more producing transactions per shard.
+- **The physical ceiling falls about 2 %.** At the surge ceiling the best
+  packing moves off 6-in/1-out.
+- **A-stuffed's bytes a day fall about 2 %,** for the same reason. Its tail
+  ratio stays near 111: the floor-fee bodies fill the same free weight at
+  the same floor rate, so the 95th-percentile block's fees hold.
+- **The C arms' adversary columns rise with the cost per shard,** a few
+  percent. No C economy changes its ranking.
+- **Unchanged:** every honest row of the table, A-honest, B and the C
+  arms' honest columns; the honest pins; the 50 % years outside the
+  stuffed scenarios.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 **The check half landed 2026-11-08** (EUP-3, branch
