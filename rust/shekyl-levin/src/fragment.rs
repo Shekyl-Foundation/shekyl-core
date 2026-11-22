@@ -9,14 +9,16 @@
 //! `epee::levin::make_noise_notify` / `make_fragmented_notify` forward here.
 
 use crate::error::Error;
-use crate::header::{BucketHead, Flags, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE};
+use crate::header::{BucketHead, Flags, HEADER_SIZE};
+use crate::ingress::CAP_NOISE_CLASS;
 use crate::message::notify;
 
 /// Body length (`m_cb`) for a noise-sized bucket of `total` bytes.
 ///
 /// `minimum` is [`HEADER_SIZE`] for a dummy and `HEADER_SIZE * 2` for a
-/// fragment train — the C++ null-slice thresholds. The packet-size limit
-/// is applied to the *body*, which is what a header's `length` field
+/// fragment train — the C++ null-slice thresholds. The class cap
+/// ([`CAP_NOISE_CLASS`], what the reader admits for such a bucket) is
+/// applied to the *body*, which is what a header's `length` field
 /// carries, not to `total`. Checked before any allocation.
 fn noise_body_len(total: usize, minimum: usize) -> Result<usize, Error> {
     if total < minimum {
@@ -27,10 +29,10 @@ fn noise_body_len(total: usize, minimum: usize) -> Result<usize, Error> {
     }
     let body = total - HEADER_SIZE;
     let claimed = u64::try_from(body).expect("usize fits in u64");
-    if claimed > DEFAULT_MAX_PACKET_SIZE {
+    if claimed > CAP_NOISE_CLASS {
         return Err(Error::OversizePacket {
             claimed,
-            limit: DEFAULT_MAX_PACKET_SIZE,
+            limit: CAP_NOISE_CLASS,
         });
     }
     Ok(body)
@@ -43,7 +45,7 @@ fn noise_body_len(total: usize, minimum: usize) -> Result<usize, Error> {
 ///
 /// [`Error::NoiseTooSmall`] if `noise_bytes` cannot hold the header
 /// (the C++ returns `nullptr`). [`Error::OversizePacket`] if the body
-/// would exceed [`DEFAULT_MAX_PACKET_SIZE`] — detected before allocation.
+/// would exceed [`CAP_NOISE_CLASS`] — detected before allocation.
 pub fn noise_notify(noise_bytes: usize) -> Result<Vec<u8>, Error> {
     let payload_len = noise_body_len(noise_bytes, HEADER_SIZE)?;
     let head = BucketHead::make(
@@ -76,7 +78,7 @@ pub fn noise_notify(noise_bytes: usize) -> Result<Vec<u8>, Error> {
 /// [`Error::NoiseTooSmall`] if `noise_size` is below two headers' worth of
 /// bytes (the C++ returns `nullptr`). [`Error::OversizePacket`] if each
 /// fragment's body (`noise_size - HEADER_SIZE`) would exceed
-/// [`DEFAULT_MAX_PACKET_SIZE`] — detected before allocation. The inner
+/// [`CAP_NOISE_CLASS`] — detected before allocation. The inner
 /// payload may itself be larger: that is why this path fragments.
 pub fn fragmented_notify(
     noise_size: usize,
@@ -143,22 +145,20 @@ mod tests {
     }
 
     #[test]
-    fn emit_rejects_a_bucket_whose_body_exceeds_the_packet_limit() {
+    fn emit_rejects_a_bucket_whose_body_exceeds_the_class_cap() {
         // Bites against writing an `m_cb` the reader would drop, and
-        // against allocating it first; it does NOT cover the success path
-        // at the limit (that would allocate 100 MB in this test).
-        let too_big = HEADER_SIZE
-            + usize::try_from(DEFAULT_MAX_PACKET_SIZE).expect("packet limit fits usize")
-            + 1;
+        // against allocating it first.
+        let too_big =
+            HEADER_SIZE + usize::try_from(CAP_NOISE_CLASS).expect("class cap fits usize") + 1;
         assert!(matches!(
             noise_notify(too_big),
             Err(Error::OversizePacket { claimed, limit })
-                if claimed == DEFAULT_MAX_PACKET_SIZE + 1 && limit == DEFAULT_MAX_PACKET_SIZE
+                if claimed == CAP_NOISE_CLASS + 1 && limit == CAP_NOISE_CLASS
         ));
         assert!(matches!(
             fragmented_notify(too_big, 0, &[]),
             Err(Error::OversizePacket { claimed, limit })
-                if claimed == DEFAULT_MAX_PACKET_SIZE + 1 && limit == DEFAULT_MAX_PACKET_SIZE
+                if claimed == CAP_NOISE_CLASS + 1 && limit == CAP_NOISE_CLASS
         ));
     }
 }

@@ -16,8 +16,8 @@
 
 use shekyl_levin::{
     fragmented_notify, ingress_payload_cap, invoke, noise_notify, notify, response, BucketReader,
-    Error, Flags, Received, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
-    INITIAL_MAX_PACKET_SIZE,
+    Error, Flags, Received, CAP_NOISE_CLASS, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE,
+    HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
 };
 
 /// Feed a whole stream, then pull exactly one message and assert it is the
@@ -417,7 +417,8 @@ fn reassembled_inner_payload_trimmed_to_declared_length() {
 /// notification here.
 #[test]
 fn reassembled_response_classifies_by_inner_protocol_version() {
-    let mut inner = response(1001, b"rsp");
+    // The transaction notice is the one command a train may carry (PWD-B12).
+    let mut inner = response(2002, b"rsp");
     // Overwrite the inner protocol-version field (bytes 25..29) with 0.
     inner[25..29].copy_from_slice(&0u32.to_le_bytes());
 
@@ -434,7 +435,7 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
     assert_eq!(
         only_message(&stream),
         Received::Notification {
-            command: 1001,
+            command: 2002,
             payload: b"rsp".to_vec(),
         },
         "inner ver=0 must not classify as Response even though outer is ver=1"
@@ -460,7 +461,8 @@ fn per_command_limit_caps_below_packet_limit() {
         })
     );
 
-    // The same size on 2002 (packet-limit arm until PWD-B12) passes.
+    // The same size on 2002, whose cap is a notice of one largest
+    // transaction (PWD-B12), passes.
     let mut reader = BucketReader::new();
     reader.feed(&invoke(2002, &vec![0u8; over])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
@@ -601,4 +603,328 @@ fn a_bucket_with_the_retired_compression_bit_is_refused() {
             Error::UnknownFlags { flags }
         );
     }
+}
+
+// ------------------------------------------------- fragment-train bounds
+
+/// One fragment bucket: command 0, the given train flags, `body` as its
+/// payload. What `fragmented_notify` writes, with the body in the caller's
+/// hands.
+fn fragment(flags: Flags, body: &[u8]) -> Vec<u8> {
+    let head = shekyl_levin::BucketHead::make(0, u64::try_from(body.len()).unwrap(), flags, false);
+    let mut bucket = head.write().to_vec();
+    bucket.extend_from_slice(body);
+    bucket
+}
+
+/// A middle fragment sets neither `B` nor `E`.
+const MIDDLE: Flags = Flags::from_bits(0);
+
+/// PWD-B12, fragments: the inner header is judged when its last byte
+/// arrives, not when the train ends. The inner header here spans two
+/// fragments and claims one byte more than its command's cap; the second
+/// fragment completes the header and is refused, and no `END` was ever
+/// sent.
+///
+/// Red edit: judge the inner header only when the train ends (call
+/// `judge_inner_header` under `if ends`). The second fragment then returns
+/// `Ok(None)` and the train may grow to the packet limit unjudged.
+#[test]
+fn an_inner_length_over_its_cap_is_refused_when_the_inner_header_completes() {
+    let cap = ingress_payload_cap(2002, Flags::REQUEST).unwrap();
+    let inner = shekyl_levin::BucketHead::make(2002, cap + 1, Flags::REQUEST, false).write();
+
+    let mut reader = BucketReader::new();
+    reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+    reader.feed(&fragment(Flags::BEGIN, &inner[..20])).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Ok(None),
+        "twenty bytes are not yet a header"
+    );
+    reader.feed(&fragment(MIDDLE, &inner[20..])).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::InnerOversize {
+            claimed: cap + 1,
+            limit: cap,
+        })
+    );
+}
+
+/// The same refusal for 2002 on an established session, where the packet
+/// limit is 100 MB and the command's cap is what refuses: a train cannot
+/// carry a 2002 larger than a bucket can.
+///
+/// Red edit: as above, or give the inner header the packet limit in place
+/// of `limit_for`.
+#[test]
+fn an_inner_2002_over_its_cap_is_refused_at_the_first_fragment() {
+    let cap = ingress_payload_cap(2002, Flags::REQUEST).unwrap();
+    assert!(cap < DEFAULT_MAX_PACKET_SIZE);
+    let inner = shekyl_levin::BucketHead::make(2002, cap + 1, Flags::REQUEST, false).write();
+
+    let mut reader = BucketReader::new();
+    reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+    reader.feed(&fragment(Flags::BEGIN, &inner)).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::InnerOversize {
+            claimed: cap + 1,
+            limit: cap,
+        })
+    );
+}
+
+/// PWD-B12, fragments: a train's buffer is bounded by its own inner
+/// header. A fragment that does not end the train must leave the inner
+/// message incomplete, so an unfinished train never holds a whole inner
+/// message, let alone more.
+///
+/// The inner message is 129 bytes. Fragments that bring the buffer to 128
+/// are taken; one that would bring it to 129 without ending the train is
+/// refused, before its body is copied.
+///
+/// Red edit: delete the `FragmentOverrun` check in
+/// `absorb_noise_or_fragment`. The refused fragment then returns `Ok(None)`,
+/// and a peer can append fragments that never end until the buffer reaches
+/// the packet limit.
+#[test]
+fn a_fragment_that_does_not_end_the_train_may_not_complete_the_inner_message() {
+    let inner = notify(2002, &[0x5A; 100]);
+    let inner_len = u64::try_from(inner.len()).unwrap();
+    assert_eq!(inner_len, 129);
+
+    let mut reader = BucketReader::new();
+    reader.feed(&fragment(Flags::BEGIN, &inner[..64])).unwrap();
+    assert_eq!(reader.next_message(), Ok(None));
+    reader.feed(&fragment(MIDDLE, &inner[64..128])).unwrap();
+    assert_eq!(reader.next_message(), Ok(None));
+    assert_eq!(
+        reader.buffered_bytes(),
+        inner_len - 1,
+        "an unfinished train holds less than its inner message"
+    );
+    // An empty fragment adds nothing and is still an unfinished train.
+    reader.feed(&fragment(MIDDLE, &[])).unwrap();
+    assert_eq!(reader.next_message(), Ok(None));
+
+    reader.feed(&fragment(MIDDLE, &inner[128..])).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::FragmentOverrun {
+            inner: inner_len,
+            held: inner_len,
+        })
+    );
+    assert_eq!(
+        reader.buffered_bytes(),
+        inner_len - 1,
+        "the refused fragment's body was not copied into the train"
+    );
+}
+
+/// The same bound when one fragment carries the whole inner message and
+/// more: refused at that fragment, whatever follows.
+///
+/// Red edit: as above.
+#[test]
+fn a_first_fragment_that_holds_the_whole_inner_message_is_refused() {
+    let mut body = notify(2002, b"whole");
+    let inner_len = u64::try_from(body.len()).unwrap();
+    body.extend_from_slice(&[0u8; 4096]);
+
+    let mut reader = BucketReader::new();
+    reader.feed(&fragment(Flags::BEGIN, &body)).unwrap();
+    assert_eq!(
+        reader.next_message(),
+        Err(Error::FragmentOverrun {
+            inner: inner_len,
+            held: inner_len + 4096,
+        })
+    );
+}
+
+/// The bound admits every train the builder writes, including one whose
+/// inner message fills its fragments exactly, so the last fragment carries
+/// no padding and the fragment before it stops one body short of the end.
+///
+/// Red edit: apply the overrun check to the fragment that ends the train
+/// as well. This train's last fragment brings the buffer to exactly the
+/// inner length and is then refused.
+#[test]
+fn a_train_that_fills_its_fragments_exactly_is_delivered() {
+    let noise_size = 1024;
+    let space = noise_size - HEADER_SIZE;
+    let payload: Vec<u8> = (0..3 * space - HEADER_SIZE)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let stream = fragmented_notify(noise_size, 2002, &payload).unwrap();
+    assert_eq!(stream.len(), 3 * noise_size, "three full fragments");
+
+    assert_eq!(
+        only_message(&stream),
+        Received::Notification {
+            command: 2002,
+            payload,
+        }
+    );
+}
+
+/// PWD-B12, fragments: the last fragment's padding is not copied into the
+/// reassembly buffer. The buffer becomes the delivered payload, so its
+/// capacity is what the train made it hold: here a 100-byte payload behind
+/// 64 KiB of padding in the one fragment.
+///
+/// Red edit: copy the whole body of the fragment that ends the train (drop
+/// the `lacking` cut in `absorb_noise_or_fragment`). The payload's
+/// allocation is then the padding's size, sixty-four times this bound.
+#[test]
+fn the_last_fragments_padding_is_not_buffered() {
+    let padding = 64 * 1024;
+    let mut body = notify(2002, &[0x5A; 100]);
+    body.resize(body.len() + padding, 0);
+
+    let Received::Notification { command, payload } = only_message(&fragment(Flags::END, &body))
+    else {
+        panic!("a notification");
+    };
+    assert_eq!(command, 2002);
+    assert_eq!(payload, vec![0x5A; 100], "trimmed to the inner length");
+    assert!(
+        payload.capacity() < 1024,
+        "the payload's allocation is {} bytes: the padding was buffered",
+        payload.capacity()
+    );
+}
+
+/// PWD-B12, fragments: a train carries a request or a response. An inner
+/// header of the noise / fragment class (neither `Q` nor `S`) is refused
+/// when its last byte arrives: it would take no command's cap, and a
+/// reassembled dummy or fragment has no receiver.
+///
+/// Red edit: delete the `InnerNotDispatch` check in `judge_inner_header`.
+/// The `END` form is then delivered as a notification of command 0, and
+/// the `BEGIN` form fails as an overrun, not as this refusal.
+#[test]
+fn an_inner_message_of_the_noise_class_is_refused_when_its_header_arrives() {
+    for inner_flags in [
+        Flags::BEGIN.union(Flags::END),
+        Flags::BEGIN,
+        Flags::END,
+        MIDDLE,
+    ] {
+        let inner = shekyl_levin::BucketHead::make(0, 0, inner_flags, false).write();
+        for train_flags in [Flags::BEGIN, Flags::END] {
+            let mut reader = BucketReader::new();
+            reader.feed(&fragment(train_flags, &inner)).unwrap();
+            assert_eq!(
+                reader.next_message(),
+                Err(Error::InnerNotDispatch {
+                    flags: inner_flags.bits(),
+                }),
+                "inner {inner_flags:?} in a {train_flags:?} fragment"
+            );
+        }
+    }
+}
+
+/// PWD-B12, the class cap: one bucket of the noise / fragment class claims
+/// at most a transaction notice and its inner header, on a session whose
+/// packet limit is 100 MB. A dummy and each kind of fragment are refused
+/// one byte over the cap, from the header alone, and admitted at it.
+///
+/// Red edit: answer the packet limit (or `u64::MAX`, as the inherited code
+/// did) for the class in `ingress_payload_cap`. The over-cap headers are
+/// then admitted, and each can make the session wait on 100 MB.
+#[test]
+fn a_noise_class_bucket_over_the_class_cap_is_refused_from_its_header() {
+    assert_eq!(
+        CAP_NOISE_CLASS,
+        ingress_payload_cap(2002, Flags::REQUEST).unwrap() + u64::try_from(HEADER_SIZE).unwrap(),
+        "one transaction notice and its inner header"
+    );
+    const { assert!(CAP_NOISE_CLASS < DEFAULT_MAX_PACKET_SIZE) };
+    for flags in [
+        Flags::BEGIN.union(Flags::END),
+        Flags::BEGIN,
+        MIDDLE,
+        Flags::END,
+    ] {
+        let over = shekyl_levin::BucketHead::make(0, CAP_NOISE_CLASS + 1, flags, false).write();
+        let mut reader = BucketReader::new();
+        reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+        reader.feed(&over).unwrap();
+        assert_eq!(
+            reader.next_message(),
+            Err(Error::OversizePacket {
+                claimed: CAP_NOISE_CLASS + 1,
+                limit: CAP_NOISE_CLASS,
+            }),
+            "{flags:?} one byte over the class cap"
+        );
+
+        let at = shekyl_levin::BucketHead::make(0, CAP_NOISE_CLASS, flags, false).write();
+        let mut reader = BucketReader::new();
+        reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+        reader.feed(&at).unwrap();
+        assert_eq!(
+            reader.next_message(),
+            Ok(None),
+            "{flags:?} at the class cap waits for its body"
+        );
+    }
+}
+
+/// PWD-B12, a train carries a transaction notice: an inner header naming
+/// any other command is refused when it is read, as a request and as a
+/// response, in a train that begins and in one that ends, and the
+/// transaction notice in the same position is not. A command the crate
+/// does not know (0, the deleted 2001, 9999) gets the same refusal as one
+/// it does: the train's rule is judged before any command's cap is looked
+/// up.
+///
+/// Red edit: delete the `InnerNotTransactionNotice` check in
+/// `judge_inner_header`. The `END` forms are then delivered as that
+/// command, and the `BEGIN` forms fail as an overrun, not as this refusal.
+/// Second red edit: look the cap up before the check. The unknown commands
+/// then fail as `UnknownCommand`.
+#[test]
+fn a_train_whose_inner_message_is_not_the_transaction_notice_is_refused() {
+    for command in [
+        COMMAND_HANDSHAKE,
+        1002,
+        2008,
+        2011,
+        2014,
+        2015,
+        0,
+        2001,
+        9999,
+    ] {
+        for (inner_flags, expect_response) in [(Flags::REQUEST, false), (Flags::RESPONSE, false)] {
+            let inner =
+                shekyl_levin::BucketHead::make(command, 0, inner_flags, expect_response).write();
+            for train_flags in [Flags::BEGIN, Flags::END] {
+                let mut reader = BucketReader::new();
+                reader.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
+                reader.feed(&fragment(train_flags, &inner)).unwrap();
+                assert_eq!(
+                    reader.next_message(),
+                    Err(Error::InnerNotTransactionNotice { command }),
+                    "inner {command} {inner_flags:?} in a {train_flags:?} fragment"
+                );
+            }
+        }
+    }
+    let inner = notify(2002, &[]);
+    let mut reader = BucketReader::new();
+    reader.feed(&fragment(Flags::END, &inner)).unwrap();
+    assert!(
+        matches!(
+            reader.next_message(),
+            Ok(Some(Received::Notification { command: 2002, .. }))
+        ),
+        "the transaction notice is what a train carries"
+    );
 }

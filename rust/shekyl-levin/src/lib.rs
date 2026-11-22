@@ -113,6 +113,53 @@
 //!    limit so cover traffic with command 0 is not an unknown command. The
 //!    codec still round-trips unknown bits (PWC-A6); ingress is what
 //!    refuses to process them.
+//!
+//! Read side again ([`BucketReader`]), the fragment-train bounds of
+//! PWD-B12. Numbered after the entries above so no earlier number moves:
+//!
+//! 7. **inner header judged on arrival** (PWD-B12, 2026-11-20) — a fragment
+//!    train's inner header is read and judged when its last byte arrives in
+//!    the reassembly buffer, whichever fragment carries it: signature,
+//!    flags, command, and the inner `length` against the command's cap
+//!    ([`Error::InnerOversize`]). The inherited reader judged it only when
+//!    the train ended, so an unfinished train could hold the packet limit
+//!    behind an inner header nobody had read. Unreachable for a conforming sender:
+//!    [`fragmented_notify`] opens every train with a whole inner header of
+//!    a command it may send.
+//! 8. **train overrun** (PWD-B12, 2026-11-20) — once the inner header is
+//!    known, a fragment that does not end the train must leave the inner
+//!    message incomplete ([`Error::FragmentOverrun`]), checked before its
+//!    body is copied, and the fragment that ends the train is copied only
+//!    as far as the inner message's end. An unfinished train therefore
+//!    holds fewer bytes than its inner message, and the reassembly buffer
+//!    never holds more than that inner message: the last fragment's
+//!    padding stays in the receive buffer. The inherited reader
+//!    appended every fragment, padding included, up to the packet limit. Unreachable for a conforming
+//!    sender: [`fragmented_notify`] cuts the inner message into equal
+//!    bodies and pads only the last, so every earlier fragment ends short
+//!    of the inner message's end. One bucket is bounded by entry 10.
+//! 9. **inner dispatch class** (PWD-B12, 2026-11-20) — a reassembled inner
+//!    message must be a request or a response. An inner header that sets
+//!    neither `Q` nor `S` is refused when it is read
+//!    ([`Error::InnerNotDispatch`]). The inherited reader bounded such an
+//!    inner message by the packet limit alone and delivered it as a
+//!    notification of whatever command its header named. Unreachable
+//!    for a conforming sender: the inner message of a train is a
+//!    [`notify`] bucket, which sets `Q`.
+//! 10. **class cap** (PWD-B12, 2026-11-21) — one bucket of the noise /
+//!     fragment class (a dummy, or one fragment) claims at most
+//!     [`CAP_NOISE_CLASS`]: a transaction notice of one largest transaction
+//!     and its inner header ([`Error::OversizePacket`]). The inherited
+//!     reader bounded such a bucket by the packet limit alone, so one
+//!     header could make a session wait on 100 MB. Unreachable for a
+//!     conforming sender: a dummy and a fragment are both the sender's
+//!     noise size, far below a notice.
+//! 11. **train carries a transaction notice** (PWD-B12, 2026-11-21) — a
+//!     reassembled inner message must be the transaction notice
+//!     ([`Error::InnerNotTransactionNotice`]), judged when the inner header
+//!     is read. The inherited reader reassembled any command. Unreachable
+//!     for a conforming sender: only transaction notices are cut into
+//!     trains.
 
 mod error;
 mod fragment;
@@ -130,24 +177,26 @@ pub use header::{
     PROTOCOL_VERSION_1,
 };
 pub use ingress::{
-    ingress_payload_cap, Command, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED,
-    HANDSHAKE_FIXED_MAX_BYTES, MAX_OBJECT_REQUEST_COUNT, PEERLIST_ENTRY_MAX_ENCODED_BYTES,
+    ingress_payload_cap, Command, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, CAP_NOISE_CLASS,
+    FLAGS_DEFINED, HANDSHAKE_FIXED_MAX_BYTES, MAX_OBJECT_REQUEST_COUNT,
+    PEERLIST_ENTRY_MAX_ENCODED_BYTES,
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
 pub use payload::{body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan, BodyPlanner};
 pub use payload::{
     BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
-    HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
-    PortableMap, RequestBodies, RequestCompactMissingTx, RequestHeaders, ResponseBodies,
-    ResponseHeaders, TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4, ADDR_IPV6,
-    ADDR_TOR, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
-    CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, HEADERS_RESPONSE_BYTES,
-    MAX_BUNDLE_REFERENCES, MIN_TX_SECTION_BYTES, NOTIFY_GET_TXPOOL_COMPLEMENT,
-    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES,
-    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
-    NOTIFY_RESPONSE_HEADERS, RESPONSE_BODIES_MAX_FIELDS, RESPONSE_BODIES_MAX_OBJECTS,
-    RESPONSE_BODIES_MAX_STRINGS, RESPONSE_BODIES_MAX_TXS, RESPONSE_HEADERS_MAX_STRINGS,
+    HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, NewTransactionsSize,
+    PeerlistEntry, PortableMap, RequestBodies, RequestCompactMissingTx, RequestHeaders,
+    ResponseBodies, ResponseHeaders, TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4,
+    ADDR_IPV6, ADDR_TOR, BODIES_RESPONSE_BYTES, CAP_NEW_TRANSACTIONS, CAP_REQUEST_BODIES,
+    CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE,
+    COMMAND_TIMED_SYNC, HASH_SIZE, HEADERS_RESPONSE_BYTES, MAX_BUNDLE_REFERENCES,
+    MIN_TX_SECTION_BYTES, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_COMPACT_MISSING_TX,
+    NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
+    RESPONSE_BODIES_MAX_FIELDS, RESPONSE_BODIES_MAX_OBJECTS, RESPONSE_BODIES_MAX_STRINGS,
+    RESPONSE_BODIES_MAX_TXS, RESPONSE_HEADERS_MAX_STRINGS,
 };
 pub use payload::{
     HeldBundleBody, NewBundle, RequestBundleBodies, ResponseBundleBodies, CAP_NEW_BUNDLE,

@@ -38,6 +38,7 @@ use crate::test_support::{
     open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of, Family, GrownTree, JoinedConnector,
     Scripted, FIRST_SPEND_HEIGHT,
 };
+use crate::trace::Trace;
 
 /// Regtest without a fixed target: the genesis rules at every height.
 const GENESIS_RULES: ChainRules =
@@ -557,6 +558,65 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
     assert_eq!(
         report.disagreements().collect::<Vec<_>>(),
         vec![crate::pipeline::Disagreement::Refused { height, verdict }]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_records_digest_is_reported_unreached_with_every_record_after_it() {
+    // The digest at a record is a barrier: the record is read, its block
+    // commits, then the digest is taken. When the record's own block is
+    // refused there is no state after it to digest, so it is reported
+    // unreached, in order before every later record the run never got to;
+    // a record before the refusal keeps its digest.
+    let path = tmp("pipeline-refusal-events");
+    let main = chain(3);
+    let orphan = block_with_nonce(
+        CurveTreeRoot::EMPTY,
+        2,
+        BlockHash::from_bytes([0x77; 32]),
+        &[],
+        0,
+        5,
+    );
+    let events = vec![
+        IngestEvent::Extend(Box::new(candidate(&main[0].0, &main[0].1))),
+        IngestEvent::Extend(Box::new(candidate(&main[1].0, &main[1].1))),
+        IngestEvent::Extend(Box::new(candidate(&orphan, &[]))),
+    ];
+    let before = SequenceNo::from_raw(1);
+    let at_refusal = SequenceNo::from_raw(2);
+    let past = SequenceNo::from_raw(5);
+    let mut source = Scripted::new(events);
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(Trace::capturing([before, at_refusal, past])),
+        cfg(4),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    let (height, verdict) = report.refused.expect("refused");
+    assert_eq!((height, verdict.rule), (h(2), CenRow::A2));
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .map(|event| event.record)
+            .collect::<Vec<_>>(),
+        vec![before],
+        "the record before the refusal is digested"
+    );
+    assert_eq!(report.events_unreached, vec![at_refusal, past]);
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![
+            crate::pipeline::Disagreement::Refused { height, verdict },
+            crate::pipeline::Disagreement::EventUnreached { record: at_refusal },
+            crate::pipeline::Disagreement::EventUnreached { record: past },
+        ]
     );
 }
 
@@ -1338,6 +1398,99 @@ async fn an_extend_on_an_offered_block_that_did_not_become_the_tip_is_refused() 
         CenRow::A2,
         "its parent is not the tip: {refused:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tables_digest_is_taken_at_each_indexed_record_and_held_to_the_trace() {
+    // CHAIN_FORGE.md §8: a baseline asked for the digest at an extend's
+    // record and at the offer that switches writes it into the trace; a
+    // replay against that trace takes the same digests and agrees; one
+    // edited digest is a disagreement naming its record; a record the
+    // corpus never reaches is one too.
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let bytes = corpus_of_offers(&r);
+    let at_extend = SequenceNo::from_raw(2);
+    let at_switch = SequenceNo::from_raw(f + 7);
+    let replay = |name: &'static str, trace: Trace| {
+        let bytes = bytes.clone();
+        async move {
+            let path = tmp(name);
+            let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+            let report = run(
+                &mut source,
+                substrate(),
+                Arc::new(Metrics::new()),
+                GENESIS_RULES,
+                open_store(&path),
+                Arc::new(trace),
+                cfg(2),
+            )
+            .await
+            .expect("the chain replays");
+            (report, path)
+        }
+    };
+
+    let (captured, path) = replay(
+        "pipeline-events-capture",
+        Trace::capturing([at_extend, at_switch]),
+    )
+    .await;
+    assert_eq!(
+        captured
+            .events
+            .iter()
+            .map(|event| (event.record, event.theirs))
+            .collect::<Vec<_>>(),
+        vec![(at_extend, None), (at_switch, None)],
+        "a capturing trace expects nothing"
+    );
+    assert_ne!(captured.events[0].ours, captured.events[1].ours);
+    assert_eq!(captured.disagreements().count(), 0);
+    let store = open_store(&path);
+    let written = crate::rebaseline::trace_of(
+        &store.begin_read().expect("read"),
+        &captured.events,
+        Vec::new(),
+    )
+    .expect("the trace");
+    drop(store);
+    let trace = Trace::read(std::io::Cursor::new(&written)).expect("reads back");
+
+    let (held, _) = replay("pipeline-events-held", trace.clone()).await;
+    assert_eq!(held.events.len(), 2);
+    assert!(held
+        .events
+        .iter()
+        .all(|event| event.theirs == Some(event.ours)));
+    assert_eq!(held.disagreements().count(), 0, "every digest agrees");
+
+    // One digest edited: the replay names its record.
+    let mut edited = written.clone();
+    let switch_digest = edited.len() - (1 + 8 + 8 + 8) - 32;
+    edited[switch_digest] ^= 0x01;
+    let (diverged, _) = replay(
+        "pipeline-events-edited",
+        Trace::read(std::io::Cursor::new(&edited)).expect("reads"),
+    )
+    .await;
+    assert_eq!(
+        diverged.disagreements().collect::<Vec<_>>(),
+        vec![crate::pipeline::Disagreement::EventDiverged { record: at_switch }]
+    );
+
+    // A record past the corpus: never reached.
+    let (short, _) = replay(
+        "pipeline-events-unreached",
+        Trace::capturing([at_extend, SequenceNo::from_raw(f + 99)]),
+    )
+    .await;
+    assert_eq!(short.events_unreached, vec![SequenceNo::from_raw(f + 99)]);
+    assert!(short.disagreements().any(|d| d
+        == crate::pipeline::Disagreement::EventUnreached {
+            record: SequenceNo::from_raw(f + 99)
+        }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
