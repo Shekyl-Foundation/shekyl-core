@@ -290,10 +290,47 @@ jobs:
           # credential to find in .git/config.
           persist-credentials: false
 
+      - name: does this revision have the --pins lane
+        # A leg runs a lane only where the CHECKED-OUT revision has it (as
+        # nightly-live-daemon-slow.yml does). Each leg checks out
+        # matrix.branch and runs that branch's script: a dispatch from a
+        # branch with the lane makes a leg on a branch whose script would
+        # refuse `--pins` as unknown. The checked-out script has the arm:
+        # the leg runs. It lacks the arm but the checked-out copy of this
+        # workflow calls the lane: red, the revision claims a lane it cannot
+        # run. Neither: the revision predates the lane, and the leg ends
+        # green with a notice, building nothing. The probe reads text, so
+        # the script's arm stays `--pins)` and this file's call stays
+        # `ignored_set_economics_sim.sh --pins` on one line.
+        id: lane
+        env:
+          LANE: --pins
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/ignored_set_economics_sim.sh
+          workflow=.github/workflows/nightly.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the economics sim's ignored set has no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "ignored_set_economics_sim\.sh ${LANE}([[:space:]]|$)" "$workflow"; then
+            echo "::error::$BRANCH's $workflow calls $script $LANE, but the script has no '$LANE)' arm: the lane cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the economics sim's $LANE lane (neither its $script nor its $workflow names it). This leg ran nothing. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
 
       - name: Run the economics sim's ignored pins
+        if: steps.lane.outputs.run == 'true'
         # The set, the helpers and their assertions are
         # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
         # each branch judges itself.
@@ -325,10 +362,47 @@ jobs:
           # credential to find in .git/config.
           persist-credentials: false
 
+      - name: does this revision have the --reader lane
+        # A leg runs a lane only where the CHECKED-OUT revision has it (as
+        # nightly-live-daemon-slow.yml does). Each leg checks out
+        # matrix.branch and runs that branch's script: a dispatch from a
+        # branch with the lane makes a leg on a branch whose script would
+        # refuse `--reader` as unknown. The checked-out script has the arm:
+        # the leg runs. It lacks the arm but the checked-out copy of this
+        # workflow calls the lane: red, the revision claims a lane it cannot
+        # run. Neither: the revision predates the lane, and the leg ends
+        # green with a notice, building nothing. The probe reads text, so
+        # the script's arm stays `--reader)` and this file's call stays
+        # `ignored_set_economics_sim.sh --reader` on one line.
+        id: lane
+        env:
+          LANE: --reader
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/ignored_set_economics_sim.sh
+          workflow=.github/workflows/nightly.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the economics sim's ignored set has no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "ignored_set_economics_sim\.sh ${LANE}([[:space:]]|$)" "$workflow"; then
+            echo "::error::$BRANCH's $workflow calls $script $LANE, but the script has no '$LANE)' arm: the lane cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the economics sim's $LANE lane (neither its $script nor its $workflow names it). This leg ran nothing. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
 
       - name: Run the economics sim's reader test
+        if: steps.lane.outputs.run == 'true'
         env:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_economics_sim.sh --reader
