@@ -33,9 +33,11 @@ The round takes the cap's possible jobs one at a time (§3 to §6), derives the
 number from the weight model (§2), lists every consumer that moves with it
 (§7), and records Rick's rulings (§9) and what is still open (§11).
 
-**Answer in one paragraph.** The derived maximum is **22**: the largest input
-count the transaction weight limit admits at the lightest legal shape, reached
-at tree depths 2, 3 and 4 (§2.3). It is computed at compile time in
+**Answer in one paragraph.** The derived maximum is **22** at today's weight
+limit: the largest input count the transaction weight limit admits at the
+lightest legal shape, reached at tree depths 2, 3 and 4 (§2.3). The number is
+provisional, since EUP-5 G moves the weight limit, and nothing built depends
+on it: every consumer reads the computed value. It is computed at compile time in
 `shekyl-wire` from the weight model, whose proof-size term is the closed form
 instead of an 8-row table (§2.1, `ICD-R1`), and the generator counts are
 derived from it exactly (`ICD-R2`). The cap bounds no relay work worth keeping
@@ -601,10 +603,61 @@ with that design, not to this round.
 
 **Benches and sims (copy):** `shekyl-verify-cost`'s
 `relay_admission_verify.rs` (`1..=8`) and `block_connect_verify.rs`'s
-`SWEEP_SHAPES` (the GAP-7 sweep, §3); `shekyl-economics-sim`'s calibration
-domain (reads `InputCount::clamped`; under the cutover it reads the landed,
-computed constant, so the sim tests the built structure);
+`SWEEP_SHAPES` (the GAP-7 sweep, §3);
 `scripts/bench/test_rt_p5_classes.py`'s pinned 8-in/16-out cell.
+
+**The economics sim (read through `InputCount::clamped`; it never reads
+`TX_WEIGHT_LIMIT`, `jg_report.rs` says so).** Listed with the sim lane
+(ESR, 2026-11-22):
+- `calibration.rs`: `all_shapes` (`1..=` the cap × `1..=MAX_OUTPUTS`), and the
+  three readers of it: `stuffer_shape`, the one-shot W9 stuffer (the most
+  archival bytes per fee); `max_archival_bytes_per_block`, the physical ceiling
+  on the fold's slew; and `sustained_stuffer_cost_per_shard_atomic`, the
+  output-conserving cycle that consumes the cap minus one outputs per
+  transaction;
+- `miner_stuffer.rs`: the miner's stuffing body, searched over `all_shapes()`
+  at two sites (`:514`, `:1342`), which drives the A-stuffed economy;
+- `MAX_TREE_DEPTH`, read through `shekyl-tx-weight` in `burden.rs` and in
+  `calibration.rs`'s `tree_depth_for_leaves` and `stuffer_txs_before_deepening`.
+  Depth 12 (`ICD-Q7`) does not move the sim's results: no fold reaches 10^17
+  outputs.
+
+Once the cap exceeds `N(d)` at some depth, a search over `1..=cap` picks
+shapes consensus refuses, which is why the cutover gives the sim the
+legal-shape function below instead of the bare cap. Under the cutover the sim
+reads the landed, computed structure, so it tests what is built. Honest
+traffic is fixed at 1-in / 2-out (`burden::normal_tx_shape`), so the honest
+economies do not move.
+
+**`ICD-F17` — the builder accepts shapes CEN-I1 refuses, and the sim prices
+its stuffer on one.** The builder refuses only zero outputs
+(`rust/shekyl-tx-builder/src/validate.rs:45`), while CEN-I1 refuses fewer than
+two on every non-coinbase transaction. `all_shapes` runs from one output, and
+`stuffer_shape`'s argmax is "`MAX_INPUTS`-in / 1-out" (`calibration.rs:17-21`),
+a transaction no node admits. This is the census row's class (FOLLOWUPS, "The
+census does not record which library-crate constants a consensus rule's value
+depends on"), with the library looser rather than tighter. The legal-shape
+function closes it at both ends.
+
+**The legal-shape function (cutover scope).** Under `ICD-R1`, `shekyl-wire`
+exposes one function for the shapes legal at depth `d`: the outputs from
+CEN-I1's minimum to `MAX_OUTPUTS`, and for each the largest input count the
+weight limit admits at that depth, `N(d, n_out)`, never above the cap. Its
+readers: the builder (refusing what consensus refuses, before signing), the
+wallet's per-depth limit, the sim's `all_shapes`, the GAP-7 sweep's shapes,
+and the P-lane ceiling's scan (`ICD-F11`), which then scans only legal cells.
+Nobody copies the weight limit or the output minimum.
+
+**What goes red in the sim at the cutover, and how it is regenerated.**
+EUP-4 prep 3's whole-economy table (#1476): the A-stuffed rows, the stuffed
+tail's floor, the C arms' adversary columns (C3's D2 escalation prices against
+the W9 stuffer), and the nightly slice's narration and table; and the
+narration pins that include stuffing (ESR-10, EUP-4, J×G, and any others the
+economics-sim-narrations job names). Each is regenerated in the cutover PR
+under `SHEKYL_PINNED_REGEN_DECISION`, citing a dated entry in
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md). The
+full table (2 880 folds, about 14 hours on a 16-vCPU host) is an on-demand
+fleet run the sim lane runs once the cutover branch is ready.
 
 **Generators and depth (`ICD-R2`, `ICD-R3`):** `shekyl-curve-generators`'s
 `MAX_FCMP_INPUTS = 128` and `MAX_FCMP_LAYERS = 12` give way to the two derived
@@ -958,7 +1011,9 @@ run, with the cap's value in hand.
 ## 12. Out of scope
 
 Automatic consolidation in the wallet: its own design round, with its privacy
-cost priced (FOLLOWUPS, the wallet's consolidation row). Relay verification:
+cost priced (FOLLOWUPS, the wallet's consolidation row). The sim does not model
+consolidation either (its traffic has no mix of shapes); that is a modelling
+question after the current sim series, raised with Rick by the sim lane. Relay verification:
 the relay lane's round (`ICD-R4`).
 
 ## 13. Round log
@@ -978,3 +1033,8 @@ the relay lane's round (`ICD-R4`).
   row floors are the vector-commitment tape's minimum (`ICD-F16`). `ICD-Q7`'s
   margin is measured against the store's write budget (PB-R2), not other
   chains' rates.
+- **2026-11-22 — the sim's consumers and the legal-shape function.** From the
+  sim lane, on Rick's word: §7 lists the sim's readers in full, `ICD-F17`
+  (the builder and the sim accept 1-output shapes CEN-I1 refuses) is recorded,
+  and the cutover gains one legal-shape function in `shekyl-wire` that the
+  builder, the wallet, the sim, the GAP-7 sweep and the P-lane ceiling read.
