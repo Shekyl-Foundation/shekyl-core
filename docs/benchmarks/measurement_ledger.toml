@@ -1077,6 +1077,7 @@ spec = [
   "rust/shekyl-scanner/src/scan.rs",
 ]
 stale_through = [
+  { through = "c1fef21e5fb671243a392f21905af922dbb85ebf", note = "In this path set, output.rs gains spend_key_image, the key image x*Hp(O) from a spend secret the caller already holds, which the transaction builder's membership self-verify calls once per input after proving. The decapsulation and the output scan do not call it; the scan cost does not move." },
   { through = "104487033550cbb5dfeb03eb7ca796459cc39df5", note = "#1494: kem.rs and output.rs map a decapsulation-key parse failure to CryptoError::MalformedDecapsKey (fips203 0.5.0 refuses a coefficient of q or more), with tests. The mapping runs only on an Err; the scan's decapsulation and recovery path is unchanged. fips203 itself moves 0.4.3 -> 0.5.0 in Cargo.lock in the same pull request, outside this path set: decapsulation now rounds Decompress to nearest (a multiply and a shift, as before), outputs byte-identical over 60,000 seeds. Not re-measured." },
   { through = "20738bf714be3e7b31cca47fe3d614d7d7f55021", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
   { through = "b5e7dbfed5ecbcc69ed954151c481cb9d6a54253", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
