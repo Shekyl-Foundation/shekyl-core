@@ -35,8 +35,9 @@
 //!
 //! # The secret is the key; everything else is drawn alike
 //!
-//! A class is a set of key slots, and the classes differ only in which keys
-//! their slots hold. Each entry draws a fresh transcript and a fresh
+//! A class is a set of keys: one key (a fixed class) or 256 (the varied
+//! class, each entry taking one uniformly). The classes differ only in their
+//! keys. Each entry draws a fresh transcript and a fresh
 //! 32-byte RNG seed, the same way in both classes. Holding the message or
 //! the seed fixed would not make two keys' computations alike: FN-DSA
 //! hedges the seed with the hashed signing key and the message
@@ -44,12 +45,16 @@
 //! the key's whatever is passed in. A fixed message and seed would instead
 //! make one class a single computation repeated against a varied one.
 //!
-//! **Equal footprint.** Each class holds [`SLOTS`] decoded keys (118,640
-//! bytes each), and each entry signs from a slot drawn uniformly. In the
-//! `fixed` class every slot holds the same key; in the `varied` class each
-//! slot holds its own. Both classes therefore touch the same amount of
-//! memory in the same pattern, and neither has its key warmer in the cache
-//! than the other.
+//! **One working slot.** Each entry's key is decoded, untimed, into one
+//! working slot just before it signs (`FnDsaHybridSigner::new`, as the serve
+//! path builds its held key), and dropped after. The allocator hands the
+//! freed block to the next decode, so every entry of both classes signs from
+//! the same memory with its key freshly written into it. Holding each
+//! class's keys in slots of their own did not work: on x86 the classes'
+//! placement crossed a null until it was shuffled, and on the floor device
+//! even shuffled slot sets differed (nulls 8.54 and 10.17 at 50,000
+//! samples, all in the fast tail), because the 256 slots a class drew were
+//! not alike.
 //!
 //! **Restarts.** FN-DSA's signing loop restarts when a candidate signature
 //! is too long (about 1 in 820 at n = 1024), and a restart repeats almost
@@ -82,8 +87,8 @@
 //! every timed signature returned `Ok` and verifies; every signature's
 //! nonce is the one its key, transcript and seed derive for some counter.
 //!
-//! **Nulls.** Key A in two disjoint sets of slots, and the varied class's
-//! 256 keys in two disjoint sets of slots. The keys are the same on both
+//! **Nulls.** Key A in both classes, and the varied class's 256 keys in
+//! both classes. The keys are the same on both
 //! sides, so nothing differs, and whatever they report is the harness or
 //! the machine. (Two different key sets would not be a null: under a key
 //! dependence they differ too.)
@@ -148,16 +153,11 @@ const CALIBRATION: usize = 10_000;
 const CROPS: usize = 100;
 /// A cut-off counts only when both classes keep more samples than this.
 const MIN_CROPPED: f64 = 10_000.0;
-/// Decoded keys per class. 256 slots of 118,640 bytes is 30 MB a class,
-/// more than any last-level cache the run's devices have, so neither
-/// class's keys sit in the cache by being few.
+/// Keys in the varied class.
 const SLOTS: usize = 256;
 /// The input seed of the registered run. No run before the registration
 /// drew from it.
 const REGISTERED_SEED: u64 = 0x4341_335f_464e_4453;
-/// XORed into the seed for the slot-placement stream, so placement draws
-/// nothing from the stream the keys and entries come from.
-const PLACEMENT_STREAM: u64 = 0x504c_4143_454d_454e;
 
 /// FN-DSA's per-signature seed, drawn from the caller's RNG and hedged
 /// (`fn-dsa-sign` 0.4.0, `lib.rs`, `SigningKey::sign`).
@@ -285,39 +285,32 @@ impl Key {
     }
 }
 
-/// A class: [`SLOTS`] held signers and the key each holds.
+/// A class: its keys, one (fixed) or [`SLOTS`] (varied).
 struct Class {
     name: &'static str,
     keys: Vec<Key>,
-    slots: Vec<(FnDsaHybridSigner, usize)>,
 }
 
 impl Class {
-    /// Every slot holds `key`. The slots are decoded by [`decode_interleaved`].
+    /// One key for every entry.
     fn fixed(name: &'static str, key: Key) -> Self {
         Self {
             name,
             keys: vec![key],
-            slots: Vec::with_capacity(SLOTS),
         }
     }
 
-    /// Each slot holds its own key, generated from `seeds` (one pair per
-    /// slot, drawn once for the whole run, so every comparison and every
-    /// device uses the same keys).
+    /// One key per seed pair, drawn once for the whole run, so every
+    /// comparison and every device uses the same keys.
     fn varied(name: &'static str, seeds: &[([u8; 32], [u8; 32])]) -> Self {
         let keys: Vec<Key> = seeds
             .iter()
             .map(|(ed25519, fn_dsa)| Key::from_seeds(*ed25519, *fn_dsa))
             .collect();
-        Self {
-            name,
-            keys,
-            slots: Vec::with_capacity(SLOTS),
-        }
+        Self { name, keys }
     }
 
-    /// The key slot `slot` holds: the one key, or the slot's own.
+    /// The key entry slot `slot` signs with: the one key, or that one.
     fn key_index(&self, slot: usize) -> usize {
         if self.keys.len() == 1 {
             0
@@ -328,43 +321,6 @@ impl Class {
 
     fn replicates(&self) -> bool {
         self.keys.iter().all(|key| key.replicates)
-    }
-}
-
-/// Decode both classes' slots in a shuffled order, so that which addresses
-/// each class's slots get is random, as which class each entry belongs to is
-/// random in time.
-///
-/// The allocator places blocks in the order they are asked for. Decoded one
-/// class after the other, the second class's 30 MB had a region of its own;
-/// decoded alternately, each class had a fixed alignment pattern (118,640
-/// bytes is 128 short of 29 pages, so the classes took the even and the odd
-/// 128-byte offsets). The development runs measured both: a null of one key
-/// set in two slot sets read `|t|` 11.94 and then 37.69 at 200,000 samples,
-/// with the second class slower by 0.15 % and 0.3 % of a signature at every
-/// quantile. `placement` is a stream of its own, so the keys and the entries
-/// are what they would be without it.
-fn decode_shuffled(classes: &mut [Class; 2], placement: &mut Inputs) {
-    let mut order: Vec<(usize, usize)> =
-        (0..SLOTS).flat_map(|slot| [(0, slot), (1, slot)]).collect();
-    for i in (1..order.len()).rev() {
-        let j = (placement.next() % (i as u64 + 1)) as usize;
-        order.swap(i, j);
-    }
-    let mut decoded: [Vec<Option<(FnDsaHybridSigner, usize)>>; 2] = [
-        (0..SLOTS).map(|_| None).collect(),
-        (0..SLOTS).map(|_| None).collect(),
-    ];
-    for (class, slot) in order {
-        let key = classes[class].key_index(slot);
-        let signer = FnDsaHybridSigner::new(&classes[class].keys[key].secret).expect("decodes");
-        decoded[class][slot] = Some((signer, key));
-    }
-    for (class, slots) in classes.iter_mut().zip(decoded) {
-        class.slots = slots
-            .into_iter()
-            .map(|slot| slot.expect("every slot is decoded once"))
-            .collect();
     }
 }
 
@@ -494,7 +450,13 @@ fn compare(
     let mut results: Vec<Option<FnDsaHybridSignature>> = Vec::with_capacity(total);
 
     for (index, entry) in entries.iter().enumerate() {
-        let (signer, _) = &mut classes[usize::from(entry.class)].slots[usize::from(entry.slot)];
+        // The entry's key is decoded into the one working slot, untimed,
+        // just before it signs, and dropped after: the allocator hands the
+        // freed block back to the next decode, so every entry of both
+        // classes signs from the same memory.
+        let class = &classes[usize::from(entry.class)];
+        let key = &class.keys[class.key_index(usize::from(entry.slot))];
+        let mut signer = FnDsaHybridSigner::new(&key.secret).expect("decodes");
         let start = Instant::now();
         let signature = signer.sign_with_rng_seed(
             SCHEME_DOMAIN_RECEIPT,
@@ -507,6 +469,7 @@ fn compare(
             }
         }
         let elapsed = start.elapsed();
+        drop(signer);
         times[index] = elapsed.as_nanos() as u64;
         results.push(signature.ok());
     }
@@ -521,7 +484,7 @@ fn compare(
     let scheme = HybridEd25519FnDsa;
     for (index, (entry, result)) in entries.iter().zip(&results).enumerate() {
         let class = &classes[usize::from(entry.class)];
-        let key = &class.keys[class.slots[usize::from(entry.slot)].1];
+        let key = &class.keys[class.key_index(usize::from(entry.slot))];
         let Some(signature) = result else {
             checks.failed += 1;
             continue;
@@ -715,7 +678,7 @@ fn main() {
     println!("CA-3 FN-DSA receipt countersignature timing (fn-dsa 0.4.0, held signer), inputs prepared before the loop");
     println!(
         "arch={} os={} cpu_avx2={} samples_per_comparison={samples} calibration={CALIBRATION} \
-         crops={CROPS} slots={SLOTS} inputs={}",
+         crops={CROPS} varied_keys={SLOTS} inputs={}",
         std::env::consts::ARCH,
         std::env::consts::OS,
         cpu_avx2(),
@@ -738,14 +701,11 @@ fn main() {
         .map(|_| (inputs.array(), inputs.array()))
         .collect();
 
-    // Slot placement draws from its own stream (see `decode_shuffled`).
-    let mut placement = Inputs(seed ^ PLACEMENT_STREAM);
     let mut replicated = true;
     let mut checked = true;
     let mut run = |label: &str, classes: [Class; 2], inputs: &mut Inputs, planted: Option<u64>| {
         replicated &= classes.iter().all(Class::replicates);
         let mut classes = classes;
-        decode_shuffled(&mut classes, &mut placement);
         let outcome = compare(&mut classes, samples, inputs, planted);
         checked &= outcome.checks.hold();
         let word = if planted.is_some() {
@@ -794,33 +754,33 @@ fn main() {
         "null",
         [
             Class::fixed("fixed-a", key_a.again()),
-            Class::fixed("fixed-a-other-slots", key_a.again()),
+            Class::fixed("fixed-a-again", key_a.again()),
         ],
         &mut inputs,
         None,
     );
-    // The same 256 keys decoded into two sets of slots: under a key
-    // dependence two different key sets would differ, and a null that can
-    // cross on the effect under test would void a run that should fail.
+    // The same 256 keys on both sides: under a key dependence two different
+    // key sets would differ, and a null that can cross on the effect under
+    // test would void a run that should fail.
     let null_varied = run(
         "null",
         [
             Class::varied("varied", &pool),
-            Class::varied("varied-other-slots", &pool),
+            Class::varied("varied-again", &pool),
         ],
         &mut inputs,
         None,
     );
     let worst_null = null_fixed.figure().max(null_varied.figure());
     // The control is planted on a null, so no real effect adds to or
-    // cancels it: key A in two slot sets, class 1 with the planted work.
+    // cancels it: key A in both classes, class 1 with the planted work.
     let leak_ns = null_fixed.median_ns * CONTROL_LEAK_FRACTION;
     let iterations = calibrate_spin(leak_ns);
     let control = run(
         "control",
         [
             Class::fixed("fixed-a", key_a.again()),
-            Class::fixed("fixed-a-other-slots", key_a),
+            Class::fixed("fixed-a-again", key_a),
         ],
         &mut inputs,
         Some(iterations),
