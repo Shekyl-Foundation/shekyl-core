@@ -155,7 +155,8 @@ growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
 whole_economy::tests::economies_full_run_matches_its_digests_and_table
 whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge
 whole_economy::tests::economies_table_matches_the_recorded_summary
-whole_economy::tests::economies_narration_renders_from_the_recorded_summary'
+whole_economy::tests::economies_narration_renders_from_the_recorded_summary
+calibration::tests::stuffer_calibration_by_depth'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`

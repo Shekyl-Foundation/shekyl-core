@@ -696,6 +696,68 @@ mod tests {
         );
     }
 
+    /// On demand (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.2): the
+    /// stuffers' shapes at every depth the tree reaches, at each of the three
+    /// rates [`rates`] names. Per depth: the one-shot shape (least fee per
+    /// archival byte), its runner-up and how much dearer it is; the shape
+    /// landing the most archival bytes in a block at the surge ceiling, its
+    /// runner-up and how many fewer bytes it lands; and the one-shot and
+    /// sustained costs per shard at the depth's first leaf. Prints the table
+    /// a change to the shape space is read against; asserts only that every
+    /// depth prices.
+    #[test]
+    #[ignore = "on demand: prints the stuffer calibration by depth (§5.37.2)"]
+    fn stuffer_calibration_by_depth() {
+        let block_weight = crate::swing::block_weight_penalty_free(&SimParams::default());
+        let ppm = |num: u128, den: u128| num.saturating_mul(1_000_000) / den.max(1);
+        for rate in rates() {
+            println!(
+                "rate {} atomic/B, ceiling {block_weight} B/block, outputs from {}",
+                rate.atomic(),
+                all_shapes().map(|s| s.n_out.get()).min().expect("a shape"),
+            );
+            println!(
+                "depth  one-shot  runner-up  dearer(ppm)  ceiling  bytes/block  runner-up  fewer(ppm)  cost/shard  sustained"
+            );
+            for depth in 1..=MAX_TREE_DEPTH {
+                let leaves = match depth {
+                    1 => 1,
+                    d => match layer_capacity(d - 1) {
+                        Some(cap) => cap + 1,
+                        None => continue,
+                    },
+                };
+                let mut by_fee: Vec<(Shape, (u128, u128))> = all_shapes()
+                    .filter_map(|s| fee_per_archival(s, depth, rate).map(|r| (s, r)))
+                    .collect();
+                by_fee.sort_by(|a, b| (a.1 .0 * b.1 .1).cmp(&(b.1 .0 * a.1 .1)));
+                let (best, (bf, bb)) = by_fee[0];
+                let (second, (sf, sb)) = by_fee[1];
+                let dearer = ppm(sf * bb, bf * sb).saturating_sub(1_000_000);
+                let mut by_block: Vec<(Shape, u64)> = all_shapes()
+                    .filter_map(|s| {
+                        let w = s.tx_weight(depth, rate)?;
+                        (w > 0).then(|| (s, (block_weight / w) * s.archival_bytes(depth)))
+                    })
+                    .collect();
+                by_block.sort_by(|a, b| b.1.cmp(&a.1));
+                let (top, top_bytes) = by_block[0];
+                let (next, next_bytes) = by_block[1];
+                let fewer = 1_000_000u128
+                    .saturating_sub(ppm(u128::from(next_bytes), u128::from(top_bytes)));
+                let one_shot = priced(stuffer_cost_per_shard_atomic(leaves, rate));
+                let sustained = priced(sustained_stuffer_cost_per_shard_atomic(leaves, rate));
+                println!(
+                    "{depth:>5}  {:>8}  {:>9}  {dearer:>11}  {:>7}  {top_bytes:>11}  {:>9}  {fewer:>10}  {one_shot:>10}  {sustained:>9}",
+                    best.label(),
+                    second.label(),
+                    top.label(),
+                    next.label(),
+                );
+            }
+        }
+    }
+
     #[test]
     fn cost_per_shard_is_txs_times_fee_and_sustained_is_dearer() {
         let leaves = 100_000;
