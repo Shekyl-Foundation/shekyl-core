@@ -1,19 +1,24 @@
 # CEN-I4 — deriving the transaction input cap (`ICD-`)
 
-**Status:** OPEN — Round 0 (2026-11-22), docs only. Consensus surface: the
-design is ruled here before any code moves, then one rule-07 cutover PR moves
-every consumer together. Identifier family `ICD-` (registered in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2): `ICD-R*` rulings,
-`ICD-F*` findings, `ICD-Q*` questions for Rick.
+**Status:** OPEN — Round 0 RULED IN PART (Rick, 2026-11-22), docs only.
+Consensus surface: the design is ruled here before any code moves, then one
+rule-07 cutover PR moves every consumer together. Identifier family `ICD-`
+(registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
+`ICD-R*` rulings, `ICD-F*` findings, `ICD-Q*` questions for Rick.
 
 **Ruled before this round (`ICD-R0`, Rick, 2026-11-22):** CEN-I4 is derived in
 its own lane before genesis, and the answer is a derived constant, not a
 chosen number.
 
-**Open questions (§9):** `ICD-Q1` whether CEN-I4 stays an explicit rule;
-`ICD-Q2` the relay verifier budget; `ICD-Q3` the snap to a padding boundary;
-`ICD-Q4` where the derived constant lives; `ICD-Q5` the coupling to EUP-5 G's
-weight limit.
+**Ruled in this round (§9):** `ICD-R1` the weight model moves into
+`shekyl-wire` and the cap is computed there; `ICD-R2` the generator counts are
+derived from the cap; `ICD-R3` the maximum tree depth is derived here;
+`ICD-R4` relay verification gets its own round in the relay lane; `ICD-R5` one
+named floor device for every embargo cell. **Handed to EUP-5 G (§10):**
+`ICD-Q6`, `ICD-F15`. **Still open (§11):** `ICD-Q1` whether CEN-I4 stays an
+explicit rule; `ICD-Q3` the snap to a padding boundary; `ICD-Q5` the coupling
+to EUP-5 G's weight limit; `ICD-Q7` the maximum tree depth; the standoff
+reserve's value; the cover carrier's fragment count.
 
 ## 0. What the cap is, and why it is decided now
 
@@ -26,18 +31,18 @@ into one takes ⌈999 / 7⌉ = 143 transactions; at 22 it takes ⌈999 / 21⌉ =
 
 The round takes the cap's possible jobs one at a time (§3 to §6), derives the
 number from the weight model (§2), lists every consumer that moves with it
-(§7), and asks Rick five questions (§9).
+(§7), and records Rick's rulings (§9) and what is still open (§11).
 
-**Answer in one paragraph, to be ruled.** The derived maximum is **22**: the
-largest input count the transaction weight limit admits at the lightest legal
-shape, reached at tree depths 2, 3 and 4 (§2.3). It is computable at compile
-time from the same weight model the fee path uses, once that model's proof-size
-term reads the closed form instead of an 8-row table (§2.1, `ICD-Q4`). The
-generators admit 85 inputs at the deepest supported tree, so 22 fits with room
-(§2.4). The cap bounds no relay work worth keeping a consensus rule for: the
-relay verifies received transactions on the transport runtime's two workers,
-and a clearnet flood of invalid ones already outruns them at today's 8, so the
-bound has to be built in relay policy (§4, `ICD-Q2`). It does move
+**Answer in one paragraph.** The derived maximum is **22**: the largest input
+count the transaction weight limit admits at the lightest legal shape, reached
+at tree depths 2, 3 and 4 (§2.3). It is computed at compile time in
+`shekyl-wire` from the weight model, whose proof-size term is the closed form
+instead of an 8-row table (§2.1, `ICD-R1`), and the generator counts are
+derived from it exactly (`ICD-R2`). The cap bounds no relay work worth keeping
+a consensus rule for: the relay verifies received transactions on the
+transport runtime's two workers, and a clearnet flood of invalid ones already
+outruns them at today's 8, so the relay lane designs that bound in its own
+round (§4, `ICD-R4`). It does move
 the worst block's verification time a little, through the proof's padding,
 and the GAP-7 sweep has to be re-run at the new shapes (§3). One large
 consolidation discloses less than a burst of capped ones (§6).
@@ -156,16 +161,22 @@ wallet meets is `N(d)`, which the wallet already computes through the same
 weight model. The slack at depth 4 (102 bytes) holds any realistic fee varint;
 the 6 bytes at depth 23 hold a fee up to a 7-byte varint, about 562 000 SKL.
 
-### 2.4 The generators hold it
+### 2.4 The generators: today's table, and the derived count (`ICD-R2`)
 
-The FCMP generators are built for `MAX_FCMP_INPUTS = 128` inputs at
+Today the FCMP generators are built for `MAX_FCMP_INPUTS = 128` inputs at
 `MAX_FCMP_LAYERS = 12` (`rust/shekyl-curve-generators/src/lib.rs:136`, `:149`),
 which is 65 536 Selene rows and 32 768 Helios rows. The same `ipa_rows` gives
 the largest input count those rows prove at each depth: 160 or more up to depth
-12, 154 at 13, 93 at 23 and **85 at 24** (the Helios side binds). A proof that
+12, 154 at 13, 93 at 23 and 85 at 24 (the Helios side binds). A proof that
 needs more fails cleanly with `FcmpError::NotEnoughGenerators`; it does not
-truncate. The cutover asserts at compile time that `ipa_rows(N, MAX_TREE_DEPTH)`
-is within the generator rows on both curves. Nothing checks it today.
+truncate. Nothing checks the table against the cap today.
+
+Under `ICD-R2` the table is sized to the need, exactly: per curve, the largest
+`ipa_rows(N(d), d)` over every legal depth. At today's weight limit and
+`MAX_TREE_DEPTH = 24` that is 16 384 Selene and 8 192 Helios rows (both at
+depth 24); at a maximum depth of 12 (`ICD-Q7`) it is 8 192 and 4 096. The
+python model of `ipa_rows` used for these tables matches the Rust `const fn`
+on all 3 840 cells it was compared on (1 to 160 inputs, depths 1 to 24).
 
 Note the name collision: `shekyl_curve_generators::MAX_FCMP_INPUTS = 128` is the
 generator sizing inherited from upstream and is not the consensus cap
@@ -370,7 +381,7 @@ message's worth of transactions per session to verify. At the 9 to 14 µs per
 weight byte measured in §2.6, a full message is roughly 9 to 14 s of one
 transport worker. A held batch refused on form closes its session and drops
 its other held batches, so one failed verification per session holds on this
-path too. Whatever moves verification off the transport runtime (`ICD-Q2`)
+path too. Whatever moves verification off the transport runtime (`ICD-R4`)
 covers both callers.
 
 What a new session costs the peer is the accept-rate bound
@@ -404,16 +415,13 @@ grows without bound and every session on the node stalls behind it. Even
 1-input garbage takes 1.4 to 1.8 of the 2 workers. The cap moves the multiplier, not the conclusion. A single
 address stays under a third of one worker at any shape measured.
 
-**Disposition proposed:** the bound belongs in relay policy and is missing
-there at any cap. The proposal for `ICD-Q2` has two parts. First, admission's
-verification moves off the transport runtime onto its own bounded verifier,
-so a flood cannot stall session I/O. Second, a verifier budget charged by
-failed verifications, per connector and per host, debited by the transaction's
-`f(n_in, depth)` from the embargo table (both known from the parse, before the
-proof runs). With that budget, a larger input count simply costs more of it,
-and the consensus cap has no relay job left. Building it is the relay lane's;
-this round states the budget and asks that the build be scheduled before
-genesis.
+**Disposition (`ICD-R4`, ruled):** the bound belongs in relay policy and is
+missing there at any cap. The relay lane designs it in its own round, with the
+requirements §9 hands it (where verification runs for both callers, what makes
+a session verified, the unverified queue, the privacy cost of a dropped or
+delayed stem, Tor, and the budget in core-time from `f(n_in, depth)`). Nothing
+is built before that round is ruled. Once the bound exists, a larger input
+count simply costs more of it, and the consensus cap has no relay job left.
 
 ## 5. Job 3: the closed domains
 
@@ -488,7 +496,7 @@ equal to the first (`rust/shekyl-tx-builder/src/lib.rs:119`, `:139-142`).
 
 - `shekyl-tx-weight`: `InputCount`, the `FCMP_PROOF_SIZE_KAT` table and its
   dimension assert, and `FCMP_PROOF_SIZE_MAX` (copy: fails to compile until
-  replaced, `ICD-Q4`);
+  replaced, `ICD-R1`);
 - `shekyl-engine-core`: `p_lane_weight_ceiling_bytes` and its test
   `p_lane_ceiling_covers_the_heaviest_legal_shape`, which ties the ceiling to
   the exit-fee reserve; `tx_fee_model.rs`'s KAT emit and validation loops
@@ -543,8 +551,16 @@ with that design, not to this round.
 **Benches and sims (copy):** `shekyl-verify-cost`'s
 `relay_admission_verify.rs` (`1..=8`) and `block_connect_verify.rs`'s
 `SWEEP_SHAPES` (the GAP-7 sweep, §3); `shekyl-economics-sim`'s calibration
-domain (reads `InputCount::clamped`); `scripts/bench/test_rt_p5_classes.py`'s
-pinned 8-in/16-out cell.
+domain (reads `InputCount::clamped`; under the cutover it reads the landed,
+computed constant, so the sim tests the built structure);
+`scripts/bench/test_rt_p5_classes.py`'s pinned 8-in/16-out cell.
+
+**Generators and depth (`ICD-R2`, `ICD-R3`):** `shekyl-curve-generators`'s
+`MAX_FCMP_INPUTS = 128` and `MAX_FCMP_LAYERS = 12` give way to the two derived
+counts and the one depth constant; `shekyl_fcmp::MAX_TREE_DEPTH`
+(`rust/shekyl-fcmp/src/lib.rs:50`) and its re-export through `shekyl-tx-weight`
+read the one constant; the embargo table's `MAX_TABLE_DEPTH` stays its own
+measured edge (depth 7), below the protocol's maximum.
 
 **Fixtures and tests (copy):** `shekyl-chain-ingest`'s
 `EXTRA_KEY_IMAGES: [[u8; 32]; MAX_FCMP_INPUTS]` (eight literal entries, fails
@@ -552,8 +568,11 @@ to compile), its committed 8-input corpora and iai benches; the four tests that
 build a 9-input transaction expecting a refusal (`shekyl-wire`
 `tests/validation.rs`, the I4 conformance trip, `proof.rs`, `wallet-contract`).
 
-**Outside this repository:** the GUI wallet's `SecurityStatus.max_inputs`
-(`src-tauri/src/commands.rs`, a literal `8`); the cutover pairs a GUI PR.
+**Outside this repository:** the GUI wallet's `SecurityStatus`
+(`src-tauri/src/commands.rs`): `max_inputs`, a literal `8`, and
+`estimated_proof_size_kb: 4.5`, a literal too. The cutover pairs a GUI PR that
+reads the cap from the core crates and computes the proof size from the same
+model at the tree's current depth.
 
 **Documents** that state 8 as the cap: the census row, FOLLOWUPS row (the
 CEN-I4 row), `GENESIS_TX_WIRE_FORMAT.md` §10 (frozen: the freeze is amended by
@@ -566,79 +585,181 @@ the cutover sweeps them.
 
 ## 8. The measurements the cutover owes
 
-- **The embargo table's new rows, on the floor.** `n_in = 9..=N(d)` at every
-  depth tier the table covers, since a cell no legal transaction fills is not
-  measured: 14 cells at each of depths 2, 3 and 4, 13 at depths 5 and 6, 12 at
-  depth 7, so 80 cells, plus the 44 already owed. Measured on a Pi 4 floor
-  device, never scaled from x86 (§80.3's correction; the `Provenance` test
-  refuses a scaled cell), with the depth-7 column labelled a synthesized
-  projection (§81.2). The device: the one the table's existing cells were
-  measured on, or, if that cannot be established, both Pi 4 units with the
-  difference recorded (`ICD-F12`); claimed in the estate's usage file before
-  the run (rule 38).
+- **The embargo table, every cell, on the named floor in one session
+  (`ICD-R5`).** `n_in = 1..=N(d)` at every depth tier the table covers, since a
+  cell no legal transaction fills is not measured: 22 cells at each of depths
+  2, 3 and 4, 21 at depths 5 and 6, 20 at depth 7, so 128 cells, the existing
+  four included. Measured on the device Rick names after the two-unit run,
+  never scaled from x86 (§80.3's correction; the `Provenance` test refuses a
+  scaled cell), never mixing devices, with the depth-7 column labelled a
+  synthesized projection (§81.2); claimed in the estate's usage file before the
+  run (rule 38). The embargo floor (#1516) follows from the table.
 - **The GAP-7 sweep at the new shapes** (§3), on the floor.
 - **The standoff reserve** re-derived (§7).
+- **The model's test vectors:** the 192 KAT cells and the real proofs past 8
+  inputs pinned against the `const` `FcmpPlusPlus::proof_size` (`ICD-R1`), and
+  the two generator counts asserted equal to the computed need (`ICD-R2`).
 - **Tests on the real pathway:** a transaction of `N` inputs built, proved,
   relayed and mined on regtest at a depth where the weight limit admits it
   (2 to 4), and `N + 1` refused at consensus with CEN-I4 named; at a depth
   where `N(d) < N`, the weight limit's refusal named instead.
 
-## 9. Questions for Rick
+## 9. Rulings — RULED 2026-11-22 (Rick)
+
+Ruled on #1528 at `46e3b27d5f`. The standard for the round: build the
+structure right, with no interim options. The numbers move again when EUP-5 G
+rules, and that rebuild is accepted.
+
+### `ICD-R1` — the weight model moves into `shekyl-wire`, and the cap is computed there (was `ICD-Q4`) — RULED
+
+Neither option §9 first offered is taken.
+
+- The field model (`spend_weight` and its parts) moves beside
+  `Transaction::write`, as `const fn`s. `shekyl-wire` takes
+  `shekyl-fcmp-proofs` for `FcmpPlusPlus::proof_size` and `shekyl-crypto-pq`
+  for the multisig sizes. **No cycle, checked at `46e3b27d5f`:** neither crate,
+  nor `shekyl-curve-generators`, reaches `shekyl-wire` through a normal, build
+  or dev dependency (`cargo tree -p <crate> -e normal,build` and `-e dev`).
+  `shekyl-wire` already depends on `shekyl-curve-generators` and
+  `shekyl-bulletproofs`.
+- `Fcmp::proof_size` (`rust/shekyl-oxide/crypto/fcmps/src/lib.rs:274`) becomes
+  a `const fn`. Its body is integer arithmetic over `ipa_rows`, which is
+  already `const`, and `usize::div_ceil`, which is `const`.
+- `MAX_FCMP_INPUTS` is computed at compile time from that model and
+  `TX_WEIGHT_LIMIT`, as `max_d N(d)` over the legal depths (§2.3). The parser,
+  CEN-I4, the builder and the engine all read it. There is no separate, looser
+  parser bound.
+- `shekyl_fcmp::MAX_INPUTS` is deleted. The prover and verifier refuse at the
+  generators' capacity for the proof's depth, which is what
+  `Generators::reduce` already enforces as `NotEnoughGenerators`
+  (`rust/shekyl-oxide/crypto/generalized-bulletproofs/src/lib.rs:254-273`). The
+  pre-check in `proof.rs` asks the same question of `ipa_rows` before any work.
+- **`batch_weights.rs:119` needs no cap at all.** It reads `MAX_INPUTS` only to
+  pre-size a `Vec` for the framed lists. It can size from the generators'
+  capacity, but the exact size is the lengths of the lists it frames, which it
+  already has, so the cutover sizes it from those.
+- `FCMP_PROOF_SIZE_KAT` stops being the model's source. Its 192 cells become
+  test vectors for `FcmpPlusPlus::proof_size`, beside the 10 real proofs past 8
+  inputs (§2.1, §2.5).
+- **`shekyl-tx-weight` stays a crate (this lane's call).** It keeps the fee
+  fixed point (`converge_weight_fee_by`, `converge_weight_fee`), the bounded
+  shape types (`InputCount` and `OutputCount`, now bounded by the wire's
+  computed cap; `GroupSize`, `Signer`, `SpendShape`), `predict_archival_len`,
+  `marginal_input_weight_at_d_ref`, and the builder-backed weight gate
+  (`tests/weight_gate.rs`). The reason is the surface: `shekyl-wire` is the
+  consensus transport crate, and a fee loop and wallet shape types are
+  wallet-side API. The economics sim and the engine already depend on
+  `shekyl-tx-weight` for exactly that, and it adds nothing to the wire crate's
+  surface.
+
+### `ICD-R2` — the generator count is derived from the cap, exactly — RULED
+
+- **The count, per curve, is the largest `ipa_rows(N(d), d)` over every legal
+  depth `d`**, where `N(d)` is the cap at that depth (§2.3). It is not
+  `ipa_rows(N, MAX_TREE_DEPTH)`, which overstates the Helios curve. At today's
+  weight limit and `MAX_TREE_DEPTH = 24` it is **16 384 Selene and 8 192 Helios
+  rows**, both reached at depth 24. That is a quarter of the 65 536 and 32 768
+  built today for upstream's 128 inputs at 12 layers.
+- `shekyl-curve-generators` holds the two counts, because it sits below the
+  wire crate. `shekyl-wire` asserts at compile time that each equals the value
+  it computes, so a weight-limit change fails the build until the counts move.
+  `MAX_FCMP_INPUTS = 128` and `MAX_FCMP_LAYERS = 12` leave that crate; what
+  remains there is the derived count, with its derivation cited.
+- **Why this is not a consensus change.** A proof over `n` padded rows uses the
+  first `n` generators: `Generators::reduce(n)` takes `g_bold[..n]` and
+  `h_bold[..n]`. The derivation strings (`Monero {id} G {i}`, frozen) and the
+  indices do not change. Shrinking the table removes only indices no legal
+  proof reaches, and a proof that would need more was already refused by the
+  cap before it.
+- This replaces §2.4's "within the generator rows" check: the counts are equal
+  to the need by construction, not merely large enough.
+
+### `ICD-R3` — the maximum tree depth is derived in this round — RULED
+
+`MAX_TREE_DEPTH = 24` is a chosen number ("over 10^30 outputs",
+`rust/shekyl-fcmp/src/lib.rs:43-50`), and the generators were sized for
+upstream's `MAX_FCMP_LAYERS = 12`, its figure for about 10^17 outputs. The cap's
+floor, the generator count, the embargo's depth tiers and the proof-size
+domain all read the depth. The derivation is `ICD-Q7` (§11), and one constant
+results: `MAX_FCMP_LAYERS` and `MAX_TREE_DEPTH` stop being two numbers.
+
+### `ICD-R4` — relay verification gets its own design round in the relay lane (was `ICD-Q2`) — RULED
+
+Nothing is built until that round is ruled: no interim budget and no change to
+the accept rate. This document keeps `ICD-F10` and `ICD-F13` as findings. The
+budget value §9 first proposed is withdrawn. The relay lane's round takes
+these requirements from here:
+
+- **Where verification runs:** off the transport runtime, for both callers,
+  the live path (`new_transactions`) and #1520's held batches
+  (`admit_held_on_sync`).
+- **What makes a session verified.** A duplicate of a transaction already in
+  the pool is answered before its proofs run (`pool_door.rs`), so it proves
+  nothing about its sender and cannot count.
+- **The queue for unverified sessions:** its bound, and what is dropped when it
+  is full.
+- **The privacy cost, stated,** when a stem transaction is dropped or delayed.
+- **Tor,** which has no daemon-side accept limiter.
+- **The budget in core-time,** read from `f(n_in, depth)`.
+
+### `ICD-R5` — one named floor, and every embargo cell measured on it in one session (from `ICD-F12`) — RULED
+
+- **First,** the same binary is run on both Pi 4 units for the two door cells
+  (1 and 8 inputs at depth 2), and the report says whether the 19 % is the unit
+  or the OS and governor. **What is already known, read-only, 2026-11-22:** the
+  two units run the same Ubuntu 26.04.1, kernel 7.0.0-1023-raspi, `ondemand`
+  governor and rustc 1.94. They differ in the board: one is a Rev 1.4 (8 GB)
+  whose clock tops out at 1.8 GHz, the other the Rev 1.2 (4 GB) used in §2.6, at
+  1.5 GHz, and 1.8 / 1.5 = 1.20. The timed run is owed: the Rev 1.4 unit is a
+  measuring host of the cover-by-shape run until 2026-11-24, and its slot
+  follows that run (§11).
+- **Then** Rick names the floor device.
+- **The cutover measures all 128 cells** (`n_in = 1..=N(d)` at depths 2 to 7)
+  on that device in one session. The table never mixes devices. The embargo
+  floor (#1516) follows from the table.
+
+## 10. Handed to EUP-5 G — findings
+
+- **`ICD-Q6` — weight against verification cost.** The cost per weight byte
+  already spreads from 8.92 to 13.33 µs across today's shapes on the floor
+  (§2.6), and the cap adds about 6 % to the top of that spread (§3). Whether
+  weight should carry an FCMP++ verification charge on the proof's padded
+  rows, as it carries a clawback for range proofs, is G's question.
+- **`ICD-F15` — the per-transaction limit's formula now sets five things.**
+  `TX_WEIGHT_LIMIT = zone / 2 − coinbase reserve` is inherited, and it now
+  determines the cap, the generator counts, the embargo rows, the cover
+  carrier's fragment count and the standoff reserve. At three times today's
+  zone (900 000) the limit is 448 614, the cap 72 (49 at depth 24), the
+  generator counts 65 536 and 32 768 at depth 24 (32 768 and 16 384 at depth 12),
+  and the embargo cells through depth 7 number 410. G rules how the limit is
+  derived, not only the zone.
+
+## 11. Still open with Rick
 
 ### `ICD-Q1` — does CEN-I4 stay an explicit rule?
 
 **The problem.** At the derived value, CEN-I4 refuses exactly what CEN-H3
 already refuses for the lightest shape, and nothing H3 admits. It becomes
 redundant in effect. But the closed domains (§5) need a maximum consensus
-enforces, and the wire needs a count bound before it allocates.
+enforces, and under `ICD-R1` the parser reads the real cap.
 
-**The question.** Keep CEN-I4 at `N`, or delete it and let the weight limit
-imply the maximum?
-
-**The options.**
-
-- **(a) Keep it, valued at the derived constant.** A cheap early refusal, a
-  named maximum that the closed domains assert against, and a census row whose
-  rationale is the derivation. The rule cannot bind before H3 for any legal
-  shape, by construction, and a test pins that.
-- **(b) Delete it.** The maximum is implied by H3; the closed domains assert
-  against the derived constant directly; the wire keeps only a transport
-  bound, looser than any legal shape.
-
-**Recommendation: (a).** The closed domains need a consensus-enforced maximum
-regardless, and a rule whose value is derived and whose redundancy is tested is
-cheaper to read than an implication through the weight model. The record says
-plainly that it binds nothing H3 does not.
-
-### `ICD-Q2` — the relay verifier budget
-
-**The problem.** §4: the relay's exposure to invalid transactions is bounded
-only by the accept rate, which was priced for handshakes, and the verification
-runs on the transport runtime's two workers (`ICD-F13`). At the connector rate
-a clearnet flood demands 5 to 8 worker-seconds per second at today's cap and
-about 16 at 22 inputs (§4.2), against 2 supplied, and every session stalls
-behind it.
-
-**The question.** Where does a received transaction's verification run, and
-how much of the floor may failed verifications take?
+**The question.** Keep CEN-I4 at the computed cap, or delete it and let the
+weight limit imply the maximum?
 
 **The options.**
 
-- **(a) A bounded verifier off the transport runtime, plus a failure-charged
-  budget in relay policy,** per connector and per host, debited by
-  `f(n_in, depth)` before the proof runs.
-- **(b) Lower the clearnet accept rate** until rate × worst cost fits the two
-  transport workers.
-- **(c) Leave it,** and keep the consensus cap as the only lever.
+- **(a) Keep it, valued at the computed constant.** A cheap early refusal, a
+  named maximum that the closed domains and the parser read, and a census row
+  whose rationale is the derivation. The rule cannot bind before H3 for any
+  legal shape, by construction, and a test pins that.
+- **(b) Delete it.** The maximum is implied by H3; the parser and the closed
+  domains read the computed constant without a consensus row naming it.
 
-**Recommendation: (a).** (b) taxes every honest connection for a cost only
-invalid transactions impose, and leaves verification on the runtime whose
-stall it is; (c) leaves the node stallable at any cap. The budget's value is an
-assumption until the relay lane derives it, and the proposed basis is
-structural rather than a percentage: **one verifier thread for transactions
-from unverified peers**, so failed verification can never take more than one
-of the floor's four cores, nor any of the transport runtime. The relay lane
-builds it before genesis.
+**Recommendation: (a).** The parser already refuses past the computed cap under
+`ICD-R1`, so the rule costs nothing new, and a census row whose value is
+derived and whose redundancy is tested is easier to read than an implication
+through the weight model. The record says plainly that it binds nothing H3
+does not.
 
 ### `ICD-Q3` — snap to a padding boundary?
 
@@ -651,82 +772,122 @@ mid-band at depths 2 and 3.
 **The options.**
 
 - **(a) No snap: `N` = 22.** The cap is the weight limit's maximum; the
-  padding governs cost per transaction, which relay policy prices (`ICD-Q2`)
-  and the block sweep measures (§3).
-- **(b) Snap to 18,** the top of the band below 19 at depth 2: verification at
-  depth 2 drops from 210 to 146 ms per transaction (x86), and consolidations
-  need more transactions.
+  padding governs cost per transaction, which the relay round prices
+  (`ICD-R4`), the block sweep measures (§3), and G may price into weight
+  (`ICD-Q6`).
+- **(b) Snap to 18,** the top of the band below 19 at depth 2.
 - **(c) Snap to 16,** a power of two: no depth-independent benefit, since the
   boundaries are not powers of two of inputs.
 
 **Recommendation: (a).** A snap would trade a privacy and fee cost paid by every
-consolidation for a per-transaction verifier saving that relay policy and the
-weight limit already bound. The floor arm (§2.6) confirms the steps are no
+consolidation for a per-transaction verifier saving that the relay round and
+the weight limit already bound. The floor arm (§2.6) shows the steps are no
 larger on the floor (+34 % and +43 % for a Selene step) than on x86. A snap to
 18 would save about 30 % of verification at depth 2 per transaction (1 576 ms
 to 1 123 ms) and nothing at depth 3, where 13 is already past the step.
-
-### `ICD-Q4` — where the derived constant lives
-
-**The problem.** The constant is derived from the weight model, which lives in
-`shekyl-tx-weight`. That crate depends on `shekyl-fcmp` and `shekyl-wire`,
-which hold the caps today, so they cannot read it without inverting the
-dependency arrow. The model is also bounded by the cap itself and is not a
-`const fn`.
-
-**The question.** Where does `MAX_INPUTS` live, and how does it become a
-compile-time value?
-
-**The options.**
-
-- **(a) In `shekyl-tx-weight`, computed at compile time** from a `const`
-  weight model whose proof-size term is the closed form (§2.1); the KAT table
-  becomes test vectors for it. CEN-I4 reads it there (`shekyl-chain-rules` may
-  depend on the weight crate). The prover's refusal becomes the generators'
-  real limit (`NotEnoughGenerators` at the depth), which is looser than `N` and
-  asserted so, so it cannot become the cap by accident. The wire keeps a
-  transport bound derived from wire arithmetic alone (the weight limit over the
-  smallest possible input), which admits every legal shape.
-- **(b) One literal at the wire, asserted equal to the computed value** in
-  `shekyl-tx-weight`, the pattern `shekyl-tx-builder` uses today. Less churn, but
-  one literal that is checked rather than derived.
-
-**Recommendation: (a).** It is the only option in which the number is computed
-rather than checked, and it removes the two library caps that FOLLOWUPS row
-"The census does not record which library-crate constants a consensus rule's
-value depends on" warns about, instead of keeping them in step.
 
 ### `ICD-Q5` — the weight limit moves at EUP-5 G
 
 **The problem.** `TX_WEIGHT_LIMIT` "moves again when EUP-5 G rules the capacity
 leg" (`rust/shekyl-wire/src/transaction.rs:228-236`). A derived cap moves with
-it, and with the cap the embargo table's rows, the generator assertion, the
-reserve, the sweeps and the cover carrier's fragment count (`ICD-F14`). That is
-the coupling §80.3 removed from the embargo, returning through the weight
-limit.
+it, and with the cap the generator counts, the embargo table's rows, the
+reserve, the sweeps and the cover carrier's fragment count (`ICD-F14`,
+`ICD-F15`). That is the coupling §80.3 removed from the embargo, returning
+through the weight limit.
 
 **The question.** Is the coupling accepted?
 
 **The options.**
 
 - **(a) Accept it, loudly.** Every table asserts its domain against the
-  derived constant at compile time, so a weight-limit change fails the build
+  computed constant at compile time, so a weight-limit change fails the build
   until the new rows are measured: a visible act, as §80.5 wants.
 - **(b) Decouple.** Freeze the cap at today's derived value and let a later
   weight-limit change leave it alone.
 
 **Recommendation: (a).** A frozen value would be a chosen number again the
 moment the weight limit moves, which is what `ICD-R0` rules out. The build
-failure is the review.
+failure is the review. (The round's standard already accepts the rebuild at G.)
 
-## 10. Out of scope
+### `ICD-Q7` — what output count does the chain commit to, and so what maximum depth?
+
+**The problem.** `MAX_TREE_DEPTH` is chosen and `MAX_FCMP_LAYERS` is
+upstream's (`ICD-R3`). A tree at its maximum depth accepts no more outputs, so
+the ceiling is a halt, not a slowdown, and its margin has to be generous. The
+cost of a deeper ceiling is a lower cap at the deepest tree, a larger generator
+table, and more embargo cells over the chain's life.
+
+**The question.** What output-count ceiling does the chain commit to, and so
+what maximum depth?
+
+**The options, with their numbers.** Outputs at depth `D` are
+38 × the product of the widths of layers 1 to D − 1 (18 at odd layers, 38 at
+even ones), so depth 2 holds 684, as the curve-tree drift guard pins. Years to
+fill are at 5 × 10^4 outputs a day (about Monero's) and 10^6 a day (about
+Bitcoin's). Generator counts are `ICD-R2`'s, at today's weight limit. Embargo
+cells are every `n_in = 1..=N(d)` at depths 2 to `D` (the table today stops at
+depth 7, 128 cells, and extends as the tree grows).
+
+| max depth | outputs | years at 5×10^4 a day | years at 10^6 a day | cap at the deepest tree | generators (Selene / Helios) | embargo cells, depths 2 to D |
+| ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 8 | 2.2 × 10^11 | 12 000 | 600 | 20 | 8 192 / 4 096 | 148 |
+| 10 | 1.5 × 10^14 | 8.2 × 10^6 | 4.1 × 10^5 | 19 | 8 192 / 4 096 | 187 |
+| **12** | **1.0 × 10^17** | **5.6 × 10^9** | **2.8 × 10^8** | **18** | **8 192 / 4 096** | **224** |
+| 14 | 7.0 × 10^19 | 3.8 × 10^12 | 1.9 × 10^11 | 18 | 8 192 / 4 096 | 260 |
+| 16 | 4.8 × 10^22 | 2.6 × 10^15 | 1.3 × 10^14 | 17 | 16 384 / 8 192 | 295 |
+| 24 (today) | 1.0 × 10^34 | 5.7 × 10^26 | 2.9 × 10^25 | 15 | 16 384 / 8 192 | 425 |
+
+The cap itself is 22 at every candidate (it is set at depths 2 to 4). The
+generator counts do not distinguish depths 8 to 14: the `ipa_rows` padding puts
+them all at 8 192 / 4 096.
+
+**Recommendation: 12, about 10^17 outputs.** It is 280 million years at
+Bitcoin's output rate and 2.8 million at a hundred times it, which no
+assumption about adoption reaches. Beyond 12 the margin buys nothing a
+reader could name. It costs three inputs at the deepest tree (15 against 18)
+and doubles the generator table at 16 or deeper. Below 12 the margin shrinks
+toward rates a successful chain could see over its life: depth 10 is about
+4 000 years at a hundred times Bitcoin's rate. The tree's eventual
+replacement at the V4 lattice-only transition is not counted on.
+Under `ICD-R1` and `ICD-R2` the one constant lives in `shekyl-curve-generators`
+beside the counts it sizes, and every reader (the wire's model, `shekyl-fcmp`,
+`shekyl-curve-tree`, the embargo table) reads it from there.
+
+### The standoff reserve's value
+
+The heaviest legal `P`-lane shape becomes about 148 608 bytes (§7, `ICD-F11`).
+Keeping 600 atomic units per weight byte of head-room needs the reserve at
+about 0.09 SKL; keeping 0.05 SKL means restating the head-room as about 336.
+Recommendation: raise it to the value that keeps 600, computed in the cutover
+from the bounded scan rather than rounded here, with the rule-75 bounds
+re-checked against the rung.
+
+### The cover carrier's fragment count
+
+`MAX_FRAGMENTS` becomes 8 at the derived cap (`ICD-F14`). Whether the carrier
+keeps a fragment train under cover-by-shape is that design's question, and its
+measuring run ends 2026-11-24. This round asks for it to be ruled after that
+run, with the cap's value in hand.
+
+### The second Pi's slot
+
+`ICD-R5`'s timed run on the Rev 1.4 unit waits for the cover-by-shape run to end
+(2026-11-24T17:11Z), unless Rick accepts a five-minute deviation in that run's
+registered plan. The owning lane will mark the window if he does.
+
+## 12. Out of scope
 
 Automatic consolidation in the wallet: its own design round, with its privacy
-cost priced (FOLLOWUPS, the wallet's consolidation row). The relay verifier
-budget's build is the relay lane's; this round states its value.
+cost priced (FOLLOWUPS, the wallet's consolidation row). Relay verification:
+the relay lane's round (`ICD-R4`).
 
-## 11. Round log
+## 13. Round log
 
 - **2026-11-22 — Round 0 opened.** Brief from Rick, ground `27a832cf81`.
   Findings `ICD-F1`…`ICD-F14`; questions `ICD-Q1`…`ICD-Q5`; padding measured
   on x86 and on the Pi 4 floor (§2.5, §2.6).
+- **2026-11-22 — Round 0 ruled in part (Rick, at `46e3b27d5f`).** `ICD-R1`
+  (was `ICD-Q4`), `ICD-R2`, `ICD-R3`, `ICD-R4` (was `ICD-Q2`), `ICD-R5` (from
+  `ICD-F12`). `ICD-Q6` and `ICD-F15` handed to EUP-5 G. `ICD-Q7` opened. Still
+  open: `ICD-Q1`, `ICD-Q3`, `ICD-Q5`, `ICD-Q7`, the reserve's value, the
+  fragment count.
