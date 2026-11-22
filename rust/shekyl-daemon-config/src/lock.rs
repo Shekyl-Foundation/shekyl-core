@@ -45,6 +45,9 @@ impl Lock {
     pub fn creatable(data_dir: &Path) -> Result<(), Diagnostic> {
         let unusable = Self::unusable(data_dir);
         probe::directory_creatable(data_dir).map_err(&unusable)?;
+        // Windows has no mode to read: the keys and the console's pipe carry
+        // owner-only descriptors of their own, enforced on every open.
+        #[cfg(unix)]
         Self::owner_only(data_dir)?;
         probe::file_openable(&data_dir.join(LOCK_FILE), probe::Need::ReadWrite).map_err(unusable)
     }
@@ -56,25 +59,21 @@ impl Lock {
     /// account: a directory above it is not counted. The mode is the
     /// operator's to change; the daemon never changes a mode it did not
     /// create. A missing directory passes: [`Lock::take`] creates it
-    /// owner-only. Windows has no mode to read here: the keys and the
-    /// console's pipe carry owner-only descriptors of their own.
+    /// owner-only. Unix only: on Windows the keys and the console's pipe
+    /// carry owner-only descriptors of their own.
+    #[cfg(unix)]
     fn owner_only(data_dir: &Path) -> Result<(), Diagnostic> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let Ok(meta) = std::fs::metadata(data_dir) else {
-                return Ok(());
-            };
-            let mode = meta.permissions().mode() & crate::directory::PERMISSION_BITS;
-            if meta.is_dir() && mode & crate::directory::GROUP_OR_OTHER_ANY != 0 {
-                return Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
-                    .option("data-dir")
-                    .param("path", data_dir.display().to_string())
-                    .param("mode", format!("{mode:04o}")));
-            }
+        use std::os::unix::fs::PermissionsExt;
+        let Ok(meta) = std::fs::metadata(data_dir) else {
+            return Ok(());
+        };
+        let mode = meta.permissions().mode() & crate::directory::PERMISSION_BITS;
+        if meta.is_dir() && mode & crate::directory::GROUP_OR_OTHER_ANY != 0 {
+            return Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
+                .option("data-dir")
+                .param("path", data_dir.display().to_string())
+                .param("mode", format!("{mode:04o}")));
         }
-        #[cfg(not(unix))]
-        let _ = data_dir;
         Ok(())
     }
 
