@@ -441,6 +441,13 @@ devices, with its source read recorded here.
 [`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
 It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
 path, and the floor device. The row closes when all three pass.
+- **The pass line** is the fixed pair, key A against key B (the
+  maintainer's ruling, 2026-11-21).
+- **`fixed-vs-varied` is information.** It shows dependence on a key being
+  repeated, and the receipt key is repeated in production.
+- **The evidence** for FN-DSA is the timing runs and the source read below.
+  There is no static row: BINSEC cannot model the SSE2 floating-point
+  instructions the signer is built from (item 8).
 
 **Threat model.** Written before anything was measured.
 
@@ -520,7 +527,7 @@ lines.
      signature one key makes: a per-key constant. Averaging estimates it,
      but it is one number per key. What it can carry about the key is
      bounded by how finely that one number can be resolved, not by the
-     number of signatures. The registration's `fixed-a-vs-fixed-b` line is
+     number of signatures. The registration's `fixed-a-vs-fixed-b` pass line is
      the measurement that sees such a constant.
    **What the devices promise about those instructions: nothing.**
    - **Cortex-A72** (the floor device). Arm's optimisation guide (UAN 0016A)
