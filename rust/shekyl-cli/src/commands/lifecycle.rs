@@ -18,6 +18,11 @@ Refusing to create a wallet whose one-time seed backup cannot be shown here.\n\
 For a script or for JSON output, use:\n  \
 shekyl-cli create <name> --seed-out <path> --password-file <path>";
 
+const SEED_NOT_SHOWN: &str = "\
+The output closed before the seed backup could be shown. \
+The wallet was created, and its seed is shown only once. \
+Delete the wallet and create it again where you can read the output.";
+
 pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str) -> CommandResult {
     require_closed(rpc)?;
     // Gate the one-time seed display BEFORE creating anything. The server never
@@ -52,15 +57,22 @@ pub fn cmd_create(rpc: &RpcSession, presentation: &Presentation, filename: &str)
             // Announced here, ahead of the seed, because the seed is shown
             // and wiped before this function returns. The result carries
             // only the name. `present` also strips seed fields.
-            println!("Created wallet: {filename}");
+            crate::out_line!("Created wallet: {filename}");
             let backup = val
                 .get(concat!("mne", "monic"))
                 .or_else(|| val.get("raw_seed_hex"))
                 .and_then(|v| v.as_str());
-            if let Some(backup) = backup {
+            let shown = if let Some(backup) = backup {
                 let mut secret = backup.to_owned();
-                println!("Write down your seed backup NOW. It is shown only once.");
-                crate::display::show_secret("Seed backup", &mut secret);
+                crate::out_line!("Write down your seed backup NOW. It is shown only once.");
+                crate::display::show_secret("Seed backup", &mut secret)
+            } else if crate::out::output_closed() {
+                crate::display::SecretDisplay::NotShown
+            } else {
+                crate::display::SecretDisplay::Shown
+            };
+            if shown == crate::display::SecretDisplay::NotShown {
+                return failed(SEED_NOT_SHOWN);
             }
             Ok(json!({"name": filename}))
         }
@@ -101,7 +113,7 @@ pub fn cmd_open(rpc: &RpcSession, presentation: &Presentation, filename: &str) -
 
 pub(crate) fn show_opened(val: &Value) {
     let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Opened wallet: {name}");
+    crate::out_line!("Opened wallet: {name}");
 }
 
 pub fn cmd_close(rpc: &RpcSession) -> CommandResult {
@@ -116,7 +128,7 @@ pub fn cmd_close(rpc: &RpcSession) -> CommandResult {
 }
 
 pub(crate) fn show_closed(_val: &Value) {
-    println!("Wallet closed.");
+    crate::out_line!("Wallet closed.");
 }
 
 pub fn cmd_restore(
@@ -137,7 +149,9 @@ pub fn cmd_restore(
     let mnemonic = Zeroizing::new(seed_words.join(" "));
     let password = read_password("New wallet password: ")?;
 
-    eprint!("Restore from block (the first block to scan; 0 = scan from the genesis block): ");
+    crate::err_inline!(
+        "Restore from block (the first block to scan; 0 = scan from the genesis block): "
+    );
     drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut height_input = String::new();
     if std::io::stdin().read_line(&mut height_input).is_err() {
@@ -177,8 +191,8 @@ pub fn cmd_restore(
 
 pub(crate) fn show_restored(val: &Value) {
     let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Restored wallet: {name}");
-    println!("Run \"wallet refresh\" to scan the chain for your funds.");
+    crate::out_line!("Restored wallet: {name}");
+    crate::out_line!("Run \"wallet refresh\" to scan the chain for your funds.");
 }
 
 /// Read an `i64` counter out of a scan result, defaulting to `0`.
@@ -192,15 +206,15 @@ fn scan_counter(val: &Value, field: &str) -> i64 {
 fn print_scan_result(headline: &str, val: &Value) {
     let blocks = scan_counter(val, "blocks_processed");
     let detected = scan_counter(val, "transfers_detected");
-    println!("{headline}: {blocks} blocks processed, {detected} transfers detected.");
+    crate::out_line!("{headline}: {blocks} blocks processed, {detected} transfers detected.");
     // `synced_height` is the contract's count; the line names the block it
     // reaches.
     match val.get("synced_height").and_then(Value::as_u64) {
-        Some(count) => println!(
+        Some(count) => crate::out_line!(
             "Synced to block: {}",
             crate::display::block_of_count_text(count, "nothing scanned yet")
         ),
-        None => println!("Synced to block: ?"),
+        None => crate::out_line!("Synced to block: ?"),
     }
 }
 
@@ -216,7 +230,7 @@ pub fn cmd_refresh(rpc: &RpcSession, presentation: &Presentation) -> CommandResu
 pub(crate) fn show_refresh(val: &Value) {
     print_scan_result("Refreshed", val);
     if let Some(fork) = val.get("reorg_fork_height").and_then(Value::as_i64) {
-        println!("Note: a chain reorg was detected and rewound (fork at block {fork}).");
+        crate::out_line!("Note: a chain reorg was detected and rewound (fork at block {fork}).");
     }
 }
 
@@ -309,7 +323,7 @@ fn attach_daemon_down_hint(val: &mut Value, daemon_down_hint: Option<&str>) {
 
 pub(crate) fn show_status(val: &Value) {
     for line in status_lines(val) {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
 }
 
@@ -384,7 +398,7 @@ pub fn cmd_password(rpc: &RpcSession, presentation: &Presentation) -> CommandRes
 }
 
 pub(crate) fn show_password(_val: &Value) {
-    println!("Password changed.");
+    crate::out_line!("Password changed.");
 }
 
 #[cfg(test)]

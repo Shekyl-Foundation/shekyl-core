@@ -57,11 +57,11 @@ pub(crate) fn show_request_new(val: &Value) {
         .and_then(|v| v.as_str())
         .map(format_amount_str)
         .unwrap_or_else(|| "?".to_owned());
-    println!("Payment request created.");
-    println!("  Request id: {id}");
-    println!("  Amount:     {amount} SKL");
-    println!("  URI:        {uri}");
-    println!("Share the URI with the payer; \"requests list\" tracks its state.");
+    crate::out_line!("Payment request created.");
+    crate::out_line!("  Request id: {id}");
+    crate::out_line!("  Amount:     {amount} SKL");
+    crate::out_line!("  URI:        {uri}");
+    crate::out_line!("Share the URI with the payer; \"requests list\" tracks its state.");
 }
 
 pub fn cmd_requests_list(rpc: &RpcSession, filter: crate::resolve::RequestFilter) -> CommandResult {
@@ -75,12 +75,15 @@ pub fn cmd_requests_list(rpc: &RpcSession, filter: crate::resolve::RequestFilter
 pub(crate) fn show_requests(val: &Value) {
     let requests = val.get("payment_requests").and_then(|v| v.as_array());
     let Some(requests) = requests.filter(|a| !a.is_empty()) else {
-        println!("No payment requests.");
+        crate::out_line!("No payment requests.");
         return;
     };
-    println!(
+    crate::out_line!(
         "{:<16} {:<10} {:>18} {:>10}  Label",
-        "Request id", "State", "Amount (SKL)", "Created"
+        "Request id",
+        "State",
+        "Amount (SKL)",
+        "Created"
     );
     for r in requests {
         print_request_row(r);
@@ -100,12 +103,12 @@ fn print_request_row(r: &Value) {
     let label = crate::display::sanitize_for_terminal(
         r.get("label").and_then(|v| v.as_str()).unwrap_or(""),
     );
-    println!("{id:<16} {state:<10} {amount:>18} {created:>10}  {label}");
+    crate::out_line!("{id:<16} {state:<10} {amount:>18} {created:>10}  {label}");
     if let Some(tx) = r.get("matched_tx_hash").and_then(|v| v.as_str()) {
-        println!("{:<16} matched by tx {tx}", "");
+        crate::out_line!("{:<16} matched by tx {tx}", "");
     }
     if let Some(expiry) = r.get("expiry").and_then(serde_json::Value::as_i64) {
-        println!("{:<16} expires at unix {expiry}", "");
+        crate::out_line!("{:<16} expires at unix {expiry}", "");
     }
 }
 
@@ -137,7 +140,7 @@ pub fn cmd_make_uri(
 
 pub(crate) fn show_uri(val: &Value) {
     if let Some(uri) = val.get("uri").and_then(|v| v.as_str()) {
-        println!("{uri}");
+        crate::out_line!("{uri}");
     }
 }
 
@@ -154,18 +157,18 @@ pub(crate) fn show_parsed_uri(val: &Value) {
     // URI, so neutralize control chars before printing.
     use crate::display::sanitize_for_terminal as safe;
     let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Address: {}", safe(address));
+    crate::out_line!("Address: {}", safe(address));
     if let Some(amount) = val.get("amount").and_then(|v| v.as_str()) {
-        println!("Amount:  {} SKL", safe(&format_amount_str(amount)));
+        crate::out_line!("Amount:  {} SKL", safe(&format_amount_str(amount)));
     }
     if let Some(label) = val.get("label").and_then(|v| v.as_str()) {
-        println!("Label:   {}", safe(label));
+        crate::out_line!("Label:   {}", safe(label));
     }
     if let Some(rid) = val.get("rid").and_then(|v| v.as_str()) {
-        println!("Request: {}", safe(rid));
+        crate::out_line!("Request: {}", safe(rid));
     }
     if let Some(expiry) = val.get("expiry").and_then(Value::as_i64) {
-        println!("Expiry:  unix {expiry}");
+        crate::out_line!("Expiry:  unix {expiry}");
     }
 }
 

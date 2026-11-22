@@ -77,8 +77,8 @@ pub(crate) fn tx_proof_disclosure(val: &Value) -> Option<&'static str> {
 pub(crate) fn show_tx_proof(val: &Value) {
     let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
     let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
-    println!("Direction: {direction}");
-    println!("{proof}");
+    crate::out_line!("Direction: {direction}");
+    crate::out_line!("{proof}");
 }
 
 pub fn cmd_get_reserve_proof(
@@ -113,13 +113,13 @@ pub fn cmd_get_reserve_proof(
 
 pub(crate) fn show_reserve_proof(val: &Value) {
     if let Some(binding) = val.get("binding").and_then(|v| v.as_str()) {
-        println!("{binding}");
+        crate::out_line!("{binding}");
     }
     let proof = val.get("proof").and_then(|v| v.as_str()).unwrap_or("");
     let total = opt_amount(val, "total");
     let count = val.get("output_count").and_then(Value::as_u64).unwrap_or(0);
-    println!("Proved reserve: {total} SKL across {count} output(s)");
-    println!("{proof}");
+    crate::out_line!("Proved reserve: {total} SKL across {count} output(s)");
+    crate::out_line!("{proof}");
 }
 
 /// Sharing warning for a generated reserve proof. Same channel as
@@ -159,19 +159,19 @@ pub fn cmd_check_tx_proof(
 pub(crate) fn show_tx_check(val: &Value) {
     let valid = val.get("valid").and_then(Value::as_bool).unwrap_or(false);
     if !valid {
-        println!("BAD proof: the proof does NOT verify for this txid/address/message.");
+        crate::out_line!("BAD proof: the proof does NOT verify for this txid/address/message.");
         return;
     }
     let direction = val.get("direction").and_then(|v| v.as_str()).unwrap_or("?");
-    println!("Good proof ({direction}).");
-    println!(
+    crate::out_line!("Good proof ({direction}).");
+    crate::out_line!(
         "Received by the address: {} SKL",
         opt_amount(val, "received")
     );
     if let Some(outputs) = val.get("outputs").and_then(|v| v.as_array()) {
         for out in outputs {
             let idx = out.get("output_index").and_then(Value::as_u64).unwrap_or(0);
-            println!("  output {idx}: {} SKL", opt_amount(out, "amount"));
+            crate::out_line!("  output {idx}: {} SKL", opt_amount(out, "amount"));
         }
     }
     print_confirmations(val);
@@ -200,16 +200,16 @@ pub fn cmd_check_reserve_proof(
 pub(crate) fn show_reserve_check(val: &Value) {
     let valid = val.get("valid").and_then(Value::as_bool).unwrap_or(false);
     if !valid {
-        println!("BAD proof: the proof does NOT verify for this address/message.");
+        crate::out_line!("BAD proof: the proof does NOT verify for this address/message.");
         return;
     }
     let count = val.get("output_count").and_then(Value::as_u64).unwrap_or(0);
-    println!("Good proof ({count} output(s)).");
-    println!("Total proven:  {} SKL", opt_amount(val, "total"));
-    println!("Since spent:   {} SKL", opt_amount(val, "spent"));
+    crate::out_line!("Good proof ({count} output(s)).");
+    crate::out_line!("Total proven:  {} SKL", opt_amount(val, "total"));
+    crate::out_line!("Since spent:   {} SKL", opt_amount(val, "spent"));
     if let (Some(total), Some(spent)) = (raw_amount(val, "total"), raw_amount(val, "spent")) {
         if let Some(live) = total.checked_sub(spent) {
-            println!(
+            crate::out_line!(
                 "Live reserve:  {} SKL",
                 format_amount_str(&live.to_string())
             );
@@ -248,9 +248,9 @@ fn print_confirmations(val: &Value) {
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if in_pool {
-        println!("The transaction is in the pool (0 confirmations).");
+        crate::out_line!("The transaction is in the pool (0 confirmations).");
     } else if let Some(c) = val.get("confirmations").and_then(serde_json::Value::as_u64) {
-        println!("Confirmations: {c}");
+        crate::out_line!("Confirmations: {c}");
     }
 }
 

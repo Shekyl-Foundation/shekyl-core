@@ -62,7 +62,7 @@ pub fn accept_foundation_terms(
             )))
         };
     }
-    eprint!("Type exactly: {FOUNDATION_PHRASE}\n> ");
+    crate::err_inline!("Type exactly: {FOUNDATION_PHRASE}\n> ");
     let _flushed = std::io::Write::flush(&mut std::io::stderr());
     let mut typed = String::new();
     if std::io::stdin().read_line(&mut typed).is_err() || typed.trim() != FOUNDATION_PHRASE {
@@ -90,8 +90,8 @@ pub fn post_foundation_stake(rpc: &RpcSession, password: &str) -> CommandResult 
 }
 
 pub(crate) fn show_foundation(_val: &Value) {
-    println!("Foundation CompleteTree stake sealed.");
-    println!("This node owes the whole frozen corpus and earns nothing for it.");
+    crate::out_line!("Foundation CompleteTree stake sealed.");
+    crate::out_line!("This node owes the whole frozen corpus and earns nothing for it.");
 }
 
 /// `stake_in <amount>` — fund the staking balance with an ordinary principal
@@ -179,13 +179,15 @@ pub fn cmd_drain_balance(rpc: &RpcSession) -> CommandResult {
 
 pub(crate) fn show_drain_balance(val: &Value) {
     match val.get("status").and_then(Value::as_str) {
-        Some("ready") => println!(
+        Some("ready") => crate::out_line!(
             "Staking funds available to move back to this wallet: {} SKL",
             opt_amount(val, "spendable")
         ),
         Some("syncing") => {
-            println!("The drainable amount is not known yet — the wallet is still syncing.");
-            println!("Run \"wallet refresh\" and try again.");
+            crate::out_line!(
+                "The drainable amount is not known yet — the wallet is still syncing."
+            );
+            crate::out_line!("Run \"wallet refresh\" and try again.");
         }
         _ => {}
     }
@@ -231,19 +233,19 @@ pub(crate) fn show_drain(val: &Value) {
     match serde_json::from_value::<DrainResult>(val.clone()) {
         Ok(result) => match result.verdict {
             DrainVerdictView::Broadcast => {
-                println!("Return sent: {}", result.tx_hash);
-                println!(
+                crate::out_line!("Return sent: {}", result.tx_hash);
+                crate::out_line!(
                     "The funds arrive in this wallet's balance after the network \
                      confirms the transaction."
                 );
             }
             DrainVerdictView::AlreadyInChain => match result.confirmed_height {
-                Some(h) => println!(
+                Some(h) => crate::out_line!(
                     "An identical earlier return is already confirmed on chain \
                      (at block {h}): {}",
                     result.tx_hash
                 ),
-                None => println!(
+                None => crate::out_line!(
                     "An identical earlier return is already confirmed on chain: {}",
                     result.tx_hash
                 ),
@@ -251,7 +253,7 @@ pub(crate) fn show_drain(val: &Value) {
         },
         Err(_) => {
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Return sent (verdict not recognized): {tx_hash}");
+            crate::out_line!("Return sent (verdict not recognized): {tx_hash}");
         }
     }
 }
@@ -270,15 +272,15 @@ pub(crate) fn show_staked_balance(val: &Value) {
 
 fn print_staked_balance(balance: &Value, indent: &str) {
     let field = |name: &str| opt_amount(balance, name);
-    println!(
+    crate::out_line!(
         "{indent}Bonded principal (confirmed): {} SKL",
         field("bonded_principal_confirmed")
     );
-    println!(
+    crate::out_line!(
         "{indent}Bonded principal (pending):   {} SKL",
         field("bonded_principal_pending")
     );
-    println!(
+    crate::out_line!(
         "{indent}Rewards received, unspent:    {} SKL",
         field("rewards_received_unspent")
     );
@@ -295,19 +297,22 @@ pub fn cmd_staked_outputs(rpc: &RpcSession) -> CommandResult {
 pub(crate) fn show_staked_outputs(val: &Value) {
     let outputs = val.get("staked_outputs").and_then(|v| v.as_array());
     let Some(outputs) = outputs.filter(|a| !a.is_empty()) else {
-        println!("No staked outputs.");
+        crate::out_line!("No staked outputs.");
         return;
     };
-    println!(
+    crate::out_line!(
         "{:<14} {:>18} {:>6} {:>16}",
-        "Output", "Amount (SKL)", "Slot", "Unlocks at block"
+        "Output",
+        "Amount (SKL)",
+        "Slot",
+        "Unlocks at block"
     );
     for o in outputs {
         let gindex = o.get("gindex").and_then(|v| v.as_str()).unwrap_or("?");
         let amount = opt_amount(o, "amount");
         let slot = o.get("p_slot").and_then(Value::as_i64).unwrap_or(-1);
         let unlock = o.get("unlock_height").and_then(Value::as_i64).unwrap_or(0);
-        println!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>16}");
+        crate::out_line!("{gindex:<14} {amount:>18} {slot:>6} {unlock:>16}");
     }
 }
 
@@ -341,31 +346,31 @@ pub(crate) fn show_staking_info(val: &Value) {
         .get("staking_enabled")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    println!("Staking enabled: {}", if enabled { "yes" } else { "no" });
+    crate::out_line!("Staking enabled: {}", if enabled { "yes" } else { "no" });
     if !enabled {
-        println!("Use \"stake\" to make this wallet a staker.");
+        crate::out_line!("Use \"stake\" to make this wallet a staker.");
         print_serving_posture(val);
         print_staking_work(val);
         return;
     }
     if let Some(balance) = val.get("balance") {
-        println!("Staked balance:");
+        crate::out_line!("Staked balance:");
         print_staked_balance(balance, "  ");
     }
     let count = val
         .get("staked_output_count")
         .and_then(Value::as_i64)
         .unwrap_or(0);
-    println!("Staked outputs:  {count}");
+    crate::out_line!("Staked outputs:  {count}");
     // `pscan_synced_height` is the scan's exclusive frontier, the first
     // block it has not covered (`wallet_rpc.yaml`): it has scanned through
     // the block before it.
     match val.get("pscan_synced_height").and_then(Value::as_u64) {
-        Some(frontier) => println!(
+        Some(frontier) => crate::out_line!(
             "Staking scan:    through block {}",
             crate::display::block_of_count_text(frontier, "none (nothing scanned yet)")
         ),
-        None => println!("Staking scan:    not yet scanned"),
+        None => crate::out_line!("Staking scan:    not yet scanned"),
     }
     print_serving_posture(val);
     print_staking_work(val);
@@ -395,15 +400,15 @@ fn print_staking_work(val: &Value) {
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     if !in_flight.is_empty() {
-        println!("In progress:");
+        crate::out_line!("In progress:");
         for entry in &in_flight {
-            println!("  {}", in_flight_line(entry));
+            crate::out_line!("  {}", in_flight_line(entry));
         }
     }
     if !outcomes.is_empty() {
-        println!("Ended without completing:");
+        crate::out_line!("Ended without completing:");
         for entry in &outcomes {
-            println!(
+            crate::out_line!(
                 "  {} {} at block {}: {}",
                 kind_word(&entry.kind),
                 entry.outcome.replace('_', " "),
@@ -411,7 +416,7 @@ fn print_staking_work(val: &Value) {
                 entry.reason
             );
         }
-        println!(
+        crate::out_line!(
             "Use \"stake acknowledge <{}>\" to clear an ending once you have read it.",
             outcomes
                 .iter()
@@ -542,9 +547,9 @@ pub fn cmd_acknowledge_outcome(rpc: &RpcSession, kind: &str) -> CommandResult {
 
 pub(crate) fn show_acknowledged(val: &Value) {
     match val.get("cleared").and_then(Value::as_u64) {
-        Some(0) | None => println!("Nothing to clear: those endings were already cleared."),
-        Some(1) => println!("Cleared 1 ending."),
-        Some(n) => println!("Cleared {n} endings."),
+        Some(0) | None => crate::out_line!("Nothing to clear: those endings were already cleared."),
+        Some(1) => crate::out_line!("Cleared 1 ending."),
+        Some(n) => crate::out_line!("Cleared {n} endings."),
     }
 }
 
@@ -602,23 +607,23 @@ pub(crate) fn show_release(val: &Value) {
     match serde_json::from_value::<UnstakeResult>(val.clone()) {
         Ok(result) => match result.verdict {
             DrainVerdictView::Broadcast => {
-                println!("Release posted: {}", result.tx_hash);
-                println!("When the network confirms it, run \"stake collect\" to move");
-                println!("the released funds back into this wallet's balance.");
+                crate::out_line!("Release posted: {}", result.tx_hash);
+                crate::out_line!("When the network confirms it, run \"stake collect\" to move");
+                crate::out_line!("the released funds back into this wallet's balance.");
             }
             DrainVerdictView::AlreadyInChain => {
-                println!(
+                crate::out_line!(
                     "An identical release is already confirmed: {}",
                     result.tx_hash
                 );
-                println!("Run \"stake collect\" to move the released funds back into");
-                println!("this wallet's balance (it may take a moment for the wallet's");
-                println!("own scan to observe the confirmation).");
+                crate::out_line!("Run \"stake collect\" to move the released funds back into");
+                crate::out_line!("this wallet's balance (it may take a moment for the wallet's");
+                crate::out_line!("own scan to observe the confirmation).");
             }
         },
         Err(_) => {
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Release posted (verdict not recognized): {tx_hash}");
+            crate::out_line!("Release posted (verdict not recognized): {tx_hash}");
         }
     }
 }
@@ -666,48 +671,48 @@ pub(crate) fn show_collect(val: &Value) {
                 remainder,
                 another_pool_remains,
             } => {
-                println!(
+                crate::out_line!(
                     "Collection sent: {} ({} SKL on the way to this wallet).",
                     tx_hash,
                     swept.to_atomic_units().to_skl_string(),
                 );
                 if remainder.to_atomic_units().is_zero() && another_pool_remains {
-                    println!(
+                    crate::out_line!(
                         "This collection is complete, but released funds from \
                          another release still remain."
                     );
-                    println!("Run \"stake collect\" again once this pass confirms.");
+                    crate::out_line!("Run \"stake collect\" again once this pass confirms.");
                 } else if remainder.to_atomic_units().is_zero() {
-                    println!(
+                    crate::out_line!(
                         "Nothing further remains: once this confirms, the \
                          collection is complete."
                     );
                 } else {
-                    println!(
+                    crate::out_line!(
                         "{} SKL still remains in the staking balance (not yet \
                          spendable, or beyond this pass's size).",
                         remainder.to_atomic_units().to_skl_string()
                     );
-                    println!("Run \"stake collect\" again once this pass confirms.");
+                    crate::out_line!("Run \"stake collect\" again once this pass confirms.");
                 }
             }
             CollectUnstakedResult::NothingLeft => {
-                println!("Nothing left to collect: the release's funds are already in");
-                println!("this wallet (or on their way in a previous pass).");
+                crate::out_line!("Nothing left to collect: the release's funds are already in");
+                crate::out_line!("this wallet (or on their way in a previous pass).");
             }
         },
         Err(_) => {
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Collection sent (reply not recognized): {tx_hash}");
+            crate::out_line!("Collection sent (reply not recognized): {tx_hash}");
         }
     }
 }
 
 fn print_serving_posture(val: &Value) {
     let posture = val.get("posture").and_then(Value::as_str);
-    println!("Serving posture:     {}", serving_posture_display(posture));
+    crate::out_line!("Serving posture:     {}", serving_posture_display(posture));
     if let Some(line) = serving_priority_line(val.get("serving_priority_not_lowered")) {
-        println!("{line}");
+        crate::out_line!("{line}");
     }
 }
 

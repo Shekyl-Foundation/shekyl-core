@@ -41,7 +41,7 @@ pub fn cmd_sign(
 ) -> CommandResult {
     require_open(rpc)?;
     if presentation.human() {
-        eprintln!("Signing — this takes a few seconds by design; please wait...");
+        crate::err_line!("Signing — this takes a few seconds by design; please wait...");
     }
     match rpc.call("sign_message", json!({ "message": message })) {
         Ok(val) => match serde_json::from_value::<SignMessageResult>(val) {
@@ -57,9 +57,9 @@ pub fn cmd_sign(
 
 pub(crate) fn show_signature(val: &Value) {
     if let Some(signature) = val.get("signature").and_then(|v| v.as_str()) {
-        println!("{signature}");
+        crate::out_line!("{signature}");
     }
-    eprintln!(
+    crate::err_line!(
         "Done. Share the message, this signature, and your address; anyone \
          can verify them together with \"verify\" — no wallet needed. Keep \
          the signature on a single line when pasting it, or write it to a \
@@ -107,9 +107,11 @@ pub fn cmd_verify(
 
 pub(crate) fn show_verify(val: &Value) {
     if val.get("valid").and_then(Value::as_bool).unwrap_or(false) {
-        println!("Signature is VALID for this address and message.");
+        crate::out_line!("Signature is VALID for this address and message.");
     } else {
-        println!("Signature is INVALID: not a signature by that address over this message.");
+        crate::out_line!(
+            "Signature is INVALID: not a signature by that address over this message."
+        );
     }
 }
 
