@@ -19,7 +19,8 @@
 # (21 lines, 17 attributes) and would silently disagree with the runner.
 #
 # The accounting is the load-bearing ratchet: every ignored test is on
-# exactly one of the five lists below (ARMED, ARMED_SLOW, ARMED_EMBARGO,
+# exactly one of the seven lists below (ARMED, ARMED_SLOW,
+# ARMED_BODY_FILL_COMPLETE_TREE, ARMED_BODY_FILL_MARKET, ARMED_EMBARGO,
 # ACCEPTANCE, DECIDED_DARK),
 # so the undecided set is empty by construction.
 #
@@ -31,7 +32,7 @@
 # direction only and its message is written for that case. Verified by
 # biting it: deleting an armed gate reports the name, not a count mismatch.
 #
-# Four lanes share this script (GATE_LANE, default "pr"):
+# Six lanes share this script (GATE_LANE, default "pr"):
 #   pr    — ARMED, per-PR in build.yml (each gate <= ~3.5 min, measured
 #           2026-09-08 local Release; sum ~20 min).
 #   slow  — ARMED_SLOW, the nightly live-daemon workflow (depth-3 spend
@@ -39,6 +40,11 @@
 #           gates — too heavy per-PR, still consensus gates; four bonded
 #           walks since the DRS-X flip, two of which close and price an
 #           archival shard with real spends before they stake).
+#   body-fill-complete-tree, body-fill-market — ARMED_BODY_FILL_*, one
+#           walk each, each its own leg of the nightly live-daemon
+#           workflow: the persona body-store fill's two walks, about two
+#           hours each on the hosted runner while they build their chain
+#           with real spends, too long to share the slow lane's job.
 #   embargo — ARMED_EMBARGO, its own leg of the nightly live-daemon
 #           workflow: the relay embargo's two live walks. Each waits for
 #           a real embargo fire, which is a random draw (mean 230 s on
@@ -331,19 +337,33 @@ ARMED_SLOW=(
   # before the door connected it): the joiner stood at one height with the
   # door reporting no room, as the F-B subjects did at 724 of 762.
   engine::regtest_e2e::sync::a_node_syncs_fifteen_spans_from_a_peer
-  # The persona body-store fill (WSS-Q4, WSS-Q15..Q18), each closing
-  # shards with real wallet spends through `regtest_e2e_shard.rs`:
-  # a CompleteTree bond filled, posted, served, its next shard pulled,
-  # a corrupt body and a deleted store repaired, and the fill refused past
-  # the discard boundary; and a market bond refused on a shard that is not
-  # final, then filled, posted and served. Green 2026-11-20, local debug
-  # build, the two side by side: CompleteTree 12 888 s (shard 1 closes at
-  # 1 328 and is pulled in its close epoch, before its freeze epoch opens
-  # at 1 500 with SEB 1 500); market 7 950 s (shard 0 closes at 405, is
-  # filled before the discard block 3 000, priced by pass 0 at 2 999).
-  # Red 2026-11-19, before the walk pulled in the close epoch: the horizon
-  # wait timed out, "pscan did not observe the finality horizon".
+)
+
+# The persona body-store fill (WSS-Q4, WSS-Q15..Q18), each walk closing
+# shards with real wallet spends through `regtest_e2e_shard.rs`. One lane
+# each, so each is its own nightly job with its own timeout: in the slow
+# lane they took it past its job limit (2026-11-21, CompleteTree green in
+# 7 214 s on the hosted runner, the market walk then cut at 240 minutes),
+# and the hosted maximum of 360 minutes cannot hold the slow lane and both.
+# Until the walks start from a forged chain (ruled 2026-11-21; the wallet
+# lane), most of each walk is that chain being built: on the hosted runner
+# closing shard 0 took 1 727 s and shard 1 about 3 465 s.
+#   GATE_LANE=body-fill-complete-tree — a CompleteTree bond filled,
+#     posted, served, its next shard pulled, a corrupt body and a deleted
+#     store repaired, and the fill refused past the discard boundary.
+#     Shard 1 closes at 1 328 and is pulled in its close epoch, before its
+#     freeze epoch opens at 1 500 (SEB 1 500).
+#   GATE_LANE=body-fill-market — a market bond refused on a shard that is
+#     not final, then filled, posted and served. Shard 0 closes at 405, is
+#     filled before the discard block 3 000, priced by pass 0 at 2 999.
+# Green 2026-11-20, local debug build, the two side by side: CompleteTree
+# 12 888 s; market 7 950 s. Red 2026-11-19, before the walk pulled in the
+# close epoch: the horizon wait timed out, "pscan did not observe the
+# finality horizon".
+ARMED_BODY_FILL_COMPLETE_TREE=(
   engine::regtest_e2e::body_fill::e2e_complete_tree_bond_fills_serves_pulls_and_reconciles
+)
+ARMED_BODY_FILL_MARKET=(
   engine::regtest_e2e::body_fill::e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves
 )
 
@@ -429,7 +449,7 @@ ACCEPTANCE=(
   engine::regtest_e2e::e2e_emission_claim_accepted_and_applied
 )
 
-for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}"; do
+for a in "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_BODY_FILL_COMPLETE_TREE[@]}" "${ARMED_BODY_FILL_MARKET[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}"; do
   grep -qx "$a: test" "$ignored" || {
     echo "FATAL: listed gate '$a' names no ignored test — it was renamed or deleted, and its disposition is now dangling" >&2
     exit 1
@@ -447,9 +467,9 @@ done
 # its gate twice, and on this step that is minutes of CI spent re-proving one
 # result; a name on two run lanes is run twice across lanes the same way.
 # The name is the thing to delete, so the message says so.
-repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
+repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_BODY_FILL_COMPLETE_TREE[@]}" "${ARMED_BODY_FILL_MARKET[@]}" "${ARMED_EMBARGO[@]}" "${ACCEPTANCE[@]}" "${DECIDED_DARK[@]}" | sort | uniq -d)
 [ -z "$repeated" ] || {
-  echo "FATAL: repeated across ARMED/ARMED_SLOW/ARMED_EMBARGO/ACCEPTANCE/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
+  echo "FATAL: repeated across ARMED/ARMED_SLOW/ARMED_BODY_FILL_*/ARMED_EMBARGO/ACCEPTANCE/DECIDED_DARK: $(printf '%s' "$repeated" | tr '\n' ' ')" >&2
   echo "A repeat inflates the accounting by one and lets an undecided gate balance against it; delete the duplicate line." >&2
   exit 1
 }
@@ -466,10 +486,10 @@ repeated=$(printf '%s\n' "${ARMED[@]}" "${ARMED_SLOW[@]}" "${ARMED_EMBARGO[@]}" 
 # It sums list LENGTHS, which equals the number of distinct names only
 # because the repeat check above rejects duplicates. That check is
 # load-bearing for this arithmetic, not housekeeping.
-accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#ARMED_EMBARGO[@]} + ${#ACCEPTANCE[@]} + ${#DECIDED_DARK[@]} ))
+accounted=$(( ${#ARMED[@]} + ${#ARMED_SLOW[@]} + ${#ARMED_BODY_FILL_COMPLETE_TREE[@]} + ${#ARMED_BODY_FILL_MARKET[@]} + ${#ARMED_EMBARGO[@]} + ${#ACCEPTANCE[@]} + ${#DECIDED_DARK[@]} ))
 if [ "$regtest_ignored" -ne "$accounted" ]; then
-  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#ARMED_EMBARGO[@]} embargo + ${#ACCEPTANCE[@]} acceptance + ${#DECIDED_DARK[@]} dark = $accounted." >&2
-  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW or ARMED_EMBARGO, or decided dark with its reason recorded here." >&2
+  echo "FATAL: $regtest_ignored ignored regtest_e2e tests, but ${#ARMED[@]} armed + ${#ARMED_SLOW[@]} slow + ${#ARMED_BODY_FILL_COMPLETE_TREE[@]} body-fill-complete-tree + ${#ARMED_BODY_FILL_MARKET[@]} body-fill-market + ${#ARMED_EMBARGO[@]} embargo + ${#ACCEPTANCE[@]} acceptance + ${#DECIDED_DARK[@]} dark = $accounted." >&2
+  echo "A new #[ignore]d test must be armed (observe it red first), added to ARMED_SLOW, an ARMED_BODY_FILL_* list or ARMED_EMBARGO, or decided dark with its reason recorded here." >&2
   exit 1
 fi
 
@@ -489,6 +509,8 @@ case "$GATE_LANE" in
     }
     ;;
   slow) LANE_GATES=("${ARMED_SLOW[@]}") ;;
+  body-fill-complete-tree) LANE_GATES=("${ARMED_BODY_FILL_COMPLETE_TREE[@]}") ;;
+  body-fill-market) LANE_GATES=("${ARMED_BODY_FILL_MARKET[@]}") ;;
   embargo) LANE_GATES=("${ARMED_EMBARGO[@]}") ;;
   acceptance)
     LANE_GATES=("${ACCEPTANCE[@]}")
@@ -502,7 +524,7 @@ case "$GATE_LANE" in
     }
     ;;
   *)
-    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr', 'slow', 'embargo' or 'acceptance')" >&2
+    echo "FATAL: unknown GATE_LANE '$GATE_LANE' (expected 'pr', 'slow', 'body-fill-complete-tree', 'body-fill-market', 'embargo' or 'acceptance')" >&2
     exit 1
     ;;
 esac

@@ -378,6 +378,9 @@ async fn baseline(
             pow,
             metrics,
             &out,
+            // A captured chain has no indexed events: its manifest names
+            // none, so its trace carries no event digests.
+            &[],
         )
     })
     .await?;
@@ -482,7 +485,27 @@ async fn replay(flags: RunFlags, trace: PathBuf) -> Result<(), Failure> {
             Disagreement::ArchivalDiverged { at } => {
                 eprintln!("archival rows after height {at}: redb != trace, DIVERGE");
             }
+            Disagreement::EventDiverged { record } => {
+                eprintln!(
+                    "tables digest after record {}: redb != trace, DIVERGE",
+                    record.to_raw()
+                );
+            }
+            Disagreement::EventUnreached { record } => {
+                eprintln!(
+                    "tables digest after record {}: the run never reached it",
+                    record.to_raw()
+                );
+            }
         }
+    }
+    let matched = report
+        .events
+        .iter()
+        .filter(|event| event.theirs == Some(event.ours))
+        .count();
+    if matched > 0 {
+        eprintln!("tables digest at {matched} indexed event(s): MATCH");
     }
     if let Some(checkpoint) = &report.checkpoint {
         if checkpoint.identical() {

@@ -208,10 +208,12 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      # The run's own commit: the pushed `dev`, or on the label the pull
-      # request's merge with `dev`, whose workflow this already is.
+      # The scripts from the base branch as it is now, whichever workflow
+      # called this: never the pull request's own copy, and never a merge
+      # commit GitHub has not refreshed since the base moved.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.base }}
           sparse-checkout: |
             scripts/ci/merge_ready.py
             scripts/ci/failed_tests.py

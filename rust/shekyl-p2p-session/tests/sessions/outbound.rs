@@ -255,6 +255,36 @@ session_test!(
     }
 );
 
+// A fragment-train refusal while this node's own dial waits for its
+// handshake response keeps what the form end is evidence of there, the
+// dialed peer's refusal, beside the refusal's own cause (PWD-B12).
+//
+// Red edit: build the end from `form_failure()` whatever the state (the
+// evidence turns local), or close with `form_end()` (the cause turns
+// `LevinHandshakeRejected`).
+session_test!(
+    a_fragment_train_refusal_during_an_outbound_handshake_is_the_peers_with_its_own_cause,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let layer = rig.layer.clone();
+        let dial =
+            tokio::spawn(async move { layer.dial(outbound_clearnet(9), DialAim::Keep).await });
+        let mut wire = within("the dialed wire", rig.dialed.recv())
+            .await
+            .expect("loopback");
+        let _ = wire.read().await;
+        let dummy = shekyl_levin::BucketHead::make(0, 0, shekyl_levin::Flags::END, false);
+        wire.inject(common::first_fragment(&dummy.write())).await;
+        let end = within("the outcome", dial)
+            .await
+            .expect("task")
+            .expect_err("a train is not a response");
+        assert_eq!(kind(end), CloseKind::InnerMessageNotDispatch);
+        assert!(matches!(end.failure().evidence(), Evidence::Destination(_)));
+        assert_eq!(end.failure().retry(), Retry::Final);
+    }
+);
+
 /// A 2002 carrying one blob, framed so the whole bucket is larger than
 /// the pre-handshake packet limit.
 fn new_transactions_above_the_initial_limit() -> Vec<u8> {

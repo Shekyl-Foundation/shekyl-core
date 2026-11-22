@@ -145,7 +145,7 @@ shekyl-operator-alarm = { path = "../shekyl-operator-alarm" }
 shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std", "compile-time-generators"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
-multiexp = "0.4"
+multiexp = { workspace = true, features = ["std"] }
 # `std` is required for `rand_core::Error: std::error::Error` (the `#[source]` of
 # `StakeEngineError::RngSourceFailed`); declared explicitly rather than relying on
 # transitive feature unification from sibling crypto deps.
@@ -439,7 +439,7 @@ proptest = "1"
 #     `ec-divisors`, `helioselene`. All are first-party Shekyl /
 #     Shekyl-vendored crates.
 #   - **Crates.io versions reused from the workspace lockfile:**
-#     `multiexp = "0.4"`, `ciphersuite = "0.4"`,
+#     `multiexp` (workspace), `ciphersuite = "0.4"`,
 #     `dalek-ff-group = "0.5"`, `rand_core = "0.6"`. Each is
 #     already present at the same pin in `shekyl-fcmp`,
 #     `shekyl-tx-builder`, and/or `shekyl-crypto-pq`;
@@ -466,7 +466,7 @@ shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # crates are non-optional production `[dependencies]` above (promoted when
 # the `SignBond` handler landed), so tests reach them through the single
 # production edge — no duplicate dev-dep entries here.
-multiexp = "0.4"
+multiexp = { workspace = true, features = ["std"] }
 ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
 ciphersuite = "0.4"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }

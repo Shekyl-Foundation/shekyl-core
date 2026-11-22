@@ -86,7 +86,7 @@ fn handshake_is_idempotent_and_does_not_discard_a_batch() {
         .get_mut(&id(1))
         .expect("peer present")
         .queued
-        .push(TxBlob::from([0xAAu8].as_slice()));
+        .push_back(TxBlob::from([0xAAu8].as_slice()));
 
     // The repeat arrives as inbound, so it must not merge again. `or_insert`
     // keeps the outbound direction and the queued batch.
@@ -309,9 +309,12 @@ fn fluff_skips_the_source_and_releases_on_deadline() {
 
     let deadline = z.fluff_deadline().expect("a batch is in flight");
     if deadline > 0 {
-        assert!(z.flush_fluff(deadline - 1, false).is_empty(), "not due yet");
+        assert!(
+            z.flush_fluff(deadline - 1, false, &mut rng).is_empty(),
+            "not due yet"
+        );
     }
-    let released = z.flush_fluff(deadline, false);
+    let released = z.flush_fluff(deadline, false, &mut rng);
     assert_eq!(
         released,
         vec![(id(2), vec![TxBlob::from([7u8].as_slice())])]
@@ -336,14 +339,198 @@ fn forcing_a_flush_runs_the_same_release_path() {
     let deadline = z.fluff_deadline().unwrap();
 
     if deadline > 0 {
-        assert!(z.flush_fluff(0, false).is_empty(), "not due at t=0");
+        assert!(
+            z.flush_fluff(0, false, &mut rng).is_empty(),
+            "not due at t=0"
+        );
     }
-    let released = z.flush_fluff(0, true);
+    let released = z.flush_fluff(0, true, &mut rng);
     assert_eq!(
         released,
         vec![(id(1), vec![TxBlob::from([9u8].as_slice())])],
         "force releases regardless of deadline"
     );
+}
+
+/// One peer, and the bytes a fluff notice of `blobs` encodes to, by the
+/// encoder the session sends with.
+fn fluff_notice_len(blobs: &[TxBlob]) -> u64 {
+    use shekyl_levin::PortableMap;
+    let notice = shekyl_levin::NewTransactions {
+        txs: blobs.iter().map(|blob| blob.to_vec()).collect(),
+        padding: Vec::new(),
+        dandelionpp_fluff: true,
+    };
+    u64::try_from(notice.store().expect("stores").len()).expect("fits")
+}
+
+fn one_peer_zone(rng: &mut SplitMix64) -> Relay {
+    let mut z = zone(rng);
+    z.on_session_established(id(1), PeerDirection::Inbound, ConnectorId::Clearnet, rng);
+    z
+}
+
+fn blob(tag: u8, len: usize) -> TxBlob {
+    TxBlob::from(vec![tag; len])
+}
+
+/// PWD-B12's release bound: a flush releases whole transactions up to the
+/// 2002 cap and no more, the rest stays queued in arrival order, and the
+/// rest goes on the next flush with no new arrival to prompt it.
+///
+/// Three transactions of 400 000 bytes arrive as 3, 2, 1. Two fit a notice
+/// and the third does not. The first flush carries the first two arrivals
+/// (sorted, as every batch is); the second carries the third.
+///
+/// Red edits, each of which fails here: release the whole queue
+/// (`std::mem::take(&mut peer.queued)` in place of `take_one_notice`);
+/// sort the queue before taking (the first notice would carry 1 and 2);
+/// delete the deadline draw for a peer that keeps a remainder (the second
+/// deadline is `None` and the third transaction is never sent).
+#[test]
+fn a_flush_releases_one_capped_notice_and_the_rest_goes_on_the_next() {
+    let mut rng = SplitMix64::new(31);
+    let mut z = one_peer_zone(&mut rng);
+    let (third, second, first) = (blob(1, 400_000), blob(2, 400_000), blob(3, 400_000));
+    for arrival in [&first, &second, &third] {
+        z.queue_fluff(&[TxBlob::clone(arrival)], None, 0, &mut rng);
+    }
+    assert!(
+        fluff_notice_len(&[
+            TxBlob::clone(&first),
+            TxBlob::clone(&second),
+            TxBlob::clone(&third)
+        ]) > shekyl_levin::CAP_NEW_TRANSACTIONS,
+        "the three together are over the cap, or this test bounds nothing"
+    );
+
+    let deadline = z.fluff_deadline().expect("a batch is in flight");
+    let released = z.flush_fluff(deadline, false, &mut rng);
+    assert_eq!(
+        released,
+        vec![(id(1), vec![TxBlob::clone(&second), TxBlob::clone(&first)])],
+        "the first two arrivals, sorted"
+    );
+    assert!(fluff_notice_len(&released[0].1) <= shekyl_levin::CAP_NEW_TRANSACTIONS);
+    assert_eq!(
+        z.peer(&id(1)).unwrap().queued,
+        vec![TxBlob::clone(&third)],
+        "what did not fit stays queued"
+    );
+
+    let next = z
+        .fluff_deadline()
+        .expect("the remainder has a deadline of its own");
+    assert!(next >= deadline);
+    let released = z.flush_fluff(next, false, &mut rng);
+    assert_eq!(released, vec![(id(1), vec![third])]);
+    assert!(z.peer(&id(1)).unwrap().queued.is_empty());
+    assert!(z.fluff_deadline().is_none(), "nothing left pending");
+}
+
+/// A queue's remainder keeps its arrival order across flushes: five
+/// transactions of 400 000 bytes leave as two, two and one, each notice
+/// the next arrivals.
+///
+/// Red edit: put the remainder back in any other order (for example
+/// `queued.truncate(taken)` on a reversed queue, or pushing the remainder
+/// behind later arrivals).
+#[test]
+fn a_backlog_leaves_in_arrival_order_over_several_flushes() {
+    let mut rng = SplitMix64::new(32);
+    let mut z = one_peer_zone(&mut rng);
+    let arrivals: Vec<TxBlob> = [9u8, 7, 8, 5, 6]
+        .into_iter()
+        .map(|tag| blob(tag, 400_000))
+        .collect();
+    for arrival in &arrivals {
+        z.queue_fluff(&[TxBlob::clone(arrival)], None, 0, &mut rng);
+    }
+    let mut notices = Vec::new();
+    while z.fluff_deadline().is_some() {
+        let mut released = z.flush_fluff(0, true, &mut rng);
+        assert_eq!(released.len(), 1, "one notice for the one peer");
+        let (_, batch) = released.remove(0);
+        assert!(fluff_notice_len(&batch) <= shekyl_levin::CAP_NEW_TRANSACTIONS);
+        notices.push(batch);
+        assert!(notices.len() <= arrivals.len(), "the backlog drains");
+    }
+    assert_eq!(
+        notices,
+        vec![
+            vec![blob(7, 400_000), blob(9, 400_000)],
+            vec![blob(5, 400_000), blob(8, 400_000)],
+            vec![blob(6, 400_000)],
+        ]
+    );
+}
+
+/// A flush always releases at least one transaction, whatever its size:
+/// nothing is split and nothing waits behind a notice that cannot be built.
+/// The blob here is larger than any transaction a pool admits, which is
+/// the only way to make one transaction exceed a cap derived from the
+/// largest one.
+///
+/// Red edit: drop `taken > 0 &&` from `take_one_notice`'s guard; the flush
+/// then releases nothing and the queue never drains.
+#[test]
+fn a_flush_always_releases_at_least_one_transaction() {
+    let mut rng = SplitMix64::new(33);
+    let mut z = one_peer_zone(&mut rng);
+    let cap = usize::try_from(shekyl_levin::CAP_NEW_TRANSACTIONS).expect("fits");
+    let oversize = blob(4, cap + 1);
+    let small = blob(5, 10);
+    z.queue_fluff(&[TxBlob::clone(&oversize)], None, 0, &mut rng);
+    z.queue_fluff(&[TxBlob::clone(&small)], None, 0, &mut rng);
+
+    let released = z.flush_fluff(0, true, &mut rng);
+    assert_eq!(released, vec![(id(1), vec![oversize])], "alone, and whole");
+    assert_eq!(z.peer(&id(1)).unwrap().queued, vec![TxBlob::clone(&small)]);
+    let released = z.flush_fluff(0, true, &mut rng);
+    assert_eq!(released, vec![(id(1), vec![small])]);
+}
+
+/// The cap is exact at its edge: two transactions whose notice is the cap
+/// to the byte leave together, and one more byte holds the second back.
+///
+/// Red edits: compare with `>=` in `take_one_notice` (the exact fit is
+/// split); count the blobs' bytes without their length varints or without
+/// the notice's envelope (the over-by-one pair leaves together and the
+/// peer refuses it).
+#[test]
+fn the_release_cap_is_exact_at_its_edge() {
+    let cap = shekyl_levin::CAP_NEW_TRANSACTIONS;
+    // A fluff of two entries is 28 bytes of envelope and length varints
+    // around them at this size; the assertion below holds that to the
+    // encoder, so the split is at the real edge.
+    let half = usize::try_from((cap - 28) / 2).expect("fits");
+    let (a, b) = (blob(1, half), blob(2, half));
+    assert_eq!(
+        fluff_notice_len(&[TxBlob::clone(&a), TxBlob::clone(&b)]),
+        cap
+    );
+
+    let mut rng = SplitMix64::new(34);
+    let mut z = one_peer_zone(&mut rng);
+    z.queue_fluff(&[TxBlob::clone(&a), TxBlob::clone(&b)], None, 0, &mut rng);
+    let released = z.flush_fluff(0, true, &mut rng);
+    assert_eq!(
+        released,
+        vec![(id(1), vec![TxBlob::clone(&a), TxBlob::clone(&b)])],
+        "an exact fit leaves as one notice"
+    );
+    assert!(z.fluff_deadline().is_none());
+
+    let longer = blob(2, half + 1);
+    z.queue_fluff(
+        &[TxBlob::clone(&a), TxBlob::clone(&longer)],
+        None,
+        0,
+        &mut rng,
+    );
+    let released = z.flush_fluff(0, true, &mut rng);
+    assert_eq!(released, vec![(id(1), vec![a])], "one byte over waits");
+    assert_eq!(z.peer(&id(1)).unwrap().queued, vec![longer]);
 }
 
 /// A zone whose epoch role is known, found by seed search rather than by a
