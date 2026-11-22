@@ -729,7 +729,12 @@ impl FoldProbe for EconomyProbe<'_> {
             self.close_year(year, seen.already_generated);
             if let Some(beat) = &self.heartbeat {
                 if year.is_multiple_of(HEARTBEAT_YEARS) {
-                    eprintln!(
+                    // Straight to the process's stderr: the test harness
+                    // captures `eprintln!`, and a slow cell must be named
+                    // while it runs, not after its test ends.
+                    use std::io::Write as _;
+                    let _ = writeln!(
+                        std::io::stderr(),
                         "beat | {} | {} | y{year} | median {} B | waiting {} | cohorts {} | {:.0} s",
                         utc_clock(),
                         beat.label,
