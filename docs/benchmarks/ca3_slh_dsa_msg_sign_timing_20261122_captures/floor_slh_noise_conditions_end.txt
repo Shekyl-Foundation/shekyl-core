@@ -1,0 +1,35 @@
+== conditions slh-noise-end at 2026-11-22T06:52:00Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.01 1.01 1.00
+clock_khz: 1500000
+soc_temp_millic: 55991
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 105861
+time_in_state:
+  600000 1455327
+  700000 19817
+  800000 3633
+  900000 3708
+  1000000 6074
+  1100000 5512
+  1200000 3877
+  1300000 4002
+  1400000 2892
+  1500000 2402243
+mem_available_kb: 3344984
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    24065 <agent>  100       00:00 ps
+    24051 root     44.0       00:00 systemd-timedat
+    24041 <agent>  3.1       00:00 bash
+    24028 root      0.0       08:49 kworker/1:0-events
+       59 root      0.0    10:51:11 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    24039 root      0.0       01:08 kworker/2:1-events
+    24030 root      0.0       05:20 kworker/3:2-events
+tmux: ca3slhn: 1 windows (created Sun Nov 22 01:30:48 2026);

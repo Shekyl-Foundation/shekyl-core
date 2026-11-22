@@ -1,0 +1,18 @@
+CA-3 SLH-DSA-SHA2-192s message signature (fips205 0.5.0) signing timing (the shipped entry, derivation included), inputs prepared before the loop
+arch=aarch64 os=linux mode=slh-dsa-noise samples_per_comparison=200 calibration=20 crops=100 inputs=NOT-REGISTERED
+pass: |t| < 4.5 on fixed-a-vs-fixed-b; null comparisons: |t| < 4.5; control: |t| > 10; fixed-vs-varied is information (ruled 2026-11-21)
+  check entries=220 returned=220 verified=220 verdict=as-intended
+  quantile=1 class0=5271554203 class1=5271376570 diff=177633
+  quantile=5 class0=5271754155 class1=5271838431 diff=-84276
+  quantile=10 class0=5271971371 class1=5272068001 diff=-96630
+  quantile=25 class0=5272406195 class1=5272525621 diff=-119426
+  quantile=50 class0=5273208439 class1=5273088591 diff=119848
+  quantile=75 class0=5273860742 class1=5273882816 diff=-22074
+  quantile=90 class0=5276083420 class1=5276604170 diff=-520750
+  quantile=95 class0=5277847813 class1=5277882108 diff=-34295
+  quantile=99 class0=5279839107 class1=5280501888 diff=-662781
+  crop=raw n0=110 n1=90 mean0=5273590454.5 mean1=5273577380.4 diff=13074.1 t=0.05
+  max_at_crop=17 cutoff=5273031628 n0=45 n1=41 diff=-91982.7 t=-0.96
+null=fixed-a-vs-fixed-a max_abs_t=0.96 median_ns=5272664283 raw_sd_ns=1821911 n0=110 n1=90 verdict=no-evidence
+noise-calibration sigma_ns=1821911 delta_ns=1222175 (delta = 15 * sigma * sqrt(2/1000))
+exit=0

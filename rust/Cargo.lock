@@ -3768,6 +3768,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-network",
  "shekyl-node",
+ "shekyl-onion-key",
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-os-account",

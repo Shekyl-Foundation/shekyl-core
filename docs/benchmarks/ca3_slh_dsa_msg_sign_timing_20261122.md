@@ -138,4 +138,39 @@ workstation, shared, with seeds that are not the registered one:
 
 ## Results
 
-No run has been made.
+### The floor device's noise calibration (2026-11-22, before its registered run)
+
+The 4 GB Pi 4, under the lane's quiet claim with the host's apt timers
+paused (the maintainer's go). The run:
+- the binary built on the device from a fresh clone of `43ac1dff98`;
+- `ca3_pq_sign_timing slh-dsa-noise 20261125`, a seed that is not the
+  registered one;
+- 06:30:49 to 06:52:00Z;
+- clock synchronised, 1.5 GHz, 49 to 56 °C, throttled `0x0`, no
+  under-voltage.
+
+```text
+  check entries=220 returned=220 verified=220 verdict=as-intended
+null=fixed-a-vs-fixed-a max_abs_t=0.96 median_ns=5272664283 raw_sd_ns=1821911 n0=110 n1=90 verdict=no-evidence
+noise-calibration sigma_ns=1821911 delta_ns=1222175 (delta = 15 * sigma * sqrt(2/1000))
+```
+
+- **σ = 1,821,911 ns** (0.035 % of the 5.27 s median signature).
+- **δ = 1,222,175 ns.** That is the floor run's planted control and its
+  stated sensitivity: a pass there excludes a key dependence of 1.22 ms
+  (0.023 % of a signature) or more, and nothing smaller.
+- The floor run is `ca3_pq_sign_timing slh-dsa 1222175`.
+- A signature takes 5.27 s on the device, not the 4.3 s the estimate
+  assumed, so the run takes about 9.7 hours (3 × 2,200 signatures).
+- The output and its conditions are
+  `ca3_slh_dsa_msg_sign_timing_20261122_captures/floor_slh_noise_*`, with
+  `SHA256SUMS`. The device's paths are written `<clone>` and `<home>`, its
+  login `<agent>`, and the raw files are in the estate's private captures.
+
+### The floor device's registered run
+
+Not yet made.
+
+### The laptop
+
+Not yet made: its noise calibration, then its run.

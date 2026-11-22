@@ -1,7 +1,8 @@
 # `CA-3`, FN-DSA: the receipt countersignature's signing time, registered 2026-11-21
 
-**State of this record: registered; no run has been made.** Results are
-added below "Registered before the run", and that section is not edited
+**State of this record: the floor device's registered run is in, and it
+PASSES; the laptop's two runs (AVX2 and SSE2) are not yet made.** Results
+are added below "Registered before the run", and that section is not edited
 afterwards.
 
 ## Why this run
@@ -279,4 +280,86 @@ before that.
 
 ## Results
 
-No run has been made.
+### The floor device: PASS
+
+**The attempt.** One attempt, on the second Raspberry Pi 4 (the 4 GB board,
+rule 76's floor), under a quiet claim, made by the crypto-audit lane.
+- **Source:** a fresh recursive clone of `d0dfabb5a4`, the commit that
+  carries this registration, with `git status` clean.
+- **Build:** on the device at `-j 2`, 02:50:19 to 03:08:12Z, untimed.
+  rustc 1.94.0 (`4a4ef493e`). The binary's SHA-256 is
+  `e68db30df1372a7a0dbe914bd5004e4c4e4ded25808e1bbb6795775c7391fa16`.
+- **Run:** started once the clock reported synchronised, 03:08:12 to
+  05:40:03Z (2 h 32 min), as `ca3_receipt_sign_timing 500000` with no seed.
+  Exit code 0.
+- **Output:** `ca3_fn_dsa_receipt_sign_timing_20261121_captures/floor_registered_attempt1.txt`.
+
+```text
+arch=aarch64 os=linux cpu_avx2=n/a samples_per_comparison=500000 calibration=10000 crops=100 varied_keys=256 inputs=registered
+information=fixed-vs-varied max_abs_t=5.52 restart_abs_z=0.81 median_ns=2090681 n0=249677 n1=249207 verdict=information
+pass-line=fixed-a-vs-fixed-b max_abs_t=2.90 restart_abs_z=2.07 median_ns=2036367 n0=249780 n1=249209 verdict=no-evidence
+null=fixed-a-vs-fixed-a-again max_abs_t=2.77 restart_abs_z=0.46 median_ns=2037293 n0=249089 n1=249775 verdict=no-evidence
+null=varied-vs-varied-again max_abs_t=1.77 restart_abs_z=0.97 median_ns=2091995 n0=249281 n1=249614 verdict=no-evidence
+control=planted-leak fraction=0.005 planted_ns=10186 max_abs_t=200.07 verdict=detected
+check=keys replicated=true verdict=as-intended
+result=PASS fixed_pair=2.90 worst_null=2.77 control_abs_t=200.07 information_fixed_vs_varied=5.52
+```
+
+(The per-quantile and per-crop lines, and each comparison's check line,
+are in the capture.)
+
+**Read against the lines, in order.**
+
+| Line | Registered | Observed | |
+| --- | --- | --- | --- |
+| 1 | a check fails: void | keys replicated; in each of the five comparisons, 510,000 entries signed, all verified, every nonce matched (restarts 472 to 596 per class) | holds |
+| 2 | control `\|t\|` ≤ 10: void | 200.07 (planted 10.19 µs, 0.5 %) | detected |
+| 3 | a null's figure ≥ 4.5: void | 2.77 and 1.77 (restart `\|z\|` 0.46 and 0.97) | clean |
+| 4–6 | the fixed pair's figure | 2.90 (`\|t\|`; restart `\|z\|` 2.07) | **pass** |
+
+The run is not void, and the fixed pair's figure is below 4.5: **PASS**.
+On the floor device, a pass excludes a dependence of the receipt
+countersignature's time on the key's value of 0.5 % of a signature
+(10.19 µs) or more, and nothing smaller.
+
+**Information, not a line.** `fixed-vs-varied` read 5.52: the fixed key
+was slower by about 0.26 µs (0.013 % of a signature) at every quantile up
+to the 95th. Its restart `|z|` was 0.81. By the ruling it is information:
+it shows how the time depends on a key being repeated, not on its value.
+
+**Conditions** (`floor_conditions_start.txt`, `floor_conditions_end.txt`):
+
+| Condition | Start (03:08:12Z) | End (05:40:03Z) |
+| --- | --- | --- |
+| Clock synchronised | yes | yes |
+| Load | 1.83 (the build had just ended) | 1.00 |
+| CPU clock | 1.5 GHz | 1.5 GHz |
+| SoC temperature | 58.9 °C | 54.0 °C |
+| `vcgencmd get_throttled` | `0x0` | `0x0` |
+| Under-voltage alarm | 0 | 0 |
+| Frequency transitions | 88,959 | 91,469 |
+
+- The board identifies as Raspberry Pi 4 Model B Rev 1.2, revision
+  `c03112`, Ubuntu 26.04.1 LTS, kernel 7.0.0-1023-raspi, governor
+  `ondemand`.
+- Nothing else of note ran: the process lists are in the captures.
+
+**Captures**, in `ca3_fn_dsa_receipt_sign_timing_20261121_captures/` with
+`SHA256SUMS`:
+- the attempt's output;
+- its conditions;
+- the clone's head and clean status;
+- the build's times, log and `rustc -vV`;
+- the binary's SHA-256;
+- the two floor shake-downs with their conditions (`floor_shakedown1_*`,
+  void on its nulls; `floor_shakedown2_*`, clean), each marked as a
+  shake-down.
+
+The committed files write the device's clone directory `<clone>`, its home
+directory `<home>` and its login `<agent>`. The unredacted files, whose own
+SHA256SUMS verified after the copy, are in the estate's private captures.
+
+### The laptop: not yet made
+
+The AVX2 and SSE2 runs wait for the maintainer's laptop session. Each is
+preceded by its shake-down on the laptop.

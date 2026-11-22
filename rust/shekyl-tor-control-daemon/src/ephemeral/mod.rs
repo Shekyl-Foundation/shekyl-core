@@ -39,10 +39,12 @@ use shekyl_tor_control_client::onion_identity::OnionIdentity;
 use crate::data_dir::{EphemeralDataDir, KeptLog};
 
 mod asker;
+mod kept;
 mod spawn;
 
 pub use asker::ControlAsker;
-pub use spawn::{KeptDataDir, LaunchFailure, SpawnError};
+pub use kept::KeptSave;
+pub use spawn::{KeptDataDir, LaunchFailure, RespawnKept, SpawnError};
 
 /// Bound on the whole teardown sequence (graceful actor stop + child reap),
 /// mirroring the wallet supervisor's reap bound: `stop_gracefully` rides the
@@ -93,6 +95,10 @@ pub struct DaemonTorConfig {
     /// Tor's `SocksTimeout`: below the daemon's Tor dial deadline, so Tor's
     /// own reply ends a dial it cannot attach (`TOR_SUPERVISOR.md` §4.2).
     pub socks_timeout: SocksTimeout,
+    /// A persistent onion's kept guards (`TSR-Q2` as amended): copied into a
+    /// fresh directory at launch and written back after a clean stop. `None`
+    /// for a per-boot onion, which keeps no guards.
+    pub guard_state: Option<directory_cache::GuardState>,
 }
 
 /// Why [`DaemonTorControl::launch`] failed. Terminal for the boot: the caller
@@ -253,6 +259,8 @@ pub struct DaemonTorControl {
     ///
     /// [`HandshakeWait::Until`]: shekyl_tor_control_client::control::HandshakeWait::Until
     handshake: Option<oneshot::Sender<()>>,
+    /// Where a persistent onion's guards are written back at a clean stop.
+    guard_state: Option<directory_cache::GuardState>,
     /// Declared last so a plain drop retires the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -456,33 +464,55 @@ impl DaemonTorControl {
     /// Bounded teardown at the daemon's stop (`TOR_SUPERVISOR.md` §4.7): the
     /// actor's graceful stop, which closes the owning control connection and
     /// reaps the child within `SHUTDOWN_GRACE`, killing it past that; then the
-    /// cache write-back; then the directory is retired and its tombstone
-    /// deleted under [`TOMBSTONE_DELETE_BOUND`]. On a wedged actor, kill and
-    /// proceed — the child reap is backstopped by `kill_on_drop` and by the
-    /// owning control connection, whose close exits tor.
+    /// cache and guard write-back; then the directory is retired and its
+    /// tombstone deleted under [`TOMBSTONE_DELETE_BOUND`]. On a wedged actor,
+    /// kill and proceed — the child reap is backstopped by `kill_on_drop` and
+    /// by the owning control connection, whose close exits tor.
     pub async fn shutdown(mut self) -> Teardown {
         let exit = self.stop_actor().await;
         // After the reap, before the directory is retired. A crash (Tor died,
-        // or we had to kill it) saves nothing: the previous cache stays.
-        let cache = self.save_if_clean(&exit).await;
+        // or we had to kill it) saves nothing: the previous cache and guards
+        // stay. A respawn stop is this same write-back.
+        let saved = self.save_kept(&exit).await;
         let retirement = match self.data_dir.take() {
             Some(dir) => Some(retire(dir).await),
             None => None,
         };
         Teardown {
             exit,
-            cache,
+            saved,
             retirement,
         }
     }
 
-    async fn save_if_clean(&self, exit: &Option<TorExit>) -> CacheSave {
-        if self.bootstrapped {
-            if let (Some(TorExit::Reaped(_)), Some(dir)) = (exit, self.data_dir.as_ref()) {
-                return save_directory_cache(dir.path()).await;
+    /// The cache and, for a persistent onion, the guards. One blocking copy.
+    /// Not due until this Tor bootstrapped and was reaped: a crash leaves the
+    /// previous files. A join failure fails both, since neither copy ran.
+    async fn save_kept(&self, exit: &Option<TorExit>) -> KeptSave {
+        let guards_held = self.guard_state.is_some();
+        let not_due = || KeptSave {
+            cache: CacheSave::NotDue,
+            guards: guards_held.then_some(CacheSave::NotDue),
+        };
+        if !self.bootstrapped {
+            return not_due();
+        }
+        let (Some(TorExit::Reaped(_)), Some(dir)) = (exit, self.data_dir.as_ref()) else {
+            return not_due();
+        };
+        let data_dir = dir.path().to_path_buf();
+        let guards = self.guard_state.clone();
+        match tokio::task::spawn_blocking(move || kept::save_from(&data_dir, guards.as_ref())).await
+        {
+            Ok(saved) => saved,
+            Err(join) => {
+                let text = join.to_string();
+                KeptSave {
+                    cache: CacheSave::Failed(std::io::Error::other(text.clone())),
+                    guards: guards_held.then(|| CacheSave::Failed(std::io::Error::other(text))),
+                }
             }
         }
-        CacheSave::NotDue
     }
 
     /// The cache files copied into this boot's directory. Empty when the
@@ -516,13 +546,14 @@ async fn observed_exit(exit_watch: &mut watch::Receiver<Option<TorExit>>) -> Opt
     *exit_watch.borrow()
 }
 
-/// What a teardown did: the reap, and what became of the directory cache.
+/// What a teardown did: the reap, what the clean stop wrote back, and what
+/// became of the directory.
 #[derive(Debug)]
 pub struct Teardown {
     /// The reap, when one was observed.
     pub exit: Option<TorExit>,
-    /// The public directory cache's write-back (`TSR-Q8`).
-    pub cache: CacheSave,
+    /// The directory cache and, for a persistent onion, its guards.
+    pub saved: KeptSave,
     /// What became of the directory and Tor's log. `None` when the control
     /// held no directory.
     pub retirement: Option<Retirement>,
@@ -589,28 +620,6 @@ pub enum CacheSave {
     /// The write-back failed. The previous files stay (each file is written
     /// to a temporary and renamed over the old one).
     Failed(std::io::Error),
-}
-
-/// Write the public directory cache back from a boot that reached the
-/// network and was stopped cleanly. The copy runs on the blocking pool.
-/// A failure leaves the previous files.
-async fn save_directory_cache(data_dir: &Path) -> CacheSave {
-    let data_dir = data_dir.to_path_buf();
-    let Some(parent) = data_dir.parent().map(Path::to_path_buf) else {
-        return CacheSave::NotDue;
-    };
-    let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
-    let saved = tokio::task::spawn_blocking(move || {
-        let cache = directory_cache::DirectoryCache::at(cache);
-        cache.ensure()?;
-        cache.save_from(&data_dir)
-    })
-    .await;
-    match saved {
-        Ok(Ok(())) => CacheSave::Saved,
-        Ok(Err(error)) => CacheSave::Failed(error),
-        Err(join) => CacheSave::Failed(std::io::Error::other(join.to_string())),
-    }
 }
 
 #[cfg(test)]
@@ -722,6 +731,7 @@ pub(crate) mod tests {
             events: EventSink::unsubscribed(),
             reply_deadline: Duration::from_secs(30),
             socks_timeout: SocksTimeout::TorDefault,
+            guard_state: None,
         }
     }
 

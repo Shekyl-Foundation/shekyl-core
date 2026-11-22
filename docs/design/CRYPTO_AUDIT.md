@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA, ML-DSA-65 and SLH-DSA-192s registered, unmeasured (§3.1 to §3.3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA: floor device passes, laptop not yet run (§3.1); ML-DSA-65 and SLH-DSA-192s registered, unmeasured (§3.2, §3.3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -467,8 +467,12 @@ devices, with its source read recorded here.
 
 ### 3.1 FN-DSA, the receipt countersignature
 
-**Status: registered, unmeasured.** The registration is
+**Status: the floor device PASSES (2026-11-22); the laptop's two runs are
+not yet made.** The registration and its results are in
 [`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
+On the 4 GB Pi 4 at 500,000 samples the fixed pair read 2.90, the nulls
+2.77 and 1.77, and the control 200.07. That excludes a key-value dependence
+of 0.5 % of a signature (10.19 µs) or more there.
 It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
 path, and the floor device. The row closes when all three pass.
 - **The pass line** is the fixed pair, key A against key B (the
