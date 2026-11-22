@@ -1,7 +1,8 @@
 # `CA-3`, FN-DSA: the receipt countersignature's signing time, registered 2026-11-21
 
-**State of this record: the floor device's registered run is in, and it
-PASSES; the laptop's two runs (AVX2 and SSE2) are not yet made.** Results
+**State of this record: all three registered runs are in, and all three
+PASS: the floor device, and the laptop on the AVX2 and on the SSE2 path.
+FN-DSA's row of `CA-3` closes.** Results
 are added below "Registered before the run", and that section is not edited
 afterwards.
 
@@ -359,7 +360,98 @@ The committed files write the device's clone directory `<clone>`, its home
 directory `<home>` and its login `<agent>`. The unredacted files, whose own
 SHA256SUMS verified after the copy, are in the estate's private captures.
 
-### The laptop: not yet made
+### The laptop: AVX2 PASS, SSE2 PASS
 
-The AVX2 and SSE2 runs wait for the maintainer's laptop session. Each is
-preceded by its shake-down on the laptop.
+**The setup.** Both runs were made on the maintainer's Windows laptop (Intel
+Core i9-11950H, 8 cores, 16 logical processors) by the agent on that
+machine.
+- **Source and build.** Each binary came from its own fresh recursive clone
+  of `3b4fd5dc2c` (the head that carries this record; the harness is
+  unchanged since the registration), `git status` clean, in a new directory
+  on a local drive with no synced folder. Each was built
+  `cargo build --release --locked -v`, with all 224 rustc invocations
+  carrying `+crt-static` and no `VCRUNTIME140.dll` among the dependents.
+- **The two paths.**
+  - The AVX2 binary's `fn-dsa-sign` line carries only `feature="default"`.
+  - The SSE2 binary was built with `--features fn-dsa-sign/no_avx2`, and its
+    line carries `feature="no_avx2"`.
+  - Both print `cpu_avx2=yes`: that names the processor, not the path.
+- **Pinning and quiet.** Each ran pinned to logical processor 4, with the
+  affinity read back as `0x10`. Each started only after a quiet gate: four
+  consecutive 30-second samples with Defender under 10 % of one logical
+  processor, total load under 15 %, and the sibling, logical 5, under 5 %.
+- **Shake-downs.** The registered runs were preceded by their shake-downs
+  on seed `20261126`:
+  - AVX2: fixed pair 1.62, nulls 2.02 and 1.08, control 24.48.
+  - SSE2: fixed pair 1.05, nulls 1.18 and 2.50, control 38.17.
+
+| | AVX2 | SSE2 |
+| --- | --- | --- |
+| Binary SHA-256 | `809e06bf1682d8745688dbe657dbb5289e1388e990f004e5e7b3f61e7cfc9f21` | `10dd021b5d9b6ecc336a042551a4e5889a55b4800b26e290c6c4f3650ed21383` |
+| Run (UTC) | 19:38:32 to 20:24:33 | 20:33:37 to 21:22:59 |
+| Checks (each comparison) | 1,010,000 entries signed, verified, nonce-matched; keys replicated | the same |
+| Control (planted 0.5 %) | 159.34 (2.07 µs) | 162.04 (2.00 µs) |
+| Nulls | 2.28, 2.49 | 2.25, 1.99 |
+| **Fixed pair** | **1.71** (restart `\|z\|` 0.67) | **1.85** (restart `\|z\|` 0.67) |
+| Information: fixed-vs-varied | 2.09 | 2.21 |
+| Sibling (logical 5) over the run | 1.15 to 6.09 %, mean 2.86 % | 0.79 to 4.05 %, mean 2.52 % |
+| Verdict | **PASS** | **PASS** |
+
+Each run is not void, and its fixed pair is below 4.5. On each path, a
+pass excludes a dependence of the receipt countersignature's time on the
+key's value of 0.5 % of a signature, about 2 µs, or more.
+
+**Conditions.** Both runs held the same conditions at the start and the
+end:
+- mains power, battery 98 % and charging, the Balanced plan with its AC
+  overlay;
+- `QueryPerformanceFrequency` 10,000,000;
+- Defender's real-time, tamper, behaviour, on-access and IOAV protection
+  all on;
+- no browser, cloud-drive client or chat application running.
+
+An AI desktop client the maintainer kept open stayed running.
+- In the AVX2 run its busiest process used 564 s of CPU over 2,760 s, not
+  pinned, while the sibling stayed idle.
+- In the SSE2 run it was nearly idle (7 s).
+
+One one-minute sample in the AVX2 run (20:05:33Z) read zero on both
+performance counters while logical 4 read 100 %. It stays in the samples
+file and is left out of the ranges. The full condition records, which list
+every process on the machine, are in the estate's private captures.
+
+**The one difference from the serve path, measured.** As this record
+registers, the signing path's functions were compared, instruction by
+instruction, between the two harness binaries and `shekyl-wallet-rpc` built
+from the same commit. Function boundaries come from the x64 function table,
+and code and data addresses are masked (`laptop_instruction_counts.txt`).
+- **On the AVX2 path,** every function on the signing path is the same
+  instruction sequence in the harness and in the wallet: `sign_avx2_inner`
+  (767), `ffsamp_fft_inner` (493), `poly_avx2::poly_LDL_fft` (187) and
+  `compute_basis_avx2_inner` (345). The AVX2 run measured the code the
+  wallet runs on an AVX2 processor.
+- **On the SSE2 path,** `ffsamp_fft_inner` (498) and `poly::poly_LDL_fft`
+  (80) are identical. `sign_inner` is not.
+  - The wallet inlines it into `SigningKey1024::sign`, instantiated with the
+    OS-randomness adapter.
+  - The harness, instantiated with the seeded stream, keeps it as its own
+    775-instruction function.
+  - Masked, the two share a longest common subsequence of 327 instructions.
+    Both call the same, identical `ffsamp_fft_inner`.
+  - So the SSE2 run measured the same sampler and LDL decomposition, which
+    are the work that touches the key's floating-point values (the source
+    read, §3.1 of `CRYPTO_AUDIT.md`), inside a differently compiled
+    `sign_inner`.
+  - This applies only on an x86_64 processor without AVX2. It is recorded
+    with the SSE2 result rather than hidden.
+
+**Captures** (`laptop_*`, with `SHA256SUMS`):
+- each run's output and shake-down output;
+- the run's one-minute counter samples;
+- `rustc -vV`;
+- `fn-dsa-sign`'s rustc line;
+- the dependents;
+- the instruction-count summary.
+
+The full records, including the build logs, the process lists and the
+disassembly, are in the estate's private captures, hashed there.
