@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 # The network id and wire prefix (`prefix.rs` re-exports them).
 shekyl-network = { path = "../shekyl-network" }
-fips203 = "=0.4.3"
+fips203 = { workspace = true }
 rand_core = { version = "0.6", features = ["getrandom"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }

@@ -218,6 +218,7 @@ const ROWS: &[Row] = &[
     public("tor-socks-password", Kind::Secret, Default::Unset, Surface::File, "The SOCKS password for tor-socks."),
     public("tor-onion", Kind::PeerEndpoint(PeerRule::OnionOnly), Default::Unset, Surface::Both, "This node's onion service and virtual port, on the operator's Tor."),
     public("tor-onion-listen", ENDPOINT, Default::Unset, Surface::Both, "The local endpoint the operator's Tor forwards tor-onion to; required with it."),
+    public("tor-onion-key-file", Kind::PATH, Default::Unset, Surface::Both, "This node's persistent onion: Tor's own hs_ed25519_secret_key; tor = managed only. Unset, the managed Tor's onion is new at every boot."),
     public("tor-file", Kind::PATH, Default::Derived("tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix"), Surface::Both, "The managed Tor binary; tor = managed only. It is verified against the pin wherever it is."),
     public("clearnet-socks", ENDPOINT, Default::Unset, Surface::Both, "A SOCKS proxy for clearnet dials."),
     public("clearnet-socks-username", Kind::Secret, Default::Unset, Surface::File, "The SOCKS username for clearnet-socks."),
@@ -431,13 +432,13 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 55 live names, the four environment
+    /// `INPUT_GRAMMAR.md` §5 counts 56 live names, the four environment
     /// levers among them. A row added or removed without the grammar fails
     /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 55);
+        assert_eq!(live, 56);
         let levers = TABLE
             .rows
             .iter()

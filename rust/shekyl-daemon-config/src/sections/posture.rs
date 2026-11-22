@@ -107,6 +107,16 @@ const CHILDREN: &[Child] = &[
         because: TOR_NOT_MANAGED,
     },
     Child {
+        option: "tor-onion-key-file",
+        parent: Parent::TorOff,
+        because: TOR_OFF,
+    },
+    Child {
+        option: "tor-onion-key-file",
+        parent: Parent::TorNotManaged,
+        because: TOR_NOT_MANAGED,
+    },
+    Child {
         option: "tor-socks",
         parent: Parent::TorManaged,
         because: TOR_MANAGED,
@@ -226,6 +236,7 @@ fn managed(r: &mut Reader<'_>) -> Tor {
 fn managed_binary(r: &mut Reader<'_>) -> Tor {
     Tor::Managed {
         binary: r.optional_path("tor-file").present(),
+        onion_key: r.optional_path("tor-onion-key-file").present(),
     }
 }
 
