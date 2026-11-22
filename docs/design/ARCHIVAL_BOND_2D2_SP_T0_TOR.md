@@ -215,9 +215,9 @@ evaporates), so SP-T0c's definition of done — "the bundle **and** the checklis
 (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Current pin (recorded 2026-10-17, `TOR_BUNDLE_DISTRIBUTION.md` TB-10):** verified
-`tor-expert-bundle-linux-x86_64-15.0.25.tar.gz` (Tor `0.4.9.14`) — tarball SHA256
-`19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a`, GPG-signed by the **Tor Browser
+**Current pin (recorded 2026-11-21, `TOR_BUNDLE_DISTRIBUTION.md` TB-10; Rick: re-pin to the latest
+Tor):** verified `tor-expert-bundle-linux-x86_64-16.0.1.tar.gz` (Tor `0.4.9.16`) — tarball SHA256
+`7039cb16060ab22e669852e55774d894b55f25ea8bd0ab7194d3478429a58725`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 `022DA248432D2A0E0F54E65E316C1FACD62D07D9`). The durable pin is *that signing key*, not just this one
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
@@ -227,8 +227,21 @@ no longer one digest: it is the SHA256 of **each of the four files** tor's direc
 `39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3`, and `libevent-2.1.so.7`,
 `libssl.so.3`, `libcrypto.so.3` as the file records them), together with the rule that the directory
 holds nothing else. The same bundle version is the `windows-x86_64` pin (TB-11), over `tor.exe`
-alone, with the DLLs it may import. (Superseded pins, kept so the earlier verification claims stay
-independently checkable: **15.0.24** recorded 2026-10-07 / Tor `0.4.9.13`, tarball SHA256
+alone, with the DLLs it may import (tarball SHA256
+`9eed3c3ff1fe43df034ce360196c9ec95472560d77ff55614d0cd5120edea27b`, `tor.exe`
+`da22856f95ee24f8ace4ad1ab04acbd818fd6c3042bc3cf8f1d7cc3fa3edcb2b`; its imports, re-derived from this
+`tor.exe`, are the 15.0.25 set unchanged, and it has no delay-load import). Tor `0.4.9.17`
+(2026-11-13: directory authority bastet's keys removed over a potential compromise, maatuska's address
+changed, the client fix TROVE-2026-075) is in no Expert Bundle at this pin; the next bundle that
+carries it is the next re-pin. (Superseded pins, kept so the earlier verification claims stay
+independently checkable: **15.0.25** recorded 2026-10-17 / Tor `0.4.9.14`, tarball SHA256
+`19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a`, `tor` SHA256
+`39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3`, `libevent-2.1.so.7`
+`b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff`, `libssl.so.3`
+`9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac`, `libcrypto.so.3`
+`418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05`; its `windows-x86_64` tarball
+`c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252`, `tor.exe`
+`8c38513b3c4584154158e7c584f4144849dc679a64cd679553d72dad28230c54`; **15.0.24** recorded 2026-10-07 / Tor `0.4.9.13`, tarball SHA256
 `8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2`, `tor` SHA256
 `74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813`, `libssl.so.3`
 `e95f55c73b63a4e25db7b9c74abdd35c42829ca1dc68f2fb17ae71c4d841381c`, `libcrypto.so.3`
@@ -242,20 +255,25 @@ extracted-binary digest as 15.0.19 — two bundle releases that moved the label 
 **15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
 `71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
 
-**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-17): Expert Bundle 16.0a14, tor
-`0.4.9.14`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a14.tar.gz` — tarball SHA256
-`6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2`, `VALIDSIG` under
+**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-11-21): Expert Bundle 16.0.1, tor
+`0.4.9.16`, stable.** 16.0.1 is the first stable bundle that ships `linux-aarch64`, which was the
+ruling's condition for leaving the alpha line. Verified
+`tor-expert-bundle-linux-aarch64-16.0.1.tar.gz` — tarball SHA256
+`67040520d44c87ccaaf5aa7df0dc1ff122eb938dbb600ae7722e8b6b75282a4b`, `VALIDSIG` under
 `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the four per-file digests in the
 `linux`/`aarch64` row of `config/tor_pins.json` (`tor`
-`0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b`; the three libraries are byte-identical to 16.0a13's). (Superseded: **16.0a13** recorded
+`689da686cdc64d2238430a5100460dd45fc045dabed88989dfcf553e06b48609`; the three libraries are byte-identical to 16.0a14's). (Superseded: **16.0a14** recorded
+2026-10-17 / tor `0.4.9.14`, an alpha, tarball SHA256 `6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2`, `tor` SHA256
+`0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b`; **16.0a13** recorded
 2026-10-07 / tor `0.4.9.13`, tarball SHA256 `e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, `tor` SHA256
 `5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`; **16.0a12** recorded
 2026-09-29 / tor `0.4.9.12`, tarball SHA256
 `e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, extracted-binary SHA256
-`e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`.) The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:
-at 15.0.17, 15.0.19, 15.0.24 and 15.0.25 the Linux targets are `linux-i686` and `linux-x86_64` only, and the
-aarch64 builds are `android-aarch64` (Bionic) and `macos-aarch64` (Mach-O). `linux-aarch64` exists only
-in the alpha line, from 16.0a1 (2025-12-15) on.
+`e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`.) Through 15.0.25 the stable line
+published no `linux-aarch64` Expert Bundle: at 15.0.17, 15.0.19, 15.0.24 and 15.0.25 the Linux targets
+are `linux-i686` and `linux-x86_64` only, and the aarch64 builds `android-aarch64` (Bionic) and
+`macos-aarch64` (Mach-O). `linux-aarch64` was in the alpha line from 16.0a1 (2025-12-15), and is on the
+stable line from 16.0.1.
 
 *Records-was, superseded by the ruling above:* this paragraph previously ruled that the alpha **must
 not** be promoted into `CURRENT_PIN` — an aarch64 host could be given it through

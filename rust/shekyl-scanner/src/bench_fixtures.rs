@@ -692,7 +692,7 @@ mod tests {
             // `expect_err`), and the inner-message check catches drift WITHIN
             // `DecapsulationFailed` to a sibling reason (`scan_output_recover`
             // constructs several `DecapsulationFailed(String)` instances —
-            // "invalid ML-KEM ciphertext length", "invalid decap key: ...",
+            // "invalid ML-KEM ciphertext length", "invalid ciphertext: ...",
             // ML-KEM decap rejection — all of which would pass the variant
             // check on their own; only the view-tag-mismatch path is the
             // typical-case fixture's intended classifier).
@@ -724,7 +724,7 @@ mod tests {
                 "expected the view-tag pre-filter mismatch (typical case) or the \
                  rare amount-tag collision; got {msg:?} — a sibling \
                  DecapsulationFailed reason (invalid ML-KEM ciphertext length, \
-                 invalid decap key, ML-KEM decap rejection) means the fixture is \
+                 invalid ciphertext, ML-KEM decap rejection) means the fixture is \
                  mis-classified"
             );
         }
