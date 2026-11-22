@@ -71,7 +71,13 @@ jobs:
     concurrency:
       group: merge-ready-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    # The Foundation's gate runner, not a hosted one: on the hosted pool
+    # this seconds-long check queued 15 to 60 minutes behind the Rust jobs,
+    # and the label waited with it. It takes one job per throwaway
+    # container, with no route to the Foundation's own network; a fork's
+    # run waits for a maintainer's approval first. While it is down the
+    # job queues and nothing turns the status green.
+    runs-on: [self-hosted, shekyl-gate]
     timeout-minutes: 5  # API calls, and at most SETTLE_SECONDS of waiting
     permissions:
       # actions: the head's workflow runs, so a pull_request run a newer
