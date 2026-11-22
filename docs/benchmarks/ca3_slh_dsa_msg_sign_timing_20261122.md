@@ -1,6 +1,7 @@
 # `CA-3`, SLH-DSA-SHA2-192s: the message signature's signing time, registered 2026-11-22
 
-**State of this record: registered; no run has been made.** Results, and
+**State of this record: the floor device's registered run is in, and it
+PASSES; the laptop's calibration and run are not yet made.** Results, and
 each device's noise calibration, are added below "Registered before the
 run". That section is not edited afterwards.
 
@@ -167,9 +168,65 @@ noise-calibration sigma_ns=1821911 delta_ns=1222175 (delta = 15 * sigma * sqrt(2
   `SHA256SUMS`. The device's paths are written `<clone>` and `<home>`, its
   login `<agent>`, and the raw files are in the estate's private captures.
 
-### The floor device's registered run
+### The floor device's registered run: PASS
 
-Not yet made.
+**The attempt.** One attempt, on the 4 GB Pi 4 under the lane's quiet claim,
+with the host's apt timers paused (the maintainer's go).
+- **Source:** a fresh recursive clone of `0f2012233e`, the commit that
+  carries this registration and the calibration above, with `git status`
+  clean.
+- **Build:** on the device at `-j 2`, 06:56:48 to 07:15:32Z, untimed. The
+  binary's SHA-256 is
+  `2f031c261928ef08287ff71eacb7b939cd0bfa21e86fd17695d72d88233c546a`.
+- **Run:** started once the clock reported synchronised, 07:15:32 to
+  17:51:26Z (10 h 36 min), as `ca3_pq_sign_timing slh-dsa 1222175` with no
+  seed. Exit code 0.
+- **Output:** `ca3_slh_dsa_msg_sign_timing_20261122_captures/floor_registered_attempt1.txt`.
+
+```text
+arch=aarch64 os=linux mode=slh-dsa samples_per_comparison=2000 calibration=200 crops=100 inputs=registered
+pass-line=fixed-a-vs-fixed-b max_abs_t=1.40 median_ns=5273882407 raw_sd_ns=3165761 n0=1003 n1=997 verdict=no-evidence
+null=fixed-a-vs-fixed-a max_abs_t=2.21 median_ns=5273936591 raw_sd_ns=3323716 n0=1002 n1=998 verdict=no-evidence
+control=fixed-a-vs-fixed-a max_abs_t=22.89 median_ns=5275010240 raw_sd_ns=3396860 n0=1027 n1=973 verdict=control
+control=planted-leak planted_ns=1222175 max_abs_t=22.89 verdict=detected
+result=PASS fixed_pair=1.40 worst_null=2.21 control=22.89
+```
+
+**Read against the lines, in order.**
+
+| Line | Registered | Observed | |
+| --- | --- | --- | --- |
+| 1 | a check fails: void | 2,200 signatures per comparison, every one returned and verified | holds |
+| 2 | control `\|t\|` ≤ 10: void | 22.89 (raw 8.62; planted δ = 1.22 ms) | detected |
+| 3 | the null's `\|t\|` ≥ 4.5: void | 2.21 | clean |
+| 4–6 | the fixed pair's `\|t\|` | 1.40 | **pass** |
+
+The run is not void, and the fixed pair is below 4.5: **PASS**. On the
+floor device, a pass excludes a dependence of the message signature's time
+on the key's value of δ = 1.22 ms (0.023 % of a signature) or more, and
+nothing smaller.
+
+**Noisier than its calibration.** The run's raw spread was 3.2 to 3.4 ms,
+against the calibration's σ of 1.82 ms. The control was still detected,
+because the cut-offs reach it at 22.89 where the raw figure was 8.62.
+Recorded because the registration sized δ from σ, and the next device's
+calibration should be read with this in mind.
+
+**Conditions** (`floor_conditions_start.txt`, `floor_conditions_end.txt`):
+- clock synchronised;
+- 1.5 GHz throughout, 59 then 56 °C;
+- throttled `0x0`, no under-voltage;
+- load 1.58 at the start, just after the build, and 1.00 at the end;
+- 11,666 frequency transitions over the run.
+
+**Captures**, with `SHA256SUMS`:
+- the attempt's output, its conditions, the clone's head and clean status,
+  the build's times, log and `rustc -vV`, and the binary's SHA-256;
+- `floor_build_log.txt`, named so because the repository ignores `*.log`.
+
+The device's paths and login are written `<clone>`, `<home>` and `<agent>`.
+The unredacted files, whose own SHA256SUMS verified after the copy, are in
+the estate's private captures.
 
 ### The laptop
 

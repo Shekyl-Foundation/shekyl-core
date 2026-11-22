@@ -204,4 +204,49 @@ workstation, shared, with seeds that are not the registered one:
 
 ## Results
 
-No run has been made.
+No registered run has been made.
+
+### The floor device's shake-down (2026-11-22): the matched pair crossed; held for the maintainer
+
+The run:
+- a fresh recursive clone of `43ac1dff98`, built on the 4 GB Pi 4 at
+  `-j 2`;
+- `ml-dsa 50000 20261124`, a seed that is not the registered one;
+- 06:05:25 to 06:26:33Z;
+- 1.5 GHz, 56 to 58 °C, throttled `0x0`.
+
+It is a shake-down, not an attempt.
+
+```text
+matched-pair candidates_drawn=27 fixed-a expand_s_bytes=2488 expand_a_rejected=10 replicates=true fixed-b expand_s_bytes=2488 expand_a_rejected=10 replicates=true
+check=replica replicated=true verdict=as-intended
+information=fixed-a-vs-varied max_abs_t=2.78
+pass-line=fixed-a-vs-fixed-b max_abs_t=10.44 verdict=LEAK
+null=fixed-a-vs-fixed-a max_abs_t=2.09 verdict=no-evidence
+null=varied-vs-other-varied max_abs_t=2.01 verdict=no-evidence
+control=planted-leak planted_ns=22156 max_abs_t=127.03 verdict=detected
+result=FAIL fixed_pair=10.44 worst_null=2.09 control=127.03 information_fixed_vs_varied=2.78
+```
+
+- **The checks held:** the replica against fips204's own key, and every
+  signature returned (790 of 790 kept signatures verified per comparison).
+  The nulls are flat and the control is detected.
+- **The matched pair crossed.** Key A was about 0.9 to 1.3 µs (about
+  0.04 %) slower, and only among single-attempt signatures: the fast mode,
+  the 1st to 10th percentiles at about 2.98 ms. The raw means did not
+  differ (`t` 0.56). At the registered 500,000 that reads about 33.
+- **Not started.** The registered run is held, and the result is with the
+  maintainer with these options:
+  - run as registered, which almost certainly fails;
+  - localise first, with key generation alone and signing alone on the
+    same matched pair;
+  - move the pass line to signing alone.
+- **The suspects:**
+  - the one the ruling names: the predictor learning the two keys'
+    rejection patterns to different degrees, since matching the counts
+    does not match the patterns;
+  - `infinity_norm`'s data-dependent `max`;
+  - the hint check's work on t0.
+- **Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_ml_*`,
+  with `SHA256SUMS`. The device's paths and login are redacted; the raw
+  files are in the estate's private captures.
