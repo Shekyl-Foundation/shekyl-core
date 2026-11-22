@@ -218,7 +218,7 @@ the narrow side:
 
 | Site | Gated branch | Severity under PQC argument |
 | --- | --- | --- |
-| `external/db_drivers/liblmdb/CMakeLists.txt:49` | `MDB_VL32` when `ARCH_WIDTH == 32` | **Consensus-adjacent storage.** Materially different blockchain-storage path, never exercised by any CI runner. Sync against live block data on any 32-bit target hits this code first. Delete with Chore #3. |
+| `external/db_drivers/liblmdb/CMakeLists.txt:49` | SUPERSEDED: the `MDB_VL32` define site left with Chore #3, and the vendored LMDB tree is **DELETED** with the C++ tree | **CLOSED.** The daemon's store is redb (`shekyl-chain-store`); no LMDB storage path remains. |
 | `src/crypto/slow-hash.c:374, 421` | SUPERSEDED 2026-09-15: file **DELETED** with Phase 4 CryptoNight removal | **CLOSED.** Consensus-adjacent 32-bit PoW fallback no longer exists. |
 | `src/blockchain_utilities/blockchain_import.cpp` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
 | `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |

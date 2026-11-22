@@ -375,7 +375,7 @@ FLOOR_NUMERATOR_ENGINE = ENGINE_SELECTORS[ENGINE_DEFAULT_REDB]
 #
 # A coinbase-only chain holds no non-coinbase transaction, so it carries no
 # transaction PRUNABLE REGION — the part of a tx covered by the
-# `txs_prunable_hash` table that already exists in `db_lmdb.h`. Store-size and IBD
+# chain store's `txs_prunable_hash` table. Store-size and IBD
 # figures taken on such a fixture are therefore measured on the block shape LEAST
 # sensitive to any scheme that discards prunable bytes, and they do not transfer to
 # a fixture containing transactions.

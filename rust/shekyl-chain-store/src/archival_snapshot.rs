@@ -757,7 +757,7 @@ pub struct UnequalRow {
     pub key: Vec<u8>,
     /// Our value (the redb side).
     pub ours: Vec<u8>,
-    /// Their value (the trace's, the LMDB side).
+    /// Their value (the trace's).
     pub theirs: Vec<u8>,
 }
 

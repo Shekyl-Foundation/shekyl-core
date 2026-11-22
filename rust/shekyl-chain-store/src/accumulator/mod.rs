@@ -20,18 +20,17 @@
 //! | `excluded` | — | not folded |
 //!
 //! The per-table assignment is [`TABLE_CLASSES`] / [`class_for_table`]:
-//! one row per Rust table. A table that survived from the LMDB inventory
-//! keeps the class in
+//! one row per Rust table. A table the audit classified keeps the class
 //! [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../../../docs/LMDB_WRITE_ATOMICITY_AUDIT.md)
-//! §10. Set-shaped write contracts are [`SET_SHAPED_CONTRACTS`].
+//! §10 gave it. Set-shaped write contracts are [`SET_SHAPED_CONTRACTS`].
 //!
 //! # What these types fold
 //!
 //! **A canonical encoding of the decoded logical value, never storage
-//! bytes.** This is forced by DRS-E2: the C++ LMDB store and the Rust redb
-//! store must produce the *same* digest for the same logical state, and they
-//! will never agree on layout. Both accumulators therefore take `&[u8]`
-//! element encodings and say nothing about how a row is stored.
+//! bytes.** This is forced by DRS-E2: two stores holding the same logical
+//! state must produce the *same* digest whatever their layout. Both
+//! accumulators therefore take `&[u8]` element encodings and say nothing
+//! about how a row is stored.
 //!
 //! # The reversal rule these types cannot enforce
 //!

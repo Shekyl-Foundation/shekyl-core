@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The one scalar codec this store owns: [`Hash32`], the storage hash
-//! `lmdb_order` carries LMDB's ordering on.
+//! `lmdb_order` carries the `compare_hash32` key order on.
 //!
 //! The integer scalars (`u8`, `u64`) are foreign types and live in
 //! `shekyl-store-codec` with the trait (`codec` module docs). They are

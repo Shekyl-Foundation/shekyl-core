@@ -444,7 +444,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
         catalogue_len,
         "archival_bundle_body is the final catalogue slot"
     );
-    // 30 tables the LMDB store also held (`rule_set_in_force` under its
+    // 30 tables the C++ store also held (`rule_set_in_force` under its
     // old name, `hf_versions`; `archival_serve_credit` left with the
     // carrier class, the switch's C7) plus the seventeen Rust-only tables
     // named below.

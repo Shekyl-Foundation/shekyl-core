@@ -53,9 +53,9 @@ use super::chain_reads::{undecodable, ReadFault, ReadTables};
 use super::error::StoreInvariant;
 
 /// The stored record of one output, as [`ReadSnapshot::output`](super::ReadSnapshot::output)
-/// returns it: one-time pubkey, commitment, recording height — LMDB's
-/// `output_data_t` minus its `unlock_time`. `OutKey` minus its join key and
-/// that field: the join was **validated** against the slot where the record
+/// returns it: one-time pubkey, commitment, recording height. `OutKey`
+/// minus its join key and its `unlock_time`: the join was **validated**
+/// against the slot where the record
 /// was decoded (module docs), so the projection carries what a consumer
 /// needs and nothing it would have to re-check. A read projection, never stored, so not
 /// `Canonical`. The live consumer is the path builder's `read_output_oc`,
