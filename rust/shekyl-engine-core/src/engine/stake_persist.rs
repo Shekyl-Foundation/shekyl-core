@@ -33,8 +33,7 @@
 //! [`PersistenceEngine::save_state`] → `shekyl-engine-file`'s `atomic_write_file`
 //! (`tmp → fsync → rename → fsync(parent)`). The ticket therefore witnesses a
 //! **durable, crash-atomic** commit, not merely an in-memory mutation — the
-//! persist-before-use guarantee is downstream of the same write atomicity the
-//! `LMDB_WRITE_ATOMICITY_AUDIT` lineage covers for every ledger block.
+//! persist-before-use guarantee is downstream of that write atomicity.
 //!
 //! # The cross-split seam
 //!

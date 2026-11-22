@@ -205,7 +205,7 @@ pub enum SetShapedInsert {
 /// wrong on one of that table's two write sites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SetShapedContract {
-    /// LMDB table name (`SHEKYL_LMDB_TABLES` spelling).
+    /// The table name, as `schema.rs` declares it.
     pub name: &'static str,
     /// Delete-path exposure of the stored element.
     pub delete: SetShapedDelete,
@@ -214,7 +214,7 @@ pub struct SetShapedContract {
 }
 
 impl SetShapedContract {
-    /// Lookup by LMDB name.
+    /// Lookup by table name.
     #[must_use]
     pub fn for_table(name: &str) -> Option<Self> {
         SET_SHAPED_CONTRACTS

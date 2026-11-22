@@ -268,19 +268,17 @@ pub enum ShardClose {
     ClosedAt(BlockHeight),
 }
 
-/// The C++ LMDB validator's `(has_segment, freeze_height)` pair, as the
-/// admission ABI, `shekyl_archival_epoch_close_shard`, and the
-/// `archival_claim_source` RPC's `shards[]` rows carry it.
+/// A shard close as the `(has_segment, freeze_height)` pair the daemon
+/// RPC's claim-source `shard` rows carry.
 ///
-/// **CEN-L10's divergence site** (`CONSENSUS_STORE_RECONCILIATION.md`
-/// §5.4.1; `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F): LMDB keeps no archival
-/// fold, so the C++ feeds the frozen J-segment's freeze height where the
-/// Rust store reads the archival fold's close height. The field names are
-/// the wire's. Rust reads the pair only through [`ShardClose::from_wire`]
-/// and writes it only through [`ShardClose::to_wire`]. `has_segment` false
-/// is [`ShardClose::Open`] whatever `freeze_height` says — the presence
-/// bit decides. Callers: the admission FFI, the epoch-close decoder, the
-/// submit shim, the engine's RPC decoder, and the KAT parser.
+/// **CEN-L10** (`CONSENSUS_STORE_RECONCILIATION.md` §5.4.1;
+/// `ARCHIVAL_SHARD_COUNT_CUTOVER.md` §F). The field names are the wire's:
+/// `freeze_height` carries the archival fold's close height. Rust reads
+/// the pair only through [`ShardClose::from_wire`] and writes it only
+/// through [`ShardClose::to_wire`]. `has_segment` false is
+/// [`ShardClose::Open`] whatever `freeze_height` says — the presence bit
+/// decides. Callers: the daemon RPC's claim-source rows, the engine's RPC
+/// decoder, and the KAT parser.
 ///
 /// The height column is a bare `u64` because this *is* the wire: the
 /// decode to [`BlockHeight`] happens once, in [`ShardClose::from_wire`]
@@ -349,7 +347,7 @@ impl ShardClose {
     }
 }
 
-/// One market candidate's bond fields at epoch close (LMDB-shape-free gather output).
+/// One market candidate's bond fields at epoch close (gather output).
 ///
 /// The gather contract: the caller supplies one entry per **distinct** `P_id`
 /// holding at least one serve-credit row for the settlement epoch. Bonded `P`s

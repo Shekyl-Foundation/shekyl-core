@@ -265,14 +265,12 @@ pub enum ReportedSet {
     /// the **same rule** (`segment_freeze_eligible`) but not the same
     /// driver: the registry advances with the daemon's tip, this cursor
     /// with the wallet's ingest. A wallet trailing inside the caught-up
-    /// slack (`CAUGHT_UP_SLACK_BLOCKS`, one archival reorg depth) has a
-    /// real window in which the chain can challenge a shard the wallet has
-    /// not yet frozen-and-begun-serving. That window is absorbed by
-    /// design, not accident: challenges slash only across the m-of-n
-    /// sliding window (m = 11), and the daemon's own scan-cost note
-    /// (`db_lmdb.cpp:6074-6085`) prices the absorb. Stated here because
-    /// the prefix arm is where the two enumerations meet; nothing in this
-    /// crate needs to compensate for it.
+    /// slack (`CAUGHT_UP_SLACK_BLOCKS`, one archival reorg depth) has a real
+    /// window in which the chain can challenge a shard the wallet has not yet
+    /// frozen-and-begun-serving. That window is absorbed by design, not
+    /// accident: challenges slash only across the m-of-n sliding window
+    /// (m = 11). Stated here because the prefix arm is where the two
+    /// enumerations meet; nothing in this crate needs to compensate for it.
     CompleteTreePrefix {
         /// The frozen-prefix length at the time of the report.
         frozen_count: u64,

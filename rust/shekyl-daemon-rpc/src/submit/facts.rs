@@ -55,7 +55,7 @@ pub struct ReferenceFacts {
     pub height: BlockHeight,
     /// Curve-tree root at that height.
     pub root: CurveTreeRoot,
-    /// Current curve-tree depth in the consensus/LMDB convention
+    /// Current curve-tree depth in the consensus convention
     /// (`curve_trees_tree_depth` = layer count − 1) — the row-K10 upper
     /// bound for the wire `tree_depth`. The verifier reconstructs its
     /// layer count as `wire tree_depth + 1`, exactly as the C++ caller
@@ -238,9 +238,8 @@ pub enum BondProbe<'a> {
     ///
     /// Carries the bond slot's `pqc_auths` key alongside the id. That is
     /// not for the verdict — Phase C runs UB3 itself — but so the gather can
-    /// run the cheap debit-auth pin **before** the per-shard last-served
-    /// scan, which is two LMDB seeks per served shard under the pool and
-    /// blockchain locks.
+    /// run the cheap debit-auth pin **before** the last-served scan
+    /// (`release_last_served`).
     ///
     /// This key alone authenticates nobody: it and the record's copy are both
     /// public, so it only stops a *validly signed* caller presenting an
@@ -521,9 +520,8 @@ pub struct EmissionCloseBondFacts {
 }
 
 /// One frozen shard registry row (owned mirror of `EpochCloseShard`, kept
-/// so the facts module names its own types). The close crosses the C++
-/// shim as the LMDB validator's `has_segment` / `freeze_height` pair
-/// (CEN-L10) and is folded into [`ShardClose`] there.
+/// so the facts module names its own types). The submit shim copies the
+/// close from the epoch snapshot as a [`ShardClose`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmissionShardFacts {
     pub shard_id: u64,

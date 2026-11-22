@@ -32,8 +32,7 @@ const VALID_BITS: u32 = if ArchivalFamily::ALL.len() == u32::BITS as usize {
 
 /// A set of archival families.
 ///
-/// Bit `i` is [`ArchivalFamily::ALL`]`[i]` — macro order, the same order
-/// `check_lmdb_schema_coverage.py` pins against the X-macro — so the
+/// Bit `i` is [`ArchivalFamily::ALL`]`[i]`, in macro order, so the
 /// encoding is fixed by the family list and nothing else.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FamilySet(u32);

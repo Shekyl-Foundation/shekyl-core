@@ -6,10 +6,10 @@
 //! Curve tree operations: grow, trim, root computation.
 //!
 //! These functions wrap the upstream FCMP++ Pedersen hash operations for the
-//! Helios/Selene curve tower. The C++ LMDB layer owns the store; Rust owns
-//! the hash primitives. Membership paths are assembled wallet-side from the
-//! block-derived leaf stream (`shekyl-curve-tree`); the daemon serves no
-//! per-output path (`PHASE_2A_SEND_PATH.md` §3.0.1, `SOK-10` Q7).
+//! Helios/Selene curve tower. The daemon's chain store holds the tree; this
+//! module owns the hash primitives. Membership paths are assembled wallet-side
+//! from the block-derived leaf stream (`shekyl-curve-tree`); the daemon serves
+//! no per-output path (`PHASE_2A_SEND_PATH.md` §3.0.1, `SOK-10` Q7).
 //!
 //! ## Tree topology
 //!

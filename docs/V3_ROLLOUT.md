@@ -35,12 +35,11 @@ at ~5.4 KB each dominate the size).
 
 Storage reduction is not an operator choice: under archival pruning every
 daemon discards prunable transaction data past the same depth, uniformly
-(`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`). **That discard is not in the
-LMDB daemon.** It lands in the Rust store and takes effect when the daemon
-runs on it (`PDM-Q-S0`: no C++ landing before the cutover), and the Monero-era
-`--prune-blockchain` stripe engine was deleted 2026-09-21 (`PDM-Q7`). Until
-the cutover a daemon keeps every transaction whole: budget disk for an
-unpruned chain.
+(`docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md`). **The discard runs in the
+Rust store**: the retention prune is a batch inside the connect transaction
+of each epoch-boundary block (`rust/shekyl-chain-store/src/store/prune.rs`).
+The Monero-era `--prune-blockchain` stripe engine was deleted 2026-09-21
+(`PDM-Q7`).
 
 ### Multisig Size Impact (scheme_id = 2)
 

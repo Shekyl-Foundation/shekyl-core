@@ -53,19 +53,18 @@
 //! *inside* that range is store corruption and comes back as SI-7
 //! [`ReadFault::Invariant`]`(CellCorrupt { fault: Absent })`, never as
 //! `AboveTip` — which a rule would read as an ordinary "not yet" and turn
-//! into a verdict. The LMDB reader got this wrong for `curve_tree_roots[0]`
-//! (32 zero bytes, a *valid* encoding of the identity point); this module
-//! is where the store makes that shape unrepresentable.
+//! into a verdict. A missing `curve_tree_roots[0]` read as 32 zero bytes
+//! would be a *valid* encoding of the identity point; this module is where
+//! the store makes that shape unrepresentable.
 //!
 //! # The blob is verified where it is decoded
 //!
 //! `block_info.hash` is the block's recorded identity (CEN-B6). A blob that
 //! does not parse, or parses to a block whose hash is not that identity, is
 //! never exposed as a `(hash, block)` pair that does not belong together —
-//! it is SI-7 on `blocks`. The C++ `for_blocks_range` re-hashed each blob
-//! and never consulted the recorded identity (`db_lmdb.cpp:3931`–`:3933`);
-//! two notions of a block's identity in one store is SCR-7, and this body
-//! has one.
+//! it is SI-7 on `blocks`. Re-hashing each blob without consulting the
+//! recorded identity would give one store two notions of a block's
+//! identity (SCR-7); this body has one.
 
 use std::borrow::Borrow;
 

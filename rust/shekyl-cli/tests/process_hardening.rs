@@ -6,8 +6,9 @@
 //! The CLI hardens its process before it reads an argument (rule 35,
 //! `DAEMON_CONFIG_CUTOVER.md` DC-Q21), observed from outside the running
 //! binary against an unhardened control: on Linux and FreeBSD the core limit
-//! reads `0` on both bounds, on FreeBSD a same-account `truss -p` is refused
-//! too, and on macOS `SIGABRT` writes no core. Which OS proves what, and what
+//! reads `0` on both bounds, on FreeBSD the trace control reads `disabled`
+//! and a same-account `truss -p` is refused too (not run as root), and on
+//! macOS `SIGABRT` writes no core. Which OS proves what, and what
 //! each arm needs of the host, is `shekyl-process`'s
 //! `tests/support/from_outside.rs`. Windows is not covered here.
 //!
@@ -36,15 +37,17 @@ fn a_running_cli_is_hardened() {
     let dir = tempfile::tempdir().expect("tempdir");
     let wallets = dir.path().join("wallets");
     let stderr_path = dir.path().join("stderr");
-    let mut child = from_outside::raised(env!("CARGO_BIN_EXE_shekyl-cli"))
-        .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
-        .arg("--wallet-dir")
-        .arg(&wallets)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
-        .spawn()
-        .expect("spawn shekyl-cli");
+    let mut child = from_outside::Started::new(
+        from_outside::raised(env!("CARGO_BIN_EXE_shekyl-cli"))
+            .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
+            .arg("--wallet-dir")
+            .arg(&wallets)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
+            .spawn()
+            .expect("spawn shekyl-cli"),
+    );
     let mut stdin = child.stdin.take().expect("piped stdin");
     writeln!(stdin, "version").expect("write a command");
     // The reader lives until the child is reaped: dropping it closes the
