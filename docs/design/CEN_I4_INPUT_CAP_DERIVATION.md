@@ -637,7 +637,12 @@ two on every non-coinbase transaction. `all_shapes` runs from one output, and
 a transaction no node admits. This is the census row's class (FOLLOWUPS, "The
 census does not record which library-crate constants a consensus rule's value
 depends on"), with the library looser rather than tighter. The legal-shape
-function closes it at both ends.
+function closes it at both ends. CEN-I1's minimum is itself a bare literal (`outputs.len() < 2`,
+`rust/shekyl-chain-rules/src/rules/tx_inputs.rs:70`); the cutover names it once,
+at its owning type beside `MAX_OUTPUTS` in `shekyl-wire`, and CEN-I1, the
+builder and the legal-shape function all read that constant. (The sim lane
+has taken the effect on #1476's stuffed rows to Rick; its scope is ruled
+there, not here.)
 
 **The legal-shape function (cutover scope).** Under `ICD-R1`, `shekyl-wire`
 exposes one function for the shapes legal at depth `d`: the outputs from
