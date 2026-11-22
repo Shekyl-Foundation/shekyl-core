@@ -1052,6 +1052,11 @@ fee a `Release` actually pays is quantized up to it.
   the builder refuse fewer than `MIN_NON_COINBASE_OUTPUTS` outputs by name
   (`TooFewOutputs`); the cutover moves that refusal and the input-count refusal
   onto the function, so the builder asks one question.
+- **The wallet's refusal at the cap** (#1527, the wallet lane: a selection
+  longer than `shekyl_tx_builder::MAX_INPUTS` refuses as
+  `SignFault::TooManyInputs`, `-29123`, in `build_select_sync`) reads the
+  constant, so the computed cap moves it with no edit; whichever of #1527 and
+  the cutover lands second takes the textual merge.
 - **The engine's restated two-output floors are deleted.** `stake_engine/bond.rs`
   and `stake_engine/release.rs` split change and payout in halves
   (`change / 2`, `payout / 2`) under comments restating the daemon's
@@ -1072,7 +1077,11 @@ fee a `Release` actually pays is quantized up to it.
   signing ceremony over an intent no transaction can carry, refused only at
   build (by #1534's `TooFewOutputs`). The intent's own principle, that an
   intent no transaction can carry is refused before anyone signs, puts a
-  `MIN_NON_COINBASE_OUTPUTS` check there; raised with the multisig lane.
+  `MIN_NON_COINBASE_OUTPUTS` check there. **Owned by #1510** (the multisig
+  lane): a new `SpendIntentError` variant refusing fewer than the minimum, in
+  `validate_structural`. It shares no variable with the cutover's edit to
+  `intent/mod.rs:73` (`MAX_INPUTS`), so whichever lands second takes only a
+  textual merge.
 - **The GUI wallet PR** reads the cap from the core crates and replaces the
   hard-coded `estimated_proof_size_kb: 4.5` with the model's figure at the
   tree's depth.
