@@ -383,7 +383,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "\"sim_lane\":\"${LANE}\"|^[[:space:]]*sim_lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"sim_lane\":\"${LANE}\"|^[[:space:]]*sim_lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '--$LANE)' arm: the lane cannot run"
             exit 1
           fi
@@ -781,14 +781,21 @@ jobs:
     # leg past its `timeout-minutes` ends `cancelled`, not `failure`, and is
     # red (scripts/ci/nightly_red.py names it a timeout). On `failure()`
     # alone, 2026-11-21's economics-sim-ignored legs, cut at 180 minutes on
-    # both branches, opened no issue. A run a newer one superseded reports
-    # nothing. nightly_red.py --check holds `needs` and this condition.
+    # both branches, opened no issue. A run cancelled as a whole reports
+    # nothing: this workflow has no concurrency group, so no newer run
+    # supersedes a scheduled one, and a run cancelled by hand was cancelled
+    # by someone who already knows (ruled 2026-11-22). A job timeout leaves
+    # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
+    # --check holds `needs` and this condition.
     needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
       contents: read
       issues: write
     steps:
@@ -799,15 +806,13 @@ jobs:
           sparse-checkout: |
             scripts/ci/nightly_red.py
             scripts/ci/check_workflows_parse.py
-            .github/workflows/nightly.yml
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: the red legs, a timeout among them
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" \
-            --workflow .github/workflows/nightly.yml > "$RUNNER_TEMP/red.json"
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
           cat "$RUNNER_TEMP/red.json"
       - uses: actions/github-script@v8
         env:
@@ -944,10 +949,13 @@ jobs:
               const title = values ? `${lanes[lane].title} (${values})` : lanes[lane].title;
               // A timeout is named as one, so nobody reads it as a test
               // failure; the lane's own lines are for a leg that failed.
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
               const what = {
                 'failed': lanes[lane].lines,
-                'timed out': [`The leg timed out after ${leg.minutes} minutes, its \`timeout-minutes\`. This is not a test failure: the leg ran out of time. Read the log for the test it was in when it was cut.`],
-                'cancelled': [`The leg was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit: not a timeout, and not a test failure. Read the log for what stopped it.`],
+                'timed out': [`The leg ran out of time${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}. This is not a test failure. Read the log for the test it was in when it was cut.`],
+                'cancelled': [`The leg was cancelled${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}: not a timeout, and not a test failure. Read the log for what stopped it.`],
               }[leg.kind];
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,

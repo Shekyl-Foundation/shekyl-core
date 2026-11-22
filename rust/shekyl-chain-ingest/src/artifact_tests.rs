@@ -17,6 +17,7 @@ use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight, SettlementEpoch};
 use shekyl_units::AtomicUnits;
 
+use crate::source::SequenceNo;
 use crate::test_support::h;
 #[cfg(feature = "fetch")]
 use crate::test_support::{block, filler_spend, key_image, wire, Family};
@@ -93,7 +94,7 @@ fn the_trace_round_trips_through_both_doors() {
         16 + 3 * (1 + 8 + FACTS_LEN)
             + (1 + 8 + CHECKPOINT_LEN)
             + (1 + 8 + EMPTY_BODY_LEN + 2 * (4 + 16))
-            + 17
+            + TRAILER_LEN
     );
 
     let trace = Trace::read(Cursor::new(&bytes)).expect("read");
@@ -127,6 +128,85 @@ fn the_trace_round_trips_through_both_doors() {
         recorded.long_term_effective_median,
         facts_at(2).long_term_effective_median
     );
+}
+
+/// The trailer: tag, then the facts, checkpoint and event counts.
+const TRAILER_LEN: usize = 1 + 8 + 8 + 8;
+
+#[test]
+fn event_digests_round_trip_by_record_and_their_order_is_held_on_both_sides() {
+    let digest = |b: u8| [b; 32];
+    let record = SequenceNo::from_raw;
+    let mut w = TraceWriter::new(Vec::new()).expect("header");
+    w.push_facts(h(0), &facts_at(0)).expect("facts");
+    w.push_checkpoint(&digest_v0(&[], &[], &CurveTreeRoot::EMPTY))
+        .expect("checkpoint");
+    w.push_archival_snapshot(&ArchivalSnapshot::empty())
+        .expect("snapshot");
+    w.push_event_digest(record(3), &digest(0xa3))
+        .expect("record 3");
+    w.push_event_digest(record(9), &digest(0xa9))
+        .expect("record 9");
+    // Records strictly ascend: the same record again, or an earlier one, is
+    // refused before a byte is written.
+    for again in [9, 4] {
+        assert!(
+            matches!(
+                w.push_event_digest(record(again), &digest(0)),
+                Err(TraceFault::EventOutOfOrder { record: r, after: 9 }) if r == again
+            ),
+            "record {again}"
+        );
+    }
+    let bytes = w.finish().expect("trailer");
+    let trace = Trace::read(Cursor::new(&bytes)).expect("read");
+    let read: Vec<(u64, [u8; 32])> = trace
+        .event_digests()
+        .map(|(r, d)| (r.to_raw(), *d.value()))
+        .collect();
+    assert_eq!(read, vec![(3, digest(0xa3)), (9, digest(0xa9))]);
+    assert_eq!(
+        trace
+            .event_records()
+            .map(SequenceNo::to_raw)
+            .collect::<Vec<_>>(),
+        vec![3, 9],
+        "a read trace asks for the digests it carries"
+    );
+    assert!(trace.event_digest(record(4)).is_none());
+
+    // The reader holds the order too: the two event records swapped.
+    let event = 1 + 8 + 32;
+    let first = bytes.len() - TRAILER_LEN - 2 * event;
+    let mut swapped = bytes.clone();
+    swapped[first..first + event].copy_from_slice(&bytes[first + event..first + 2 * event]);
+    swapped[first + event..first + 2 * event].copy_from_slice(&bytes[first..first + event]);
+    assert!(matches!(
+        Trace::read(Cursor::new(&swapped)).expect_err("out of order"),
+        TraceFault::EventOutOfOrder {
+            record: 3,
+            after: 9
+        }
+    ));
+    // And the trailer's event count.
+    let mut miscounted = bytes;
+    let n = miscounted.len();
+    miscounted[n - 8] ^= 0x01;
+    assert!(matches!(
+        Trace::read(Cursor::new(&miscounted)).expect_err("count"),
+        TraceFault::TrailerMismatch { what: "events" }
+    ));
+
+    // A capturing trace names records and expects nothing at them.
+    let capturing = Trace::capturing([record(2), record(5)]);
+    assert_eq!(
+        capturing
+            .event_records()
+            .map(SequenceNo::to_raw)
+            .collect::<Vec<_>>(),
+        vec![2, 5]
+    );
+    assert!(capturing.event_digest(record(2)).is_none());
 }
 
 #[test]
@@ -182,24 +262,33 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
 
     let mut bad_count = good.clone();
     let n = bad_count.len();
-    bad_count[n - 16] ^= 0x01;
+    // The trailer's facts count: tag, then facts u64, checkpoints u64,
+    // events u64.
+    bad_count[n - 24] ^= 0x01;
     assert!(matches!(
         Trace::read(Cursor::new(&bad_count)).expect_err("count"),
         TraceFault::TrailerMismatch { what: "facts" }
     ));
 
-    let truncated = &good[..good.len() - 17];
+    let truncated = &good[..good.len() - TRAILER_LEN];
     assert!(matches!(
         Trace::read(Cursor::new(truncated)).expect_err("truncated"),
         TraceFault::Truncated
     ));
 
-    let mut bad_version = good.clone();
-    bad_version[8] = 2;
-    assert!(matches!(
-        Trace::read(Cursor::new(&bad_version)).expect_err("version"),
-        TraceFault::UnsupportedVersion { found: 2 }
-    ));
+    // Version 0x01, the layout without event digests, is not read: every
+    // committed trace was re-baselined (`TRACE_VERSION`'s docs).
+    for version in [0x01, 0x03] {
+        let mut bad_version = good.clone();
+        bad_version[8] = version;
+        assert!(
+            matches!(
+                Trace::read(Cursor::new(&bad_version)).expect_err("version"),
+                TraceFault::UnsupportedVersion { found } if found == version
+            ),
+            "{version:#04x}"
+        );
+    }
 
     // The trailer ends a trace: two concatenated, or one byte past it, is
     // refused rather than read as the first.
@@ -270,9 +359,12 @@ fn the_archival_snapshot_is_the_checkpoints_other_encoding_on_both_sides() {
     assert_eq!(record[0], 0x04);
     assert_eq!(&record[1..9], &0u64.to_le_bytes());
     assert!(record[9..].iter().all(|&b| b == 0));
-    assert_eq!(good.len(), snapshot_at + 1 + 8 + EMPTY_BODY_LEN + 17);
+    assert_eq!(
+        good.len(),
+        snapshot_at + 1 + 8 + EMPTY_BODY_LEN + TRAILER_LEN
+    );
 
-    // Reader: the snapshot stripped out of a `0x01` trace is a missing one.
+    // Reader: the snapshot stripped out of a trace is a missing one.
     let mut stripped = good[..snapshot_at].to_vec();
     stripped.extend_from_slice(&good[snapshot_at + 1 + 8 + EMPTY_BODY_LEN..]);
     assert!(matches!(

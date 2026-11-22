@@ -70,6 +70,13 @@ impl SequenceNo {
     pub const fn to_raw(self) -> u64 {
         self.0
     }
+
+    /// The position an artifact recorded (a trace's event digest, a
+    /// manifest's event): the inverse of [`Self::to_raw`].
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 /// One event a [`Source`] emits.

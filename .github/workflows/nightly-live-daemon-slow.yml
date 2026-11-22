@@ -44,8 +44,10 @@ name: nightly/live-daemon-slow-gates
 # quietly: the arm gone is red here, a listed name gone or an empty list
 # is red in the script (its name checks and its empty-lane check). The
 # skip ends by itself when the lane reaches the other branch; there is no
-# exclude to remember to delete. The probe reads text, so the matrix's
-# `lane:` list stays on one line and the script's arms stay `<lane>)`.
+# exclude to remember to delete. The probe reads text: it finds the lane
+# as `"lane":"<lane>"` in the planner's fallback matrix, or as an item of a
+# pre-planner revision's `lane: [...]` list, so the fallback matrix stays
+# on one line and the script's arms stay `<lane>)`.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
 # per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
@@ -60,8 +62,14 @@ name: nightly/live-daemon-slow-gates
 #
 # A leg that runs past its `timeout-minutes` ends `cancelled`, not
 # `failure`, and is red: `report-red` runs on every scheduled run not
-# cancelled as a whole (a newer run superseding it is the one that reports),
-# and scripts/ci/nightly_red.py names a leg cut at its limit as a timeout.
+# cancelled as a whole, and scripts/ci/nightly_red.py names a leg cut at its
+# limit as a timeout. A job timeout leaves `!cancelled()` true for the jobs
+# after it, and a run cancelled as a whole reports nothing, whether it was
+# running or waiting (both shown on a scratch probe, 2026-11-22: the
+# reporter ran after a 1-minute timeout and classed it "timed out"). This
+# workflow has no concurrency group, so a scheduled run is never superseded:
+# a run cancelled as a whole was cancelled by hand, and it reports nothing
+# because the person who cancelled it already knows (ruled 2026-11-22).
 # It ran on `failure()` until 2026-11-21, when the slow leg's 240-minute cut
 # opened no issue. The reporter is its own job and the only one that can
 # write: the legs run the code of the branch they check out.
@@ -211,7 +219,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -305,7 +313,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -342,6 +350,9 @@ jobs:
     timeout-minutes: 10  # API calls only; nightly.yml's report-red p90 is 0.1 min
     permissions:
       actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
       contents: read
       issues: write
     steps:
@@ -350,15 +361,13 @@ jobs:
           sparse-checkout: |
             scripts/ci/nightly_red.py
             scripts/ci/check_workflows_parse.py
-            .github/workflows/nightly-live-daemon-slow.yml
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: the red legs, a timeout among them
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" \
-            --workflow .github/workflows/nightly-live-daemon-slow.yml > "$RUNNER_TEMP/red.json"
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
           cat "$RUNNER_TEMP/red.json"
       - uses: actions/github-script@v8
         env:
@@ -395,14 +404,18 @@ jobs:
             // (nightly_red.py --check holds the jobs named here to `needs`).
             const laneJobs = ['slow-gates', 'body-fill'];
             for (const leg of red) {
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
+              const said = leg.why ? ` (GitHub: "${leg.why}")` : '';
               let title;
               let how;
               if (leg.key === 'plan') {
                 title = 'nightly slow-lane planner RED';
                 how = {
                   'failed': 'The `plan` job (`nightly_skip.py --plan`) failed. Every lane job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref. The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
-                  'timed out': `The \`plan\` job timed out after ${leg.minutes} minutes, its \`timeout-minutes\`. Every lane job ran its full fallback matrix; read the log for the API call it was in.`,
-                  'cancelled': `The \`plan\` job was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit. Every lane job ran its full fallback matrix; read the log for what stopped it.`,
+                  'timed out': `The \`plan\` job ran out of time${ran}${said}. Every lane job ran its full fallback matrix; read the log for the API call it was in.`,
+                  'cancelled': `The \`plan\` job was cancelled${ran}${said}. Every lane job ran its full fallback matrix; read the log for what stopped it.`,
                 }[leg.kind];
               } else if (laneJobs.includes(leg.key)) {
                 const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
@@ -414,8 +427,8 @@ jobs:
                 title = `nightly ${lane} live-daemon gates RED (${branch})`;
                 how = {
                   'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
-                  'timed out': `The leg timed out after ${leg.minutes} minutes, its \`timeout-minutes\` (${what[lane] || lane}). This is not a test failure: the leg ran out of time. Read the log for the gate it was in when it was cut.`,
-                  'cancelled': `The leg was cancelled after ${leg.minutes} minutes, short of its ${leg.limit}-minute limit (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
+                  'timed out': `The leg ran out of time${ran}${said} (${what[lane] || lane}). This is not a test failure. Read the log for the gate it was in when it was cut.`,
+                  'cancelled': `The leg was cancelled${ran}${said} (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
                 }[leg.kind];
               } else {
                 core.setFailed(`report-red has no route for the red leg "${leg.name}": name its job here`);
