@@ -375,19 +375,19 @@ impl BuiltSpend {
         if count > MAX_OUTPUTS {
             return Err(BuildSpendError::TooManyOutputs { count });
         }
-        let positions = tx_key.output_positions(count);
         // Allocated once, at its size: each output holds its mask, and a
         // vector that grew would free its earlier buffers, masks in them,
         // without wiping them.
         let mut outputs = Vec::with_capacity(count);
-        for (recipient, position) in positions.iter() {
-            let Recipient { payee, amount } = recipients[recipient];
+        for (position, (recipient, &Recipient { payee, amount })) in
+            tx_key.place(recipients.iter().enumerate().collect())
+        {
             outputs.push(
                 build_output(position, payee, amount)
                     .map_err(|source| BuildSpendError::Output { recipient, source })?,
             );
         }
-        let order = positions.into_order();
+        let order = tx_key.output_order(count);
         let wire = SpendOutputs::of(tx_key, &outputs).map_err(BuildSpendError::Extra)?;
         Ok(Self {
             outputs,

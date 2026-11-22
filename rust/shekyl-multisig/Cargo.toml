@@ -71,6 +71,9 @@ zeroize = { workspace = true }
 serde_json = "1"
 
 [dev-dependencies]
+# R-34: tests read one output position at a time (`TxKey::output_positions`),
+# which exists only under TEST_ONLY `test-utils`.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # `tests/`: the spend end to end, from a dealt group's member files and slice
 # 1's outputs, through the ceremony into a transaction.
 ciphersuite = "0.4"

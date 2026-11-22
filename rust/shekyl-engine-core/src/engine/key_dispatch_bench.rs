@@ -108,11 +108,15 @@ fn build_output_paid_to(
     // The sender's key does not affect receiver-side recovery (the
     // recipient only sees the ciphertext), so a fresh one serves.
     let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
+    // R-34: place `output_index + 1` outputs by the key's order and build
+    // the last, which sits at `output_index`.
+    let count = usize::try_from(output_index).expect("a bench output index fits") + 1;
+    let (position, ()) = tx_key
+        .place(vec![(); count])
+        .pop()
+        .expect("a placed set of at least one output");
     let constructed = construct_output(
-        tx_key
-            .output_positions(usize::try_from(output_index).unwrap() + 1)
-            .at(output_index)
-            .unwrap(),
+        position,
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         recipient.spend_pk.as_canonical_bytes(),

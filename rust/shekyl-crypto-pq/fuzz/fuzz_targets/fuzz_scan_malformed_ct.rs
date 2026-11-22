@@ -30,7 +30,7 @@ fuzz_target!(|data: &[u8]| {
     let amount = 1_000_000u64;
     let output_index = 0u64;
     // R-34: the position comes from the key's order, as a wallet's does.
-    let position = tx_key.output_positions(1).at(output_index).unwrap();
+    let (position, ()) = tx_key.place(vec![()]).pop().unwrap();
     let od = match construct_output(
         position,
         &pk.x25519,

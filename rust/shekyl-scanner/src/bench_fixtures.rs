@@ -270,12 +270,9 @@ fn assemble_scannable_block(
     let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
     let mut leaf_entries: Vec<u8> = Vec::with_capacity(n_outputs * PQC_LEAF_ENTRY_LEN);
 
-    let positions = tx_key.output_positions(n_outputs);
-    for output_index in 0..n_outputs {
+    for (position, ()) in tx_key.place(vec![(); n_outputs]) {
         let out = construct_output(
-            positions
-                .at(output_index as u64)
-                .expect("a position for each fixture output"),
+            position,
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             recipient_spend_pub,
