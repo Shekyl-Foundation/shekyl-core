@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The emission walk's Tor trio.
+//! The emission walk's Tor mesh.
 //!
 //! A `#[path]` child of the regtest harness. The shared miner stays in the
 //! parent: this module owns the mesh, the onion endpoint, and the one
@@ -23,58 +23,126 @@ use super::{
     ShownPool,
 };
 
-/// The Tor trio's two relays, as the miner's harness reads them: each
-/// relay's own `daemon_status` and `peer_connections`, the operator's
-/// reads, over its admin listener.
-pub(super) struct TrioRelays {
-    b: HttpRpc,
-    b_onion: OnionPeer,
-    c: HttpRpc,
-    c_onion: OnionPeer,
+/// The emission walk's mesh: five daemons, each connected to the others
+/// (Rick, 2026-11-22). A node stems a transaction it originates to at
+/// most two peers, its successor and, after an embargo fire, its
+/// alternate, and no arrival from either counts as the transaction coming
+/// back (F-10). A third peer is the least that leaves the origin a return
+/// it can trust; five leaves one when a peer is slow. A test mesh is sized
+/// to the production shape, not to the smallest that passes.
+pub(super) const MESH_NODES: usize = 5;
+
+/// The mesh's node names: A the miner, then its relays in dial order
+/// ([`RegtestDaemon::start_tor_mesh`]).
+const NODE_NAMES: [char; MESH_NODES] = ['A', 'B', 'C', 'D', 'E'];
+
+/// One of the mesh's relays, as the miner's harness reads it: its own
+/// `daemon_status` and `peer_connections`, the operator's reads, over its
+/// admin listener.
+struct MeshRelay {
+    name: char,
+    rpc: HttpRpc,
+    onion: OnionPeer,
 }
 
-/// One reading of the trio's sessions and tips. A stem the miner
+/// The mesh's relays in dial order: B, which dials every relay after it,
+/// to the last, which dials nobody.
+pub(super) struct MeshRelays(Vec<MeshRelay>);
+
+/// One reading of the mesh's sessions and tips. A stem the miner
 /// originates comes back as a fluff only over this whole mesh
-/// ([`RegtestDaemon::start_tor_trio`]). A session missing at the miner's
+/// ([`RegtestDaemon::start_tor_mesh`]). A session missing at the miner's
 /// pool limit fails that wait: the walk is rerun, and the origin's embargo
 /// is not a second deadline.
 #[derive(Debug)]
 struct MeshReading {
-    a_to_b: bool,
-    a_to_c: bool,
-    b_to_c: bool,
-    a_height: u64,
-    b_height: u64,
-    c_height: u64,
+    /// Each dial the mesh is made of: the dialer, the dialed, and whether
+    /// the dialer holds that outbound session.
+    sessions: Vec<(char, char, bool)>,
+    /// Each node's tip, the miner's first.
+    tips: Vec<(char, u64)>,
 }
 
 impl MeshReading {
-    /// Every session up, and both relays at the miner's tip as it was read
+    /// Every session up, and every relay at the miner's tip as it was read
     /// first: a relay behind the miner cannot admit a spend of an output it
     /// has not seen.
     fn whole(&self) -> bool {
-        self.a_to_b
-            && self.a_to_c
-            && self.b_to_c
-            && self.b_height >= self.a_height
-            && self.c_height >= self.a_height
+        let Some((&(_, miner_tip), relay_tips)) = self.tips.split_first() else {
+            return false;
+        };
+        self.sessions.iter().all(|&(_, _, held)| held)
+            && relay_tips.iter().all(|&(_, tip)| tip >= miner_tip)
     }
 }
 
 impl std::fmt::Display for MeshReading {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let up = |held: bool| if held { "up" } else { "down" };
-        write!(
-            f,
-            "A→B {}, A→C {}, B→C {}; tips A {}, B {}, C {}",
-            up(self.a_to_b),
-            up(self.a_to_c),
-            up(self.b_to_c),
-            self.a_height,
-            self.b_height,
-            self.c_height,
-        )
+        for (i, (from, to, held)) in self.sessions.iter().enumerate() {
+            let sep = if i == 0 { "" } else { ", " };
+            let state = if *held { "up" } else { "down" };
+            write!(f, "{sep}{from}→{to} {state}")?;
+        }
+        f.write_str("; tips")?;
+        for (i, (name, tip)) in self.tips.iter().enumerate() {
+            let sep = if i == 0 { " " } else { ", " };
+            write!(f, "{sep}{name} {tip}")?;
+        }
+        Ok(())
     }
+}
+
+#[test]
+fn a_mesh_reads_whole_only_with_every_session_up_and_every_relay_at_the_tip() {
+    let names = &NODE_NAMES;
+    let mut sessions = Vec::new();
+    for (i, &dialer) in names.iter().enumerate() {
+        for &dialed in &names[i + 1..] {
+            sessions.push((dialer, dialed, true));
+        }
+    }
+    // Each pair is one session: five nodes, ten dials.
+    assert_eq!(sessions.len(), MESH_NODES * (MESH_NODES - 1) / 2);
+    let tips: Vec<(char, u64)> = names.iter().map(|&name| (name, 390)).collect();
+    let whole = MeshReading {
+        sessions: sessions.clone(),
+        tips: tips.clone(),
+    };
+    assert!(whole.whole());
+    assert!(whole
+        .to_string()
+        .starts_with("A→B up, A→C up, A→D up, A→E up, B→C up"));
+    assert!(whole
+        .to_string()
+        .ends_with("; tips A 390, B 390, C 390, D 390, E 390"));
+
+    // One session down, anywhere in the mesh.
+    let mut short = sessions.clone();
+    let last = short.len() - 1;
+    short[last].2 = false;
+    let reading = MeshReading {
+        sessions: short,
+        tips: tips.clone(),
+    };
+    assert!(!reading.whole());
+    assert!(reading.to_string().contains("D→E down"));
+
+    // One relay behind the miner's tip; a relay past it is at it.
+    let mut behind = tips.clone();
+    behind[2].1 = 389;
+    behind[3].1 = 391;
+    assert!(!MeshReading {
+        sessions: sessions.clone(),
+        tips: behind,
+    }
+    .whole());
+
+    // No tips read is not a whole mesh.
+    assert!(!MeshReading {
+        sessions,
+        tips: Vec::new(),
+    }
+    .whole());
 }
 
 /// Whether `rpc`'s node holds an outbound Tor session to `onion`
@@ -102,7 +170,7 @@ async fn tip_height(rpc: &HttpRpc) -> u64 {
 }
 
 /// A v3 onion endpoint, `<56 base32 characters>.onion:<port>`, held by
-/// value so [`Peering`] stays `Copy`.
+/// value.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct OnionPeer {
     host: [u8; 56],
@@ -178,16 +246,17 @@ const TOR_PUBLISH_LIMIT: Duration = Duration::from_secs(300);
 /// same way, 300 s. The live tests allow at most one republish; needing
 /// more is a finding (`TSR-M3`).
 ///
-/// A trio daemon is spawned only once the onions it dials read
+/// A mesh daemon is spawned only once the onions it dials read
 /// `reachable`. A dial made before the descriptor is fetchable waits out
 /// Tor's whole window and fails (run 3, 2026-11-14: "waiting for
 /// rendezvous desc", 105 s), and the address then goes off the dialer's
 /// draw ("cooling after a failed dial").
 const ONION_REACHABLE_LIMIT: Duration = Duration::from_secs(600);
 
-/// How long the trio's sessions may take to form once every onion reads
-/// `reachable` ([`RegtestDaemon::await_trio_mesh`]): Tor's re-query gap,
-/// then one Tor test of the address (Rick, 2026-11-14).
+/// How long the mesh's sessions may take to form once every onion reads
+/// `reachable` ([`RegtestDaemon::await_mesh`]): Tor's re-query gap, then
+/// one Tor test of the address (Rick, 2026-11-14). Each dial is its own
+/// and they run at once, so the limit is one dial's.
 ///
 /// A lookup that reaches directories without the descriptor fails, and the
 /// client's Tor does not ask those directories again for 15 minutes
@@ -198,7 +267,7 @@ const ONION_REACHABLE_LIMIT: Duration = Duration::from_secs(600);
 /// with the longest retry waits between them, 10 s and 30 s
 /// (`shekyl-transport-layer` `dial_profile(Tor)`, `RETRY_WAITS`): 400 s.
 /// 900 + 400 = 1,300 s.
-const TRIO_MESH_LIMIT: Duration = Duration::from_secs(1_300);
+const MESH_LIMIT: Duration = Duration::from_secs(1_300);
 
 impl RegtestDaemon {
     /// The pinned Tor binary a walk that reads over Tor runs, from
@@ -217,103 +286,113 @@ impl RegtestDaemon {
         }
     }
 
-    /// The emission walk's three daemons, all on a managed Tor running the
-    /// pinned binary `tor_file` (Rick, 2026-11-14). A, returned first, is
-    /// the miner: it pays `seed`'s address, seats its bundle producer (a
+    /// The emission walk's mesh of [`MESH_NODES`] daemons, all on a
+    /// managed Tor running the pinned binary `tor_file` (Rick, 2026-11-14),
+    /// each connected to every other (Rick, 2026-11-22). A, returned first,
+    /// is the miner: it pays `seed`'s address, seats its bundle producer (a
     /// mining address and a Tor, `shekyl-node` `producer::seat`), and is the
-    /// daemon the wallet uses. B and C are relays. **A dials B and C; B
-    /// dials C; C dials nobody.**
+    /// daemon the wallet uses. B, C, D and E are relays, returned in that
+    /// order. **Each node dials every node named after it: A dials B to E,
+    /// B dials C to E, and so on; E dials nobody.** Each pair is then one
+    /// session, and the dialer never dials a node that holds a session to
+    /// it.
     ///
-    /// **Why three.** A daemon with a Tor holds a transaction it originates
-    /// until an outbound session hides its address
-    /// (`DAEMON_RELAY_PRIVACY.md` §98.5), so A needs an outbound peer. With
-    /// two daemons the stem dead-ends: the relay's only session is A's, the
-    /// one the stem arrived on, a stem goes out on an outbound session
-    /// other than its source and a fluff to every peer but its source, so
-    /// the relay sends it nowhere, and A's transaction waits out A's own
-    /// embargo before it is shown. That is the origin rig's hold
-    /// (`origin::StemSinkPair`), and a walk that mines hundreds of
-    /// transactions cannot wait it out each time. With three, every stem A
-    /// originates ends at a node that fluffs back to A: stemmed to B, it
-    /// goes on to C, which has no outbound session and fluffs to every peer
-    /// but B, A among them; stemmed to C, C fluffs to B, and B relays the
-    /// fluff to A.
+    /// **Why five** ([`MESH_NODES`]). A daemon with a Tor holds a
+    /// transaction it originates until an outbound session hides its
+    /// address (`DAEMON_RELAY_PRIVACY.md` §98.5), and marks it shown when
+    /// its fluff comes back from a peer it did not hand it to (F-10). It
+    /// hands it to at most two: its stem successor, and the alternate it
+    /// re-stems to when an embargo fires. On three nodes an origin that has
+    /// re-stemmed has handed the transaction to both its peers, no return
+    /// counts, and the entry waits for the second fire, past the pool wait.
+    /// On five a third and a fourth peer can bring it back. A stem goes out
+    /// on an outbound session other than its source and a fluff to every
+    /// peer but its source; E has no outbound session, so a stem that
+    /// reaches it is fluffed, and every node holds a session to A.
     ///
-    /// C is [`Peering::Listening`]: one unanswered loopback port is its
+    /// E is [`Peering::Listening`]: one unanswered loopback port is its
     /// whole clearnet, so it is synced from open and dials nobody. Its
-    /// managed Tor publishes the onion B dials. B's one closed peer is that
-    /// onion. Neither mines; both follow A over the sessions A opens.
+    /// managed Tor publishes the onion the others dial. Each other relay's
+    /// closed peers are the onions of the relays named after it. None of
+    /// them mines; each follows A over the session A opens.
     ///
     /// **When it is ready.** A daemon is spawned only once the onions it
-    /// dials read `reachable` ([`ONION_REACHABLE_LIMIT`]), and the trio is
-    /// returned only once its mesh is whole: A holds sessions to B and C, B
-    /// to C, and both relays are at A's tip ([`Self::await_trio_mesh`]).
-    /// Run 3 (2026-11-14) spawned A while C's descriptor was not yet
-    /// fetchable: A's dial to C failed, so a stem A sent B went on to C,
-    /// whose one other peer was the source, and A's first transaction was
-    /// still unbroadcast at the limit. Each daemon logs `p2p` and `tor` at
-    /// `debug`, so a session that closes says why.
+    /// dials read `reachable` ([`ONION_REACHABLE_LIMIT`]), and the mesh is
+    /// returned only once it is whole: every session up and every relay at
+    /// A's tip ([`Self::await_mesh`]). Run 3 (2026-11-14) spawned A while
+    /// a relay's descriptor was not yet fetchable: A's dial to it failed,
+    /// and A's first transaction was still unbroadcast at the limit. Each
+    /// daemon logs `p2p` and `tor` at `debug`, so a session that closes
+    /// says why.
     ///
-    /// Only A covers its own origins in the pool wait. B and C do not
+    /// Only A covers its own origins in the pool wait. The relays do not
     /// originate. A short mesh during the walk fails that wait; propagation
     /// is a rerun (`docs/FOLLOWUPS.md`, the emission walk).
-    pub(super) async fn start_tor_trio(
+    pub(super) async fn start_tor_mesh(
         seed: &[u8; shekyl_crypto_pq::account::SEED_BYTES],
         schedule: Option<RegtestSchedule>,
         tor_file: PathBuf,
-    ) -> (RegtestDaemon, RegtestDaemon, RegtestDaemon) {
+    ) -> (RegtestDaemon, Vec<RegtestDaemon>) {
         let serial = serial_lock().lock_owned().await;
-        let c = Self::spawn(
-            RegtestSpawn::new(None)
-                .with_schedule(schedule)
-                .with_peering(Peering::Listening {
+        // The relays start from the last named, E, to B: each dials the
+        // relays started before it, so their onions are published and
+        // reachable first.
+        let mut started: Vec<(RegtestDaemon, OnionPeer)> = Vec::with_capacity(MESH_NODES - 1);
+        for _ in 1..MESH_NODES {
+            let peering = if started.is_empty() {
+                Peering::Listening {
                     p2p_port: Self::free_port(),
                     requests: true,
-                })
-                .with_managed_tor(tor_file.clone()),
-        )
-        .await;
-        let c_onion = c.published_onion(TOR_PUBLISH_LIMIT).await;
-        c.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
-        let b = Self::spawn(
-            RegtestSpawn::new(None)
-                .with_schedule(schedule)
-                .with_peering(Peering::TorPeers {
-                    first: c_onion,
-                    second: None,
-                })
-                .with_managed_tor(tor_file.clone())
-                .with_ports_taken([c.rpc_port]),
-        )
-        .await;
-        let b_onion = b.published_onion(TOR_PUBLISH_LIMIT).await;
-        b.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
+                }
+            } else {
+                Peering::TorPeers {
+                    peers: started.iter().map(|(_, onion)| *onion).collect(),
+                }
+            };
+            let relay = Self::spawn(
+                RegtestSpawn::new(None)
+                    .with_schedule(schedule)
+                    .with_peering(peering)
+                    .with_managed_tor(tor_file.clone())
+                    .with_ports_taken(started.iter().map(|(relay, _)| relay.rpc_port)),
+            )
+            .await;
+            let onion = relay.published_onion(TOR_PUBLISH_LIMIT).await;
+            relay.await_onion_reachable(ONION_REACHABLE_LIMIT).await;
+            started.push((relay, onion));
+        }
         let mine_address = mine_address_from_seed(seed, shekyl_address::Network::Regtest);
         let mut a = Self::spawn(
             RegtestSpawn::new(Some(serial))
                 .with_schedule(schedule)
                 .with_mine_address(mine_address)
                 .with_peering(Peering::TorPeers {
-                    first: b_onion,
-                    second: Some(c_onion),
+                    peers: started.iter().map(|(_, onion)| *onion).collect(),
                 })
                 .with_managed_tor(tor_file)
-                .with_ports_taken([b.rpc_port, c.rpc_port]),
+                .with_ports_taken(started.iter().map(|(relay, _)| relay.rpc_port)),
         )
         .await;
-        a.relays = Some(TrioRelays {
-            b: b.rpc.clone(),
-            b_onion,
-            c: c.rpc.clone(),
-            c_onion,
-        });
+        // Dial order from A: B, the last started, first.
+        started.reverse();
+        a.relays = Some(MeshRelays(
+            started
+                .iter()
+                .zip(&NODE_NAMES[1..])
+                .map(|((relay, onion), &name)| MeshRelay {
+                    name,
+                    rpc: relay.rpc.clone(),
+                    onion: *onion,
+                })
+                .collect(),
+        ));
         a.shown_pool = ShownPool::covering_origins();
-        a.await_trio_mesh(TRIO_MESH_LIMIT).await;
-        (a, b, c)
+        a.await_mesh(MESH_LIMIT).await;
+        (a, started.into_iter().map(|(relay, _)| relay).collect())
     }
 
     /// The mesh, rendered for a pool-wait failure. Empty when this daemon
-    /// is not the trio's miner.
+    /// is not the mesh's miner.
     pub(super) async fn mesh_at_failure(&self) -> String {
         match self.read_mesh().await {
             Some(reading) => format!(" (mesh: {reading})"),
@@ -321,37 +400,46 @@ impl RegtestDaemon {
         }
     }
 
-    /// The trio's mesh as it reads now, from A (this daemon); `None` on a
-    /// daemon that is not the trio's miner. A's tip is read first, so a
-    /// relay at or past it has every block A had then.
+    /// The mesh as it reads now, from A (this daemon); `None` on a daemon
+    /// that is not the mesh's miner. A's tip is read first, so a relay at
+    /// or past it has every block A had then.
     async fn read_mesh(&self) -> Option<MeshReading> {
-        let relays = self.relays.as_ref()?;
-        let a_height = tip_height(&self.rpc).await;
-        Some(MeshReading {
-            a_to_b: holds_outbound_to(&self.rpc, relays.b_onion).await,
-            a_to_c: holds_outbound_to(&self.rpc, relays.c_onion).await,
-            b_to_c: holds_outbound_to(&relays.b, relays.c_onion).await,
-            a_height,
-            b_height: tip_height(&relays.b).await,
-            c_height: tip_height(&relays.c).await,
-        })
+        let MeshRelays(relays) = self.relays.as_ref()?;
+        let miner = NODE_NAMES[0];
+        let miner_tip = tip_height(&self.rpc).await;
+        let mut sessions = Vec::new();
+        for relay in relays {
+            let held = holds_outbound_to(&self.rpc, relay.onion).await;
+            sessions.push((miner, relay.name, held));
+        }
+        for (i, dialer) in relays.iter().enumerate() {
+            for dialed in &relays[i + 1..] {
+                let held = holds_outbound_to(&dialer.rpc, dialed.onion).await;
+                sessions.push((dialer.name, dialed.name, held));
+            }
+        }
+        let mut tips = vec![(miner, miner_tip)];
+        for relay in relays {
+            tips.push((relay.name, tip_height(&relay.rpc).await));
+        }
+        Some(MeshReading { sessions, tips })
     }
 
-    /// Wait until the trio's mesh is whole ([`MeshReading::whole`]), within
-    /// `limit`; at once on a daemon that is not the trio's miner.
-    async fn await_trio_mesh(&self, limit: Duration) {
+    /// Wait until the mesh is whole ([`MeshReading::whole`]), within
+    /// `limit`; at once on a daemon that is not the mesh's miner.
+    async fn await_mesh(&self, limit: Duration) {
         let deadline = Instant::now() + limit;
         loop {
             let Some(reading) = self.read_mesh().await else {
                 return;
             };
             if reading.whole() {
-                eprintln!("tor trio: the mesh is whole ({reading})");
+                eprintln!("tor mesh: the mesh is whole ({reading})");
                 return;
             }
             if Instant::now() >= deadline {
                 self.panic_with_log(
-                    "the Tor trio's mesh did not form",
+                    "the Tor mesh did not form",
                     format!("within {limit:?}: {reading}"),
                 );
             }
