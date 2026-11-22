@@ -60,6 +60,11 @@ serde_json = "1"
 libm = { version = "0.2.16", default-features = false }
 
 [dev-dependencies]
+# The full table's on-demand pin compares its narration and JSON summary
+# with their recorded SHA-256 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1);
+# neither file is committed. Workspace pin, already in the tree through the
+# chain forge's digest pins.
+sha2 = { workspace = true }
 # The armed regeneration guard (rule 50): a committed narration moves only
 # under a cited decision. Already in the tree through the chain crates.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }

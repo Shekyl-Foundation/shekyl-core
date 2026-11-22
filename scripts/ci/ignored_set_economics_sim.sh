@@ -95,7 +95,7 @@ eup4::tests::eup4_steady_nightly_narration_matches_the_committed_fixture'
 # template rules on the baseline at N = 90, and the inherited zone's
 # A-honest and B, each to year 135. Nightly, not per PR: the narration pins
 # above already fold the fill and the composition its arms extend.
-economies_slice='whole_economy::tests::economies_nightly_narration_matches_the_committed_fixture'
+economies_slice='whole_economy::tests::economies_nightly_slice_matches_its_narration_and_table'
 run_tests="$narration_pins
 $steady_pins
 $economies_slice
@@ -107,15 +107,16 @@ esr10::tests::regen_esr10_narration_fixtures
 eup4::tests::regen_eup4_narration_fixtures
 jg_grid::tests::regen_jg_grid_narration_fixtures
 growth_trace::tests::regen_growth_trace_narration_fixture
-whole_economy::tests::regen_economies_narration_fixtures
+whole_economy::tests::regen_economies_nightly_fixtures
+whole_economy::tests::regen_economies_full_fixtures
 whole_economy::tests::regen_economies_table_fixture'
 on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
 growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
-whole_economy::tests::economies_narration_matches_the_committed_fixture
+whole_economy::tests::economies_full_run_matches_its_digests_and_table
 whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge
-whole_economy::tests::economies_table_matches_the_hosted_summary'
+whole_economy::tests::economies_table_matches_the_recorded_summary'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`

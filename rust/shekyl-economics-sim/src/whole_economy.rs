@@ -1044,11 +1044,17 @@ fn write_report(out: &mut impl Write, rows: &[Row], scope: Scope) -> fmt::Result
 /// show where the mechanism's arithmetic or supply runs out, and the tail
 /// is read from the other scenarios (§5.37.1).
 fn stress_tag(scenario: &str) -> &'static str {
-    if scenario == SUSTAINED_GROWTH {
+    if is_stress(scenario) {
         " (stress: runs to its edge; not read for the tail)"
     } else {
         ""
     }
+}
+
+/// Whether `scenario` is a stress: run to its edge, labelled so, and not
+/// read for the tail (Rick, 2026-11-21).
+fn is_stress(scenario: &str) -> bool {
+    scenario == SUSTAINED_GROWTH
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -1292,11 +1298,12 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     Ok(())
 }
 
-/// The derived table (§5.37.1, Rick 2026-11-21): one CSV line per row,
-/// the figures the rulings read, each the median across the row's seeds as
-/// the narration prints it. The narration and the JSON summary, hosted by
-/// digest, are the full record behind it. Test code: the table is rebuilt
-/// from the hosted summary by its regeneration and its pin.
+/// The derived table (§5.37.1, Rick 2026-11-21 and 2026-11-22): one CSV
+/// line per row, the figures the rulings read, each the median across the
+/// row's seeds as the narration prints it. The full run's narration and JSON
+/// summary are the record behind it; neither is committed, and the repo keeps
+/// the SHA-256 of each. Test code: the nightly slice's table and the full
+/// table are each rebuilt from their run by a pin.
 #[cfg(test)]
 fn table(summary: &Summary) -> String {
     let mut out = String::new();
@@ -1307,12 +1314,13 @@ fn table(summary: &Summary) -> String {
 /// The derived table's columns, in order: the row's names, then security,
 /// release and burn, inclusion, bloat, distribution, archival and the tail.
 #[cfg(test)]
-const TABLE_COLUMNS: [&str; 40] = [
+const TABLE_COLUMNS: [&str; 41] = [
     "scenario",
     "zone",
     "w_ref",
     "economy",
     "rule",
+    "role",
     "stops",
     "half_year",
     "income_y1",
@@ -1366,9 +1374,12 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
         "# THREE ECONOMIES GRADED WHOLE, the derived table (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).\n\
          # One line per economy, template rule, scenario, zone and w_ref; each figure is the median\n\
          # across the row's seeds, '-' where no seed has it (past a stop, or never reached). SKL per\n\
-         # block unless named; tau in ms/KB; m_r and burn are yearly means; the tail is the miner's-net\n\
-         # tail over the 95th-percentile block's miner's-net fees. {SUSTAINED_GROWTH} is a stress and is\n\
-         # not read for the tail. The narration and the JSON summary are the full record."
+         # block unless named; tau in ms/KB; m_r and burn are yearly means; the tail column is a ratio\n\
+         # with no unit: the miner's-net tail (SKL a block) over the 95th-percentile block's miner's-net\n\
+         # fees (SKL a block). role 'stress' marks {SUSTAINED_GROWTH}: it runs to its edge and is not\n\
+         # read for the tail, which is read from the 'read' rows. stops names, per seed, where the fold\n\
+         # ended: the horizon (year {HORIZON_YEARS}), the supply's break, or the reward's domain edge.\n\
+         # The narration and the JSON summary are the full record."
     )?;
     writeln!(out, "{}", TABLE_COLUMNS.join(","))?;
     let gb = BYTES_PER_GB as f64;
@@ -1380,7 +1391,7 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
         let stops: Vec<String> = row
             .folds
             .iter()
-            .map(|f| f.stop.map_or("-".into(), |stop| stop.label()))
+            .map(|f| f.stop.map_or("horizon".into(), |stop| stop.label()))
             .collect();
         let half: Vec<f64> = row.folds.iter().filter_map(|f| f.half_year).collect();
         let first_gb: Vec<f64> = row
@@ -1416,6 +1427,12 @@ fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
             row.place.w_ref.to_string(),
             row.economy.clone(),
             row.rule.clone(),
+            if is_stress(&row.scenario) {
+                "stress"
+            } else {
+                "read"
+            }
+            .to_owned(),
             stops.join(";"),
             med(&half, 2),
             fig(1, &|y| y.miner_income, 2),
@@ -1467,16 +1484,98 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/economies_nightly_narration.txt"
     );
-    /// The full table's committed narration.
-    const FULL_FIXTURE: &str = concat!(
+    /// The nightly slice's committed derived table.
+    const NIGHTLY_TABLE_FIXTURE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/economies_narration.txt"
+        "/tests/fixtures/economies_nightly_table.csv"
     );
+    /// The SHA-256 of the full run's narration and JSON summary, in
+    /// `sha256sum`'s format. The two files are not committed (Rick,
+    /// 2026-11-22): the on-demand full run is their proof.
+    const FULL_DIGESTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/economies_full_digests.txt"
+    );
+    /// The full run's narration's name, in [`FULL_DIGESTS`] and in
+    /// [`FULL_OUTPUT_DIR_ENV`]'s directory.
+    const FULL_NARRATION_NAME: &str = "economies_narration.txt";
+    /// The full run's JSON summary's name, likewise.
+    const FULL_SUMMARY_NAME: &str = "economies_summary.json";
+    /// A directory a full run writes its narration and JSON summary into,
+    /// under the names above, before it is checked: a run that fails leaves
+    /// what it made to read.
+    const FULL_OUTPUT_DIR_ENV: &str = "SHEKYL_ECONOMIES_FULL_DIR";
 
-    fn narration(scope: Scope) -> String {
-        let mut out = String::new();
-        run(&mut out, &SimParams::default(), scope).expect("String sink is infallible");
-        out
+    /// One run's narration, its JSON summary and its derived table.
+    struct Outputs {
+        narration: String,
+        json: String,
+        table: String,
+    }
+
+    fn outputs(scope: Scope) -> Outputs {
+        let mut narration = String::new();
+        let summary =
+            run(&mut narration, &SimParams::default(), scope).expect("String sink is infallible");
+        Outputs {
+            json: serde_json::to_string(&summary).expect("JSON serialization failed"),
+            table: table(&summary),
+            narration,
+        }
+    }
+
+    /// The nightly slice's outputs, folded once for its pin and its
+    /// regeneration alike.
+    fn nightly() -> &'static Outputs {
+        static NIGHTLY: std::sync::OnceLock<Outputs> = std::sync::OnceLock::new();
+        NIGHTLY.get_or_init(|| outputs(Scope::Nightly))
+    }
+
+    /// The full run's outputs, folded once, written to
+    /// [`FULL_OUTPUT_DIR_ENV`]'s directory when it names one.
+    fn full() -> &'static Outputs {
+        static FULL: std::sync::OnceLock<Outputs> = std::sync::OnceLock::new();
+        FULL.get_or_init(|| {
+            let full = outputs(Scope::Full);
+            if let Ok(dir) = std::env::var(FULL_OUTPUT_DIR_ENV) {
+                for (name, bytes) in [
+                    (FULL_NARRATION_NAME, &full.narration),
+                    (FULL_SUMMARY_NAME, &full.json),
+                ] {
+                    let path = std::path::Path::new(&dir).join(name);
+                    std::fs::write(&path, bytes).expect("write the full run's output");
+                    eprintln!("wrote {}", path.display());
+                }
+            }
+            full
+        })
+    }
+
+    fn sha256_hex(bytes: &str) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// [`FULL_DIGESTS`]'s content for `narration` and `json`.
+    fn digests(narration: &str, json: &str) -> String {
+        format!(
+            "{}  {FULL_NARRATION_NAME}\n{}  {FULL_SUMMARY_NAME}\n",
+            sha256_hex(narration),
+            sha256_hex(json)
+        )
+    }
+
+    /// The JSON summary's recorded SHA-256, read from [`FULL_DIGESTS`].
+    fn recorded_summary_digest() -> String {
+        let digests = std::fs::read_to_string(FULL_DIGESTS).expect("read the recorded digests");
+        digests
+            .lines()
+            .find_map(|line| line.strip_suffix(&format!("  {FULL_SUMMARY_NAME}")))
+            .expect("the digests record the JSON summary")
+            .to_owned()
     }
 
     #[test]
@@ -1648,26 +1747,39 @@ mod tests {
         }
     }
 
-    /// The nightly slice against its committed copy.
+    /// The nightly slice, folded once: its narration and the table derived
+    /// from its own summary, each against its committed copy. The derive
+    /// function runs on real output every night, with nothing fetched.
     #[test]
-    #[ignore = "--economies nightly slice: 34 folds to y135 — nightly; run with --release --ignored; fixture generated and checked on Linux x86-64"]
-    fn economies_nightly_narration_matches_the_committed_fixture() {
+    #[ignore = "--economies nightly slice: 34 folds to y135 — nightly; run with --release --ignored; fixtures generated and checked on Linux x86-64"]
+    fn economies_nightly_slice_matches_its_narration_and_table() {
+        let nightly = nightly();
         committed_fixture::assert_matches(
             "--economies nightly narration",
             NIGHTLY_FIXTURE,
-            &narration(Scope::Nightly),
+            &nightly.narration,
+        );
+        committed_fixture::assert_matches(
+            "--economies nightly derived table",
+            NIGHTLY_TABLE_FIXTURE,
+            &nightly.table,
         );
     }
 
-    /// The full table against its committed copy.
+    /// The full table, folded once: its narration and JSON summary against
+    /// their recorded SHA-256, and the table derived from that summary
+    /// against the committed copy. Set [`FULL_OUTPUT_DIR_ENV`] to keep the
+    /// two files.
     #[test]
-    #[ignore = "--economies, the full table: 2 880 folds to y135 — on demand, not nightly; run with --release --ignored; fixture generated and checked on Linux x86-64"]
-    fn economies_narration_matches_the_committed_fixture() {
+    #[ignore = "--economies, the full table: 2 880 folds to y135 — on demand, not nightly; run with --release --ignored; digests and table generated and checked on Linux x86-64"]
+    fn economies_full_run_matches_its_digests_and_table() {
+        let full = full();
         committed_fixture::assert_matches(
-            "--economies narration",
-            FULL_FIXTURE,
-            &narration(Scope::Full),
+            "--economies full-run digests",
+            FULL_DIGESTS,
+            &digests(&full.narration, &full.json),
         );
+        committed_fixture::assert_matches("--economies derived table", TABLE_FIXTURE, &full.table);
     }
 
     /// The derived table's committed copy (§5.37.1).
@@ -1776,7 +1888,10 @@ mod tests {
         assert_eq!(column(lines[1], "first_1gb_day_year"), "3");
         assert_eq!(column(lines[1], "tail_net_over_fees_p95_y135"), "2.0");
         assert_eq!(column(lines[1], "tail_era_y135"), "1");
-        // The stopped row reads nothing past year 7.
+        assert_eq!(column(lines[1], "role"), "read");
+        assert_eq!(column(lines[1], "stops"), "horizon;horizon;horizon");
+        // The growth row is a stress, and reads nothing past year 7.
+        assert_eq!(column(lines[2], "role"), "stress");
         assert_eq!(column(lines[2], "income_y1"), "200.00");
         assert_eq!(column(lines[2], "income_y10"), "-");
         assert_eq!(
@@ -1794,79 +1909,96 @@ mod tests {
         assert_eq!(table(&back), table(&summary));
     }
 
+    /// Names a full run's JSON summary on disk, for deriving the table
+    /// without folding it again (a 13.9-hour run, §5.37.1).
+    const SUMMARY_PATH_ENV: &str = "SHEKYL_ECONOMIES_SUMMARY";
+
     /// The JSON summary [`SUMMARY_PATH_ENV`] names, read whole. Refuses,
-    /// naming the variable, when it names none: the pin and the helper
-    /// below have no subject without it (rule 47).
-    fn hosted_summary() -> Summary {
+    /// naming the variable, when it names none, and when the file is not the
+    /// summary whose SHA-256 the repo records: the pin and the helper below
+    /// have no subject without it (rule 47).
+    fn recorded_summary() -> Summary {
         let path = std::env::var(SUMMARY_PATH_ENV).unwrap_or_else(|_| {
             panic!(
-                "{SUMMARY_PATH_ENV} names no JSON summary: fetch the hosted one by its pinned \
-                 digest and name its decompressed path"
+                "{SUMMARY_PATH_ENV} names no JSON summary: name a full run's {FULL_SUMMARY_NAME}"
             )
         });
         let json = std::fs::read_to_string(&path).expect("read the JSON summary");
+        assert_eq!(
+            sha256_hex(&json),
+            recorded_summary_digest(),
+            "{path} is not the JSON summary whose SHA-256 {FULL_DIGESTS} records"
+        );
         serde_json::from_str(&json).expect("the JSON summary parses")
     }
 
-    /// The derived table against the full record: rebuilt from the hosted
-    /// JSON summary, it is the committed copy.
+    /// The derived table against the recorded full run, read from its JSON
+    /// summary on disk: seconds, where the full pin above takes hours.
     #[test]
-    #[ignore = "--economies, the derived table: reads the hosted JSON summary (379 MB) named by SHEKYL_ECONOMIES_SUMMARY — on demand"]
-    fn economies_table_matches_the_hosted_summary() {
+    #[ignore = "--economies, the derived table: reads the recorded JSON summary (379 MB) SHEKYL_ECONOMIES_SUMMARY names — on demand"]
+    fn economies_table_matches_the_recorded_summary() {
         committed_fixture::assert_matches(
             "--economies derived table",
             TABLE_FIXTURE,
-            &table(&hosted_summary()),
+            &table(&recorded_summary()),
         );
     }
 
-    /// Armed: rewrites the derived table from the JSON summary under a cited
-    /// decision.
+    /// Armed: rewrites the derived table from the recorded JSON summary on
+    /// disk under a cited decision, for a change to the table's form.
     #[test]
-    #[ignore = "armed regeneration helper; writes the derived table from the JSON summary SHEKYL_ECONOMIES_SUMMARY names; requires SHEKYL_PINNED_REGEN_DECISION"]
+    #[ignore = "armed regeneration helper; writes the derived table from the recorded JSON summary SHEKYL_ECONOMIES_SUMMARY names; requires SHEKYL_PINNED_REGEN_DECISION"]
     fn regen_economies_table_fixture() {
         regenerate(
             "the --economies derived table",
             &[Output {
                 path: TABLE_FIXTURE,
-                build: || table(&hosted_summary()),
+                build: || table(&recorded_summary()),
             }],
         );
     }
 
-    /// Where the full table's regeneration also writes the run's JSON
-    /// summary, which `--economies` prints and which is not committed.
-    const SUMMARY_PATH_ENV: &str = "SHEKYL_ECONOMIES_SUMMARY";
-
-    /// The full table's narration; its JSON summary, every year of every
-    /// cell, written to [`SUMMARY_PATH_ENV`]'s path when it names one, so
-    /// one 2 880-fold run gives both (§5.37.1).
-    fn full_narration_and_summary() -> String {
-        let mut out = String::new();
-        let summary =
-            run(&mut out, &SimParams::default(), Scope::Full).expect("String sink is infallible");
-        if let Ok(path) = std::env::var(SUMMARY_PATH_ENV) {
-            let json = serde_json::to_string(&summary).expect("JSON serialization failed");
-            std::fs::write(&path, json).expect("write the summary");
-            eprintln!("wrote {path}");
-        }
-        out
-    }
-
-    /// Armed: rewrites the committed narrations under a cited decision.
+    /// Armed: rewrites the nightly slice's narration and table, from one
+    /// fold of the slice, under a cited decision.
     #[test]
-    #[ignore = "armed regeneration helper; writes the committed fixtures (and the full table's JSON summary where SHEKYL_ECONOMIES_SUMMARY names); requires SHEKYL_PINNED_REGEN_DECISION"]
-    fn regen_economies_narration_fixtures() {
+    #[ignore = "armed regeneration helper; writes the nightly slice's committed narration and table; requires SHEKYL_PINNED_REGEN_DECISION"]
+    fn regen_economies_nightly_fixtures() {
         regenerate(
-            "the --economies narrations",
+            "the --economies nightly narration and table",
             &[
                 Output {
                     path: NIGHTLY_FIXTURE,
-                    build: || narration(Scope::Nightly),
+                    build: || nightly().narration.clone(),
                 },
                 Output {
-                    path: FULL_FIXTURE,
-                    build: full_narration_and_summary,
+                    path: NIGHTLY_TABLE_FIXTURE,
+                    build: || nightly().table.clone(),
+                },
+            ],
+        );
+    }
+
+    /// Armed: rewrites the full run's recorded digests and the derived
+    /// table, from one full fold, under a cited decision. Refuses unless
+    /// [`FULL_OUTPUT_DIR_ENV`] names where the two files go: a digest of
+    /// bytes nobody kept proves nothing.
+    #[test]
+    #[ignore = "armed regeneration helper; writes the full run's digests and the derived table, and the run's narration and JSON summary into SHEKYL_ECONOMIES_FULL_DIR; requires SHEKYL_PINNED_REGEN_DECISION"]
+    fn regen_economies_full_fixtures() {
+        assert!(
+            std::env::var(FULL_OUTPUT_DIR_ENV).is_ok(),
+            "{FULL_OUTPUT_DIR_ENV} names no directory for the full run's narration and JSON summary"
+        );
+        regenerate(
+            "the --economies full run's digests and derived table",
+            &[
+                Output {
+                    path: FULL_DIGESTS,
+                    build: || digests(&full().narration, &full().json),
+                },
+                Output {
+                    path: TABLE_FIXTURE,
+                    build: || full().table.clone(),
                 },
             ],
         );

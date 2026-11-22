@@ -3956,6 +3956,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2",
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
