@@ -1,6 +1,6 @@
 # CEN-I4 — deriving the transaction input cap (`ICD-`)
 
-**Status:** OPEN — Round 0 RULED IN PART (Rick, 2026-11-22), docs only.
+**Status:** OPEN — Round 0 RULED except three open items (Rick, 2026-11-22; §11), docs only.
 Consensus surface: the design is ruled here before any code moves, then one
 rule-07 cutover PR moves every consumer together. Identifier family `ICD-`
 (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
@@ -14,11 +14,13 @@ chosen number.
 `shekyl-wire` and the cap is computed there; `ICD-R2` the generator counts are
 derived from the cap; `ICD-R3` the maximum tree depth is derived here;
 `ICD-R4` relay verification gets its own round in the relay lane; `ICD-R5` one
-named floor device for every embargo cell. **Handed to EUP-5 G (§10):**
-`ICD-Q6`, `ICD-F15`. **Still open (§11):** `ICD-Q1` whether CEN-I4 stays an
-explicit rule; `ICD-Q3` the snap to a padding boundary; `ICD-Q5` the coupling
-to EUP-5 G's weight limit; `ICD-Q7` the maximum tree depth; the standoff
-reserve's value; the cover carrier's fragment count.
+named floor device for every embargo cell; `ICD-R6` CEN-I4 stays an explicit
+rule; `ICD-R7` no rounding to a padding boundary; `ICD-R8` the coupling to the
+weight limit is accepted; `ICD-R9` the maximum tree depth is 14; `ICD-R10` the
+standoff reserve is computed. **Handed to EUP-5 G (§10):** `ICD-Q6`,
+`ICD-F15`. **Still open (§11):** `ICD-Q8` the rule order `ICD-R6`'s test
+needs; the row-floor decision (`ICD-F16`); the cover carrier's fragment
+count.
 
 ## 0. What the cap is, and why it is decided now
 
@@ -178,8 +180,9 @@ truncate. Nothing checks the table against the cap today.
 
 Under `ICD-R2` the table is sized to the need, exactly: per curve, the largest
 `ipa_rows(N(d), d)` over every legal depth. At today's weight limit and
-`MAX_TREE_DEPTH = 24` that is 16 384 Selene and 8 192 Helios rows (both at
-depth 24); at a maximum depth of 12 (`ICD-Q7`) it is 8 192 and 4 096. The
+today's `MAX_TREE_DEPTH = 24` that is 16 384 Selene and 8 192 Helios rows
+(both at depth 24); at the ruled maximum depth of 14 (`ICD-R9`) it is 8 192 and
+4 096. The
 python model of `ipa_rows` used for these tables matches the Rust `const fn`
 on all 3 840 cells it was compared on (1 to 160 inputs, depths 1 to 24).
 
@@ -238,14 +241,14 @@ What this shows:
 - **No input count is a boundary at every depth.** 22 sits mid-band at depths 2
   and 3, and exactly on a Helios step at depths 7 and 24 (where the weight
   limit admits only 20 and 15 anyway). A snap cannot be stated once for all
-  depths; `ICD-Q3` asks whether to snap at all.
+  depths; `ICD-R7` rules out snapping.
 - **Splitting still costs verifiers more.** Every split adds a transaction's
   fixed cost (about 22 ms here, 100 to 130 ms on the diagnostic Pi, §2.6), and the per-input cost
   within a band is lower than across one.
 
 **`ICD-F16` — the two row floors are the smallest the vector-commitment tape
-accepts; lowering them is a circuit change, not a tuning. Closed at its first
-task (2026-11-22).** `ipa_rows` raises the padded rows to at least 256 Selene
+accepts; lowering them is a circuit change, not a tuning. Traced 2026-11-22;
+the decision is Rick's (§11).** `ipa_rows` raises the padded rows to at least 256 Selene
 and 128 Helios (`C1_TARGET_ROWS`, `C2_TARGET_ROWS`,
 `rust/shekyl-oxide/crypto/fcmps/src/lib.rs:74-75`). One input at depth 2
 needs only 111 and 32 rows, which would pad to 128 and 32, so the question
@@ -281,7 +284,7 @@ can lay out.**
 the layout, so there is no "lowered" configuration to time. Lowering them
 means changing the word length or the leaf branch's layout, a departure from
 the circuit as upstream had it audited, for a saving that exists only below
-depth 6. The finding closes here. (The model also shows the trade's other
+depth 6. Whether that departure is worth it is Rick's decision (§11). (The model also shows the trade's other
 direction, for the record only: with more rows the same witness needs fewer
 commitments, so raising the floors shrinks small proofs, by about 30 % for one
 input at depth 2 at 2 048 / 512 rows, at the price of a larger inner-product
@@ -598,16 +601,19 @@ At 8 that is harmless (the scan's maximum, 8 inputs at depth 24, is legal). At
 CEN-H3 refuses. Filtering those cells at the 10-byte fee alone is not enough
 either: it drops 16 inputs at depth 23 (148 617 bytes at that fee), which is
 legal with a fee varint of 7 bytes or fewer, and would leave the ceiling below a
-legal spend. **The heaviest legal `P`-lane spend weighs exactly the weight
-limit, 148 614 bytes** (16 inputs, two outputs, depth 23, a 7-byte fee). The
-cutover's scan reads the legal-shape function (below), which answers per shape
-and fee width, so it cannot fall below a legal spend. The reserve's head-room at
-0.05 SKL then falls from about 600 to about 336 atomic per weight byte: either the reserve rises to about 0.09 SKL to keep
-600, or the 600 is restated, and the rule-75 bounds (`0 < reserve < rung`) are
-re-checked. (The reserve's comment gives today's ceiling as 80 456 bytes; the
-weight model gives 79 625 for the same shape at a 10-byte fee varint. The
-comment likely predates the 2026-09-14 proof-size re-measurement; the cutover
-recomputes it rather than carrying either figure.)
+legal spend. Over today's depths 2 to 24 the heaviest legal `P`-lane spend
+weighs exactly the weight limit, 148 614 bytes (16 inputs, two outputs, depth
+23, a 7-byte fee); **with the maximum depth at 14 (`ICD-R9`) it is 148 521
+bytes** (22 inputs, two outputs, depth 4). The cutover's scan reads the
+legal-shape function (below), which answers per shape and fee width, so it
+cannot fall below a legal spend. At a pinned 0.05 SKL the reserve's head-room
+would fall from about 600 to about 337 atomic per weight byte; instead the
+reserve is computed from the ceiling at 600 (`ICD-R10`: 89 113 000 atomic,
+about 0.0891 SKL, with the rule-75 bounds re-checked against the rung). (The
+reserve's comment gives today's ceiling as 80 456 bytes; the weight model gives
+79 625 for the same shape at a 10-byte fee varint. The comment likely predates
+the 2026-09-14 proof-size re-measurement; the computed reserve replaces both
+figures.)
 
 **Wallet (read):** the engine's selection and refusals (`curve_tree_actor.rs`,
 `drain_select.rs`, `bond_assembly.rs`'s `MAX_RETENTION_FUNDING_INPUTS`, the
@@ -632,7 +638,7 @@ message envelope (97 658 bytes today, so 5), pinned as an equality by
 `tests/carrier_window.rs`. At the derived cap the largest transaction is about
 145 KB, so the constant becomes 8; the epoch's ceiling of 44 windows does not
 bind at 8. A capacity decision then moves a cover constant, mechanically: the
-§80.3 shape, named in `ICD-Q5`. Whether the carrier keeps a fragment train at
+§80.3 shape, accepted with the rest under `ICD-R8`. Whether the carrier keeps a fragment train at
 all is cover-by-shape's question (`CBS-`, not yet ruled), and it goes to Rick
 with that design, not to this round.
 
@@ -655,7 +661,7 @@ with that design, not to this round.
   at two sites (`:514`, `:1342`), which drives the A-stuffed economy;
 - `MAX_TREE_DEPTH`, read through `shekyl-tx-weight` in `burden.rs` and in
   `calibration.rs`'s `tree_depth_for_leaves` and `stuffer_txs_before_deepening`.
-  Depth 12 (`ICD-Q7`) does not move the sim's results: no fold reaches 10^17
+  The ruled depth 14 (`ICD-R9`) does not move the sim's results: no fold reaches 10^17
   outputs.
 
 Once the cap exceeds `N(d)` at some depth, a search over `1..=cap` picks
@@ -676,13 +682,16 @@ depends on"), with the library looser rather than tighter. The legal-shape
 function closes it at both ends. CEN-I1's minimum is itself a bare literal (`outputs.len() < 2`,
 `rust/shekyl-chain-rules/src/rules/tx_inputs.rs:70`, and the literal 2 in
 `shekyl-wire`'s pruned and full spend checks). **The cutover reads the constant
-landed by the sim lane's minimum-output PR, and does not create it** (Rick,
-2026-11-22: one variable moves in one PR; the PR's number is recorded here when
-it opens). That PR, which lands first, names the minimum once beside
-`MAX_OUTPUTS` in `shekyl-wire`, points CEN-I1, the two wire checks and the
-builder's refusal at it, and starts the sim's `all_shapes` there; the
-legal-shape function reads it, and when the function lands the sim moves onto
-it.
+landed by #1534, the sim lane's minimum-output PR, and does not create it**
+(Rick, 2026-11-22: one variable moves in one PR).
+#1534, which lands first, names the minimum once as
+`shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS` beside `MAX_OUTPUTS`,
+points CEN-I1, the two wire checks and the builder's `TooFewOutputs` refusals
+(`sign_transaction`, `BuiltSpend::build`) at it, and starts the sim's
+`all_shapes` there; the legal-shape function reads it, and when the function
+lands the sim moves onto it. (#1534 also makes the weight table's measurement
+cell sign two outputs: the proof length it measures is unchanged, and a
+sign-time figure taken across it differs by one range-proof round.)
 
 **The legal-shape function (cutover scope).** Under `ICD-R1`, `shekyl-wire`
 exposes one function for the shapes legal at depth `d`: the outputs from
@@ -755,12 +764,12 @@ the cutover sweeps them.
   (2 to 4). One input more is refused where the pathway actually refuses it,
   and each test names that refusal: on relay, the wire parser's count
   refusal (`Transaction::validate`, reading the computed cap) before any rule;
-  in a block, CEN-H3, which `tx_form` runs before CEN-I4
-  (`rust/shekyl-chain-rules/src/validate.rs:826-830`) and which refuses every
-  `N + 1`-input transaction by construction. At a depth where `N(d) < N`,
-  CEN-H3 names the refusal on both paths. CEN-I4's own refusal, if `ICD-Q1`
-  keeps the rule, is tested through its conformance entry, the only route that
-  reaches it (`ICD-Q1`).
+  in a block, CEN-I4, which the cutover judges immediately before CEN-H3
+  (`ICD-R6`; today `tx_form` runs H3 first,
+  `rust/shekyl-chain-rules/src/validate.rs:826-830`). The ruled test: a
+  23-input transaction at depth 2, refused with CEN-I4 named in a block and
+  cited at the parser. At a depth where `N(d) < N`, a transaction of `N(d) + 1`
+  inputs is within the cap and over the weight limit, and CEN-H3 names it.
 
 ## 9. Rulings — RULED 2026-11-22 (Rick)
 
@@ -815,9 +824,10 @@ Neither option §9 first offered is taken.
 - **The count, per curve, is the largest `ipa_rows(N(d), d)` over every legal
   depth `d`**, where `N(d)` is the cap at that depth (§2.3). It is not
   `ipa_rows(N, MAX_TREE_DEPTH)`, which overstates the Helios curve. At today's
-  weight limit and `MAX_TREE_DEPTH = 24` it is **16 384 Selene and 8 192 Helios
-  rows**, both reached at depth 24. That is a quarter of the 65 536 and 32 768
-  built today for upstream's 128 inputs at 12 layers.
+  weight limit and the ruled maximum depth of 14 (`ICD-R9`) it is **8 192
+  Selene and 4 096 Helios rows**, an eighth of the 65 536 and 32 768 built
+  today for upstream's 128 inputs at 12 layers. (At today's depth 24 it would
+  be 16 384 and 8 192, both reached at depth 24.)
 - `shekyl-curve-generators` holds the two counts, because it sits below the
   wire crate. `shekyl-wire` asserts at compile time that each equals the value
   it computes, so a weight-limit change fails the build until the counts move.
@@ -838,8 +848,9 @@ Neither option §9 first offered is taken.
 `rust/shekyl-fcmp/src/lib.rs:43-50`), and the generators were sized for
 upstream's `MAX_FCMP_LAYERS = 12`, its figure for about 10^17 outputs. The cap's
 floor, the generator count, the embargo's depth tiers and the proof-size
-domain all read the depth. The derivation is `ICD-Q7` (§11), and one constant
-results: `MAX_FCMP_LAYERS` and `MAX_TREE_DEPTH` stop being two numbers.
+domain all read the depth. The derivation is `ICD-R9` (14, in two steps), and
+one constant results: `MAX_FCMP_LAYERS` and `MAX_TREE_DEPTH` stop being two
+numbers.
 
 ### `ICD-R4` — relay verification gets its own design round in the relay lane (was `ICD-Q2`) — RULED
 
@@ -915,169 +926,191 @@ other unit's numbers are diagnostics whatever their cause.
   and the embargo cells through depth 7 number 410. G rules how the limit is
   derived, not only the zone.
 
-## 11. Still open with Rick
+### Second rulings — RULED 2026-11-22 (Rick, at `97dda2dd76`)
 
-### `ICD-Q1` — does CEN-I4 stay an explicit rule? (recommendation changed 2026-11-22)
+These close every question the round had open except the cover carrier's
+fragment count and the row-floor decision (§11).
 
-**The problem.** At the derived value, CEN-I4 refuses nothing CEN-H3 admits:
-`N` is the weight limit's own maximum over the lightest legal shapes, so every
-transaction of `N + 1` inputs is over the weight limit, whatever its shape
-(§2.2, §2.3). The paths a transaction actually takes make that concrete:
+#### `ICD-R6` — CEN-I4 stays an explicit rule at the derived value (was `ICD-Q1`) — RULED
 
-- **On relay** the wire parser refuses it first: the pool door's `parse` runs
-  `Transaction::validate` (`rust/shekyl-node/src/pool_door.rs:210-219`), which
-  refuses more than `MAX_FCMP_INPUTS` inputs before any rule runs, and under
-  `ICD-R1` reads the computed cap.
-- **In a block** no wire count check runs (the block path does not call
-  `Transaction::validate`), and `tx_form` runs CEN-H3 before CEN-I4
-  (`rust/shekyl-chain-rules/src/validate.rs:826-830`), so H3 refuses it.
-- So **the chain-rules I4 arm is reached by no transaction on any path**, only
-  by a conformance test that builds one by hand.
+The parser refuses on the input count, reading the computed cap (`ICD-R1`), and
+a test pins that a 23-input transaction is refused with CEN-I4's name. This
+document's later recommendation to delete the rule, made after review showed
+that no path reaches the chain-rules I4 arm today, is superseded. The ruling's
+test cannot pass on today's order, so the cutover makes CEN-I4 the refusal
+that fires (confirmation asked as `ICD-Q8`, §11):
 
-The closed domains (§5) still need a maximum that consensus enforces. CEN-H3
-enforces it, by construction, and the computed constant names it.
+- **In a block,** `tx_form` judges CEN-I4 in its first band, immediately
+  before CEN-H3: the count bound before the weight bound. Today H3 runs first
+  (`rust/shekyl-chain-rules/src/validate.rs:826`), and every `N + 1`-input
+  transaction is over the weight limit, so H3 names it. With I4 first, I4 names
+  it. Only the row naming that refusal changes; what is accepted does not, and
+  the class rows (H20 to H22) still come after both, as now.
+- **On relay** the wire parser's count refusal (`Transaction::validate`,
+  reading the computed cap) runs before any rule; its error cites CEN-I4, the
+  row it enforces at the parser.
+- The test: a 23-input transaction built at depth 2, refused in a block with
+  CEN-I4 named, and refused at the parser with CEN-I4 cited.
 
-**The question.** Keep CEN-I4 as a rule at the computed cap, or delete it and
-let the weight limit imply the maximum?
+#### `ICD-R7` — no rounding to a padding boundary (was `ICD-Q3`) — RULED
 
-**The options.**
+The cap is what the weight limit admits. The padding's cost per transaction is
+priced by the relay round (`ICD-R4`), measured by the batched GAP-7 sweep (§3),
+and may be priced into weight by EUP-5 G (`ICD-Q6`).
 
-- **(a) Keep it, valued at the computed constant.** The census keeps a row
-  whose value is the derivation, and the validator keeps an arm that a test
-  pins as unreachable after H3.
-- **(b) Delete the rule; keep the constant.** The census row records CEN-I4 as
-  implied by CEN-H3 at the computed cap, with this round as its reason. The
-  wire parser's count refusal stays, reading the same constant, as the
-  allocation bound on untrusted bytes (rule 25), and the closed domains read
-  the constant directly.
+#### `ICD-R8` — the coupling to the weight limit is accepted (was `ICD-Q5`) — RULED
 
-**Recommendation: (b), changed from (a).** (a) was recommended as "a cheap
-early refusal"; it is neither early (the parser on relay and H3 in a block both
-run first) nor ever the refusal. A consensus arm that no transaction can reach,
-by construction, is the kind of code rule 15 deletes rather than carries: it
-adds a site to keep in step with the constant and protects nothing H3 does not.
-The derived number survives in the place it does work, the computed constant
-that the parser, the builder, the engine and the closed domains read.
-Deleting the rule is not a widening: H3 already refuses exactly what I4 would.
+Every table checks its range against the computed constant at compile time, so
+a weight-limit change fails the build until the new rows are measured: the
+generator counts, the embargo table's rows, the proof-size vectors, the
+reserve, the sweeps and the cover carrier's fragment count.
 
-### `ICD-Q3` — snap to a padding boundary?
+#### `ICD-R9` — the maximum tree depth is 14, derived in two steps (was `ICD-Q7`) — RULED
 
-**The problem.** §2.5: the proof's verification cost steps at padding
-boundaries, and the boundaries fall at different counts at each depth. 22 is
-mid-band at depths 2 and 3.
-
-**The question.** Should the derived value be rounded down to a boundary?
-
-**The options.**
-
-- **(a) No snap: `N` = 22.** The cap is the weight limit's maximum; the
-  padding governs cost per transaction, which the relay round prices
-  (`ICD-R4`), the block sweep measures (§3), and G may price into weight
-  (`ICD-Q6`).
-- **(b) Snap to 18,** the top of the band below 19 at depth 2.
-- **(c) Snap to 16,** a power of two: no depth-independent benefit, since the
-  boundaries are not powers of two of inputs.
-
-**Recommendation: (a).** A snap would trade a privacy and fee cost paid by every
-consolidation for a per-transaction verifier saving that the relay round and
-the weight limit already bound. The floor arm (§2.6) shows the steps are no
-larger on an A72 (+34 % and +43 % for a Selene step on the diagnostic Pi) than
-on x86. A snap to 18 would save about 30 % of verification at depth 2 per
-transaction (1 576 ms to 1 123 ms on the diagnostic Pi) and nothing at depth 3, where 13 is already past the step.
-
-### `ICD-Q5` — the weight limit moves at EUP-5 G
-
-**The problem.** `TX_WEIGHT_LIMIT` "moves again when EUP-5 G rules the capacity
-leg" (`rust/shekyl-wire/src/transaction.rs:228-236`). A derived cap moves with
-it, and with the cap the generator counts, the embargo table's rows, the
-reserve, the sweeps and the cover carrier's fragment count (`ICD-F14`,
-`ICD-F15`). That is the coupling §80.3 removed from the embargo, returning
-through the weight limit.
-
-**The question.** Is the coupling accepted?
-
-**The options.**
-
-- **(a) Accept it, loudly.** Every table asserts its domain against the
-  computed constant at compile time, so a weight-limit change fails the build
-  until the new rows are measured: a visible act, as §80.5 wants.
-- **(b) Decouple.** Freeze the cap at today's derived value and let a later
-  weight-limit change leave it alone.
-
-**Recommendation: (a).** A frozen value would be a chosen number again the
-moment the weight limit moves, which is what `ICD-R0` rules out. The build
-failure is the review. (The round's standard already accepts the rebuild at G.)
-
-### `ICD-Q7` — what output count does the chain commit to, and so what maximum depth?
-
-**The problem.** `MAX_TREE_DEPTH` is chosen and `MAX_FCMP_LAYERS` is
-upstream's (`ICD-R3`). A tree at its maximum depth accepts no more outputs, so
-the ceiling is a halt, not a slowdown, and its margin has to be generous. The
-cost of a deeper ceiling is a lower cap at the deepest tree, a larger generator
-table, and more embargo cells over the chain's life.
-
-**The question.** What output-count ceiling does the chain commit to, and so
-what maximum depth?
-
-**The rate the chain is allowed to write.** The margin is measured against
-Shekyl's own limit, not another chain's output rate. An output costs 1 269
-bytes of weight (35 for the output, 50 of CT base, the 1 120-byte KEM
-ciphertext and a 64-byte leaf entry). The store's write budget, PB-R2
-(`DAEMON_REDB_STORE.md` §1.3a: at most 1 GB a day on the floor device at design
-load), therefore bounds the chain at about **788 000 outputs a day**, and that
-is an upper bound, since not every written byte is an output. (At today's
+**Step 1, the floor: 12.** The margin is measured on Shekyl's own limit. An
+output costs 1 269 bytes of weight (35 for the output, 50 of CT base, the
+1 120-byte KEM ciphertext and a 64-byte leaf entry), so the store's write
+budget, PB-R2 (`DAEMON_REDB_STORE.md` §1.3a: at most 1 GB a day on the floor
+device at design load), bounds the chain at about 788 000 outputs a day. The
+tree holds every output ever created, so the bound is on cumulative outputs:
+depth 12 holds about 10^17, about 360 million years at that rate. (At today's
 300 000-byte zone, full blocks every 120 s write about 216 MB a day, about
 170 000 outputs, inside the budget.)
 
-**The options, with their numbers.** Outputs at depth `D` are
-38 × the product of the widths of layers 1 to D − 1 (18 at odd layers, 38 at
-even ones), so depth 2 holds 684, as the curve-tree drift guard pins. Years to
-fill are at the write budget's 788 000 outputs a day and at a hundred times
-it. Generator counts are `ICD-R2`'s, at today's weight limit. Embargo cells
-are every `n_in = 1..=N(d)` at depths 2 to `D` (the table today stops at depth
-7, 128 cells, and extends as the tree grows).
+**Step 2, the maximum: the deepest tree that needs no more generators than the
+floor does.** At today's weight limit that is **14**. Depths 12 to 14 all need
+8 192 Selene and 4 096 Helios rows (`ICD-R2`); depth 15 doubles the Selene
+count, since its cap of 18 inputs needs 18 × (111 + 7 × 52) = 8 550 rows. Depth
+14 holds 7.0 × 10^19 outputs, about 2.4 × 10^11 years at the write budget, and
+the cap at the deepest tree stays 18.
 
-| max depth | outputs | years at the write budget | years at 100× the budget | cap at the deepest tree | generators (Selene / Helios) | embargo cells, depths 2 to D |
-| ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| 8 | 2.2 × 10^11 | 760 | 7.6 | 20 | 8 192 / 4 096 | 148 |
-| 10 | 1.5 × 10^14 | 520 000 | 5 200 | 19 | 8 192 / 4 096 | 187 |
-| **12** | **1.0 × 10^17** | **3.6 × 10^8** | **3.6 × 10^6** | **18** | **8 192 / 4 096** | **224** |
-| 14 | 7.0 × 10^19 | 2.4 × 10^11 | 2.4 × 10^9 | 18 | 8 192 / 4 096 | 260 |
-| 16 | 4.8 × 10^22 | 1.7 × 10^14 | 1.7 × 10^12 | 17 | 16 384 / 8 192 | 295 |
-| 24 (today) | 1.0 × 10^34 | 3.6 × 10^25 | 3.6 × 10^23 | 15 | 16 384 / 8 192 | 425 |
+| max depth | outputs | years at the write budget | cap at the deepest tree | generators (Selene / Helios) | embargo cells, depths 2 to D |
+| ---: | ---: | ---: | ---: | --- | ---: |
+| 10 | 1.5 × 10^14 | 520 000 | 19 | 8 192 / 4 096 | 187 |
+| 12 (the floor) | 1.0 × 10^17 | 3.6 × 10^8 | 18 | 8 192 / 4 096 | 224 |
+| **14 (ruled)** | **7.0 × 10^19** | **2.4 × 10^11** | **18** | **8 192 / 4 096** | **260** |
+| 15 | 2.7 × 10^21 | 9.2 × 10^12 | 18 | 16 384 / 4 096 | 278 |
+| 24 (until the cutover) | 1.0 × 10^34 | 3.6 × 10^25 | 15 | 16 384 / 8 192 | 425 |
 
-The cap itself is 22 at every candidate (it is set at depths 2 to 4). The
-generator counts do not distinguish depths 8 to 14: the `ipa_rows` padding puts
-them all at 8 192 / 4 096.
+- **Why the extra margin is taken.** At the ceiling the chain accepts no new
+  outputs, raising it is a hard fork, and between 12 and 14 the margin is
+  free: the same generators, the same cap at the deepest tree, and embargo
+  cells measured only if the tree ever gets that deep.
+- **Where it lives.** The one constant sits in `shekyl-curve-generators`
+  beside the counts (`ICD-R2`). `shekyl-wire` asserts at compile time that it
+  equals step 2's derivation, so a weight-limit change that moves the free
+  depth fails the build. `MAX_FCMP_LAYERS` and `MAX_TREE_DEPTH` become this one
+  constant; every reader of either (the weight model and its re-export, the
+  prover's and builder's depth checks, the P-lane ceiling, the engine's fee
+  query and dust bar at `D_ref`, the sim's depth maps, the cover carrier's
+  largest-transaction size) reads it.
+- **What re-checks it.** Block size is dynamic and the write budget is a
+  design budget, not a consensus limit, so step 1's floor is re-checked when
+  EUP-5 G rules block growth, and step 2 follows any weight-limit change
+  through the build.
 
-**Recommendation: 12, about 10^17 outputs.** At the most the chain is allowed
-to write it is about 360 million years, and 3.6 million at a hundred times
-that budget. Depth 10 would also be safe, at about 520 000 years, but the extra
-margin of 12 costs almost nothing: the generator count is identical at depths
-8 to 14; the cap at the deepest tree is 18 against 19, at a depth the chain
-will not reach; and the 37 extra embargo cells are measured only if the tree
-ever gets that deep. Beyond 12 the margin buys nothing a reader could name,
-and at 16 or deeper the generator table doubles. The tree's eventual
-replacement at the V4 lattice-only transition is not counted on.
+#### `ICD-R10` — the standoff exit-fee reserve is computed, not pinned — RULED
 
-**Re-checked when EUP-5 G moves the zone.** The ceiling rests on the write
-budget and on today's weight limit; a larger zone raises the rate the chain
-can write toward the budget, and a larger weight limit raises the cap and the
-generator counts (`ICD-F15`). G's ruling re-runs this table.
+**The reserve is the heaviest legal `Release` weight times a headroom rate**,
+as a constant expression, rounded up to the fee lattice
+(`shekyl_economics::FEE_QUANTIZATION_MASK`, 1 000 atomic units), because the
+fee a `Release` actually pays is quantized up to it.
 
-Under `ICD-R1` and `ICD-R2` the one constant lives in `shekyl-curve-generators`
-beside the counts it sizes, and every reader (the wire's model, `shekyl-fcmp`,
-`shekyl-curve-tree`, the embargo table) reads it from there.
+- **The heaviest legal `Release` weight** comes from the legal-shape function
+  (below) over depths 2 to 14: **148 521 bytes** (22 inputs, two outputs,
+  depth 4). With depths above 14 no longer legal, the 148 614-byte shape at
+  depth 23 (`ICD-F11`) drops out.
+- **The headroom rate stays 600 atomic units per weight byte, an Assumption.**
+  Its basis, "600 times any observed floor", is replaced when the fee
+  ladder's own maximum rate exists (EUP-5 G).
+- **Today's value:** 148 521 × 600 = 89 112 600, rounded up to **89 113 000
+  atomic units, about 0.0891 SKL** (from 0.05).
+- **What it costs.** A fresh persona's protocol cover draw, uniform over
+  `[1, rung)` with the rung at 0.75 SKL, clears the reserve with probability
+  1 − 89 113 000 / 750 000 000 ≈ **88.1 %**, down from 93.3 %; the reserve is
+  about 1/8.4 of the rung, against 1/15. The §7.2 zero-fee-input escape still
+  funds a `Release` over an underfunded pool
+  (`ARCHIVAL_BOND_CONSTRUCTION.md` §7.2), so the larger corner strands value
+  until earnings or retirement but bricks nothing.
+- **Rule-75 bounds re-checked:** `0 < 89 113 000 < 750 000 000`. The engine's
+  assertion that the reserve is below one cover rung
+  (`the_exit_fee_reserve_is_below_one_cover_rung`) holds.
+- **Placement.** `shekyl-standoff` today depends on nothing and states that it
+  reads no consensus constant (`reserve.rs`). The computed reserve needs the
+  wire's legal ceiling and the fee lattice, so the cutover gives the crate those
+  two dependencies and restates that sentence; the rung assertion stays in
+  `shekyl-engine-core`, where the rung is visible.
 
-### The standoff reserve's value
+#### Cutover additions (Rick, 2026-11-22)
 
-The heaviest legal `P`-lane spend becomes 148 614 bytes, the weight limit
-itself (§7, `ICD-F11`).
-Keeping 600 atomic units per weight byte of head-room needs the reserve at
-about 0.09 SKL; keeping 0.05 SKL means restating the head-room as about 336.
-Recommendation: raise it to the value that keeps 600, computed in the cutover
-from the bounded scan rather than rounded here, with the rule-75 bounds
-re-checked against the rung.
+- **The legal-shape function is scoped to consensus.** It answers what can be
+  mined: the output count from `MIN_NON_COINBASE_OUTPUTS` to `MAX_OUTPUTS`,
+  depths 2 to the ruled maximum, and the input count the weight limit admits
+  for each, never above the cap. Relay policy (the weight gate, the fee floor)
+  keeps its own narrower rules on top and does not go in it.
+- **The builder reads it.** #1534 (the sim lane's, landing first) already makes
+  the builder refuse fewer than `MIN_NON_COINBASE_OUTPUTS` outputs by name
+  (`TooFewOutputs`); the cutover moves that refusal and the input-count refusal
+  onto the function, so the builder asks one question.
+- **The engine's restated two-output floors are deleted.** `stake_engine/bond.rs`
+  and `stake_engine/release.rs` split change and payout in halves
+  (`change / 2`, `payout / 2`) under comments restating the daemon's
+  `vout.size() < 2`. The split reads the minimum instead. **`ICD-F19`, an edge
+  on those lines:** a change or payout under 2 atomic units halves to a
+  zero-valued output, which the builder refuses with the generic
+  `ZeroOutputAmount`; the cutover's split refuses that case by name before
+  building.
+- **The ordinary send cannot reach the builder with one output** (traced
+  2026-11-22): `transfer/engine.rs` requires the selected inputs to cover the
+  payments, the with-change fee and `MIN_CHANGE`, so a change output always
+  exists, and no sweep surface exists (`sweep_all` was removed from the CLI).
+  `fee_and_change`'s no-change branch (`fee_variant.rs:73-77`) is unreachable
+  from that path with one recipient.
+- **`ICD-F20` — a multisig intent with fewer than two recipients passes
+  structural validation.** `SpendIntent::validate_structural` bounds the
+  recipients above (`MAX_RECIPIENTS`) and not below, so a group can run a
+  signing ceremony over an intent no transaction can carry, refused only at
+  build (by #1534's `TooFewOutputs`). The intent's own principle, that an
+  intent no transaction can carry is refused before anyone signs, puts a
+  `MIN_NON_COINBASE_OUTPUTS` check there; raised with the multisig lane.
+- **The GUI wallet PR** reads the cap from the core crates and replaces the
+  hard-coded `estimated_proof_size_kb: 4.5` with the model's figure at the
+  tree's depth.
+- **The economics sim's calibration domain** reads the landed constants and
+  the legal-shape function, so the sim tests the built structure.
+- **`ICD-F17`, for the sim lane:** one calibration run with the shape search
+  starting at two outputs, ahead of the full table. Rick's estimate is a shift
+  of about 2.5 % in the stuffer's archival-bytes-per-weight ratio at 8 inputs
+  and about 1 % at 22, enough to flip the 3 % margin between the 6-input and
+  8-input shapes, and a change in the sustained campaign's cycle. The 2 880-run
+  table stays with the cutover.
+
+## 11. Still open
+
+### `ICD-Q8` — confirm the rule order `ICD-R6` needs
+
+**The problem.** `ICD-R6`'s test (a 23-input transaction refused with CEN-I4's
+name) cannot pass while `tx_form` runs CEN-H3 before CEN-I4, since every such
+transaction is over the weight limit.
+
+**The question.** May the cutover judge CEN-I4 immediately before CEN-H3 in
+`tx_form`'s first band, and have the wire parser's count refusal cite CEN-I4?
+
+**The options.** (a) Yes, as `ICD-R6` above describes: only the row naming the
+refusal changes, and the count, the cheaper check, runs first. (b) Keep the
+order and pin the test through CEN-I4's conformance entry, the one route that
+reaches the arm today.
+
+**Recommendation: (a).** It makes the ruled rule the live refusal on both
+paths, instead of an arm reached only by a hand-built test.
+
+### The minimum-row floors (`ICD-F16`)
+
+The trace is done (§2.5): the two floors are the smallest row counts the
+vector-commitment tape can lay out, and going below them changes the circuit's
+word length or leaf layout. Whether a saving that exists only below depth 6 is
+worth departing from the circuit as upstream had it audited is Rick's to
+decide.
 
 ### The cover carrier's fragment count
 
@@ -1127,3 +1160,16 @@ the relay lane's round (`ICD-R4`).
   scan's fee width named. The test plan names the refusal each path produces,
   and `ICD-Q1`'s recommendation changed to deleting the rule, since no
   transaction reaches it.
+- **2026-11-22 — second rulings (Rick, at `97dda2dd76`).** `ICD-R6` (CEN-I4
+  stays, with a test that names it; the later recommendation to delete is
+  superseded, and `ICD-Q8` asks to confirm the rule order the test needs),
+  `ICD-R7` (no snap), `ICD-R8` (coupling accepted), `ICD-R9` (maximum depth 14:
+  floor 12 on the write budget, then the deepest tree needing no more
+  generators), `ICD-R10` (reserve computed: 89 113 000 atomic today). Cutover
+  additions recorded: the legal-shape function scoped to consensus, the builder
+  on it (#1534 lands the minimum first), the engine's restated two-output
+  floors deleted (`ICD-F19`, the zero-output edge on those lines), the send
+  path traced (no one-output route), `ICD-F20` (a multisig intent with fewer
+  than two recipients passes structural validation), the GUI's proof-size
+  literal, and the sim's two-output calibration run. Still open: `ICD-Q8`, the
+  row-floor decision, the fragment count.
