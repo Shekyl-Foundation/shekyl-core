@@ -155,8 +155,8 @@ enum Mode {
     /// `keygen_from_seed`).
     MlDsaKeygen,
     /// Diagnostic, not a registered line: ML-DSA's matched pair with signing
-    /// alone timed (fips204's `try_sign_with_seed` on keys generated before
-    /// the loop).
+    /// alone timed (fips204's `try_sign_with_seed`, the key decoded into one
+    /// working slot before each entry).
     MlDsaSign,
 }
 
@@ -363,6 +363,8 @@ fn compare_ml_dsa(
         })
         .collect();
     let mut times = vec![0u64; total];
+    let mut hints = vec![0u8; total];
+    let mut malformed_hints = 0usize;
     let mut returned = 0usize;
     let mut kept = Vec::with_capacity(total / KEEP_EVERY + 1);
     for (index, entry) in entries.iter().enumerate() {
@@ -382,6 +384,11 @@ fn compare_ml_dsa(
         times[index] = start.elapsed().as_nanos() as u64;
         if let Ok(signature) = result {
             returned += 1;
+            // Untimed: the ML-DSA half's hint count, from its hint section.
+            match hint_count(&signature.signature) {
+                Some(count) => hints[index] = count,
+                None => malformed_hints += 1,
+            }
             if index % KEEP_EVERY == 0 {
                 kept.push((index, signature));
             }
@@ -397,13 +404,15 @@ fn compare_ml_dsa(
                 if scheme.verify(&public, SCHEME_DOMAIN_PQC_AUTH_TX, &entries[*index].message, &sig).is_ok())
         })
         .count();
-    let checks_hold = returned == total && verified == kept.len();
+    let checks_hold = returned == total && verified == kept.len() && malformed_hints == 0;
     println!(
-        "  check entries={total} returned={returned} kept={} verified={verified} verdict={}",
+        "  check entries={total} returned={returned} kept={} verified={verified} \
+         malformed_hint_sections={malformed_hints} verdict={}",
         kept.len(),
         if checks_hold { "as-intended" } else { "FAILED" }
     );
     let which: Vec<u8> = entries.iter().map(|e| e.class).collect();
+    hint_report(&which, &times, &hints, sizing);
     let (max_t, median_ns, n) = statistics(&which, &times, sizing);
     Outcome {
         raw_sd_ns: raw_sd(&times[sizing.calibration..]),
@@ -817,16 +826,20 @@ fn matched_ml_dsa_pair(
     }
 }
 
-/// One diagnostic comparison: `op` timed alone on class `which`'s key, the
-/// classes interleaved by a coin drawn before the loop, as every comparison
-/// here is. Each entry draws a fresh 32-byte nonce seed and 64-byte message.
-fn compare_op<K>(
+/// One diagnostic comparison. Before each entry, untimed, `prepare` writes
+/// the entry's key material into a fresh local, the one working slot every
+/// entry of both classes signs from; then `op` is timed alone on it. The
+/// classes own no memory of their own (the FN-DSA harness's lesson: a class
+/// signing from resident objects of its own can cross on placement alone).
+/// `op` returns the signature's public hint count, or 0 where there is none.
+fn compare_op<K, S>(
     keys: [&K; 2],
     sizing: Sizing,
     inputs: &mut Inputs,
     planted: Option<u64>,
-    mut op: impl FnMut(&K, &[u8; 32], &[u8; 64]) -> bool,
-) -> Outcome {
+    prepare: impl Fn(&K) -> S,
+    mut op: impl FnMut(&S, &[u8; 32], &[u8; 64]) -> Option<u8>,
+) -> (Outcome, Vec<u8>, Vec<u64>, Vec<u8>) {
     let total = sizing.samples + sizing.calibration;
     let entries: Vec<(u8, [u8; 32], [u8; 64])> = (0..total)
         .map(|_| {
@@ -838,22 +851,28 @@ fn compare_op<K>(
         })
         .collect();
     let mut times = vec![0u64; total];
+    let mut hints = vec![0u8; total];
     let mut returned = 0usize;
+    // The one working slot, allocated once: every entry of both classes
+    // writes its key material here, untimed, and is timed from here.
+    let mut slot: Option<S> = None;
     for (index, (class, nonce, message)) in entries.iter().enumerate() {
+        slot = Some(prepare(keys[usize::from(*class)]));
+        let key = slot.as_ref().expect("written just above");
         let start = Instant::now();
-        let ok = op(
-            keys[usize::from(*class)],
-            black_box(nonce),
-            black_box(message),
-        );
+        let result = op(black_box(key), black_box(nonce), black_box(message));
         if let Some(iterations) = planted {
             if *class == 1 {
                 spin(iterations);
             }
         }
         times[index] = start.elapsed().as_nanos() as u64;
-        returned += usize::from(ok);
+        if let Some(hint) = result {
+            returned += 1;
+            hints[index] = hint;
+        }
     }
+    drop(slot);
     let checks_hold = returned == total;
     println!(
         "  check entries={total} returned={returned} verdict={}",
@@ -861,29 +880,199 @@ fn compare_op<K>(
     );
     let which: Vec<u8> = entries.iter().map(|e| e.0).collect();
     let (max_t, median_ns, n) = statistics(&which, &times, sizing);
-    Outcome {
+    let outcome = Outcome {
         raw_sd_ns: raw_sd(&times[sizing.calibration..]),
         max_t,
         median_ns,
         samples: n,
         checks_hold,
+    };
+    (outcome, which, times, hints)
+}
+
+/// ML-DSA-65's ω and k (FIPS 204 Table 1): the hint section is the last
+/// ω + k bytes of a signature.
+const ML_DSA_65_OMEGA: usize = 55;
+const ML_DSA_65_K: usize = 6;
+/// A stratum counts in the stratified comparison only when each class holds
+/// at least this many of its entries below the cut-off being read.
+const MIN_STRATUM_PER_CLASS: f64 = 100.0;
+
+/// The total hint count of an ML-DSA-65 signature, read from its hint
+/// section (the last ω + k bytes; the ML-DSA half ends a canonical hybrid
+/// signature too). `None` if the section is malformed by fips204 0.5.0's own
+/// rules (`hint_bit_unpack`, `conversion.rs:340-400`): each row's cumulative
+/// count at least the previous and at most ω (step 4); the indices within a
+/// row strictly increasing (step 9); the unused tail of the first ω bytes
+/// zero (step 17). The packer writes the cumulative count after row i at
+/// ω + i (`hint_bit_pack`, `conversion.rs:322`), so the last byte is the
+/// total.
+fn hint_count(signature: &[u8]) -> Option<u8> {
+    let start = signature.len().checked_sub(ML_DSA_65_OMEGA + ML_DSA_65_K)?;
+    let (positions, cumulative) = signature[start..].split_at(ML_DSA_65_OMEGA);
+    let mut index = 0usize;
+    for &end in cumulative {
+        let end = usize::from(end);
+        if end < index || end > ML_DSA_65_OMEGA {
+            return None;
+        }
+        let first = index;
+        while index < end {
+            if index > first && positions[index - 1] >= positions[index] {
+                return None;
+            }
+            index += 1;
+        }
     }
+    if positions[index..].iter().any(|&b| b != 0) {
+        return None;
+    }
+    u8::try_from(index).ok()
+}
+
+/// The cut-offs the main statistic reads, placed from the calibration batch.
+fn crop_cutoffs(times: &[u64], sizing: Sizing) -> Vec<f64> {
+    let mut calibration: Vec<f64> = times[..sizing.calibration]
+        .iter()
+        .map(|&t| t as f64)
+        .collect();
+    calibration.sort_by(f64::total_cmp);
+    (0..CROPS)
+        .map(|i| {
+            let quantile = 1.0 - 0.5f64.powf(10.0 * (i as f64 + 1.0) / CROPS as f64);
+            let index =
+                ((quantile * sizing.calibration as f64) as usize).min(sizing.calibration - 1);
+            calibration[index]
+        })
+        .collect()
+}
+
+/// Welch's t within strata of equal hint count, combined: each stratum's
+/// difference of means weighted by its size, over the measured entries at
+/// or below `ceiling`, strata with fewer than [`MIN_STRATUM_PER_CLASS`] in a
+/// class left out. Returns the t and the entries it used.
+fn stratified_t(
+    which: &[u8],
+    times: &[u64],
+    hints: &[u8],
+    from: usize,
+    ceiling: f64,
+) -> (f64, usize) {
+    let mut strata: std::collections::BTreeMap<u8, [Moments; 2]> =
+        std::collections::BTreeMap::new();
+    for i in from..times.len() {
+        let t = times[i] as f64;
+        if t <= ceiling {
+            strata.entry(hints[i]).or_default()[usize::from(which[i])].push(t);
+        }
+    }
+    let (mut num, mut den, mut used) = (0.0, 0.0, 0usize);
+    for m in strata.values() {
+        if m[0].n < MIN_STRATUM_PER_CLASS || m[1].n < MIN_STRATUM_PER_CLASS {
+            continue;
+        }
+        let w = m[0].n + m[1].n;
+        num += w * (m[0].mean - m[1].mean);
+        den += w * w * (m[0].variance() / m[0].n + m[1].variance() / m[1].n);
+        used += w as usize;
+    }
+    (if den > 0.0 { num / den.sqrt() } else { 0.0 }, used)
+}
+
+/// The hint counts' part of a comparison's report:
+/// - each class's mean hint count;
+/// - a chi-square test of homogeneity of the two classes' hint-count
+///   distributions (2 × m table, adjacent counts pooled until both expected
+///   cells are at least 5), with its degrees of freedom and the
+///   Wilson–Hilferty normal equivalent `z`;
+/// - the stratified comparison within equal hint counts, read as the main
+///   figure is: on the raw samples and below each of the same 100 cut-offs,
+///   the largest `|t|` reported with where it sits.
+fn hint_report(which: &[u8], times: &[u64], hints: &[u8], sizing: Sizing) {
+    let from = sizing.calibration;
+    let mut counts: std::collections::BTreeMap<u8, [f64; 2]> = std::collections::BTreeMap::new();
+    let mut mean = [Moments::default(); 2];
+    for i in from..hints.len() {
+        counts.entry(hints[i]).or_default()[usize::from(which[i])] += 1.0;
+        mean[usize::from(which[i])].push(f64::from(hints[i]));
+    }
+    let totals = [mean[0].n, mean[1].n];
+    let all = totals[0] + totals[1];
+    let mut bins: Vec<[f64; 2]> = Vec::new();
+    let mut open = [0.0f64; 2];
+    for c in counts.values() {
+        open[0] += c[0];
+        open[1] += c[1];
+        let row = open[0] + open[1];
+        if row * totals[0] / all >= 5.0 && row * totals[1] / all >= 5.0 {
+            bins.push(open);
+            open = [0.0; 2];
+        }
+    }
+    if open[0] + open[1] > 0.0 {
+        match bins.last_mut() {
+            Some(last) => {
+                last[0] += open[0];
+                last[1] += open[1];
+            }
+            None => bins.push(open),
+        }
+    }
+    let chi2: f64 = bins
+        .iter()
+        .map(|bin| {
+            let row = bin[0] + bin[1];
+            (0..2)
+                .map(|k| {
+                    let expected = row * totals[k] / all;
+                    (bin[k] - expected).powi(2) / expected
+                })
+                .sum::<f64>()
+        })
+        .sum();
+    let df = bins.len().saturating_sub(1).max(1) as f64;
+    let z = ((chi2 / df).powf(1.0 / 3.0) - (1.0 - 2.0 / (9.0 * df))) / (2.0 / (9.0 * df)).sqrt();
+    let (mut best_t, mut best_n) = stratified_t(which, times, hints, from, f64::INFINITY);
+    let mut at = String::from("raw");
+    for (i, cutoff) in crop_cutoffs(times, sizing).iter().enumerate() {
+        let (t, n) = stratified_t(which, times, hints, from, *cutoff);
+        if t.abs() > best_t.abs() {
+            (best_t, best_n) = (t, n);
+            at = format!("crop {i} at {cutoff:.0} ns");
+        }
+    }
+    println!(
+        "  hints mean0={:.2} mean1={:.2} chi2={chi2:.2} df={df:.0} chi2_z={z:.2} | \
+         within-equal-hints max_abs_t={:.2} at {at} (n={best_n}, strata need >= \
+         {MIN_STRATUM_PER_CLASS:.0} per class)",
+        mean[0].mean,
+        mean[1].mean,
+        best_t.abs()
+    );
 }
 
 /// The localisation of ML-DSA's matched-pair crossing (CRYPTO_AUDIT.md
-/// §3.2): the same matched pair the `ml-dsa` mode draws for this seed, with
-/// key generation alone or signing alone timed. Diagnostic: it reads no
-/// registered line and prints no verdict, only the figures.
+/// §3.2), on the matched pair the `ml-dsa` mode draws for this seed, each
+/// half timed alone from one working slot:
+/// - `ml-dsa-keygen`: the shared secret copied into the slot, then the
+///   output's seed derivation and `keygen_from_seed` timed;
+/// - `ml-dsa-sign`: the secret key decoded from its bytes into the slot
+///   (`PrivateKey::try_from_bytes`, as the shipped call decodes its key on
+///   every call), then fips204's `try_sign_with_seed` timed, and each
+///   signature's hint count read afterwards.
+///
+/// Each null holds key A as two separate copies, one per class, through the
+/// same slot. Diagnostic: no registered line, no verdict, only the figures.
 fn ml_dsa_localisation(mode: Mode, sizing: Sizing, inputs: &mut Inputs, seed: u64) -> ! {
-    use fips204::traits::Signer as _;
+    use fips204::traits::{SerDes as _, Signer as _};
     use shekyl_crypto_pq::derivation::keygen_from_seed;
     use shekyl_crypto_pq::output::output_ml_dsa_seed_for_tests;
 
     let (a, b, a_work, b_work, drawn) = matched_ml_dsa_pair(inputs);
     let half = if mode == Mode::MlDsaKeygen {
-        "key generation alone (seed derivation + keygen_from_seed)"
+        "key generation alone, one working slot"
     } else {
-        "signing alone (fips204 try_sign_with_seed, keys generated before the loop)"
+        "signing alone, one working slot, hint counts"
     };
     println!("CA-3 ML-DSA localisation, diagnostic (no registered line): {half}");
     println!(
@@ -899,44 +1088,82 @@ fn ml_dsa_localisation(mode: Mode, sizing: Sizing, inputs: &mut Inputs, seed: u6
         a_work.replicates,
         b_work.replicates,
     );
-    let report = |label: &str, o: &Outcome| {
+    let report = |label: &str, r: &(Outcome, Vec<u8>, Vec<u64>, Vec<u8>), with_hints: bool| {
+        let (o, which, times, hints) = r;
         println!(
             "{label} max_abs_t={:.2} median_ns={:.0} raw_sd_ns={:.0} n0={:.0} n1={:.0}",
             o.max_t, o.median_ns, o.raw_sd_ns, o.samples[0], o.samples[1]
         );
+        if with_hints {
+            hint_report(which, times, hints, sizing);
+        }
     };
-    let (pair, null, control) = if mode == Mode::MlDsaKeygen {
+    let (pair, null, control, with_hints) = if mode == Mode::MlDsaKeygen {
+        let a_again = a;
+        let prepare = |ss: &[u8; SHARED_SECRET_LEN]| *ss;
         let keygen = |ss: &[u8; SHARED_SECRET_LEN], _: &[u8; 32], _: &[u8; 64]| {
-            let seed = output_ml_dsa_seed_for_tests(black_box(ss), 0);
-            black_box(keygen_from_seed(&seed)).is_ok()
+            let seed = output_ml_dsa_seed_for_tests(ss, 0);
+            black_box(keygen_from_seed(&seed)).is_ok().then_some(0)
         };
-        let pair = compare_op([&a, &b], sizing, inputs, None, keygen);
-        let null = compare_op([&a, &a], sizing, inputs, None, keygen);
-        let iterations = calibrate_spin(null.median_ns * CONTROL_LEAK_FRACTION);
-        let control = compare_op([&a, &a], sizing, inputs, Some(iterations), keygen);
-        (pair, null, control)
+        let pair = compare_op([&a, &b], sizing, inputs, None, prepare, keygen);
+        let null = compare_op([&a, &a_again], sizing, inputs, None, prepare, keygen);
+        let iterations = calibrate_spin(null.0.median_ns * CONTROL_LEAK_FRACTION);
+        let control = compare_op(
+            [&a, &a_again],
+            sizing,
+            inputs,
+            Some(iterations),
+            prepare,
+            keygen,
+        );
+        (pair, null, control, false)
     } else {
-        let key = |ss: &[u8; SHARED_SECRET_LEN]| {
+        let bytes = |ss: &[u8; SHARED_SECRET_LEN]| {
             keygen_from_seed(&output_ml_dsa_seed_for_tests(ss, 0))
                 .expect("a derived seed generates")
                 .1
+                .into_bytes()
         };
-        let (sk_a, sk_b) = (key(&a), key(&b));
+        let (sk_a, sk_b) = (bytes(&a), bytes(&b));
+        let sk_a_again = sk_a;
+        let prepare = |sk: &[u8; fips204::ml_dsa_65::SK_LEN]| {
+            fips204::ml_dsa_65::PrivateKey::try_from_bytes(*sk).expect("its own encoding decodes")
+        };
         let sign = |sk: &fips204::ml_dsa_65::PrivateKey, nonce: &[u8; 32], message: &[u8; 64]| {
-            black_box(sk.try_sign_with_seed(nonce, message, &[])).is_ok()
+            sk.try_sign_with_seed(nonce, message, &[])
+                .ok()
+                .and_then(|sig| hint_count(&sig))
         };
-        let pair = compare_op([&sk_a, &sk_b], sizing, inputs, None, sign);
-        let null = compare_op([&sk_a, &sk_a], sizing, inputs, None, sign);
-        let iterations = calibrate_spin(null.median_ns * CONTROL_LEAK_FRACTION);
-        let control = compare_op([&sk_a, &sk_a], sizing, inputs, Some(iterations), sign);
-        (pair, null, control)
+        let pair = compare_op([&sk_a, &sk_b], sizing, inputs, None, prepare, sign);
+        let null = compare_op([&sk_a, &sk_a_again], sizing, inputs, None, prepare, sign);
+        let iterations = calibrate_spin(null.0.median_ns * CONTROL_LEAK_FRACTION);
+        let control = compare_op(
+            [&sk_a, &sk_a_again],
+            sizing,
+            inputs,
+            Some(iterations),
+            prepare,
+            sign,
+        );
+        (pair, null, control, true)
     };
-    report("diagnostic=fixed-a-vs-fixed-b", &pair);
-    report("null=fixed-a-vs-fixed-a", &null);
-    report("control=fixed-a-vs-fixed-a(planted 0.5%)", &control);
-    std::process::exit(i32::from(
-        !(pair.checks_hold && null.checks_hold && control.checks_hold),
-    ));
+    report("diagnostic=fixed-a-vs-fixed-b", &pair, with_hints);
+    report("null=fixed-a-vs-fixed-a-again", &null, with_hints);
+    report(
+        "control=fixed-a-vs-fixed-a-again(planted 0.5%)",
+        &control,
+        with_hints,
+    );
+    let checks = pair.0.checks_hold && null.0.checks_hold && control.0.checks_hold;
+    println!(
+        "check=localisation verdict={}",
+        if checks {
+            "as-intended"
+        } else {
+            "FAILED (a call returned no signature or a malformed hint section)"
+        }
+    );
+    std::process::exit(i32::from(!checks));
 }
 
 fn usage() -> ! {

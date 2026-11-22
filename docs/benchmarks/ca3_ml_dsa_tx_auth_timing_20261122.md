@@ -273,3 +273,53 @@ result=FAIL fixed_pair=10.44 worst_null=2.09 control=127.03 information_fixed_vs
 - **Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_ml_*`,
   with `SHA256SUMS`. The device's paths and login are redacted; the raw
   files are in the estate's private captures.
+- **That localisation does not stand.** Two faults:
+  - Signing alone signed from a resident key object per class, the
+    per-class memory that FN-DSA retired after placement alone crossed its
+    nulls on this device. Its null reused one object, so it could not see
+    placement.
+  - Both halves read key A faster, while the composed call reads it slower.
+
+### Second localisation: method, fixed before the run (2026-11-22)
+
+This is a diagnostic, not an attempt. It has no registered line and makes
+no proposal on the pass line.
+
+- **Device and inputs:**
+  - the floor device under a quiet claim;
+  - seed `20261124`, so the same matched pair;
+  - 50,000 samples per comparison;
+  - modes `ml-dsa-sign`, `ml-dsa-keygen` and `ml-dsa` (the composed call).
+- **One working slot.** Each diagnostic mode prepares every entry's key
+  material, untimed, into one slot. The slot is allocated once and reused
+  for every entry of both classes.
+  - `ml-dsa-sign`: the keys are held as encoded bytes, and each entry
+    decodes into the slot (`PrivateKey::try_from_bytes`) before
+    `try_sign_with_seed` is timed.
+  - `ml-dsa-keygen`: each entry copies the shared secret into the slot
+    before the seed derivation and `keygen_from_seed` are timed.
+- **Nulls.** `fixed-a-vs-fixed-a-again` holds key A as two separate
+  copies, one per class, through the same slot. The planted control sits
+  on that null.
+- **Hint counts** (`ml-dsa-sign` and `ml-dsa`), read untimed after each
+  call. fips204 0.5.0 writes the hint section last (`encodings.rs:280`).
+  `hint_bit_pack` (`conversion.rs:277`) stores the running index after row
+  `i` at `ω + i` (`:322`), so the last byte is the total.
+- **A check, voiding the comparison on failure.** Every hint section is
+  well formed by `hint_bit_unpack`'s rules (`conversion.rs:340-400`):
+  - each row's count at least the previous and at most ω (step 4);
+  - the positions within a row strictly increasing (step 9);
+  - the unused bytes zero (step 17).
+- **Reported per comparison:**
+  - the overall figure, as in the registered statistic;
+  - each class's mean hint count, and the two distributions compared by a
+    chi-square test of homogeneity on a 2 × m table. Adjacent counts are
+    pooled until every expected cell is at least 5. The test reports its
+    degrees of freedom and the Wilson–Hilferty normal equivalent `z`.
+  - the stratified comparison within equal hint counts: Welch's `t` per
+    hint count, combined as the size-weighted difference of means over its
+    pooled standard error. It is read as the main figure is, on the raw
+    samples and below each of the same 100 cut-offs. The largest `|t|` is
+    reported, with where it sits. **Minimum:** a hint count enters only
+    when each class holds at least 100 entries of it below the cut-off
+    being read.
