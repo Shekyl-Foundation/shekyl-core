@@ -11,12 +11,12 @@ publish = false
 # Message 3's and message 4's payload is a grant set, one length for every
 # set (RT-O31); the handshake takes that length from the set's owner.
 shekyl-rpc-grants = { path = "../shekyl-rpc-grants" }
-# Pinned exactly, to the version `shekyl-crypto-pq` and the P2P handshake
-# pin. RT-P4's constant-time result is a statement about this build of this
-# crate, and the handshake is what puts its decapsulation in front of a
-# stranger. The RT-P4 harness (examples/rt_p4_decaps_timing.rs) times it
-# through this same edge.
-fips203 = "=0.4.3"
+# The workspace's exact pin, the one `shekyl-crypto-pq` and the P2P
+# handshake inherit. RT-P4's constant-time result is a statement about this
+# build of this crate, and the handshake is what puts its decapsulation in
+# front of a stranger. The RT-P4 harness (examples/rt_p4_decaps_timing.rs)
+# times it through this same edge.
+fips203 = { workspace = true }
 # mac1 on message 1 (RPC_CHANNEL.md section 4.3): keyed BLAKE2s, and
 # BLAKE2s-256 for its key. The version and features shekyl-noise's Noise
 # hash already uses, so the lock gains an edge and no crate.

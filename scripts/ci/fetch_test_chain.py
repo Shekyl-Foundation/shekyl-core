@@ -53,14 +53,24 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 import urllib.request
+import zipfile
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python before 3.11, e.g. macOS's system python3
+    sys.exit(
+        "fetch_test_chain.py needs Python 3.11 or later (tomllib); "
+        f"this is Python {sys.version_info.major}.{sys.version_info.minor}"
+    )
 
 REPO = Path(__file__).resolve().parents[2]
 FORGE = REPO / "rust" / "shekyl-chain-forge"
 PIN_FILE = FORGE / "chains" / "hosted.toml"
-ORAS_URL = "https://github.com/oras-project/oras/releases/download/v{v}/oras_{v}_{p}.tar.gz"
+# Each platform's archive: Windows ships a zip holding `oras.exe`, the rest a
+# tar.gz holding `oras`.
+ORAS_URL = "https://github.com/oras-project/oras/releases/download/v{v}/oras_{v}_{p}.{ext}"
 # What a pull needs from a chain entry. The rest of the pin's form is
 # `hosted::Pins` (`shekyl-chain-forge`).
 CHAIN_FIELDS = ("reference", "digest", "commit", "plan", "layer")
@@ -135,14 +145,46 @@ def check_layers(chain: dict, directory: Path) -> None:
         raise Refused(f"{chain['name']}: the artifact holds files the pin does not name: {extra}")
 
 
-def oras_platform() -> str:
-    system = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system())
-    machine = {"x86_64": "amd64", "AMD64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(
-        platform.machine()
-    )
+# What `platform.machine()` reports, per host, for the two architectures oras
+# ships: `x86_64` (Linux, macOS), `AMD64` (Windows), `amd64` (FreeBSD);
+# `aarch64` (Linux), `arm64` (macOS, FreeBSD).
+ORAS_MACHINES = {"x86_64": "amd64", "AMD64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+ORAS_SYSTEMS = {"Linux": "linux", "Darwin": "darwin", "FreeBSD": "freebsd", "Windows": "windows"}
+
+
+def oras_platform(system_name: str | None = None, machine_name: str | None = None) -> str:
+    """The oras archive's platform for this host, or for the pair given."""
+    system_name = platform.system() if system_name is None else system_name
+    machine_name = platform.machine() if machine_name is None else machine_name
+    system = ORAS_SYSTEMS.get(system_name)
+    machine = ORAS_MACHINES.get(machine_name)
     if not system or not machine:
-        raise Refused(f"no pinned oras archive for {platform.system()} {platform.machine()}")
+        raise Refused(f"no pinned oras archive for {system_name} {machine_name}")
     return f"{system}_{machine}"
+
+
+def oras_archive(plat: str) -> tuple[str, str]:
+    """The archive's extension and the binary inside it, for `plat`."""
+    return ("zip", "oras.exe") if plat.startswith("windows_") else ("tar.gz", "oras")
+
+
+def extract_oras(archive: bytes, plat: str) -> bytes:
+    """The oras binary out of the checked archive for `plat`."""
+    ext, name = oras_archive(plat)
+    if ext == "zip":
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            if name not in zipped.namelist():
+                raise Refused(f"the oras archive holds no `{name}` file")
+            return zipped.read(name)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        try:
+            member = tar.getmember(name)
+        except KeyError:
+            raise Refused(f"the oras archive holds no `{name}` file") from None
+        extracted = tar.extractfile(member)
+        if extracted is None:
+            raise Refused(f"the oras archive holds no `{name}` file")
+        return extracted.read()
 
 
 def install_oras(pins: dict) -> Path:
@@ -153,23 +195,19 @@ def install_oras(pins: dict) -> Path:
     if not want:
         raise Refused(f"the pin file has no oras {version} checksum for {plat}")
     home = Path(os.environ.get("RUNNER_TEMP") or Path.home() / ".cache") / "shekyl-oras" / version
-    binary = home / "oras"
+    ext, name = oras_archive(plat)
+    binary = home / name
     stamp = home / "archive.sha256"
     if binary.is_file() and stamp.is_file() and stamp.read_text().strip() == want:
         return binary
-    url = ORAS_URL.format(v=version, p=plat)
+    url = ORAS_URL.format(v=version, p=plat, ext=ext)
     with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 (a pinned https URL)
         archive = response.read()
     got = hashlib.sha256(archive).hexdigest()
     if got != want:
         raise Refused(f"oras {version} {plat}: the archive's SHA-256 is {got}; the pin says {want}")
     home.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
-        member = tar.getmember("oras")
-        extracted = tar.extractfile(member)
-        if extracted is None:
-            raise Refused("the oras archive holds no `oras` file")
-        binary.write_bytes(extracted.read())
+    binary.write_bytes(extract_oras(archive, plat))
     binary.chmod(0o755)
     stamp.write_text(want + "\n")
     return binary
@@ -338,8 +376,60 @@ def selftest() -> int:
         and command.endswith("rm -f out/blocks.txt"),
     )
 
+    # Each archive form gives up its binary, and one without it is refused.
+    payload = b"oras binary"
+    zipped = io.BytesIO()
+    with zipfile.ZipFile(zipped, "w") as archive:
+        archive.writestr("oras.exe", payload)
+        archive.writestr("LICENSE", b"license")
+    tarred = io.BytesIO()
+    with tarfile.open(fileobj=tarred, mode="w:gz") as archive:
+        info = tarfile.TarInfo("oras")
+        info.size = len(payload)
+        archive.addfile(info, io.BytesIO(payload))
+    expect("a Windows zip gives up oras.exe", extract_oras(zipped.getvalue(), "windows_amd64") == payload)
+    expect("a tar.gz gives up oras", extract_oras(tarred.getvalue(), "linux_amd64") == payload)
+    no_exe = io.BytesIO()
+    with zipfile.ZipFile(no_exe, "w") as archive:
+        archive.writestr("LICENSE", b"license")
+    no_oras = io.BytesIO()
+    with tarfile.open(fileobj=no_oras, mode="w:gz") as archive:
+        info = tarfile.TarInfo("LICENSE")
+        info.size = len(b"license")
+        archive.addfile(info, io.BytesIO(b"license"))
+    for label, archive_bytes, plat in (
+        ("a Windows zip without oras.exe is refused", no_exe.getvalue(), "windows_amd64"),
+        ("a tar.gz without oras is refused", no_oras.getvalue(), "linux_amd64"),
+    ):
+        try:
+            extract_oras(archive_bytes, plat)
+            expect(label, False)
+        except Refused:
+            expect(label, True)
+
     real = load_pins()
     expect("the committed pin file parses and pins oras", bool(real["oras"]["sha256"]))
+    # Each host's own report, as `platform` gives it there, reaches a pinned
+    # archive; a pair oras does not ship for is refused by name.
+    for host, machine, plat in (
+        ("Linux", "x86_64", "linux_amd64"),
+        ("Linux", "aarch64", "linux_arm64"),
+        ("Darwin", "x86_64", "darwin_amd64"),
+        ("Darwin", "arm64", "darwin_arm64"),
+        ("FreeBSD", "amd64", "freebsd_amd64"),
+        ("Windows", "AMD64", "windows_amd64"),
+    ):
+        try:
+            got = oras_platform(host, machine)
+        except Refused:
+            got = None
+        expect(f"{host} {machine} maps to {plat}", got == plat)
+        expect(f"the pin file pins oras for {plat}", plat in real["oras"]["sha256"])
+    try:
+        oras_platform("Linux", "riscv64")
+        expect("an unshipped architecture is refused", False)
+    except Refused as why:
+        expect("an unshipped architecture is refused", "riscv64" in str(why))
     print("selftest: " + ("passed" if failures == 0 else f"{failures} failure(s)"))
     return 1 if failures else 0
 

@@ -371,7 +371,7 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // The managed Tor's inbox, before the node: the network publishes into
     // it from its first value (`TOR_SUPERVISOR.md` §5). The supervisor
     // starts on it once the node is open.
-    let (tor_inbox, tor_feeds) = tor::prepare();
+    let (tor_inbox, tor_feeds) = tor::prepare(walked.persistent_onion);
     // The node, after the marker (DX-Q6): the store, ingest, the pool,
     // chain sync, and the network built from the plan (§2). The network's
     // ban file entries are applied before its first accept, and its
