@@ -1,7 +1,7 @@
 //! Integer reward arithmetic for archival emission (REWARD_EMISSION_LEG.md §4).
 //!
-//! Substrate-free: no LMDB, no FFI. Consumed by consensus verification, KATs, and
-//! `shekyl-staking-sim` (`--curve-impl=integer`).
+//! Substrate-free: no store reads, no FFI. Consumed by consensus
+//! verification, KATs, and `shekyl-staking-sim` (`--curve-impl=integer`).
 
 #![deny(clippy::float_arithmetic)]
 

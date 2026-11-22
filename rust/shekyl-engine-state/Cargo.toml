@@ -19,7 +19,10 @@ serde.workspace = true
 serde_bytes = "0.11"
 thiserror.workspace = true
 tracing = "0.1"
-postcard = { version = "1", features = ["alloc"] }
+# No default features: postcard's default, `heapless-cas`, pulls heapless 0.7
+# (Treiber pool, RUSTSEC-2026-0580) and atomic-polyfill, and no code here
+# uses heapless.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 getrandom = { version = "0.2", features = ["std"] }
 
 # Hardening-pass commit 3.4 (`docs/MID_REWIRE_HARDENING.md` §3.4):

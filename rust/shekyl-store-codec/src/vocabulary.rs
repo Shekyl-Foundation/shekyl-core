@@ -65,8 +65,8 @@ impl Canonical for BlockHeight {
 /// `txs_prunable_hash[tx_id]` — the digest of a transaction's prunable
 /// region, the txid's fourth component (S-CHAIN-W SCW-10). The
 /// `shekyl-types` identity type, stored as its 32 bytes; the daemon
-/// store's `Hash32` (`lmdb_order`) appears only where an LMDB *ordering*
-/// is carried, which a value is not.
+/// store's `Hash32` (`lmdb_order`) appears only where a key *ordering* is
+/// carried, which a value is not.
 impl Canonical for PrunableHash {
     const NAME: &'static str = "prunable_hash";
     const FIXED_WIDTH: Option<usize> = Some(32);

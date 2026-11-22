@@ -28,14 +28,15 @@ use shekyl_units::AtomicUnits;
 use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, RunEnd, RunFault};
 use crate::corpus::CorpusSource;
 use crate::metrics::Metrics;
-use crate::pipeline::{run, Checkpoint, PipelineConfig, PipelineFault};
+use crate::pipeline::{run, Checkpoint, OfferStop, PipelineConfig, PipelineFault, RunReport};
 use crate::schedule::ChainRules;
 use crate::sequencer::SequenceError;
 use crate::source::{IngestEvent, SequenceNo, Sequenced};
 use crate::test_support::{
-    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_reorg,
-    expected_state, h, key_image, open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of,
-    Family, GrownTree, JoinedConnector, Scripted, FIRST_SPEND_HEIGHT,
+    at, bare_chain, block_with_nonce, chain, corpus_from, corpus_of, corpus_of_offers,
+    corpus_of_reorg, corpus_offering, corpus_offering_then, expected_state, h, key_image,
+    open_store, reorg, reorg_of, spent_keys_of, tmp, trace_of, Family, GrownTree, JoinedConnector,
+    Scripted, FIRST_SPEND_HEIGHT,
 };
 
 /// Regtest without a fixed target: the genesis rules at every height.
@@ -991,10 +992,10 @@ async fn a_rewind_across_a_seed_epoch_step_claims_the_seed_from_the_store() {
     )
     .await
     .expect("the rewind across the epoch step replays");
-    assert_eq!(report.switches.len(), 1);
+    assert_eq!(report.rewinds.len(), 1);
     // Main's tip was `boundary`; the rewind is to `boundary − 2`: two popped.
     assert_eq!(
-        (report.switches[0].to, report.switches[0].popped),
+        (report.rewinds[0].to, report.rewinds[0].popped),
         (h(boundary - 2), 2)
     );
     // Every main block connected once, then the fork's three.
@@ -1131,6 +1132,215 @@ async fn a_regtest_corpus_replays_under_a_fixed_difficulty_and_connects() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn offers_of_a_heavier_fork_switch_through_the_fork_choice_and_land_where_a_rewind_does() {
+    // CF-3 through the real Source: the reorg family's chain again, with
+    // the fork written as offers after main's blocks, as a network meets
+    // it. No record says switch. The fork choice holds the fork while it
+    // is no heavier (`f + 1'..=f + 3'` against main's three), switches at
+    // the fourth offer, and the run ends where the rewind's replay ends:
+    // the fork's tip, its state and its archival rows, each promoted
+    // height's facts compared with the trace's.
+    let path = tmp("pipeline-offers");
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_of_offers(&r);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("the offers replay");
+    assert!(report.rewinds.is_empty(), "no rewind was read");
+    // One switch, at the fourth offer: records `0..=f + 3` are main's
+    // extends, `f + 4..=f + 7` the four offers.
+    assert_eq!(report.switches.len(), 1, "{:?}", report.switches);
+    let switch = &report.switches[0];
+    assert_eq!(
+        switch.record.to_raw(),
+        f + 7,
+        "the offer that made the fork heavier"
+    );
+    assert_eq!((switch.fork, switch.depth, switch.tip), (h(f), 3, h(f + 4)));
+    assert_eq!(switch.digest, expected_state(&r.after));
+    assert_eq!(report.popped(), 3);
+    // Every main block, then the fork's four, promoted together.
+    let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
+    let expected: Vec<u64> = (0..=f + 3).chain(f + 1..=f + 4).collect();
+    assert_eq!(connected, expected);
+    // The promoted heights are compared, not skipped: every height of the
+    // fork's chain is, once.
+    assert_eq!(report.disagreements().count(), 0);
+    assert_eq!(report.roots.compared(), f + 5, "every height 0..={}", f + 4);
+    let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(f + 4));
+    assert_eq!(ours, theirs, "the fork's tip matches its own trace");
+    let archival = report
+        .archival
+        .as_ref()
+        .expect("archival rows at the checkpoint");
+    assert!(
+        archival.identical(),
+        "{:?}",
+        archival.diff.diverged().collect::<Vec<_>>()
+    );
+}
+
+/// The offers test's chain replayed with the fork offered in `order`.
+async fn replay_offering(
+    name: &str,
+    order: &[usize],
+) -> Result<
+    RunReport,
+    PipelineFault<shekyl_corpus::CorpusFault, <MockSubstrate as crate::pow::Pow>::Fault>,
+> {
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering(&r, order);
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp(name)),
+        trace,
+        cfg(2),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offer_dropped_from_the_tip_of_the_fork_leaves_no_switch() {
+    // Negative control: without the fork's last block the fork is three
+    // against main's three, never heavier, so the fork choice holds it and
+    // nothing switches. Against the switch the full corpus derives (at the
+    // fourth offer) the outcome changed: a replay test holding the switch
+    // to a manifest goes red.
+    let report = replay_offering("pipeline-offers-drop-last", &[0, 1, 2])
+        .await
+        .expect("the held offers replay");
+    assert!(report.switches.is_empty(), "{:?}", report.switches);
+    let f = FIRST_SPEND_HEIGHT;
+    let connected: Vec<u64> = report.connected.iter().map(|(hh, _)| hh.to_raw()).collect();
+    assert_eq!(connected, (0..=f + 3).collect::<Vec<_>>(), "main alone");
+    assert!(
+        report.checkpoint.is_none(),
+        "the fork's tip, which the trace covers, is never reached"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offer_dropped_from_inside_the_fork_is_refused_as_unlinked() {
+    // Negative control: without the fork's first block, its child is
+    // offered with a parent the store holds nowhere. The node refuses it
+    // (CEN-K2's orphan); the replay stops there, naming the offer.
+    let f = FIRST_SPEND_HEIGHT;
+    let refused = replay_offering("pipeline-offers-drop-first", &[1, 2, 3])
+        .await
+        .expect_err("an orphan offer");
+    match refused {
+        PipelineFault::Offer {
+            record,
+            stop: OfferStop::Unlinked { .. },
+        } => assert_eq!(record.to_raw(), f + 4, "the first offer"),
+        other => panic!("not refused as unlinked: {other}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_offers_out_of_order_are_refused_as_unlinked() {
+    // Negative control: the fork's first two blocks swapped, so the child
+    // arrives before its parent and is refused as an orphan, as it would be
+    // live; the corpus carries no order of its own to repair it.
+    let f = FIRST_SPEND_HEIGHT;
+    let refused = replay_offering("pipeline-offers-swapped", &[1, 0, 2, 3])
+        .await
+        .expect_err("a child before its parent");
+    match refused {
+        PipelineFault::Offer {
+            record,
+            stop: OfferStop::Unlinked { .. },
+        } => assert_eq!(record.to_raw(), f + 4, "the child, offered first"),
+        other => panic!("not refused as unlinked: {other}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_after_a_switch_is_claimed_from_the_store_and_connects() {
+    // Four offers switch the chain (at the fourth), then the fork's fifth
+    // block is an `extend` on the new tip. The ledgers dropped the branch
+    // the chain left; the claims for the block after the switch read the
+    // promoted headers from the store, as a claim past a rewind does, and
+    // the run ends at the trace's covered tip with every height compared.
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 5);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering_then(&r, &[0, 1, 2, 3], Some(4));
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp("pipeline-offers-then-extend")),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("the switch and the block after it replay");
+    assert_eq!(report.switches.len(), 1, "{:?}", report.switches);
+    assert_eq!(report.switches[0].tip, h(f + 4));
+    assert_eq!(report.connected.last().map(|(hh, _)| *hh), Some(h(f + 5)));
+    assert_eq!(report.disagreements().count(), 0);
+    assert_eq!(report.roots.compared(), f + 6, "every height 0..={}", f + 5);
+    let Checkpoint { at, ours, theirs } = report.checkpoint.expect("covered-tip checkpoint");
+    assert_eq!(at, h(f + 5));
+    assert_eq!(ours, theirs);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_extend_on_an_offered_block_that_did_not_become_the_tip_is_refused() {
+    // The fork's first three blocks offered: three against main's three,
+    // held, no switch. Then the fork's fourth written as an `extend` on the
+    // third, which the format takes (its parent is an offered block). The
+    // tip is still main's, so the replay judges a block whose parent is not
+    // its tip and refuses it (CEN-A2): nothing in the corpus says the chain
+    // switched, and nothing is trusted because the corpus wrote it.
+    let f = FIRST_SPEND_HEIGHT;
+    let r = reorg(f + 4, f, 4);
+    let trace = Arc::new(trace_of(&r.after, true));
+    let bytes = corpus_offering_then(&r, &[0, 1, 2], Some(3));
+    let mut source = CorpusSource::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(tmp("pipeline-offers-extend-unswitched")),
+        trace,
+        cfg(2),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    assert!(report.switches.is_empty(), "{:?}", report.switches);
+    let (at, refused) = report.refused.as_ref().expect("the extend is refused");
+    assert_eq!(*at, h(f + 4));
+    assert_eq!(
+        refused.rule,
+        CenRow::A2,
+        "its parent is not the tip: {refused:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_the_switch() {
     // §3.8 / RD-Q13 through the real Source, over blocks that spend. With
     // `f` the first spend height: main `0..=f + 3`, rewind to `f`, fork
@@ -1159,8 +1369,8 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     .expect("the reorg replays");
     // Main's tip was `f + 3`; the rewind is to `f`: `f + 1..=f + 3` popped.
     assert_eq!(report.popped(), 3, "blocks {}..={} popped", f + 1, f + 3);
-    assert_eq!(report.switches.len(), 1);
-    let sw = &report.switches[0];
+    assert_eq!(report.rewinds.len(), 1);
+    let sw = &report.rewinds[0];
     assert_eq!((sw.to, sw.popped), (h(f), 3));
     assert_eq!(
         sw.digest,

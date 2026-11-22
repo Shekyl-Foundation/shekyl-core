@@ -18,12 +18,14 @@ use shekyl_types::BlockHeight;
 
 use crate::fault::CorpusFault;
 use crate::{
-    CORPUS_FORMAT_VERSION, CORPUS_MAGIC, COUNT_OFFSET, HEADER_LEN, HEIGHT_AT, MAGIC_LEN, NET_AT,
-    VERSION_AT,
+    CORPUS_FORMAT_VERSION, CORPUS_MAGIC, COUNT_OFFSET, HEADER_LEN, HEIGHT_AT, LAYOUT_4, MAGIC_LEN,
+    NET_AT, VERSION_AT,
 };
 
 /// What [`decode`] read out of a header.
 pub(crate) struct Decoded {
+    /// [`CORPUS_FORMAT_VERSION`] or [`LAYOUT_4`].
+    pub layout: u32,
     pub net: Network,
     pub first: BlockHeight,
     pub declared: u64,
@@ -42,7 +44,8 @@ pub(crate) fn encode(net: Network, first: BlockHeight, count: u64) -> [u8; HEADE
 }
 
 /// The header `bytes` are. Refuses a foreign magic, version, or network
-/// before any record is read.
+/// before any record is read. Layout 4 is read as well as layout 5
+/// ([`LAYOUT_4`], `CF-R7`).
 ///
 /// # Errors
 ///
@@ -57,7 +60,7 @@ pub(crate) fn decode(header: &[u8; HEADER_LEN]) -> Result<Decoded, CorpusFault> 
             .try_into()
             .expect("version is a u32: VERSION_LEN is size_of::<u32>()"),
     );
-    if version != CORPUS_FORMAT_VERSION {
+    if version != CORPUS_FORMAT_VERSION && version != LAYOUT_4 {
         return Err(CorpusFault::UnsupportedVersion { found: version });
     }
     let net_tag = header[NET_AT..HEIGHT_AT]
@@ -76,6 +79,7 @@ pub(crate) fn decode(header: &[u8; HEADER_LEN]) -> Result<Decoded, CorpusFault> 
             .expect("the record count is a u64: COUNT_LEN is size_of::<u64>()"),
     );
     Ok(Decoded {
+        layout: version,
         net,
         first,
         declared,

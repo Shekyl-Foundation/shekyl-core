@@ -30,8 +30,8 @@ fn hash(byte: u8) -> LmdbHashKey {
     LmdbHashKey::from_bytes([byte; 32])
 }
 
-/// An `output_amounts` row for the tests: the `(0, index)` key LMDB's
-/// one bucket has, with a record that names its index in every field.
+/// An `output_amounts` row for the tests: the `(0, index)` key of the
+/// one bucket, with a record that names its index in every field.
 fn out_key(byte: u8) -> OutKey {
     OutKey {
         output_id: OutputStorageId::from_raw(u64::from(byte)),

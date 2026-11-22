@@ -147,9 +147,10 @@ pub enum Action {
         /// the spread, so another spread moves a later read plan.
         start_spread_ms: u64,
     },
-    /// Pop the last `depth` blocks and mine `depth + 1` blocks on the fork,
-    /// the first listing a spend the popped branch did not: a shallow
-    /// reorg, written as a rewind and the branch after it.
+    /// A competing branch of `depth + 1` blocks from `depth` below the tip,
+    /// the first listing a spend the branch it competes with did not: a
+    /// shallow reorg, written as `offer` records the replay's fork choice
+    /// switches to (`CHAIN_FORGE.md` §7.1).
     Reorg {
         /// Blocks popped; at most the schedule's reorg cap.
         depth: u64,
@@ -304,6 +305,28 @@ do = "produce"
 persona = 0
 start_spread_ms = 50
 "#;
+
+    /// A key the plan's schema does not declare is the parser's refusal,
+    /// naming the key: at the top level and inside a step.
+    #[test]
+    fn an_unknown_key_in_a_plan_is_refused_by_name() {
+        let top = PLAN.replacen(
+            "fixed_difficulty = 1",
+            "fixed_difficulty = 1\nnetwork_id = 7",
+            1,
+        );
+        let step = PLAN.replacen("blocks = 3", "blocks = 3\nsplit = 2", 1);
+        for (text, key) in [(top, "network_id"), (step, "split")] {
+            match Plan::parse(&text) {
+                Err(PlanFault::Toml(e)) => assert!(
+                    e.message().contains(&format!("unknown field `{key}`")),
+                    "{key}: {e}"
+                ),
+                Err(other) => panic!("{key}: refused for another reason: {other}"),
+                Ok(_) => panic!("{key}: an unknown key was accepted"),
+            }
+        }
+    }
 
     #[test]
     fn a_plan_parses_every_step_kind() {

@@ -114,6 +114,9 @@ editor.
 - **Storage:** `<base>.prefs.toml` (the TOML body) plus
   `<base>.prefs.toml.hmac` (32 bytes of HMAC-SHA256). Co-located with
   `.wallet.keys` and `.wallet`.
+- **Format:** TOML 1.1, the configuration files' format
+  (`INPUT_GRAMMAR.md` R2). A key the schema does not declare is refused
+  by name.
 - **Integrity key:**
   ```
   prefs_hmac_key = HKDF-Expand(

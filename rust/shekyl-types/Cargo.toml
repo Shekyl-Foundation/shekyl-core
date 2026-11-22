@@ -47,7 +47,10 @@ postcard-schema = { version = "0.2", default-features = false, features = ["deri
 schema = ["dep:postcard-schema"]
 
 [dev-dependencies]
-postcard = { version = "1", features = ["alloc"] }
+# No default features: postcard's default, `heapless-cas`, pulls heapless 0.7
+# (Treiber pool, RUSTSEC-2026-0580) and atomic-polyfill, and no code here
+# uses heapless.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

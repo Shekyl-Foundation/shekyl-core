@@ -17,7 +17,7 @@ MAJOR.MINOR.PATCH[-PRERELEASE]
 
 | Component | Bumped when |
 |-----------|-------------|
-| MAJOR | Breaking change to the repo's external interface: RPC removal, CLI flag change, config format change, LMDB schema requiring resync, wallet file format change. |
+| MAJOR | Breaking change to the repo's external interface: RPC removal, CLI flag change, config format change, chain store schema requiring resync, wallet file format change. |
 | MINOR | Backward-compatible feature addition: new RPC endpoint, new CLI command, new wallet capability. |
 | PATCH | Bug fix, performance improvement, or non-breaking internal change. Documentation, CI, and internal-only changes do not require a version bump and can land between tags without one. |
 | PRERELEASE | `alpha.N` / `beta.N` / `rc.N` (see below). |

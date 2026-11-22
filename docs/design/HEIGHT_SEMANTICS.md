@@ -288,12 +288,12 @@ the C++ definition it mirrored was line 70 of
 reads `daemon_status.height`, the tip's ordinal, and adds one
 (`rust/shekyl-levin/tests/dual_stack.rs:199-221`).
 
-**C++ store primitives (the producers the names above rest on):**
+**Store primitives (the producers the names above rest on):**
 
 | Call | Quantity |
 | --- | --- |
-| `BlockchainLMDB::height()` / `Blockchain::get_current_blockchain_height()` (`src/cryptonote_core/blockchain.cpp`) | COUNT |
-| `BlockchainLMDB::top_block_hash` out-param (`src/blockchain_db/lmdb/db_lmdb.cpp`) / `Blockchain::get_tail_id(height)` (`src/cryptonote_core/blockchain.cpp`) | ORDINAL (`m_height - 1`) |
+| `ReadSnapshot::tip()`, its `TipState.recorded` (`rust/shekyl-chain-store/src/store/read.rs`) | `Tip.height` ORDINAL; `None` on an empty chain |
+| `count_at(tip)` (`rust/shekyl-daemon-rpc/src/store_facts.rs`) | COUNT (the tip's height plus one) |
 
 ### 3.4 Inland family census
 

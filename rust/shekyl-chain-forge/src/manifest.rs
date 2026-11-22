@@ -15,9 +15,11 @@
 //! artifact's release notes), not to the chain; a manifest that carried it
 //! would differ at every commit and stop being a known answer.
 //!
-//! `switches` stays empty until `CF-3`'s layout-5 corpus can carry an
-//! alternative block; a reorg in a layout-4 corpus is a rewind and the
-//! branch after it.
+//! `switches` names each switch the replay's fork choice made on the
+//! corpus's `offer` records (corpus layout 5): the record that tipped it,
+//! the fork's height and the depth. The replay test holds a fresh replay's
+//! switches to them, so a change in the fork choice is a red test, not a
+//! changed record.
 
 use serde::{Deserialize, Serialize};
 
@@ -109,7 +111,8 @@ pub struct Manifest {
     pub trace_sha256: String,
     /// The event index.
     pub events: Vec<EventRecord>,
-    /// The switches the forge expects; empty before `CF-3`.
+    /// The switches the replay's fork choice made, which the forge held to
+    /// the ones its plan expects: one per reorg.
     pub switches: Vec<SwitchRecord>,
 }
 

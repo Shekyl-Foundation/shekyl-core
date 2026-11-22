@@ -15,8 +15,7 @@
 //!
 //! # The write handle is a possession type, and that is the point
 //!
-//! `BlockchainLMDB` keeps its write transaction in a raw member pointer
-//! and dereferences `*m_write_txn` at **129** sites with no guard at the
+//! A write transaction held as a raw pointer must be checked at every
 //! dereference (DRS-W3). [`WriteBatch`] makes the precondition
 //! unrepresentable: it cannot be null, table access goes through it (never
 //! a raw `WriteTransaction`), and it exists only inside a
@@ -39,12 +38,8 @@
 //!
 //! A second live batch is a typed [`StoreCannot::WriteInProgress`], not
 //! redb's blocking `begin_write`. Same-thread re-entry would otherwise
-//! deadlock. The C++ is **not** the same shape, and saying so precisely is
-//! the point: `BlockchainLMDB::batch_start` **returns `false`** for a
-//! second batch (`m_batch_active` or `m_write_batch_txn` set,
-//! `db_lmdb.cpp:4103`/`:4105`) and two core callers *spin* on that; it
-//! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
-//! store refuses with a typed error and never spins — DRS-W17.
+//! deadlock. This store refuses with a typed error and never spins —
+//! DRS-W17.
 //!
 //! # Four verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
 //!
@@ -185,7 +180,7 @@ pub const TWO_PHASE_COMMIT: bool = true;
 
 /// Cache the engine is opened with.
 ///
-/// The value is redb's own default (1 GiB; `redb-4.4.0/src/db.rs:2045`) made explicit so a
+/// The value is redb's own default (1 GiB; `redb-4.6.0/src/db.rs:2299`) made explicit so a
 /// future redb bump cannot change RSS by omission (A4's shape, on the
 /// axis A5 measures). Reopen the number against DRS-BENCH peak-RSS,
 /// never to "go faster".
@@ -372,7 +367,7 @@ impl ChainStore {
     ///   the life of a writable `Database` and a shared one for a read-only
     ///   handle: a byte-range lock on its lock range, and on Linux also the
     ///   whole-file `flock` older redb took
-    ///   (`redb-4.4.0/src/tree_store/page_store/file_backend/optimized.rs:90`,
+    ///   (`redb-4.6.0/src/tree_store/page_store/file_backend/optimized.rs:128`, `lock_legacy_file`,
     ///   read at the pinned source). A second writable open — this process
     ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
     ///   read-only handle excludes every writer for as long as it exists.
@@ -561,8 +556,8 @@ impl ChainStore {
     /// closure wrote lands. There is no separate abort verb; an abort that
     /// the engine fails to complete is not lost either — redb latches the
     /// storage failure and refuses the next `begin_write` with
-    /// `StorageError::PreviousIo` (`redb-4.4.0/src/tree_store/page_store/cached_file.rs:200`,
-    /// held by its own test at `db.rs:2392`, read at the pinned source), which the next `write`
+    /// `StorageError::PreviousIo` (`redb-4.6.0/src/tree_store/page_store/cached_file.rs:221`,
+    /// held by its own test `transient_io_error`, `db.rs:2652`, read at the pinned source), which the next `write`
     /// surfaces as [`EngineError::BeginWrite`].
     ///
     /// `E` is any error the caller's closure may return, provided the

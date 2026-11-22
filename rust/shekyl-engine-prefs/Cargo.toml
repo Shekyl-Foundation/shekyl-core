@@ -16,7 +16,7 @@ license.workspace = true
 # name we have not whitelisted, and the per-field rejection messages
 # for Bucket-3 collisions are routed through our own Error type
 # before that catch-all fires.
-toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+toml = { workspace = true, features = ["display"] }
 
 # HMAC-SHA256 for file-integrity protection. The key is derived from
 # `file_kek` + `expected_classical_address` so tampering while the

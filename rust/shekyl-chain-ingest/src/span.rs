@@ -903,13 +903,14 @@ fn settled(offered: Offered) -> Result<Reply, Carry> {
 }
 
 /// The reply for a switch's outcome. `Err` hands back the landed switch,
-/// whose returned bodies the caller offers first.
+/// whose returned bodies the caller offers first; boxed, since it carries
+/// every promoted block's facts.
 ///
 /// Past the cap and below the floor are proven outcomes:
 /// [`Reply::CannotFollow`] (DX-Q2 item 8).
-fn switch_reply(switched: Switched) -> Result<Reply, crate::connector::SwitchDone> {
+fn switch_reply(switched: Switched) -> Result<Reply, Box<crate::connector::SwitchDone>> {
     match switched {
-        Switched::Done(done) => Err(done),
+        Switched::Done(done) => Err(Box::new(done)),
         Switched::Refused {
             at, hash, refused, ..
         } => Ok(Reply::PromotionRefused { at, hash, refused }),

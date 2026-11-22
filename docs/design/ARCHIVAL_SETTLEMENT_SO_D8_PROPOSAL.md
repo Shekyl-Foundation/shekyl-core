@@ -80,7 +80,7 @@ privacy gain does not enter the arithmetic.
 > — the connect/pop write set — landed 2026-09-15 (PR #757 merged
 > 2026-09-16): `connect(ChainValid, ConnectFacts, RuleSetId)` / `pop()` on
 > the branded batch, SI-1/2/3/4/6/8/9 built, the writer halt
-> (`DAEMON_REDB_STORE.md:11`, S-CHAIN-W row **LANDED**). The daemon still
+> (`DAEMON_REDB_STORE.md` §3, S-CHAIN-W row **LANDED**). The daemon still
 > opens LMDB only; `shekyl-chain-rules` declares its rows with none built
 > (B3, H5, L1 `pending` at `census.rs:216/280/360`). DRS is **one increment
 > from a validator** (E6 rule bodies), not mid-increment.

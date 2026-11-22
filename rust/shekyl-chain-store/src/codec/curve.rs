@@ -18,12 +18,11 @@
 //!
 //! The C++ kept three string-keyed cells — `"root"`, `"depth"`,
 //! `"leaf_count"` — and each read invented a value when its key was absent
-//! (`db_lmdb.cpp:9259–9313`: `hash_init`, `0`, `0`), then documented that
-//! the root read was therefore ambiguous and told callers to disambiguate
-//! with a second read (SCU-1). Here the table holds **one**
-//! [`CurveTreeState`] under the unit key: the three facts the C++ wrote in
-//! one grow (`:8936–8966`) cannot disagree, and **the empty tree is a
-//! written row** — [`CurveTreeState::EMPTY`], put by the seal at store
+//! (`hash_init`, `0`, `0`), then documented that the root read was
+//! therefore ambiguous and told callers to disambiguate with a second read
+//! (SCU-1). Here the table holds **one** [`CurveTreeState`] under the unit
+//! key: the three facts one grow writes cannot disagree, and **the empty
+//! tree is a written row** — [`CurveTreeState::EMPTY`], put by the seal at store
 //! creation — so an absent row is [`StoreInvariant::CellCorrupt`](crate::store::StoreInvariant::CellCorrupt)
 //! (`crate::store::StoreInvariant`), never a default. No caller compares a
 //! root against `hash_init` to learn whether the tree is empty.
@@ -31,9 +30,9 @@
 //! # `curve_tree_layers`
 //!
 //! The key is [`crate::ids::LayerChunk`]: a `(u8, u64)` tuple, layer then
-//! chunk, assembled in one place (`SCU-Q3`). The C++ packed the same pair
-//! into one `u64` because LMDB needs one integer; the tuple orders
-//! layer-major without a shift to pin and without a 56-bit chunk ceiling.
+//! chunk, assembled in one place (`SCU-Q3`). The tuple orders layer-major
+//! without the shift and the 56-bit chunk ceiling that packing the pair
+//! into one `u64` would need.
 //! [`LayerHash`] is the 32-byte value stored under that key.
 //!
 //! # Where the types stop
@@ -52,10 +51,9 @@ use shekyl_types::{CurveTreeRoot, TreePosition};
 // ---------------------------------------------------------------------------
 
 /// The tree's depth: the number of hashed layers **above the leaf layer**
-/// (`db_lmdb.cpp:8957` — "depth = number of layers above the leaf;
-/// `fcmp_layers = depth + 1`"). `0` for an empty tree. Stated once, here,
-/// with its off-by-one; no consumer re-derives it. Fits a `u8` because the
-/// C++ refuses a grow past 255 (`:8955`).
+/// (`fcmp_layers` is depth + 1). `0` for an empty tree. Stated once, here,
+/// with its off-by-one; no consumer re-derives it. Fits a `u8`, the width
+/// the grow reports it in.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct TreeDepth(u8);
 
