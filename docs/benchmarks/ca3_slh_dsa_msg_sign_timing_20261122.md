@@ -1,7 +1,7 @@
 # `CA-3`, SLH-DSA-SHA2-192s: the message signature's signing time, registered 2026-11-22
 
-**State of this record: the floor device's registered run is in, and it
-PASSES; the laptop's calibration and run are not yet made.** Results, and
+**State of this record: both registered runs are in, and both PASS: the
+floor device's and the laptop's. SLH-DSA closes.** Results, and
 each device's noise calibration, are added below "Registered before the
 run". That section is not edited afterwards.
 
@@ -257,6 +257,73 @@ Exit 0, and all 220 signatures verified. The null read 1.43.
   hashed it on the machine), is
   `ca3_slh_dsa_msg_sign_timing_20261122_captures/laptop_slh_noise_200.txt`.
 
-### The laptop's registered run
+### The laptop's registered run: PASS
 
-Not yet made.
+**The attempt.** One attempt, made by the agent on the maintainer's Windows
+laptop (Intel Core i9-11950H), from its own fresh recursive clone.
+- **Source:** `bb39bddf4c`, which carries the calibration above, with `git
+  status` clean. Built with `rustc` 1.94.0, unelevated, no `RUSTFLAGS`. The
+  binary's SHA-256 is
+  `5ab5921feca9173623d8f2fa7625d5f9711c085f6dcb7939a89f06ea85eb3448`. It ran
+  nothing before the attempt.
+- **Quiet gate:** passed on its first four 30-second samples. Defender used
+  0.0 to 0.3 % of one logical processor, the total was 0.6 to 1.0 %, and
+  logical processor 5 was at 0.1 to 1.7 %.
+- **Run:** 21:49:39 to 22:58:38Z (4,139 s), as `ca3_pq_sign_timing slh-dsa
+  9611892` with no seed. It was pinned to logical processor 4 (affinity
+  read back `0x10`) at Normal priority. Exit code 0.
+- **Output:** byte for byte, 3,182 bytes, SHA-256 `79d1bbc2…`:
+  `ca3_slh_dsa_msg_sign_timing_20261122_captures/laptop_registered_attempt1.txt`.
+
+```text
+arch=x86_64 os=windows mode=slh-dsa samples_per_comparison=2000 calibration=200 crops=100 inputs=registered
+pass-line=fixed-a-vs-fixed-b max_abs_t=2.43 median_ns=581365900 raw_sd_ns=30995972 n0=1003 n1=997 verdict=no-evidence
+null=fixed-a-vs-fixed-a max_abs_t=2.15 median_ns=571065000 raw_sd_ns=18617073 n0=1002 n1=998 verdict=no-evidence
+control=fixed-a-vs-fixed-a max_abs_t=66.60 median_ns=577208700 raw_sd_ns=22248707 n0=1027 n1=973 verdict=control
+control=planted-leak planted_ns=9611892 max_abs_t=66.60 verdict=detected
+result=PASS fixed_pair=2.43 worst_null=2.15 control=66.60
+```
+
+**Read against the lines, in order.**
+
+| Line | Registered | Observed | |
+| --- | --- | --- | --- |
+| 1 | a check fails: void | 2,200 signatures per comparison, every one returned and verified | holds |
+| 2 | control `\|t\|` ≤ 10: void | 66.60 (raw 10.29; planted δ = 9.61 ms) | detected |
+| 3 | the null's `\|t\|` ≥ 4.5: void | 2.15 | clean |
+| 4–6 | the fixed pair's `\|t\|` | 2.43 | **pass** |
+
+The run is not void, and the fixed pair is below 4.5: **PASS**.
+
+**Its sensitivity is coarse.** On the laptop, a pass excludes a dependence
+of the signature's time on the key's value of δ = 9.61 ms (1.66 % of a
+signature) or more, and nothing smaller. δ comes from the laptop's own σ,
+as the ruling sets it. The fine bound is the floor device's: 1.22 ms, or
+0.023 %.
+- A coarse δ is not, by itself, a sign that the calibration was noisy. It
+  ran behind the same quiet gate, with logical processor 5 at 1 to 2 %.
+  The laptop's spread is about 2.5 % of a signature under those conditions.
+- The run's own raw spread was 18.6 to 31.0 ms, against the calibration's
+  σ of 14.3 ms. The control was detected regardless.
+
+**During the run** (69 one-minute samples, by the agent):
+- Logical processor 4 was at 100 % throughout.
+- Logical processor 5 averaged 3.35 %. It went over 5 % in five samples:
+  - 7.21 % at 21:59:39Z and 18.44 % at 22:00:39Z, both from the agent's own
+    activity, which used the sibling's idle time;
+  - 5.17 %, 5.17 % and 5.14 % later in the run.
+- The machine's total was 6.67 to 8.77 %.
+- At the start and the end: mains power, the battery at 99 % and charging,
+  plan Balanced, Defender's protections on, and no browser.
+- Three processor-performance readings of 0 while logical processor 4 read
+  100 % are taken as counter glitches. They stay in the private samples.
+
+**Captures:**
+- `laptop_registered_attempt1.txt`, the output;
+- `laptop_rustc_vV.txt`;
+- `SHA256SUMS` beside them, and a `.gitattributes` that stores every file
+  byte for byte, because the Windows files end lines with CRLF.
+
+The build log, the gate, the process snapshots and the samples name the
+machine's user profile and its processes. They stay in the estate's
+private captures.

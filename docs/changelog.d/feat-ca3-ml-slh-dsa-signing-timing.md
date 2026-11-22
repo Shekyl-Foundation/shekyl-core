@@ -2,3 +2,11 @@
 - **The ML-DSA-65 and SLH-DSA-192s runs are registered (`CA-3`; the maintainer's rulings of 2026-11-21).** Every signer's pass line is now a fixed pair, and fixed-against-fresh is information.
   - **ML-DSA.** The pair is matched on the work key generation does by design: the bytes ExpandS consumes and the triples ExpandA rejects. The match uses a replica of fips204's own derivation, checked against fips204's key (ρ, K, s1, s2, and t1 recomputed). A test-only `output_ml_dsa_seed_for_tests`, behind `seeded-rng`, reaches the seed.
   - **SLH-DSA.** Three comparisons at 1,000 signatures per class, recorded as an assumption from the threat model. A 10 % calibration batch, and a control sized per device from a noise calibration: δ = 15 · σ · √(2/1000).
+- **SLH-DSA-192s's message signature is shown independent of the key's value on both devices (`CA-3` SLH-DSA closed).** Both registered runs pass:
+
+  | Device | Fixed pair | Null | Control | δ (share of a signature) |
+  | --- | --- | --- | --- | --- |
+  | The 4 GB Pi 4, rule 76's floor | 1.40 | 2.21 | 22.89 | 1.22 ms (0.023 %) |
+  | The maintainer's laptop, x86_64 | 2.43 | 2.15 | 66.60 | 9.61 ms (1.66 %) |
+
+  Each device's δ comes from its own measured noise, so the laptop's bound is the coarser one.

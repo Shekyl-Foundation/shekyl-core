@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s: floor device passes, laptop run in progress (§3.3); ML-DSA-65 registered; its floor shake-down's matched pair crossed, and the run is held; the localisation with one working slot crosses nowhere, and the change to the registration is with the maintainer (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 registered; its floor shake-down's matched pair crossed, and the run is held; the localisation with one working slot crosses nowhere, and the change to the registration is with the maintainer (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -749,12 +749,14 @@ through its seeded twin (`:1224`).
 
 ### 3.3 SLH-DSA-SHA2-192s, message signing
 
-**Status: the floor device PASSES (2026-11-22); the laptop's calibration
-and run are not yet made.** The registration and its results are in
+**Status: CLOSED 2026-11-22. Both registered runs PASS: the floor device's
+and the laptop's.** The registration and its results are in
 [`ca3_slh_dsa_msg_sign_timing_20261122.md`](../benchmarks/ca3_slh_dsa_msg_sign_timing_20261122.md).
 On the 4 GB Pi 4 the fixed pair read 1.40, the null 2.21, and the control
 22.89 at δ = 1.22 ms, which excludes a key-value dependence of 1.22 ms
-(0.023 % of a signature) or more there.
+(0.023 % of a signature) or more there. On the laptop (x86_64, Windows) the
+fixed pair read 2.43, the null 2.15, and the control 66.60 at its own
+δ = 9.61 ms (1.66 %): a coarser bound, from that machine's larger noise.
 It has three comparisons (the fixed pair, the a/a null, and the control on
 it) at 1,000 signatures per class, and its control is sized from each
 device's measured noise (the maintainer's rulings, 2026-11-21). The harness
