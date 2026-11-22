@@ -47,23 +47,28 @@ at the commit that carries this record. It uses RT-P4's method:
 - Welch's t is taken on the raw samples and below each of 100 cut-offs, placed from a discarded calibration batch of 10,000. A cut-off counts only when both classes keep more than 10,000 samples below it;
 - the largest `|t|` is reported.
 
-**The classes.** A class is a set of 256 decoded keys, each held in its own
-slot (118,640 bytes each, 30 MB a class), and each entry signs from a slot
-drawn uniformly. In a fixed class every slot holds the same key; in the
-varied class each slot holds its own key. Both classes touch the same amount
-of memory in the same pattern, so neither has its key warmer in the cache
-than the other. The 512 slots are decoded in a shuffled order, drawn
-from a stream of its own, so which addresses each class gets is random, as
-which class each entry belongs to is random in time. On the development
-machine's AVX2 path, placement alone moved a null:
-- decoded one class after the other, the second class was slower by about
-  0.15 % of a signature at every quantile (`|t|` 11.94 at 200,000
-  samples);
-- decoded alternately, each class took a fixed alignment (a slot is 128
+**The classes.** A class is a set of keys: one key for a fixed class, and
+256 for the varied class, where each entry takes one uniformly. Every entry
+draws a fresh pass transcript (every field drawn, the stream byte economy
+or support) and a fresh 32-byte RNG seed, the same way in both classes.
+
+**One working slot.** Each entry's key is decoded, untimed, into one
+working slot just before it signs (`FnDsaHybridSigner::new`, as the serve
+path builds its held key), and dropped after. The allocator hands the freed
+block to the next decode, so every entry of both classes signs from the
+same memory with its key freshly written into it. The classes own no memory
+of their own. Three earlier designs gave each class 256 slots of its own,
+and each crossed a null on placement alone in the shake-downs:
+- **Decoded one class after the other** (development machine, AVX2): the
+  second class was slower by about 0.15 % of a signature at every quantile
+  (`|t|` 11.94 at 200,000 samples).
+- **Decoded alternately:** each class took a fixed alignment (a slot is 128
   bytes short of 29 pages), and the second class was slower by about 0.3 %
-  (`|t|` 37.69). Every entry draws a fresh pass transcript (every field
-drawn, the stream byte economy or support) and a fresh 32-byte RNG seed, the
-same way in both classes.
+  (`|t|` 37.69).
+- **Decoded in a shuffled order:** clean on x86. On the floor device the
+  nulls read 8.54 and 10.17 at 50,000 samples, in opposite directions, all
+  in the fast tail: the slots one class drew were not like the slots the
+  other drew.
 
 The message and the seed are drawn, not held. The crate hedges the seed
 with the hashed signing key and binds the hashed verifying key into the
@@ -85,13 +90,11 @@ of its `|t|` and its `|z|`.
 **The pass line, and one information line** (the maintainer's ruling of
 2026-11-21, made before any run):
 
-- **Pass line, `fixed-a-vs-fixed-b`:** key A in every slot against key B
-  in every slot. With two fixed keys there is no difference in familiarity
+- **Pass line, `fixed-a-vs-fixed-b`:** key A against key B. With two fixed keys there is no difference in familiarity
   between the classes. So a time that depends on the key's value shows here
   even where `fixed-vs-varied` could not tell it from familiarity (the
   lesson of `CA-2`).
-- **Information, `fixed-vs-varied`:** key A in every slot against a key per
-  slot. A difference here shows that the time depends on a key being
+- **Information, `fixed-vs-varied`:** key A against the 256 keys. A difference here shows that the time depends on a key being
   repeated, not on its value. The receipt key is repeated in production, so
   the fixed class is the production condition. Its figure, the larger of
   `|t|` and the restart `|z|`, is printed beside the verdict and recorded
@@ -132,15 +135,29 @@ pass-line figures are not reported as one.
   paths sign the same bytes, and the nonce check recovers the same counts.
 - **The SSE2 binary has no AVX2 signing code.** It carries no
   `fn_dsa_sign::sign_avx2` symbol; the AVX2 build carries 17.
-- **Not yet shaken down:** the Windows (MSVC) build and the aarch64 build.
-  Each is shaken down on its own device before its registered run (below).
+- **The development machine's x86 figures above are for the shuffled-slot
+  harness.** The one-working-slot harness this registration fixes replaced
+  it after the floor device's first shake-down. The laptop's own shake-down
+  covers that harness on x86 before its runs.
+- **The floor device** (the 4 GB Pi 4; unregistered seeds, 50,000 samples
+  per comparison):
+  - *Shake-down 1* (2026-11-22 01:57 to 02:14Z), the shuffled-slot harness
+    at `80c4a62e19`. Every check held and the control read 56.08, but the
+    nulls read 8.54 and 10.17, in opposite directions and all in the fast
+    tail. **Void.** That is the reason for the one working slot.
+  - *Shake-down 2* (02:21 to 02:41Z), the one-working-slot harness at
+    `2e4cffa0c1`. Every check held. The nulls read 1.57 and 1.25, and the
+    control (planted 10.26 µs) read 63.43, about 200 at 500,000 samples.
+    The fixed pair read 2.29 and the information line 1.07. The board held
+    1.5 GHz at 50 to 55 °C, throttled `0x0`, with no under-voltage.
+- **Not yet shaken down:** the Windows (MSVC) build, on the laptop before
+  its runs.
 
 **The control and the nulls.**
 - The nulls:
-  - `fixed-a-vs-fixed-a-other-slots`: key A in two disjoint sets of slots,
-    which tests whether slot placement alone crosses;
-  - `varied-vs-varied-other-slots`: the varied class's own 256 keys in two
-    disjoint sets of slots. The keys are the same on both sides. Two
+  - `fixed-a-vs-fixed-a-again`: key A in both classes;
+  - `varied-vs-varied-again`: the varied class's own 256 keys in both
+    classes. The keys are the same on both sides. Two
     different key sets would not be a null: under the key dependence being
     tested they would differ too, and the run would read void where it
     should read fail.
@@ -228,11 +245,11 @@ records them
   and the exit code.
 
 **Time and memory.**
-- **Each laptop run:** about 45 minutes and 1.6 GB, most of it the signatures
-  kept for verification after each loop. The two laptop runs take about
-  1.5 hours together.
-- **The Pi run:** about 2 hours (five comparisons of 510,000 signatures at
-  2.24 ms, plus verification at 0.57 ms each) and 0.8 GB.
+- **Each laptop run:** about an hour and 1.4 GB, most of it the signatures
+  kept for verification after each loop. Each entry's untimed decode adds
+  to the loop. The two laptop runs take about 2 hours together.
+- **The Pi run:** about 3 hours 10 minutes and 0.7 GB, scaled from
+  shake-down 2's 19.7 minutes at 50,000 samples.
 
 **A shake-down on each device first.** Before each registered run, its
 own binary runs once on its own device:
