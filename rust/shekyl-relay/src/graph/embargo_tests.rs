@@ -586,6 +586,57 @@ fn circulation_disarms_and_an_echo_does_not() {
     assert_eq!(z.relay_state_len(), 0);
 }
 
+/// F-10 after a re-stem (`DAEMON_RELAY_PRIVACY.md` §102): once the embargo
+/// has fired and the re-stem is out, the transaction has been handed to two
+/// peers, and an arrival from either disarms nothing. The first successor
+/// dropping the stem and echoing it after the fire is the attack; the second
+/// fire and its fluff still come. A peer the transaction was never handed to
+/// still disarms.
+/// Red edit: compare against the current successor only (`StemWatch::seen`).
+#[test]
+fn after_a_re_stem_neither_handed_peer_disarms_the_embargo() {
+    let run = |echo_from_first: bool| {
+        let mut rng = SplitMix64::new(0xE6);
+        let mut z = stem_zone(&[1, 2, 3], &mut rng);
+        let sent = tx(12);
+        let first = originate(&mut z, &sent, &mut rng);
+        let fire = z.stem_observation_deadline().expect("armed");
+        let fired = z.fire_embargoes(fire, &mut rng);
+        let [restem] = fired.stems.as_slice() else {
+            panic!("the first fire re-stems once");
+        };
+        let alternate = restem.peer;
+        assert_ne!(alternate, first, "to the alternate");
+        z.commit_stem(restem, fire, &mut rng);
+
+        let echo = if echo_from_first { first } else { alternate };
+        assert!(
+            z.record_arrival(&[sent.0], Some(echo)).is_empty(),
+            "an arrival from a peer the transaction was handed to resolves nothing"
+        );
+        let second = z.stem_observation_deadline().expect("still armed");
+        let other = [1, 2, 3]
+            .map(id)
+            .into_iter()
+            .find(|peer| *peer != first && *peer != alternate)
+            .expect("three peers");
+        (z, sent, second, other, rng)
+    };
+
+    for echo_from_first in [true, false] {
+        // Nothing else arrives: the second fire ends the stem phase.
+        let (mut z, sent, second, _, mut rng) = run(echo_from_first);
+        let fired = z.fire_embargoes(second, &mut rng);
+        assert!(fired.stems.is_empty(), "one re-stem is the cap");
+        assert_eq!(fired.published, vec![sent.0], "the last-resort fluff comes");
+
+        // A third peer has it: that is circulation.
+        let (mut z, sent, _, other, _) = run(echo_from_first);
+        assert_eq!(z.record_arrival(&[sent.0], Some(other)), vec![sent.0]);
+        assert_eq!(z.relay_state_len(), 0);
+    }
+}
+
 /// W3c: churn that refills a slot within the epoch does not hand the
 /// reshape a fresh draw. The alternate is the one captured at the first
 /// stem; when it has left, the fire ends the stem phase rather than

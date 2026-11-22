@@ -18444,3 +18444,82 @@ none was past a session's hold. With the floor alone the same walk loses
 stems in the gap and goes red at its shown-pool wait (§101.1). That walk
 ended later, in its mining leg, at a harness timeout that is no part of the
 relay.
+
+## 102. F-10 after a re-stem: every peer the transaction was handed to — IMPLEMENTED 2026-11-22
+
+**Status: IMPLEMENTED 2026-11-22. Ruled (Rick, 2026-11-22): F-10 is not
+weakened; the emission walk's mesh is five nodes, each connected to the
+others, and its shown-pool wait stays 60 s.**
+
+### 102.1 The strand on a small mesh
+
+F-10 (§49) counts an arrival only from a peer this node did not hand the
+transaction to. A first fire re-stems once, to the alternate captured at
+the first stem, and the alternate becomes the charged successor
+(`fire_embargoes`, `StemWatch::stemmed`). A node stems a transaction to at
+most two peers, so it needs a third for a return it can trust.
+
+On a three-node mesh the origin has two peers and after a fire has handed
+the transaction to both. The first successor fluffs to the other peer
+only, never back to its source; the other peer is now the alternate, and
+its fluff is not counted. The entry waits for the second fire, which
+fluffs and marks it shown. The transaction is not lost: it has reached
+every node, the origin's shown mark is late, and the origin fluffs once
+more. Every relay does the same on its own second fire, so the late fluff
+does not mark the origin.
+
+That is the "15 shown, 1 unbroadcast" of every red emission walk of
+2026-11-22, whatever made the return late: an early fire (§100), a stem
+dropped at a node that was behind (§101), or a block that took 79 s to
+cross a slow path and held the stems behind it on the same session.
+
+The mesh is the defect, not the rule. A production node is provisioned
+for 12 outbound peers (`MIN_PROVISIONED_OUT_PEERS`); a three-node mesh
+tests a shape production does not have. Four nodes is the least that
+leaves a trusted return; five leaves one when a peer is slow. A test mesh
+is sized to the production shape, not to the smallest that passes. The
+walk's change is the walk's own and is not in this section's PR.
+
+Refused: counting the alternate's arrival inside a window (the alternate
+is a peer the transaction was handed to; a dropper in that seat would
+clear itself), and shortening the wait for the second fire (a reaction on
+a timer; it would need a round of its own).
+
+A real node with only two peers still strands an entry after a fire, with
+the cost above and no loss.
+
+### 102.2 The gap: the first successor was forgotten at the re-stem
+
+The watch kept one peer for each transaction. A re-stem replaced the
+record, so after the fire an arrival from the **first** successor counted
+as propagation.
+
+The attack: the first successor drops the stem, waits for the origin's
+embargo to fire and the re-stem to go out, then echoes the bytes back.
+The origin's embargo is disarmed and the transaction marked shown on the
+word of a peer it gave the transaction to. The first successor's silence
+was tallied at the fire and stands; what is lost is the origin's failsafe,
+the last-resort fluff of the second fire.
+
+The watch now keeps every peer this node handed the transaction to, at
+most two, and an arrival from either resolves nothing: the rule's own
+wording, "the peer I gave it to gave it back" is nothing. The embargo's
+held row keeps the first successor and names it to the watch at each later
+record of that transaction.
+
+It costs an honest peer nothing. An honest first successor never returns
+a transaction to the node that stemmed it: it fluffs to every peer but
+its source, and it does not relay what it already holds. Any arrival from
+it is an echo. The three-node strand is no worse for it, since that
+successor never returned the transaction there.
+
+### 102.3 Tests
+
+`shekyl-relay` `stem_watch.rs`:
+`the_first_successor_cannot_resolve_by_echoing_after_a_re_stem`.
+`graph/embargo_tests.rs`:
+`after_a_re_stem_neither_handed_peer_disarms_the_embargo` (the second fire
+and its fluff still come after an echo from either handed peer; a third
+peer's arrival still disarms). Red edit for both: compare against the
+current successor only.
+
