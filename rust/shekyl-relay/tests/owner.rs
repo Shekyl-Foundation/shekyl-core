@@ -175,6 +175,115 @@ fn a_node_that_falls_behind_again_holds_again() {
     assert_eq!(rig.pool.admits(), vec![blob(9), blob(10)]);
 }
 
+/// A node that falls behind again while a held batch is with the pool
+/// admits no further one: the rest stays held, in order, for the next turn.
+/// The pool is slow, so the turn back to unsynchronised lands part-way.
+/// Red edit: take the whole hold at the turn and admit all of it.
+#[test]
+fn a_node_that_falls_behind_mid_admission_keeps_the_rest() {
+    let rig = Rig::build(Build {
+        node_sync: NodeSync::Unsynchronised,
+        ..Build::default()
+    });
+    let mut sender = rig.inbound(1);
+    for tag in [1, 2, 3] {
+        sender.inject_blocking(new_transactions(vec![blob(tag)], false));
+    }
+    handled_so_far(&rig, &mut sender, 0xE8);
+
+    rig.pool.close_gate();
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("the first held batch reached the pool", || {
+        rig.pool.admits().len() == 1
+    });
+    rig.node_sync
+        .send(NodeSync::Unsynchronised)
+        .expect("the owner listens");
+    rig.pool.open_gate();
+    thread::sleep(SETTLE);
+    assert_eq!(
+        rig.pool.admits(),
+        vec![blob(1)],
+        "nothing more is admitted once the node is behind again"
+    );
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("the rest was admitted at the next turn", || {
+        rig.pool.admits().len() == 3
+    });
+    assert_eq!(rig.pool.admits(), vec![blob(1), blob(2), blob(3)]);
+}
+
+/// A session that closes while its first held batch is with the pool takes
+/// the rest with it.
+/// Red edit: take the whole hold at the turn, out of `on_closed`'s reach.
+#[test]
+fn a_session_that_closes_during_admission_takes_the_rest() {
+    let rig = Rig::build(Build {
+        node_sync: NodeSync::Unsynchronised,
+        ..Build::default()
+    });
+    let mut leaver = rig.inbound(1);
+    for tag in [1, 2] {
+        leaver.inject_blocking(new_transactions(vec![blob(tag)], false));
+    }
+    handled_so_far(&rig, &mut leaver, 0xE9);
+
+    rig.pool.close_gate();
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    support::wait_until("the first held batch reached the pool", || {
+        rig.pool.admits().len() == 1
+    });
+    leaver.peer_closes();
+    rig.wait_closed(leaver.id);
+    thread::sleep(SETTLE);
+    rig.pool.open_gate();
+    thread::sleep(SETTLE);
+    assert_eq!(rig.pool.admits(), vec![blob(1)]);
+}
+
+/// A held batch the pool refuses as malformed closes its session and ends
+/// that session's replay: its later held batches are not offered to the
+/// pool. Another session's held batch is admitted as ever.
+/// Red edit: go on to the session's next held batch after the refusal.
+#[test]
+fn a_malformed_held_transaction_ends_its_sessions_replay() {
+    let rig = Rig::build(Build {
+        node_sync: NodeSync::Unsynchronised,
+        ..Build::default()
+    });
+    rig.pool.script(&blob(9), Admit::RefusedForm);
+    let mut refused = rig.inbound(1);
+    let mut other = rig.inbound(2);
+    refused.inject_blocking(new_transactions(vec![blob(9)], false));
+    refused.inject_blocking(new_transactions(vec![blob(1)], false));
+    other.inject_blocking(new_transactions(vec![blob(2)], false));
+    handled_so_far(&rig, &mut refused, 0xEA);
+    handled_so_far(&rig, &mut other, 0xEB);
+
+    rig.node_sync
+        .send(NodeSync::Synchronised)
+        .expect("the owner listens");
+    rig.wait_closed(refused.id);
+    support::wait_until("the other session's batch was admitted", || {
+        rig.pool.admits().contains(&blob(2))
+    });
+    thread::sleep(SETTLE);
+    let admits = rig.pool.admits();
+    assert!(admits.contains(&blob(9)), "the malformed one was judged");
+    assert!(
+        !admits.contains(&blob(1)),
+        "nothing of that session follows the refusal: {admits:?}"
+    );
+    assert_eq!(admits.len(), 2);
+}
+
 #[test]
 fn a_fluff_batch_is_admitted_shown_and_fluffed_to_the_other_peers() {
     let rig = Rig::build(Build::default());

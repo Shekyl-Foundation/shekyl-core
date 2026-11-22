@@ -18406,16 +18406,29 @@ if it had arrived at that moment. The pool cannot judge a transaction
 against a chain the node is still catching up to, so nothing is admitted
 or relayed before the turn.
 
-- **The bound is bytes, one 2002's worth for each session.** A synchronised
+- **The bound is one 2002's worth for each session.** A synchronised
   node is bounded by the session's permit: one batch in flight for each
   session. A held batch cannot keep that permit, because the session reads
   one frame at a time under it and the block the node is waiting for may be
-  that session's next frame. One message's worth of bytes is the same bound
-  stated without the permit. What a session sends past it while the node is
+  that session's next frame. One message's worth is the same bound stated
+  without the permit. What a session sends past it while the node is
   behind is ignored. The figure is the 2002's own cap and is as tight as
   that cap: PWD-B12 is what binds it.
-- **A session that closes takes its held batches with it.** Their source is
-  gone from the zone.
+- **A held batch is charged the memory it keeps,** not its transactions'
+  bytes alone: each transaction's bytes and its vector, and the batch's own
+  record (`held_form`). A notice's padding is not kept, and a notice with
+  no transaction is not held. Charged by bytes alone, padded notices with
+  no transaction, or many batches of one small transaction, would fill a
+  behind node's memory at no charge. A session that holds nothing has its
+  one batch held whatever the charge: it came in under the 2002's cap.
+- **The turn admits one held batch at a time,** each taken from the hold
+  under the lock and the sync reading an arrival uses. A node that falls
+  behind again part-way admits no further batch; the rest stays held, in
+  order and charged, for the next turn.
+- **A session that closes takes its held batches with it,** during the
+  turn's admission as before it. Their source is gone from the zone.
+- **A held batch the pool refuses as malformed closes its session and ends
+  that session's replay.** Nothing more of it is offered to the pool.
 - **Fluffs are held too.** A fluff dropped at a node that is behind is a
   missed return for a stem that node sent.
 - **A long first sync.** The hold is the same bound for a node syncing from
@@ -18429,9 +18442,15 @@ or relayed before the turn.
 `stems_received_while_behind_are_held_and_stemmed_at_sync` (the walk's
 sequence: three stem batches on one session inside one gap),
 `a_fluff_received_while_behind_is_shown_at_sync`,
-`a_session_that_closes_takes_its_held_batches` and
-`a_node_that_falls_behind_again_holds_again`. The bound is
-`a_sessions_hold_ends_at_one_messages_worth` in `owner/port.rs`.
+`a_session_that_closes_takes_its_held_batches`,
+`a_node_that_falls_behind_again_holds_again`,
+`a_node_that_falls_behind_mid_admission_keeps_the_rest` (a slow pool, the
+turn back landing part-way),
+`a_session_that_closes_during_admission_takes_the_rest` and
+`a_malformed_held_transaction_ends_its_sessions_replay`. The bound is
+`a_sessions_hold_ends_at_one_messages_worth` and
+`a_held_batch_is_charged_what_it_keeps_and_keeps_no_padding` in
+`owner/port.rs`.
 
 ### 101.4 Read on a walk
 
