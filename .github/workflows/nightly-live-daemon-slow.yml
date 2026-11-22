@@ -110,8 +110,8 @@ jobs:
     # (the commit it tests, this file, the toolchain pin, the pinned test
     # chains, the runner image) matches a scheduled run in the last week
     # where it passed is skipped, and the summary names that run. Fuzzing,
-    # property tests with no fixed seed, benchmarks and anything whose
-    # verdict is about an outside host are never skipped; a dispatch runs
+    # property tests with no fixed seed and anything whose verdict is about
+    # an outside host are never skipped; a dispatch runs
     # every leg it selects. If this job does not succeed, every planned job
     # falls back to its full matrix (its `matrix` expression): the failure
     # runs more, never less.

@@ -49,8 +49,8 @@ jobs:
     # (the commit it tests, this file, the toolchain pin, the pinned test
     # chains, the runner image) matches a scheduled run in the last week
     # where it passed is skipped, and the summary names that run. Fuzzing,
-    # property tests with no fixed seed, benchmarks and anything whose
-    # verdict is about an outside host are never skipped; a dispatch runs
+    # property tests with no fixed seed and anything whose verdict is about
+    # an outside host are never skipped; a dispatch runs
     # every leg it selects. If this job does not succeed, every planned job
     # falls back to its full matrix (its `matrix` expression): the failure
     # runs more, never less.
@@ -68,6 +68,7 @@ jobs:
       hasher-ignored: ${{ steps.plan.outputs['hasher-ignored'] }}
       wire-ignored: ${{ steps.plan.outputs['wire-ignored'] }}
       trybuild-ignored: ${{ steps.plan.outputs['trybuild-ignored'] }}
+      bench-full: ${{ steps.plan.outputs['bench-full'] }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -562,7 +563,9 @@ jobs:
         run: bash scripts/ci/ignored_set_trybuild.sh
 
   bench-full:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'bench-full' }}
+    name: bench-full (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') && needs.plan.outputs['bench-full'] != '{"include":[]}' }}
     # The block path's instruction counts on blocks at the weight limit:
     # `shekyl-chain-ingest` `benches/block_path_full_iai.rs`, the capture
     # script's nightly set. The shapes are DAEMON_REDB_STORE.md §1.3a.7's,
@@ -585,12 +588,11 @@ jobs:
     timeout-minutes: 100
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['bench-full'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -638,7 +640,10 @@ jobs:
           if-no-files-found: error
 
   bench-full-drift:
-    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
+    name: bench-full-drift (${{ matrix.branch }})
+    # It follows bench-full's planned legs: it compares tonight's capture
+    # with the one before, so it runs exactly where bench-full ran.
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') && needs.plan.outputs['bench-full'] != '{"include":[]}' }}
     # Tonight's full-block counts against the capture before tonight's of
     # the same branch, through compare.py's thresholds
     # (scripts/bench/nightly_drift.sh). A row past its fail threshold, or a
@@ -648,7 +653,7 @@ jobs:
     #
     # Its own job: it holds `actions: read`, to list and fetch the earlier
     # artifact, and the capture job above holds no token at all.
-    needs: bench-full
+    needs: [plan, bench-full]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -656,12 +661,11 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['bench-full'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           persist-credentials: false
 
       - name: Artifact name for this branch

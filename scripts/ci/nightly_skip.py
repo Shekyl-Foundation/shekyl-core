@@ -39,10 +39,12 @@ a leg whose key cannot be computed runs; a job this file does not name fails
 `--check`; and if the planner itself does not succeed, the workflow falls
 back to its full matrices.
 
-Never skipped, whatever the key (`NEVER`): a job that draws fresh
-randomness by design (a fuzzer, a property test with no fixed seed), a job
-whose verdict is about an outside host, and a measurement series (a benchmark:
-each night is new data). Environment a job fetches at run time by a pin (the
+Never skipped, whatever the key (`SUBJECTS`): a job that draws fresh
+randomness by design (a fuzzer, a property test with no fixed seed), and a
+job whose verdict is about an outside host. A benchmark is skipped like any
+other leg (ruled 2026-11-22): its instruction counts move only with the
+code, the toolchain or the image, all in the key; its drift check
+(`FOLLOWS`) runs exactly where it runs. Environment a job fetches at run time by a pin (the
 toolchain through rustup, packages through apt in a container) is treated as
 part of the image: not in the key beyond the image's identity, and bounded
 by the weekly run.
@@ -85,10 +87,14 @@ SUBJECTS = {
     "nightly.yml": {
         "proptest-exhaustive": "fresh randomness by design: 200,000 property cases a night "
                                "with no fixed seed, so each night tests new cases",
-        "bench-full": "a measurement series: each night is new data on the runner, not a "
-                      "verdict on the code",
-        "bench-full-drift": "reads bench-full's capture from the same run",
     },
+    "nightly-live-daemon-slow.yml": {},
+}
+# A job that runs exactly where another planned job runs, reading that job's
+# planner output: bench-full-drift compares tonight's capture with the one
+# before, so it has no legs of its own.
+FOLLOWS = {
+    "nightly.yml": {"bench-full-drift": "bench-full"},
     "nightly-live-daemon-slow.yml": {},
 }
 PLANNER = "plan"
@@ -288,6 +294,8 @@ def plan(workflow_file: str) -> int:
     commits: dict[str, str] = {}
     legs, entries = [], {}
     for job, (output, full) in planned_jobs(doc).items():
+        if output != job:
+            continue  # a follower: it runs where its leader's legs run
         container = (doc["jobs"][job].get("container") or {})
         container = container.get("image", "") if isinstance(container, dict) else container
         digest = image_digest(container) if container else "none"
@@ -319,7 +327,8 @@ def plan(workflow_file: str) -> int:
     run_file = os.path.basename(env.get("GITHUB_WORKFLOW_REF", workflow_file).split("@", 1)[0])
     prior = candidates(repo, run_file, default_branch, now) if event == "schedule" else []
     decisions = decide(legs, prior, now, event, default_branch)
-    matrices: dict[str, list[dict]] = {output: [] for _, (output, _) in planned_jobs(doc).items()}
+    matrices: dict[str, list[dict]] = {job: [] for job, (output, _) in planned_jobs(doc).items()
+                                       if output == job}
     for d in decisions:
         job, output, entry = entries[d["name"]]
         if d["run"]:
@@ -336,6 +345,8 @@ def plan(workflow_file: str) -> int:
         lines.append(f"| {d['name']} | {'yes' if d['run'] else 'skipped'} | {d['reason']} |")
     for job, why in never.items():
         lines.append(f"| {job} (every leg) | yes | never skipped: {why} |")
+    for job, leader in FOLLOWS[os.path.basename(workflow_file)].items():
+        lines.append(f"| {job} | where {leader} runs | follows {leader}'s legs |")
     skipped = [d for d in decisions if not d["run"]]
     lines += ["", f"{len(decisions) - len(skipped)} planned legs run, {len(skipped)} skipped; "
               f"a skipped leg relies on the run named beside it, where it passed with the same key."]
@@ -347,7 +358,8 @@ def plan(workflow_file: str) -> int:
     return 0
 
 
-def wiring_problems(filename: str, doc: object, never: dict[str, str]) -> list[str]:
+def wiring_problems(filename: str, doc: object, never: dict[str, str],
+                    follows: dict[str, str] | None = None) -> list[str]:
     """How `doc` departs from the planner's wiring (empty when it holds)."""
     if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
         return [f"{filename}: no jobs mapping"]
@@ -357,8 +369,11 @@ def wiring_problems(filename: str, doc: object, never: dict[str, str]) -> list[s
     problems = []
     outputs = (jobs[PLANNER].get("outputs") or {}) if isinstance(jobs[PLANNER], dict) else {}
     planned = planned_jobs(doc)
+    follows = follows or {}
     for name in sorted(set(never) - set(jobs)):
         problems.append(f"{filename}: `{name}` is listed as never skipped but is not a job here")
+    for name in sorted(set(follows) - set(jobs)):
+        problems.append(f"{filename}: `{name}` is listed as a follower but is not a job here")
     for name, job in jobs.items():
         if name in (PLANNER, REPORTER) or name in never:
             continue
@@ -368,18 +383,21 @@ def wiring_problems(filename: str, doc: object, never: dict[str, str]) -> list[s
                             f"listed as never skipped, with why")
             continue
         output, full = planned[name]
+        leader = follows.get(name, name)
         needs = job.get("needs", [])
         needs = [needs] if isinstance(needs, str) else needs
         if PLANNER not in needs:
             problems.append(f"{filename}: `{name}` does not need `{PLANNER}`")
+        if leader != name and leader not in needs:
+            problems.append(f"{filename}: `{name}` follows `{leader}` and does not need it")
         cond = str(job.get("if", ""))
-        guard = "needs.plan.outputs['%s'] != '{\"include\":[]}'" % name
+        guard = "needs.plan.outputs['%s'] != '{\"include\":[]}'" % leader
         if not cond.startswith("${{ !cancelled() && ") or guard not in cond:
             problems.append(f"{filename}: `{name}`'s `if` must start `!cancelled() &&` (a failed "
                             f"planner runs it) and hold `{guard}` (no empty matrix)")
-        if output != name or outputs.get(name) != "${{ steps.plan.outputs['%s'] }}" % name:
-            problems.append(f"{filename}: `{name}` reads a planner output `{PLANNER}` does not "
-                            f"pass on as `{name}`")
+        if output != leader or outputs.get(leader) != "${{ steps.plan.outputs['%s'] }}" % leader:
+            problems.append(f"{filename}: `{name}` reads a planner output other than "
+                            f"`{leader}`'s, or `{PLANNER}` does not pass `{leader}` on")
         if {e.get("branch") for e in full} != {"main", "dev"}:
             problems.append(f"{filename}: `{name}`'s fallback matrix does not cover main and dev")
         refs = [st.get("with", {}).get("ref") for st in job.get("steps", [])
@@ -403,14 +421,16 @@ def check() -> int:
             problems.append(f"{filename}: missing (renamed? update SUBJECTS)")
             continue
         with open(path) as f:
-            problems += wiring_problems(filename, yaml.load(f, Loader=StrictLoader), never)
+            problems += wiring_problems(filename, yaml.load(f, Loader=StrictLoader), never,
+                                        FOLLOWS[filename])
     for p in problems:
         print(f"FAIL: {p}")
     if problems:
         return 1
     print(f"nightly skip: {', '.join(SUBJECTS)} plan every job but the never-skipped "
-          f"({sum(len(n) for n in SUBJECTS.values())}, each with why); a failed planner runs "
-          f"every leg; each planned leg checks out the commit its key names")
+          f"({sum(len(n) for n in SUBJECTS.values())}, each with why), each follower where its "
+          f"leader runs; a failed planner runs every leg; each planned leg checks out the "
+          f"commit its key names")
     return 0
 
 
@@ -517,6 +537,32 @@ def selftest() -> int:
            lambda d: d["jobs"]["a"]["strategy"].__setitem__("matrix",
                d["jobs"]["a"]["strategy"]["matrix"].replace(',{"branch":"dev"}', "")), nv, True)
     wiring("a leg renamed fails", lambda d: d["jobs"]["a"].__setitem__("name", "a"), nv, True)
+
+    def with_follower(d, own_output=False, needs_leader=True):
+        import copy
+        f = copy.deepcopy(d["jobs"]["a"])
+        f["name"] = "b (${{ matrix.branch }})"
+        f["needs"] = ["plan", "a"] if needs_leader else ["plan"]
+        if own_output:
+            f["strategy"]["matrix"] = f["strategy"]["matrix"].replace("outputs['a']",
+                                                                      "outputs['b']")
+        d["jobs"]["b"] = f
+
+    def wiring_f(label, edit, want):
+        import copy
+        doc = copy.deepcopy(good)
+        edit(doc)
+        got = len(wiring_problems("w.yml", doc, nv, {"b": "a"}))
+        if (got > 0) != want:
+            failures.append(f"{label}: {got} problem(s)")
+        else:
+            print(f"selftest ok: {label}")
+
+    wiring_f("a follower on its leader's legs holds", lambda d: with_follower(d), False)
+    wiring_f("a follower on an output of its own fails",
+             lambda d: with_follower(d, own_output=True), True)
+    wiring_f("a follower not needing its leader fails",
+             lambda d: with_follower(d, needs_leader=False), True)
     for f in failures:
         print(f"SELFTEST FAIL: {f}")
     if failures:
@@ -526,8 +572,8 @@ def selftest() -> int:
           "other-branch run, and a skipped or failed leg are never relied on; a dispatch and a "
           "never-skipped job run every time; an unknown component runs the leg; a job neither "
           "planned nor never-skipped, a planner missing or not passed on, a planned job a failed "
-          "planner would skip or that checks out the branch, a fallback short of a branch, and a "
-          "renamed leg each fail the wiring check")
+          "planner would skip or that checks out the branch, a fallback short of a branch, a "
+          "renamed leg, and a follower off its leader's legs each fail the wiring check")
     return 0
 
 
