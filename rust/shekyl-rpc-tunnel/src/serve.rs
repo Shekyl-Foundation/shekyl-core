@@ -41,6 +41,7 @@ use tokio::sync::{watch, Semaphore};
 use tokio::time::{sleep, Sleep};
 
 use crate::config::{Config, Listen};
+use shekyl_process::stop::{FirstStop, Inherited, Stops};
 
 /// A grant set, as `rpc client list` names one.
 fn names(set: GrantSet) -> String {
@@ -63,6 +64,7 @@ fn names(set: GrantSet) -> String {
 /// first session, the listener, or the node's revocation.
 pub async fn run(
     config: Config,
+    inherited: Inherited,
     key: shekyl_rpc_channel::handshake::StaticKeypair,
     say: fn(&str),
 ) -> Result<(), String> {
@@ -96,8 +98,8 @@ pub async fn run(
     // Armed before the listener exists: from "Listening on" a stop signal
     // is a clean stop that removes the socket, never the signal's default
     // death.
-    let mut stop =
-        Stop::arm().map_err(|e| format!("the stop signals could not be registered: {e}"))?;
+    let mut stops = Stops::arm(inherited)
+        .map_err(|e| format!("the stop signals could not be registered: {e}"))?;
     let result = match &config.listen {
         Listen::Tcp(addr) => {
             listen_check(*addr)?;
@@ -112,7 +114,7 @@ pub async fn run(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
                 &local,
-                &mut stop,
+                &mut stops,
                 ended_tx,
                 ended_rx,
             )
@@ -120,13 +122,13 @@ pub async fn run(
         }
         #[cfg(unix)]
         Listen::Socket(path) => {
-            let listener = bind_socket(path)?;
+            let listener = bind_socket(path).await?;
             say(&format!("Listening on {}.", path.display()));
             let served = accept_loop(
                 || async { listener.accept().await.map(|(io, _)| io) },
                 &pool,
                 &local,
-                &mut stop,
+                &mut stops,
                 ended_tx,
                 ended_rx,
             )
@@ -143,7 +145,7 @@ async fn accept_loop<F, Fut, S>(
     mut accept: F,
     pool: &Arc<Pool>,
     local: &Arc<Semaphore>,
-    stop: &mut Stop,
+    stops: &mut Stops,
     ended_tx: watch::Sender<Option<ChannelFault>>,
     mut ended_rx: watch::Receiver<Option<ChannelFault>>,
 ) -> Result<(), String>
@@ -191,7 +193,9 @@ where
                 let fault = ended.ok().and_then(|value| value.clone());
                 break Err(fault.map_or_else(String::new, |fault| fault.to_string()));
             }
-            () = stop.next() => break Ok(()),
+            // `Replaced` does not complete: this tunnel armed once, and a
+            // later arm is not a stop. The accept loop still ends on revocation.
+            () = until_stop(stops) => break Ok(()),
             Some(_) = serving.join_next(), if !serving.is_empty() => {}
         }
     };
@@ -206,56 +210,11 @@ where
     ended
 }
 
-/// The stop signals, registered once: Ctrl-C, and on Unix the SIGTERM a
-/// service manager sends (systemd's stop, the rc.d supervisor's).
-///
-/// Registering replaces the signal's default action, so a signal that
-/// arrives once this is armed is a clean stop, whenever it arrives. The
-/// streams live as long as the tunnel: a stream made after a signal does
-/// not see it, so one made per wait would lose a signal that came between
-/// two waits.
-struct Stop {
-    #[cfg(unix)]
-    terminate: tokio::signal::unix::Signal,
-    #[cfg(unix)]
-    interrupt: tokio::signal::unix::Signal,
-    #[cfg(windows)]
-    ctrl_c: tokio::signal::windows::CtrlC,
-}
-
-impl Stop {
-    /// Register the stop signals now, before anything this process holds
-    /// needs a clean stop to be released.
-    fn arm() -> io::Result<Self> {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            Ok(Self {
-                terminate: signal(SignalKind::terminate())?,
-                interrupt: signal(SignalKind::interrupt())?,
-            })
-        }
-        #[cfg(windows)]
-        {
-            Ok(Self {
-                ctrl_c: tokio::signal::windows::ctrl_c()?,
-            })
-        }
-    }
-
-    /// The next stop signal, including one that arrived before this wait.
-    async fn next(&mut self) {
-        #[cfg(unix)]
-        {
-            tokio::select! {
-                _ = self.terminate.recv() => {}
-                _ = self.interrupt.recv() => {}
-            }
-        }
-        #[cfg(windows)]
-        {
-            self.ctrl_c.recv().await;
-        }
+/// The first stop. A replaced arm does not end this wait: the accept loop
+/// has the revocation to end on, and a replacement is not a stop.
+async fn until_stop(stops: &mut Stops) {
+    if let FirstStop::Replaced = stops.first().await {
+        std::future::pending::<()>().await;
     }
 }
 
@@ -315,38 +274,48 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 }
 
 /// A socket at `path`, in a directory only this account can enter (R0
-/// §1.1's construction). A socket there that a tunnel answers on is not
-/// taken over; one left by a stopped tunnel is replaced.
+/// §1.1's construction). A socket there that a tunnel answers on, or one
+/// whose server cannot be shown gone, is not taken over; one left by a
+/// stopped tunnel (the connection refused) is replaced.
 #[cfg(unix)]
-fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+async fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
+    use shekyl_rpc_transport::listen::{
+        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
+    };
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| format!("{} names no directory", path.display()))?;
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let me = shekyl_os_account::effective_uid();
-    if !meta.is_dir() || meta.uid() != me || meta.permissions().mode() & 0o077 != 0 {
-        return Err(format!(
-            "{} must be a directory only this account can enter (owned by uid {me}, mode 0700)",
-            dir.display()
-        ));
-    }
-    match std::fs::symlink_metadata(path) {
-        Ok(existing) if existing.file_type().is_socket() => {
-            if std::os::unix::net::UnixStream::connect(path).is_ok() {
-                return Err(format!("another tunnel answers on {}", path.display()));
-            }
-            std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    match owner_only_socket_dir(dir) {
+        Ok(()) => {}
+        Err(SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly) => {
+            return Err(format!(
+                "{} must be a directory only this account can enter (owned by uid {}, mode 0700)",
+                dir.display(),
+                shekyl_os_account::effective_uid()
+            ));
         }
-        Ok(_) => {
+        Err(SocketDirRefusal::Unreadable(why)) => return Err(format!("{}: {why}", dir.display())),
+    }
+    match clear_replaceable_socket(path).await {
+        Ok(()) => {}
+        Err(SocketRefusal::Answers) => {
+            return Err(format!("another tunnel answers on {}", path.display()));
+        }
+        Err(SocketRefusal::NotASocket) => {
             return Err(format!(
                 "{} is not a socket; it is not replaced",
                 path.display()
-            ))
+            ));
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(SocketRefusal::Unknown(why)) => {
+            return Err(format!(
+                "{}: whether a tunnel still holds this socket is not known ({why}); it is not \
+                 replaced",
+                path.display()
+            ));
+        }
+        Err(SocketRefusal::NotRemoved(why)) => return Err(format!("{}: {why}", path.display())),
     }
     tokio::net::UnixListener::bind(path).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -492,25 +461,5 @@ mod tests {
         for bad in ["0.0.0.0:1", "[::]:1", "192.0.2.7:1"] {
             assert!(listen_check(bad.parse().unwrap()).is_err(), "{bad}");
         }
-    }
-
-    /// A SIGTERM that arrives once the stop is armed, before anything waits
-    /// on it, is still the stop the next wait returns. Red edits: register
-    /// the streams inside `next` (the test process dies by signal 15), or
-    /// make a fresh stream per wait (the wait never returns).
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_sigterm_before_the_first_wait_is_a_clean_stop() {
-        let mut stop = Stop::arm().expect("the stop signals");
-        let sent = std::process::Command::new("kill")
-            .args(["-TERM", &std::process::id().to_string()])
-            .status()
-            .expect("kill");
-        assert!(sent.success());
-        // Nothing waits on the stop while the signal lands.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        tokio::time::timeout(Duration::from_secs(10), stop.next())
-            .await
-            .expect("the SIGTERM sent before the wait is the stop it returns");
     }
 }

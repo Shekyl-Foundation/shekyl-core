@@ -73,11 +73,15 @@
 //! none has said nothing by seeing one elsewhere.
 //!
 //! **A planted leak.** A timing test that never reports a leak has not been
-//! shown able to. The same loop is run with extra work inside the timed
-//! region for one class of a `fixed-vs-invalid` comparison, calibrated to a
-//! stated fraction of one decapsulation, and the harness must report it. The
-//! fraction is the sensitivity of the whole probe: a leak smaller than that
-//! is not excluded by a pass. If it is not detected the run is void.
+//! shown able to. The pass line's comparison is run again with extra work
+//! inside the timed region for its class 1, calibrated to a stated fraction
+//! of one decapsulation, and the harness must report it. The fraction is the
+//! sensitivity of the whole probe: a leak smaller than that is not excluded
+//! by a pass. If it is not detected the run is void. It is planted on the
+//! pass line's own classes, not on an information comparison: a pass needs
+//! that comparison clean unplanted, so whenever the control's verdict
+//! matters its detection is the plant's, and it shows the sensitivity on the
+//! very inputs the verdict rests on.
 //!
 //! Run: `cargo run --release -p shekyl-rpc-channel --example rt_p4_decaps_timing -- [SAMPLES [SEED]]`
 //! (default 1,000,000 samples per comparison; about 1.1 GB of memory at that
@@ -553,17 +557,6 @@ fn main() {
         &pass_line,
         verdict(pass_line.max_t),
     );
-    let checks = &subject.checks;
-    let checked = checks.entries.get() == (samples + CALIBRATION) as u64
-        && checks.decrypt_mismatch.get() == 0
-        && checks.not_rejected.get() == 0;
-    println!(
-        "check=message-classes entries={} decrypt_mismatch={} not_rejected={} verdict={}",
-        checks.entries.get(),
-        checks.decrypt_mismatch.get(),
-        checks.not_rejected.get(),
-        if checked { "as-intended" } else { "FAILED" }
-    );
 
     let information = [
         [Class::Fixed, Class::Valid],
@@ -571,10 +564,8 @@ fn main() {
         [Class::Fixed, Class::Bitflip],
         [Class::Valid, Class::Invalid],
     ];
-    let mut median_ns = pass_line.median_ns;
     for classes in information {
         let outcome = compare(&subject, classes, samples, &mut inputs, None);
-        median_ns = outcome.median_ns;
         report("information", classes, &outcome, "information");
     }
     // Both classes the same kind: there is nothing to find, so anything
@@ -590,11 +581,11 @@ fn main() {
         report("null", classes, &outcome, verdict(outcome.max_t));
     }
 
-    let leak_ns = median_ns * CONTROL_LEAK_FRACTION;
+    let leak_ns = pass_line.median_ns * CONTROL_LEAK_FRACTION;
     let iterations = calibrate_spin(leak_ns);
     let control = compare(
         &subject,
-        [Class::Fixed, Class::Invalid],
+        pass_classes,
         samples,
         &mut inputs,
         Some(iterations),
@@ -608,6 +599,20 @@ fn main() {
         } else {
             "NOT-DETECTED"
         }
+    );
+
+    // Every message-class entry, the pass line's and the control's, built
+    // and checked before its loop.
+    let checks = &subject.checks;
+    let checked = checks.entries.get() == 2 * (samples + CALIBRATION) as u64
+        && checks.decrypt_mismatch.get() == 0
+        && checks.not_rejected.get() == 0;
+    println!(
+        "check=message-classes entries={} decrypt_mismatch={} not_rejected={} verdict={}",
+        checks.entries.get(),
+        checks.decrypt_mismatch.get(),
+        checks.not_rejected.get(),
+        if checked { "as-intended" } else { "FAILED" }
     );
 
     // A run that could not have seen a leak, that sees one where there is

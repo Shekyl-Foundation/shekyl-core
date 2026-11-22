@@ -1,9 +1,9 @@
 # `RT-P4`: the message-only pass line, registered 2026-11-21
 
-**State of this record: the laptop's registered run is in, and it PASSES;
-the floor device's is not yet made.** The attestation moves when the floor
-device's run is in (see "The attestation" below). Results are added below
-"Registered before the run", and that section is not edited afterwards.
+**State of this record: both registered runs are in, and both PASS.** The
+attestation moved on both (see "The attestation" below), and RT-P4's
+standing check passes. Results are added below "Registered before the
+run", and that section is not edited afterwards.
 
 ## Why this run
 
@@ -276,17 +276,109 @@ gap stands at these figures (2026-11-21), on the unchanged basis of
 bundle holder reaches decapsulation (mac1), the handshake budget caps the
 rate, and the key is hybrid. The crypto-audit lane is investigating the gap.
 
-### The floor device — not yet made
+### The floor device — PASS
 
-The second Raspberry Pi 4 the maintainer is providing; its identity is
-recorded here before its run.
+One attempt, 2026-11-22 00:06:46Z to 01:14:55Z, on a second Raspberry Pi 4,
+under a quiet claim in the estate's usage ledger (the hashing-actor lane's
+timing ended at 00:02:56Z and left nothing behind; nothing else ran). Its
+identity, recorded in the capture before the run: Raspberry Pi 4 Model B
+Rev 1.2, board revision `c03112` (4 GB), Ubuntu 26.04.1 LTS, kernel
+`7.0.0-1023-raspi`, governor `ondemand`, clock synchronised. Its exit code
+was 0. The output, with the conditions at each end, is
+`rt_p4_mlkem_decaps_timing_20261121_message_captures/floor_registered_attempt1.txt`.
+
+```text
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on the message-only comparison (ruled 2026-10-25); null comparisons: |t| < 4.5; control: |t| > 10; the four other comparisons are information
+selfcheck=reference-kpke cases=256 mismatches=0
+pass-line=invalid-message-fixed-vs-invalid-message-random max_abs_t=2.81 median_ns=326716 n0=499801 n1=500199 verdict=no-evidence
+check=message-classes entries=1010000 decrypt_mismatch=0 not_rejected=0 verdict=as-intended
+information=fixed-vs-valid max_abs_t=1.95 median_ns=326752 n0=501276 n1=498724 verdict=information
+information=fixed-vs-invalid max_abs_t=1.21 median_ns=326827 n0=499396 n1=500604 verdict=information
+information=fixed-vs-bitflip max_abs_t=1.66 median_ns=326753 n0=500353 n1=499647 verdict=information
+information=valid-vs-invalid max_abs_t=2.26 median_ns=326845 n0=500235 n1=499765 verdict=information
+null=invalid-vs-invalid max_abs_t=2.29 median_ns=326698 n0=500220 n1=499780 verdict=no-evidence
+null=valid-vs-valid max_abs_t=1.82 median_ns=326956 n0=499773 n1=500227 verdict=no-evidence
+control=planted-leak fraction=0.005 planted_ns=1634 max_abs_t=1331.37 verdict=detected
+result=PASS pass_line_abs_t=2.81 worst_null_abs_t=2.29 control_abs_t=1331.37
+```
+
+(The per-quantile and per-crop lines are in the capture.)
+
+**Read against the lines, in order.**
+
+| Line | Registered | Observed | |
+| --- | --- | --- | --- |
+| 1 | a check fails: void | self-check 0 mismatches of 256; 1,010,000 entries, every one decrypting to its message and rejected | holds |
+| 2 | control `\|t\|` ≤ 10: void | 1331.37 (planted 1,634 ns, 0.5 %) | detected |
+| 3 | a null ≥ 4.5: void | 2.29, 1.82 | clean |
+| 4–6 | the pass line | 2.81 | **pass** |
+
+The run is not void, and the pass line is below 4.5: **PASS**. A pass
+excludes a dependence on the decrypted message of 0.5 % of a
+decapsulation or more, and nothing smaller.
+
+**Information.** All four comparisons are below 4.5 on this core
+(`valid-vs-invalid` 2.26): the valid-against-invalid difference the laptop
+shows is not seen on the Cortex-A72. A decapsulation takes about 327 µs
+here, against about 263 µs for `fips203` 0.4.3 on the first floor device on
+2026-10-11; the device, kernel and build differ, and the figure is not a
+line.
+
+**The build.** The device has no Rust toolchain, so the binary was
+cross-compiled on an x86_64 build host from a fresh clone of `7297b5cfbc`
+(clean): `cargo build --release --locked --target aarch64-unknown-linux-gnu
+-p shekyl-rpc-channel --example rt_p4_decaps_timing`, rustc 1.94.0
+(`4a4ef493e`), no rustflags (the harness's rustc line,
+`floor_example_rustc_line.txt`, carries no `target-feature` or
+`target-cpu`); the only environment the build was given names the aarch64
+linker and C compiler. The binary is 606,672 bytes, SHA-256
+`655537b150b227f9c2415272508ec61663c30ed011e6a68c39f7df8ffc4e17c3`, checked
+again on the device before the run, and needs GLIBC 2.34 against the
+device's 2.43. It was not executed before the run.
+
+**Conditions**, none of them a line: at the start 1.5 GHz, 49.2 °C, load
+0.10; at the end 1.5 GHz, 55.5 °C, load 1.00; `total_trans` 17,450 →
+18,512, with almost all of the run's time at 1.5 GHz in
+`time_in_state`; the under-voltage alarm 0 at both ends; nothing else over
+0.5 % CPU at the end. `vcgencmd get_throttled` needs root and was recorded
+as unreadable, as on 2026-10-11.
+
+**Captures.** `floor_registered_attempt1.txt` (the device's SHA-256 of the
+original, `9c45cca1…7a677a4`, is kept with the original in the estate's
+private captures) is committed with the login in its process lines (four
+occurrences) written `<login>`, the only change; `floor_example_rustc_line.txt` with the
+clone's directory written `<clone>` and the home directory `<home>`.
+
+### The control's comparison, 2026-11-22 (review)
+
+As registered, the control plants its extra work on a `fixed-vs-invalid`
+comparison. The 2026-10-25 lines made that comparison information, and
+the laptop reads it at 29.55 unplanted, over the control's own line of 10:
+so on that machine "detected" would not, by itself, show that the planted
+0.5 % was seen. For these two runs the detection is the plant's. The
+planted comparison reads 428.23 on the laptop against 29.55 unplanted
+(314 ns planted against a 27 ns difference), and 1331.37 on the floor
+device against 1.21 unplanted.
+
+After these runs, the harness plants the control on the pass line's own
+classes (`invalid-message-fixed` against `invalid-message-random`),
+calibrated to the pass line's median. A pass needs that comparison clean
+unplanted, so whenever the control's verdict matters its detection is the
+plant's, and it shows the sensitivity on the inputs the verdict rests on;
+the message-class checks cover the control's entries too. These two runs
+are not re-run; the next registered run takes the moved control, and a
+re-run of these is the maintainer's to call.
 
 ### The attestation
 
 "What closes it" has a pass on a device replace that device's entry and
 move `[crates]`. `[crates]` is one table for both devices: the standing
-check compares the shipped closure with it, not per run. Moving it on the
-laptop's pass alone would make the check accept the floor device's entry,
-which measured `fips203` 0.4.3, as if it covered 0.5.0. So both entries
-and `[crates]` move together, in the commit that records the floor
-device's pass, and the standing check stays red until then.
+check compares the shipped closure with it, not per run. So both entries
+and `[crates]` moved together, in the commit that records the floor
+device's pass: both are now `timing` entries naming this record and
+`7297b5cfbc`, and `[crates]` holds `fips203` 0.5.0, `crypto-common` 0.1.7,
+`generic-array` 0.14.7, `typenum` 1.20.1, `zeroize` 1.9.2 and
+`zeroize_derive` 1.5.0 with their lock checksums. RT-P4's standing check
+passes.
