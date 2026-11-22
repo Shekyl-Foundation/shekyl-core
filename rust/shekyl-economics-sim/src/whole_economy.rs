@@ -23,7 +23,7 @@
 use std::collections::VecDeque;
 use std::fmt::{self, Write};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shekyl_economics::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     effective_emission, split_block_emission, staker_pool_share_at, tail_subsidy_per_block,
@@ -231,7 +231,7 @@ fn scenario(params: &SimParams, name: &str) -> ScenarioConfig {
 }
 
 /// A zone point at a `w_ref`: what a row's cell is built on.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Place {
     pub(crate) zone: String,
     pub(crate) zone_bytes: u64,
@@ -333,7 +333,7 @@ fn cells(base: &SimParams, scope: Scope) -> Vec<Cell> {
 }
 
 /// A distribution's summary: what a column reads of a year's blocks.
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub(crate) struct Spread {
     pub(crate) p50: f64,
     pub(crate) p95: f64,
@@ -372,7 +372,7 @@ fn spread(values: &mut [u64]) -> Spread {
 }
 
 /// One year of a fold, as the table reads it.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct YearFig {
     pub(crate) year: u64,
     /// The release multiplier's mean over the year's blocks.
@@ -427,7 +427,7 @@ pub(crate) struct YearFig {
 }
 
 /// One adversary pricing, at a year's first block.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Adversaries {
     pub(crate) year: u64,
     /// The ratchet's cost as a ratio to production's, per stake share of
@@ -444,7 +444,7 @@ pub(crate) struct Adversaries {
 }
 
 /// A fold's reading.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Folded {
     pub(crate) years: Vec<YearFig>,
     /// Where the fold stopped before the horizon, if it did.
@@ -464,7 +464,7 @@ pub(crate) struct Folded {
 /// Where a fold stopped before the horizon: the edge, the year whose block
 /// reached it (the table reads only the whole years before), and the
 /// effective median there, bytes.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) struct FoldStop {
     pub(crate) edge: FoldEdge,
     pub(crate) year: u64,
@@ -903,18 +903,18 @@ fn fold_beating(base: &SimParams, cell: &Cell, label: Option<String>) -> Folded 
 
 /// A row of the table: one economy, rule, scenario and place, its seeds'
 /// folds.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Row {
     pub(crate) economy: String,
-    pub(crate) rule: &'static str,
-    pub(crate) scenario: &'static str,
+    pub(crate) rule: String,
+    pub(crate) scenario: String,
     pub(crate) place: Place,
     pub(crate) seeds: Vec<u64>,
     pub(crate) folds: Vec<Folded>,
 }
 
 /// The `--economies` summary: every row, every year.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Summary {
     pub(crate) horizon_years: u64,
     pub(crate) tau_sweep_ms_per_kb: [f64; 2],
@@ -923,20 +923,25 @@ pub(crate) struct Summary {
 
 /// The median and range of `values`, formatted with `digits` decimals.
 fn mr(values: &[f64], digits: usize) -> String {
-    let mut v: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
-    if v.is_empty() {
+    let Some((median, low, high)) = median_and_range(values) else {
         return "-".into();
-    }
-    v.sort_by(f64::total_cmp);
-    let median = v[(v.len() - 1) / 2];
-    if v.len() == 1 || (v[0] - v[v.len() - 1]).abs() < f64::EPSILON {
+    };
+    if (low - high).abs() < f64::EPSILON {
         return format!("{median:.digits$}");
     }
-    format!(
-        "{median:.digits$} [{:.digits$}, {:.digits$}]",
-        v[0],
-        v[v.len() - 1]
-    )
+    format!("{median:.digits$} [{low:.digits$}, {high:.digits$}]")
+}
+
+/// The lower median of `values`' finite members, and their least and
+/// greatest; nothing when none is finite. The narration and the derived
+/// table both read their medians here.
+fn median_and_range(values: &[f64]) -> Option<(f64, f64, f64)> {
+    let mut v: Vec<f64> = values.iter().copied().filter(|x| x.is_finite()).collect();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(f64::total_cmp);
+    Some((v[(v.len() - 1) / 2], v[0], v[v.len() - 1]))
 }
 
 /// Each fold's figure at `year`, or nothing past its stop.
@@ -973,8 +978,8 @@ pub(crate) fn run(
         } else {
             rows.push(Row {
                 economy: cell.economy.name(),
-                rule: cell.rule.name(),
-                scenario: cell.scenario,
+                rule: cell.rule.name().to_owned(),
+                scenario: cell.scenario.to_owned(),
                 place: cell.place.clone(),
                 seeds: vec![cell.seed],
                 folds: vec![f],
@@ -1007,13 +1012,17 @@ fn write_report(out: &mut impl Write, rows: &[Row], scope: Scope) -> fmt::Result
     )?;
     let mut last: Option<(&str, &str, u64)> = None;
     for row in rows {
-        let key = (row.scenario, row.place.zone.as_str(), row.place.w_ref);
+        let key = (
+            row.scenario.as_str(),
+            row.place.zone.as_str(),
+            row.place.w_ref,
+        );
         if last != Some(key) {
             writeln!(
                 out,
                 "\n== {}{} | zone {} ({} B) | w_ref {} ==",
                 row.scenario,
-                stress_tag(row.scenario),
+                stress_tag(&row.scenario),
                 row.place.zone,
                 row.place.zone_bytes,
                 row.place.w_ref
@@ -1107,7 +1116,7 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     writeln!(out, "{template}")?;
     let mut tail = format!(
         "   tail{} (miner's-net tail over miner's-net fees p50/p95/p99):",
-        stress_tag(row.scenario)
+        stress_tag(&row.scenario)
     );
     for year in SAMPLE_YEARS {
         let ratio = |p: fn(&Spread) -> f64| {
@@ -1274,6 +1283,171 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
             pick(&|a| a.shard_advance_cost),
             pick(&|a| a.shard_advance_gain)
         )?;
+    }
+    Ok(())
+}
+
+/// The derived table (§5.37.1, Rick 2026-11-21): one CSV line per row,
+/// the figures the rulings read, each the median across the row's seeds as
+/// the narration prints it. The narration and the JSON summary, hosted by
+/// digest, are the full record behind it. Test code: the table is rebuilt
+/// from the hosted summary by its regeneration and its pin.
+#[cfg(test)]
+fn table(summary: &Summary) -> String {
+    let mut out = String::new();
+    write_table(&mut out, &summary.rows).expect("String sink is infallible");
+    out
+}
+
+/// The derived table's columns, in order: the row's names, then security,
+/// release and burn, inclusion, bloat, distribution, archival and the tail.
+#[cfg(test)]
+const TABLE_COLUMNS: [&str; 40] = [
+    "scenario",
+    "zone",
+    "w_ref",
+    "economy",
+    "rule",
+    "stops",
+    "half_year",
+    "income_y1",
+    "income_y10",
+    "income_y30",
+    "income_y60",
+    "income_y135",
+    "fee_share_y10",
+    "m_r_y1",
+    "m_r_y10",
+    "m_r_y30",
+    "burn_y1",
+    "burn_y10",
+    "burn_y30",
+    "ltem_kb_y30",
+    "standard_fee_y1",
+    "tau_gross_y1",
+    "tau_gross_y30",
+    "tau_net_y1",
+    "tau_net_y30",
+    "gb_day_y1",
+    "gb_day_y10",
+    "gb_day_y30",
+    "first_1gb_day_year",
+    "archive_gb_y135",
+    "adoption_fraction",
+    "adoption_year",
+    "stakers_per_gb_year_y10",
+    "stakers_per_gb_year_y30",
+    "staker_pool_y10",
+    "staker_penalty_y10",
+    "tail_net_over_fees_p95_y60",
+    "tail_net_over_fees_p95_y100",
+    "tail_net_over_fees_p95_y135",
+    "tail_era_y135",
+];
+
+/// The narration's median of `values` ([`median_and_range`]), as `digits`
+/// decimals, or `-`.
+#[cfg(test)]
+fn med(values: &[f64], digits: usize) -> String {
+    median_and_range(values)
+        .map_or_else(|| "-".into(), |(median, _, _)| format!("{median:.digits$}"))
+}
+
+#[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
+fn write_table(out: &mut impl Write, rows: &[Row]) -> fmt::Result {
+    writeln!(
+        out,
+        "# THREE ECONOMIES GRADED WHOLE, the derived table (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).\n\
+         # One line per economy, template rule, scenario, zone and w_ref; each figure is the median\n\
+         # across the row's seeds, '-' where no seed has it (past a stop, or never reached). SKL per\n\
+         # block unless named; tau in ms/KB; m_r and burn are yearly means; the tail is the miner's-net\n\
+         # tail over the 95th-percentile block's miner's-net fees. {SUSTAINED_GROWTH} is a stress and is\n\
+         # not read for the tail. The narration and the JSON summary are the full record."
+    )?;
+    writeln!(out, "{}", TABLE_COLUMNS.join(","))?;
+    let gb = BYTES_PER_GB as f64;
+    for row in rows {
+        let fig = |year: u64, f: &dyn Fn(&YearFig) -> f64, digits: usize| -> String {
+            let v: Vec<f64> = at_year(row, year).map(f).collect();
+            med(&v, digits)
+        };
+        let stops: Vec<String> = row
+            .folds
+            .iter()
+            .map(|f| f.stop.map_or("-".into(), |stop| stop.label()))
+            .collect();
+        let half: Vec<f64> = row.folds.iter().filter_map(|f| f.half_year).collect();
+        let first_gb: Vec<f64> = row
+            .folds
+            .iter()
+            .map(|f| {
+                f.years
+                    .iter()
+                    .find(|y| y.bytes_a_day >= gb)
+                    .map_or(f64::INFINITY, |y| y.year as f64)
+            })
+            .collect();
+        let adoption: Vec<f64> = row
+            .folds
+            .iter()
+            .filter_map(|f| f.adoption.map(|a| a.0))
+            .collect();
+        let adoption_year: Vec<f64> = row
+            .folds
+            .iter()
+            .filter_map(|f| f.adoption.map(|a| a.1))
+            .collect();
+        let tail = |y: &YearFig| {
+            if y.fee_net.p95 > 0.0 {
+                y.tail_net / y.fee_net.p95
+            } else {
+                f64::INFINITY
+            }
+        };
+        let cells = [
+            row.scenario.clone(),
+            row.place.zone.clone(),
+            row.place.w_ref.to_string(),
+            row.economy.clone(),
+            row.rule.clone(),
+            stops.join(";"),
+            med(&half, 2),
+            fig(1, &|y| y.miner_income, 2),
+            fig(10, &|y| y.miner_income, 2),
+            fig(30, &|y| y.miner_income, 2),
+            fig(60, &|y| y.miner_income, 2),
+            fig(135, &|y| y.miner_income, 2),
+            fig(10, &|y| y.miner_fee / y.miner_income, 4),
+            fig(1, &|y| y.release_mean, 3),
+            fig(10, &|y| y.release_mean, 3),
+            fig(30, &|y| y.release_mean, 3),
+            fig(1, &|y| y.burn_mean, 3),
+            fig(10, &|y| y.burn_mean, 3),
+            fig(30, &|y| y.burn_mean, 3),
+            fig(30, &|y| y.ltem as f64 / BYTES_PER_KB, 0),
+            fig(1, &|y| y.standard_fee, 5),
+            fig(1, &|y| y.tau_gross, 3),
+            fig(30, &|y| y.tau_gross, 3),
+            fig(1, &|y| y.tau_net, 3),
+            fig(30, &|y| y.tau_net, 3),
+            fig(1, &|y| y.bytes_a_day / gb, 3),
+            fig(10, &|y| y.bytes_a_day / gb, 3),
+            fig(30, &|y| y.bytes_a_day / gb, 3),
+            med(&first_gb, 0),
+            fig(135, &|y| y.archival_bytes as f64 / gb, 1),
+            med(&adoption, 4),
+            med(&adoption_year, 3),
+            fig(10, &|y| y.staker_income_per_gb_year, 3),
+            fig(30, &|y| y.staker_income_per_gb_year, 3),
+            fig(10, &|y| y.staker_pool, 4),
+            fig(10, &|y| y.staker_penalty, 4),
+            fig(60, &tail, 1),
+            fig(100, &tail, 1),
+            fig(135, &tail, 1),
+            fig(135, &|y| if y.tail_share > 0.5 { 1.0 } else { 0.0 }, 0),
+        ];
+        writeln!(out, "{}", cells.join(","))?;
     }
     Ok(())
 }
@@ -1488,6 +1662,170 @@ mod tests {
             "--economies narration",
             FULL_FIXTURE,
             &narration(Scope::Full),
+        );
+    }
+
+    /// The derived table's committed copy (§5.37.1).
+    const TABLE_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/economies_table.csv"
+    );
+
+    /// A fold whose every year to `years` carries `scale`, stopped at the
+    /// reward's edge when `stop` says so.
+    fn synthetic_fold(years: u64, scale: f64, stop: Option<FoldStop>) -> Folded {
+        Folded {
+            years: (1..=years)
+                .map(|year| YearFig {
+                    year,
+                    release_mean: scale,
+                    burn_mean: scale / 10.0,
+                    miner_income: 100.0 * scale,
+                    miner_fee: scale,
+                    fee_net: Spread {
+                        p95: scale,
+                        ..Spread::default()
+                    },
+                    tail_net: 2.0 * scale,
+                    tail_share: if year > 100 { 1.0 } else { 0.0 },
+                    bytes_a_day: if year >= 3 { 2.0e9 } else { 1.0e8 },
+                    ..YearFig::default()
+                })
+                .collect(),
+            stop,
+            half_year: Some(11.0 * scale),
+            adoption: None,
+            adversaries: Vec::new(),
+            design_load_bytes_a_day: 4.3e8,
+            bond_per_gb: 250.0,
+        }
+    }
+
+    fn synthetic_summary() -> Summary {
+        let place = Place {
+            zone: "N = 90".into(),
+            zone_bytes: 1_795_896,
+            w_ref: 3_000,
+        };
+        let edge = FoldStop {
+            edge: FoldEdge::RewardDomain,
+            year: 8,
+            median_bytes: 4_000_000_000_000,
+        };
+        Summary {
+            horizon_years: HORIZON_YEARS,
+            tau_sweep_ms_per_kb: TAU_SWEEP_MS_PER_KB,
+            rows: vec![
+                Row {
+                    economy: "A-honest".into(),
+                    rule: "gross".into(),
+                    scenario: BASELINE_STEADY_STATE.into(),
+                    place: place.clone(),
+                    seeds: HONEST_SEEDS.to_vec(),
+                    folds: vec![
+                        synthetic_fold(HORIZON_YEARS, 1.0, None),
+                        synthetic_fold(HORIZON_YEARS, 2.0, None),
+                        synthetic_fold(HORIZON_YEARS, 3.0, None),
+                    ],
+                },
+                Row {
+                    economy: "B".into(),
+                    rule: "miner's net".into(),
+                    scenario: SUSTAINED_GROWTH.into(),
+                    place,
+                    seeds: HONEST_SEEDS.to_vec(),
+                    folds: vec![
+                        synthetic_fold(7, 1.0, Some(edge)),
+                        synthetic_fold(7, 2.0, Some(edge)),
+                        synthetic_fold(7, 3.0, Some(edge)),
+                    ],
+                },
+            ],
+        }
+    }
+
+    /// The derived table: its header, one line per row with every column,
+    /// the seeds' median, and `-` past a fold's stop.
+    #[test]
+    fn the_derived_table_has_a_line_per_row_and_every_column() {
+        let table = table(&synthetic_summary());
+        let lines: Vec<&str> = table.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(lines.len(), 3, "the header and two rows");
+        assert_eq!(lines[0], TABLE_COLUMNS.join(","));
+        let column = |line: &str, name: &str| -> String {
+            let at = TABLE_COLUMNS
+                .iter()
+                .position(|c| *c == name)
+                .expect("a column");
+            line.split(',')
+                .nth(at)
+                .expect("the column's cell")
+                .to_owned()
+        };
+        for line in &lines[1..] {
+            assert_eq!(line.split(',').count(), TABLE_COLUMNS.len(), "{line}");
+        }
+        // The seeds carry 1, 2 and 3: the median is 2.
+        assert_eq!(column(lines[1], "income_y10"), "200.00");
+        assert_eq!(column(lines[1], "half_year"), "22.00");
+        assert_eq!(column(lines[1], "first_1gb_day_year"), "3");
+        assert_eq!(column(lines[1], "tail_net_over_fees_p95_y135"), "2.0");
+        assert_eq!(column(lines[1], "tail_era_y135"), "1");
+        // The stopped row reads nothing past year 7.
+        assert_eq!(column(lines[2], "income_y1"), "200.00");
+        assert_eq!(column(lines[2], "income_y10"), "-");
+        assert_eq!(
+            column(lines[2], "stops"),
+            "domain y8 at 4.0 TB;domain y8 at 4.0 TB;domain y8 at 4.0 TB"
+        );
+    }
+
+    /// The JSON summary `--economies` writes reads back to the same table.
+    #[test]
+    fn the_summary_reads_back_to_the_same_table() {
+        let summary = synthetic_summary();
+        let json = serde_json::to_string(&summary).expect("serialize");
+        let back: Summary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(table(&back), table(&summary));
+    }
+
+    /// The JSON summary [`SUMMARY_PATH_ENV`] names, read whole. Refuses,
+    /// naming the variable, when it names none: the pin and the helper
+    /// below have no subject without it (rule 47).
+    fn hosted_summary() -> Summary {
+        let path = std::env::var(SUMMARY_PATH_ENV).unwrap_or_else(|_| {
+            panic!(
+                "{SUMMARY_PATH_ENV} names no JSON summary: fetch the hosted one by its pinned \
+                 digest and name its decompressed path"
+            )
+        });
+        let json = std::fs::read_to_string(&path).expect("read the JSON summary");
+        serde_json::from_str(&json).expect("the JSON summary parses")
+    }
+
+    /// The derived table against the full record: rebuilt from the hosted
+    /// JSON summary, it is the committed copy.
+    #[test]
+    #[ignore = "--economies, the derived table: reads the hosted JSON summary (379 MB) named by SHEKYL_ECONOMIES_SUMMARY — on demand"]
+    fn economies_table_matches_the_hosted_summary() {
+        committed_fixture::assert_matches(
+            "--economies derived table",
+            TABLE_FIXTURE,
+            &table(&hosted_summary()),
+        );
+    }
+
+    /// Armed: rewrites the derived table from the JSON summary under a cited
+    /// decision.
+    #[test]
+    #[ignore = "armed regeneration helper; writes the derived table from the JSON summary SHEKYL_ECONOMIES_SUMMARY names; requires SHEKYL_PINNED_REGEN_DECISION"]
+    fn regen_economies_table_fixture() {
+        regenerate(
+            "the --economies derived table",
+            &[Output {
+                path: TABLE_FIXTURE,
+                build: || table(&hosted_summary()),
+            }],
         );
     }
 

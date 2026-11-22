@@ -107,13 +107,15 @@ esr10::tests::regen_esr10_narration_fixtures
 eup4::tests::regen_eup4_narration_fixtures
 jg_grid::tests::regen_jg_grid_narration_fixtures
 growth_trace::tests::regen_growth_trace_narration_fixture
-whole_economy::tests::regen_economies_narration_fixtures'
+whole_economy::tests::regen_economies_narration_fixtures
+whole_economy::tests::regen_economies_table_fixture'
 on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
 growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
 whole_economy::tests::economies_narration_matches_the_committed_fixture
-whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge'
+whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge
+whole_economy::tests::economies_table_matches_the_hosted_summary'
 
 # Rule 47 for this script's own list: it must name at least one test to
 # run. Counted by awk, which exits 0 on an empty list where `grep -c`

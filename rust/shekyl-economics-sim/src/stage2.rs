@@ -17,7 +17,7 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use shekyl_chain_rules::EffectiveMedian;
 use shekyl_economics::{params::SCALE, CirculatingSupply, ClosedShardCount, TxVolume};
@@ -476,7 +476,7 @@ pub(crate) trait FoldProbe {
 
 /// Where a fold stops when its probe asks it to
 /// ([`FoldProbe::stops_at_edges`]), instead of refusing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum FoldEdge {
     /// The cumulative burn has passed everything emitted: the supply break
     /// a schedule whose fees are exogenous reaches (§5.28.1), where the
