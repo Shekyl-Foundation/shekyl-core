@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA: floor device passes, laptop not yet run (§3.1); SLH-DSA-192s: floor device passes, laptop not yet run (§3.3); ML-DSA-65 registered, its floor shake-down's matched pair crossed and the run is held (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s: floor device passes, laptop run in progress (§3.3); ML-DSA-65 registered, its floor shake-down's matched pair crossed and the run is held (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -437,12 +437,46 @@ devices, with its source read recorded here.
 
 ### 3.1 FN-DSA, the receipt countersignature
 
-**Status: the floor device PASSES (2026-11-22); the laptop's two runs are
-not yet made.** The registration and its results are in
+**Status: CLOSED 2026-11-22: all three registered runs PASS.** The
+registration and its results are in
 [`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
-On the 4 GB Pi 4 at 500,000 samples the fixed pair read 2.90, the nulls
-2.77 and 1.77, and the control 200.07. That excludes a key-value dependence
-of 0.5 % of a signature (10.19 µs) or more there.
+| Run | Fixed pair | Nulls | Control |
+| --- | --- | --- | --- |
+| 4 GB Pi 4, 500,000 samples | 2.90 | 2.77, 1.77 | 200.07 |
+| Laptop, AVX2 path | 1.71 | 2.28, 2.49 | 159.34 |
+| Laptop, SSE2 path | 1.85 | 2.25, 1.99 | 162.04 |
+
+Each pass excludes a key-value dependence of 0.5 % of a signature or more on
+its path: 10.19 µs on the floor device, about 2 µs on x86. The record
+discloses one coverage difference. On the SSE2 path, which runs only on x86
+without AVX2, the wallet inlines `sign_inner` where the harness does not.
+The sampler and the LDL decomposition it calls are instruction-identical.
+
+`sign_inner` (`fn-dsa-sign` 0.4.0, `lib.rs:482`) does key-derived
+floating-point work of its own:
+- the Gram matrix from the basis (`poly_mulownadj_fft`, `poly_muladj_fft`,
+  `lib.rs:590-604`);
+- the target and lattice-point products (`poly_mul_fft`, `lib.rs:632-635`
+  and `:680-686`);
+- the inverse FFT (`lib.rs:688-689`);
+- `rint` (`lib.rs:700`, `:715`), which on x86_64 is `cvtsd2si`
+  (`_mm_cvtsd_si64`, `flr_native.rs:373-384`).
+
+All of it is multiplies, adds, subtractions and conversions, whose latency
+on x86_64 does not depend on operand values for normal inputs. Every
+division and square root on key-derived values in signing is in the two
+functions the comparison found identical between the harness and the
+wallet:
+- `poly_LDL_fft`, whose divisions on x86_64 are `_mm_div_pd` and
+  `_mm_div_sd` (`poly.rs:1130`, `:1148`; the AVX2 path's `_mm256_div_pd`
+  at `poly_avx2.rs:393`; `poly.rs:1215` is the same division on targets
+  without SIMD);
+- `ffsamp_fft_inner`, whose leaf divides once (`sampler.rs:512`) and takes
+  two square roots (`:532`, `:553`); on the AVX2 path
+  `sampler_avx2.rs:280`, `:300` and `:321`.
+
+So the differently compiled `sign_inner` contains no operation whose time
+can vary with the key's values.
 It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
 path, and the floor device. The row closes when all three pass.
 - **The pass line** is the fixed pair, key A against key B (the
