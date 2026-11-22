@@ -55,7 +55,8 @@ const RULES: ChainRules =
     ChainRules::harness_regtest(NonZeroU128::new(DIFFICULTY), CappedEpoch::PRODUCTION);
 
 /// The most blocks any test here waits for in turn: five, in
-/// [`the_miner_extends_the_chain_block_after_block`].
+/// [`the_miner_extends_the_chain_block_after_block`], whose loop runs to it,
+/// so the count the bound is derived from is the count the test mines.
 const MOST_BLOCKS: u32 = 5;
 
 /// How many times the expected hash count a block's search may try before
@@ -113,8 +114,12 @@ fn the_block(found: &FoundInbox, miner: &Miner, before: u64) -> Found {
     let started = Instant::now();
     loop {
         // Read before the wait: a block among the hashes counted here is
-        // delivered within the wait, so a count over the bound with no
-        // block after it is a search that missed.
+        // almost always delivered within the wait. The winning hash is
+        // counted before it is checked, claimed and sent, and a starved
+        // worker can be descheduled between the two for longer than the
+        // wait; a late block then needs the bound's worth of further
+        // hashes from the other workers to look like a miss, minutes on
+        // the floor device.
         let tried = miner.hashes_tried() - before;
         let asked = Instant::now();
         match found.recv_timeout(POLL) {
@@ -500,7 +505,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
     )
     .expect("the workers start");
     s.mine(1).await;
-    for expected in 1..6u64 {
+    for expected in 1..=u64::from(MOST_BLOCKS) {
         let mut next = s.next_template(Vec::new()).await.expect("a template");
         assert_eq!(next.height.to_raw(), expected);
         // The workers leave a job whose seed is not warm
