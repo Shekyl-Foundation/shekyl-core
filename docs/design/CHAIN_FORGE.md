@@ -584,7 +584,9 @@ One row per consumer group, from the census at `4b867a4f8`. **Status** is NOT ST
 | --- | --- | --- | --- | --- |
 | `vectors_tests.rs:153`, `:406`, `:705`, `:747`; `vectors_tests/rebaseline.rs:61`, `corpus_census.rs:103`, `pool_door.rs:35`, `relay_floor.rs:45`, `too_many_inputs.rs:57`, `h19_cost.rs:43` | the five corpora | forge lane (`CF-5`) | L, all of it | NOT STARTED |
 | `header_path_tests.rs` (9 tests: `:210`…`:1029`); `sync_wire_tests.rs:41`, `:77` | the five corpora | forge lane (`CF-5`) | L | NOT STARTED |
-| `archival_corpus_tests.rs:212`; `archival_sufficiency_tests.rs:240`, `:315`, `:372` (unwitnessed families become witnessed) | the five corpora | forge lane (`CF-5`) | L, CF-E12…E17 | NOT STARTED |
+| `archival_corpus_tests.rs:212`; `archival_sufficiency_tests.rs:372` (unwitnessed families become witnessed) | the five corpora | forge lane (`CF-5`) | L, CF-E12…E17 | NOT STARTED |
+| The two sufficiency tests the epoch close witnesses: `archival_sufficiency_tests.rs:236` (the census: the epoch-close families and the `LastSlashEpoch` watermark carried) and `:311` (the watermark's stub witness of the `SlashLog` gate) | the five corpora; none crosses an epoch, so both run unwitnessed | SO-D12 | L, from CF-E13 through the first slash deadline that moves the watermark (CF-E15) | NOT STARTED (2026-11-22: the walk's capture is a run record, not a corpus; Rick) |
+| The emission claim's three single-daemon pop checks, A5a–c (removed from `e2e_emission_claim_accepted_and_applied`, 2026-11-22): the depth-1 pop of the claim block and its re-mine; the settlement-straddling pop, the pool's CEN-K10 drop of the returned claim and its resubmit; the deep pop through the claim's reference block, with no miner wedge. Each keeps its assertions | none (on the walk's three daemons the re-mine was refused: the peers still held the popped block) | SO-D12 | L at CF-E14, one daemon, no Tor and no peers | NOT STARTED (2026-11-22; Rick) |
 | `rpc_store_facts_tests/mod.rs:685` | the five corpora | DRS | L | NOT STARTED |
 | The chain-sync loopback (`shekyl-p2p-harness/tests/chain_sync_loopback.rs`, `_claim_relay.rs`, `_cutover.rs`, `_opening.rs`: 31 tests through `chain_sync/support.rs:265`); `shekyl-chain-sync/src/scenarios.rs:88` | `spend-1in-2out` | forge lane (`CF-5`) | L to CF-E1, CF-E22 for the fork tests | NOT STARTED |
 | `cs2-long-run` (`shekyl-p2p-harness/tests/chain_sync_long_run.rs:103`, `:172`) | the five corpora; never run | chain sync | L, then P | NOT STARTED |
@@ -597,7 +599,7 @@ One row per consumer group, from the census at `4b867a4f8`. **Status** is NOT ST
 | `miner_tests.rs:425` (LWMA) | real mining | economics | W | NOT STARTED |
 | #1360's emission-claim bench row | none yet | benches | L snapshot at CF-E13; `CF-4b`'s pilot | NOT STARTED |
 | `regtest_e2e.rs` capture generators (`:1933`, `:2373`, `:2685`, `:2983`, `:4168`) | live daemon | forge lane (`CF-5`) | stop capturing; keep the walk as a live-daemon test | NOT STARTED |
-| `regtest_e2e.rs:4303` (emission claim, DECIDED_DARK) | live daemon | SO-D12 | stays a live-daemon walk; its corpus role passes to L | NOT STARTED |
+| `regtest_e2e.rs` `e2e_emission_claim_accepted_and_applied` (the emission walk, the acceptance lane) | live daemon | SO-D12 | stays a live-daemon walk; its corpus role passes to L | 2026-11-22: its capture is kept with the run record, never committed or hosted (`CF-R6`; Rick). Its single-daemon pops and the two sufficiency tests are the SO-D12 rows above |
 | The `ct2_tier_a`/`ct2_tier_b` fixtures (`shekyl-curve-tree/tests/recon_*.rs` and their readers) | generated from a live daemon | curve tree | L at CF-E6 and CF-E26 | NOT STARTED |
 | `scripts/bench/drs_catchup.py`, `drs_crash.py`, `drs_powerloss.py`, `drs_bench.py` | coinbase-only or refused | daemon budget | P | NOT STARTED |
 | The open-edge bench (`wss_q1b_regtest_open_edge.sh`, `docs/FOLLOWUPS.md:1375`) | coinbase-only | wallet | P | NOT STARTED |
