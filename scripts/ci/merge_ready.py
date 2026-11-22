@@ -209,11 +209,13 @@ PUSH_ACTS = ("checking", "re-testing", "ready")
 
 # merge-ready-retest.yml's names, held to the file by the selftest: the
 # report finds its re-test job by name and reads the verdict from the job's
-# outputs. The merge and the tests steps end green whatever they find, so a
-# red re-test is the pull request's and never fails a push run on `dev`.
+# outputs. The merge, the inventory and the tests steps end green whatever
+# they find, so a red re-test is the pull request's and never fails a push
+# run on `dev`.
 RETEST_WORKFLOW = ".github/workflows/merge-ready-retest.yml"
-RETEST_OUTPUTS = ("conflict", "tests_failed", "timed_out")
+RETEST_OUTPUTS = ("conflict", "inventory_failed", "tests_failed", "timed_out")
 MERGE_STEP = "merge the newest dev into the head"
+INVENTORY_STEP = "the fuzz inventory against the newest dev"
 TESTS_STEP = "the shared tests against the newest dev"
 
 
@@ -588,23 +590,28 @@ def plan() -> int:
 # The re-test's report.
 
 
-def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool) -> str:
+def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool,
+               inventory_failed: bool = False) -> str:
     """The re-test's result as the pull request sees it: the job's own
-    result, except that a job which ended green with a conflict, failing
-    tests or the time budget in its outputs is a failure."""
-    if result == "success" and (conflict or tests_failed or timed_out):
+    result, except that a job which ended green with a conflict, a failing
+    fuzz inventory, failing tests or the time budget in its outputs is a
+    failure."""
+    if result == "success" and (conflict or inventory_failed or tests_failed or timed_out):
         return "failure"
     return result
 
 
-def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool) -> dict:
+def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool,
+              inventory_failed: bool = False) -> dict:
     """The job's failed steps with the step that carried the verdict added:
     that step ended green, so the API does not list it."""
-    carried = [MERGE_STEP] if conflict else [TESTS_STEP] if (tests_failed or timed_out) else []
+    carried = ([MERGE_STEP] if conflict else [INVENTORY_STEP] if inventory_failed
+               else [TESTS_STEP] if (tests_failed or timed_out) else [])
     return {**info, "failed_steps": info["failed_steps"] + [x for x in carried if x not in info["failed_steps"]]}
 
 
-def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str) -> str:
+def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str,
+              inventory_failed: bool = False) -> str:
     """Why a re-test that did not pass is red. `result` is not 'success'
     or 'cancelled'."""
     after = f"after {merged}"
@@ -612,6 +619,9 @@ def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, m
         return f"re-test did not run ({result}, {after})"
     if conflict:
         return f"does not merge with dev {after}"
+    if inventory_failed:
+        return (f"the fuzz inventory fails against dev {after} "
+                "(scripts/ci/check_fuzz_inventory.py; a lockfile: --regenerate)")
     if timed_out:
         return f"timed out {after}"
     if info is None:
@@ -636,9 +646,12 @@ def report(pr: int, head: str, result: str) -> int:
     run_url, dev, since = os.environ["RUN_URL"], os.environ["DEV"], os.environ["SINCE"]
     merged, crates = os.environ.get("MERGED", ""), os.environ.get("CRATES", "")
     conflict = os.environ.get("CONFLICT") == "true"
+    # Read with get, as the others: a re-test workflow from a merge made
+    # before this output existed passes no INVENTORY_FAILED.
+    inventory_failed = os.environ.get("INVENTORY_FAILED") == "true"
     tests_failed = os.environ.get("TESTS_FAILED") == "true"
     timed_out = os.environ.get("TIMED_OUT") == "true"
-    result = verdict_of(result, conflict, tests_failed, timed_out)
+    result = verdict_of(result, conflict, tests_failed, timed_out, inventory_failed)
     moved = current_head(pr) != head
     current = parse(newest(statuses(head)))
     postable = not moved and may_post(current, run_url, dev, "report", lambda t: dev_is_newer_than(t, dev))
@@ -656,10 +669,10 @@ def report(pr: int, head: str, result: str) -> int:
 
     info = failed_tests.describe(job) if job and result == "failure" else None
     if info is not None:
-        info = red_steps(info, conflict, tests_failed, timed_out)
+        info = red_steps(info, conflict, tests_failed, timed_out, inventory_failed)
     if result == "failure" and job is None:
         print(f"::warning::no job named '#{pr} / {RETEST_JOB}' in this run; the description cannot name the failure")
-    words = red_words(result, conflict, timed_out, info, merged)
+    words = red_words(result, conflict, timed_out, info, merged, inventory_failed)
     remove_label(pr)
     post_kind(head, "red", words, dev, since)
     lines = [
@@ -896,6 +909,10 @@ def selftest() -> int:
         if report_step(*args) != want:
             problems.append(f"report_step, {label}: {report_step(*args)} != {want}")
     info = {"failed_steps": [], "tests": [], "builds": [], "url": "u"}
+    if "fuzz inventory fails" not in red_words("failure", False, False, info, "#1", True):
+        problems.append("red_words: a failing fuzz inventory is not named")
+    if "does not merge" not in red_words("failure", True, False, info, "#1", True):
+        problems.append("red_words: a conflict is not named first")
     for label, result, conflict, timed_out, inf, want in [
         ("never started", "skipped", False, False, None, "did not run"),
         ("timed out", "failure", False, True, {**info, "failed_steps": ["tests"]}, "timed out"),
@@ -911,6 +928,7 @@ def selftest() -> int:
         ("green, nothing in the outputs", ("success", False, False, False), "success"),
         ("green with failing tests", ("success", False, True, False), "failure"),
         ("green with a conflict", ("success", True, False, False), "failure"),
+        ("green with a failing fuzz inventory", ("success", False, False, False, True), "failure"),
         ("green past the time budget", ("success", False, False, True), "failure"),
         ("a setup step failed", ("failure", False, False, False), "failure"),
         ("cancelled", ("cancelled", False, False, False), "cancelled"),
@@ -922,6 +940,8 @@ def selftest() -> int:
         problems.append("red_steps: failing tests do not name the tests step")
     if red_steps(base, True, False, False)["failed_steps"] != [MERGE_STEP]:
         problems.append("red_steps: a conflict does not name the merge step")
+    if red_steps(base, False, False, False, True)["failed_steps"] != [INVENTORY_STEP]:
+        problems.append("red_steps: a failing fuzz inventory does not name the inventory step")
     # The workflows carry the names this reads (rule 47).
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     label_cond = (f"(github.event.action != 'labeled' && github.event.action != 'unlabeled')\n"
@@ -950,6 +970,10 @@ def selftest() -> int:
             (f"    name: {REPORT_JOB}\n", "the report job's name"),
             (f"- name: {MERGE_STEP}\n", "the merge step's name"),
             (f"- name: {TESTS_STEP}\n", "the tests step's name"),
+            (f"- name: {INVENTORY_STEP}\n", "the inventory step's name"),
+            ("python3 scripts/ci/check_fuzz_inventory.py || rc=$?", "the inventory step's check"),
+            (f"- name: {TESTS_STEP}\n        if: steps.merge.outputs.conflict != 'true' && "
+             "steps.inventory.outputs.inventory_failed != 'true'\n", "the tests a failing inventory skips"),
             ("if: steps.merge.outputs.conflict != 'true'\n", "the steps a conflict skips"),
             ("python3 scripts/ci/merge_ready_overlap.py --scope", "the re-test's own scope"),
             ("group: merge-ready-retest-${{ inputs.pr }}", "one re-test per pull request"),
