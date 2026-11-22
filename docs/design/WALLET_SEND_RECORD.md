@@ -278,8 +278,10 @@ only, never the read path.
   For a multisig group (block version 7, R-37) it is the group address's
   fingerprint: a group's address is a file of four kilobytes and more,
   so the block stores each paid group's address once, keyed by that
-  fingerprint, and keeps it while a row pays the group. The ledger's
-  load check `group-payees-stored` holds the two together. A group
+  fingerprint; undoing the last row that pays a group drops it. The
+  ledger's load check `group-payees-stored` refuses a row whose group is
+  not stored, and a stored address that does not parse or hashes to
+  another fingerprint. A group
   payee is then as complete as a solo one: the wallet shows who was
   paid and holds what an outbound proof for the payment needs.
   Settled by C1's envelope frame, not by the §1 table: inside the

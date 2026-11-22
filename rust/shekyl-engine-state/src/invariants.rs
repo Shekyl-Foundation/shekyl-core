@@ -47,7 +47,7 @@
 //! | `tx-keys-no-orphans`                 | Every tx-hash in `tx_meta.tx_keys` appears in a live reference (transfer tx_hash / spending_tx_hash, pool, pending, or a non-terminal-or-abandoned send-journal row) |
 //! | `reorg-trail-monotonic`              | `ledger.reorg_blocks.blocks` is strictly ascending and capped by `tip.synced_height`  |
 //! | `spent-state-consistent`             | Within `ledger.transfers`: spend-triple self-consistency + key-image uniqueness       |
-//! | `group-payees-stored`                | Within `send_journal`: every group a row pays has its address stored, every stored address parses and hashes to the fingerprint it is kept under, and every stored group is one a row pays (R-37) |
+//! | `group-payees-stored`                | Within `send_journal`: every group a row pays has its address stored, and every stored address parses and hashes to the fingerprint it is kept under (R-37) |
 //!
 //! The last is the load check that holds a fingerprint read from a file
 //! to what [`crate::GroupFingerprint`] promises in memory: it names a
@@ -369,12 +369,6 @@ fn check_group_payees_stored(journal: &SendJournalBlock) -> Result<(), WalletLed
             return Err(invariant_error(
                 INV_GROUP_PAYEES_STORED,
                 format!("the address stored for the group {named} is another group's"),
-            ));
-        }
-        if !paid.contains(fingerprint) {
-            return Err(invariant_error(
-                INV_GROUP_PAYEES_STORED,
-                format!("the journal stores the group {named} and no row pays it"),
             ));
         }
     }
@@ -975,14 +969,18 @@ mod tests {
         assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
     }
 
+    /// A stored group no row pays is not refused: an address the wallet
+    /// keeps without a row that names it costs nothing, and refusing it
+    /// would refuse the whole wallet. `undo_dispatch` drops one anyway.
     #[test]
-    fn a_group_stored_and_not_paid_is_refused() {
+    fn a_group_stored_and_not_paid_passes() {
         let paid = crate::group_payee::tests::group(0x21);
         let mut w = paying_a_group(crate::GroupFingerprint::of(&paid));
         w.send_journal.store_group_payee(&paid);
         w.send_journal
             .store_group_payee(&crate::group_payee::tests::group(0x22));
-        assert_invariant(w.check_invariants().unwrap_err(), INV_GROUP_PAYEES_STORED);
+        w.check_invariants()
+            .expect("an address no row pays is kept, not refused");
     }
 
     #[test]

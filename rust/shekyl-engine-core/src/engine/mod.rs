@@ -331,6 +331,7 @@ pub(crate) mod fee_variant;
 /// design (§19.8.2 wall-clock budget).
 #[cfg(all(test, feature = "gf7-hooks"))]
 mod gf7_sealing_run;
+pub(crate) mod group_destination;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]

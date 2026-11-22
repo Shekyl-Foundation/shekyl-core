@@ -4239,9 +4239,17 @@ async fn a_solo_wallet_pays_a_three_of_five_group() {
             panic!("member {i} refused the group's output");
         };
         assert_eq!(receipt.amount(), PAID, "member {i}");
-        found.push((output.tx_hash(), output.global_index()));
+        found.push((
+            output.tx_hash(),
+            output.global_index(),
+            *receipt.output_key(),
+            *receipt.key_image(),
+        ));
     }
-    assert!(found.windows(2).all(|pair| pair[0] == pair[1]));
+    assert!(
+        found.windows(2).all(|pair| pair[0] == pair[1]),
+        "all five members find one coin: its place, its key and its key image"
+    );
 
     // The journal names the group and stores its address once.
     let txid = pending

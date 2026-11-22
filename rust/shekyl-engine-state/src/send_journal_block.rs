@@ -420,7 +420,8 @@ pub struct SendJournalBlock {
     pub rows: BTreeMap<[u8; 32], SendRecord>,
 
     /// The address of every group a row pays, once per group, keyed by
-    /// its fingerprint (R-37). A group stays here while a row names it.
+    /// its fingerprint (R-37). Undoing the last row that pays a group
+    /// drops it.
     #[serde(default = "BTreeMap::new")]
     group_payees: BTreeMap<GroupFingerprint, StoredGroupAddress>,
 }

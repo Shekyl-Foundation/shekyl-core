@@ -103,10 +103,12 @@ use std::time::{Duration, Instant};
 use shekyl_address::{AddressError, MultisigAddressPayload, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 use shekyl_encoding::EncodingError;
-use shekyl_engine_state::{GroupFingerprint, PaymentRequestId, SendDestination, SendRecipient};
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
+use shekyl_engine_state::{PaymentRequestId, SendDestination, SendRecipient};
 use shekyl_tx_weight::GroupSize;
+
+pub use super::group_destination::GroupDestination;
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -355,67 +357,6 @@ impl TxDestination {
             Self::OwnPersona(_) => SendDestination::OwnPersonaFunding,
             Self::Group(group) => SendDestination::Group(group.fingerprint()),
         }
-    }
-}
-
-/// A multisig group a send pays: its parsed address and the address's
-/// fingerprint, the name the payer shows and records (R-37). Two group
-/// destinations are the same group when their fingerprints are.
-#[derive(Clone, Debug)]
-pub struct GroupDestination {
-    address: MultisigAddressPayload,
-    fingerprint: GroupFingerprint,
-}
-
-impl GroupDestination {
-    /// The group `address` names.
-    #[must_use]
-    pub fn new(address: MultisigAddressPayload) -> Self {
-        let fingerprint = GroupFingerprint::of(&address);
-        Self {
-            address,
-            fingerprint,
-        }
-    }
-
-    /// The group's address.
-    #[must_use]
-    pub fn address(&self) -> &MultisigAddressPayload {
-        &self.address
-    }
-
-    /// The group address's fingerprint.
-    #[must_use]
-    pub fn fingerprint(&self) -> GroupFingerprint {
-        self.fingerprint
-    }
-
-    /// The group's size, as the weight model prices its output's `0x0D`
-    /// entry.
-    #[must_use]
-    pub fn size(&self) -> GroupSize {
-        GroupSize::new(self.address.n_total(), self.address.m_required())
-            .expect("a group address bounds its size as the weight model does")
-    }
-}
-
-impl PartialEq for GroupDestination {
-    fn eq(&self, other: &Self) -> bool {
-        self.fingerprint == other.fingerprint
-    }
-}
-
-impl Eq for GroupDestination {}
-
-impl PartialOrd for GroupDestination {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for GroupDestination {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.fingerprint.cmp(&other.fingerprint)
     }
 }
 
