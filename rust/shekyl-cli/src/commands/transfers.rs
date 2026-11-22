@@ -198,7 +198,7 @@ fn discard_reservation(rpc: &RpcSession, pending_tx_id: &str) {
              later send reports insufficient funds)",
             &e,
         );
-        eprintln!("{}", reported.message);
+        crate::err_line!("{}", reported.message);
     }
 }
 
@@ -227,12 +227,16 @@ pub fn cmd_transfers(
 pub(crate) fn show_transfers(val: &Value) {
     let transfers = val.get("transfers").and_then(|v| v.as_array());
     let Some(transfers) = transfers.filter(|a| !a.is_empty()) else {
-        println!("No transfers.");
+        crate::out_line!("No transfers.");
         return;
     };
-    println!(
+    crate::out_line!(
         "{:<10} {:<12} {:>16} {:>12} {:>8}  Id",
-        "Direction", "State", "Amount", "Fee", "Block"
+        "Direction",
+        "State",
+        "Amount",
+        "Fee",
+        "Block"
     );
     for t in transfers {
         print_transfer_row(t);
@@ -244,21 +248,21 @@ pub(crate) fn show_submit(val: &Value) {
         Ok(result) => {
             let tx_hash = result.tx_hash;
             match result.verdict {
-                SubmitVerdictView::Accepted => println!("Transaction submitted: {tx_hash}"),
-                SubmitVerdictView::AlreadyInPool => println!(
+                SubmitVerdictView::Accepted => crate::out_line!("Transaction submitted: {tx_hash}"),
+                SubmitVerdictView::AlreadyInPool => crate::out_line!(
                     "Transaction already in the network's pool (an earlier submit went \
                      through): {tx_hash}"
                 ),
                 SubmitVerdictView::AlreadyInChain => match result.confirmed_height {
-                    Some(h) => println!(
+                    Some(h) => crate::out_line!(
                         "Transaction already confirmed on chain (at block {h}): \
                          {tx_hash}"
                     ),
-                    None => println!("Transaction already confirmed on chain: {tx_hash}"),
+                    None => crate::out_line!("Transaction already confirmed on chain: {tx_hash}"),
                 },
             }
             if !result.verdict_saved {
-                eprintln!(
+                crate::err_line!(
                     "Warning: the send went out and stands, but the wallet could not save \
                      the daemon's answer (see the wallet log). The next save writes it; if \
                      the wallet stops first, `tx alarm` lists this send when it reopens."
@@ -267,7 +271,7 @@ pub(crate) fn show_submit(val: &Value) {
         }
         Err(_) => {
             let tx_hash = val.get("tx_hash").and_then(|v| v.as_str()).unwrap_or("?");
-            println!("Transaction submitted (verdict not recognized): {tx_hash}");
+            crate::out_line!("Transaction submitted (verdict not recognized): {tx_hash}");
         }
     }
 }
@@ -297,11 +301,11 @@ fn print_transfer_row(t: &Value) {
     let fee = format_amount_str(s("fee"));
     let height = format_height(t);
     let id = listed_tx_id(t);
-    println!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
+    crate::out_line!("{direction:<10} {state:<12} {amount:>16} {fee:>12} {height:>8}  {id}");
     // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
     // so the user sees the failure where the money is listed (rule 82).
     if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
-        println!(
+        crate::out_line!(
             "{:<10} received but unspendable: {}",
             "",
             unspendable_reason_text(reason)
@@ -379,8 +383,8 @@ pub fn cmd_get_tx_note(rpc: &RpcSession, txid: &str) -> CommandResult {
 
 pub(crate) fn show_note(val: &Value) {
     match val.get("note").and_then(|v| v.as_str()) {
-        Some(note) => println!("{note}"),
-        None => println!("No note stored for this transaction."),
+        Some(note) => crate::out_line!("{note}"),
+        None => crate::out_line!("No note stored for this transaction."),
     }
 }
 
@@ -398,10 +402,10 @@ pub fn cmd_set_tx_note(rpc: &RpcSession, txid: &str, note: &str) -> CommandResul
 
 pub(crate) fn show_note_stored(val: &Value) {
     match val.get("note").and_then(|v| v.as_str()) {
-        Some(stored) => println!("Note stored: {stored}"),
+        Some(stored) => crate::out_line!("Note stored: {stored}"),
         // Unreachable through this CLI (the parser requires a non-empty
         // note), but the wire allows a clearing write — echo it honestly.
-        None => println!("Note cleared."),
+        None => crate::out_line!("Note cleared."),
     }
 }
 
@@ -481,14 +485,14 @@ pub fn cmd_tx_resend(rpc: &RpcSession, txid: &str) -> CommandResult {
 
 pub(crate) fn show_tx_alarm(val: &Value) {
     let Some(sends) = val.as_array() else {
-        println!("(the wallet's answer was not a list)");
+        crate::out_line!("(the wallet's answer was not a list)");
         return;
     };
     if sends.is_empty() {
-        println!("No sends need your decision.");
+        crate::out_line!("No sends need your decision.");
         return;
     }
-    println!("Sends that need your decision:");
+    crate::out_line!("Sends that need your decision:");
     for send in sends {
         let id = send.get("id").and_then(Value::as_str).unwrap_or("?");
         let height = send
@@ -508,17 +512,17 @@ pub(crate) fn show_tx_alarm(val: &Value) {
             "bytes-missing" => "the wallet has no saved copy to resend",
             _ => "(a reason this version does not know)",
         };
-        println!("  {id}  sent at height {height}: {why}");
+        crate::out_line!("  {id}  sent at height {height}: {why}");
     }
-    println!(
+    crate::out_line!(
         "Resend one with `tx resend <id>` (the same transaction, offered again), or give it \
          up with `tx abandon <id>`."
     );
 }
 
 pub(crate) fn show_abandoned(_val: &Value) {
-    println!("Send abandoned: the wallet has given up on it.");
-    println!(
+    crate::out_line!("Send abandoned: the wallet has given up on it.");
+    crate::out_line!(
         "Its funds stay locked until the network is confirmed to have \
          dropped it — and if the network confirms it after all, the \
          send shows as confirmed again."

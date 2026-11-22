@@ -601,8 +601,8 @@ impl ShownPool {
 /// late. The relay owns the derivation
 /// ([`shekyl_relay::embargo_fire_wait_secs`]): the shared timer's 1-in-1000
 /// quantile, so a walk calls a fire that does come late at most once in a
-/// thousand. The fire is a memoryless draw, the same for this node's own
-/// transaction as for a relayed one, so it has no earliest time. The submit
+/// thousand. The fire is the timer's floor plus a memoryless draw, the same
+/// for this node's own transaction as for a relayed one. The submit
 /// watchdog does not read it: overdue is the daemon's judgment.
 fn embargo_fire_wait() -> Duration {
     Duration::from_secs(u64::from(shekyl_relay::embargo_fire_wait_secs()))
