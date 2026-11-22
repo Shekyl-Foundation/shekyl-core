@@ -32,3 +32,7 @@ rust/shekyl-rpc-types/tests/vectors/rpc/** -text
 # A trailing CR fails the last field's parse, and that panic is the failure.
 # Checkout must not rewrite the line endings.
 rust/shekyl-chain-rules/tests/vectors/block_weight_trajectory/trajectory.txt -text
+# A sealed wallet written by `dev` at a branch point (R-36): its bytes are
+# ciphertext, and a CR/LF rewrite would break the seal. Git's own binary
+# guess reads the first bytes for a NUL; this does not rely on it.
+rust/shekyl-engine-file/tests/fixtures/solo_wallet_at_branch_point/solo.wallet* -text
