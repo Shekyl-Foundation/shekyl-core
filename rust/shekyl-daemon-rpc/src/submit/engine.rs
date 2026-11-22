@@ -309,10 +309,9 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         };
 
         // ── The debit arm's possession pre-gate, before any lock ───────
-        // §8.7.1.1's gather runs a per-shard last-served scan — two LMDB
-        // seeks per served shard, with the pool and blockchain locks held,
-        // and for a CompleteTree record that count tracks the frozen-segment
-        // count rather than any constant. The gather's own cheap pin compares the
+        // §8.7.1.1's gather runs the last-served scan (`release_last_served`:
+        // the issued-draw reads over the release cooldown's window), whose
+        // cost is not a constant. The gather's own cheap pin compares the
         // presented authorizer to the record's committed `bond_spend_pk`,
         // and BOTH of those are public values (the key rides the JoinMarket
         // post on the wire), so that pin authenticates nobody on its own:

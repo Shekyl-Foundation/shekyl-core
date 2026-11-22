@@ -38,11 +38,11 @@ pub const PIN_FILE: &str = "chains/hosted.toml";
 /// The OCI artifact type every hosted chain carries.
 pub const ARTIFACT_TYPE: &str = "application/vnd.shekyl.test-chain";
 
-/// The corpus layer's media type: layout 4 (`shekyl-chain-ingest`'s
+/// The corpus layer's media type: layout 5 (`shekyl-corpus`'s
 /// `CORPUS_FORMAT_VERSION`). A layout change bumps it with the constant
 /// (rule 42's discipline applied to the artifact); the determinism test
 /// holds the two together.
-pub const CORPUS_MEDIA_TYPE: &str = "application/vnd.shekyl.corpus.v4";
+pub const CORPUS_MEDIA_TYPE: &str = "application/vnd.shekyl.corpus.v5";
 
 /// The trace layer's media type: trace version 1 (`TRACE_VERSION`).
 pub const TRACE_MEDIA_TYPE: &str = "application/vnd.shekyl.trace.v1";

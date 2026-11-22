@@ -1,29 +1,17 @@
 # Daemon chain store — redb at genesis (Path B)
 
-**Status:** Design **open for execution of DRS-P0 / DRS-BENCH**, and of **DRS-C
-as analysis only** (CSR-4, 2026-09-01 — DRS-C does **not** ship as C++ refactor
-PRs; the surface partition is the scoping/review unit for the Rust rewrite).
-After
-Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), a
-**gap-close pass** (success criteria, surface map, concurrency, P0 multi-PR,
-D2-reopen as first-class good, D10 mandatory reconstructible, IBD floor
-sketch — 2026-07-27), and **post-close pin PC-1** (D2-R1 re-pointed at DRS-C —
-2026-08-21, §14). Engine-swap (**DRS-E\***) **in progress: E1 increment 1 (S-TXN lifecycle, PR #740, 2026-09-13) landed; increment 2 (canonical codecs + rule-42 gate, `schema_version` seal, persisted provenance, typed `properties` cells — §11.1 implementation pointers) landed 2026-09-14; **increment 2.5** (the branded `WriteBatch<'id>` reachable only through `ChainStore::write`, `StoreError`'s three classes as its outer variants, `StoreInvariant` with SI-7 built, `InsertTable`/`UpsertTable`, batch poison — §3.6.3 implementation pointers) landed 2026-09-15; **increment 3 — S-CHAIN-W, the connect/pop write set — landed 2026-09-16 (PR #757; rulings and commits dated 2026-09-15)** (`connect(ChainValid, ConnectFacts, RuleSetId)` / `pop()` on the branded batch, one undo log per connect, SI-1/2/3/4/6/8/9 built, the writer halt, `ConnectState` wire type — §3.6.3 implementation pointers; plan and pre-flight in [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md)); the daemon still opens LMDB only — DRS-E2's replay is the store's first production writer**; **C2-R8 RULED 2026-09-14** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)) — the storage-layer placement question that blocked S-CHAIN-W's writers is answered (validator crate with no store handle mints `ChainValid`; `ChainView` projected from the committing `WriteBatch`; the store computes nothing consensus-visible; pop is undo-log reverse replay; three error classes, invariant→verdict conversion banned and gated; belts in [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)). **S-CHAIN-W's E1 precondition (increment 2.5) is discharged; its DRS-E6 precondition — increment 1, the `shekyl-chain-rules` scaffold — landed 2026-09-15 ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)), so S-CHAIN-W is unblocked; the plan amendment the ruling's §14 owed — DRS-D12 (validation precedes connect; replay-that-validates is the only pre-cutover writer), the DRS-E6 row and its §7.5 surface partition (141 of 154 live consensus rows have no storage surface — 147/160 before the switch (`SO-D12` 4b) moved CEN-B4, G7, H20 and J4–J6 to bucket 3, 2026-11-09 and 2026-11-10; 147/161 before CEN-L17, 2026-10-21; 148/162 between CEN-K10 going to bucket 3 and CEN-A5 going to bucket 3, 2026-10-18 (DRS-X PR 2); 149/163 between CEN-J29–J37's minting (2026-10-12) and CEN-K10 going to bucket 3 (2026-10-17, reorg retention deleted on #1102); 140/154 between CEN-J28's minting (2026-10-12, FN-DSA increment 3) and CEN-J29–J37, the bundle's nine admission rows, minted `pending` the same day; 139/153 between CEN-B7 going to bucket 3 (2026-10-08) and CEN-J28's minting; 140/154 until CEN-B7 went to bucket 3 with the hard-fork mechanism, 2026-10-08; 139/153 between CEN-J17's move to bucket 3 (2026-10-04) and CEN-J27's minting (2026-10-08, PR #1003); 140/154 until CEN-J17 moved to bucket 3, 2026-10-04 (E6 slice 8 Q1); 141/153 at `02c086f4b`, before CEN-F12's deletion 2026-09-21; the denominator moved to 154 with CEN-I20 and CEN-L16, both store-bound, 2026-09-23), and `ChainTip.connect` as a planned `get_info` field — landed 2026-09-15**. *The field is served at `CORE_RPC_VERSION` 4.0:* the writer is `Writer` on `chain_height` (`rust/shekyl-rpc-types/src/wire/chain.rs:52-65`) and on `daemon_status` (`rust/shekyl-rpc-types/src/wire/daemon.rs:104`). `ConnectState` (line 512 of `shekyl-rpc-types/src/chain.rs` at `a282ec1d3d`) and `InfoChain` (line 138 of `shekyl-rpc-types/src/info.rs` at `a282ec1d3d`) were the 3.x types; the store flip served the fact (§3.6.3; R2, §15); **P0a–P0d delivered 2026-09-10**; **DRS-0 is UNBLOCKED as of 2026-09-11** — CEN-B5's S1 was re-verified at `e54e5b983` (the sha that merged PR #623) and the row promoted, discharging its last gate. Prior premature “ratified” banner remains withdrawn.
+**Status:** OPEN — the daemon's store of record. Since the store flip (#1212, 2026-10-31; [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md)) `shekyld` runs on `shekyl-chain-store`, and LMDB, `BlockchainDB` and `blockchain.cpp` are deleted. What genesis still needs from this program is §8.1's open boxes: the rebuild (DRS-D10; [`DRS_X_REBUILD_ROUND0.md`](DRS_X_REBUILD_ROUND0.md), `RB-Q`), the performance budget's release-cut run (§1.3a), complete consensus coverage and the release gate (DRS-E6, §7.6), root-and-frontier parity with the wallet (DRS-D3c), redb's supply-chain governance (§10) and `DEL-008`'s genesis gate (§12). The decisions below are the ruled record; where one describes the C++ or LMDB as live, the flip superseded it.
+
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
 columns are ordered by that hierarchy, not by engineering elegance.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
-**Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**. The surface
-map is **no longer stamped** — §3.5 is re-derived from the tree by
-`scripts/ci/check_drs_c_surface_map.py` on every run, because the stamp here
-said 97 while the tree had moved to 102. **The five table-inventory
-rows (handles, opens, claimed total, undocumented, phantoms) re-measured
-at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
-`2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
-(`m_db->` counts, hardfork pop) were not — the pin→HEAD delta
-is closed in the [P0a reconciliation registry](#p0a-reconciliation-registry-2026-09-05-dev-9742ec4f6);
-the other stamped figures are unre-measured and keep the Round-2 pin.
+**Verification stamp:** the Round-2 figures (against `dev` **`3247fe3b6`**) and
+the P0a and P0b re-measurements (`9742ec4f6`, `2dba46537`; the
+[P0a reconciliation registry](#p0a-reconciliation-registry-2026-09-05-dev-9742ec4f6))
+measured the C++ tree the flip deleted. They are the record of that tree and
+are not re-measured.
 
 **Identifier family:** `DRS-*` · **Crate names:** **`shekyl-chain-store`**
 (pinned, DRS-R-19) · **`shekyl-chain-rules`** (the validation crate, pinned
@@ -99,21 +87,21 @@ DRS-D12 — no store handle by construction).
 | --- | --- |
 | Live `MDB_dbi` table handles in `db_lmdb.h` | **47** (1:1 with opens; was 46 at the Round-2 pin — the three births are in the P0a registry below; `output_metadata` and `txs_prunable_tip` left on 2026-09-22, LMDB v15) |
 | `lmdb_db_open(` **call** sites (macro path) | **47** — the 48th `rg` hit is the **function definition**, not an open (the pin-era shape R2-3 ruled on: N calls + 1 definition; was 46+1) |
-| `docs/LMDB_SCHEMA.md` claimed total | **47** — **current and gate-pinned** (`check_lmdb_schema_coverage.py`; claimed 41 at the Round-2 pin) |
+| `docs/LMDB_SCHEMA.md` claimed total | **47** — the file is records-was, and its gate (`check_lmdb_schema_coverage.py`) is retired (§12.1); claimed 41 at the Round-2 pin |
 | Tables in code, **0 hits** in schema doc | **none** (P0a, 2026-09-05). At the Round-2 pin these **seven** had zero hits: `block_burn`, `archival_budget`, `archival_budget_accrual`, `archival_bond_unbond_log`, `archival_bond_reinstate_log`, `archival_bond_holdings_update_log`, **`archival_emission_claim_log`** — all documented since (`2572e6f5b`, 2026-08-25 — the commit that landed all seven sections and the coverage gate; the gate's header dates its census 2026-08-26, the same moment in UTC, and counts **nine** = these seven + the two witness tables born 2026-08-04) |
-| Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion, and the gate's ghost leg refuses their return |
+| Phantom tables in schema/audit | **none** (P0a). At the pin: `staker_accrual`, `staker_claims` — **0** hits in `db_lmdb.{h,cpp}`; their sections died with the claim-era wire deletion. The ghost leg that refused their return is retired with its gate (§12.1); `check_redb_schema_bijection.py` refuses a class row for a table the Rust schema does not define (§9.1) |
 | `m_db->` sites / distinct methods | **253** in `blockchain.cpp`; **97** distinct methods (same 97 across all files — no extra methods outside that vocabulary) |
-| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
+| Atomicity audit | **rewritten by P0b (2026-09-05)** — covers all **declared** tables (matrix gate-pinned at P0b, by a gate now retired, §12.1; declared, not runtime — DRS-W5 records that a writable `open()` deletes `hf_starting_heights`, leaving 46), all **three** prune shapes — one atomic, two checkpointed — and the store lifecycle (`open()`, `reset()`, `migrate()`); was: 183 lines, April 2026, **0** archival hits vs **702** in `db_lmdb.cpp` (22 of the live tables post-dated it) |
 | Hardfork pop | **Closed:** the C++ hard-fork mechanism and LMDB left with the flip, and this store's table of the rule set in force per height is `rule_set_in_force` (layout 34; it was `hf_versions`, a name it shared with Monero's fork table). **UPDATE 2026-10-08:** `HardFork` and the `set`/`get` interface are deleted ([`CXX_VERSION_GATES.md`](../completed/CXX_VERSION_GATES.md) §5). **UPDATE 2026-10-06:** `on_block_popped` and the reorg rescan are deleted with the vote window, so nothing reads `hf_versions` above the tip. `HardFork::add` still writes the scheduled version on connect. The interface still has **set/get only**, no delete (`blockchain_db.h:1938,1947`); the row goes with the class |
 
 ### Oracles of record — status
 
 | Document | Status |
 | --- | --- |
-| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **RECONCILED** (P0a, 2026-09-05) — gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
-| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **RECONCILED** (P0b, 2026-09-05) — rewritten in place at `2dba46537` over every write path; §10 matrix gate-pinned to `SHEKYL_LMDB_TABLES`; A-2/A-4/A-6 transcriptions + RAW set carried; the April verdicts preserved as records-was |
-| `db_lmdb.{h,cpp}` | **Authoritative** table inventory until re-census |
-| Early **logical state digest** (E-1) | **Built** (P0d, 2026-09-10) against production LMDB — core chain + `spent_keys` + live curve-tree root. Archival journals are a named exclusion (§7.1.1), not first in DRS-E2 |
+| [`docs/LMDB_SCHEMA.md`](../LMDB_SCHEMA.md) | **Records-was** (2026-10-28); its gate is retired (§12.1). At P0a (2026-09-05) it was **RECONCILED**: a gate-pinned duplicate-free bijection with `SHEKYL_LMDB_TABLES` (property rows, headings, total, DB-version header); a DRS-0 input |
+| [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) | **RECONCILED** (P0b, 2026-09-05) — rewritten in place at `2dba46537` over every write path; §10 matrix is the record of the C++ inventory, and the `accumulator/class.rs` tests hold each surviving table to the class it gives; A-2/A-4/A-6 transcriptions + RAW set carried; the April verdicts preserved as records-was |
+| `db_lmdb.{h,cpp}` | **Deleted.** The table inventory is `rust/shekyl-chain-store/src/schema.rs` and `pool/schema.rs`, held to `TABLE_CLASSES` by `check_redb_schema_bijection.py` |
+| Early **logical state digest** (E-1) | **Built** (P0d, 2026-09-10) against production LMDB — core chain + `spent_keys` + live curve-tree root. Archival journals are a named exclusion (§7.1.1), not first in DRS-E2. Its oracle role is retired with A2 (§8.1); the Rust half, `ReadSnapshot::logical_state_digest_v0`, stays |
 
 **DRS-P0 (P0a–P0d) landed 2026-09-10. DRS-0 is UNBLOCKED as of 2026-09-11** — the register's third S-grade was re-verified at its merged sha `e54e5b983` and CEN-B5 promoted. The S0 (CEN-M8, PR #602) and the first S1 (CEN-D2/D1, PR #604) are fixed, merged and re-verified; a **second S1 was found 2026-09-04 and fixed 2026-09-05 (PR #623)** — CEN-B5's header check compared the root *after* the add while `create_block_template` fills the header from the root *before* it, so every non-FAKECHAIN chain would have halted at height 60 (census §7 #17); the check now runs at admission before the add, red → green observed on a TESTNET Blockchain fixture (§7 #18); **re-verified 2026-09-11 at `e54e5b983` — ordering traced rather than read from the comment, uniformity established by the absence of any `m_nettype` token in the function, and the regression test confirmed wired at `tests/unit_tests/CMakeLists.txt:124`.** CEN-L11/L12 were promoted at PR #609's merged fix (2026-09-04).
 
@@ -233,13 +221,10 @@ the two 2026-09-22 deaths leave 47. Dispositions:
 | ~~`txs_prunable_tip`~~ | in code at pin, documented at pin; **DELETED 2026-09-22** (LMDB v15 / redb v10) — write-never since `PDM-Q7` |
 | `txs_pruned` | in code at pin, documented at pin |
 
-This registry is CI-pinned: `scripts/ci/check_lmdb_schema_coverage.py`
-asserts these rows are a duplicate-free bijection with
-`SHEKYL_LMDB_TABLES` and that the stated row count matches, in the same
-run that pins `LMDB_SCHEMA.md`'s property rows, section headings, stated
-total, and DB-version header. `docs-gates.yml` (né `doc-links.yml`; renamed by P0b) already triggers on
-`docs/**` and on `db_lmdb.cpp`, so both a registry edit and a
-source-only table change start the gate.
+This registry is the record of the C++ table set at its pin, and no gate
+reads it. The gate that pinned it, `scripts/ci/check_lmdb_schema_coverage.py`,
+is retired with its subject (§12.1). The Rust store's table set is held
+by `check_redb_schema_bijection.py` (§9.1).
 
 **Field evidence for the RECORD-AND-SPECIFY default (P0c), from the
 round preceding this PR.** C2-R1c-Q3b repaired one inherited defect —
@@ -260,22 +245,21 @@ store, don't patch blind.
 
 ## 0. Problem statement
 
-Durable state lives in C++ LMDB (**47** declared tables, 46 at runtime —
-DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (254 store call sites, 91 store methods), not the
-storage class alone.
-Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
-**boundary-thickness and type-safety** problem under
+Durable state lives in `shekyl-chain-store`, a redb store; the C++ store
+and `blockchain.cpp` are deleted (banner). The C++ tree this program
+started from is recorded in the substrate inventory above, under the
+verification stamp. The program's case is Path B: a cross-language
+gather/FFI/store is a **boundary-thickness and type-safety** problem under
 [`40-ffi-discipline`](../completed/RULE_40_FFI_DISCIPLINE.md) — marshal
 *cost* is unmeasured and **must not** load-bearing-justify Path B (R2-4 / R-14).
 
-**Program:** re-census LMDB truth **and** build a layout-independent **state
-digest against LMDB** → **partition `blockchain.cpp` analytically** with that
+**Program** (§8.1 holds its status): re-census the C++ store **and** build a layout-independent **state
+digest against it** → **partition `blockchain.cpp` analytically** with that
 digest as regression oracle (DRS-C is **analysis-only** since CSR-4; the surfaces
 scope Rust rewrite increments, they are not C++ refactor PRs) → redb-native
 `shekyl-chain-store` behind stable surfaces → **redb-only genesis**.
 **The genesis-on-LMDB alternative is retired** by the 2026-09-01 countermand: it
-ships the C++ ruled unshippable. Its former text is kept in §1.5 and §8.2 as
+ships the C++ ruled unshippable. Its former text is kept in §1.5 as
 dated history only.
 
 ### 0.1 Success criteria — “Shekyl is better when …”
@@ -608,8 +592,9 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (91 store methods) → `BlockchainLMDB` (47 tables since v15) + FFI gather
-shells.
+`shekyl-chain-ingest` → `shekyl-chain-rules` (validate) → `shekyl-chain-store`
+(redb). Writes go through `ChainStore::write` and reads through a
+`ReadSnapshot` (§3.6.3, §3.6.4). No C++ is on the path.
 
 ### 3.2 After DRS-C (+ LMDB digest)
 
@@ -737,7 +722,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-TX** | Tx blob and existence — **LANDED 2026-09-19 (DRS-E1 increment 6, [`DRS_E1_STX.md`](../completed/DRS_E1_STX.md))**: 9 methods + `get_tx_block_height` re-homed from S-OUT-KI → 6 reads on `ReadSnapshot` — T1 `tx_location(&TxHash) -> Option<TxLocation>`, T2 `tx_count()`, T3 `tx_record(&TxHash) -> Option<TxRecord>` (the pruned segment and the three permanent operand rows — the skeleton, `skeleton_of`), T4 `tx_archival_good(TxStorageId) -> AtIndex<ArchivalGood>` (the prunable and `pqc_auths` regions as `PDM-Q6`'s one unit; `DRS-SB` SB-Q2 reshaped it from the per-region `tx_prunable`), T5 `tx_output_indices(TxStorageId) -> AtIndex<TxOutputIndices>`, T6 `tx_locations(RangeInclusive<LmdbHashKey>)`; T3 + T4 recompose `get_tx_blob` (`TxRecord::wire_bytes`). `get_tx_unlock_time` not ported (transitively callerless, STX-Q2 A); `for_all_transactions` dissolves into T6. The three prune-shaped reads are the archival good's read path per `PDM-Q6`, ported — see the plan's §2.3 before reading `PDM-Q7` as their deletion. No layout change (`SCHEMA_VERSION` is untouched by this increment; it was 7 at the cut, moved by DRS-E6 slice 2) | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
 | **S-CURVE** | Curve-tree reads — **LANDED 2026-09-21 (DRS-E1 increment 7, [`DRS_E1_SCURVE.md`](../completed/DRS_E1_SCURVE.md))**: **5 methods → 3 typed reads** on `ReadSnapshot` (`store/curve_reads.rs`) — C1 `curve_tree() -> CurveTreeState` (root + depth + leaf count as **one row**, `SCU-Q1`; replaces `get_curve_tree_root` / `_depth` / `_leaf_count`), C2 `root_at(BlockHeight) -> AtHeight<CurveTreeRoot>` (the body `ChainView::root_at` had, made public; the view delegates; replaces `get_curve_tree_root_at_height`), C3 `leaves(Range<TreePosition>) -> AtIndex<Vec<TreeLeaf>>` (replaces `get_curve_tree_leaf_chunk`; consumer E3, `SCU-Q4`). Layout **8 → 9**: `curve_tree_leaves` → `Coded<tree_leaf>`, `curve_tree_layers` → `(u8, u64)` via `LayerChunk::key` → `Coded<layer_hash>` (`SCU-Q3`, packing not inherited), `curve_tree_meta` → one `Coded<curve_tree_state>` row under `()`, **`EMPTY` written by the seal** (SCU-1: absence is SI-7, never a default; the summary's root must equal the live root, SI-12 — widened 2026-09-27 to the seal's row too, since DRS-E3 records the derived root and an EMPTY summary claims nothing has drained). `TreePosition` moved to `shekyl-types`, `TreeLeaf` minted there (`SCU-Q2`). SI-11 (`LeavesNotDense`) armed by the reads until E3 writes — **and by the writer since 2026-09-26** (DRS-E3, [`DRS_E3_CURVE_WRITER.md`](DRS_E3_CURVE_WRITER.md): `store/grow.rs` writes the three tables plus `output_to_leaf` / `leaf_to_output` (SI-17) and the Rust-only `curve_tree_leaf_counts` (SI-18); `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions`, `curve_tree_checkpoints` **not ported** — the schema gate's `NOT_PORTED` direction; layout 14 → 15; the root is the validator's derivation and `ConnectFacts.root_after` is gone). | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` — **LANDED, both halves: read half 2026-09-23 (DRS-E1 increment 8, [`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md)), write half 2026-10-02 (DRS-E4, [`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md) — PR-a #914 / #921 and PR-b; both plans closed as record 2026-10-02)**: **18 methods → 9 typed reads** on `ReadSnapshot` (`store/archival_reads.rs`) — A1 `bond_record(&PCanonicalId) -> Option<BondRecord>` (replaces `get_archival_bond_value` / `_hybrid_pubkey` / `archival_bond_join_epoch`; the `u64::MAX` join epoch gone by the type, SAR-1), A3 `last_served_epoch(p, shard) -> Option<SettlementEpoch>` and A4 `served_shards(p) -> Vec<ServedShard>` (one reverse seek per shard over the tuple key `ServeCreditKey`, never a full walk; replace `archival_bond_last_served_epochs` / `_all_last_served_epochs`), A5 `pass_count(p, shard, E) -> PassCount` (`archival_serve_credit_pass_count`), A6 `r_market(shard, E) -> Option<RMarket>` / A7 `sigma_work(E) -> Option<SigmaWorkMilli>` / A8 `budget(E) -> Option<AtomicUnits>` (`get_archival_r_market` and the gather's two legs — **`None` ≠ 0**, SAR-8), A9 `last_settled_slash_epoch() -> Option<SettlementEpoch>` (`get_archival_last_slash_epoch`; the `properties` cell typed, sentinel gone), A10 `attestation_witness_at(h) -> AtHeight<Option<Vec<u8>>>` (`get_archival_attestation_witness_at_height`; above-tip and empty-witness told apart). **Not ported, each by ruling:** `gather_archival_emission_epoch_snapshot` deleted-not-ported (SAR-4, §3.4 rule 3 — slice 8 composes `EmissionEpochSource` from A1/A5/A7/A8, `SAR-Q4`); `archival_bond_holds_shard` and its slash-log read are **E4 commit 2** — as E4's §6 sequences it: tables and types first, then the `ChainView` reads with A2 and the fold (`SAR-Q7`: the port deferred, the row minted now as CEN-L16; *was* "commit 1" here until E4's plan existed); `archival_shard_freeze_height` / `get_archival_shard_segment_at_height` dead (`PDM-Q12`, SAR-5); `get_archival_prune_watermark_epoch` S-PRUNE's (SAR-6); the alt-witness pair E5 S-ALT's (`SAR-Q5`); `archival_bond_good_through` already a Rust fold behind an FFI shim; `set_archival_serve_credit_bit` E4's. **Layout 10 → 11:** six tables leave `Unshaped` (`archival_bond` → `Coded<BondRecord>`, `archival_serve_credit` → `([u8; 32], u64, u64, u64) → Present`, `archival_r_market`, `archival_sigma_work`, `archival_budget`, `archival_attestation_witness`) and `properties` gains the `archival_last_slash_epoch` cell; the journals, `archival_settlement` and the retired freeze table stay `Unshaped` for E4 (`SAR-Q1`). **The bond record's first Rust type** (`shekyl-chain-store::codec::archival::BondRecord`, `Canonical`, re-specified per `SAR-Q3` — same semantics, not byte-compatible) is cross-checked against the frozen v7 corpus (`docs/test_vectors/ARCHIVAL_BOND_RECORD_V7.json`; frozen, no regenerator); the shared vocabulary (`ShardSet`, `HoldingsKind`, `BadInterval`, the four frozen caps) moved to `shekyl_types::archival` (`SAR-Q2`). SI-14 `ruled` (the type refuses what it would observe), SI-15 `built` (`ServeCreditWithoutBond`). **The write half — LANDED 2026-10-02 (DRS-E4):** the archival transition derived on the validator's verdict (`ArchivalDelta`, `ARW-Q1`) and written by `store/archival_write.rs` inside the connect batch (CEN-L7 … L10 Rust, commit 4); `archival_bond_holds_shard` ported as `holds_shard_at` over A1 + A2 (CEN-L16, commit 2); five journals dissolved into `undo_log`, the slash log kept as history and written in `BlockHeight` (`ARW-Q2`, `ARW-Q17`; its retirement is `SLK-Q1`, [`DRS_E4_SLASH_LOG_ROUND.md`](../completed/DRS_E4_SLASH_LOG_ROUND.md) (closed as record 2026-10-10) — **built 2026-10-09:** retired in S-PRUNE's boundary batch below `SlashLogFloor::under(height, SEB, RuleSet::reorg_cap)`, asserted at the one read, SI-26; so the `0x04` snapshot's `slash_log` family is the table, walked whole — a boundary deletes rows strictly below that boundary's floor and a pop does not restore them, and the walk does not re-filter to the tip's floor; equal to the whole log while the chain is under the window, which the captured corpora are (`SLK-5`)); the §7.1.1 gate DISCHARGED by `digest_v1`'s archival snapshot at the tip plus the sufficiency stamp (commits 6–8); the C++ marshal's retirement is **`DEL-008`** (§12 / §12.1), the cutover's — *was* "stays E4's (CEN-L7 … L10, the journals, the C++ marshal retirement)". | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. **UPDATE 2026-09-23: the gate lifted 2026-09-05 (P0b RECONCILED; readiness row A1) and was re-read eighteen days later — Round-0 pre-flight [`DRS_E1_SARCH.md`](../completed/DRS_E1_SARCH.md) (DRS-E1 increment 8; Round 1 RULED on PR #840, **increment LANDED 2026-09-23** — see the Role cell): the *read* half of this row (eighteen methods → nine typed reads, six tables and one cell shaped, the bond record's first Rust type); the *write* half (CEN-L7 … L10, the journals, the C++ marshal retirement) stays E4's, whose first question the pre-flight names (SAR-7: which journals are history the read path needs).** **Write half — DRS-E4 pre-flight Round 0 executed 2026-09-29 at `dev@cac2dadbe` ([`DRS_E4_ARCHIVAL_WRITER.md`](../completed/DRS_E4_ARCHIVAL_WRITER.md)): the archival transition derived on the verdict (`ARW-Q1`), five of six journals dissolved into `undo_log` and the slash log kept as history (`ARW-Q2`), the §7.1.1 gate discharged inside the increment by `digest_v1` at the tip plus the sufficiency stamp (`ARW-Q5`); nine questions posed, none ruled, no code. UPDATE 2026-10-02: **write half LANDED** — ten commits over PR-a (#914, #921) and PR-b, nineteen `ARW-Q` questions (eighteen ruled, `ARW-Q18` last — the slash-bearing capture refused for the `0x04` slash-family pin in the slash witness; `ARW-Q19`, the slash log's horizon and key, re-homed as `SLK-Q1` / `SLK-Q2`), the plan closed as record. The constraint the port enforces, written here so the port reads it (`PDM-Q9`, RULED 2026-09-18; decision log 2026-09-17): the daemon holds archival *consensus* state — bonds, credits, close rows, slashes, the claim set, the witness — and **no archival serving state in the daemon, ever**: no shard bodies beyond S-PRUNE's uniform retention, no `LeafStore`, no served frame, no per-node posture. An archiver-backed daemon that behaves differently from a plain one fingerprints the Principal's public address; the archival fast path in the daemon is REJECTED at any performance argument; the criterion is persistent, posture-correlated state (forbidden) versus episodic, universally available actions (allowed). Violation signal: `rg -n 'serving\|LeafStore\|shard bytes\|ServedFrame' rust/shekyl-chain-store/src` returning a definition that serves archival content.** | Cursor surface for retention (E4) |
-| **S-POOL** | Tx pool — **LANDED 2026-09-24 (DRS-E1 increment 9, [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md)); the record's relay decomposition below RETIRED 2026-10-16 (DX-F6, [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md) §2.2): `PoolRecord` carries the receive hour and `public` (reorg retention deleted with CEN-K10, 2026-10-17), P2 is `publish`, `Responsibility` is `shekyl-relay`'s; the pool file is versioned by its own `POOL_SCHEMA_VERSION` (2026-10-17, `SPL-Q8` as ruled), apart from the chain file's `SCHEMA_VERSION`**: **nine methods (the row's eight, plus the LMDB-level txpool_has_tx that `tx_memory_pool::have_tx` reaches past `Blockchain::` — outside this map's denominator, which is what `blockchain.cpp` reaches, so it is counted in `DRS_E1_SPOOL.md` §2.1 #9 and not here — SPL-15) → 7 typed operations** on a **second file**, `shekyl-chain-store::pool::PoolStore` — §5.1's pick built and its falsifier closed: `txpool_meta` / `txpool_blob` are **evicted** from this store's catalogue (layout 11 → 12, `tables.snap` 49 → 47, `Unshaped` 22 → 20; `schema::MIRRORED_ELSEWHERE` names the twins and the bijection gate reads it). P1 `insert(txid, &PoolRecord, blob)` (both rows; `AlreadyHeld`, `EmptyBlob`, `NullFcmpCache`; a key in one table only is SI-16), P2 `update(&txid, &PoolRecord)` (meta only; `NotHeld`; **`Relay(RelayRefusal)` — the stored `RelayState::follows` verdict carried through: `OriginChanged`, provenance enforced not asserted; `PhaseNotForward` when the phase is not the stored one and not a forward step; `ResponsibilityRearmed`**), P3 `remove` (both rows, idempotent), P4 `record -> Option<PoolRecord>`, P5 `blob -> Option<Vec<u8>>` (no category parameter; either row alone is SI-16), P6 `len`, P7 `entries()` (natural key order, SPL-8; blob a second read). `for_all_txpool_txes`'s class filter, `get_txpool_tx_count`'s per-class scan, `txpool_tx_matches_category` and txpool_has_tx dissolve into P4/P7 + `RelayMethod::matches` at the pool (SPL-3, SPL-15). **The record** (`codec::pool::PoolRecord`) re-specifies the 192-byte `txpool_tx_meta_t` along `DAEMON_RELAY_PRIVACY.md` §92.4's seams — `Origin { Originated, Arrived { zone } }` (permanent), `RelayPhase { Held, Stem, Fluff, Block }` each with its own clock word (SPL-5's overload dissolved), `RelayState` (phase enum chosen by provenance: originated is `Held` or `Block` with responsibility on that arm; arrived is `Stem`, `Fluff` or `Block`) — `SPL-Q9`, pin made structural on review; the relay discriminant has no default arm and `Fluff` is reached only by its own byte (SPL-14). `RelayMethod` / `NetZone` moved to `shekyl_types::relay` as the FFI seam's words (`SPL-Q6`). **Write API is the closure** `PoolStore::write(…)` (the store commits or aborts at the closure's exit; no caller holds a batch) — `LockedTXN`'s abort-on-drop (the mechanism of the relay-timestamp bug) is not carried (SPL-16). **Header:** own version cell; a sealed file at another layout is **recreated** (`PoolOpen::Recreated`), a non-redb file / no header / undecodable cell is **refused, never deleted** (`SPL-Q8` with its precondition). D9 durability (`SPL-Q4`). **SI-16** built. **The pool itself — admission, the relay clock, eviction, indices — is E5's**; the contract it inherits: chain commits first, pool second, pool reconciles at open (`SPL-Q5`, new E5 work) | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. **UPDATE 2026-09-24: LANDED on the increment PR.** Round 0 and Round 1 (PR #849; SPL-14) sized it; the file, the eviction and layout 12 are built. Nine DB methods — the eight `Blockchain::` forwards plus `txpool_has_tx` (SPL-15), every caller `tx_memory_pool` — map to seven operations. The §5.1 falsifier is closed: no pool table is in this catalogue. Review the same day made the pin a type (`RelayState`; `DRS_E1_SPOOL.md` §11). The pool itself — admission, relay clock, eviction, indices — stays E5's.** | Privacy-sensitive (Dandelion++) |
+| **S-POOL** | Tx pool — **LANDED 2026-09-24 (DRS-E1 increment 9, [`DRS_E1_SPOOL.md`](DRS_E1_SPOOL.md)); the record's relay decomposition below RETIRED 2026-10-16 (DX-F6, [`DRS_E5_POOL_ALT_PRUNE.md`](../completed/DRS_E5_POOL_ALT_PRUNE.md) §2.2): `PoolRecord` carries the receive hour and `public` (reorg retention deleted with CEN-K10, 2026-10-17), P2 is `publish`, `Responsibility` is `shekyl-relay`'s; the pool file is versioned by its own `POOL_SCHEMA_VERSION` (2026-10-17, `SPL-Q8` as ruled), apart from the chain file's `SCHEMA_VERSION`**: **nine methods (the row's eight, plus the LMDB-level txpool_has_tx that `tx_memory_pool::have_tx` reaches past `Blockchain::` — outside this map's denominator, which is what `blockchain.cpp` reaches, so it is counted in `DRS_E1_SPOOL.md` §2.1 #9 and not here — SPL-15) → 7 typed operations** on a **second file**, `shekyl-chain-store::pool::PoolStore` — §5.1's pick built and its falsifier closed: `txpool_meta` / `txpool_blob` are **evicted** from this store's catalogue (layout 11 → 12, `tables.snap` 49 → 47, `Unshaped` 22 → 20; `schema::MIRRORED_ELSEWHERE` names the twins and the bijection gate reads it). P1 `insert(txid, &PoolRecord, blob)` (both rows; `AlreadyHeld`, `EmptyBlob`, `NullFcmpCache`; a key in one table only is SI-16), P2 `update(&txid, &PoolRecord)` (meta only; `NotHeld`; **`Relay(RelayRefusal)` — the stored `RelayState::follows` verdict carried through: `OriginChanged`, provenance enforced not asserted; `PhaseNotForward` when the phase is not the stored one and not a forward step; `ResponsibilityRearmed`**), P3 `remove` (both rows, idempotent), P4 `record -> Option<PoolRecord>`, P5 `blob -> Option<Vec<u8>>` (no category parameter; either row alone is SI-16), P6 `len`, P7 `entries()` (natural key order, SPL-8; blob a second read). `for_all_txpool_txes`'s class filter, `get_txpool_tx_count`'s per-class scan, `txpool_tx_matches_category` and txpool_has_tx dissolve into P4/P7 + `RelayMethod::matches` at the pool (SPL-3, SPL-15). **The record** (`codec::pool::PoolRecord`) re-specifies the 192-byte `txpool_tx_meta_t` along `DAEMON_RELAY_PRIVACY.md` §92.4's seams — `Origin { Originated, Arrived { zone } }` (permanent), `RelayPhase { Held, Stem, Fluff, Block }` each with its own clock word (SPL-5's overload dissolved), `RelayState` (phase enum chosen by provenance: originated is `Held` or `Block` with responsibility on that arm; arrived is `Stem`, `Fluff` or `Block`) — `SPL-Q9`, pin made structural on review; the relay discriminant has no default arm and `Fluff` is reached only by its own byte (SPL-14). `RelayMethod` / `NetZone` moved to `shekyl_types::relay` as the FFI seam's words (`SPL-Q6`). **Write API is the closure** `PoolStore::write(…)` (the store commits or aborts at the closure's exit; no caller holds a batch) — `LockedTXN`'s abort-on-drop (the mechanism of the relay-timestamp bug) is not carried (SPL-16). **Header:** own version cell; a sealed file at another layout is **recreated** (`PoolOpen::Recreated`), a non-redb file / no header / undecodable cell is **refused, never deleted** (`SPL-Q8` with its precondition). D9 durability (`SPL-Q4`). **SI-16** built. **The pool itself — admission, the relay clock, eviction, indices — is E5's**; the contract it inherits: chain commits first, pool second, pool reconciles at open (`SPL-Q5`, new E5 work) | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. **UPDATE 2026-09-24: LANDED on the increment PR.** Round 0 and Round 1 (PR #849; SPL-14) sized it; the file, the eviction and layout 12 are built. Nine DB methods — the eight `Blockchain::` forwards plus `txpool_has_tx` (SPL-15), every caller `tx_memory_pool` — map to seven operations. The §5.1 falsifier is closed: no pool table is in this catalogue. Review the same day made the pin a type (`RelayState`; `DRS_E1_SPOOL.md` §11). The pool itself — admission, relay clock, eviction, indices — stays E5's.** | Privacy-sensitive (Dandelion++) |
 | **S-ALT** | Alt chain — **LANDED 2026-09-25 (DRS-E1 increment 10, [`DRS_E1_SALT.md`](DRS_E1_SALT.md))**: six methods here plus the alt-attestation witness pair (S-ARCH's #16/#17 by this map's count, S-ALT's by `SAR-Q5`) and the remover no `Blockchain::` method reaches → **seven typed operations on the consensus file's existing `WriteBatch` / `ReadSnapshot`** (`SAL-Q1` RULED: same file, same transaction — a switch is pop, demote, connect and remove in **one** `ChainStore::write` closure, SAL-1, so `rollback_blockchain_switching` is deleted at cutover rather than ported, SAL-14; the pool's grounds for a second file were checked against this surface and are absent, SAL-10). AL1 `insert_alt_block` (`AltCannot::AlreadyHeld` — CEN-K3's belt, typed; since DRS-E5 a4 it takes the cheap tier's `AltValid` and keys the row by the verdict's hash — the `IdentityMismatch` belt the increment landed with lost its producer and is gone), AL2 `remove_alt_block` (`AltCannot::NotHeld`, a caller-contract violation), AL3 `drop_alt_blocks`, AL4 `alt_block` (hands out a **parsed** `Block` — every C++ consumer parsed; no raw-bytes surface), AL5 `has_alt_block` (membership without a decode, the p2p `have_block` path), AL6 `alt_block_count`, AL7 `alt_blocks` — reads on `ReadSnapshot` **and** on the batch, never `ChainView` (SAL-7). `alt_block_data_t ‖ blob` → **`AltBlock`** (`codec/alt.rs`): the u128 as one field, the weight's zero sentinel as `Option`, the block bytes and the CW-2 witness as fields — `archival_alt_attestation_witness` **folded** into `alt_blocks` (`schema::FOLDED_INTO`, the bijection gate's fourth direction, SAL-2); layout **12 → 13**, `tables.snap` 47 → 46, `Unshaped` 20 → 18. **The digest boundary is a test** (SAL-15): an alt block with a witness moves no digest — the audit's "declared, not enforced" item for this class, closed as a consequence of the one-row shape. Not in scope: the admission ladder, fork choice, the switch itself, `--keep-alt-blocks` — E5's. | 6 | `add_alt_block` `drop_alt_blocks` `for_all_alt_blocks` `get_alt_block` `get_alt_block_count` `remove_alt_block` | **9** — Alt-chain storage depends on both chain surfaces being settled; its reorg path is the one place both are exercised together. **UPDATE 2026-10-11 (DRS-E5 a4): AL1 is `insert_alt_block(&self, AltValid)` — the cheap tier's verdict builds the row (`AltBlock::admitted`) and keys it by its own hash; `AltCannot::IdentityMismatch` is deleted with its producer. The surface's own cell above records the increment as landed; `DRS_E5_POOL_ALT_PRUNE.md` §1.1 has the shape as of a4.** UPDATE 2026-09-25: LANDED on the S-ALT increment PR (three commits stacked on #856). UPDATE 2026-09-25: `DRS_E1_SALT.md` §9 RULED (PR #856) — the increment may be cut. UPDATE 2026-09-24: pre-flight posed. |  |
 | **S-PRUNE** | Pruning — **the retention prune LANDED 2026-09-25 ([`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md) §14; layout 13 → 14): the boundary batch inside `connect` at `E·SEB` discards `D(E)`'s shards (`txs_prunable` + `txs_pqc_auths`) and retires undo rows below `tip − D_max` and `archival_slash_log` rows below `SlashLogFloor::under` (`retire_slash_rows`, `SLK-Q1`; no floor cell, `SLK-3`; a stubbed `SlashLog` skips the delete, `ARW-9`), the `undo_log_floor` cell checked against the journal's first key (SI-6 `FloorMismatch`), `Horizons` with `cap ≤ retention < SEB` refused at open — the cap the in-force rule set's (`RuleSet::reorg_cap`, SPR-8), re-checked by `connect` — `pop` refusing below the floor, `D_MAX` / `journal_horizon` / `SHARD_TX_COUNT` built (**re-keyed 2026-09-29 by the `SHT-Q2` build:** `SHARD_TX_COUNT` deleted for `SHARD_LENGTH`, `W` in archival bytes; `txs_archival_len` and `block_info.cumulative_archival_len` born; layout 17 → 18); the regtest lever's parse refuses `SEB ≤ cap` (SPR-9).** The C++ statement below stands: nothing was extracted. | 1 | `pop_target_allowed` (was 6: check_pruning, get_blockchain_pruning_seed, prune_blockchain, update_pruning **DELETED from C++ 2026-09-21**, `PDM-Q7`; prune_tx_data unreached from blockchain.cpp since the same day and **DELETED 2026-09-22** with the output_metadata and txs_prunable_tip tables and its watermark, LMDB v15) | **NOT EXTRACTED** — four of the original six were the Monero-era stripe engine, superseded before they could be ported and gone 2026-09-21; the fifth, prune_tx_data (Shekyl's C++ depth-based tx-data discard), went 2026-09-22 once it had no caller. Nothing of either is carried into S-PRUNE (see the PDM note below and its two dated updates). `pop_target_allowed` **dissolved 2026-09-15 (S-CHAIN-W SCW-7)**: pop-ability is "does `undo_log[h]` exist", so the retention prune that eventually lives here inherits a contract before it has a home — **it deletes `undo_log` rows below its watermark in its own transaction, and the watermark may not go shallower than `D_max` blocks below the tip** (`ARCHIVAL_PRUNED_DAEMON_MODE.md` PDM-Q11, **RULED 2026-09-18** — `D_max = 720` PROVISIONAL): undo-log retention ≥ `D_max`, or a legal reorg returns `StoreCannot::PopBelowFloor`. The surface landed 2026-09-25 ([`DRS_E1_SPRUNE.md`](DRS_E1_SPRUNE.md)): the floor is the `undo_log_floor` cell, written by the boundary batch, and `pop` below it is `PopBelowFloor`. [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4. The plan doc `PDM-Q-F31` asked for is that file, built rather than owed. It holds the predicate (Q2, no exceptions — Q9 RULED on #775: all daemons prune uniformly), `Horizons`, the three-leg store invariant (A4 withdrawn, `PDM-Q6` item 5: no *declared* length rows — the computed, txid-bound `txs_archival_len` of `SHT-Q2` is permanent and not A4, its invariant SI-24), Q3's instrument, and the named inputs (`storage_ids_through` is the storage-id total, SPR-1). Outside this row: §11's serve-credit precondition stays the E3 ordering. | Bootstrap / prune tools |
 
@@ -870,7 +855,7 @@ PR; digest identity before/after; no engine change.")
 
 ### 3.6 Writer / reader concurrency (process model)
 
-Applies to **both** LMDB today and redb after E\*. Mission: security (DoS)
+Applies to the redb store. Mission: security (DoS)
 and privacy (node liveness → density).
 
 | Rule | Specification |
@@ -881,11 +866,11 @@ and privacy (node liveness → density).
 | **DoS: long-lived readers** | Attacker-influenceable RPC must not pin free pages indefinitely. Mitigations (pick in DRS-0 / implement in C or E1): max read-txn wall time; max concurrent heavy reads; reject/export-only paths for full scans. BENCH measures file growth under adversarial concurrent readers. **PICKED** at `ba4b3c73a` (2026-09-12, slice C) — see §3.6.1; implementation stays C/E1. |
 | **redb-specific** | redb self-managed cache → peak RSS under attacker feed is a **hard BENCH bound** (§1.3). Writer still single; no multi-process multi-writer on one file. |
 | **Multi-process** | Default `shekyld` = one process, one store file, one writer. Remote wallet talks **RPC**, never opens daemon redb. (D3 topology.) |
-| **Shadow / dual backend** | Second engine is a **separate file**; never two writers on one LMDB env (V4). Shadow apply may lag; production authority is one backend. |
+| **Shadow / dual backend** | None: one backend per binary (ruled 2026-09-14; `DEL-003`, §12), so a store file never has a second engine or a second writer. |
 | **Writer halt** | A `StoreInvariantViolated` on connect **or pop** **halts the writer** — neither verb is accepted after it — and leaves the readers serving; the halt is **advertised on the tip** (§3.6.2), never inferred from silence, and **re-derived on restart**, never persisted. No peer penalty, no process exit (C2-R8 Q8). |
 
-P2P and levin remain C++ at genesis under D2-reopen without requiring B;
-they must still obey the writer queue when calling into surfaces.
+P2P and levin are Rust (`shekyl-p2p`, `shekyl-levin`), and like every
+other caller they must obey the writer queue when they reach the store.
 
 #### 3.6.1 Long-lived-reader mitigations — PICKED at `ba4b3c73a` (2026-09-12, DRS-0 slice C)
 
@@ -1280,7 +1265,7 @@ already rules it are otherwise read as a gap by the next person down the list.
 
 | Path | Why measure separately |
 | --- | --- |
-| **IBD** | Not network-paced vs fast/LAN peer; saturates disk/CPU. LMDB batches + `MDB_APPEND` (~10 sites) is bulk-load optimized; redb COW insert has no direct equivalent. FCMP++ verify may still dominate — **measure**, don’t deduce. |
+| **IBD** | Not network-paced vs fast/LAN peer; saturates disk/CPU. FCMP++ verify may still dominate — **measure**, don’t deduce. |
 | **Deep pop** | Unwinds as fast as possible off-chain; deletes/journals may churn more than apply |
 | **Resource bounds** | File growth, reader pinning, peak RSS — **security/privacy**, above speed in mission order |
 
@@ -1697,7 +1682,7 @@ a case for moving it.
 **A STATED BOUND ON WHAT THIS BASELINE GENERALISES TO.** The fixture is
 coinbase-only, so it holds no non-coinbase transaction and therefore no
 transaction **prunable region** — the part of a tx covered by the
-`txs_prunable_hash` table that already exists in `db_lmdb.h`. That region is the
+`txs_prunable_hash` table (`schema.rs`). That region is the
 subject of the pruning round's `PDM-Q-F13`/`PDM-Q-F14` findings in
 [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md), which name it
 as the scarce replay-compatible good and put `pqc_auths` at ~60% of tx bytes.
@@ -2157,7 +2142,7 @@ not there. What was owed, and where each piece stands:
 3. **The row** — `txs_pqc_auth_hash: u64 → Coded<PqcAuthHash>` (§11.1(f); the identity type, not a `Hash32`), written by `connect`
    beside `txs_prunable_hash` from the identity it is handed, under the
    three-leg invariant above (present ⇔ 4-part; never deleted by a
-   prune; pop reverses the journaled insert), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
+   prune; pop reverses the journaled insert), Rust-only (`RUST_ONLY_TABLES`,
    SCW-11), journaled, SI-9-fresh under `tx_id`. **Store crate: S-CHAIN-W
    amendment A3**, riding S-CHAIN-R's amendments layout commit
    ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) §7 commit 2b, `SCHEMA_VERSION
@@ -2197,51 +2182,25 @@ met.
 
 ## 8. Genesis gate checklists (R2-8 — not subtraction)
 
-### 8.1 DRS-D2 **closed** (redb-only genesis) — Tier A + B
+### 8.1 Genesis checklist (redb-only genesis) — Tier A + B, as of 2026-11-21
 
-- [ ] **§0.1 A1–A10** all green
-- [ ] DRS-P0a–P0d complete (multi-PR envelope §7.1); **P0f** conformance register populated for every row E2 claims as correctness
-- [ ] DRS-C progressed as **analysis** (CSR-4): surface map §3.5 updated and used to scope Rust rewrite increments — **not** C++ refactor PRs; digest stability checked per CSR-3a's per-state acceptance
-- [ ] Divergence register: every row RECORD-AND-SPECIFY-complete (or an explicitly justified FIX-IN-CPP); no unaudited DIVERGE
-- [ ] DRS-BENCH suite green vs §1.3 floors; durability config on artifact
-- [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory)
-- [ ] Writer/reader concurrency rules (§3.6) implemented and tested; `ChainTip.connect` exposed in `get_info` (§3.6.2)
-- [ ] **DRS-E6 complete consensus coverage (DRS-D12):** the completeness gate reports `implemented = enforced` for consensus-flagged census rows, computed from the census (policy rows are E5's `AdmissionPolicy` denominator, reported separately); every rule carries its negative fixture; the `RuleCoverage` the store persists is complete
-- [ ] **Release gate (§7.6):** the comparator plus `implemented == enforced` gated **cutover**; **release** requires both **`ratified == enforced`** over consensus-flagged rows (`check_chain_rules_coverage.py`) **and** the repair-backlog query (§7.6 item 1) at **zero unresolved entries** — the ratio covers consensus rows only; the query covers the store-invariant, schema-shape and surface-plan deviations; together they are the one denominator
-- [ ] Cross-store KAT (DRS-D3c) green
-- [ ] Supply-chain governance (§10) for production redb
-- [ ] Affirmative digest artifacts archived (survive LMDB deletion)
-- [ ] DRS-MAT green on redb cell
-- [ ] Deletion register empty; production `shekyld` does not link liblmdb
-- [ ] **§0.1 B1–B3** met (Path B / no permanent façade)
+Each box states what holds it. A box whose subject left with the C++ at the store flip (`DRS_X_STORE_FLIP.md`, #1212) is **retired**, with what replaced it.
 
-### 8.2 DRS-D2 **reopened** — **RETIRED 2026-09-01, kept as dated history**
-
-> **Not a live checklist.** “Tier-A LMDB genesis” is off the menu under the
-> countermand; a reopen means testnet slips. Preserved unrewritten because it
-> records what the programme committed to before that ruling.
-
-**Required (do not shame):**
-
-- [ ] **§0.1 A1–A3, A8** minimum (journals, digest, warts, CI)
-- [ ] **A4** durability explicit on LMDB production config (safesync / sync
-      policy documented and tested)
-- [ ] **A5–A6** BENCH baseline recorded (LMDB); floors bind future engines
-- [ ] **A7** cross-store KAT green (encoding layer — engine-agnostic)
-- [ ] Vendored liblmdb: **CVE + ITS-patch currency current** (mainnet surface)
-- [ ] Schema + atomicity audit + RAW = **genesis consensus documentation**
-- [ ] Writer/reader rules (§3.6) respected on LMDB path
-- [ ] Wallet e2e green on **LMDB** cell
-- [ ] Status/index language: “Tier-A LMDB genesis” (§1.5)
-
-**Strongly preferred:**
-
-- [ ] **A9** DRS-C as far as bandwidth allowed
-- [ ] **A10** reconstructible tooling even on LMDB
-
-**Deferred without shame:**
-
-- [ ] redb unlink, redb supply-chain, redb digest parity, B1–B3, full D10 on redb
+- [ ] **§0.1 A1–A10** all green. Met: A1 (P0b), A3 (P0c), A8 in its redb form (the schema bijection and store-invariant register gates in `docs-gates.yml`, and the schema snapshot gate, rule 42). Retired: A2 (its oracle was the digest against production LMDB; the E2 corpus is re-baselined from Rust, `DRS_E2_REPLAY_DRIVER.md`) and A9 (`blockchain.cpp` is deleted). Open: A4 (the next box), A5 and A6 (the BENCH box), A7 (the cross-store KAT box) and A10 (the D10 box).
+- [x] DRS-P0a–P0d complete (multi-PR envelope §7.1): delivered 2026-09-10. **Retired:** P0f's conformance register. Its subject was the C++ side's conformance, and the register left with the CSR-3a grading (`CONSENSUS_STORE_RECONCILIATION.md`, records-was at `43fadfb65e`).
+- **Retired:** DRS-C as analysis of `blockchain.cpp`'s surfaces, and digest stability per CSR-3a. `blockchain.cpp` is deleted; the surfaces became the Rust store's typed reads and writes (§3.5's rows are LANDED).
+- **Retired:** the divergence register's RECORD-AND-SPECIFY completeness. It graded the Rust store against the C++; the flip's own register (`DRS_X_STORE_FLIP.md` §3.1, DX-Q8) categorized every difference before the C++ left, with no "unexplained" category.
+- [ ] DRS-BENCH suite green vs the performance budget (§1.3a); durability on the artifact. Open: the budget gates every release cut from the first cut after CS-5 (§1.3a.1 rule 1), and that run has not been made. Its tooling lacks the adversarial-block builder, and PB-R1's store-cache share is unmeasured until Chain P (both in `docs/FOLLOWUPS.md`).
+- [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory). D9 is built: every write transaction is armed with `Durability::Immediate` (`rust/shekyl-chain-store/src/store/mod.rs`); its crash and power-loss rows (PB-S1, PB-S2) are release-cut rows of the box above. D10 is open: the rebuild is unbuilt and its round is unruled (`DRS_X_REBUILD_ROUND0.md`, `RB-Q`; the S3 row in `docs/FOLLOWUPS.md`).
+- [ ] Writer/reader concurrency rules (§3.6) implemented and tested; `ChainTip.connect` exposed in `get_info` (§3.6.2). Met: the write and read handles (§3.6.3, §3.6.4 BUILT), and `ChainTip.connect` is served at `CORE_RPC_VERSION` 4.0. Open: §3.6.1's three long-lived-reader mitigations (the read transaction's own deadline, the store-owned semaphore over heavy reads, full scans unreachable from the public RPC) are picked and not built, and PB-S5 measures them (`docs/FOLLOWUPS.md`).
+- [ ] **DRS-E6 complete consensus coverage (DRS-D12):** the completeness gate reports `implemented = enforced` for consensus-flagged census rows, computed from the census (policy rows are E5's `AdmissionPolicy` denominator, reported separately); every rule carries its negative fixture; the `RuleCoverage` the store persists is complete. Open: `check_chain_rules_coverage.py` reports consensus `implemented 146 / enforced 154` and policy `8 / 8` on `dev` at `ca7085028a`.
+- [ ] **Release gate (§7.6):** **release** requires both **`ratified == enforced`** over consensus-flagged rows (`check_chain_rules_coverage.py`) **and** the repair-backlog query (§7.6 item 1) at **zero unresolved entries**. Open: consensus `ratified 131 / enforced 154` at `ca7085028a`, and the repair-backlog query is unbuilt (`docs/FOLLOWUPS.md`).
+- [ ] Cross-store KAT (DRS-D3c) green. Open: re-scoped by `WSS-Q1`(b) to root-and-frontier parity, daemon against wallet (`docs/FOLLOWUPS.md`).
+- [ ] Supply-chain governance (§10) for production redb. Open: §10's gaps stand. `cargo audit` covers redb's advisories in CI; there is no `VENDORED_DEPENDENCIES.md` or `AUDIT_SCOPE.md` row, no update procedure and no vendor-or-pin decision.
+- [x] Affirmative digest artifacts archived before LMDB's deletion: the flip's DX-Q8 baseline, pinned to its `dev` sha before the C++ left (`DRS_X_STORE_FLIP.md` §4 item 8), holds the E2 corpus replayed against the C++ with each shape's grade.
+- [x] DRS-MAT green on the redb cell. With LMDB deleted the matrix is the redb cell alone: the wallet's end-to-end walks against the Rust daemon, the live-daemon lanes of `scripts/ci/run_live_daemon_gates.sh`, which gated the flip (`DRS_X_STORE_FLIP.md` §3.2).
+- [ ] Deletion register empty; production `shekyld` does not link liblmdb. liblmdb is out (`DEL-004`, landed 2026-10-28), and `DEL-002`, `DEL-009` and `DEL-010` have no C++ left to hold. Open: `DEL-008`'s genesis gate (§12): SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live.
+- [x] **§0.1 B1–B3** met: no C++ remains, so no gather or façade (B1); no C LMDB in `shekyld` (B2, `DEL-004`); the commit-consuming `WriteBatch` makes forget-to-commit unrepresentable (B3, §3.6.3).
 
 ---
 
@@ -2249,30 +2208,36 @@ met.
 
 ### 9.1 Bidirectional inventory CI (≈ one script)
 
-Makes DRS-R-1 **structurally unrepresentable**. Legs 1–2 are **live** as
-`scripts/ci/check_lmdb_schema_coverage.py` (`2572e6f5b`, 2026-08-25; extended by P0a
-2026-09-05), keyed on the `SHEKYL_LMDB_TABLES` X-macro — the single source
-`mdb_env_set_maxdbs` derives from (SO-D4), which is the sharper subject
-than this section's original `db_lmdb.h` phrasing (the handle set is
-name-derived `m_<name>`, verified 1:1 by P0a):
+Makes DRS-R-1 **structurally unrepresentable**. The four legs below
+are numbered as other sections cite them. They are the legs of
+`check_lmdb_schema_coverage.py` over the X-macro, retired with that gate
+(§12.1):
 
-1. Every X-macro table has an `LMDB name` property row **and** a section
-   heading in `LMDB_SCHEMA.md` — headings checked duplicate-free (the
-   property-row legs dedupe, which hid a doubled `properties` heading)
-2. Every `LMDB_SCHEMA.md` property row and heading names an X-macro table
-   (**catches phantoms** — the half that produced `staker_*`), plus the
-   stated total, the DB-version header, and the P0a reconciliation
-   registry's row bijection
-3. Every `MDB_dbi` appears in `LMDB_WRITE_ATOMICITY_AUDIT.md` — **live**
-   (P0b, 2026-09-05: the audit-matrix leg of `check_lmdb_schema_coverage.py`,
-   stated at the table-name layer the macro owns)
-4. After digest exists: every `MDB_dbi` in digest set **or** named exclusion
-   row
+1. X-macro table → `LMDB_SCHEMA.md` property row and section heading:
+   retired; `LMDB_SCHEMA.md` is records-was
+2. `LMDB_SCHEMA.md` row or heading → X-macro table (the phantom check):
+   retired with leg 1
+3. X-macro table → `LMDB_WRITE_ATOMICITY_AUDIT.md` §10 row: retired; the
+   audit is a record at its pins
+4. X-macro table → one `Digest v0` state in the audit's §10: retired with
+   leg 3
 
-**Seed count: 47/47** (46/46 at the Round-2 pin — R2-3's "no phantom 47"
-ruled the definition-site `rg` hit; the same N+1 shape reads 47+1 today).
-Gate must not cry wolf on day one — it has run green on `dev` since
-its landing (`2572e6f5b`, 2026-08-25).
+The inventory gate is `scripts/ci/check_redb_schema_bijection.py`, run by
+`docs-gates.yml`. Its denominator is the Rust table definitions: every
+`TableDefinition` and `MultimapTableDefinition` in
+`rust/shekyl-chain-store/src/schema.rs` and `pool/schema.rs`. It checks
+them both ways against `accumulator/class.rs`'s `TABLE_CLASSES`: a defined
+table with no class row fails, a class row that names no defined table
+fails (the phantom check), duplicates on either side fail, and an empty
+definition set or class table fails rather than passing over nothing
+(rule 47). `--selftest` builds each refusal. The gate prints both counts on
+every run, so this section states none.
+
+Two readers keep the audit binding on the Rust store. The
+`accumulator/class.rs` tests hold each table that survives to the class
+§10 gives it. `check_drs_p0d_digest_coverage.py` requires `digest_v0.rs`
+to name the three v0 families and record the §7.1.1 archival exclusion,
+and the audit's "Digest v0 read set" to name the same families.
 
 ### 9.2 Other layers
 
@@ -2380,9 +2345,9 @@ discovered as a digest mismatch.
 
 **(c) redb's own on-disk format version is handled by rebuild, never by an
 in-place upgrade.** redb pins its file format independently of our schema —
-4.4.0 carries `FILE_FORMAT_VERSION3` (as 4.1.0 did) and fails a mismatched
-file with `UpgradeRequired`
-(`/redb-4.4.0/src/tree_store/page_store/header.rs:502`, `:515`, read at the
+4.6.0 carries `FILE_FORMAT_VERSION3` (as 4.1.0 and 4.4.0 did) and fails a
+mismatched file with `UpgradeRequired`
+(`/redb-4.6.0/src/tree_store/page_store/header.rs:539`, `:552`, read at the
 pinned source, not recalled). Policy: a
 redb upgrade that moves that constant is a **deliberate, artifact-recorded
 operation — build a fresh store and replay** (§11's "trivial migrator"), never
@@ -2848,7 +2813,7 @@ mis-stated is one that passes on the wrong set.
 | DEL-001 | Permanent C++ façade over redb | DRS-B | N/A until created |
 | DEL-002 | Time-boxed shims | Surface Rust-owned | Empty until created. The first is the thin C++ `core` shell the flip PR builds at the consumers — the protocol handler's chain reads, block arrivals and pool calls, and `levin_notify`'s five `i_core_events` methods — each forwarding to Rust (`DRS_X_STORE_FLIP.md` DX-Q1, 2026-10-16). Chain sync's cutover deletes its protocol-handler half, RD its relay half |
 | DEL-003 | Production dual-backend / shadow | D2 closed + artifacts | **N/A** (2026-10-15): one engine per binary (ruled 2026-09-14, §1.3, §7.4), so a production dual backend can never exist; R2 removes LMDB in the flip PR with no engine flag (§15) |
-| DEL-004 | liblmdb in default `shekyld` | The store flip PR (R2, §15) | **Landed 2026-10-28:** the default daemon configure does not compile or link liblmdb. The vendor tree stays at `external/db_drivers/liblmdb` and is not a target. Falsify by an `add_subdirectory(db_drivers)` or a `target_link_libraries` of `lmdb` in the daemon build. |
+| DEL-004 | liblmdb in default `shekyld` | The store flip PR (R2, §15) | **Landed 2026-10-28:** the default daemon configure does not compile or link liblmdb. The vendor tree `external/db_drivers/liblmdb` is deleted. Falsify by an `add_subdirectory(db_drivers)` or a `target_link_libraries` of `lmdb` in the daemon build. |
 | DEL-005 | Schema phantoms / missing seven | DRS-P0 | **Closed** (P0a, 2026-09-05) — phantom sections died with the claim-era wire deletion, the seven documented in `2572e6f5b` (2026-08-25), both directions gate-pinned since |
 | DEL-006 | V4 heed-as-destination without pointer | Docs | Closed |
 | DEL-007 | **heed as an intermediate engine** — its only advantage over redb is on-disk compatibility with the C++ LMDB, and no block has been mined on any network — every peer is at height 1, and that genesis block is **regenerated deterministically** from the `GENESIS_TX` / `GENESIS_NONCE` constants in `cryptonote_config.h` whenever the store is empty (`blockchain.cpp:513`), in any engine. There is no persisted state to preserve — the genesis block is regenerated from `GENESIS_TX`/`GENESIS_NONCE` on any empty store, so it is a derived artifact of a repo constant, not state; LMDB→heed→redb is two switchovers to reach where one gets you | Rick, 2026-09-01 | **Closed — do not re-propose** (CSR-7) |
@@ -2950,7 +2915,7 @@ All **Accept** as previously recorded; residual fixes in Round-2 below.
 | **R2-5** | Over-corrected caret pin | **Accept** — governance gaps primary |
 | **R2-6** | Total digest O(n²) | **Accept** — accumulators + checkpoint reopen |
 | **R2-7** | D2-R2 unreachable; weak D2-R1 bridge | **Accept** — unpark C; same concrete bridge on R1 |
-| **R2-8** | Reopen gate by subtraction | **Accept** — §8.2 own list |
+| **R2-8** | Reopen gate by subtraction | **Accept**; the reopen path and its list retired 2026-09-01 |
 | **E-1** | Digest vs LMDB in P0/C | **Accept** — DRS-D11; highest leverage |
 | **E-2** | One pass + escalation | **Accept** — §7.1–7.2 |
 | **E-3** | Bidirectional CI | **Accept** — §9.1 |

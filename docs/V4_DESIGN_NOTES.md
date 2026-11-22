@@ -9,27 +9,17 @@ This document captures design decisions, deferred work, and architectural direct
 ### Status: **SUPERSEDED (2026-07-27)** for engine choice and destination architecture
 
 **Authoritative program:** [`docs/design/DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md)
-(`DRS-*` family). Preferred destination is **redb** (Rust-native) behind
-**decomposed** validation surfaces (C++ decompose vs LMDB **first**), Path B
-long-term, LMDB as temporary logical oracle during engine swap only. DRS-D2
-(redb-only genesis) has **named reopen criteria** (genesis-on-LMDB bridge).
-`heed` is **not** the stepping stone. **DRS-0 is blocked** until DRS-P0
-completes. The re-census half of that condition is **cleared**: DRS-P0a
-reconciled `LMDB_SCHEMA.md` (2026-09-05) and DRS-P0b rewrote
-`LMDB_WRITE_ATOMICITY_AUDIT.md` (2026-09-05); both are gate-pinned to the
-`SHEKYL_LMDB_TABLES` macro and graded RECONCILED in the DRS oracles table.
-**DRS-P0c** closed the wart register on 2026-09-08 at DRS-W15; it now spans
-DRS-W1…DRS-W17 — DRS-W16 added 2026-09-12 by DRS-0 slice A, DRS-W17 2026-09-14 by DRS-E1 increment 1 (evidence
-in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9).
-**DRS-P0d** landed the logical-state digest v0 on 2026-09-10 (core chain +
-spent keys + live curve-tree root against production LMDB; archival
-journals remain the §7.1.1 named exclusion). The P0a–P0d envelope that
-blocked DRS-0 is complete; DRS-0 still waits on the CEN-B5 S1
-re-verification named in `DAEMON_REDB_STORE.md`.
+(`DRS-*` family). The daemon runs on **redb** (`shekyl-chain-store`). The
+C++ LMDB store, `blockchain.cpp` and the vendored LMDB are deleted, and
+`heed` is retired as an intermediate engine (`DEL-007`). `LMDB_SCHEMA.md`
+and `LMDB_WRITE_ATOMICITY_AUDIT.md` are records of the C++ store; the
+DRS-W1…DRS-W17 wart register is in
+[`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
 
 The historical text below is retained so the V4 deferral rationale (especially
-**no split writers on one LMDB env**) is not lost — those constraints still
-apply to any oracle/shadow phase.
+**no split writers on one store**) is not lost. `DAEMON_REDB_STORE.md` §3.6
+states it for the redb store: one backend per binary and one writer per
+store file.
 
 ### What (historical)
 
@@ -78,8 +68,8 @@ Large. The `BlockchainLMDB` class is ~5000 lines of C++ with 28 sub-databases, c
 
 ### References
 
-- [`docs/LMDB_SCHEMA.md`](LMDB_SCHEMA.md) — complete schema reference for all 28 sub-databases
-- [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) — audit of all write transaction boundaries
-- [`docs/VENDORED_DEPENDENCIES.md`](VENDORED_DEPENDENCIES.md) — LMDB version pinning and branch tracking
-- `src/blockchain_db/lmdb/db_lmdb.cpp` — current C++ implementation
-- `src/blockchain_db/lmdb/db_lmdb.h` — DBI handle declarations and struct definitions
+- [`docs/LMDB_SCHEMA.md`](LMDB_SCHEMA.md) — the record of the C++ store's schema
+- [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) — the C++ store's write transaction boundaries, audited at its pins
+- [`docs/VENDORED_DEPENDENCIES.md`](VENDORED_DEPENDENCIES.md) — the record of the vendored LMDB copy
+- `src/blockchain_db/lmdb/db_lmdb.cpp` — the C++ implementation; deleted, in git history
+- `src/blockchain_db/lmdb/db_lmdb.h` — DBI handle declarations and struct definitions; deleted, in git history

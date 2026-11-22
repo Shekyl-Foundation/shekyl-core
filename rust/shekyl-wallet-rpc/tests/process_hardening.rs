@@ -6,8 +6,9 @@
 //! The wallet RPC server hardens its process before it reads an argument
 //! (rule 35, `DAEMON_CONFIG_CUTOVER.md` DC-Q21), observed from outside the
 //! running binary against an unhardened control: on Linux and FreeBSD the
-//! core limit reads `0` on both bounds, on FreeBSD a same-account `truss -p`
-//! is refused too, and on macOS `SIGABRT` writes no core. Which OS proves
+//! core limit reads `0` on both bounds, on FreeBSD the trace control reads
+//! `disabled` and a same-account `truss -p` is refused too (not run as
+//! root), and on macOS `SIGABRT` writes no core. Which OS proves
 //! what, and what each arm needs of the host, is `shekyl-process`'s
 //! `tests/support/from_outside.rs`. Windows is not covered here.
 //!
@@ -36,7 +37,15 @@ fn a_running_wallet_rpc_is_hardened() {
     }
     from_outside::assert_the_control_shows_the_subject(NAME);
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // Owner-only: the wallet RPC binds its socket only in a directory this
+    // account alone can enter, and tempfile's default mode is the umask's.
+    let dir = {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .expect("tempdir")
+    };
     let wallets = dir.path().join("wallets");
     std::fs::create_dir(&wallets).expect("wallet dir");
     // A short name: a socket path must fit `sun_path` (104 bytes on macOS
@@ -44,16 +53,18 @@ fn a_running_wallet_rpc_is_hardened() {
     let socket = dir.path().join("s");
     let stderr_path = dir.path().join("stderr");
     let stderr_of = || std::fs::read_to_string(&stderr_path).unwrap_or_default();
-    let mut child = from_outside::raised(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
-        .args(["--network", "stagenet", "--disable-rpc-login"])
-        .arg(format!("--rpc-bind=uds://{}", socket.display()))
-        .arg("--wallet-dir")
-        .arg(&wallets)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
-        .spawn()
-        .expect("spawn shekyl-wallet-rpc");
+    let mut child = from_outside::Started::new(
+        from_outside::raised(env!("CARGO_BIN_EXE_shekyl-wallet-rpc"))
+            .args(["--network", "stagenet", "--disable-rpc-login"])
+            .arg(format!("--rpc-bind=uds://{}", socket.display()))
+            .arg("--wallet-dir")
+            .arg(&wallets)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
+            .spawn()
+            .expect("spawn shekyl-wallet-rpc"),
+    );
 
     let start = Instant::now();
     while !socket.exists() {

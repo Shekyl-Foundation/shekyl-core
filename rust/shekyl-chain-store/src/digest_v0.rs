@@ -5,20 +5,20 @@
 
 //! Layout-independent logical state digest v0 (DRS-P0d).
 //!
-//! Canonical encoding of three LMDB families, hashed with cSHAKE256
+//! Canonical encoding of three chain families, hashed with cSHAKE256
 //! (SP 800-185, house default for new artifacts —
-//! `shekyl-crypto-hash::cshake256_32`). The digest is **not** an LMDB
+//! `shekyl-crypto-hash::cshake256_32`). The digest is **not** a
 //! page hash: it hashes logical values (height-ordered block hashes,
 //! the spent-key **set**, the live curve-tree root), so two engines
 //! with the same logical state agree regardless of B-tree layout.
 //!
 //! # v0 coverage (minimum, `DAEMON_REDB_STORE.md` §7.1 P0d)
 //!
-//! | Family | Logical input | LMDB tables | Digest mechanism |
+//! | Family | Logical input | Tables | Digest mechanism |
 //! |---|---|---|---|
 //! | Core chain | height-ordered `block_info.bi_hash` | `blocks` / `block_info` | chained cSHAKE over `n ‖ hash_0 ‖ … ‖ hash_{n-1}` |
 //! | Spent keys | set of 32-byte key images | `spent_keys` | XOR of per-element cSHAKE (§6.2 set-shaped; order-independent, pop-symmetric) |
-//! | Curve root | live Selene root | `curve_tree_meta` `"root"` via `get_curve_tree_root` | 32-byte value as-is (empty tree → Selene `hash_init`) |
+//! | Curve root | live Selene root | `curve_tree_roots[tip + 1]` | 32-byte value as-is (empty tree → Selene `hash_init`) |
 //!
 //! **Deliberately excluded (P0e / §7.1.1):** archival journals
 //! (`archival_*`), the txpool (which since layout 12 is not in this file at
@@ -38,7 +38,7 @@
 //! | Offset | Width | Field | Notes |
 //! |--------|-------|-------|-------|
 //! | 0 | 1 | format version tag | [`DIGEST_FORMAT_VERSION`] = `0x00` |
-//! | 1 | 8 | `n_blocks` | u64 LE, `BlockchainLMDB::height()` |
+//! | 1 | 8 | `n_blocks` | u64 LE, count of block hashes |
 //! | 9 | 8 | `n_spent` | u64 LE, cardinality of `spent_keys` |
 //! | 17 | 32 | chain component | [`chain_component`] |
 //! | 49 | 32 | spent accumulator | [`spent_accumulator`] |
@@ -70,8 +70,8 @@
 //!
 //! # Duplicate spent keys
 //!
-//! The FFI/hasher treats the spent list as a **set**: LMDB stores it
-//! with `MDB_NODUPDATA`, so the walker never yields duplicates. Passing
+//! The hasher treats the spent list as a **set**: `spent_keys` is keyed
+//! by the key image, so the walker never yields duplicates. Passing
 //! the same key image twice into [`digest_v0`] XORs the leaf with
 //! itself and cancels — a caller-contract violation, not a stored
 //! state. DRS-0 may replace XOR with an additive field hash; that is a

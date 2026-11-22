@@ -425,7 +425,7 @@ def mining_address(timeout):
 
 
 def measure(args):
-    """Run the LMDB IBD baseline and emit an artifact, or refuse.
+    """Run the IBD measurement and emit an artifact, or refuse.
 
     The subject is what the artifact describes. The seed is fixture. The seed
     is reused across runs (generation dominates at the reference height); the

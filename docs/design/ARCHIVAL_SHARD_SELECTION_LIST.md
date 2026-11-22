@@ -7,7 +7,7 @@ RPC; GUI picker). `SL-D6` payout-floor filter stays FOLLOWUPS. Market
 
 **Scope:** how a market staker's wallet decides which shards to bond. Nothing
 here is consensus-visible: no wire field moves, no admission rule changes, no
-LMDB table is added. The whole surface is one read-only daemon RPC plus wallet
+chain-store table is added. The whole surface is one read-only daemon RPC plus wallet
 presentation, so it is **build-and-pivot**, not design-first.
 
 **Grounded on `dev@37accf6f`, 2026-09-13.** Every row below was read at source.

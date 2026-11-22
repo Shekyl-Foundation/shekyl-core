@@ -201,9 +201,8 @@ pub(super) fn bond_record<T: ReadTables>(
 
 /// **A2.** Every slash logged against `persona` at a height **strictly
 /// above** `height`, in log order — the rows `holds_shard_at` folds over
-/// the record to answer whether a shard was held *as of* `height`
-/// (`db_lmdb.cpp:4804`'s `archival_slash_removed_holding_after`, minus the
-/// fold, which is the retention crate's; CEN-L16). The log holds every
+/// the record to answer whether a shard was held *as of* `height` (the
+/// fold itself is the retention crate's; CEN-L16). The log holds every
 /// persona's slashes. This keeps one persona's entry, dropping the height
 /// the holdings fold does not read, and drops every other persona before
 /// the row is stored. Empty when nothing above `height` names `persona`.
@@ -394,9 +393,9 @@ pub(super) fn bundle_references_at<T: ReadTables>(
 }
 
 /// **A11.** Every `archival_bond` row, decoded, in key order — the redb
-/// B-tree's order over the 32-byte persona, which is the LMDB comparator's
-/// order over the same bytes, so the scan applies slashes in the order the
-/// C++ cursor did. A row that does not decode is SI-7 (SI-14's arm too).
+/// B-tree's byte-lexicographic order over the 32-byte persona, so the scan
+/// applies slashes in persona byte order. A row that does not decode is
+/// SI-7 (SI-14's arm too).
 pub(super) fn bond_records<T: ReadTables>(
     txn: &T,
 ) -> Result<Vec<(PCanonicalId, BondRecord)>, ReadFault> {

@@ -340,6 +340,16 @@ where
         report.weights.compared(),
         report.emission.compared(),
     );
+    // A switch is the fork choice's, derived from the corpus's offers.
+    for switch in &report.switches {
+        eprintln!(
+            "switched at record {}: fork {}, {} demoted, tip {}",
+            switch.record.to_raw(),
+            switch.fork,
+            switch.depth,
+            switch.tip,
+        );
+    }
     Ok(report)
 }
 

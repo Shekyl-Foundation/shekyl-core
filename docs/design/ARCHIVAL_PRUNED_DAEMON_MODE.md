@@ -1747,7 +1747,7 @@ Named now so they are not discovered later.
   the dependency and does not edit `class.rs`.
   **UPDATE 2026-09-13 (`4da609cbd`, PR #726):** the DRS lane has since
   stated *how* it will absorb the ruling
-  (`DAEMON_REDB_STORE.md:1105-1275`, §11.2 amendment chain): a digest
+  (`DAEMON_REDB_STORE.md:1093-1263`, §11.2 amendment chain): a digest
   cares whether nodes agree, not whether bytes are present, so a
   **uniform** discard yields a floor-defined accumulator and lifts
   exclusions rather than re-pointing them. The handoff is therefore

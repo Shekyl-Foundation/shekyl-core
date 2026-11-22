@@ -20,7 +20,7 @@ pub mod network;
 pub mod notify;
 pub mod options;
 pub mod run;
-pub mod signals;
+pub mod stop;
 pub mod tor;
 pub mod verify;
 

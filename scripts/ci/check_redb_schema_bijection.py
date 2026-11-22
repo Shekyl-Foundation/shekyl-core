@@ -11,9 +11,7 @@ The Rust table definitions are the denominator. `schema.rs` and
 A name on only one side is a table the digest classification forgot,
 or a classification of a table that does not exist.
 
-The LMDB X-macro, and the allowlists that explained how a definition
-related to it, are not a side of this check. Ordering lives in
-`lmdb_order`'s pinned vectors. This gate checks names.
+Ordering lives in `lmdb_order`'s pinned vectors. This gate checks names.
 
 Instance of 47-gate-subject-assertion.mdc: an empty definition set or
 an empty class table fails. `--selftest` builds each refusal.
