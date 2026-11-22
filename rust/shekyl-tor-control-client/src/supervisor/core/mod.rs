@@ -1053,12 +1053,12 @@ impl Core {
     #[must_use]
     pub fn action_stands(&self, action: &Action) -> bool {
         match action {
-            Action::RepublishOnion => !self.service_republish || !self.republish_cannot_help(),
+            Action::RepublishOnion => !self.service_republish || !self.republish_held_off(),
             Action::Probe => matches!(self.probe, probe::Probe::InFlight { .. }),
             Action::CheckDirectories => {
                 matches!(
                     self.directories,
-                    Some(directories::DirectoryHalf::AwaitingDraw)
+                    Some(directories::DirectoryHalf::AwaitingDraw { .. })
                 )
             }
             Action::FetchFromDirectory { hsdir } => {

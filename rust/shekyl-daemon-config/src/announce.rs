@@ -114,7 +114,12 @@ pub fn posture(config: &DaemonConfig) -> String {
         }
     }
     match &config.tor {
-        Tor::Managed { .. } => parts.push("Tor managed: a per-boot onion".to_owned()),
+        Tor::Managed {
+            onion_key: None, ..
+        } => parts.push("Tor managed: a per-boot onion".to_owned()),
+        Tor::Managed {
+            onion_key: Some(_), ..
+        } => parts.push("Tor managed: a persistent onion".to_owned()),
         Tor::Operator { onion: Some(_), .. } => parts.push("Tor operator: an onion".to_owned()),
         Tor::Operator { onion: None, .. } => parts.push("Tor operator: dial-only".to_owned()),
         Tor::Off => {}
@@ -358,6 +363,9 @@ mod tests {
     fn the_posture_names_the_connectors_and_dial_only() {
         let (_, c) = setup(&[], "");
         assert_eq!(posture(&c), "posture: clearnet and Tor; clearnet address not advertised; Tor managed: a per-boot onion");
+        let key = std::env::temp_dir().join("hs_ed25519_secret_key");
+        let (_, c) = setup(&["--tor-onion-key-file", key.to_str().unwrap()], "");
+        assert_eq!(posture(&c), "posture: clearnet and Tor; clearnet address not advertised; Tor managed: a persistent onion");
         let (_, c) = setup(&["--clearnet", "off", "--tor", "off"], "");
         assert_eq!(posture(&c), "posture: offline: no clearnet and no Tor");
         let (_, c) = setup(&["--clearnet-listen", "none", "--tor", "off"], "");
