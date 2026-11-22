@@ -28,12 +28,13 @@ What passes, in each of these workflows:
   reports nothing. An exact match, because a check for the parts would
   pass the same parts joined by `||`.
 
-`gui-drift.yml` and `chain-forge.yml` are the scheduled subjects: the
-first's nightly holds the GUI wallet's pinned shekyl-core edges to the
-wallet's manifest (CHAIN_FORGE.md CF-R26), the second's forges the small
-plan at dev's HEAD and holds it to the committed chain (CHAIN_FORGE.md §9),
-so their reporters' `if` is exactly `SCHEDULE_CONDITION`, the same shape on
-a scheduled run.
+`gui-drift.yml`, `chain-forge.yml` and `freebsd-nightly.yml` are the
+scheduled subjects: the first's nightly holds the GUI wallet's pinned
+shekyl-core edges to the wallet's manifest (CHAIN_FORGE.md CF-R26), the
+second's forges the small plan at dev's HEAD and holds it to the committed
+chain (CHAIN_FORGE.md §9), the third runs the workspace tests on FreeBSD at
+dev's HEAD, so their reporters' `if` is exactly `SCHEDULE_CONDITION`, the
+same shape on a scheduled run.
 
 Rule 47: the workflows are named here, so a renamed or deleted one,
 or a reporter removed from one of them, fails by name rather than
@@ -55,7 +56,8 @@ REPORTER = "./.github/workflows/report-dev-red.yml"
 CONDITION = "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}"
 # gui-drift.yml's nightly holds the GUI wallet's pin to its manifest
 # (CHAIN_FORGE.md CF-R26), and chain-forge.yml's holds the small plan to the
-# committed chain (§9); their reds reach the reporter from the schedule.
+# committed chain (§9), and freebsd-nightly.yml's runs the workspace tests on
+# FreeBSD; their reds reach the reporter from the schedule.
 SCHEDULE_CONDITION = "${{ !cancelled() && github.event_name == 'schedule' }}"
 # Each subject workflow, and the exact condition its reporter runs under.
 SUBJECTS = {
@@ -65,6 +67,7 @@ SUBJECTS = {
     "fuzz-harness.yml": CONDITION,
     "gui-drift.yml": SCHEDULE_CONDITION,
     "chain-forge.yml": SCHEDULE_CONDITION,
+    "freebsd-nightly.yml": SCHEDULE_CONDITION,
 }
 
 
@@ -181,7 +184,8 @@ def main(argv: list[str]) -> int:
     print(
         f"dev-red reporter: {', '.join(SUBJECTS)} each end in one reporter "
         "that needs every other job and runs on every push run on dev, red or "
-        "green (gui-drift.yml, chain-forge.yml: on their scheduled runs)"
+        "green (gui-drift.yml, chain-forge.yml, freebsd-nightly.yml: on their "
+        "scheduled runs)"
     )
     return 0
 

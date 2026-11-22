@@ -71,7 +71,13 @@ jobs:
     concurrency:
       group: merge-ready-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    # The Foundation's gate runner, not a hosted one: on the hosted pool
+    # this seconds-long check queued 15 to 60 minutes behind the Rust jobs,
+    # and the label waited with it. It takes one job per throwaway
+    # container, with no route to the Foundation's own network; a fork's
+    # run waits for a maintainer's approval first. While it is down the
+    # job queues and nothing turns the status green.
+    runs-on: [self-hosted, shekyl-gate]
     timeout-minutes: 5  # API calls, and at most SETTLE_SECONDS of waiting
     permissions:
       # actions: the head's workflow runs, so a pull_request run a newer
@@ -87,9 +93,14 @@ jobs:
     outputs:
       judged: ${{ steps.run.outputs.judged }}
     steps:
-      # The script alone, from the commit under test.
+      # The script alone, from the base branch as it is now: never the
+      # pull request's own copy, so a pull request cannot change its judge,
+      # and never the event's merge commit, which GitHub may not have
+      # refreshed since the base moved (#1489 was judged by a script two
+      # merges old). The workflow file itself is still the merge's.
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.base_ref }}
           sparse-checkout: scripts/ci/merge_ready.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
@@ -123,10 +134,19 @@ jobs:
     steps:
       # The pull request's merge with `dev`, every branch's history: the
       # head, the merge base and `dev`, which the plan fetches again now.
+      # The tree the plan scopes by is the merge's, which holds the pull
+      # request's own crates and workflows.
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
+      # The plan's scripts from the base branch as it is now, as the label
+      # check's: never the pull request's own copy, and never a merge
+      # GitHub has not refreshed since the base moved.
+      - name: the plan's scripts from the base
+        env:
+          BASE: ${{ github.base_ref }}
+        run: git checkout "origin/${BASE}" -- scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py scripts/ci/change_scope.py
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
