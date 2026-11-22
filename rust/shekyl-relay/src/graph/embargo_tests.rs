@@ -445,8 +445,8 @@ fn an_own_transaction_re_stems_once_to_its_alternate_then_is_broadcast() {
     assert_eq!(second.published, vec![sent.0], "the second fire publishes");
     for peer in [successor, alternate] {
         assert_eq!(
-            z.peer(&peer).expect("connected").queued.as_slice(),
-            std::slice::from_ref(&sent.1),
+            z.peer(&peer).expect("connected").queued,
+            [TxBlob::clone(&sent.1)],
             "the last resort fluffs to every session"
         );
     }
@@ -502,8 +502,8 @@ fn no_live_alternate_ends_the_stem_at_the_first_fire() {
     assert!(fired.stems.is_empty());
     assert_eq!(fired.published, vec![forwarded.0], "published");
     assert_eq!(
-        relay.peer(&successor).expect("connected").queued.as_slice(),
-        std::slice::from_ref(&forwarded.1),
+        relay.peer(&successor).expect("connected").queued,
+        [TxBlob::clone(&forwarded.1)],
         "fluffed to the sessions other than its source"
     );
     assert!(

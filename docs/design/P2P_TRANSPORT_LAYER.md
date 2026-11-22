@@ -1988,6 +1988,21 @@ handshake, so it is valid in every phase.
 `RecordRejected` is an AEAD failure or a poisoned receiver.
 `SessionRefused` is the C++ side declining a delivery (D4).
 
+**Added 2026-11-20 (`PWD-B12`, `SHEKYL_P2P_PROTOCOL.md` §3.7), in the third
+row, "any time after the channel exists":** `InnerMessageOversize` (20), a
+fragment train whose inner message claims more than its command's cap;
+`FragmentTrainOverrun` (21), a train that holds its whole inner message and has
+not ended; `InnerMessageNotDispatch` (22), a train whose inner message is not a
+request or a response. They are refusals of the session's form, as
+`SessionRefused` is, each with a kind of its own so the log names which bound
+refused (`CloseKind::refuses_session`, `rust/shekyl-transport-layer/src/cause.rs`,
+is the class). **Added 2026-11-21 (`PWD-B12`), same row and class:**
+`InnerMessageNotTransactionNotice` (23), a train whose inner message is a
+request or response of a command other than the transaction notice. The
+code's table is the source; it also carries
+`NetworkMismatch` (18) and `InvokeTimeout` (19), which
+`P2P_3_REMNANT_CUTOVER_BRIEF.md` F5 records.
+
 This table is a requirement of the transport layer. It is not implemented
 on the pipe. A failure an operator can act on is one of these values
 (rule 82), not a generic drop. On the overlays that is

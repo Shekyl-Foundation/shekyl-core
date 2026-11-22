@@ -1025,6 +1025,18 @@ impl ReadSnapshot<'_> {
         Ok(out)
     }
 
+    /// The tables digest of this snapshot: one commitment to every table
+    /// [`Self::table_rows`] reads, row for row ([`crate::tables_digest`]).
+    /// What a forged chain's trace carries at each indexed event, and what
+    /// a snapshot opened at that event is held to.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn tables_digest_v1(&self) -> Result<[u8; 32], StoreError> {
+        Ok(crate::tables_digest::tables_digest_v1(&self.table_rows()?))
+    }
+
     /// The proof-of-work hash this node recorded for the block at `height`
     /// (`block_pow`, written by `connect`), under the seed it was computed
     /// under. [`AtHeight::AboveTip`] past the tip.
