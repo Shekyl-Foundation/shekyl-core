@@ -447,3 +447,80 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
     assert_eq!(reopened, after, "the public bit survives a restart");
     scenario.close().await;
 }
+
+/// The chain forge's price and its pool (`CHAIN_FORGE.md` §5.4): a spend
+/// priced by [`crate::priced`] at the economy rung served for its block is
+/// admitted, and kept for the block that lists it, once; the same spend one
+/// lattice step under what the shipped policy admits is refused on CEN-M3,
+/// by name; and a second spend of one coinbase in the same listing is
+/// refused, the earlier one held.
+#[tokio::test]
+async fn a_spend_at_its_price_is_admitted_and_one_lattice_step_under_the_floor_is_not() {
+    use crate::priced::{assert_priced, fee_at, SIZING_FEE};
+
+    let (mut scenario, mined) = matured("pool-door-priced").await;
+    let spender = Spender::on(scenario.network_id(), &mined);
+    let wallet = scenario.wallet();
+    let rate = scenario.connecting_economy_rate().await;
+    let sized = spender.spend_coinbase(wallet, h(0), h(AT), SIZING_FEE);
+    let fee = fee_at(&sized, rate);
+    let priced = spender.spend_coinbase(wallet, h(0), h(AT), fee);
+    assert_priced(&priced, &sized, rate);
+
+    // Down the lattice from the price to the first fee the shipped policy
+    // does not admit over the window the door reads.
+    let floors = scenario
+        .read_chain(|view, _| {
+            match shekyl_chain_rules::relay_floor_window(view, h(AT)).expect("floors") {
+                shekyl_chain_rules::AtHeight::Recorded(floors) => floors,
+                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("recorded"),
+            }
+        })
+        .await;
+    let measured = u64::try_from(sized.weight()).expect("a weight fits");
+    let mut under = fee;
+    loop {
+        under = under
+            .checked_sub(shekyl_economics::FEE_QUANTIZATION_MASK)
+            .expect("a floor above zero");
+        let weight = shekyl_tx_weight::weight_at_fee(measured, SIZING_FEE, under).expect("fits");
+        if !shekyl_economics::relay_floor_admits(under, weight, &floors) {
+            break;
+        }
+    }
+    let cheap = spender.spend_coinbase(wallet, h(0), h(AT), under);
+    let refused = scenario
+        .admit(std::slice::from_ref(&cheap))
+        .await
+        .expect_err("one lattice step under the floor");
+    assert_eq!(refused.txid, cheap.txid_parts().hash);
+    assert!(
+        matches!(
+            refused.answer,
+            Admission::Refused(Judged::Policy(shekyl_chain_rules::PolicyRefused {
+                rule: PolicyRow::M3
+            }))
+        ),
+        "refused on CEN-M3: {:?}",
+        refused.answer
+    );
+    assert!(!scenario.take_admitted(&cheap.txid_parts().hash));
+
+    // At its price: admitted, and taken once.
+    scenario
+        .admit(std::slice::from_ref(&priced))
+        .await
+        .expect("the priced spend is admitted");
+    let txid = priced.txid_parts().hash;
+    assert!(scenario.take_admitted(&txid), "kept for its block");
+    assert!(!scenario.take_admitted(&txid), "taken once");
+
+    // One listing spending one coinbase twice: the second is judged with
+    // the first held.
+    let respend = spender.spend_coinbase(wallet, h(0), h(AT), fee);
+    let refused = scenario
+        .admit(&[priced, respend.clone()])
+        .await
+        .expect_err("a second spend of one coinbase");
+    assert_eq!(refused.txid, respend.txid_parts().hash);
+}

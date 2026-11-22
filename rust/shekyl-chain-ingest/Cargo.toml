@@ -123,6 +123,9 @@ forge = [
     "shekyl-harness-spender/seeded-rng",
     "shekyl-tx-builder/seeded-rng",
     "shekyl-crypto-pq/seeded-rng",
+    # The wallet's fee loop, over a forged transaction's measured weight
+    # (`priced`, CHAIN_FORGE.md §5.4).
+    "dep:shekyl-tx-weight",
     "dep:shekyl-genesis-tool",
     "dep:shekyl-hash-budget",
     "dep:tempfile",
@@ -244,6 +247,7 @@ shekyl-miner = { path = "../shekyl-miner", optional = true }
 # tip, a switch's returns and an alternative block's bodies offered to its
 # door, a compact block's bodies resolved from what it shows.
 shekyl-mempool = { path = "../shekyl-mempool", optional = true }
+shekyl-tx-weight = { path = "../shekyl-tx-weight", optional = true }
 # pipeline: the node's one block template, built by the tip follower on one
 # snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and the reward-aware fill it lists
 # bodies under (#1152).
@@ -302,6 +306,7 @@ zeroize = { workspace = true, optional = true }
 # the manifest's formats). That crate's test-kind targets depend on this
 # one; its library does not, so the edge makes no cycle.
 shekyl-chain-forge = { path = "../shekyl-chain-forge" }
+shekyl-tx-weight = { path = "../shekyl-tx-weight" }
 # The budget a test starts its own hasher over, and the one the service
 # tests' gate takes its jobs' permits from. The library names no budget.
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }

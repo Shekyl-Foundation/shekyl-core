@@ -141,6 +141,9 @@ pub struct Scenario<P> {
     /// A commitment the next template carries instead, once: a test that
     /// holds the witness key and seed itself.
     next_commitment: Option<shekyl_types::archival::DrawCommitment>,
+    /// The transactions the daemon's pool admitted ([`Self::admit`]) and
+    /// no caller has yet taken ([`Self::take_admitted`]).
+    admitted: std::collections::BTreeSet<shekyl_types::TxHash>,
     /// The directory this scenario's store lives in. Last, so it drops
     /// after the store this struct holds. [`Self::close`] joins the
     /// connector; dropping the task handle detaches that task.
@@ -290,6 +293,7 @@ impl<P: Pow> Scenario<P> {
             store: Some(opened),
             witness: None,
             next_commitment: None,
+            admitted: std::collections::BTreeSet::new(),
             path,
         }
     }
@@ -1172,6 +1176,7 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
 
 #[path = "scenario_pool.rs"]
 mod pool;
+pub use pool::{ListingFault, PoolRefused};
 
 /// The chain that carries a network's identity: regtest's table genesis as
 /// block 0, its miner and its id (`CHAIN_FORGE.md` §6, `CF-1a`).
