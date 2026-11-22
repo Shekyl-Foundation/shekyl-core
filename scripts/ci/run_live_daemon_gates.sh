@@ -497,7 +497,7 @@ case "$GATE_LANE" in
     [ -n "${SHEKYL_TEST_TOR_BINARY:-}" ] && [ -x "$SHEKYL_TEST_TOR_BINARY" ] || {
       echo "FATAL: SHEKYL_TEST_TOR_BINARY names no executable. Stage the pinned bundle:" >&2
       echo "  python3 scripts/release/tor_bundle.py fetch --host <triple> --sources <dir>" >&2
-      echo "  python3 scripts/release/tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor" >&2
+      echo "  python3 scripts/release/tor_bundle.py stage --host <triple> --sources <dir> --dest <stage>/tor --licenses <stage>/tor-licenses" >&2
       exit 1
     }
     ;;
