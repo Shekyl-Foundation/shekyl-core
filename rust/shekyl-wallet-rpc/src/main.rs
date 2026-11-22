@@ -92,7 +92,8 @@ struct Cli {
     log_file: Option<PathBuf>,
 
     /// The Tor binary a serving wallet runs. Unset, the wallet finds the
-    /// bundled one. A path naming no file on this machine refuses the start.
+    /// bundled one. A relative path, or one naming no file on this machine,
+    /// refuses the start.
     /// Either way the binary must match the pinned build.
     #[arg(long = shekyl_wallet_rpc::server::TOR_FILE_OPTION)]
     tor_file: Option<PathBuf>,

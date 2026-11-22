@@ -77,8 +77,9 @@ pub struct ReplArgs {
     rpc_url: Option<String>,
 
     /// The Tor binary the self-hosted wallet server runs when this wallet
-    /// serves. Unset, the bundled one is found. A path naming no file on this
-    /// machine refuses the start. Either way the binary must match the
+    /// serves. Unset, the bundled one is found. A relative path, or one
+    /// naming no file on this machine, refuses the start. Either way the
+    /// binary must match the
     /// pinned build. Refused with --rpc-url: that server is not started, so
     /// set it on the server you connect to.
     #[arg(

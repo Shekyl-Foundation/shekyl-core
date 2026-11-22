@@ -137,13 +137,14 @@ impl ListenAddr {
 
 /// The option naming the Tor binary a serving wallet runs, on both wallet
 /// binaries (`INPUT_GRAMMAR.md` §12.1, §12.4). Unset is discovery; a path
-/// naming no file refuses the start ([`shekyl_engine_core::TorFile`]).
+/// that is relative or names no file refuses the start
+/// ([`shekyl_engine_core::TorFile`]).
 pub const TOR_FILE_OPTION: &str = "tor-file";
 
 /// The resolved `tor-file` option a host passes in ([`ServerConfig::tor_file`],
 /// [`spawn_in_process`]), and its refusal, re-exported so a host reaches them
 /// through this crate.
-pub use shekyl_engine_core::{TorFile, TorFileMissing};
+pub use shekyl_engine_core::{TorFile, TorFileRefused};
 
 /// Server configuration.
 #[derive(Clone)]

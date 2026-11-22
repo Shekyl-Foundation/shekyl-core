@@ -557,7 +557,7 @@ Legend as §5: **R** rename or fold, **K** kept, **X** REJECTED row, **–** rem
 | `json` | `json` | switch | off | CLI | | K |
 | `script` | `script-file` | path | unset | CLI | | R |
 | — | `log-file`, `log-level`, `log-category`, `log-size-max` | as §5 | as §5, the file `shekyl-cli-<network>.log` | both | | N; the daemon's rows apply |
-| (`device.tor_binary_path`, the deleted prefs file) | `tor-file` | path | unset: discovery, as the daemon's `tor-file` | both | | N (Rick, 2026-11-21): the Tor binary the self-hosted server runs when the wallet serves, with the daemon's behaviour: a set value changes where the binary is looked for, never whether it is verified, and a path naming no file on this machine refuses the start with its remedy, never replaced by discovery (IG-Q41). Unconstructible with `wallet-rpc-endpoint` or `wallet-rpc-socket-file`: no server is started (`WALLET_SETTINGS.md` §4) |
+| (`device.tor_binary_path`, the deleted prefs file) | `tor-file` | path | unset: discovery, as the daemon's `tor-file` | both | | N (Rick, 2026-11-21): the Tor binary the self-hosted server runs when the wallet serves, with the daemon's behaviour: a set value changes where the binary is looked for, never whether it is verified; a relative path refuses the start (IG-6), and a path naming no file on this machine refuses the start with its remedy, never replaced by discovery (IG-Q41). Unconstructible with `wallet-rpc-endpoint` or `wallet-rpc-socket-file`: no server is started (`WALLET_SETTINGS.md` §4) |
 
 ### 12.2 `shekyl-cli` — the scripted subcommands' options
 

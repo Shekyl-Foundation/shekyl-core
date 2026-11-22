@@ -117,6 +117,12 @@ impl std::error::Error for TorConfigError {
 /// The serving host's `tor-file` option, resolved once when the host reads
 /// its options: the Tor binary serving runs, or discovery when unset.
 ///
+/// The value is a `path` (`INPUT_GRAMMAR.md` IG-6), so it is absolute: serving
+/// starts its supervisor again on a cadence, and a relative path would name
+/// whatever file sits at that spelling under the process's working directory
+/// at each start, not the one the operator named. A relative path is refused
+/// before it is looked for.
+///
 /// A path that names no file on this machine is refused at start with its
 /// remedy, never replaced by discovery, as the daemon's `tor-file` is
 /// (`INPUT_GRAMMAR.md` IG-Q41; Rick, 2026-11-21): the option is the
@@ -126,22 +132,34 @@ impl std::error::Error for TorConfigError {
 #[derive(Clone, Debug, Default)]
 pub struct TorFile(Option<std::path::PathBuf>);
 
-/// A `tor-file` that names no file on this machine.
+/// Why a `tor-file` was refused at start.
 #[derive(Debug)]
-pub struct TorFileMissing(std::path::PathBuf);
+pub enum TorFileRefused {
+    /// The path is relative (IG-6: a `path` is absolute).
+    NotAbsolute(std::path::PathBuf),
+    /// The path names no file on this machine (IG-Q41).
+    Missing(std::path::PathBuf),
+}
 
-impl std::fmt::Display for TorFileMissing {
+impl std::fmt::Display for TorFileRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "tor-file {} names no file on this machine: point it at the Tor binary here, \
-             or remove the option to use the bundled one",
-            self.0.display()
-        )
+        match self {
+            Self::NotAbsolute(path) => write!(
+                f,
+                "tor-file {} is not an absolute path: give the Tor binary's full path",
+                path.display()
+            ),
+            Self::Missing(path) => write!(
+                f,
+                "tor-file {} names no file on this machine: point it at the Tor binary \
+                 here, or remove the option to use the bundled one",
+                path.display()
+            ),
+        }
     }
 }
 
-impl std::error::Error for TorFileMissing {}
+impl std::error::Error for TorFileRefused {}
 
 impl TorFile {
     /// Unset: discovery.
@@ -150,17 +168,20 @@ impl TorFile {
         Self(None)
     }
 
-    /// The option as given: `None` is discovery; a path naming a file is that
-    /// file.
+    /// The option as given: `None` is discovery; an absolute path naming a
+    /// file is that file.
     ///
     /// # Errors
     ///
-    /// [`TorFileMissing`] when the path names no file on this machine.
-    pub fn from_option(path: Option<std::path::PathBuf>) -> Result<Self, TorFileMissing> {
+    /// [`TorFileRefused::NotAbsolute`] for a relative path, before it is
+    /// looked for; [`TorFileRefused::Missing`] when the path names no file on
+    /// this machine.
+    pub fn from_option(path: Option<std::path::PathBuf>) -> Result<Self, TorFileRefused> {
         match path {
             None => Ok(Self(None)),
+            Some(path) if !path.is_absolute() => Err(TorFileRefused::NotAbsolute(path)),
             Some(path) if path.is_file() => Ok(Self(Some(path))),
-            Some(path) => Err(TorFileMissing(path)),
+            Some(path) => Err(TorFileRefused::Missing(path)),
         }
     }
 
@@ -321,6 +342,27 @@ mod tests {
         assert!(said.contains(&missing.display().to_string()), "{said}");
         assert!(said.contains("point it at the Tor binary here"), "{said}");
         assert!(said.contains("remove the option"), "{said}");
+        assert!(matches!(refused, TorFileRefused::Missing(_)), "{refused:?}");
+    }
+
+    /// A relative path is refused as one before it is looked for, even when
+    /// it names a file from the working directory: a later start of the
+    /// supervisor would look again from wherever the process then stands.
+    /// `Cargo.toml` is this crate's own, the test's working directory. Red
+    /// edit: drop the absolute check, and the file is taken.
+    #[test]
+    fn a_relative_path_is_refused_even_when_it_names_a_file() {
+        let relative = std::path::PathBuf::from("Cargo.toml");
+        assert!(relative.is_file(), "the test runs in the crate's directory");
+        let refused =
+            TorFile::from_option(Some(relative.clone())).expect_err("a relative path is refused");
+        assert!(
+            matches!(&refused, TorFileRefused::NotAbsolute(path) if *path == relative),
+            "{refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(said.contains("is not an absolute path"), "{said}");
+        assert!(said.contains("Cargo.toml"), "{said}");
     }
 
     #[test]

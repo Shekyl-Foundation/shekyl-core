@@ -90,7 +90,7 @@ table ([`design/INPUT_GRAMMAR.md`](./design/INPUT_GRAMMAR.md) §12.1, §12.4).
 
 | Option     | Binaries                                        | Default | Behaviour |
 |------------|-------------------------------------------------|---------|-----------|
-| `tor-file` | `shekyl-wallet-rpc`; `shekyl-cli` for its own in-process server (refused with `--rpc-url`) | unset: discovery (`tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix) | The Tor binary a serving wallet runs, with the daemon's behaviour (IG-Q41). Resolved once at start (`shekyl_engine_core::TorFile`): a path naming no file on this machine refuses the start with its remedy; a path naming a file is taken and must still pass the pin. Neither is ever replaced by discovery. The GUI starts no serving host, so it has no such option. |
+| `tor-file` | `shekyl-wallet-rpc`; `shekyl-cli` for its own in-process server (refused with `--rpc-url`) | unset: discovery (`tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` on Unix) | The Tor binary a serving wallet runs, with the daemon's behaviour (IG-Q41). Resolved once at start (`shekyl_engine_core::TorFile`): a relative path refuses the start before it is looked for, since a `path` is absolute (IG-6) and serving restarts its supervisor from wherever the process then stands; a path naming no file on this machine refuses the start with its remedy; a path naming a file is taken and must still pass the pin. Neither is ever replaced by discovery. The GUI starts no serving host, so it has no such option. |
 
 ## 5. Sealed wallet state
 
