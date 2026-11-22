@@ -465,7 +465,11 @@ count_pattern() {
 # rust/shekyl-wire/src/shard_frame.rs (`rows_digest_step`, under
 # shekyl/shard-rows-digest-v1). Its tests call the step, not cSHAKE, so they
 # add no site.
-MECH1_EXPECTED=75
+# CF-4b (the trace's per-event digest): 75 -> 76. One production site in
+# rust/shekyl-chain-store/src/tables_digest.rs (`tables_digest_v1`, under
+# shekyl/chain-store/tables-digest/v1). Its tests call the function, not
+# cSHAKE, so they add no site.
+MECH1_EXPECTED=76
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

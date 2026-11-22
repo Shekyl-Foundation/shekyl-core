@@ -295,11 +295,20 @@ rows that the persona scan seals per shard and a body store recomputes from
 a frame (`shekyl-wire` `shard_frame.rs`, `rows_digest_step`). It is a local
 store check, never read by consensus. Its step is pinned by two vectors
 computed with a pure-Python cSHAKE256 checked against NIST SP 800-185
-sample 3, not regenerated from this crate's output. Mechanism 1 is 57.
+sample 3, not regenerated from this crate's output.
+
+The 2026-11-21 refresh (`CF-4b`, trace version 2) adds one mechanism-1
+customization, `shekyl/chain-store/tables-digest/v1`: one 32-byte
+commitment to every table a chain store holds, row for row, that a replay
+trace carries at each indexed event of a forged chain and a replay holds
+the store to (`shekyl-chain-store` `tables_digest.rs`, `tables_digest_v1`).
+It is a comparison against a trace, never read by consensus. Its known
+answer is computed by `scripts/kat/stdlib_cshake.py`, not regenerated from
+the crate's output. Mechanism 1 is 58.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 57 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 58 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 40 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
@@ -312,13 +321,13 @@ three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the w
 derivation and the harness fixture wallet's test-only derivation, which differ only by
 salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 135 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 136 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 124 are
+cross-checks that every frozen row still has its entry there. The remaining 125 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 
