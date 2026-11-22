@@ -249,6 +249,13 @@ pub struct PopBlocks {
 #[derive(Clone, Copy, Debug)]
 pub struct Digest;
 
+/// The store's tables digest now ([`shekyl_chain_store::tables_digest`]):
+/// one commitment to every table it holds, row for row. What a replay
+/// takes at each of a forged chain's indexed events, and what the trace
+/// carries there (`CHAIN_FORGE.md` §8).
+#[derive(Clone, Copy, Debug)]
+pub struct TablesDigest;
+
 /// The redb-side archival state now, as `DRS_E4_ARCHIVAL_WRITER.md`
 /// §3.8.1's rows (`ReadSnapshot::archival_snapshot`): the checkpoint's
 /// other encoding, diffed against the trace's `0x04` record rather than
@@ -849,6 +856,18 @@ impl Message<Digest> for Connector {
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         Ok(self.writer.read()?.logical_state_digest_v0()?)
+    }
+}
+
+impl Message<TablesDigest> for Connector {
+    type Reply = Result<crate::trace::Digest, RunFault>;
+
+    async fn handle(
+        &mut self,
+        _: TablesDigest,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.writer.read()?.tables_digest_v1()?)
     }
 }
 

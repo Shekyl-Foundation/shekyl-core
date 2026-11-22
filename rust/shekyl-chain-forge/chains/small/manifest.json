@@ -19,7 +19,7 @@
   "tip_height": 1505,
   "transactions": 292,
   "corpus_sha256": "bfe1be8e32fe237e29a4ab4bfb0a8d4af9270c7d74d4358fc5c35441630657b3",
-  "trace_sha256": "91cefd1f56a72aa89c51f11edd093caef3f07fc3dd9912f94519d586e46beed0",
+  "trace_sha256": "dad4e9c3b2dfa72dfa21a4ceeb04a70eebf2e461e558efd2e32e36cffd46d276",
   "events": [
     {
       "name": "first-spend-2in",
