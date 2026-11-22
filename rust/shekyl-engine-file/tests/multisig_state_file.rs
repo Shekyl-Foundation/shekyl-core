@@ -86,8 +86,8 @@ fn a_swapped_sibling_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let file = wallet(dir.path());
     let key = *file.session_wrap_key_region_2();
-    file.save_pending_posts(&key, b"pending-body").unwrap();
-    std::fs::copy(file.pending_path(), file.multisig_path()).unwrap();
+    file.save_pscan_state(&key, b"pscan-body").unwrap();
+    std::fs::copy(file.pscan_path(), file.multisig_path()).unwrap();
     let err = file
         .open_multisig_state(&key)
         .expect_err("a swapped sibling must be refused");
@@ -96,7 +96,7 @@ fn a_swapped_sibling_is_refused() {
             err,
             WalletFileError::UnexpectedPayloadKind { expected, got }
                 if expected == PayloadKind::MultisigStatePostcard as u8
-                    && got == PayloadKind::PendingPostBlockPostcard as u8
+                    && got == PayloadKind::PScanStatePostcard as u8
         ),
         "got {err:?}"
     );
