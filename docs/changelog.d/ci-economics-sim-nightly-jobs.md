@@ -1,0 +1,5 @@
+- **The economics sim's nightly lane is split into two jobs, and each output line carries the time it arrived.** The set ran in one job with a 180-minute timeout: 6 111 to 8 001 s on `dev` over a week. On `main` the same commit passed in 10 299 s one night and was cut at 10 817 s the next.
+  - **`economics-sim-reader`** runs the per-mode reader test on its own. It is about half of the set's wall time.
+  - **`economics-sim-ignored`** keeps the narration pins, the steady control's pins and the ESR-11 timing set.
+  - **Timestamps:** `scripts/ci/ignored_set_economics_sim.sh` gains `--pins` and `--reader` lanes. Its output streams line by line with a UTC time, so a run cut by its timeout still names the test that was running. The verdict is cargo's own exit (rule 46).
+  - **When it applies:** the scheduled nightly runs `main`'s copy of the workflow, so the split takes effect there at the next promotion. Until then, the script with no lane runs the whole set, as before.
