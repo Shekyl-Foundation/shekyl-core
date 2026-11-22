@@ -1654,6 +1654,16 @@ impl Transaction {
         counter.bytes
     }
 
+    /// The fee the transaction pays: the `Fcmp` ct's field, zero for a
+    /// `Null` ct (a coinbase pays none).
+    #[must_use]
+    pub const fn fee(&self) -> u64 {
+        match &self.ct {
+            Ct::Fcmp { fee, .. } => *fee,
+            Ct::Null(_) => 0,
+        }
+    }
+
     /// The consensus **transaction weight** — the serialized size **plus** the
     /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
     /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp` at `ac3836de90`
