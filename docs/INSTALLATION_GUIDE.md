@@ -269,9 +269,11 @@ sudo systemctl enable --now shekyld@testnet
 ```
 
 Without a package, apply the same two declarations first, because
-systemd refuses to start a unit whose account does not exist. Check first
-that no login is named `shekyl` (`getent passwd shekyl`): the declaration
-keeps an account that already exists, and the daemon would run as it. Then install
+systemd refuses to start a unit whose account does not exist. They also
+declare the RPC tunnel's account `shekyl-tunnel` and its configuration
+directory `/etc/shekyl-tunnel`. Check first that no login is named `shekyl`
+or `shekyl-tunnel` (`getent passwd shekyl shekyl-tunnel`): the declaration
+keeps an account that already exists, and the service would run as it. Then install
 both units and enable the daemon; the unit runs `/usr/local/bin/shekyld`:
 
 ```bash

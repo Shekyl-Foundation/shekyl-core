@@ -93,7 +93,7 @@ impl MlKemDecapsKey {
             .try_into()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
         let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-            .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
+            .map_err(|e| CryptoError::MalformedDecapsKey(e.into()))?;
         Ok(Self(dk))
     }
 
@@ -321,7 +321,7 @@ impl KeyEncapsulation for HybridX25519MlKem {
             .try_into()
             .map_err(|_| CryptoError::InvalidKeyMaterial)?;
         let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-            .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
+            .map_err(|e| CryptoError::MalformedDecapsKey(e.into()))?;
 
         let ct_bytes: [u8; ML_KEM_768_CT_LEN] = ciphertext
             .ml_kem
@@ -486,5 +486,31 @@ mod tests {
         assert_eq!(pk.ml_kem.len(), ML_KEM_768_EK_LEN);
         assert_eq!(sk.x25519.len(), 32);
         assert_eq!(sk.ml_kem.len(), ML_KEM_768_DK_LEN);
+    }
+
+    /// An ML-KEM-768 decapsulation key with its first secret coefficient
+    /// set to 0xFFF (4095, at least q = 3329): ByteEncode_12 stores it in the
+    /// low 12 bits of the first two bytes.
+    fn with_s_hat_out_of_range(dk: &mut [u8]) {
+        dk[0] = 0xFF;
+        dk[1] |= 0x0F;
+    }
+
+    /// fips203 0.5.0 refuses a decapsulation key with a secret coefficient
+    /// of q or more. Both of this module's parse sites report a malformed
+    /// key, not a failed decapsulation: nothing about the ciphertext is
+    /// wrong.
+    #[test]
+    fn a_decaps_key_with_a_coefficient_of_q_or_more_is_malformed() {
+        let (public, mut secret) = HybridX25519MlKem.keypair_generate().unwrap();
+        let (_, ciphertext) = HybridX25519MlKem.encapsulate(&public).unwrap();
+        assert!(HybridX25519MlKem.decapsulate(&secret, &ciphertext).is_ok());
+        with_s_hat_out_of_range(&mut secret.ml_kem);
+        let err = MlKemDecapsKey::from_bytes(&secret.ml_kem).unwrap_err();
+        assert!(matches!(err, CryptoError::MalformedDecapsKey(_)), "{err:?}");
+        let err = HybridX25519MlKem
+            .decapsulate(&secret, &ciphertext)
+            .unwrap_err();
+        assert!(matches!(err, CryptoError::MalformedDecapsKey(_)), "{err:?}");
     }
 }

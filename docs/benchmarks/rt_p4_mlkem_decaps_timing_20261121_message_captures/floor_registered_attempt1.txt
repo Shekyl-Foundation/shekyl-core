@@ -1,0 +1,145 @@
+head 7297b5cfbc6fe6f697f1eb42d7d6395a21680f9b
+built cross-compiled for aarch64-unknown-linux-gnu on an x86_64 build host, release, --locked, no rustflags
+binary_sha256 655537b150b227f9c2415272508ec61663c30ed011e6a68c39f7df8ffc4e17c3
+rustc rustc 1.94.0 (4a4ef493e 2026-03-02)
+kernel 7.0.0-1023-raspi
+model Raspberry Pi 4 Model B Rev 1.2
+revision c03112
+os Ubuntu 26.04.1 LTS
+== conditions at start
+time 2026-11-22T00:06:46Z
+clock_synchronized yes
+load 0.10 0.51 0.79
+governor ondemand
+cur_freq 1500000
+temp_millic 49173
+vcgencmd_get_throttled: Can't open device file: /dev/vcio
+Try creating a device file with: sudo mknod /dev/vcio c 100 0
+rpi_volt_in0_lcrit_alarm 0 (rpi_volt)
+total_trans 17450
+time_in_state: 600000 1203082;700000 13600;800000 1871;900000 861;1000000 727;1100000 504;1200000 405;1300000 625;1400000 466;1500000 253411
+processes over 0.5% CPU (pid user %cpu etime command):
+     7511 <login>   100       00:00 ps
+     7485 root     36.3       00:00 systemd-timedat
+     7478 <login>   4.7       00:00 tmux: server
+     7405 root      3.1       00:01 sshd-session
+     7481 <login>   2.7       00:00 bash
+== run
+RT-P4 ML-KEM-768 decapsulation timing (fips203), inputs prepared before the loop
+arch=aarch64 os=linux samples_per_comparison=1000000 calibration=10000 crops=100 inputs=registered
+pass: |t| < 4.5 on the message-only comparison (ruled 2026-10-25); null comparisons: |t| < 4.5; control: |t| > 10; the four other comparisons are information
+selfcheck=reference-kpke cases=256 mismatches=0
+  quantile=1 class0=325661 class1=325660 diff=1
+  quantile=5 class0=325827 class1=325827 diff=0
+  quantile=10 class0=325938 class1=325938 diff=0
+  quantile=25 class0=326160 class1=326160 diff=0
+  quantile=50 class0=326790 class1=326790 diff=0
+  quantile=75 class0=334252 class1=334234 diff=18
+  quantile=90 class0=347215 class1=347215 diff=0
+  quantile=95 class0=347863 class1=347863 diff=0
+  quantile=99 class0=348863 class1=348863 diff=0
+  crop=raw n0=499801 n1=500199 mean0=331101.8 mean1=331075.4 diff=26.4 t=1.67
+  max_at_crop=54 cutoff=348419 n0=489130 n1=489208 diff=40.5 t=2.81
+pass-line=invalid-message-fixed-vs-invalid-message-random max_abs_t=2.81 median_ns=326716 n0=499801 n1=500199 verdict=no-evidence
+check=message-classes entries=1010000 decrypt_mismatch=0 not_rejected=0 verdict=as-intended
+  quantile=1 class0=325623 class1=325623 diff=0
+  quantile=5 class0=325789 class1=325790 diff=-1
+  quantile=10 class0=325883 class1=325883 diff=0
+  quantile=25 class0=326123 class1=326123 diff=0
+  quantile=50 class0=326827 class1=326827 diff=0
+  quantile=75 class0=334308 class1=334308 diff=0
+  quantile=90 class0=347308 class1=347308 diff=0
+  quantile=95 class0=348141 class1=348159 diff=-18
+  quantile=99 class0=353493 class1=353807 diff=-314
+  crop=raw n0=501276 n1=498724 mean0=331456.5 mean1=331495.2 diff=-38.7 t=-1.95
+  max_at_crop=raw
+information=fixed-vs-valid max_abs_t=1.95 median_ns=326752 n0=501276 n1=498724 verdict=information
+  quantile=1 class0=325604 class1=325604 diff=0
+  quantile=5 class0=325753 class1=325753 diff=0
+  quantile=10 class0=325864 class1=325864 diff=0
+  quantile=25 class0=326086 class1=326086 diff=0
+  quantile=50 class0=326752 class1=326752 diff=0
+  quantile=75 class0=334197 class1=334197 diff=0
+  quantile=90 class0=347159 class1=347159 diff=0
+  quantile=95 class0=347937 class1=347937 diff=0
+  quantile=99 class0=348827 class1=348826 diff=1
+  crop=raw n0=499396 n1=500604 mean0=331034.6 mean1=331036.2 diff=-1.6 t=-0.10
+  max_at_crop=40 cutoff=347808 n0=469696 n1=471102 diff=-15.8 t=-1.21
+information=fixed-vs-invalid max_abs_t=1.21 median_ns=326827 n0=499396 n1=500604 verdict=information
+  quantile=1 class0=325641 class1=325641 diff=0
+  quantile=5 class0=325790 class1=325790 diff=0
+  quantile=10 class0=325900 class1=325900 diff=0
+  quantile=25 class0=326123 class1=326123 diff=0
+  quantile=50 class0=326771 class1=326771 diff=0
+  quantile=75 class0=334196 class1=334197 diff=-1
+  quantile=90 class0=347178 class1=347196 diff=-18
+  quantile=95 class0=347882 class1=347900 diff=-18
+  quantile=99 class0=348919 class1=348937 diff=-18
+  crop=raw n0=500353 n1=499647 mean0=331105.8 mean1=331116.2 diff=-10.3 t=-0.63
+  max_at_crop=24 cutoff=334753 n0=404614 n1=403644 diff=10.7 t=1.66
+information=fixed-vs-bitflip max_abs_t=1.66 median_ns=326753 n0=500353 n1=499647 verdict=information
+  quantile=1 class0=325678 class1=325678 diff=0
+  quantile=5 class0=325827 class1=325827 diff=0
+  quantile=10 class0=325919 class1=325919 diff=0
+  quantile=25 class0=326141 class1=326141 diff=0
+  quantile=50 class0=326789 class1=326789 diff=0
+  quantile=75 class0=334197 class1=334197 diff=0
+  quantile=90 class0=347234 class1=347252 diff=-18
+  quantile=95 class0=347900 class1=347900 diff=0
+  quantile=99 class0=348975 class1=348993 diff=-18
+  crop=raw n0=500235 n1=499765 mean0=331149.5 mean1=331146.1 diff=3.4 t=0.21
+  max_at_crop=33 cutoff=347400 n0=456302 n1=455424 diff=26.7 t=2.26
+information=valid-vs-invalid max_abs_t=2.26 median_ns=326845 n0=500235 n1=499765 verdict=information
+  quantile=1 class0=325623 class1=325623 diff=0
+  quantile=5 class0=325790 class1=325790 diff=0
+  quantile=10 class0=325900 class1=325901 diff=-1
+  quantile=25 class0=326142 class1=326142 diff=0
+  quantile=50 class0=326808 class1=326808 diff=0
+  quantile=75 class0=334197 class1=334197 diff=0
+  quantile=90 class0=347197 class1=347215 diff=-18
+  quantile=95 class0=347956 class1=347956 diff=0
+  quantile=99 class0=348901 class1=348919 diff=-18
+  crop=raw n0=500220 n1=499780 mean0=331054.1 mean1=331068.1 diff=-14.0 t=-0.89
+  max_at_crop=3 cutoff=326178 n0=132567 n1=132603 diff=-1.4 t=-2.29
+null=invalid-vs-invalid max_abs_t=2.29 median_ns=326698 n0=500220 n1=499780 verdict=no-evidence
+  quantile=1 class0=325623 class1=325623 diff=0
+  quantile=5 class0=325771 class1=325772 diff=-1
+  quantile=10 class0=325864 class1=325864 diff=0
+  quantile=25 class0=326086 class1=326086 diff=0
+  quantile=50 class0=326753 class1=326753 diff=0
+  quantile=75 class0=334160 class1=334160 diff=0
+  quantile=90 class0=347141 class1=347142 diff=-1
+  quantile=95 class0=347937 class1=347937 diff=0
+  quantile=99 class0=348826 class1=348808 diff=18
+  crop=raw n0=499773 n1=500227 mean0=331007.3 mean1=331021.7 diff=-14.3 t=-0.90
+  max_at_crop=10 cutoff=327086 n0=282947 n1=282941 diff=-1.8 t=-1.82
+null=valid-vs-valid max_abs_t=1.82 median_ns=326956 n0=499773 n1=500227 verdict=no-evidence
+  quantile=1 class0=325660 class1=327253 diff=-1593
+  quantile=5 class0=325827 class1=327419 diff=-1592
+  quantile=10 class0=325920 class1=327530 diff=-1610
+  quantile=25 class0=326142 class1=327752 diff=-1610
+  quantile=50 class0=326679 class1=328272 diff=-1593
+  quantile=75 class0=334327 class1=335919 diff=-1592
+  quantile=90 class0=347215 class1=348808 diff=-1593
+  quantile=95 class0=347863 class1=349456 diff=-1593
+  quantile=99 class0=348938 class1=350530 diff=-1592
+  crop=raw n0=500886 n1=499114 mean0=331190.0 mean1=332793.5 diff=-1603.5 t=-96.12
+  max_at_crop=11 cutoff=328234 n0=331750 n1=239780 diff=-1348.0 t=-1331.37
+control=planted-leak fraction=0.005 planted_ns=1634 max_abs_t=1331.37 verdict=detected
+result=PASS pass_line_abs_t=2.81 worst_null_abs_t=2.29 control_abs_t=1331.37
+rc=0
+== conditions at end
+time 2026-11-22T01:14:55Z
+clock_synchronized yes
+load 1.00 1.00 1.00
+governor ondemand
+cur_freq 1500000
+temp_millic 55504
+vcgencmd_get_throttled: Can't open device file: /dev/vcio
+Try creating a device file with: sudo mknod /dev/vcio c 100 0
+rpi_volt_in0_lcrit_alarm 0 (rpi_volt)
+total_trans 18512
+time_in_state: 600000 1203083;700000 13600;800000 1871;900000 861;1000000 739;1100000 585;1200000 462;1300000 691;1400000 467;1500000 662190
+processes over 0.5% CPU (pid user %cpu etime command):
+     8269 <login>   200       00:00 ps
+     8256 root     45.8       00:00 systemd-timedat

@@ -49,7 +49,7 @@ pub(crate) fn command(
 }
 
 pub(crate) fn show(text: &String) {
-    println!("{text}");
+    crate::out_line!("{text}");
 }
 
 /// The report. Asks the daemon only when the wallet does not hold the id,

@@ -79,7 +79,7 @@ fn replies(kind: &str) -> Vec<(String, Value)> {
 /// The subject exists: each directory holds the vectors the README lists.
 #[test]
 fn the_vector_set_is_there() {
-    assert_eq!(replies("known").len(), 26);
+    assert_eq!(replies("known").len(), 27);
     assert_eq!(replies("unknown").len(), 14);
     assert_eq!(replies("refused").len(), 4);
 }
