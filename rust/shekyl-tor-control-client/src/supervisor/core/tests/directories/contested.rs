@@ -11,10 +11,10 @@
 //! check can clear the cause.
 
 use super::super::super::super::posture::{Inbound, InboundCause};
-use super::super::super::{Action, DirectoryAnswer, Input};
+use super::super::super::{Action, Counted, DirectoryAnswer, Exclusion, Input};
 use super::super::probe::{arrival, count, probes, refetches, republishes, secs, uploaded};
 use super::super::said_of;
-use super::{answered, checking, drive, fetched, ours, sent, OURS};
+use super::{answered, checking, checking_with, drive, fetched, ours, sent, OURS};
 
 /// **A newer copy this node did not publish names another publisher, and
 /// nothing is sent** (Rick, 2026-11-21). One directory of eight holds our
@@ -85,6 +85,80 @@ fn a_newer_copy_names_another_publisher_and_sends_nothing() {
             "another publisher leaves the overdue anchor"
         );
         assert_eq!(core.overdue_due(), None, "the overdue check stays hidden");
+    }
+}
+
+/// **A newer copy after this node's own new round names no one** (§4.5,
+/// "Another publisher"). Our counter is read for the check; a round of the same
+/// descriptor that begins after the check was asked may upload a newer
+/// revision of this node's own, and a directory may answer with it. Seven
+/// directories hold ours, one a copy above it, and the round began either
+/// while the counter was being read or while the fetches were out: the
+/// copy is excluded as republished, the seven hold it, and the probe's
+/// arrival is reachable. Fails if the copy names another publisher, which
+/// would hold this node's republish off over its own upload.
+#[test]
+fn a_newer_copy_after_our_own_round_names_no_one() {
+    let newer = DirectoryAnswer::Received {
+        revision_counter: Some(OURS + 1),
+    };
+    let round = || Input::UploadRoundStarted {
+        descriptor: super::super::D0,
+    };
+    for while_drawn in [true, false] {
+        let (mut core, _) = if while_drawn {
+            checking_with(sent(1..=8, "cur", 0), vec![round()])
+        } else {
+            let (mut core, asked) = checking(sent(1..=8, "cur", 0));
+            core.on(round(), secs(16));
+            (core, asked)
+        };
+        for n in 1..=7 {
+            core.on(
+                answered(
+                    n,
+                    "cur",
+                    DirectoryAnswer::Received {
+                        revision_counter: Some(OURS),
+                    },
+                ),
+                secs(16),
+            );
+        }
+        core.on(answered(8, "cur", newer), secs(16));
+        let judged = core.on(arrival(secs(15), secs(18)), secs(18));
+        assert_eq!(republishes(&judged), 0, "while drawn: {while_drawn}");
+        assert!(
+            matches!(core.status().inbound, Inbound::Reachable { .. }),
+            "while drawn: {while_drawn}: {:?}",
+            core.status().inbound
+        );
+        let report: Vec<Counted> = judged
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::DirectoriesSettled(report) => Some(report),
+                _ => None,
+            })
+            .flatten()
+            .map(|line| line.counted)
+            .collect();
+        assert_eq!(
+            report
+                .iter()
+                .filter(|counted| **counted == Counted::Excluded(Exclusion::Republished))
+                .count(),
+            1,
+            "while drawn: {while_drawn}: {report:?}"
+        );
+        assert_eq!(
+            report
+                .iter()
+                .filter(|counted| **counted == Counted::Found)
+                .count(),
+            7,
+            "while drawn: {while_drawn}: {report:?}"
+        );
     }
 }
 

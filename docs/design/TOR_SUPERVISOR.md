@@ -1107,6 +1107,15 @@ address and key, so peers may reach it instead of this node. Stop the other
 one, or give this node its own key." No refetch and no republish: clients
 reach whichever copy is newest, and a republish would only race the other
 host's. A later check that finds no newer copy judges the facet again.
+Our counter is the one read for the check, and this node's own Tor may
+upload a newer revision of that descriptor after it: a newer copy of a
+descriptor whose round began after the check was asked names no one
+(`Exclusion::Republished`). That includes a round
+that began while the counter was being read, since the read runs off the
+loop and its reply is not ordered against Tor's events. The copy is not
+counted, and the next check reads the counter afresh. Tor reports a round's
+upload before any directory can return what it uploaded, so no answer of
+the check's can come ahead of the round that explains it.
 
 **No republish while it cannot help.** While the clock is named, or either
 descriptor's latest round was refused, nothing is republished: a republish

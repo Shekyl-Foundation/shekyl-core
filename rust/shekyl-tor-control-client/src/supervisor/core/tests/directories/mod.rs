@@ -96,6 +96,13 @@ pub(super) fn answered(n: u8, descriptor: &str, answer: DirectoryAnswer) -> Inpu
 /// due at the floor too: their delays count from the round's end. Returns
 /// the core and the 15 s step, every request's actions joined to it.
 fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
+    checking_in_flight_with(fetches, Vec::new())
+}
+
+/// [`checking_in_flight`], with `while_drawn` folded after the probe asks
+/// for its check's list and before the list is folded: what Tor said while
+/// this service's counter was being read off the loop.
+fn checking_in_flight_with(fetches: Vec<DirectoryFetch>, while_drawn: Vec<Input>) -> (Core, Step) {
     let mut core = published();
     let ended = core.on(uploaded(0), 0);
     assert!(
@@ -121,6 +128,9 @@ fn checking_in_flight(fetches: Vec<DirectoryFetch>) -> (Core, Step) {
         "the probe asks for its check's list as it goes out"
     );
     step.actions.extend(fired.actions);
+    for input in while_drawn {
+        step.actions.extend(core.on(input, secs(15)).actions);
+    }
     let drawn = core.on(
         Input::DirectoriesDrawn {
             fetches,
@@ -191,7 +201,16 @@ pub(super) fn drive(
 /// probe in flight, minted at 15 s. Returns the core and the fetches asked
 /// at 15 s.
 pub(super) fn checking(fetches: Vec<DirectoryFetch>) -> (Core, Vec<RelayFingerprint>) {
-    let (mut core, step) = checking_in_flight(fetches);
+    checking_with(fetches, Vec::new())
+}
+
+/// [`checking`], with `while_drawn` folded while the check's list is drawn
+/// ([`checking_in_flight_with`]).
+pub(super) fn checking_with(
+    fetches: Vec<DirectoryFetch>,
+    while_drawn: Vec<Input>,
+) -> (Core, Vec<RelayFingerprint>) {
+    let (mut core, step) = checking_in_flight_with(fetches, while_drawn);
     // The sample is answered already: what is left in flight is fetches.
     let mut asked = fetched(&step);
     let rest = served(

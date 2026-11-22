@@ -159,9 +159,21 @@ impl Core {
 
     /// A round of `descriptor` began. One that was still open, its end
     /// lost, gives way to it.
+    /// A check asked or open learns of it: the counter it reads, or read,
+    /// may be older than what this round uploads (§4.5, "Another
+    /// publisher").
     pub(super) fn round_started(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
         self.take_track(descriptor);
         self.rounds.push(RoundTrack::new(descriptor, now));
+        match &mut self.directories {
+            Some(DirectoryHalf::AwaitingDraw { republished }) => {
+                if !republished.contains(&descriptor) {
+                    republished.push(descriptor);
+                }
+            }
+            Some(DirectoryHalf::Open(check)) => check.round_started(descriptor),
+            None => {}
+        }
         Vec::new()
     }
 
@@ -518,9 +530,10 @@ impl Core {
         ours: Option<ServiceDescriptor>,
         open_uploads: &OpenUploads,
     ) -> Vec<Action> {
-        if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
+        let Some(DirectoryHalf::AwaitingDraw { republished }) = &mut self.directories else {
             return Vec::new();
-        }
+        };
+        let republished = std::mem::take(republished);
         let rows = fetches
             .into_iter()
             .map(|fetch| {
@@ -540,7 +553,11 @@ impl Core {
                 }
             })
             .collect();
-        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(rows, ours)));
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(
+            rows,
+            ours,
+            republished,
+        )));
         self.on_directories_deadline(now)
     }
 
@@ -565,7 +582,7 @@ impl Core {
     pub(super) fn directories_due(&self) -> Option<u64> {
         match &self.directories {
             Some(DirectoryHalf::Open(check)) => check.due(),
-            Some(DirectoryHalf::AwaitingDraw) | None => None,
+            Some(DirectoryHalf::AwaitingDraw { .. }) | None => None,
         }
     }
 
@@ -657,7 +674,7 @@ impl Core {
             return Vec::new();
         };
         let (verdict, report) = match &self.directories {
-            Some(DirectoryHalf::AwaitingDraw) => return Vec::new(),
+            Some(DirectoryHalf::AwaitingDraw { .. }) => return Vec::new(),
             Some(DirectoryHalf::Open(check)) if !check.is_complete() => return Vec::new(),
             Some(DirectoryHalf::Open(check)) => (check.verdict(), check.report()),
             None => {
@@ -823,7 +840,9 @@ impl Core {
                     minted_at: None,
                     attempt,
                 };
-                self.directories = Some(DirectoryHalf::AwaitingDraw);
+                self.directories = Some(DirectoryHalf::AwaitingDraw {
+                    republished: Vec::new(),
+                });
                 vec![Action::Probe, Action::CheckDirectories]
             }
             Probe::InFlight {

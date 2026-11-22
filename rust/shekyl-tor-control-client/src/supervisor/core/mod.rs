@@ -1058,7 +1058,7 @@ impl Core {
             Action::CheckDirectories => {
                 matches!(
                     self.directories,
-                    Some(directories::DirectoryHalf::AwaitingDraw)
+                    Some(directories::DirectoryHalf::AwaitingDraw { .. })
                 )
             }
             Action::FetchFromDirectory { hsdir } => {
