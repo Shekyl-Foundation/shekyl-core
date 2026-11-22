@@ -5497,12 +5497,22 @@ rule, unless named.
   - **Rick's review of 2026-11-22 set these three columns.** The table and
     the nightly slice's table were regenerated under it from the same runs:
     the recorded JSON summary for the full table, one fold for the slice.
-    The narrations do not change.
+    The narrations did not change under it.
+- **The narration's distribution line reads the same way (Rick,
+  2026-11-22).** It said the supply was "emitted before demand reaches
+  the baseline", the misreading the review corrected in the table. It now
+  reads "emitted before blocks first carry the baseline". Only the words
+  move; every figure stays. The nightly slice's narration was regenerated
+  in one fold. The full narration was re-rendered from the recorded JSON
+  summary, with nothing folded again, and its SHA-256 rewritten
+  (`regen_economies_full_narration_digest`). The summary and its SHA-256
+  are unchanged, and the run-8 narration is kept beside the new one.
 - **The full narration and the JSON summary are not committed and not
   hosted.** The repo records the SHA-256 of each in
   `tests/fixtures/economies_full_digests.txt`, in `sha256sum`'s format.
-  The run that produced them is the regeneration at `f8e6f1ec4b` above.
-  They are reproducible outputs, and the on-demand full pin
+  The run that produced them is the regeneration at `f8e6f1ec4b` above;
+  the narration's digest is now that run's summary re-rendered under the
+  wording ruling just above. They are reproducible outputs, and the on-demand full pin
   (`economies_full_run_matches_its_digests_and_table`) is their proof: it
   folds the table once, compares both digests, and derives the table from
   that run's summary. The two files are kept privately, not in this

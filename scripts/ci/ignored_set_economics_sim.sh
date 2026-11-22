@@ -146,7 +146,8 @@ jg_grid::tests::regen_jg_grid_narration_fixtures
 growth_trace::tests::regen_growth_trace_narration_fixture
 whole_economy::tests::regen_economies_nightly_fixtures
 whole_economy::tests::regen_economies_full_fixtures
-whole_economy::tests::regen_economies_table_fixture'
+whole_economy::tests::regen_economies_table_fixture
+whole_economy::tests::regen_economies_full_narration_digest'
 on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture

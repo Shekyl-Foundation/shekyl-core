@@ -1251,7 +1251,7 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
         .collect();
     writeln!(
         out,
-        "   distribution: emitted before demand reaches the baseline {} (at year {})",
+        "   distribution: emitted before blocks first carry the baseline {} (at year {})",
         mr(&adoption, 4),
         mr(&adoption_year, 3)
     )?;
@@ -1588,11 +1588,13 @@ mod tests {
 
     /// [`FULL_DIGESTS`]'s content for `narration` and `json`.
     fn digests(narration: &str, json: &str) -> String {
-        format!(
-            "{}  {FULL_NARRATION_NAME}\n{}  {FULL_SUMMARY_NAME}\n",
-            sha256_hex(narration),
-            sha256_hex(json)
-        )
+        digest_lines(&sha256_hex(narration), &sha256_hex(json))
+    }
+
+    /// [`FULL_DIGESTS`]'s content for the two files' SHA-256, in
+    /// `sha256sum`'s format.
+    fn digest_lines(narration_sha: &str, summary_sha: &str) -> String {
+        format!("{narration_sha}  {FULL_NARRATION_NAME}\n{summary_sha}  {FULL_SUMMARY_NAME}\n")
     }
 
     /// The recorded SHA-256 of the full run's file `name`
@@ -2009,17 +2011,23 @@ mod tests {
         );
     }
 
+    /// The full narration, rendered from the recorded JSON summary
+    /// [`SUMMARY_PATH_ENV`] names.
+    fn narration_from_recorded_summary() -> String {
+        let mut narration = String::new();
+        write_report(&mut narration, &recorded_summary().rows, Scope::Full)
+            .expect("String sink is infallible");
+        narration
+    }
+
     /// The full narration rendered from the recorded JSON summary, against
     /// the narration's recorded SHA-256: the summary is the run's record, so
     /// it renders the run's narration byte for byte without folding again.
     #[test]
     #[ignore = "--economies, the full narration: renders the recorded JSON summary (379 MB) SHEKYL_ECONOMIES_SUMMARY names — on demand"]
     fn economies_narration_renders_from_the_recorded_summary() {
-        let mut narration = String::new();
-        write_report(&mut narration, &recorded_summary().rows, Scope::Full)
-            .expect("String sink is infallible");
         assert_eq!(
-            sha256_hex(&narration),
+            sha256_hex(&narration_from_recorded_summary()),
             recorded_digest(FULL_NARRATION_NAME),
             "the narration rendered from the recorded JSON summary is not the one {FULL_DIGESTS} records"
         );
@@ -2056,6 +2064,34 @@ mod tests {
                     build: || nightly().table.clone(),
                 },
             ],
+        );
+    }
+
+    /// Armed: re-renders the full narration from the recorded JSON summary
+    /// under a cited decision, for a change to the narration's wording, and
+    /// rewrites its SHA-256 in [`FULL_DIGESTS`]. The summary and its SHA-256
+    /// stay: nothing is folded again. The narration is written to
+    /// [`FULL_OUTPUT_DIR_ENV`]'s directory, to be kept beside the summary.
+    #[test]
+    #[ignore = "armed regeneration helper; re-renders the full narration from the recorded JSON summary SHEKYL_ECONOMIES_SUMMARY names and rewrites its digest; requires SHEKYL_PINNED_REGEN_DECISION and SHEKYL_ECONOMIES_FULL_DIR"]
+    fn regen_economies_full_narration_digest() {
+        assert!(
+            std::env::var(FULL_OUTPUT_DIR_ENV).is_ok(),
+            "{FULL_OUTPUT_DIR_ENV} names no directory for the re-rendered narration"
+        );
+        regenerate(
+            "the --economies full narration's digest, re-rendered from the recorded JSON summary",
+            &[Output {
+                path: FULL_DIGESTS,
+                build: || {
+                    let narration = narration_from_recorded_summary();
+                    let dir = std::env::var(FULL_OUTPUT_DIR_ENV).expect("checked above");
+                    let path = std::path::Path::new(&dir).join(FULL_NARRATION_NAME);
+                    std::fs::write(&path, &narration).expect("write the re-rendered narration");
+                    eprintln!("wrote {}", path.display());
+                    digest_lines(&sha256_hex(&narration), &recorded_digest(FULL_SUMMARY_NAME))
+                },
+            }],
         );
     }
 
