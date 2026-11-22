@@ -22,18 +22,22 @@ use std::num::NonZeroUsize;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use zeroize::Zeroizing;
 
+use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
+use shekyl_crypto_pq::output::spend_key_image;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm, PseudoOutBlinds};
 use shekyl_curve_primitives::Commitment;
-use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::proof::{self, BranchLayer, KeyImage, ProveError, ProveInput, ProveResult};
+use shekyl_fcmp::{PqcKeyScalar, PqcLeafScalar};
 use shekyl_network::NetworkId;
 use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash, TxSignableHash};
 use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
-use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION};
+use crate::types::{
+    OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
+};
 use crate::validate::validate_inputs;
 
 /// Construct the proof portion of an FCMP++ transaction.
@@ -324,7 +328,20 @@ fn sign_with<R: RngCore + CryptoRng>(
         extra_outputs,
     )?;
 
-    // ── 8. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Construct-side membership self-verify ─────────────────────
+    // The FCMP++ prover checks almost none of its own work in a release
+    // build, and it takes the tree root without reading it: a proof over a
+    // path that does not reach `tree.tree_root`, or any prover fault, would
+    // otherwise surface only as the daemon's CEN-I15 refusal after the
+    // spend is on the wire. Verify it here with the daemon's verifier, over
+    // the operands the daemon will use: each input's key image `x·Hp(O)`
+    // (what the prefix carries, held to it in `open_spend`), the PQC key
+    // scalar from the spend slot's hybrid public key, the root and the layer
+    // count the proof was made for, and `tx_signable`.
+    let key_images = own_key_images(inputs)?;
+    verify_own_membership(&prove_result, &key_images, inputs, tree, tx_signable)?;
+
+    // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
@@ -336,7 +353,82 @@ fn sign_with<R: RngCore + CryptoRng>(
         reference_block: tree.reference_block,
         tree_depth: tree.tree_depth,
         tx_signable,
+        key_images,
     })
+}
+
+/// Each input's key image `I = x·Hp(O)`, in input order: the images the
+/// membership proof's linkability binds and the spend's prefix must carry.
+fn own_key_images(inputs: &[SpendInput]) -> Result<Vec<KeyImage>, TxBuilderError> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            spend_key_image(
+                &input.spend_key_x,
+                &compute_key_image_gen(&input.output_key),
+            )
+            .map_err(|e| {
+                TxBuilderError::MembershipSelfCheck(format!("input {index}: key image: {e}"))
+            })
+        })
+        .collect()
+}
+
+/// Step 8 of [`sign_with`]: `proved` verifies under
+/// [`shekyl_fcmp::proof::verify`], the function CEN-I15 and the submit
+/// verifier call, against `key_images`, each spend slot's PQC key scalar
+/// (`PqcKeyScalar::from_pqc_auth` over the hybrid public key the slot will
+/// carry, as the consensus verifiers derive it), `tree`'s root and layer
+/// count, and `tx_signable`.
+fn verify_own_membership(
+    proved: &ProveResult,
+    key_images: &[KeyImage],
+    inputs: &[SpendInput],
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+) -> Result<(), TxBuilderError> {
+    let pqc_keys = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            let combined_ss: &[u8; 64] = input.combined_ss[..].try_into().map_err(|_| {
+                TxBuilderError::InvalidCombinedSsLength {
+                    index,
+                    len: input.combined_ss.len(),
+                }
+            })?;
+            let public_key =
+                derive_pqc_public_key(combined_ss, input.output_index).map_err(|e| {
+                    TxBuilderError::MembershipSelfCheck(format!(
+                        "input {index}: PQC public key: {e}"
+                    ))
+                })?;
+            PqcKeyScalar::from_pqc_auth(PqcScheme::Single.id(), &public_key).ok_or_else(|| {
+                TxBuilderError::MembershipSelfCheck(format!(
+                    "input {index}: the PQC public key is not a well-formed single-signer key"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    match proof::verify(
+        &proved.proof,
+        key_images,
+        &proved.pseudo_outs,
+        &pqc_keys,
+        &tree.tree_root,
+        tree.tree_depth,
+        tx_signable,
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TxBuilderError::MembershipSelfCheck(
+            "the proof does not verify against the root, key images and message it was made for"
+                .into(),
+        )),
+        Err(e) => Err(TxBuilderError::MembershipSelfCheck(format!(
+            "the verifier refused the proof: {e}"
+        ))),
+    }
 }
 
 /// An output's real commitment, `C = mask*G + amount*H` (compressed, no

@@ -171,6 +171,25 @@ fn open_spend_with(
             layout.key_images.len()
         )));
     }
+    // The membership proof was verified against `signed.key_images` when it
+    // was made (`sign_with`'s step 8); the prefix must carry those images, or
+    // the consensus verifier, which reads them from the prefix, refuses it.
+    if signed.key_images.len() != spend_slots {
+        return Err(TxBuilderError::WireError(format!(
+            "the proof's key images ({}) and spend inputs ({spend_slots}) disagree",
+            signed.key_images.len()
+        )));
+    }
+    if let Some(index) = layout
+        .key_images
+        .iter()
+        .zip(&signed.key_images)
+        .position(|(laid, proved)| laid != proved.as_bytes())
+    {
+        return Err(TxBuilderError::WireError(format!(
+            "key image {index} is not the image the membership proof was verified against"
+        )));
+    }
     if layout.slots.spend.len() != spend_slots {
         return Err(TxBuilderError::WireError(format!(
             "spend auth slots ({}) and spend inputs ({spend_slots}) disagree",
@@ -360,7 +379,7 @@ impl OpenSpend {
 mod tests {
     use super::*;
     use crate::types::SignedProofs;
-    use shekyl_types::BlockHash;
+    use shekyl_types::{BlockHash, KeyImage};
     use shekyl_units::AtomicUnits;
 
     fn blank_signed() -> SignedProofs {
@@ -375,8 +394,13 @@ mod tests {
             reference_block: BlockHash::from_bytes([0; 32]),
             tree_depth: 2,
             tx_signable: shekyl_types::TxSignableHash::from_bytes([0; 32]),
+            key_images: vec![KeyImage::from_canonical_bytes(LAID_IMAGE)],
         }
     }
+
+    /// The key image [`layout_with`] lays for every spend, and the one
+    /// [`blank_signed`]'s proof was verified against.
+    const LAID_IMAGE: [u8; 32] = [1; 32];
 
     fn blank_spend() -> SpendInput {
         SpendInput {
@@ -396,7 +420,7 @@ mod tests {
 
     fn layout_with(spend_keys: usize, extra_inputs: usize, extra_keys: usize) -> SpendLayout {
         SpendLayout {
-            key_images: vec![[1; 32]; spend_keys],
+            key_images: vec![LAID_IMAGE; spend_keys],
             extra_inputs: vec![Input::Gen(0); extra_inputs],
             output_keys: vec![[2; 32]],
             output_amounts: vec![0],
@@ -426,6 +450,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, TxBuilderError::WireError(_)));
+    }
+
+    #[test]
+    fn open_spend_refuses_a_key_image_the_proof_was_not_verified_against() {
+        let mut layout = layout_with(1, 0, 0);
+        layout.key_images[0][0] ^= 1;
+        let err = open_spend(blank_signed(), &[blank_spend()], layout, &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::WireError(reason)
+                if reason.contains("not the image the membership proof was verified against")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn open_spend_refuses_a_proof_key_image_count_mismatch() {
+        let mut signed = blank_signed();
+        signed.key_images.clear();
+        let err = open_spend(signed, &[blank_spend()], layout_with(1, 0, 0), &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::WireError(reason)
+                if reason.contains("the proof's key images (0) and spend inputs (1) disagree")),
+            "{err:?}"
+        );
     }
 
     #[test]

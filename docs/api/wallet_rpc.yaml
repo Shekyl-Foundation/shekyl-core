@@ -1191,7 +1191,8 @@ components:
                                           branch-layer-mismatch,
                                           invalid-combined-ss-length,
                                           bulletproof, fcmp-prove, pqc-sign,
-                                          wire, balance-self-check — or the
+                                          wire, balance-self-check,
+                                          membership-self-check — or the
                                           wallet's random source and the
                                           state signing reads —
                                           primitive, handle-mismatch,

@@ -162,6 +162,15 @@ pub enum TxBuilderError {
     /// broadcast rather than as a daemon rejection.
     #[error("construct-side CT balance self-check failed: {0}")]
     BalanceSelfCheck(#[from] shekyl_ct_balance::CtBalanceError),
+
+    /// The FCMP++ membership proof just made failed the construct-side
+    /// self-verify: under the consensus verifier, against the key images,
+    /// spend-slot PQC keys, tree root, layer count and `tx_signable` the
+    /// daemon will use, it does not verify. A prover fault, or a tree path
+    /// that does not reach the root the wallet was given, caught before the
+    /// spend leaves the wallet rather than as a daemon rejection.
+    #[error("construct-side membership self-check failed: {0}")]
+    MembershipSelfCheck(String),
 }
 
 /// What a [`TxBuilderError`] means to a wallet, bounded: the variant's
@@ -229,11 +238,12 @@ pub enum InternalSignFault {
     PqcSignError,
     WireError,
     BalanceSelfCheck,
+    MembershipSelfCheck,
 }
 
 impl InternalSignFault {
     /// Every internal fault, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::NoInputs,
         Self::NoOutputs,
         Self::ZeroInputAmount,
@@ -254,6 +264,7 @@ impl InternalSignFault {
         Self::PqcSignError,
         Self::WireError,
         Self::BalanceSelfCheck,
+        Self::MembershipSelfCheck,
     ];
 
     /// The variant's name as one keyword, the closed set a report and the
@@ -281,6 +292,7 @@ impl InternalSignFault {
             Self::PqcSignError => "pqc-sign",
             Self::WireError => "wire",
             Self::BalanceSelfCheck => "balance-self-check",
+            Self::MembershipSelfCheck => "membership-self-check",
         }
     }
 }
@@ -318,6 +330,7 @@ impl TxBuilderError {
             Self::PqcSignError { .. } => I::PqcSignError,
             Self::WireError(_) => I::WireError,
             Self::BalanceSelfCheck(_) => I::BalanceSelfCheck,
+            Self::MembershipSelfCheck(_) => I::MembershipSelfCheck,
         };
         SignFault::Internal(internal)
     }

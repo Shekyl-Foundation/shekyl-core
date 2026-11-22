@@ -1549,6 +1549,31 @@ pub fn compute_output_key_image(
     })
 }
 
+/// The key image `I = x·Hp(O)` of an output whose spend secret `x` the
+/// caller already holds: the signer's (`SpendInput::spend_key_x` in
+/// `shekyl-tx-builder`), which verifies the membership proof it has just made
+/// against the key image the transaction will carry. A caller holding the
+/// wallet's spend key instead derives the image with
+/// [`compute_output_key_image`] or [`crate::held_key_image`].
+///
+/// `hp_of_output` is `Hp(O)`, as for [`compute_output_key_image`].
+///
+/// # Errors
+///
+/// [`CryptoError::InvalidKeyMaterial`] when `spend_secret_x` is not a
+/// canonical scalar, or when `hp_of_output` is not a prime-order point.
+pub fn spend_key_image(
+    spend_secret_x: &[u8; 32],
+    hp_of_output: &[u8; 32],
+) -> Result<crate::key_image::KeyImage, CryptoError> {
+    let hp_point = decompress_hp(hp_of_output)?;
+    let x: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*spend_secret_x))
+            .ok_or(CryptoError::InvalidKeyMaterial)?,
+    );
+    Ok(image_from_spend_scalar(&x, &hp_point))
+}
+
 /// Internal helper: derive ML-DSA-65 keypair from seed bytes, returning
 /// serialized public and secret key.
 fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {

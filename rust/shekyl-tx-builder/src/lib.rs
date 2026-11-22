@@ -18,6 +18,8 @@
 //!   ├─ ECDH amount encoding (compact v2 format)
 //!   ├─ Pseudo-output balancing
 //!   ├─ FCMP++ membership proof via shekyl-fcmp::proof::prove
+//!   ├─ Self-verify: the CT balance, and the membership proof under
+//!   │  shekyl-fcmp::proof::verify (the consensus verifier's own call)
 //!   └─ PQC signing (hybrid Ed25519 + ML-DSA-65) via shekyl-crypto-pq
 //! ```
 //!

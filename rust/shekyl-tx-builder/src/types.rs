@@ -9,7 +9,7 @@
 
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::output_mask::OutputMask;
-use shekyl_types::{BlockHash, CurveTreeRoot, TxSignableHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -213,4 +213,9 @@ pub struct SignedProofs {
     /// transaction to it: a layout whose prefix or base differs from what
     /// was proved is refused there, not by the daemon.
     pub tx_signable: TxSignableHash,
+    /// Each input's key image `x·Hp(O)`, in input order: the images the
+    /// membership proof was verified against before it was returned.
+    /// [`crate::open_spend`] holds the layout's key images to them, so the
+    /// prefix carries exactly the images the proof verifies under.
+    pub key_images: Vec<KeyImage>,
 }

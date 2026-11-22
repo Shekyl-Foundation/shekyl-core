@@ -15,7 +15,9 @@ pub(crate) mod support {
     use shekyl_crypto_pq::output::construct_output;
     use shekyl_curve_generators::biased_hash_to_point;
     use shekyl_fcmp::PqcLeafScalar;
-    use shekyl_tx_builder::{sign_transaction, LeafEntry, OutputInfo, SpendInput, TreeContext};
+    use shekyl_tx_builder::{
+        sign_transaction, LeafEntry, OutputInfo, SpendInput, TreeContext, TxBuilderError,
+    };
     use shekyl_units::AtomicUnits;
 
     const TEST_SEED: [u8; 32] = [7u8; 32];
@@ -212,8 +214,46 @@ pub(crate) mod support {
     /// build. The FCMP++ membership proof dominates it, and every
     /// non-vartime multiexp in that prover takes secret scalars, so this
     /// is the figure that prices a change to multiexp's constant-time
-    /// selection (rule 76: read it on the floor device). Diagnostic, not a
-    /// gate: it prints, and asserts only that every cell signs.
+    /// selection (rule 76: read it on the floor device). It includes the
+    /// builder's membership self-verify, which runs inside
+    /// `sign_transaction`. Diagnostic, not a gate: it prints, and asserts
+    /// only that every cell signs.
+    /// The builder verifies the membership proof it has just made before
+    /// returning it. The prover does not read the tree root it is given, so
+    /// a cell whose root its path does not reach proves without complaint;
+    /// the self-verify refuses it, at one input and depth 1 and at two
+    /// inputs and depth 3 (a layer count above the leaf layer's). The same
+    /// cells with their own root sign, carrying one key image per input.
+    /// Red edit: drop `verify_own_membership` from `sign_with`.
+    #[test]
+    fn a_proof_over_a_root_its_path_does_not_reach_is_refused_before_it_leaves() {
+        for (n_in, depth) in [(1, 1), (2, 3)] {
+            let cell = kat_cell(n_in, depth).unwrap_or_else(|e| panic!("({n_in},{depth}): {e}"));
+            let signed = cell
+                .sign()
+                .unwrap_or_else(|e| panic!("({n_in},{depth}) with its own root: {e}"));
+            assert_eq!(signed.key_images.len(), n_in, "({n_in},{depth})");
+
+            let mut wrong_root = cell.tree.clone();
+            let mut root = *wrong_root.tree_root.as_bytes();
+            root[0] ^= 1;
+            wrong_root.tree_root = shekyl_types::CurveTreeRoot::from_bytes(root);
+            let refused = sign_transaction(
+                &shekyl_network::Network::Testnet.network_id(),
+                cell.prefix_hash,
+                &cell.spend_inputs,
+                std::slice::from_ref(&cell.output),
+                cell.fee,
+                &wrong_root,
+            )
+            .expect_err("a proof over a root its path does not reach must not be returned");
+            assert!(
+                matches!(refused, TxBuilderError::MembershipSelfCheck(_)),
+                "({n_in},{depth}): {refused:?}"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
     fn time_sign_transaction_by_shape() {
