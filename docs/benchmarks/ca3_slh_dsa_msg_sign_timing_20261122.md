@@ -228,6 +228,35 @@ The device's paths and login are written `<clone>`, `<home>` and `<agent>`.
 The unredacted files, whose own SHA256SUMS verified after the copy, are in
 the estate's private captures.
 
-### The laptop
+### The laptop's noise calibration (2026-11-22, before its registered run)
 
-Not yet made: its noise calibration, then its run.
+The run:
+- the maintainer's Windows laptop (Intel Core i9-11950H), made by the agent
+  on that machine;
+- the binary built from a fresh recursive clone of `fda7b1c10f`, `git
+  status` clean, 279 of 279 rustc invocations with `+crt-static`, SHA-256
+  `22a8f02eaefdbf9c61c0fe2d0c52a5e5fd6367ee84a19478187ef7834fefcacd`;
+- `ca3_pq_sign_timing slh-dsa-noise 20261127`, a seed that is not the
+  registered one, 21:26:20 to 21:28:41Z;
+- pinned to logical processor 4 (affinity read back `0x10`), its sibling at
+  1 to 2 %, mains power, Defender on, no browser.
+
+Exit 0, and all 220 signatures verified. The null read 1.43.
+
+- **σ = 14,328,563 ns** (2.5 % of the 578 ms median signature).
+- **δ = 9,611,892 ns.** That is the laptop run's planted control and its
+  stated sensitivity: a pass there excludes a key dependence of 9.61 ms
+  (1.66 % of a signature) or more, and nothing smaller.
+- Relative to a signature, the laptop's noise is about seventy times the
+  floor device's (0.035 %). So the same formula gives it a much coarser
+  sensitivity. The ruling sets δ from each device's own σ, and this is that
+  δ.
+- The laptop run is `ca3_pq_sign_timing slh-dsa 9611892`, from a fresh clone
+  of the commit that carries this section.
+- The output, byte for byte (1,359 bytes, SHA-256 `796ec6e4…`, as the agent
+  hashed it on the machine), is
+  `ca3_slh_dsa_msg_sign_timing_20261122_captures/laptop_slh_noise_200.txt`.
+
+### The laptop's registered run
+
+Not yet made.
