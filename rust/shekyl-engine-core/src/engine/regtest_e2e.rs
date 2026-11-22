@@ -1580,9 +1580,10 @@ impl RegtestDaemon {
     /// confirmation, the settlement loop or a pop leg's re-mine (Rick,
     /// 2026-11-14). The window runs from the block until its bundle is
     /// admitted, or until `h + W₂ − 1`, the last block that can admit it;
-    /// while one is open each block is followed by `per_block`. The producer's reads come due at heights it alone
-    /// knows, so the chain has to reach them: mining stops for none of
-    /// them. A window already open stays open.
+    /// while one is open each block is followed by `per_block`. The
+    /// producer's reads come due at heights it alone knows, so the chain
+    /// has to reach them: mining stops for none of them. A window already
+    /// open stays open.
     pub(super) fn watch_draws(&self, drawn_in: std::ops::Range<u64>, w2: u64, per_block: Duration) {
         let mut slot = self.watch.lock().expect("the watch lock");
         let open = slot.take().map(|watch| watch.open).unwrap_or_default();
