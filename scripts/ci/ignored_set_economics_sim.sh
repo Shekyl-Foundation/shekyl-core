@@ -5,8 +5,8 @@
 # BSD-3-Clause
 #
 # The economics sim's `#[ignore]`d tests, run by nightly.yml's
-# economics-sim-ignored and economics-sim-reader jobs. The set lives here, in the tree under test,
-# and not in the workflow file: a scheduled workflow runs the default
+# economics-sim-ignored job, one leg per lane. The set lives here, in the
+# tree under test, and not in the workflow file: a scheduled workflow runs the default
 # branch's copy of nightly.yml over every branch in its matrix, so a set
 # written there judged `dev` by `main`'s list (#1110: a test deleted on dev
 # on 2026-10-15 stayed named on main's copy). Each branch now judges
@@ -40,9 +40,10 @@
 # The tests are passed by exact name, so the helpers cannot be reached by a
 # filter. Rule 46: the run's output streams through `tee` and a line stamper,
 # both of which read to the end of their input, and the verdict is cargo's
-# own exit from PIPESTATUS, never the pipe's. Each line carries the UTC time
-# it arrived, so a run its job's timeout cuts still names the tests that
-# finished and when (libtest prints `test <name> ... ok` as each one ends).
+# own exit from PIPESTATUS, never the pipe's. Each line carries the UTC date
+# and time it arrived, so a run its job's timeout cuts still names the tests
+# that finished and when (libtest prints `test <name> ... ok` as each one
+# ends).
 #
 # `--check` (ignored_set_mode.sh) stops after this judgement. The per-PR
 # Rust job uses it; the run below is the nightly lane.
@@ -55,13 +56,14 @@
 # green and turned this lane red for three nights
 # (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.31).
 #
-# The nightly lanes, each its own job with its own budget, so one slow test
-# cannot cut the others and a test that grows shows in its own job:
+# The nightly lanes, each a leg of economics-sim-ignored with its own runner
+# and budget, so one slow test cannot cut the others and a test that grows
+# shows in its own leg:
 #   --pins    the narration pins, the steady control's pins and the ESR-11
-#             timing set (economics-sim-ignored);
-#   --reader  the per-mode reader test alone (economics-sim-reader): about
-#             half the set's wall time, measured one test at a time on a
-#             16-vCPU build host at dev 46f266ac08, 2026-11-22.
+#             timing set;
+#   --reader  the per-mode reader test alone: about half the set's wall
+#             time, measured one test at a time on a 16-vCPU build host at
+#             dev 46f266ac08, 2026-11-22.
 # With no lane it runs the whole nightly set, as the jobs did before the
 # split; the schedule runs main's copy of nightly.yml, which calls it that
 # way until the split reaches main.
@@ -80,12 +82,12 @@ case "${1:-}" in
     ;;
   --pins)
     lane=pins
-    budget='180m, the economics-sim-ignored job'
+    budget="180m, the economics-sim-ignored job's pins leg"
     shift
     ;;
   --reader)
     lane=reader
-    budget='180m, the economics-sim-reader job'
+    budget="180m, the economics-sim-ignored job's reader leg"
     shift
     ;;
 esac
@@ -165,12 +167,16 @@ echo "shekyl-economics-sim ignored set: exactly the listed set; the ${lane} lane
 ignored_set_stop_after_judgement
 
 START=$(date +%s)
-# Each line of output as it arrives, with the UTC time, to the job's log;
-# the raw lines to sim-ignored.log for the count below.
+# Each line of output as it arrives, with the UTC date and time, to the
+# job's log; the raw lines to sim-ignored.log for the count below. printf's
+# own `%(...)T` reads the clock without a process per line; TZ is set in
+# the function's own subshell (it runs as a pipeline stage), so the stamp
+# is UTC wherever the runner's zone points.
 stamp() {
   local line
+  export TZ=UTC
   while IFS= read -r line; do
-    printf '%s %s\n' "$(date -u +%H:%M:%SZ)" "$line"
+    printf '%(%Y-%m-%dT%H:%M:%SZ)T %s\n' -1 "$line"
   done
 }
 set +e
