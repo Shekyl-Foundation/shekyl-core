@@ -96,7 +96,7 @@ fn remote_mining_note(dc: &DaemonClient) -> Option<String> {
 
 fn remind_if_remote(dc: &DaemonClient) {
     if let Some(note) = remote_mining_note(dc) {
-        eprintln!("{note}");
+        crate::err_line!("{note}");
     }
 }
 
@@ -165,7 +165,7 @@ pub(crate) fn show_mine_start(val: &Value) {
         .unwrap_or(false)
     {
         let threads = val.get("threads").and_then(Value::as_u64).unwrap_or(0);
-        println!(
+        crate::out_line!(
             "The daemon is already mining with {threads} thread(s). \
              Run \"mine stop\" first to change the thread count."
         );
@@ -173,15 +173,15 @@ pub(crate) fn show_mine_start(val: &Value) {
     }
     let threads = val.get("threads").and_then(Value::as_u64).unwrap_or(0);
     let address = val.get("address").and_then(|v| v.as_str()).unwrap_or("");
-    println!(
+    crate::out_line!(
         "Mining started: {threads} thread(s) on the daemon, paying to {}.",
         short_address(address)
     );
-    println!(
+    crate::out_line!(
         "The daemon owns the mining threads — they keep running after this \
          CLI exits. \"mine stop\" stops them."
     );
-    println!("{BUILT_IN_MINER_NOTICE}");
+    crate::out_line!("{BUILT_IN_MINER_NOTICE}");
 }
 
 /// `mine stop` — stop mining on the daemon.
@@ -202,9 +202,9 @@ pub fn cmd_mine_stop(daemon: Option<&DaemonClient>) -> CommandResult {
 
 pub(crate) fn show_mine_stop(val: &Value) {
     if val.get("idle").and_then(Value::as_bool).unwrap_or(false) {
-        println!("The daemon is not mining.");
+        crate::out_line!("The daemon is not mining.");
     } else {
-        println!("Mining stopped.");
+        crate::out_line!("Mining stopped.");
     }
 }
 
@@ -218,17 +218,17 @@ pub fn cmd_mine_status(daemon: Option<&DaemonClient>) -> CommandResult<MineStatu
 
 pub(crate) fn show_mine_status(status: &MineStatus) {
     if !status.active {
-        println!("Mining: idle.");
+        crate::out_line!("Mining: idle.");
         return;
     }
-    println!("Mining: active");
-    println!("  Threads:    {}", status.threads.0);
-    println!("  Hash rate:  {}", hashes_per_second_text(status.speed));
+    crate::out_line!("Mining: active");
+    crate::out_line!("  Threads:    {}", status.threads.0);
+    crate::out_line!("  Hash rate:  {}", hashes_per_second_text(status.speed));
     if let Some(address) = &status.address.0 {
-        println!("  Paying to:  {}", short_address(&address.0));
+        crate::out_line!("  Paying to:  {}", short_address(&address.0));
     }
     if let Some(difficulty) = status.difficulty.0 {
-        println!("  Difficulty: {}", difficulty.get());
+        crate::out_line!("  Difficulty: {}", difficulty.get());
     }
 }
 

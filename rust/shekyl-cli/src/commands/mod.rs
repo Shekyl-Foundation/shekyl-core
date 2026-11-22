@@ -110,7 +110,7 @@ pub fn run(
                 Err(error) => {
                     // `process::exit` in the caller skips destructors, so the
                     // self-hosted server has to stop before this returns.
-                    rpc.shutdown();
+                    crate::rpc_client::exit_if_output_closed(rpc.shutdown());
                     return Err(error.into());
                 }
             };
@@ -130,10 +130,17 @@ pub fn run(
     };
 
     if matches!(reader, LineReader::Terminal { .. }) && presentation.human() {
-        println!("Welcome to shekyl-cli. Type \"help\" for commands.");
+        crate::out_line!("Welcome to shekyl-cli. Type \"help\" for commands.");
     }
 
     loop {
+        // The output is gone (a reader that ended, `| head`): end the session
+        // the way the end of input does. The shutdown closes the wallet and
+        // removes the server's socket directory; the line says the wallet was
+        // saved only when that close succeeded.
+        if crate::out::output_closed() {
+            crate::rpc_client::end_for_closed_output(rpc.shutdown());
+        }
         let prompt = crate::session::prompt(network.name(), rpc.open_wallet_name().as_deref());
         let resolved = match next_line(&mut reader, &presentation, &rpc, &prompt) {
             Line::Prompt(raw) => {
@@ -156,7 +163,7 @@ pub fn run(
             Line::Skip => continue,
             Line::Done => break,
             Line::Broken(error) => {
-                rpc.shutdown();
+                crate::rpc_client::exit_if_output_closed(rpc.shutdown());
                 return Err(error);
             }
         };
@@ -169,7 +176,10 @@ pub fn run(
                     "help",
                     Ok(serde_json::json!({ "text": text })),
                     |val| {
-                        print!("{}", val.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+                        crate::out_inline!(
+                            "{}",
+                            val.get("text").and_then(|v| v.as_str()).unwrap_or("")
+                        );
                     },
                 )
             }
@@ -179,7 +189,10 @@ pub fn run(
                     "help",
                     Ok(serde_json::json!({ "text": block })),
                     |val| {
-                        println!("{}", val.get("text").and_then(|v| v.as_str()).unwrap_or(""));
+                        crate::out_line!(
+                            "{}",
+                            val.get("text").and_then(|v| v.as_str()).unwrap_or("")
+                        );
                     },
                 ),
                 None => present_failure(
@@ -465,13 +478,13 @@ pub fn run(
                 &presentation,
                 view.label(),
                 daemon_view::command(daemon_client, &view),
-                |text| println!("{text}"),
+                |text| crate::out_line!("{text}"),
             ),
             ResolvedCommand::Enroll(word) => present(
                 &presentation,
                 word.label(),
                 crate::enroll::run(enroll, &word).map_err(crate::outcome::refusal),
-                |text| println!("{text}"),
+                |text| crate::out_line!("{text}"),
             ),
 
             ResolvedCommand::MineStart { threads } => present(
@@ -588,7 +601,7 @@ pub fn run(
             }
         };
         if !ok && !presentation.interactive() {
-            rpc.shutdown();
+            crate::rpc_client::exit_if_output_closed(rpc.shutdown());
             std::process::exit(1);
         }
         if matches!(reader, LineReader::One(_)) {
@@ -600,8 +613,8 @@ pub fn run(
         drop(editor.save_history(hist));
     }
     // Closes any open wallet and stops the self-hosted server (removing its
-    // private UDS socket directory).
-    rpc.shutdown();
+    // private UDS socket directory). A closed output exits from that result.
+    crate::rpc_client::exit_if_output_closed(rpc.shutdown());
     Ok(())
 }
 
@@ -678,7 +691,7 @@ fn next_line(
                 Err(ReadlineError::Interrupted) => Line::Skip,
                 Err(ReadlineError::Eof) => Line::Done,
                 Err(error) => {
-                    eprintln!("Input error: {error}");
+                    crate::err_line!("Input error: {error}");
                     Line::Done
                 }
             }
@@ -749,25 +762,25 @@ fn cmd_version(rpc: &RpcSession, daemon: Option<&crate::daemon::DaemonClient>) -
 }
 
 fn show_version(report: &VersionReport) {
-    println!("shekyl-cli {}", report.cli_version);
+    crate::out_line!("shekyl-cli {}", report.cli_version);
     match &report.wallet_rpc_error {
-        Some(error) => eprintln!("{error}"),
+        Some(error) => crate::err_line!("{error}"),
         None => {
             let server = report.version.as_deref().unwrap_or("?");
             let api = report.api_version.unwrap_or(0);
-            println!("shekyl-wallet-rpc {server} (api v{api})");
+            crate::out_line!("shekyl-wallet-rpc {server} (api v{api})");
         }
     }
     match (&report.daemon_version, &report.daemon_error) {
-        (Some(version), _) => println!("shekyld {version}"),
-        (None, Some(error)) => eprintln!("shekyld: {error}"),
+        (Some(version), _) => crate::out_line!("shekyld {version}"),
+        (None, Some(error)) => crate::err_line!("shekyld: {error}"),
         (None, None) => {}
     }
 }
 
 /// Standard confirmation: "Type 'yes' to confirm: "
 pub(crate) fn confirm(prompt: &str) -> bool {
-    eprint!("{prompt} Type 'yes' to confirm: ");
+    crate::err_inline!("{prompt} Type 'yes' to confirm: ");
     drop(std::io::Write::flush(&mut std::io::stderr()));
     let mut input = String::new();
     if std::io::stdin().read_line(&mut input).is_err() {
@@ -793,7 +806,7 @@ pub(crate) fn confirm_money(
         MoneyGate::Refuse(error) => Err(error),
         MoneyGate::Ask { ignored_yes } => {
             if ignored_yes {
-                eprintln!("--yes is only honored for a script or a one-shot; confirming.");
+                crate::err_line!("--yes is only honored for a script or a one-shot; confirming.");
             }
             if confirm(prompt) {
                 Ok(())

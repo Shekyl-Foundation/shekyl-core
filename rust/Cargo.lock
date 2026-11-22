@@ -5359,6 +5359,7 @@ dependencies = [
  "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-logging",
+ "shekyl-os-account",
  "shekyl-process",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

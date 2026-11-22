@@ -423,6 +423,19 @@ impl Miner {
         }
     }
 
+    /// Every hash the workers have tried since the miner started: each one
+    /// a hash completed and then checked against the job's target. A hash
+    /// cut short by a stop or a cancelled loan is not counted, nor one
+    /// finished after a stop. Never reset and never windowed (unlike
+    /// [`MinerStatus::rate`]); not part of [`MinerStatus`], so the status
+    /// shape the RPC serves is unchanged. Each worker's count is read
+    /// `Relaxed`: the sum is a monotone count, exact once the workers are
+    /// idle, and at worst a few hashes behind while they run.
+    #[must_use]
+    pub fn hashes_tried(&self) -> u64 {
+        self.shared.rates.iter().map(RateRing::total).sum()
+    }
+
     /// Stop every worker without waiting for them, and return them to be
     /// joined.
     ///
