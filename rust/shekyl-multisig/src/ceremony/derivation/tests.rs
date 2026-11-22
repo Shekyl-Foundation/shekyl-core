@@ -5,17 +5,22 @@ use curve25519_dalek::Scalar;
 use rand_core::{OsRng, RngCore};
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
-use shekyl_crypto_pq::kem::{HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation};
+use shekyl_crypto_pq::kem::{
+    HybridKemSecretKey, HybridX25519MlKem, KeyEncapsulation, MlKemDecapsKey, X25519_KEM_CT_LEN,
+};
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
 use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::multisig_output::{
-    construct_multisig_output, open_multisig_entry, MultisigEntryView, MultisigMemberView,
-    MultisigOutputData,
+    construct_multisig_output, MultisigMemberView, MultisigOutputData,
 };
-use shekyl_crypto_pq::output::recover_combined_ss;
+use shekyl_crypto_pq::multisig_receive::{
+    receive_group_output, GroupEntryOnChain, GroupOutputOnChain, GroupReceipt, GroupReceived,
+    GroupScanKeys,
+};
 use shekyl_curve_tree::{
     AssembleInput, AssembledPaths, BlockHeight, ChunkLeaf, Gindex, PathParts, ReferenceBlock,
 };
+use shekyl_engine_state::ChainPlace;
 use shekyl_fcmp::tree::key_image_generator;
 use shekyl_types::{BlockHash, CommitmentBytes, CurveTreeRoot, OneTimePubkey};
 
@@ -189,8 +194,6 @@ fn validated_with(
 struct Paid {
     global_index: u64,
     output: MultisigOutputData,
-    committed_form: MultisigCommittedForm,
-    key_image: KeyImage,
 }
 
 /// The group paid [`INPUTS`], each in its own transaction.
@@ -215,52 +218,73 @@ fn pay_inputs(g: &Group, inputs: &[(u64, u64)]) -> Vec<Paid> {
                 &NET_ID,
             )
             .unwrap();
-            let ss = recover_combined_ss(
-                &g.group_sk.x25519,
-                &g.group_sk.ml_kem,
-                &output.kem_ciphertext_x25519,
-                &output.kem_ciphertext_ml_kem,
-            )
-            .unwrap();
-            let (own_x25519, own_ml_kem) = own_ciphertexts(&output, 0);
-            let committed_form = open_multisig_entry(
-                &ss.0,
-                PAID_OUTPUT_INDEX,
-                &MultisigMemberView {
-                    member_index: 0,
-                    n_total: MEMBERS,
-                    m_required: MEMBERS,
-                    member_kem_secret: &g.member_sks[0],
-                    network: &NET_ID,
-                },
-                &MultisigEntryView {
-                    out_idx: u8::try_from(PAID_OUTPUT_INDEX).unwrap(),
-                    n: MEMBERS,
-                    own_x25519_ct: &own_x25519,
-                    own_ml_kem_ct: &own_ml_kem,
-                    enc_key_hashes: &output.enc_key_hashes,
-                },
-                &output.pqc_leaf.entry_bytes(),
-            )
-            .unwrap();
-            let mut paid = Paid {
+            Paid {
                 global_index,
                 output,
-                committed_form,
-                key_image: KeyImage::from_bytes([0; 32]),
-            };
-            paid.key_image = recover_group_spend(&g.key(), &record(&paid, 0).source())
-                .unwrap()
-                .key_image();
-            paid
+            }
         })
         .collect()
 }
 
-fn own_ciphertexts(output: &MultisigOutputData, member: u8) -> ([u8; 32], Vec<u8>) {
-    let (x25519, ml_kem) =
-        output.member_kem_ciphertexts[usize::from(member)].split_at(X25519_KEM_CT_LEN);
-    (x25519.try_into().unwrap(), ml_kem.to_vec())
+/// `member`'s receive of `output` as the chain carries it: the receipt
+/// `shekyl-crypto-pq` returns, the only thing a coin is made from.
+fn receive(g: &Group, output: &MultisigOutputData, member: u8) -> GroupReceipt {
+    let dk = MlKemDecapsKey::from_bytes(&g.group_sk.ml_kem).unwrap();
+    let b_point = curve25519_dalek::edwards::CompressedEdwardsY(*g.payload.b_group())
+        .decompress()
+        .unwrap();
+    let y_point = curve25519_dalek::edwards::CompressedEdwardsY(*g.payload.y_group())
+        .decompress()
+        .unwrap();
+    let spend_key = (b_point + y_point).compress().to_bytes();
+    let enc_amount = output.enc_amount_wire().to_bytes();
+    let enc_label = output.enc_label_wire().to_bytes();
+    let leaf = output.pqc_leaf.entry_bytes();
+    let on_chain = GroupOutputOnChain {
+        output_index: PAID_OUTPUT_INDEX,
+        output_key: &output.output_key,
+        commitment: &output.commitment,
+        enc_amount: enc_amount[..8].try_into().unwrap(),
+        amount_tag: enc_amount[8],
+        enc_label: enc_label[..8].try_into().unwrap(),
+        label_tag: enc_label[8],
+        view_tag: output.view_tag_prefilter,
+        source_x25519_ct: &output.kem_ciphertext_x25519,
+        source_ml_kem_ct: &output.kem_ciphertext_ml_kem,
+        leaf_entry: Some(&leaf),
+        entry: Some(GroupEntryOnChain {
+            out_idx: u8::try_from(PAID_OUTPUT_INDEX).unwrap(),
+            member_cts: output
+                .member_kem_ciphertexts
+                .iter()
+                .map(|ct| {
+                    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+                    (x25519.try_into().unwrap(), ml_kem)
+                })
+                .collect(),
+            enc_key_hashes: &output.enc_key_hashes,
+        }),
+    };
+    let received = receive_group_output(
+        &GroupScanKeys {
+            view_x25519: &g.group_sk.x25519,
+            view_ml_kem: &dk,
+            spend_key: &spend_key,
+            b: &g.b,
+        },
+        &MultisigMemberView {
+            member_index: member,
+            n_total: MEMBERS,
+            m_required: MEMBERS,
+            member_kem_secret: &g.member_sks[usize::from(member)],
+            network: &NET_ID,
+        },
+        &on_chain,
+    );
+    match received {
+        Some(GroupReceived::Coin(receipt)) => receipt,
+        other => panic!("member {member} receives the group's output: {other:?}"),
+    }
 }
 
 /// The path every paid output has: one leaf chunk holding all of them.
@@ -323,43 +347,43 @@ fn spend(intent: &ValidatedIntent, paid: &[Paid]) -> SpendPaths {
     .expect("a batch of the intent's own inputs at its reference block matches")
 }
 
-/// `member`'s ledger record of `paid`.
-fn record(paid: &Paid, member: u8) -> GroupOutputRecord {
-    let (own_x25519_ct, own_ml_kem_ct) = own_ciphertexts(&paid.output, member);
-    GroupOutputRecord {
-        global_index: paid.global_index,
-        output_index: PAID_OUTPUT_INDEX,
-        output_key: paid.output.output_key,
-        commitment: paid.output.commitment,
-        source_x25519_ct: paid.output.kem_ciphertext_x25519,
-        source_ml_kem_ct: paid.output.kem_ciphertext_ml_kem.clone(),
-        key_image: paid.key_image,
-        leaf_point: paid.output.pqc_leaf.point,
-        committed_form: paid.committed_form.clone(),
-        own_x25519_ct,
-        own_ml_kem_ct,
-    }
+/// `member`'s coin of `paid`, placed at `global_index`.
+fn coin_at(g: &Group, paid: &Paid, member: u8, global_index: u64) -> GroupCoin {
+    GroupCoin::received(
+        &receive(g, &paid.output, member),
+        ChainPlace {
+            tx_hash: shekyl_types::TxHash::from_bytes([0x5A; 32]),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(global_index),
+            block_height: shekyl_types::BlockHeight::from_raw(REFERENCE_HEIGHT - 20),
+            eligible_height: shekyl_types::BlockHeight::from_raw(REFERENCE_HEIGHT - 10),
+        },
+    )
 }
 
-/// A member's ledger, looked up by global index: records only.
+/// `member`'s coin of `paid`, at its own global index.
+fn record(g: &Group, paid: &Paid, member: u8) -> GroupCoin {
+    coin_at(g, paid, member, paid.global_index)
+}
+
+/// A member's ledger, looked up by global index: coins only.
 struct Ledger {
-    records: Vec<GroupOutputRecord>,
+    records: Vec<GroupCoin>,
 }
 
 impl GroupOutputs for Ledger {
-    fn record(&self, global_index: u64) -> Option<GroupOutputRecord> {
+    fn coin(&self, global_index: u64) -> Option<GroupCoin> {
         self.records
             .iter()
-            .find(|r| r.global_index == global_index)
+            .find(|r| r.global_output_index().to_raw() == global_index)
             .cloned()
     }
 }
 
 /// `member`'s ledger of `paid`: its own ciphertexts differ from every
 /// other member's.
-fn ledger(paid: &[Paid], member: u8) -> Ledger {
+fn ledger(g: &Group, paid: &[Paid], member: u8) -> Ledger {
     Ledger {
-        records: paid.iter().map(|p| record(p, member)).collect(),
+        records: paid.iter().map(|p| record(g, p, member)).collect(),
     }
 }
 
@@ -377,8 +401,13 @@ fn an_amount_paired_with_another_input_is_refused() {
     amounts.swap(0, 1);
     let intent = validated_with(&g, bytes32(), &INPUTS, &amounts);
     let paid = pay(&g);
-    let refused =
-        DerivedSpend::derive(spend(&intent, &paid), &ledger(&paid, 0), &g.key(), NET_ID).err();
+    let refused = DerivedSpend::derive(
+        spend(&intent, &paid),
+        &ledger(&g, &paid, 0),
+        &g.key(),
+        NET_ID,
+    )
+    .err();
     assert!(
         matches!(
             refused,
@@ -400,11 +429,8 @@ fn one_coin_recorded_at_two_inputs_of_equal_amount_is_refused() {
     let amounts = EQUAL_INPUTS.map(|(_, amount)| AtomicUnits::from_raw(amount));
     let intent = validated_with(&g, bytes32(), &EQUAL_INPUTS, &amounts);
     let paid = pay_inputs(&g, &EQUAL_INPUTS);
-    let mut held = ledger(&paid, 0);
-    held.records[1] = GroupOutputRecord {
-        global_index: EQUAL_INPUTS[1].0,
-        ..held.records[0].clone()
-    };
+    let mut held = ledger(&g, &paid, 0);
+    held.records[1] = coin_at(&g, &paid[0], 0, EQUAL_INPUTS[1].0);
     let refused = DerivedSpend::derive(spend(&intent, &paid), &held, &g.key(), NET_ID).err();
     assert!(
         matches!(refused, Some(DeriveError::DuplicateKeyImage)),
@@ -508,7 +534,7 @@ fn a_batch_in_another_order_is_matched_to_the_intents_inputs() {
     )
     .expect("the same inputs, in another order, match");
     let [a, b] = [reversed, spend(&intent, &paid)]
-        .map(|paths| DerivedSpend::derive(paths, &ledger(&paid, 0), &g.key(), NET_ID).unwrap());
+        .map(|paths| DerivedSpend::derive(paths, &ledger(&g, &paid, 0), &g.key(), NET_ID).unwrap());
     assert_eq!(a.unsigned.outputs(), b.unsigned.outputs());
     assert!(a
         .inputs
@@ -531,7 +557,7 @@ fn members_holding_one_intent_derive_one_spend() {
         let [a, b] = [0, 1].map(|member| {
             DerivedSpend::derive(
                 spend(&intent, &paid),
-                &ledger(&paid, member),
+                &ledger(&g, &paid, member),
                 &g.key(),
                 NET_ID,
             )
@@ -546,7 +572,10 @@ fn members_holding_one_intent_derive_one_spend() {
             assert_eq!(x.key_image(), y.key_image());
             assert!(*x.pseudo_out_blind == *y.pseudo_out_blind);
             assert_eq!(rerandomized(x), rerandomized(y));
-            assert_ne!(x.record.own_x25519_ct, y.record.own_x25519_ct);
+            assert_ne!(
+                x.coin.own_ciphertext().x25519,
+                y.coin.own_ciphertext().x25519
+            );
         }
         assert!(a
             .inputs
@@ -555,7 +584,7 @@ fn members_holding_one_intent_derive_one_spend() {
 
         let other = DerivedSpend::derive(
             spend(&validated(&g, bytes32()), &paid),
-            &ledger(&paid, 0),
+            &ledger(&g, &paid, 0),
             &g.key(),
             NET_ID,
         )
@@ -592,7 +621,7 @@ fn two_inputs_of_one_intent_never_share_blinds() {
         let paid = pay(&g);
         let derived = DerivedSpend::derive(
             spend(&validated(&g, bytes32()), &paid),
-            &ledger(&paid, 0),
+            &ledger(&g, &paid, 0),
             &g.key(),
             NET_ID,
         )
@@ -629,7 +658,7 @@ fn recipient_i_is_the_output_at_its_position_in_the_intents_order() {
     let paid = pay(&g);
     let derived = DerivedSpend::derive(
         spend(&validated(&g, seed), &paid),
-        &ledger(&paid, 0),
+        &ledger(&g, &paid, 0),
         &g.key(),
         NET_ID,
     )

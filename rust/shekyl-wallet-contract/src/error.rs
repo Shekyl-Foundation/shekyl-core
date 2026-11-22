@@ -2364,6 +2364,7 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
         | F::UnknownNetwork(_) => WalletRpcError::WalletFileCorrupt,
         F::Ledger(
             WalletLedgerError::UnsupportedFormatVersion { .. }
+            | WalletLedgerError::UnsupportedGroupFormatVersion { .. }
             | WalletLedgerError::UnsupportedBlockVersion { .. },
         )
         | F::UnknownCapability(_) => WalletRpcError::WalletFileVersionUnsupported,

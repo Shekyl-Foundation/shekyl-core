@@ -101,6 +101,7 @@ fn assert_typed_or_ok(result: &Result<WalletLedger, WalletLedgerError>) {
     let _classification: &str = match result {
         Ok(_) => "ok",
         Err(WalletLedgerError::UnsupportedFormatVersion { .. }) => "format-version",
+        Err(WalletLedgerError::UnsupportedGroupFormatVersion { .. }) => "group-format-version",
         Err(WalletLedgerError::UnsupportedBlockVersion { .. }) => "block-version",
         Err(WalletLedgerError::Postcard(_)) => "postcard",
         Err(WalletLedgerError::InvariantFailed { .. }) => "invariant",

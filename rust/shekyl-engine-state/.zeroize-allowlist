@@ -51,6 +51,22 @@ rust/shekyl-engine-state/src/payment_request.rs|matched_tx_hash: Option<[u8; 32]
 # scation is applied separately by the tx-builder.
 rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 
+# ── group_ledger.rs ───────────────────────────────────────────────────
+# A group wallet's persisted records (R-30, R-35). The output key `O`, the
+# commitment `C` and the leaf commitment point `CM` are on-chain public
+# values: every chain reader sees them in the output and its `0x07` entry.
+# Each appears in both `GroupCoin` and `RefusedGroupOutput`. The schema line
+# is `CommittedForm`'s hand-written `Schema` naming its wire shape
+# (`Vec<u8>`); it allocates nothing at runtime, and the committed form
+# itself is held in `MultisigCommittedForm`, which wipes on drop.
+rust/shekyl-engine-state/src/group_ledger.rs|ty: <Vec<u8> as postcard_schema::Schema>::SCHEMA.ty
+rust/shekyl-engine-state/src/group_ledger.rs|output_key: [u8; 32]
+rust/shekyl-engine-state/src/group_ledger.rs|commitment: [u8; 32]
+rust/shekyl-engine-state/src/group_ledger.rs|leaf_point: [u8; 32]
+# The test fixture's group spend key `B_group + Y_group`: the public point a
+# payer builds to, carried in the group's address.
+rust/shekyl-engine-state/src/group_ledger_tests.rs|spend_key: [u8; 32]
+
 # ── ledger_indexes.rs ────────────────────────────────────────────────
 #
 # Runtime indexes are rebuilt from `LedgerBlock::transfers` on every

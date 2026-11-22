@@ -28,7 +28,9 @@ use zeroize::Zeroizing;
 use crate::bench_fixtures::{make_bench_wallet, scannable_block_for_recipient};
 use crate::extra::{Extra, ExtraField};
 use crate::scan::{MultisigMemberScan, ScannableBlock};
-use crate::{Scanner, ViewPair};
+use crate::{GroupScanner, Scanner, ViewPair};
+use shekyl_crypto_pq::multisig_receive::GroupReceived;
+use shekyl_engine_state::group_ledger::unspendable_reason;
 
 const NET: [u8; 16] = [0x4E; 16];
 const AMOUNT: u64 = 7_000_000;
@@ -127,7 +129,7 @@ fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> Scannab
     block
 }
 
-fn member_scanner(g: &Group, i: u8) -> Scanner {
+fn member_scanner(g: &Group, i: u8) -> GroupScanner {
     let pair = ViewPair::new(
         g.spend,
         Zeroizing::new(Scalar::from_bytes_mod_order([0x07; 32])),
@@ -136,7 +138,7 @@ fn member_scanner(g: &Group, i: u8) -> Scanner {
     )
     .unwrap();
     let member = &g.member_sks[usize::from(i)];
-    Scanner::new_multisig_member(
+    GroupScanner::new(
         pair,
         Zeroizing::new(g.b.to_bytes()),
         MultisigMemberScan::new(
@@ -149,11 +151,21 @@ fn member_scanner(g: &Group, i: u8) -> Scanner {
     )
 }
 
+/// Scan `block` as member `i`: the one output it finds, as the reason the
+/// member's receive refused it, or `None` for a coin.
 fn scan_one(g: &Group, i: u8, block: ScannableBlock) -> Option<UnspendableReason> {
     let found = member_scanner(g, i).scan(block).unwrap().into_inner();
     assert_eq!(found.len(), 1, "member {i} finds the group's output");
-    assert_eq!(found[0].amount().to_raw(), AMOUNT);
-    found[0].unspendable()
+    match found[0].received() {
+        GroupReceived::Coin(receipt) => {
+            assert_eq!(receipt.amount(), AMOUNT);
+            None
+        }
+        GroupReceived::Refused(refusal) => {
+            assert_eq!(refusal.amount(), AMOUNT);
+            Some(unspendable_reason(refusal.reason()))
+        }
+    }
 }
 
 /// The slice's receive gate: the extra passes CEN-I19 (with its `0x0D`

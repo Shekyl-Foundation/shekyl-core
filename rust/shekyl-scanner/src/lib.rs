@@ -82,11 +82,12 @@ mod pqc_leaf_verdict_tests;
 
 pub use balance::BalanceSummary;
 pub use extra::{Extra, ExtraField};
-pub use ledger_ext::{LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
+pub use ledger_ext::{GroupLedgerBlockExt, LedgerIndexesExt, TransferDetailsExt, WalletLedgerExt};
+pub use multisig_scan::{GroupScanned, GroupScannedOutput};
 pub use output::WalletOutput;
 pub use scan::{
-    GuaranteedScanner, MultisigMemberScan, RecoveredWalletOutput, ScanError, ScanOutcome,
-    ScannableBlock, Scanner, Timelocked, MAX_OUTPUTS,
+    GroupScanOutcome, GroupScanner, GuaranteedScanner, MultisigMemberScan, RecoveredWalletOutput,
+    ScanError, ScanOutcome, ScannableBlock, Scanner, Timelocked, MAX_OUTPUTS,
 };
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 

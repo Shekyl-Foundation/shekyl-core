@@ -280,10 +280,10 @@ pub fn construct_multisig_output(
     })
 }
 
-/// Why a member's receive check refuses an output it otherwise owns. Every
-/// variant leaves the output received but unspendable by this group as
-/// published: the sender can always burn an output, and this is how a
-/// member sees that it did.
+/// Why a member's receive check refuses an output it otherwise owns. The
+/// sender can always burn an output, and this is how a member sees that it
+/// did. [`Self::reach`] says whether the whole group lost it or only this
+/// member's signature (R-35).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum MultisigReceiveError {
     /// The entry's member count is not the group's, or this member's index
@@ -308,6 +308,35 @@ pub enum MultisigReceiveError {
     /// from the decrypted hashes: a hash for some other member is wrong.
     #[error("the output's leaf does not commit to the entry's key hashes")]
     LeafMismatch,
+}
+
+/// Who an output that failed the member check is lost to (R-35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalReach {
+    /// No member can spend it: the group-level commitment does not hold.
+    /// It counts in no balance.
+    Everyone,
+    /// The group can spend it and this member cannot sign for it: the
+    /// group-level checks passed and this member's own entry did not. It is
+    /// group funds, and this member cannot be a signer of an intent that
+    /// spends it.
+    ThisMember,
+}
+
+impl MultisigReceiveError {
+    /// Who the output is lost to. The member check runs every
+    /// group-level check before this member's own, so a member-level
+    /// refusal means the group-level checks passed.
+    #[must_use]
+    pub const fn reach(self) -> RefusalReach {
+        match self {
+            Self::GroupSize
+            | Self::HashesUndecryptable
+            | Self::DuplicateKeyHash
+            | Self::LeafMismatch => RefusalReach::Everyone,
+            Self::MemberDecap | Self::MemberKeyHash => RefusalReach::ThisMember,
+        }
+    }
 }
 
 /// The receive-side context one member brings to an output its group owns.
@@ -344,18 +373,29 @@ pub struct MultisigEntryView<'a> {
 }
 
 /// Check, as one member, that an output the group owns can be spent by the
-/// group as published (`docs/PQC_MULTISIG.md` §8): decrypt the key hashes
-/// under the group secret, check this member's own hash against its key,
-/// and check that the published leaf commits to the committed form the
-/// hashes make. Returns the committed form, which a spend reveals.
+/// group as published (`docs/PQC_MULTISIG.md` §8). Returns the committed
+/// form, which a spend reveals.
 ///
-/// `group_combined_ss` is the group KEM secret the solo scanner recovered
-/// for this output, and `published_leaf` the output's `0x07` entry.
+/// The group-level checks run first, and every member reaches the same
+/// verdict on them: the entry is for a group of this size, the key hashes
+/// decrypt under the group secret, no hash repeats, and the published leaf
+/// commits to the committed form the hashes make. Only then does this
+/// member check its own entry: its ciphertext decapsulates and the hash at
+/// its index is its key's. So a refusal from the second half
+/// ([`MultisigReceiveError::reach`] is [`RefusalReach::ThisMember`]) is
+/// one where the group can still spend the output and this member cannot
+/// sign for it (R-35).
+///
+/// `group_combined_ss` is the group KEM secret recovered for this output,
+/// and `published_leaf` the output's `0x07` entry. Crate-private: a wallet
+/// receives a group output through
+/// [`crate::multisig_receive::receive_group_output`], whose receipt only
+/// this crate can make.
 ///
 /// # Errors
 ///
 /// [`MultisigReceiveError`], naming the first check that failed.
-pub fn open_multisig_entry(
+pub(crate) fn open_multisig_entry(
     group_combined_ss: &[u8; 64],
     output_index: u64,
     member: &MultisigMemberView<'_>,
@@ -366,6 +406,8 @@ pub fn open_multisig_entry(
     if entry.n != n || member.member_index >= n {
         return Err(MultisigReceiveError::GroupSize);
     }
+
+    // --- The group's checks: every member reaches the same verdict. ---
 
     let key = derive_multisig_key_hashes_key(group_combined_ss, output_index);
     let plaintext = Zeroizing::new(
@@ -401,6 +443,16 @@ pub fn open_multisig_entry(
         }
     }
 
+    let committed = MultisigCommittedForm::new(member.m_required, std::mem::take(&mut *key_hashes))
+        .map_err(|_| MultisigReceiveError::GroupSize)?;
+    let leaf = pqc_leaf_commitment(group_combined_ss, output_index, &committed.to_bytes())
+        .map_err(|_| MultisigReceiveError::LeafMismatch)?;
+    if !bool::from(leaf.entry_bytes().ct_eq(published_leaf)) {
+        return Err(MultisigReceiveError::LeafMismatch);
+    }
+
+    // --- This member's own entry: the group can spend the output either way. ---
+
     let member_ss = recover_combined_ss(
         &member.member_kem_secret.x25519,
         &member.member_kem_secret.ml_kem,
@@ -411,16 +463,8 @@ pub fn open_multisig_entry(
     let (member_pk, _member_sk) = derive_multisig_member_keypair(&member_ss.0)
         .map_err(|_| MultisigReceiveError::MemberDecap)?;
     let own_hash = multisig_key_hash(member.network, &member_pk);
-    if !bool::from(own_hash.ct_eq(&key_hashes[usize::from(member.member_index)])) {
+    if !bool::from(own_hash.ct_eq(&committed.key_hashes()[usize::from(member.member_index)])) {
         return Err(MultisigReceiveError::MemberKeyHash);
-    }
-
-    let committed = MultisigCommittedForm::new(member.m_required, std::mem::take(&mut *key_hashes))
-        .map_err(|_| MultisigReceiveError::GroupSize)?;
-    let leaf = pqc_leaf_commitment(group_combined_ss, output_index, &committed.to_bytes())
-        .map_err(|_| MultisigReceiveError::LeafMismatch)?;
-    if !bool::from(leaf.entry_bytes().ct_eq(published_leaf)) {
-        return Err(MultisigReceiveError::LeafMismatch);
     }
     Ok(committed)
 }

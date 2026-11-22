@@ -16,15 +16,15 @@ use super::{random_scalar, Paid, AMOUNTS, NET};
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
 use shekyl_address::multisig_address::{address_fingerprint, MultisigAddressPayload};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
-use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN};
+use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::label::SENTINEL_PLAINTEXT;
-use shekyl_crypto_pq::multisig::MultisigCommittedForm;
 use shekyl_crypto_pq::multisig_intent::IntentSeed;
 use shekyl_crypto_pq::signature::{verify_pqc_auth, HYBRID_SCHEME_ID_ED25519_ML_DSA_65};
 use shekyl_curve_tree::{
     AssembleInput, AssembledPaths, BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex,
     OneTimePubkey, PathParts, ReferenceBlock,
 };
+use shekyl_engine_state::{ChainPlace, GroupCoin, GroupOutput, GroupWalletLedger};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
 use shekyl_multisig::ceremony::nonce::InputInUse;
@@ -32,8 +32,8 @@ use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
 use shekyl_multisig::{
-    import, DerivedSpend, GroupOutputRecord, GroupOutputs, HeldNonceStore, Incoming, LedgerView,
-    LiveCeremonies, MemberFile, SigningContext, SpendPaths, ValidatedIntent,
+    import, DerivedSpend, GroupOutputs, HeldNonceStore, Incoming, LedgerView, LiveCeremonies,
+    MemberFile, SigningContext, SpendPaths, ValidatedIntent,
 };
 use shekyl_tx_weight::{
     predict_spend_weight, GroupSize, InputCount, OutputCount, Signer, SpendShape,
@@ -185,46 +185,78 @@ pub fn validate(file: &MemberFile, intent: SpendIntent) -> ValidatedIntent {
 }
 
 /// A member's ledger of the group's outputs, as a test hands it to the
-/// derivation: the records in any order, looked up by global index. No
+/// derivation: the coins in any order, looked up by global index. No
 /// path: those come from the tree, as one batch (R-26).
-pub struct Ledger(pub Vec<GroupOutputRecord>);
+pub struct Ledger(pub Vec<GroupCoin>);
 
 impl GroupOutputs for Ledger {
-    fn record(&self, global_index: u64) -> Option<GroupOutputRecord> {
+    fn coin(&self, global_index: u64) -> Option<GroupCoin> {
         self.0
             .iter()
-            .find(|record| record.global_index == global_index)
+            .find(|coin| coin.global_output_index().to_raw() == global_index)
             .cloned()
     }
+}
+
+/// `file`'s coin of `paid`'s output `which`, placed at `global_index`: made
+/// from the receipt the member's receive check returns, as a scan makes it.
+pub fn coin_at(file: &MemberFile, paid: &Paid, which: usize, global_index: u64) -> GroupCoin {
+    let (out, output_index, _) = &paid.outputs[which];
+    GroupCoin::received(
+        &super::receive(file, out, *output_index),
+        ChainPlace {
+            tx_hash: shekyl_types::TxHash::from_bytes([0x5A; 32]),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(global_index),
+            block_height: shekyl_types::BlockHeight::from_raw(1),
+            eligible_height: shekyl_types::BlockHeight::from_raw(2),
+        },
+    )
 }
 
 /// `file`'s ledger of `paid`'s outputs: public values, the `0x06`
 /// ciphertext, and its own `0x0D` ciphertexts. No secret.
 pub fn ledger(file: &MemberFile, paid: &Paid) -> Ledger {
-    let me = usize::from(file.member_index());
     Ledger(
-        paid.outputs
+        GLOBAL_INDICES
             .iter()
-            .zip(&paid.scans)
-            .zip(GLOBAL_INDICES)
-            .map(|(((out, output_index, _), s), global_index)| {
-                let (x25519, ml_kem) = out.member_kem_ciphertexts[me].split_at(X25519_KEM_CT_LEN);
-                GroupOutputRecord {
-                    global_index,
-                    output_index: *output_index,
-                    output_key: out.output_key,
-                    commitment: out.commitment,
-                    source_x25519_ct: out.kem_ciphertext_x25519,
-                    source_ml_kem_ct: out.kem_ciphertext_ml_kem.clone(),
-                    key_image: s.key_image,
-                    leaf_point: out.pqc_leaf.point,
-                    committed_form: MultisigCommittedForm::from_bytes(&s.committed_form).unwrap(),
-                    own_x25519_ct: x25519.try_into().unwrap(),
-                    own_ml_kem_ct: ml_kem.to_vec(),
-                }
-            })
+            .enumerate()
+            .map(|(which, &global_index)| coin_at(file, paid, which, global_index))
             .collect(),
     )
+}
+
+/// `coin` with one field's bytes, as `field` reads them, replaced by
+/// `other`'s. A coin is made from its receipt or read back from the
+/// wallet's own ledger file, so a coin that differs from its receipt is a
+/// ledger file that does: this edits the group ledger's encoding and reads
+/// it back, as a damaged or forged file would be read.
+pub fn with_field_of(
+    coin: &GroupCoin,
+    other: &GroupCoin,
+    field: impl Fn(&GroupCoin) -> Vec<u8>,
+) -> GroupCoin {
+    let mut file = GroupWalletLedger::empty();
+    file.ledger.outputs.push(GroupOutput::Coin(coin.clone()));
+    let mut bytes = file.to_postcard_bytes().unwrap();
+    let (mine, theirs) = (field(coin), field(other));
+    assert_eq!(mine.len(), theirs.len(), "the field has one width");
+    let hits: Vec<usize> = bytes
+        .windows(mine.len())
+        .enumerate()
+        .filter(|(_, window)| *window == mine.as_slice())
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "the field's bytes appear once in the encoding"
+    );
+    bytes[hits[0]..hits[0] + mine.len()].copy_from_slice(&theirs);
+    let read = GroupWalletLedger::from_postcard_bytes(&bytes).unwrap();
+    match read.ledger.outputs.into_iter().next() {
+        Some(GroupOutput::Coin(coin)) => coin,
+        other => panic!("the file holds the coin: {other:?}"),
+    }
 }
 
 /// What a wallet asks its tree for, for each of `paid`'s outputs, beside

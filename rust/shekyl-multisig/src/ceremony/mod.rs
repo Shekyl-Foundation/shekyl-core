@@ -68,9 +68,7 @@ pub mod roles;
 pub mod spend_paths;
 
 pub use context::{ContextError, SigningContext};
-pub use derivation::{
-    DeriveError, DerivedSpend, GroupOutputRecord, GroupOutputs, InputContext, UnsignedSpend,
-};
+pub use derivation::{DeriveError, DerivedSpend, GroupOutputs, InputContext, UnsignedSpend};
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
     AlreadyHeld, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies, NotHeld,

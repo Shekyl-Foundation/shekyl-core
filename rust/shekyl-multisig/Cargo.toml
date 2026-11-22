@@ -35,6 +35,9 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # enforces the "no transport" ban.
 shekyl-address = { path = "../shekyl-address" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# The group ledger's coins (`GroupCoin`): the derivation reads a member's
+# coins from it (R-30). A persisted-state crate; no transport.
+shekyl-engine-state = { path = "../shekyl-engine-state" }
 # Every input's pseudo-out blind, the last balancing the outputs' masks
 # (`PseudoOutBlinds::from_intent`).
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
