@@ -1,6 +1,6 @@
 # CEN-I4 — deriving the transaction input cap (`ICD-`)
 
-**Status:** OPEN — Round 0 RULED except three open items (Rick, 2026-11-22; §11), docs only.
+**Status:** OPEN — Round 0 RULED except the fragment count (Rick, 2026-11-22; §11), docs only.
 Consensus surface: the design is ruled here before any code moves, then one
 rule-07 cutover PR moves every consumer together. Identifier family `ICD-`
 (registered in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2):
@@ -17,10 +17,10 @@ derived from the cap; `ICD-R3` the maximum tree depth is derived here;
 named floor device for every embargo cell; `ICD-R6` CEN-I4 stays an explicit
 rule; `ICD-R7` no rounding to a padding boundary; `ICD-R8` the coupling to the
 weight limit is accepted; `ICD-R9` the maximum tree depth is 14; `ICD-R10` the
-standoff reserve is computed. **Handed to EUP-5 G (§10):** `ICD-Q6`,
-`ICD-F15`. **Still open (§11):** `ICD-Q8` the rule order `ICD-R6`'s test
-needs; the row-floor decision (`ICD-F16`); the cover carrier's fragment
-count.
+standoff reserve is computed; `ICD-R11` the cap is checked before the weight;
+`ICD-R12` the row floors stay. **Handed to EUP-5 G (§10):** `ICD-Q6`,
+`ICD-F15`. **Still open (§11):** the cover carrier's fragment count, after the
+cover-by-shape run ends on 2026-11-24.
 
 ## 0. What the cap is, and why it is decided now
 
@@ -248,7 +248,7 @@ What this shows:
 
 **`ICD-F16` — the two row floors are the smallest the vector-commitment tape
 accepts; lowering them is a circuit change, not a tuning. Traced 2026-11-22;
-the decision is Rick's (§11).** `ipa_rows` raises the padded rows to at least 256 Selene
+closed by `ICD-R12` (the floors stay).** `ipa_rows` raises the padded rows to at least 256 Selene
 and 128 Helios (`C1_TARGET_ROWS`, `C2_TARGET_ROWS`,
 `rust/shekyl-oxide/crypto/fcmps/src/lib.rs:74-75`). One input at depth 2
 needs only 111 and 32 rows, which would pad to 128 and 32, so the question
@@ -284,7 +284,7 @@ can lay out.**
 the layout, so there is no "lowered" configuration to time. Lowering them
 means changing the word length or the leaf branch's layout, a departure from
 the circuit as upstream had it audited, for a saving that exists only below
-depth 6. Whether that departure is worth it is Rick's decision (§11). (The model also shows the trade's other
+depth 6. Ruled 2026-11-22: not worth it; the floors stay (`ICD-R12`). (The model also shows the trade's other
 direction, for the record only: with more rows the same witness needs fewer
 commitments, so raising the floors shrinks small proofs, by about 30 % for one
 input at depth 2 at 2 048 / 512 rows, at the price of a larger inner-product
@@ -928,8 +928,8 @@ other unit's numbers are diagnostics whatever their cause.
 
 ### Second rulings — RULED 2026-11-22 (Rick, at `97dda2dd76`)
 
-These close every question the round had open except the cover carrier's
-fragment count and the row-floor decision (§11).
+These, with `ICD-R11` and `ICD-R12` after them, close every question the round
+had open except the cover carrier's fragment count (§11).
 
 #### `ICD-R6` — CEN-I4 stays an explicit rule at the derived value (was `ICD-Q1`) — RULED
 
@@ -938,7 +938,7 @@ a test pins that a 23-input transaction is refused with CEN-I4's name. This
 document's later recommendation to delete the rule, made after review showed
 that no path reaches the chain-rules I4 arm today, is superseded. The ruling's
 test cannot pass on today's order, so the cutover makes CEN-I4 the refusal
-that fires (confirmation asked as `ICD-Q8`, §11):
+that fires (the order is ruled as `ICD-R11`):
 
 - **In a block,** `tx_form` judges CEN-I4 in its first band, immediately
   before CEN-H3: the count bound before the weight bound. Today H3 runs first
@@ -1041,6 +1041,35 @@ fee a `Release` actually pays is quantized up to it.
   two dependencies and restates that sentence; the rung assertion stays in
   `shekyl-engine-core`, where the rung is visible.
 
+#### `ICD-R11` — the cap is checked before the weight (was `ICD-Q8`) — RULED
+
+`tx_form` judges CEN-I4 immediately before CEN-H3 in its first band, and the
+wire parser's count refusal cites CEN-I4, so `ICD-R6`'s test holds on both
+paths. Today H3 is in the first band and I4 in the third
+(`rust/shekyl-chain-rules/src/validate.rs:826`, `:830`).
+
+The comment at `validate.rs:807` ("Pulling I1 or I4 ahead of H21 would hide
+the class failure") exists so that a malformed bond post is named by its shape
+rule, not an input rule. For I4 it no longer applies: every transaction I4
+refuses is also over the weight limit (§2.2, §2.3; a transaction carries at
+most one bond-post or emission input, and those are heavier than a spend
+input), and H3 already runs ahead of the shape rules, so an over-cap
+transaction is named by H3 today, never by its shape. Moving I4 just before H3
+hides nothing that is not hidden now: only the name on the refusal changes, and
+the cheaper check runs first. **The reasoning does not cover CEN-I1** (the
+two-output minimum), so I1 stays in the third band; the cutover rewrites the
+comment to say so.
+
+#### `ICD-R12` — the row floors stay; `ICD-F16` closed — RULED
+
+`C1_TARGET_ROWS` and `C2_TARGET_ROWS` stay as they are. The trace holds: the
+tape places witness values in `COMMITMENT_WORD_LEN = 128`-slot words
+(`rust/shekyl-oxide/crypto/fcmps/src/tape.rs:20`), and the floors are the
+smallest sizes that layout can hold, not a tuning knob. Going lower means
+changing the circuit's word length, a departure from what upstream had audited,
+for one or two 11–15 % steps on small spends that end at about 18 million
+outputs. Not done.
+
 #### Cutover additions (Rick, 2026-11-22)
 
 - **The legal-shape function is scoped to consensus.** It answers what can be
@@ -1095,31 +1124,6 @@ fee a `Release` actually pays is quantized up to it.
   table stays with the cutover.
 
 ## 11. Still open
-
-### `ICD-Q8` — confirm the rule order `ICD-R6` needs
-
-**The problem.** `ICD-R6`'s test (a 23-input transaction refused with CEN-I4's
-name) cannot pass while `tx_form` runs CEN-H3 before CEN-I4, since every such
-transaction is over the weight limit.
-
-**The question.** May the cutover judge CEN-I4 immediately before CEN-H3 in
-`tx_form`'s first band, and have the wire parser's count refusal cite CEN-I4?
-
-**The options.** (a) Yes, as `ICD-R6` above describes: only the row naming the
-refusal changes, and the count, the cheaper check, runs first. (b) Keep the
-order and pin the test through CEN-I4's conformance entry, the one route that
-reaches the arm today.
-
-**Recommendation: (a).** It makes the ruled rule the live refusal on both
-paths, instead of an arm reached only by a hand-built test.
-
-### The minimum-row floors (`ICD-F16`)
-
-The trace is done (§2.5): the two floors are the smallest row counts the
-vector-commitment tape can lay out, and going below them changes the circuit's
-word length or leaf layout. Whether a saving that exists only below depth 6 is
-worth departing from the circuit as upstream had it audited is Rick's to
-decide.
 
 ### The cover carrier's fragment count
 
@@ -1182,3 +1186,9 @@ the relay lane's round (`ICD-R4`).
   than two recipients passes structural validation), the GUI's proof-size
   literal, and the sim's two-output calibration run. Still open: `ICD-Q8`, the
   row-floor decision, the fragment count.
+- **2026-11-22 — `ICD-R11` and `ICD-R12` (Rick).** The cap is checked before
+  the weight (was `ICD-Q8`); the comment that seemed to forbid it guards CEN-I1,
+  not CEN-I4, and is rewritten in the cutover. The row floors stay and
+  `ICD-F16` closes. The 360-million-year figure and the computed reserve's new
+  `shekyl-standoff` dependency on the wire crate are confirmed. Open: the
+  fragment count only.
