@@ -428,13 +428,17 @@ fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
 }
 
 /// **With umask 002, nothing but the owner can reach the socket at any
-/// point during startup** (Rick, 2026-11-21). The socket's own mode is set
-/// only after its bind, so the directory carries the startup: the server
-/// makes a missing directory 0700 whatever the umask, and it is 0700 from
-/// the first moment it exists, polled while the server starts. The control:
+/// point during startup** (Rick, 2026-11-21). The socket is 0600 from
+/// before it listens (the listeners' shared bind, Rick, 2026-11-22), so the
+/// first connect that succeeds finds it 0600; the directory stays the
+/// containment: the server makes a missing directory 0700 whatever the
+/// umask, and it is 0700 from the first moment it exists, polled while the
+/// server starts. The control:
 /// a directory the child made under the same umask with mode 0777 is
-/// group-writable (0775), so the umask was live. Red edit: make the
-/// directory with `create_dir_all` (it appears 0775).
+/// group-writable (0775), so the umask was live. Red edits: make the
+/// directory with `create_dir_all` (it appears 0775), or listen before the
+/// narrowing (the first connect can find the socket 0775, as a FreeBSD run
+/// did on 2026-11-22 when the bind listened before its chmod).
 #[test]
 fn with_umask_002_only_the_owner_can_reach_the_socket_during_startup() {
     use std::os::unix::ffi::OsStrExt;

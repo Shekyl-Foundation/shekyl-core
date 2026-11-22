@@ -2331,6 +2331,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
+ "socket2",
  "tokio",
  "tower-service",
  "tracing",

@@ -4880,6 +4880,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
+ "socket2",
  "tempfile",
  "tokio",
  "tower-service",

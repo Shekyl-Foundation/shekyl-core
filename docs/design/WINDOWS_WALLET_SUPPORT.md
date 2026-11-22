@@ -184,11 +184,13 @@ reader looking), so it is corrected rather than left standing.
 ### The named pipe is better than the Unix path we have, not merely equivalent
 
 - **The DACL is applied atomically at creation** via `SECURITY_ATTRIBUTES` in
-  `CreateNamedPipe`. The UDS path binds
-  ([`server.rs:320`](../../rust/shekyl-wallet-rpc/src/server.rs)) and *then*
-  chmods ([`:324`](../../rust/shekyl-wallet-rpc/src/server.rs)) — a real
-  pre-chmod window, which the code's own comment concedes and mitigates by
-  parenting the socket in a 0700 directory. The pipe has no window to mitigate.
+  `CreateNamedPipe`. The UDS path reaches the same property by order: the
+  listeners' shared bind
+  ([`listen.rs`](../../rust/shekyl-rpc-transport/src/listen.rs)
+  `bind_owner_only_socket`) binds, narrows the socket to 0600, and only then
+  listens, so a connect before the narrowing is refused (Rick, 2026-11-22).
+  Its 0700 directory stays the containment, since BSD-derived systems may not
+  enforce a socket's mode on connect. The pipe needs no ordering.
 - **Peer identity is retrievable** (`GetNamedPipeClientProcessId`,
   `ImpersonateNamedPipeClient`). The Unix path does not use `SO_PEERCRED`, so
   this is capability we do not currently have.
@@ -695,12 +697,12 @@ scatter the platform boundary across a file whose job is the serve loop.
 This is the part that a `cfg`-split-everything reflex gets wrong, and it is
 wrong three times out of four:
 
-- **`restrict_socket_perms` — no Windows counterpart, because its reason is
-  gone.** Its own doc comment states the case: applied *after* `bind`, with a
-  0700 parent making the pre-chmod window unreachable. `CreateNamedPipe` takes
-  `SECURITY_ATTRIBUTES` **at creation** — the atomicity WP-Q1 was partly decided
-  on. There is no post-creation step to port. The function does not gain a
-  Windows arm; it ceases to exist on that platform.
+- **The Unix socket's narrowing — no Windows counterpart, because there is no
+  step to order.** On Unix the socket is bound, narrowed to 0600, and only
+  then listens (`bind_owner_only_socket`), so no connect lands at a wider
+  mode. `CreateNamedPipe` takes `SECURITY_ATTRIBUTES` **at creation** — the
+  atomicity WP-Q1 was partly decided on. The narrowing does not gain a Windows
+  arm; it does not exist on that platform.
 - **`private_socket_dir` — all three of its jobs are subsumed or absent.**
   Access control moves to the DACL; collision-avoidance to the per-spawn
   name (pid + spawn counter, WP-D1 — an earlier form of this sentence said

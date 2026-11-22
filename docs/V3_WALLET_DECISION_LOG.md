@@ -39,6 +39,45 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-22 — Every socket listener is 0600 before it listens; its directory stays the containment
+
+**Decision.** Every Unix socket listener — the wallet RPC server, the
+daemon's owner socket, the daemon's console leg and the RPC tunnel — binds
+through one function, `shekyl_rpc_transport::listen::bind_owner_only_socket`.
+In order: the socket's directory must be this account's alone; what is at the
+path must be nothing, or a socket this account owns whose server is gone
+(the listeners' shared replace decision); then the socket is created
+close-on-exec, bound, narrowed to `0600`, and only then listens. Each
+listener keeps only its own wording of a refusal, and the post-bind chmod
+steps are deleted. This supersedes the 2026-11-21 ruling's acceptance
+(#1490) that a socket's own `0600` comes after its bind and its directory
+alone covers startup.
+
+**Rationale.** tokio's and std's Unix binds listen in the same call, so a
+chmod after them leaves a window in which a connect is accepted at the
+umask's mode. A FreeBSD CI run on 2026-11-22 (umask 002) connected inside
+that window and found the wallet RPC's socket `0775`. The `0700` directory
+held, so no other account could reach it, but the claim that the socket is
+the owner's whenever it can be reached was false, and an operator who puts a
+listener's socket in a directory of their own (`--rpc-unix`, the tunnel's
+socket) had only that directory between the socket and every other account.
+The rejected alternative was to make the test wait for the mode: that keeps
+the window and teaches the test to agree with it. With bind, narrow, listen,
+a connect before the narrowing is refused, so the mode holds from the first
+moment anything can connect. The directory check stays mandatory in all four
+listeners: it is the containment, because BSD-derived systems may not
+enforce a socket's mode on connect. The tunnel's socket becoming `0600` (it
+had the umask's mode) is not a compatibility change: its owner-only
+directory already kept every other account out.
+
+The shared replace decision also refuses a socket another account owns (the
+daemon's owner socket refused one by uid before the decision was shared),
+and it is synchronous, so the daemon's owner socket, bound before its
+runtime serves it, takes the same steps as the listeners that bind inside
+one.
+
+---
+
 ## 2026-09-20 — A persona's bond is immutable for its life
 
 **Decision.** A persona's bond is **immutable for its life**. The holdings set

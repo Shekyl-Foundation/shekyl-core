@@ -712,22 +712,20 @@ impl BoundListener {
             ListenAddr::Tcp(addr) => Ok(Self::Tcp(TcpListener::bind(addr).await?)),
             #[cfg(unix)]
             ListenAddr::Uds(path) => {
-                prepare_uds_path(path).await?;
-                let listener = UnixListener::bind(path)?;
-                // Own the socket path for cleanup BEFORE restrict_socket_perms
-                // so a chmod failure still unlinks the bound socket.
+                let bound = bind_uds(path)?;
+                // Own the socket path for cleanup BEFORE the runtime takes
+                // it, so a refusal there still unlinks the bound socket.
                 let cleanup = UdsCleanup(path.clone());
-                restrict_socket_perms(path)?;
-                Ok(Self::Uds(listener, cleanup))
+                Ok(Self::Uds(bound.into_tokio()?, cleanup))
             }
             #[cfg(windows)]
             ListenAddr::SelfHostedPipe(pipe) => {
                 // The descriptor (owner-only, logon-SID DACL, Medium label)
                 // is applied at creation, and `first_pipe_instance(true)`
                 // refuses a name someone else already holds — both inside
-                // `shekyl-win-sec`. There is no post-bind step to mirror
-                // `restrict_socket_perms`, and no directory to mirror the
-                // Unix private socket directory: the containment that
+                // `shekyl-win-sec`. There is no narrowing to order before a
+                // listen, as the Unix bind does, and no directory to mirror
+                // the Unix private socket directory: the containment that
                 // directory gave the Unix socket is rebuilt as the loud
                 // create here plus the peer check at the client's dial (§8.1).
                 let listener = shekyl_win_sec::OwnerOnlyPipeListener::bind(pipe.name.clone())?;
@@ -838,83 +836,80 @@ impl axum::serve::Listener for PipeListener {
     }
 }
 
+/// Bind the wallet RPC's socket at `path` through the listeners' shared
+/// bind (`shekyl_rpc_transport::listen::bind_owner_only_socket`): its
+/// directory this account's alone, a socket a stopped server left replaced,
+/// then the socket bound, 0600, and only then listening. The UDS deployments
+/// run with HTTP auth disabled ("auth rides the transport",
+/// `wallet_rpc.yaml`), which is sound only because nothing but this account
+/// can ever connect to it.
+///
+/// A missing directory is made 0700 whatever the umask (Rick, 2026-11-21);
+/// an existing one is held to the shared rule, and the refusal names it.
+///
+/// Unix only, with no Windows counterpart: `CreateNamedPipe` takes the
+/// descriptor at creation (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 #[cfg(unix)]
-async fn prepare_uds_path(path: &Path) -> Result<(), BoxErr> {
+fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListener, BoxErr> {
     use shekyl_rpc_transport::listen::{
-        clear_replaceable_socket, owner_only_socket_dir, SocketDirRefusal, SocketRefusal,
+        bind_owner_only_socket, OwnerSocketRefusal, SocketDirRefusal, SocketRefusal,
     };
     use std::os::unix::fs::DirBuilderExt;
-    // The socket's mode is set only after its bind; until then the
-    // directory is what keeps another account from connecting. It is made
-    // 0700 whatever the umask, or, if it is there, held to the tunnel's
-    // rule: this account's alone (Rick, 2026-11-21).
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let not_owner_only = || -> BoxErr {
-        format!(
+    if let Err(e) = std::fs::symlink_metadata(dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("{}: {e}", dir.display()).into());
+        }
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+    }
+    let refused = match bind_owner_only_socket(path) {
+        Ok(bound) => return Ok(bound),
+        Err(refusal) => refusal,
+    };
+    Err(match refused {
+        OwnerSocketRefusal::NoDirectory => {
+            format!("{} names no directory to hold the socket", path.display())
+        }
+        OwnerSocketRefusal::Directory(
+            SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly,
+        ) => format!(
             "{} must be a directory only this account can enter (owned by this account, no \
              group or other access); the wallet RPC's socket is not bound there",
             dir.display()
-        )
-        .into()
-    };
-    match owner_only_socket_dir(dir) {
-        Ok(()) => {}
-        Err(SocketDirRefusal::Missing) => {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(dir)?;
-            owner_only_socket_dir(dir).map_err(|_| not_owner_only())?;
+        ),
+        OwnerSocketRefusal::Directory(SocketDirRefusal::Unreadable(why)) => {
+            format!("{}: {why}", dir.display())
         }
-        Err(SocketDirRefusal::NotOwnerOnly) => return Err(not_owner_only()),
-        Err(SocketDirRefusal::Unreadable(why)) => {
-            return Err(format!("{}: {why}", dir.display()).into());
+        // A socket a server still answers on is not taken over; one a
+        // stopped or killed server left was removed. Anything else at the
+        // path is not this server's to remove.
+        OwnerSocketRefusal::Path(SocketRefusal::Answers) => {
+            format!("another server answers on {}", path.display())
         }
+        OwnerSocketRefusal::Path(SocketRefusal::NotASocket) => {
+            format!("{} is not a socket; it is not replaced", path.display())
+        }
+        OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid)) => format!(
+            "{} is a socket another account owns (uid {uid}); it is not replaced",
+            path.display()
+        ),
+        OwnerSocketRefusal::Path(SocketRefusal::Unknown(why)) => format!(
+            "{}: whether a server still holds this socket is not known ({why}); it is not \
+             replaced",
+            path.display()
+        ),
+        OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why)) => {
+            format!("{}: {why}", path.display())
+        }
+        OwnerSocketRefusal::Socket(error) => format!("{}: {error}", path.display()),
     }
-    // A socket a server still answers on is not taken over; one a stopped
-    // or killed server left is removed. Anything else at the path is not
-    // this server's to remove.
-    match clear_replaceable_socket(path).await {
-        Ok(()) => {}
-        Err(SocketRefusal::Answers) => {
-            return Err(format!("another server answers on {}", path.display()).into());
-        }
-        Err(SocketRefusal::NotASocket) => {
-            return Err(format!("{} is not a socket; it is not replaced", path.display()).into());
-        }
-        Err(SocketRefusal::Unknown(why)) => {
-            return Err(format!(
-                "{}: whether a server still holds this socket is not known ({why}); it is not \
-                 replaced",
-                path.display()
-            )
-            .into());
-        }
-        Err(SocketRefusal::NotRemoved(why)) => {
-            return Err(format!("{}: {why}", path.display()).into());
-        }
-    }
-    Ok(())
-}
-
-/// Restrict a freshly bound UDS socket to owner-only (0600).
-///
-/// The wallet RPC's UDS deployments run with HTTP auth disabled ("auth
-/// rides the transport", `wallet_rpc.yaml`), which is only sound if the
-/// socket itself is permission-gated. Applied after `bind`; the in-process
-/// default additionally parents the socket in a 0700 directory so the
-/// pre-chmod window is unreachable.
-///
-/// Unix only, with no Windows counterpart: `CreateNamedPipe` takes the
-/// descriptor at creation, so there is no post-bind step to port
-/// (`WINDOWS_WALLET_SUPPORT.md` §8.1).
-#[cfg(unix)]
-fn restrict_socket_perms(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+    .into())
 }
 
 /// Per-process spawn counter, so multiple in-process servers in one process

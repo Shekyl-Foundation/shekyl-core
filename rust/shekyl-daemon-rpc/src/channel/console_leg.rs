@@ -13,10 +13,12 @@
 //! closed at message 3 ([`super::listener::Leg::Console`]).
 //!
 //! - **Unix:** a socket at [`CONSOLE_SOCKET_FILE`] in the network's data
-//!   directory, inside the service's data home, which is `0700` and owned by
-//!   the service account; the socket itself is `0600`. A socket left by a
-//!   previous start is replaced: the data directory's exclusive lock is
-//!   held, so nothing else is serving it.
+//!   directory, which must be the service account's alone, bound through
+//!   the listeners' shared bind
+//!   (`shekyl_rpc_transport::listen::bind_owner_only_socket`): `0600` from
+//!   before it listens. A socket left by a previous start is replaced: the
+//!   data directory's exclusive lock is held, so nothing else serves it,
+//!   and its connection is refused.
 //! - **Windows:** a pipe under a fresh random name, with the data home's
 //!   ACL (`shekyl_win_sec::OwnerOnlyPipeListener::bind_console`), named in
 //!   [`CONSOLE_PIPE_FILE`] in the data directory. A fixed name could be
@@ -48,31 +50,60 @@ pub fn place(dir: &Path) -> PathBuf {
 ///
 /// # Errors
 ///
-/// Something other than a socket is at the socket's path, or the bind or
-/// the mode failed.
+/// The data directory is not the service account's alone, something that
+/// is not a stale socket of this account is at the socket's path, or the
+/// bind failed.
 #[cfg(unix)]
 pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
-    bind_socket(dir).map_err(|e| crate::run::StartFault::Refused(e.to_string()))
+    bind_socket(dir).map_err(crate::run::StartFault::Refused)
 }
 
 #[cfg(unix)]
-fn bind_socket(dir: &Path) -> std::io::Result<ConsoleListener> {
-    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+fn bind_socket(dir: &Path) -> Result<ConsoleListener, String> {
+    use shekyl_rpc_transport::listen::{
+        bind_owner_only_socket, OwnerSocketRefusal, SocketDirRefusal, SocketRefusal,
+    };
     let path = place(dir);
-    match std::fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_socket() => std::fs::remove_file(&path)?,
-        Ok(_) => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("{} is not a socket; it is not replaced", path.display()),
-            ))
+    match bind_owner_only_socket(&path) {
+        Ok(bound) => bound
+            .into_tokio()
+            .map_err(|e| format!("{}: {e}", path.display())),
+        Err(OwnerSocketRefusal::NoDirectory) => {
+            Err(format!("{} names no directory", path.display()))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+        Err(OwnerSocketRefusal::Directory(
+            SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly,
+        )) => Err(format!(
+            "{} must be a directory only the service account can enter (owned by it, mode \
+             0700); the console's leg is not bound there",
+            dir.display()
+        )),
+        Err(OwnerSocketRefusal::Directory(SocketDirRefusal::Unreadable(why))) => {
+            Err(format!("{}: {why}", dir.display()))
+        }
+        Err(OwnerSocketRefusal::Path(SocketRefusal::Answers)) => Err(format!(
+            "something answers on {} while this daemon holds the data directory's lock; it is \
+             not replaced",
+            path.display()
+        )),
+        Err(OwnerSocketRefusal::Path(SocketRefusal::NotASocket)) => Err(format!(
+            "{} is not a socket; it is not replaced",
+            path.display()
+        )),
+        Err(OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid))) => Err(format!(
+            "{} is a socket another account owns (uid {uid}); it is not replaced",
+            path.display()
+        )),
+        Err(OwnerSocketRefusal::Path(SocketRefusal::Unknown(why))) => Err(format!(
+            "{}: whether anything still holds this socket is not known ({why}); it is not \
+             replaced",
+            path.display()
+        )),
+        Err(OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why))) => {
+            Err(format!("{}: {why}", path.display()))
+        }
+        Err(OwnerSocketRefusal::Socket(error)) => Err(format!("{}: {error}", path.display())),
     }
-    let listener = tokio::net::UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(listener)
 }
 
 /// Bind the console's leg for the data directory `dir`. Called inside the
@@ -113,5 +144,45 @@ pub fn retire(dir: &Path) {
             "the console's leg {} could not be removed: {e}",
             place(dir).display()
         ),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// **The console's leg is never bound in a data directory others can
+    /// enter**, and the refusal names the directory; in an owner-only one
+    /// it is bound 0600 (Rick, 2026-11-22: the directory check is mandatory
+    /// for every socket listener). Red edit: bind without the shared bind's
+    /// directory check.
+    #[tokio::test]
+    async fn the_console_leg_is_bound_only_in_an_owner_only_data_directory() {
+        let dir = tempfile::tempdir().expect("a data directory");
+        let path = place(dir.path());
+        for mode in [0o750, 0o755, 0o770] {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode))
+                .expect("chmod");
+            let refused = bind_socket(dir.path()).expect_err("refused");
+            assert!(
+                refused.contains(&dir.path().display().to_string())
+                    && refused.contains("only the service account can enter"),
+                "mode {mode:o}: {refused}"
+            );
+            assert!(!path.exists(), "nothing was bound under mode {mode:o}");
+        }
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod 700");
+        let _leg = bind_socket(dir.path()).expect("bound in an owner-only data directory");
+        let mode = std::fs::metadata(&path)
+            .expect("the leg")
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the console's leg is the service account's"
+        );
     }
 }
