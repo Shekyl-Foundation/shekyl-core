@@ -273,6 +273,13 @@ jobs:
           # each allowed path to still use it, and refuses CacheStore anywhere.
           run_one "One owner of every RandomX cache (HA-R1)" \
             scripts/ci/check_randomx_cache_owner.sh
+          # R-34: a wallet's output positions come from its transaction
+          # key's order; only the block producers name a fixed position.
+          # The selftest first, so a scan that reads nothing cannot pass.
+          run_one "R-34: fixed output positions are the block producers' (selftest)" \
+            python3 scripts/ci/check_fixed_output_position_callers.py --selftest
+          run_one "R-34: fixed output positions are the block producers'" \
+            python3 scripts/ci/check_fixed_output_position_callers.py
           # DX-Q3 Q4: the node's template draws its coinbase secret and its
           # draw commitment from the OS (the commitment through the witness
           # ring); the scenario's reproducible values stay in test code.

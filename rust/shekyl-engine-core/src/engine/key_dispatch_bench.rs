@@ -109,12 +109,14 @@ fn build_output_paid_to(
     // recipient only sees the ciphertext), so a fresh one serves.
     let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
     let constructed = construct_output(
-        &tx_key,
+        tx_key
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         recipient.spend_pk.as_canonical_bytes(),
         amount,
-        output_index,
     )
     .expect("construct_output succeeds for synthetic bench output");
 

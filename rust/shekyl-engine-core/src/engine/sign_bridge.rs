@@ -790,12 +790,14 @@ mod tests {
 
         // Build the change output exactly as `sign_tx` does.
         let constructed = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             &change_pk,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct change output");
 
@@ -886,12 +888,14 @@ mod tests {
         // by the recipient's view-derived Montgomery secret (the production
         // scanner's derivation).
         let constructed = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &recipient_x25519,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct payment output");
         let recovered = scan_output_recover(
@@ -918,12 +922,14 @@ mod tests {
         // the RAW Edwards view-key bytes (interpreted as a Montgomery
         // u-coordinate) produces an output the recipient CANNOT recover.
         let wrong = construct_output(
-            &TxKey::seeded(TX_KEY),
+            TxKey::seeded(TX_KEY)
+                .output_positions(usize::try_from(OUT_IDX).unwrap() + 1)
+                .at(OUT_IDX)
+                .unwrap(),
             &decoded.view_key,
             &decoded.ml_kem_encap_key,
             &decoded.spend_key,
             AMOUNT,
-            OUT_IDX,
         )
         .expect("construct output to the wrong point (daemon-acceptable)");
         assert!(

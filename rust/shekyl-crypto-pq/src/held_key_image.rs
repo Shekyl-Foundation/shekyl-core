@@ -173,12 +173,15 @@ mod tests {
             let spend_scalar = Scalar::random(&mut rand::rngs::OsRng);
             let spend_public = (G * spend_scalar).compress().to_bytes();
             let output = construct_output(
-                &TxKey::random().expect("the OS draws a key"),
+                TxKey::random()
+                    .expect("the OS draws a key")
+                    .output_positions(usize::try_from(FIXTURE_OUTPUT).unwrap() + 1)
+                    .at(FIXTURE_OUTPUT)
+                    .unwrap(),
                 &recipient_pk.x25519,
                 &recipient_pk.ml_kem,
                 &spend_public,
                 FIXTURE_AMOUNT,
-                FIXTURE_OUTPUT,
             )
             .unwrap();
             Self {

@@ -270,14 +270,16 @@ fn assemble_scannable_block(
     let mut per_output_kem_cts: Vec<Vec<u8>> = Vec::with_capacity(n_outputs);
     let mut leaf_entries: Vec<u8> = Vec::with_capacity(n_outputs * PQC_LEAF_ENTRY_LEN);
 
+    let positions = tx_key.output_positions(n_outputs);
     for output_index in 0..n_outputs {
         let out = construct_output(
-            tx_key,
+            positions
+                .at(output_index as u64)
+                .expect("a position for each fixture output"),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             recipient_spend_pub,
             BENCH_AMOUNT,
-            output_index as u64,
         )
         // Precondition of this fixture: `recipient_pk` is a valid hybrid KEM
         // public key and `recipient_spend_pub` a torsion-free compressed Edwards
@@ -579,12 +581,11 @@ mod tests {
     /// per-output `OutputData` after writing it into the wire fields).
     fn first_output_data(recipient_pk: &HybridKemPublicKey) -> OutputData {
         construct_output(
-            &fresh_tx_key(),
+            fresh_tx_key().output_positions(1).at(0).unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &fake_spend_key_bytes(),
             BENCH_AMOUNT,
-            /* output_index */ 0,
         )
         .expect("construct_output succeeds for valid bench inputs")
     }

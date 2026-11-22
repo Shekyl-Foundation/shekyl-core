@@ -227,7 +227,16 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
         .map(|(amount, index)| {
             let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
             (
-                construct_multisig_output(&tx_key, address, amount, index, &NET).unwrap(),
+                construct_multisig_output(
+                    tx_key
+                        .output_positions(usize::try_from(index).unwrap() + 1)
+                        .at(index)
+                        .unwrap(),
+                    address,
+                    amount,
+                    &NET,
+                )
+                .unwrap(),
                 index,
                 amount,
             )

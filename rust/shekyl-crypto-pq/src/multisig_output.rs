@@ -55,11 +55,11 @@ use crate::output::{
     compute_output_key_image, construct_output_core, encapsulate_deterministic, recover_combined_ss,
 };
 use crate::output_mask::OutputMask;
+use crate::output_order::OutputPosition;
 use crate::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG,
 };
-use crate::tx_key::TxKey;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_types::SigningPayloadHash;
 
@@ -194,7 +194,7 @@ impl MultisigOutputData {
 }
 
 /// Build an output paying `amount` to the multisig group `address`, at
-/// `output_index` in a transaction keyed by `tx_key`, on the chain
+/// `position` (its transaction's key and its index, R-34), on the chain
 /// whose id is `network`.
 ///
 /// # Errors
@@ -206,12 +206,13 @@ impl MultisigOutputData {
 /// [`CryptoError::InvalidInput`] for an output index above 255 (the `0x0D`
 /// entry names its output in one byte); the solo core's own errors.
 pub fn construct_multisig_output(
-    tx_key: &TxKey,
+    position: OutputPosition<'_>,
     address: &MultisigAddressPayload,
     amount: u64,
-    output_index: u64,
     network: &NetworkId,
 ) -> Result<MultisigOutputData, CryptoError> {
+    let tx_key = position.tx_key();
+    let output_index = position.index();
     let out_idx = u8::try_from(output_index)
         .map_err(|_| CryptoError::InvalidInput("multisig output index above 255".into()))?;
     let spend_point = group_point(address.b_group())? + group_point(address.y_group())?;
@@ -219,12 +220,11 @@ pub fn construct_multisig_output(
     let (group_x25519, group_ml_kem) = split_kem_pubkey(address.group_kem_pubkey())?;
 
     let core = construct_output_core(
-        tx_key,
+        position,
         &group_x25519,
         group_ml_kem,
         &spend_key,
         amount,
-        output_index,
         &crate::label::sentinel_plaintext(),
     )?;
 

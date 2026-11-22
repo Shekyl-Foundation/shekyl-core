@@ -17,6 +17,7 @@
 //! after the fact without rebuilding the block around it.
 
 use shekyl_crypto_pq::output::{construct_output, OutputData};
+use shekyl_crypto_pq::output_order::OutputPosition;
 use shekyl_crypto_pq::TxKey;
 use shekyl_wire::tx_extra::{self, COINBASE_NONCE_BYTES, CONFORMING_DRAW_COMMITMENT};
 use shekyl_wire::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
@@ -43,13 +44,13 @@ pub fn tx_key(height: u64) -> TxKey {
 /// non-identity point, or whose ML-KEM key is not 1184 bytes, is not a
 /// wallet this crate derived — a harness bug, not an input to handle.
 fn output(recipient: &Recipient, tx_key: &TxKey, amount: u64) -> OutputData {
+    // R-34: a coinbase's one output sits at position 0, fixed.
     construct_output(
-        tx_key,
+        OutputPosition::for_block_producer(tx_key, 0),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
         amount,
-        0,
     )
     .expect("a harness-derived recipient is a valid output target")
 }

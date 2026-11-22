@@ -92,7 +92,13 @@ fn entry(out: &MultisigOutputData) -> MultisigEntry {
 /// sees the `0x0D` entry list before it is written.
 fn group_block(g: &Group, edit: impl FnOnce(&mut Vec<MultisigEntry>)) -> ScannableBlock {
     let tx_key = TxKey::random().expect("the OS draws a key");
-    let out = construct_multisig_output(&tx_key, &g.address, AMOUNT, 0, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key.output_positions(1).at(0).unwrap(),
+        &g.address,
+        AMOUNT,
+        &NET,
+    )
+    .unwrap();
     let mut entries = vec![entry(&out)];
     edit(&mut entries);
 

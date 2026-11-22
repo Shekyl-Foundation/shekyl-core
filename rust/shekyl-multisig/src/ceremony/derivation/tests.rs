@@ -205,10 +205,13 @@ fn pay_inputs(g: &Group, inputs: &[(u64, u64)]) -> Vec<Paid> {
         .iter()
         .map(|&(global_index, amount)| {
             let output = construct_multisig_output(
-                &TxKey::random().expect("the OS draws a key"),
+                TxKey::random()
+                    .expect("the OS draws a key")
+                    .output_positions(usize::try_from(PAID_OUTPUT_INDEX).unwrap() + 1)
+                    .at(PAID_OUTPUT_INDEX)
+                    .unwrap(),
                 &g.payload,
                 amount,
-                PAID_OUTPUT_INDEX,
                 &NET_ID,
             )
             .unwrap();

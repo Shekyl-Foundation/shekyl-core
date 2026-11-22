@@ -205,12 +205,14 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     tx_hash[8] = seed;
     let output_index = u64::from(seed);
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
         amount,
-        output_index,
     )
     .expect("construct_output for test wallet output");
     let key = CompressedEdwardsY(constructed.output_key)
@@ -301,12 +303,14 @@ fn populate_ledger(
         let amount = td.amount().to_raw();
         let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+            shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
             amount,
-            output_index,
         )
         .expect("construct_output for test ledger output");
 
@@ -637,12 +641,14 @@ async fn funded_ledger_and_tree(
     for &(seed, amt) in specs {
         let output_index = u64::from(seed);
         let c = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+            shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &blob.x25519_pk,
             &blob.ml_kem_ek,
             &test_recipient_spend_pk(),
             amt,
-            output_index,
         )
         .expect("construct_output for consistent tree leaf");
         let commitment = Commitment {
@@ -2764,12 +2770,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let blob = test_account_blob();
     let output_index = u64::from(spend_seed);
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
         input_amount,
-        output_index,
     )
     .expect("construct funding output");
     let ciphertext = HybridCiphertext {
@@ -2869,12 +2877,14 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     // with the input (a collision zeroes the FCMP++ rerandomization scalar).
     let change_output_index: u64 = output_index + 100;
     let change_out = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+        shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY)
+            .output_positions(usize::try_from(change_output_index).unwrap() + 1)
+            .at(change_output_index)
+            .unwrap(),
         &blob.x25519_pk,
         &blob.ml_kem_ek,
         &test_recipient_spend_pk(),
         change,
-        change_output_index,
     )
     .expect("construct change output");
     let outputs = vec![OutputInfo {

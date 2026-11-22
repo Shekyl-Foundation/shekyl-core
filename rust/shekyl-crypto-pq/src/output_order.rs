@@ -169,6 +169,141 @@ impl TxKey {
         }
         OutputOrder { recipient_at }
     }
+
+    /// The positions of this transaction's `count` outputs (R-34): the
+    /// order [`Self::output_order`] draws, each position bound to this key.
+    /// The one way a wallet gets an [`OutputPosition`].
+    #[must_use]
+    pub fn output_positions(&self, count: usize) -> OutputPositions<'_> {
+        OutputPositions {
+            tx_key: self,
+            order: self.output_order(count),
+        }
+    }
+}
+
+/// Where one output sits in its transaction, bound to the key it is built
+/// under (R-34). The `shekyl-crypto-pq` output constructors take one in
+/// place of a bare index, so an output's position and derivation index
+/// come from its key's [`OutputOrder`] and from nowhere a caller chose.
+///
+/// A wallet gets one only from [`TxKey::output_positions`]. A block
+/// producer, whose outputs are public by construction and whose bytes are
+/// pinned, names a fixed position with [`Self::for_block_producer`]; a CI gate lists
+/// its callers (`scripts/ci/check_fixed_output_position_callers.py`).
+#[derive(Clone, Copy)]
+pub struct OutputPosition<'k> {
+    tx_key: &'k TxKey,
+    index: u64,
+}
+
+impl<'k> OutputPosition<'k> {
+    /// A fixed position for a block producer's output: the genesis
+    /// builder, the coinbase template and the harness coinbase. Their
+    /// outputs carry no change to hide and their bytes are pinned, so the
+    /// position is the producer's, not a draw. No wallet calls this; the
+    /// gate named on [`OutputPosition`] fails on a caller it does not list.
+    #[must_use]
+    pub fn for_block_producer(tx_key: &'k TxKey, index: u64) -> Self {
+        Self { tx_key, index }
+    }
+
+    /// The output's position in its transaction, which is also its
+    /// derivation index.
+    #[must_use]
+    pub fn index(&self) -> u64 {
+        self.index
+    }
+
+    /// The key the output is built under.
+    #[must_use]
+    pub fn tx_key(&self) -> &'k TxKey {
+        self.tx_key
+    }
+}
+
+impl fmt::Debug for OutputPosition<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OutputPosition({})", self.index)
+    }
+}
+
+/// A transaction's output positions, drawn from its key
+/// ([`TxKey::output_positions`]): recipient `r`'s output sits at `π(r)`.
+pub struct OutputPositions<'k> {
+    tx_key: &'k TxKey,
+    order: OutputOrder,
+}
+
+impl<'k> OutputPositions<'k> {
+    /// The number of outputs placed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether no output is placed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    /// `recipient`'s position, `π(recipient)`, or `None` for a recipient
+    /// past the count.
+    #[must_use]
+    pub fn of_recipient(&self, recipient: usize) -> Option<OutputPosition<'k>> {
+        self.order
+            .position_of(recipient)
+            .map(|position| OutputPosition {
+                tx_key: self.tx_key,
+                index: u64::try_from(position).expect("an output position fits in a u64"),
+            })
+    }
+
+    /// The position at `index`, or `None` past the last. A position read by
+    /// index holds whichever recipient the order put there
+    /// ([`OutputOrder::recipient_at`]); a builder places each recipient by
+    /// [`Self::of_recipient`].
+    #[must_use]
+    pub fn at(&self, index: u64) -> Option<OutputPosition<'k>> {
+        (index < u64::try_from(self.len()).expect("an output count fits in a u64")).then_some(
+            OutputPosition {
+                tx_key: self.tx_key,
+                index,
+            },
+        )
+    }
+
+    /// Each recipient with its position, in position order: the first is
+    /// the transaction's output 0.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (usize, OutputPosition<'k>)> + '_ {
+        let tx_key = self.tx_key;
+        self.order
+            .recipients()
+            .enumerate()
+            .map(move |(position, recipient)| {
+                let index = u64::try_from(position).expect("an output position fits in a u64");
+                (recipient, OutputPosition { tx_key, index })
+            })
+    }
+
+    /// The order the positions came from.
+    #[must_use]
+    pub fn order(&self) -> &OutputOrder {
+        &self.order
+    }
+
+    /// The order the positions came from, keeping no borrow of the key.
+    #[must_use]
+    pub fn into_order(self) -> OutputOrder {
+        self.order
+    }
+}
+
+impl fmt::Debug for OutputPositions<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OutputPositions({} outputs)", self.len())
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +397,39 @@ mod tests {
             format!("{:?}", key(3).output_order(4)),
             "OutputOrder(4 outputs)"
         );
+        assert_eq!(
+            format!("{:?}", key(3).output_positions(4)),
+            "OutputPositions(4 outputs)"
+        );
+    }
+
+    /// A key's positions are its order: recipient `r` sits at `π(r)`, both
+    /// by recipient and in position order, and every position is bound to
+    /// the key that drew it.
+    #[test]
+    fn positions_are_the_keys_order() {
+        const OUTPUTS: usize = 7;
+        let tx_key = key(5);
+        let order = tx_key.output_order(OUTPUTS);
+        let positions = tx_key.output_positions(OUTPUTS);
+        assert_eq!(positions.order(), &order);
+        assert_eq!(positions.len(), OUTPUTS);
+        for recipient in 0..OUTPUTS {
+            let position = positions.of_recipient(recipient).unwrap();
+            let index = position.index();
+            assert_eq!(
+                usize::try_from(index).unwrap(),
+                order.position_of(recipient).unwrap()
+            );
+            assert!(std::ptr::eq(position.tx_key(), std::ptr::from_ref(&tx_key)));
+            assert_eq!(positions.at(index).unwrap().index(), index);
+        }
+        assert!(positions.of_recipient(OUTPUTS).is_none());
+        assert!(positions.at(OUTPUTS as u64).is_none());
+        for (expected, (recipient, position)) in positions.iter().enumerate() {
+            assert_eq!(usize::try_from(position.index()).unwrap(), expected);
+            assert_eq!(order.recipient_at(expected), Some(recipient));
+        }
+        assert_eq!(positions.into_order(), order);
     }
 }

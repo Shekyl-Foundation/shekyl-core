@@ -221,12 +221,14 @@ fn tree_with(
     for index in 0..max_spent as u64 {
         let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
         let data = construct_output(
-            &tx_secret,
+            tx_secret
+                .output_positions(usize::try_from(index).unwrap() + 1)
+                .at(index)
+                .unwrap(),
             &wallet.x25519_pk,
             &wallet.ml_kem_ek,
             &wallet.spend_public,
             input_amount,
-            index,
         )
         .expect("construct spent output");
         let combined_ss = recover_combined_ss(
@@ -391,21 +393,19 @@ fn measure(
     let recipient = random_wallet(rng);
     let dest_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     let payment = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(1).at(0).unwrap(),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
         payment_amount,
-        0,
     )
     .expect("payment");
     let change = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(2).at(1).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_amount,
-        1,
     )
     .expect("change");
     let pack = |out: &OutputData, amount: u64| OutputInfo {
