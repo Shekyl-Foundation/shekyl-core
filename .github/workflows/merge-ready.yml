@@ -126,15 +126,21 @@ jobs:
     outputs:
       leg: ${{ steps.plan.outputs.leg }}
     steps:
-      # The base branch as it is now, with every branch's history: the
+      # The pull request's merge with `dev`, every branch's history: the
       # head, the merge base and `dev`, which the plan fetches again now.
-      # The script and the tree it scopes by are the base's, as for the
-      # label check and as merge-ready-dev.yml's push plan already is.
+      # The tree the plan scopes by is the merge's, which holds the pull
+      # request's own crates and workflows.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.base_ref }}
           fetch-depth: 0
           persist-credentials: false
+      # The plan's scripts from the base branch as it is now, as the label
+      # check's: never the pull request's own copy, and never a merge
+      # GitHub has not refreshed since the base moved.
+      - name: the plan's scripts from the base
+        env:
+          BASE: ${{ github.base_ref }}
+        run: git checkout "origin/${BASE}" -- scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py scripts/ci/change_scope.py
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
