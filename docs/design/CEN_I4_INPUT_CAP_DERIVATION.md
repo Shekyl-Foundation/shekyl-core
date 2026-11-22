@@ -638,11 +638,15 @@ a transaction no node admits. This is the census row's class (FOLLOWUPS, "The
 census does not record which library-crate constants a consensus rule's value
 depends on"), with the library looser rather than tighter. The legal-shape
 function closes it at both ends. CEN-I1's minimum is itself a bare literal (`outputs.len() < 2`,
-`rust/shekyl-chain-rules/src/rules/tx_inputs.rs:70`); the cutover names it once,
-at its owning type beside `MAX_OUTPUTS` in `shekyl-wire`, and CEN-I1, the
-builder and the legal-shape function all read that constant. (The sim lane
-has taken the effect on #1476's stuffed rows to Rick; its scope is ruled
-there, not here.)
+`rust/shekyl-chain-rules/src/rules/tx_inputs.rs:70`, and the literal 2 in
+`shekyl-wire`'s pruned and full spend checks). **The cutover reads the constant
+landed by the sim lane's minimum-output PR, and does not create it** (Rick,
+2026-11-22: one variable moves in one PR; the PR's number is recorded here when
+it opens). That PR, which lands first, names the minimum once beside
+`MAX_OUTPUTS` in `shekyl-wire`, points CEN-I1, the two wire checks and the
+builder's refusal at it, and starts the sim's `all_shapes` there; the
+legal-shape function reads it, and when the function lands the sim moves onto
+it.
 
 **The legal-shape function (cutover scope).** Under `ICD-R1`, `shekyl-wire`
 exposes one function for the shapes legal at depth `d`: the outputs from
