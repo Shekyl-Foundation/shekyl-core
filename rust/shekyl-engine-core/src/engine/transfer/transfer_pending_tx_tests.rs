@@ -2858,32 +2858,41 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         c2_layers: path.c2_layers().to_vec(),
     }];
 
-    // ── Build the bond vin + the change output ───────────────────────
+    // ── Build the bond vin + the two change outputs ──────────────────
     let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
     assert_eq!(built.vin().bond_credit, floor);
     assert_eq!(built.vin().bond_debit, 0);
 
     let change: u64 = input_amount - fee - floor;
-    // Offset the change index so (combined_ss, output_index) never collides
-    // with the input (a collision zeroes the FCMP++ rerandomization scalar).
+    // Split as production's bond post splits it (`[change_lo, change_hi]`;
+    // CEN-I1 admits no fewer than two outputs). Offset the change indices so
+    // (combined_ss, output_index) never collides with the input (a collision
+    // zeroes the FCMP++ rerandomization scalar).
+    let change_lo = change / 2;
     let change_output_index: u64 = output_index + 100;
-    let change_out = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
-        &blob.x25519_pk,
-        &blob.ml_kem_ek,
-        &test_recipient_spend_pk(),
-        change,
-        change_output_index,
-    )
-    .expect("construct change output");
-    let outputs = vec![OutputInfo {
-        dest_key: change_out.output_key,
-        amount: AtomicUnits::from_raw(change),
-        commitment_mask: change_out.commitment_mask(),
-        enc_amount: change_out.enc_amount_wire(),
-        enc_label: change_out.enc_label_wire(),
-    }];
+    let outputs: Vec<OutputInfo> = [change_lo, change - change_lo]
+        .into_iter()
+        .zip(change_output_index..)
+        .map(|(amount, index)| {
+            let change_out = construct_output(
+                &shekyl_crypto_pq::TxKey::seeded(TEST_OUTPUT_TX_KEY),
+                &blob.x25519_pk,
+                &blob.ml_kem_ek,
+                &test_recipient_spend_pk(),
+                amount,
+                index,
+            )
+            .expect("construct change output");
+            OutputInfo {
+                dest_key: change_out.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: change_out.commitment_mask(),
+                enc_amount: change_out.enc_amount_wire(),
+                enc_label: change_out.enc_label_wire(),
+            }
+        })
+        .collect();
 
     // Amount-level credit-funding rule (§7.3): funding == change + fee + credit.
     verify_credit_funding(
