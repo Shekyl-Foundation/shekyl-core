@@ -783,7 +783,7 @@ fn a_train_that_fills_its_fragments_exactly_is_delivered() {
 fn the_last_fragments_padding_is_not_buffered() {
     let padding = 64 * 1024;
     let mut body = notify(2002, &[0x5A; 100]);
-    body.extend_from_slice(&vec![0u8; padding]);
+    body.resize(body.len() + padding, 0);
 
     let Received::Notification { command, payload } = only_message(&fragment(Flags::END, &body))
     else {
@@ -879,14 +879,29 @@ fn a_noise_class_bucket_over_the_class_cap_is_refused_from_its_header() {
 /// PWD-B12, a train carries a transaction notice: an inner header naming
 /// any other command is refused when it is read, as a request and as a
 /// response, in a train that begins and in one that ends, and the
-/// transaction notice in the same position is not.
+/// transaction notice in the same position is not. A command the crate
+/// does not know (0, the deleted 2001, 9999) gets the same refusal as one
+/// it does: the train's rule is judged before any command's cap is looked
+/// up.
 ///
 /// Red edit: delete the `InnerNotTransactionNotice` check in
 /// `judge_inner_header`. The `END` forms are then delivered as that
 /// command, and the `BEGIN` forms fail as an overrun, not as this refusal.
+/// Second red edit: look the cap up before the check. The unknown commands
+/// then fail as `UnknownCommand`.
 #[test]
 fn a_train_whose_inner_message_is_not_the_transaction_notice_is_refused() {
-    for command in [COMMAND_HANDSHAKE, 1002, 2008, 2011, 2014, 2015] {
+    for command in [
+        COMMAND_HANDSHAKE,
+        1002,
+        2008,
+        2011,
+        2014,
+        2015,
+        0,
+        2001,
+        9999,
+    ] {
         for (inner_flags, expect_response) in [(Flags::REQUEST, false), (Flags::RESPONSE, false)] {
             let inner =
                 shekyl_levin::BucketHead::make(command, 0, inner_flags, expect_response).write();

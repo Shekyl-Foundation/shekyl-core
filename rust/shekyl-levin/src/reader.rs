@@ -453,7 +453,6 @@ impl BucketReader {
             .expect("static header slice");
         // Divergence "inner-signature verify" (C++ memcpys unchecked).
         let inner = BucketHead::read(header_bytes)?;
-        let limit = self.limit_for(inner.command, inner.flags)?;
         // Divergence "inner dispatch class": a train carries a request or a
         // response. An inner dummy or fragment takes no command cap.
         if !inner
@@ -471,6 +470,10 @@ impl BucketReader {
                 command: inner.command,
             });
         }
+        // The cap is looked up last: an inner command this crate does not
+        // know is refused above as not the transaction notice, the same
+        // refusal a known command gets, and never as an unknown command.
+        let limit = self.limit_for(inner.command, inner.flags)?;
         if inner.payload_len > limit {
             return Err(Error::InnerOversize {
                 claimed: inner.payload_len,
