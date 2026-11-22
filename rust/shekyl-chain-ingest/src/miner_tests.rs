@@ -81,6 +81,10 @@ const MOST_BLOCKS: u32 = 5;
 const EXPECTED_MULTIPLE: u64 = 15;
 
 /// [`DIFFICULTY`] as a hash count: the hashes a block takes on average.
+/// [`the_hash_bound_is_derived_from_the_difficulty`] computes in `f64`
+/// and needs it within `u32`, and its multiple within `i32`; a difficulty
+/// past those is a search no test can wait for, and the conversions there
+/// say so.
 #[allow(
     clippy::cast_possible_truncation,
     reason = "the assert above the cast holds the difficulty inside u64"
@@ -91,9 +95,13 @@ const EXPECTED_HASHES: u64 = {
 };
 
 /// The hashes a block's search may try: [`EXPECTED_MULTIPLE`] ×
-/// [`EXPECTED_HASHES`], 120. The wait adds one hash per worker: each can
-/// finish the hash it started on the previous job after the next is
-/// posted, and that hash is counted against the next block.
+/// [`EXPECTED_HASHES`], 120. The wait adds one hash per worker: the count
+/// is read just after the next job is posted, and each worker can finish
+/// the hash it started on the previous job after that read, which is
+/// counted against the next block. A worker checks the board before every
+/// hash, so it starts no further hash on the previous job once the next is
+/// posted. The read comes after the post, never before: a worker could
+/// finish a hash and start another on the previous job in between.
 const SEARCH_HASHES: u64 = EXPECTED_MULTIPLE * EXPECTED_HASHES;
 
 /// How long a block's search may run before the test calls it a hang: the
@@ -106,8 +114,8 @@ const HANG_AFTER: Duration = Duration::from_secs(20 * 60);
 /// How often the wait reads the miner's count while no block has come.
 const POLL: Duration = Duration::from_millis(500);
 
-/// The block found for the job posted when `miner` had tried `before`
-/// hashes, judged by hashes tried ([`SEARCH_HASHES`]), with [`HANG_AFTER`]
+/// The block found for the job just posted, `before` being `miner`'s count
+/// read after the post ([`SEARCH_HASHES`] says why after), judged by hashes tried ([`SEARCH_HASHES`]), with [`HANG_AFTER`]
 /// as a backstop that reports a hang, not a miner failure.
 fn the_block(found: &FoundInbox, miner: &Miner, before: u64) -> Found {
     let workers = u64::try_from(miner.status().threads).expect("a worker count");
@@ -124,9 +132,12 @@ fn the_block(found: &FoundInbox, miner: &Miner, before: u64) -> Found {
         let asked = Instant::now();
         match found.recv_timeout(POLL) {
             Ok(block) => return block,
+            // `FoundWait` is both a wait that ran out and an inbox that
+            // ended; only an ended inbox returns before the wait is over.
             Err(FoundWait) => assert!(
                 asked.elapsed() >= POLL,
-                "the found-block inbox ended with no block, after {tried} hashes"
+                "the found-block inbox returned before the {POLL:?} wait ran out, so it \
+                 ended: no block, after {tried} hashes"
             ),
         }
         assert!(
@@ -320,8 +331,8 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         Difficulty::new(DIFFICULTY).expect("a test difficulty is non-zero")
     );
     warm_job_seed(&s, &own, &next);
-    let before = miner.hashes_tried();
     let first = board.publish(job_for(&next));
+    let before = miner.hashes_tried();
     let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, first);
     assert_eq!(block.height, next.height);
@@ -365,8 +376,8 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         searching.rate.hashes > 0,
         "the hopeless job is being searched"
     );
-    let before = miner.hashes_tried();
     let second = board.publish(job_for(&next));
+    let before = miner.hashes_tried();
     assert!(second > hopeless);
     let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, second, "the superseded job was left");
@@ -451,8 +462,8 @@ async fn a_miner_searching_until_a_height_mines_no_block_above_it() {
     let mut next = s.next_template(Vec::new()).await.expect("a template");
     assert_eq!(next.height, until);
     warm_job_seed(&s, &own, &next);
-    let before = miner.hashes_tried();
     let posted = board.publish(job_for(&next));
+    let before = miner.hashes_tried();
     let block = the_block(&found, &miner, before);
     assert_eq!(block.generation, posted);
     assert_eq!(block.height, until);
@@ -511,8 +522,8 @@ async fn the_miner_extends_the_chain_block_after_block() {
         // The workers leave a job whose seed is not warm
         // (`warm_job_seed`), so each post ranks first, as the node does.
         warm_job_seed(&s, &own, &next);
-        let before = miner.hashes_tried();
         board.publish(job_for(&next));
+        let before = miner.hashes_tried();
         let block = the_block(&found, &miner, before);
         next.template.block = block.block;
         s.connect_template(next)
@@ -974,7 +985,8 @@ fn a_miner_on_a_one_permit_budget_is_refused() {
 /// the difficulty, or the most blocks a test waits for, and leave `k`.
 #[test]
 fn the_hash_bound_is_derived_from_the_difficulty() {
-    let win = 1.0 / f64::from(u32::try_from(EXPECTED_HASHES).expect("a small difficulty"));
+    let win =
+        1.0 / f64::from(u32::try_from(EXPECTED_HASHES).expect("a difficulty a test can wait for"));
     let false_failure = |multiple: u64| {
         let hashes = i32::try_from(multiple * EXPECTED_HASHES).expect("small");
         f64::from(MOST_BLOCKS) * (1.0 - win).powi(hashes)
