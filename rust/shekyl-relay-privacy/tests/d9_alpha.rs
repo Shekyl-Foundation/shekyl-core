@@ -307,7 +307,14 @@ fn analytic_alpha_agrees_with_the_empirical_walk() {
     // (Rick, 2026-11-22). The pair is the floor-aware closed form against
     // the walk on `EmbargoTimer::adopted`, whose deadlines carry the floor.
     let shipped = EmbargoTimer::adopted(&params);
-    let floor_ticks = shipped.floor_millis() / DEFAULT_EMBARGO_TICK_MILLIS;
+    // The floor in the timer's own ticks, which must be the tick the draw's
+    // mean above is counted in for the closed form to read one timer.
+    assert_eq!(
+        shipped.tick_millis(),
+        DEFAULT_EMBARGO_TICK_MILLIS,
+        "the shipped timer left the default tick; count the draw's mean at its tick"
+    );
+    let floor_ticks = shipped.floor_ticks();
     let analytic_shipped = shekyl_relay_privacy::full_travel_probability_with_floor(
         &params,
         ticks,

@@ -712,6 +712,14 @@ impl EmbargoTimer {
         self.floor_ticks.saturating_mul(self.tick_millis)
     }
 
+    /// [`Self::floor_millis`] in this timer's own ticks
+    /// ([`Self::tick_millis`]): the count the timer holds, so a reader that
+    /// works in ticks does not divide it back out.
+    #[must_use]
+    pub const fn floor_ticks(&self) -> u64 {
+        self.floor_ticks
+    }
+
     /// Timer granularity in milliseconds.
     #[must_use]
     pub const fn tick_millis(&self) -> u64 {
@@ -1139,7 +1147,9 @@ mod tests {
                 "the draws reach inside one floor of zero ({earliest} ms, floor {floor} ms)"
             );
 
-            let floor_ticks = floor / DEFAULT_EMBARGO_TICK_MILLIS;
+            let floor_ticks = adopted.floor_ticks();
+            assert_eq!(adopted.tick_millis(), d.tick_millis);
+            assert_eq!(floor, floor_ticks * adopted.tick_millis());
             for one_in in [10, PROPAGATION_FALSE_FAIL_ONE_IN, 1_000] {
                 let ticks = bare.table.survival_quantile_ticks(one_in) + floor_ticks;
                 assert_eq!(
