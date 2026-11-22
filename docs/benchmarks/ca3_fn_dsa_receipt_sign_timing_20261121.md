@@ -82,13 +82,20 @@ those entries would hide it. So the classes' restart rates are compared
 with a pooled two-proportion `z`, and each comparison's figure is the larger
 of its `|t|` and its `|z|`.
 
-**The pass lines.** Two comparisons, both pass lines:
+**The pass line, and one information line** (the maintainer's ruling of
+2026-11-21, made before any run):
 
-- `fixed-vs-varied`: key A in every slot against a key per slot.
-- `fixed-a-vs-fixed-b`: key A in every slot against key B in every slot.
-  With two fixed keys there is no difference in familiarity between the
-  classes. So a key-dependent time shows here even where `fixed-vs-varied`
-  could not tell it from familiarity (the lesson of `CA-2`).
+- **Pass line, `fixed-a-vs-fixed-b`:** key A in every slot against key B
+  in every slot. With two fixed keys there is no difference in familiarity
+  between the classes. So a time that depends on the key's value shows here
+  even where `fixed-vs-varied` could not tell it from familiarity (the
+  lesson of `CA-2`).
+- **Information, `fixed-vs-varied`:** key A in every slot against a key per
+  slot. A difference here shows that the time depends on a key being
+  repeated, not on its value. The receipt key is repeated in production, so
+  the fixed class is the production condition. Its figure, the larger of
+  `|t|` and the restart `|z|`, is printed beside the verdict and recorded
+  with it, and is never read against the lines.
 
 **The checks. Each can fail, and a failure voids the run before any line
 is read.**
@@ -147,9 +154,9 @@ pass-line figures are not reported as one.
 1. A check fails: **void**.
 2. The control is not detected (`|t|` ≤ 10): **void**.
 3. A null's figure is ≥ 4.5: **void**.
-4. Either pass line's figure is > 10: **fail**.
-5. Either pass line's figure is between 4.5 and 10: **inconclusive**.
-6. Both pass lines' figures are below 4.5: **pass**.
+4. The fixed pair's figure is > 10: **fail**.
+5. The fixed pair's figure is between 4.5 and 10: **inconclusive**.
+6. The fixed pair's figure is below 4.5: **pass**.
 
 **The inputs.** The harness's registered seed, with no seed argument. It
 prints `inputs=registered`. No run before this registration drew from it.

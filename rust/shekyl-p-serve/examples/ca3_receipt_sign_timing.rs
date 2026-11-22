@@ -64,12 +64,16 @@
 //! restart rates are compared too (a pooled two-proportion `z`), and the
 //! lines read the larger of `|t|` and `|z|`.
 //!
-//! # The lines
+//! # The pass line, and one information line (ruled 2026-11-21)
 //!
-//! - `fixed-vs-varied`: one key in every slot against a key per slot.
-//! - `fixed-pair`: key A in every slot against key B in every slot. Two
-//!   fixed keys: a key-dependent time with nothing for familiarity to act
-//!   on, which separates the two where `fixed-vs-varied` cannot (CA-2).
+//! - **Pass line, `fixed-a-vs-fixed-b`:** key A in every slot against key B
+//!   in every slot. Two fixed keys: a time that depends on the key's value,
+//!   with nothing for familiarity to act on (CA-2).
+//! - **Information, `fixed-vs-varied`:** one key in every slot against a key
+//!   per slot. A difference here shows that the time depends on a key being
+//!   repeated, not on its value; the receipt key is repeated in production,
+//!   so the fixed class is the production condition. Printed and recorded,
+//!   never read against the lines.
 //!
 //! # Checks, nulls and the control
 //!
@@ -722,8 +726,8 @@ fn main() {
         }
     );
     println!(
-        "pass: |t| and restart |z| < {T_PASS} on fixed-vs-varied and on fixed-pair; null comparisons: \
-         both < {T_PASS}; control: |t| > {T_LEAK}"
+        "pass: |t| and restart |z| < {T_PASS} on fixed-a-vs-fixed-b; null comparisons: both < {T_PASS}; \
+         control: |t| > {T_LEAK}; fixed-vs-varied is information (ruled 2026-11-21)"
     );
 
     // Every key is drawn here, before any comparison, so the keys do not
@@ -767,7 +771,7 @@ fn main() {
 
     // Pass line 1: one key in every slot against a key per slot.
     let fixed_varied = run(
-        "pass-line",
+        "information",
         [
             Class::fixed("fixed", key_a.again()),
             Class::varied("varied", &pool),
@@ -842,11 +846,11 @@ fn main() {
     let checks_hold = replicated && checked;
     let detected = control.max_t > T_LEAK;
     let unbiased = worst_null < T_PASS;
-    let worst_pass = fixed_varied.figure().max(fixed_pair.figure());
-    let passed = checks_hold && detected && unbiased && worst_pass < T_PASS;
+    let pass_figure = fixed_pair.figure();
+    let passed = checks_hold && detected && unbiased && pass_figure < T_PASS;
     println!(
-        "result={} fixed_vs_varied={:.2} fixed_pair={:.2} worst_null={worst_null:.2} \
-         control_abs_t={:.2}",
+        "result={} fixed_pair={:.2} worst_null={worst_null:.2} control_abs_t={:.2} \
+         information_fixed_vs_varied={:.2}",
         if !checks_hold {
             "VOID (a check failed, so the comparisons did not time what they claim)"
         } else if !detected {
@@ -855,14 +859,14 @@ fn main() {
             "VOID (a null comparison is over the line, so the harness is biased)"
         } else if passed {
             "PASS"
-        } else if worst_pass > T_LEAK {
+        } else if pass_figure > T_LEAK {
             "FAIL"
         } else {
             "INCONCLUSIVE"
         },
-        fixed_varied.figure(),
         fixed_pair.figure(),
-        control.max_t
+        control.max_t,
+        fixed_varied.figure()
     );
     std::process::exit(i32::from(!passed));
 }

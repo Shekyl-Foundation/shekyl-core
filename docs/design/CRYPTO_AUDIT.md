@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA registered (§3.1); ML-DSA-65 and SLH-DSA-192s harness built, unregistered (§3.2, §3.3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA, ML-DSA-65 and SLH-DSA-192s registered, unmeasured (§3.1 to §3.3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -471,6 +471,13 @@ devices, with its source read recorded here.
 [`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
 It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
 path, and the floor device. The row closes when all three pass.
+- **The pass line** is the fixed pair, key A against key B (the
+  maintainer's ruling, 2026-11-21).
+- **`fixed-vs-varied` is information.** It shows dependence on a key being
+  repeated, and the receipt key is repeated in production.
+- **The evidence** for FN-DSA is the timing runs and the source read below.
+  There is no static row: BINSEC cannot model the SSE2 floating-point
+  instructions the signer is built from (item 8).
 
 **Threat model.** Written before anything was measured.
 
@@ -550,7 +557,7 @@ lines.
      signature one key makes: a per-key constant. Averaging estimates it,
      but it is one number per key. What it can carry about the key is
      bounded by how finely that one number can be resolved, not by the
-     number of signatures. The registration's `fixed-a-vs-fixed-b` line is
+     number of signatures. The registration's `fixed-a-vs-fixed-b` pass line is
      the measurement that sees such a constant.
    **What the devices promise about those instructions: nothing.**
    - **Cortex-A72** (the floor device). Arm's optimisation guide (UAN 0016A)
@@ -642,7 +649,11 @@ above. None is chosen before then.
 
 ### 3.2 ML-DSA-65, transaction authorisation
 
-**Status: harness built, registration not yet made.** The harness is
+**Status: registered, unmeasured.** The registration is
+[`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
+Its pass line is a fixed pair matched on the work key generation does by
+design (ExpandS bytes, ExpandA rejections), and `fixed-vs-varied` is
+information (the maintainer's rulings, 2026-11-21). The harness is
 `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`, mode `ml-dsa`. It
 times `sign_pqc_auth_for_output` (`shekyl-crypto-pq/src/output.rs:1182`)
 through its seeded twin (`:1206`).
@@ -711,8 +722,12 @@ through its seeded twin (`:1206`).
 
 ### 3.3 SLH-DSA-SHA2-192s, message signing
 
-**Status: harness built, registration not yet made.** The harness is the
-same example, mode `slh-dsa`. It times `sign_message_pq_half`
+**Status: registered, unmeasured.** The registration is
+[`ca3_slh_dsa_msg_sign_timing_20261122.md`](../benchmarks/ca3_slh_dsa_msg_sign_timing_20261122.md).
+It has three comparisons (the fixed pair, the a/a null, and the control on
+it) at 1,000 signatures per class, and its control is sized from each
+device's measured noise (the maintainer's rulings, 2026-11-21). The harness
+is the same example, mode `slh-dsa`. It times `sign_message_pq_half`
 (`shekyl-crypto-pq/src/message_signing.rs:385`) as the wallet calls it:
 hedged with the OS's randomness (`try_sign(..., true)`), on one fixed
 message.
