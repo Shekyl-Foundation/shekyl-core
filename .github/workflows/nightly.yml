@@ -657,8 +657,12 @@ jobs:
     # leg past its `timeout-minutes` ends `cancelled`, not `failure`, and is
     # red (scripts/ci/nightly_red.py names it a timeout). On `failure()`
     # alone, 2026-11-21's economics-sim-ignored legs, cut at 180 minutes on
-    # both branches, opened no issue. A run a newer one superseded reports
-    # nothing. nightly_red.py --check holds `needs` and this condition.
+    # both branches, opened no issue. A run cancelled as a whole reports
+    # nothing: this workflow has no concurrency group, so no newer run
+    # supersedes a scheduled one, and a run cancelled by hand was cancelled
+    # by someone who already knows (ruled 2026-11-22). A job timeout leaves
+    # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
+    # --check holds `needs` and this condition.
     needs: [proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest

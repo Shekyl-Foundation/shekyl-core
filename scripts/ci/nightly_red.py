@@ -20,7 +20,14 @@ what it reports:
     the reporter's checkout), and a cancellation short of it otherwise;
   - a run cancelled as a whole (a newer run superseded it, or a person
     stopped it) reports nothing: the reporter's `if` is `!cancelled()`, so
-    it does not run. Read afterwards, a run whose job timed out also
+    it does not run. The nightly workflows have no concurrency group, so a
+    scheduled run is never superseded; a run cancelled by hand reports
+    nothing because the person who cancelled it already knows (ruled
+    2026-11-22). A job past its timeout leaves `!cancelled()` true for the
+    reporter: a scratch probe on 2026-11-22 ran both this reporter's and
+    the dev-red reporter's condition after a 1-minute timeout, each ran,
+    and `--run` named the leg "timed out"; runs cancelled while running and
+    while waiting each reported nothing. Read afterwards, a run whose job timed out also
     concludes `cancelled` (2026-11-21), so `--run` judges each job by its
     own record, and a cancellation short of the limit is named as one.
 

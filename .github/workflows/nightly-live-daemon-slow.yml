@@ -60,8 +60,14 @@ name: nightly/live-daemon-slow-gates
 #
 # A leg that runs past its `timeout-minutes` ends `cancelled`, not
 # `failure`, and is red: `report-red` runs on every scheduled run not
-# cancelled as a whole (a newer run superseding it is the one that reports),
-# and scripts/ci/nightly_red.py names a leg cut at its limit as a timeout.
+# cancelled as a whole, and scripts/ci/nightly_red.py names a leg cut at its
+# limit as a timeout. A job timeout leaves `!cancelled()` true for the jobs
+# after it, and a run cancelled as a whole reports nothing, whether it was
+# running or waiting (both shown on a scratch probe, 2026-11-22: the
+# reporter ran after a 1-minute timeout and classed it "timed out"). This
+# workflow has no concurrency group, so a scheduled run is never superseded:
+# a run cancelled as a whole was cancelled by hand, and it reports nothing
+# because the person who cancelled it already knows (ruled 2026-11-22).
 # It ran on `failure()` until 2026-11-21, when the slow leg's 240-minute cut
 # opened no issue. The reporter is its own job and the only one that can
 # write: the legs run the code of the branch they check out.
