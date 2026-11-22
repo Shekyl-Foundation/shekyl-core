@@ -235,17 +235,66 @@ What this shows:
   limit admits only 20 and 15 anyway). A snap cannot be stated once for all
   depths; `ICD-Q3` asks whether to snap at all.
 - **Splitting still costs verifiers more.** Every split adds a transaction's
-  fixed cost (about 22 ms here, 100 to 130 ms on the floor, §2.6), and the per-input cost
+  fixed cost (about 22 ms here, 100 to 130 ms on the diagnostic Pi, §2.6), and the per-input cost
   within a band is lower than across one.
 
-### 2.6 The floor arm — measured 2026-11-22
+**`ICD-F16` — the two row floors are the smallest the vector-commitment tape
+accepts; lowering them is a circuit change, not a tuning. Closed at its first
+task (2026-11-22).** `ipa_rows` raises the padded rows to at least 256 Selene
+and 128 Helios (`C1_TARGET_ROWS`, `C2_TARGET_ROWS`,
+`rust/shekyl-oxide/crypto/fcmps/src/lib.rs:74-75`). One input at depth 2
+needs only 111 and 32 rows, which would pad to 128 and 32, so the question
+was what the floors cost the smallest spends.
 
-**Measured, floor** (Raspberry Pi 4 Model B, Cortex-A72 ×4 at 1.5 GHz, not
-throttled, 56–59 °C, rustc 1.94 aarch64, release; a fresh clone at
-`27a832cf81` with the same scratch patch, built on the device; proof
-verification the median of 5 runs, the other terms one run; the raw captures
-are archived in the estate's measurement records). Rule 76: these are the
-values; the x86 table above is the diagnostic beside them.
+*Scope.* The Selene floor binds only for one input at depth 2. The Helios
+floor binds while `inputs × (layers / 2) < 4`: one input at depths 2–3 (32
+rows needed, the floor 4 times that), one input at depths 4–5 (64 rows, 2
+times), and two inputs at depths 2–3 (64 rows, 2 times). From depth 6 on, one
+input needs 96 rows, which pads to 128 without the floor. Depth 5 holds
+17 778 528 outputs, so **the floors touch only small spends on a young chain,
+and stop mattering at about 18 million outputs.** At most they cost one or
+two Helios halvings, 11–15 % of verification each on the diagnostic Pi.
+
+*Task 1, upstream's reason.* The floors arrived in upstream's
+`ecf94345` (2024-11-21, "Fix prove/verify for when the targetted amount of
+layers is exceeded"). Before it, the rows were fixed at `inputs × 256` and
+`inputs × 128`, one input's need at upstream's 8 target layers; the commit made
+the rows follow the layer count and kept those per-input sizes as floors,
+without a comment. The commit records no soundness or batching reason, but the
+code enforces one: **both floors are the minimum the vector-commitment tape
+can lay out.**
+- **Helios:** the tape places witness words of `COMMITMENT_WORD_LEN = 128`
+  slots and starts a new commitment only when the offset equals the commitment
+  length exactly (`tape.rs:47-58`). Fewer than 128 padded rows never closes a
+  commitment, so 128 is the floor.
+- **Selene:** `append_branch` asserts that the leaf branch fits one commitment
+  (`tape.rs:75`). Shekyl's leaf branch is `LEAF_TUPLE_WIDTH × LAYER_ONE_LEN` =
+  4 × 38 = 152 scalars, which needs 256 rows. Upstream's was 6 × 38 = 228, which
+  needs 256 too.
+
+*Task 2, the measurement.* Not run: with the floors lowered the prover refuses
+the layout, so there is no "lowered" configuration to time. Lowering them
+means changing the word length or the leaf branch's layout, a departure from
+the circuit as upstream had it audited, for a saving that exists only below
+depth 6. The finding closes here. (The model also shows the trade's other
+direction, for the record only: with more rows the same witness needs fewer
+commitments, so raising the floors shrinks small proofs, by about 30 % for one
+input at depth 2 at 2 048 / 512 rows, at the price of a larger inner-product
+argument and a larger generator table. Nothing here proposes it.)
+
+### 2.6 The diagnostic Pi arm — measured 2026-11-22; not the floor (`ICD-R5`)
+
+**Measured on the estate's test-load Pi 4, not on the floor device** (Raspberry
+Pi 4 Model B Rev 1.2, 4 GB, Cortex-A72 ×4 at 1.5 GHz, Ubuntu 26.04.1, kernel
+7.0, `ondemand` governor, not throttled, 56–59 °C, rustc 1.94 aarch64,
+release; a fresh clone at `27a832cf81` with the same scratch patch, built on
+the device; proof verification the median of 5 runs, the other terms one run;
+the raw captures are archived in the estate's measurement records). **This
+unit is a diagnostic beside the floor, as the x86 table is** (`ICD-R5`, Rick,
+2026-11-22: it exists to relieve test load and is never the worst case). Its
+ratios are findings; **none of its absolute figures is a floor value**, here
+or where §3 and §4 quote them. The floor device's cells are measured in the
+cutover (§8).
 
 | depth | n | rows | verify (total) | of which proof | auths | range proof | µs per weight byte | prove |
 | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -264,36 +313,33 @@ values; the x86 table above is the diagnostic beside them.
 | 3 | 17 | 4 096 / 1 024 | 1 497.2 ms | 1 452.1 ms | 22.2 ms | 22.9 ms | 13.14 | 38.5 s |
 | 3 | 22 | 4 096 / 1 024 | 1 650.5 ms | 1 599.0 ms | 28.7 ms | 22.9 ms | 11.33 | 45.3 s |
 
-What the floor adds:
+What this arm adds, as ratios:
 
-- **The steps are the same size on the floor.** A Selene step costs +34 % at
+- **The steps are the same size on an A72 as on x86.** A Selene step costs +34 % at
   depth 2 (18 → 19) and +43 % at depth 3 (12 → 13); a Helios step +15 % and
   +11 %. x86 measured +38 %, +50 %, +14 % and +10 %. The floor-to-x86 ratio of
   the proof term is 6.9 to 7.4 across every cell, so the A72 does not amplify
   the padding.
-- **The fixed per-transaction cost is about 100 to 130 ms on the floor**
+- **The fixed per-transaction cost is about 100 to 130 ms on this unit**
   (176 ms for one input, against a marginal 50 ms per input at depth 2 and
-  77 ms at depth 3 between 1 and 8 inputs). That is what each extra
-  transaction of a split consolidation costs every verifier.
-- **`ICD-F12` — this Pi 4 reads about 19 % slower than the floor device of
-  record; the absolute values above carry that, the ratios do not.** The same
-  harness on the same x86 workstation reads within 8 % of slice 6's x86 cells
-  (1 input at depth 3: 22.5 ms here against 23.3 ms; 8 inputs: 96.9 against
-  104.6), while on the floor it reads 19 % above slice 6's floor cells (156.0
-  against 130.6 ms; 687.3 against 578.1). A change in the proof would move both
-  arms; only the floor moved, so the difference is the device or its
-  conditions (a different Pi 4 unit, Ubuntu 26.04 and kernel 7.0, rustc 1.94,
-  the `ondemand` governor), not the workload. The floor-to-x86 ratio here is
-  6.9 to 7.4 against §80.6's pinned 5.56, which is §80.6's check firing as
-  designed. The same gap shows against the embargo table's door cells (176.4
-  and 524.9 ms here against 144.31 and 425.86 at depth 2). The padding steps
-  and the per-byte comparison in §3 are ratios within this device and stand;
-  every absolute floor figure in this document that comes from §2.6 is read on
-  a device about 19 % slower than the one the table was measured on. Which
-  Pi 4, under which governor, is *the* floor is a rule-76 question this round
-  raises and does not answer (§8). It has a consumer beyond this round: the
-  relay's embargo floor (#1516, merged) takes its verification term from the
-  table's door cells, so whichever way the question resolves reaches it.
+  77 ms at depth 3 between 1 and 8 inputs), about two thirds of a one-input
+  spend's whole verification. That is what each extra transaction of a split
+  consolidation costs every verifier; the floor's absolute value is the
+  cutover's measurement.
+- **`ICD-F12` — this unit reads about 19 % slower than the floor device; RULED
+  (`ICD-R5`): the floor is the other unit.** The same harness on the same x86
+  workstation reads within 8 % of slice 6's x86 cells (1 input at depth 3:
+  22.5 ms here against 23.3 ms; 8 inputs: 96.9 against 104.6), while on this
+  Pi it reads 19 % above slice 6's floor cells (156.0 against 130.6 ms; 687.3
+  against 578.1), and the same gap shows against the embargo table's door
+  cells (176.4 and 524.9 ms here against 144.31 and 425.86 at depth 2). A
+  change in the proof would move both arms; only the Pi moved. The two units
+  run the same OS, kernel, governor and toolchain and differ in the board: the
+  floor device is a Rev 1.4 at 1.8 GHz, this one a Rev 1.2 at 1.5 GHz, and
+  1.8 / 1.5 = 1.20. Its floor-to-x86 ratio, 6.9 to 7.4 against §80.6's pinned
+  5.56, is §80.6's check firing on the wrong device, as designed. The padding
+  steps and the per-byte comparison in §3 are ratios within this unit and
+  stand.
 
 ## 3. Job 1: work per block
 
@@ -304,7 +350,8 @@ counts, which made the cap irrelevant to per-block work. With the padding in
 view it is not flat:
 
 - **`ICD-F9` — a larger cap admits shapes that cost more per byte.** On the
-  floor at depth 3, a 13-input spend costs 14.17 µs per weight byte; the
+  diagnostic Pi at depth 3 (§2.6; a ratio, so it stands), a 13-input spend
+  costs 14.17 µs per weight byte; the
   costliest of the shapes measured that the cap of 8 admits costs 13.33 (a
   1-input spend at depth 2). Only 1 and 8 inputs were measured below the cap;
   7 inputs at depth 3 sits just past a Selene step and was not.
@@ -333,11 +380,13 @@ keep the cap at 8.
 
 ### 4.1 What one invalid transaction costs, at the floor
 
-Two floor sources: the embargo table's door sequence (`SPEC_VERIFY_COST`,
-2026-11-08 operands) and this round's harness (§2.6), read on a Pi 4 about 19 %
-slower than the table's (`ICD-F12`).
+Two sources: the embargo table's door sequence (`SPEC_VERIFY_COST`, 2026-11-08
+operands, measured on the floor device) and this round's harness on the
+diagnostic Pi (§2.6, **not floor values**; that unit is about 19 % slower,
+`ICD-F12`). The 22-input row on the floor device is the cutover's
+measurement (§8).
 
-| inputs | depth 2, table | depth 2, §2.6 | depth 3, §2.6 | depth 7, table (synthesized tree) |
+| inputs | depth 2, table (floor) | depth 2, §2.6 (diagnostic, not floor) | depth 3, §2.6 (diagnostic, not floor) | depth 7, table (floor, synthesized tree) |
 | ---: | ---: | ---: | ---: | ---: |
 | 1 | 144.31 ms | 176.4 ms | 180.4 ms | 163.11 ms |
 | 8 | 425.86 ms | 524.9 ms | 720.7 ms | 818.56 ms |
@@ -364,7 +413,7 @@ door inline (`port.rs:139`). Session tasks run on the transport runtime
 (`rust/shekyl-p2p-session/src/layer.rs:246`), whose worker count is
 `spans::WORKERS = 2` (`rust/shekyl-transport-layer/src/spans.rs:83`, a recorded
 assumption, §97). A proof verification therefore holds one of the two
-transport workers for its whole length: 0.18 s to 1.65 s on the floor (§2.6).
+transport workers for its whole length: 0.18 s to 1.65 s on the diagnostic Pi (§2.6, not floor values; about a sixth less on the floor device).
 Two in flight hold both, and every session's reads, writes, handshakes and
 timed syncs on that runtime wait behind them.
 
@@ -397,16 +446,18 @@ transaction.** Its recorded basis (`DAEMON_RELAY_PRIVACY.md` §97, the clearnet
 accept-rates row) is about 1 % of a floor core for 10 handshakes a second. A
 peer that sends one invalid transaction per session at the connector rate
 demands verification at 10 per second. The table is that **demand**, in
-worker-seconds per second; the transport runtime supplies 2:
+worker-seconds per second; the transport runtime supplies 2. Rows marked §2.6
+are read on the diagnostic Pi and are **not floor values**; on the floor device
+they are about a sixth lower (`ICD-F12`):
 
 | shape (source) | demand at the connector rate | per host (one per 6 s) |
 | --- | ---: | ---: |
-| 1 input, depth 2 (table / §2.6) | 1.44 / 1.76 | 0.024 / 0.029 |
-| 8 inputs, depth 2 (table / §2.6) | 4.26 / 5.25 | 0.071 / 0.087 |
-| 8 inputs, depth 3 (§2.6) | 7.21 | 0.120 |
+| 1 input, depth 2 (table / §2.6, not floor) | 1.44 / 1.76 | 0.024 / 0.029 |
+| 8 inputs, depth 2 (table / §2.6, not floor) | 4.26 / 5.25 | 0.071 / 0.087 |
+| 8 inputs, depth 3 (§2.6, not floor) | 7.21 | 0.120 |
 | 8 inputs, depth 7 (table) | 8.19 | 0.136 |
-| 22 inputs, depth 2 (§2.6) | 15.76 | 0.263 |
-| 22 inputs, depth 3 (§2.6) | 16.51 | 0.275 |
+| 22 inputs, depth 2 (§2.6, not floor) | 15.76 | 0.263 |
+| 22 inputs, depth 3 (§2.6, not floor) | 16.51 | 0.275 |
 
 What saturates is the transport runtime, not the device's cores. **At today's
 cap of 8, a clearnet flood from many addresses already demands more than the
@@ -451,7 +502,7 @@ clustering needs. It also costs more, per extra transaction:
 
 - weight: about 7.1 KB of fixed overhead (two outputs, their KEM ciphertexts,
   leaf entries and range proof, and the proof base), paid as fee;
-- verification: about 100 to 130 ms on the floor (§2.6), paid by every verifier;
+- verification: about 100 to 130 ms on the diagnostic Pi (§2.6, not a floor value), paid by every verifier;
 - latency: a wallet chaining the transactions waits out each output's
   maturity.
 
@@ -464,7 +515,7 @@ clustering needs. It also costs more, per extra transaction:
 **What the cap does not buy is uniformity.** At any cap the count stays public
 and correlates with wallet state. Uniformity would mean fixed-count
 transactions padded with dummy inputs, each needing a real membership proof
-(6.2 KB and 50 to 77 ms on the floor per input), which this round does not
+(6.2 KB and 50 to 77 ms per input on the diagnostic Pi), which this round does not
 propose.
 
 **Disposition proposed:** the privacy side favors the larger cap. Fewer,
@@ -585,16 +636,18 @@ the cutover sweeps them.
 
 ## 8. The measurements the cutover owes
 
-- **The embargo table, every cell, on the named floor in one session
+- **The embargo table, every cell, on the floor device in one session
   (`ICD-R5`).** `n_in = 1..=N(d)` at every depth tier the table covers, since a
   cell no legal transaction fills is not measured: 22 cells at each of depths
   2, 3 and 4, 21 at depths 5 and 6, 20 at depth 7, so 128 cells, the existing
-  four included. Measured on the device Rick names after the two-unit run,
-  never scaled from x86 (§80.3's correction; the `Provenance` test refuses a
-  scaled cell), never mixing devices, with the depth-7 column labelled a
-  synthesized projection (§81.2); claimed in the estate's usage file before the
-  run (rule 38). The embargo floor (#1516) follows from the table.
-- **The GAP-7 sweep at the new shapes** (§3), on the floor.
+  ones remeasured beside the new ones. On the floor device's configuration
+  (§9, `ICD-R5`) and nowhere else, after its cover-by-shape run ends
+  (2026-11-24T17:11Z); never scaled from x86 or from the diagnostic Pi (§80.3's
+  correction; the `Provenance` test refuses a scaled cell), never mixing
+  devices, with the depth-7 column labelled a synthesized projection (§81.2);
+  claimed in the estate's usage file before the run (rule 38). The embargo
+  floor (#1516) follows from the table.
+- **The GAP-7 sweep at the new shapes** (§3), on the floor device.
 - **The standoff reserve** re-derived (§7).
 - **The model's test vectors:** the 192 KAT cells and the real proofs past 8
   inputs pinned against the `const` `FcmpPlusPlus::proof_size` (`ICD-R1`), and
@@ -702,26 +755,42 @@ these requirements from here:
 - **Tor,** which has no daemon-side accept limiter.
 - **The budget in core-time,** read from `f(n_in, depth)`.
 
-### `ICD-R5` — one named floor, and every embargo cell measured on it in one session (from `ICD-F12`) — RULED
+### `ICD-R5` — one named floor device, and every embargo cell measured on it in one session (from `ICD-F12`) — RULED
 
-- **First,** the same binary is run on both Pi 4 units for the two door cells
-  (1 and 8 inputs at depth 2), and the report says whether the 19 % is the unit
-  or the OS and governor. **What is already known, read-only, 2026-11-22:** the
-  two units run the same Ubuntu 26.04.1, kernel 7.0.0-1023-raspi, `ondemand`
-  governor and rustc 1.94. They differ in the board: one is a Rev 1.4 (8 GB)
-  whose clock tops out at 1.8 GHz, the other the Rev 1.2 (4 GB) used in §2.6, at
-  1.5 GHz, and 1.8 / 1.5 = 1.20. The timed run is owed: the Rev 1.4 unit is a
-  measuring host of the cover-by-shape run until 2026-11-24, and its slot
-  follows that run (§11).
-- **Then** Rick names the floor device.
-- **The cutover measures all 128 cells** (`n_in = 1..=N(d)` at depths 2 to 7)
-  on that device in one session. The table never mixes devices. The embargo
-  floor (#1516) follows from the table.
+**The floor is a configuration (Rick, 2026-11-22):**
+
+| | the floor device | the diagnostic Pi (§2.6) |
+| --- | --- | --- |
+| board | Raspberry Pi 4 Model B **Rev 1.4** | Raspberry Pi 4 Model B Rev 1.2 |
+| CPU | Cortex-A72 ×4, **1.8 GHz** maximum | Cortex-A72 ×4, 1.5 GHz maximum |
+| RAM | **8 GB** | 4 GB |
+| OS | Ubuntu 26.04.1 LTS, kernel 7.0.0-1023-raspi, 64-bit | the same |
+| governor | `ondemand` | the same |
+| toolchain | rustc 1.94.0 aarch64 | the same |
+| role | **the floor: every floor measurement runs here, and only here** | relieves test load; usable for ratios, builds and tests; never the worst case |
+
+Read on 2026-11-22 from each device. The floor's 8 GB meets Rick's standing
+recommendation of at least 8 GB for a 64-bit system running the post-quantum
+algorithms. The two units differ in board revision, clock and RAM, not in
+software; the clock ratio (1.20) accounts for `ICD-F12`'s 19 %. The two-unit
+comparison run first proposed here is dropped: the floor is named, so the
+other unit's numbers are diagnostics whatever their cause.
+
+- **The cutover measures every embargo cell on the floor device in one
+  session,** after the cover-by-shape run on it ends (2026-11-24T17:11Z):
+  `n_in = 1..=N(d)` at depths 2 to 7, 128 cells. The table never mixes devices.
+  The embargo floor (#1516) follows from the table.
+- **The existing cells are remeasured with the new ones (this lane's call).**
+  The 48 cells already measured on that device stay valid as records, but the
+  table's own notes record its masks-and-proof terms as pre-`PL-D3`, and one
+  session on one binary is the only way every cell answers the same question.
+  So all 128 are measured together, and the old cells are kept as the prior
+  they are compared against, as §81.3 asks of a re-measurement.
 
 ## 10. Handed to EUP-5 G — findings
 
 - **`ICD-Q6` — weight against verification cost.** The cost per weight byte
-  already spreads from 8.92 to 13.33 µs across today's shapes on the floor
+  already spreads from 8.92 to 13.33 µs across today's shapes on the diagnostic Pi
   (§2.6), and the cap adds about 6 % to the top of that spread (§3). Whether
   weight should carry an FCMP++ verification charge on the proof's padded
   rows, as it carries a clawback for range proofs, is G's question.
@@ -782,9 +851,9 @@ mid-band at depths 2 and 3.
 **Recommendation: (a).** A snap would trade a privacy and fee cost paid by every
 consolidation for a per-transaction verifier saving that the relay round and
 the weight limit already bound. The floor arm (§2.6) shows the steps are no
-larger on the floor (+34 % and +43 % for a Selene step) than on x86. A snap to
-18 would save about 30 % of verification at depth 2 per transaction (1 576 ms
-to 1 123 ms) and nothing at depth 3, where 13 is already past the step.
+larger on an A72 (+34 % and +43 % for a Selene step on the diagnostic Pi) than
+on x86. A snap to 18 would save about 30 % of verification at depth 2 per
+transaction (1 576 ms to 1 123 ms on the diagnostic Pi) and nothing at depth 3, where 13 is already past the step.
 
 ### `ICD-Q5` — the weight limit moves at EUP-5 G
 
@@ -820,35 +889,52 @@ table, and more embargo cells over the chain's life.
 **The question.** What output-count ceiling does the chain commit to, and so
 what maximum depth?
 
+**The rate the chain is allowed to write.** The margin is measured against
+Shekyl's own limit, not another chain's output rate. An output costs 1 269
+bytes of weight (35 for the output, 50 of CT base, the 1 120-byte KEM
+ciphertext and a 64-byte leaf entry). The store's write budget, PB-R2
+(`DAEMON_REDB_STORE.md` §1.3a: at most 1 GB a day on the floor device at design
+load), therefore bounds the chain at about **788 000 outputs a day**, and that
+is an upper bound, since not every written byte is an output. (At today's
+300 000-byte zone, full blocks every 120 s write about 216 MB a day, about
+170 000 outputs, inside the budget.)
+
 **The options, with their numbers.** Outputs at depth `D` are
 38 × the product of the widths of layers 1 to D − 1 (18 at odd layers, 38 at
 even ones), so depth 2 holds 684, as the curve-tree drift guard pins. Years to
-fill are at 5 × 10^4 outputs a day (about Monero's) and 10^6 a day (about
-Bitcoin's). Generator counts are `ICD-R2`'s, at today's weight limit. Embargo
-cells are every `n_in = 1..=N(d)` at depths 2 to `D` (the table today stops at
-depth 7, 128 cells, and extends as the tree grows).
+fill are at the write budget's 788 000 outputs a day and at a hundred times
+it. Generator counts are `ICD-R2`'s, at today's weight limit. Embargo cells
+are every `n_in = 1..=N(d)` at depths 2 to `D` (the table today stops at depth
+7, 128 cells, and extends as the tree grows).
 
-| max depth | outputs | years at 5×10^4 a day | years at 10^6 a day | cap at the deepest tree | generators (Selene / Helios) | embargo cells, depths 2 to D |
+| max depth | outputs | years at the write budget | years at 100× the budget | cap at the deepest tree | generators (Selene / Helios) | embargo cells, depths 2 to D |
 | ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| 8 | 2.2 × 10^11 | 12 000 | 600 | 20 | 8 192 / 4 096 | 148 |
-| 10 | 1.5 × 10^14 | 8.2 × 10^6 | 4.1 × 10^5 | 19 | 8 192 / 4 096 | 187 |
-| **12** | **1.0 × 10^17** | **5.6 × 10^9** | **2.8 × 10^8** | **18** | **8 192 / 4 096** | **224** |
-| 14 | 7.0 × 10^19 | 3.8 × 10^12 | 1.9 × 10^11 | 18 | 8 192 / 4 096 | 260 |
-| 16 | 4.8 × 10^22 | 2.6 × 10^15 | 1.3 × 10^14 | 17 | 16 384 / 8 192 | 295 |
-| 24 (today) | 1.0 × 10^34 | 5.7 × 10^26 | 2.9 × 10^25 | 15 | 16 384 / 8 192 | 425 |
+| 8 | 2.2 × 10^11 | 760 | 7.6 | 20 | 8 192 / 4 096 | 148 |
+| 10 | 1.5 × 10^14 | 520 000 | 5 200 | 19 | 8 192 / 4 096 | 187 |
+| **12** | **1.0 × 10^17** | **3.6 × 10^8** | **3.6 × 10^6** | **18** | **8 192 / 4 096** | **224** |
+| 14 | 7.0 × 10^19 | 2.4 × 10^11 | 2.4 × 10^9 | 18 | 8 192 / 4 096 | 260 |
+| 16 | 4.8 × 10^22 | 1.7 × 10^14 | 1.7 × 10^12 | 17 | 16 384 / 8 192 | 295 |
+| 24 (today) | 1.0 × 10^34 | 3.6 × 10^25 | 3.6 × 10^23 | 15 | 16 384 / 8 192 | 425 |
 
 The cap itself is 22 at every candidate (it is set at depths 2 to 4). The
 generator counts do not distinguish depths 8 to 14: the `ipa_rows` padding puts
 them all at 8 192 / 4 096.
 
-**Recommendation: 12, about 10^17 outputs.** It is 280 million years at
-Bitcoin's output rate and 2.8 million at a hundred times it, which no
-assumption about adoption reaches. Beyond 12 the margin buys nothing a
-reader could name. It costs three inputs at the deepest tree (15 against 18)
-and doubles the generator table at 16 or deeper. Below 12 the margin shrinks
-toward rates a successful chain could see over its life: depth 10 is about
-4 000 years at a hundred times Bitcoin's rate. The tree's eventual
+**Recommendation: 12, about 10^17 outputs.** At the most the chain is allowed
+to write it is about 360 million years, and 3.6 million at a hundred times
+that budget. Depth 10 would also be safe, at about 520 000 years, but the extra
+margin of 12 costs almost nothing: the generator count is identical at depths
+8 to 14; the cap at the deepest tree is 18 against 19, at a depth the chain
+will not reach; and the 37 extra embargo cells are measured only if the tree
+ever gets that deep. Beyond 12 the margin buys nothing a reader could name,
+and at 16 or deeper the generator table doubles. The tree's eventual
 replacement at the V4 lattice-only transition is not counted on.
+
+**Re-checked when EUP-5 G moves the zone.** The ceiling rests on the write
+budget and on today's weight limit; a larger zone raises the rate the chain
+can write toward the budget, and a larger weight limit raises the cap and the
+generator counts (`ICD-F15`). G's ruling re-runs this table.
+
 Under `ICD-R1` and `ICD-R2` the one constant lives in `shekyl-curve-generators`
 beside the counts it sizes, and every reader (the wire's model, `shekyl-fcmp`,
 `shekyl-curve-tree`, the embargo table) reads it from there.
@@ -869,12 +955,6 @@ keeps a fragment train under cover-by-shape is that design's question, and its
 measuring run ends 2026-11-24. This round asks for it to be ruled after that
 run, with the cap's value in hand.
 
-### The second Pi's slot
-
-`ICD-R5`'s timed run on the Rev 1.4 unit waits for the cover-by-shape run to end
-(2026-11-24T17:11Z), unless Rick accepts a five-minute deviation in that run's
-registered plan. The owning lane will mark the window if he does.
-
 ## 12. Out of scope
 
 Automatic consolidation in the wallet: its own design round, with its privacy
@@ -891,3 +971,10 @@ the relay lane's round (`ICD-R4`).
   `ICD-F12`). `ICD-Q6` and `ICD-F15` handed to EUP-5 G. `ICD-Q7` opened. Still
   open: `ICD-Q1`, `ICD-Q3`, `ICD-Q5`, `ICD-Q7`, the reserve's value, the
   fragment count.
+- **2026-11-22 — `ICD-F12` ruled into `ICD-R5`; `ICD-F16` recorded and closed;
+  `ICD-Q7` restated.** The floor device is the Rev 1.4, 8 GB, 1.8 GHz Pi 4
+  (configuration in §9); §2.6's unit is a diagnostic, and every absolute figure
+  taken from it is marked not a floor value. The two-unit run is dropped. The
+  row floors are the vector-commitment tape's minimum (`ICD-F16`). `ICD-Q7`'s
+  margin is measured against the store's write budget (PB-R2), not other
+  chains' rates.
