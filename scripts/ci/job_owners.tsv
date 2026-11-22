@@ -124,7 +124,7 @@ scripts/ci/domain_registry_gate.sh	grep-gates:grep-gates
 scripts/ci/drop_runner_chrome_apt_source.sh	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,grep-gates:grep-gates,nightly:bench-full
 scripts/ci/engine_decomposition_ratchet.conf	grep-gates:grep-gates
 scripts/ci/failed_tests.py	grep-gates:grep-gates,merge-ready-retest:report,report-dev-red:report
-scripts/ci/fetch_test_chain.py	chain-forge:hosted-pull,chain-forge:scope,nightly:chain-ingest-ignored,nightly:producer-gate
+scripts/ci/fetch_test_chain.py	chain-forge:hosted-pull,chain-forge:scope,freebsd-nightly:freebsd,nightly:chain-ingest-ignored,nightly:producer-gate
 scripts/ci/followups_owner_grandfather.txt	docs-gates:check-doc-links
 scripts/ci/gui_wallet_core_deps.toml	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/ignored_set_chain_forge.sh	chain-forge:aarch64,chain-forge:x86_64,rust-audit-test:rust-audit-and-test
@@ -148,7 +148,7 @@ scripts/ci/push_scope_base.sh	build:changes,rust-audit-test:changes
 scripts/ci/require_live_tests.sh	tor-pin-verify:verify
 scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:slow-gates
 scripts/ci/run_live_tor_tests.sh	grep-gates:grep-gates,tor-pin-verify:verify
-scripts/ci/rust_scoped_tests.sh	merge-ready-retest:retest,rust-audit-test:rust-audit-and-test
+scripts/ci/rust_scoped_tests.sh	freebsd-nightly:freebsd,merge-ready-retest:retest,rust-audit-test:rust-audit-and-test
 scripts/ci/shipped_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/strip_c_comments.py	depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/test_check_doc_code_citations.py	docs-gates:check-doc-links

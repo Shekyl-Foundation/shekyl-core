@@ -1,0 +1,215 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# FreeBSD is a release target (ruled 2026-11-21). This is its nightly test
+# run: the Linux Rust job's workspace tests (scripts/ci/rust_scoped_tests.sh
+# with RUST_TESTS=all: the pinned nextest, its `ci` profile, `--locked`,
+# the same exclusion, then the doctests) on FreeBSD 14.4, in a VM on a
+# GitHub-hosted runner, at `dev`'s HEAD.
+#
+# - The tests run as an unprivileged user. Root passes checks a user's
+#   process cannot (P2_NOTRACE, file modes, locked-memory limits), so a
+#   test run as root can pass for the wrong reason.
+# - The hosted test chain is fetched on the Linux runner, where
+#   scripts/ci/fetch_test_chain.py checks every layer against its pin,
+#   before the VM starts; the VM reads it from the workspace copy. Nothing
+#   is fetched from GHCR inside the VM.
+# - The workspace is copied into the VM (rsync; a shared NFS workspace
+#   does not work: cargo cannot take its lock on Cargo.lock there) and the
+#   target lives on the VM's own disk, so only fbsd-results/ comes back.
+#   The VM step itself always succeeds, so the action copies the results
+#   back; the verdict step reads the statuses they record.
+# - Memory headroom is held to at least 1 GB: free + inactive + laundry
+#   pages (on UFS the page cache is in the inactive queue and reclaimable),
+#   sampled every 30 s. A run that dips under it is red even if every test
+#   passed, and swap use is reported beside it.
+# - Scheduled at 09:37 UTC, off the hour and clear of the 03:00 to 07:00
+#   UTC nightly block and of the 15:17 UTC fuzz run. A red or timed-out run reaches
+#   `report-dev-red`, which opens or threads `dev RED: FreeBSD nightly /
+#   <job>` and closes it when the job is next green.
+#
+# Cost, measured on the scratch runs of this job at dev 46f266ac08
+# (2026-11-22): about 115 runner-minutes a night, one leg. As the
+# unprivileged user: VM boot and packages about 1.5 min, toolchain under 1
+# min, cold build 16.7 min, tests 93 min, doctests 0.5 min; 9564 tests
+# passed (one flaky, routed to its owner), the least memory available 5.8
+# GB. As root the same set took 75.5 min of tests, so the test time varies
+# by a quarter run to run. Installing the pinned nextest from source adds
+# a few minutes the scratch runs did not have.
+
+name: FreeBSD nightly
+
+on:
+  schedule:
+    - cron: "37 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freebsd:
+    name: FreeBSD 14.4, workspace tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 210  # green scratch runs 91 and 111 min (cold build, 4 vCPU), plus nextest's install; about 1.8 times the slower
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+          submodules: recursive
+          persist-credentials: false
+
+      - name: the hosted test chain, fetched and checked on the runner
+        # The pinned oras has no FreeBSD build in the pin; the VM reads the
+        # checked chain from the workspace copy instead.
+        run: python3 scripts/ci/fetch_test_chain.py shard-fill
+
+      - name: FreeBSD VM
+        # v1.6.0, pinned by commit (MIT; boots the image under KVM).
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b
+        with:
+          release: '14.4'
+          mem: 12288
+          sync: rsync
+          copyback: true
+          sync-time: true
+          disable-cache: true
+          prepare: |
+            # ca_root_nss: rustup's and cargo's TLS find no CA bundle in
+            # the base image. bash: rust_scoped_tests.sh.
+            pkg install -y bash ca_root_nss curl git python3 rsync
+            pw useradd -n shekyltest -m -s /bin/sh -c 'unprivileged test user'
+          run: |
+            # The action runs this under `sh -e`: each phase's status is
+            # captured with `|| rc=$?` and recorded, never fatal here.
+            set -u
+            W=$(pwd)
+            R="$W/fbsd-results"
+            mkdir -p "$R"
+            stamp() { echo "$1 $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> "$R/timings.txt"; }
+            stamp vm-run-start
+            {
+              uname -a
+              sysctl kern.vm_guest hw.ncpu hw.physmem hw.usermem hw.model
+              swapinfo -k
+              df -h /
+              su -l shekyltest -c 'id; ulimit -a'
+            } > "$R/vm-facts.txt" 2>&1
+            cat "$R/vm-facts.txt"
+            (
+              ps=$(sysctl -n vm.stats.vm.v_page_size)
+              while :; do
+                set -- $(sysctl -n vm.stats.vm.v_free_count vm.stats.vm.v_inactive_count vm.stats.vm.v_laundry_count)
+                sw=$(swapinfo -k | awk 'NR>1 { u += $3 } END { print u + 0 }')
+                echo "$(date +%s) free_mb=$(( $1 * ps / 1048576 )) inact_mb=$(( $2 * ps / 1048576 )) laundry_mb=$(( $3 * ps / 1048576 )) avail_mb=$(( ($1 + $2 + $3) * ps / 1048576 )) swap_used_kb=$sw"
+                sleep 30
+              done
+            ) > "$R/memory.log" 2>&1 &
+            sampler=$!
+
+            # The test user's own copy of the workspace (the action's is
+            # under /root, mode 0700).
+            T=/home/shekyltest
+            rsync -a "$W/" "$T/ws/" --exclude fbsd-results
+            mkdir -p "$T/results"
+            chown -R shekyltest "$T/ws" "$T/results"
+            cat > "$T/phases.sh" <<'PHASES'
+            set -u
+            R=$HOME/results
+            stamp() { echo "$1 $(date -u +%Y-%m-%dT%H:%M:%SZ) $(date +%s)" >> "$R/timings.txt"; }
+            export CARGO_TARGET_DIR="$HOME/target"
+            export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
+            export PATH="$CARGO_HOME/bin:$PATH"
+            cd "$HOME/ws/rust"
+
+            # The toolchain rust-toolchain.toml pins, and the nextest
+            # rust_scoped_tests.sh pins, by the Linux job's own recipe.
+            stamp toolchain-start
+            tc_rc=0
+            channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+            {
+              curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-all-errors -o /tmp/rustup-init.sh https://sh.rustup.rs &&
+              sh /tmp/rustup-init.sh -y --default-toolchain "$channel" --profile minimal --no-modify-path &&
+              bash ../scripts/ci/rust_scoped_tests.sh install-nextest
+            } > "$R/toolchain.log" 2>&1 || tc_rc=$?
+            stamp toolchain-end
+            echo "toolchain rc=$tc_rc" >> "$R/timings.txt"
+            if [ "$tc_rc" -ne 0 ]; then tail -n 40 "$R/toolchain.log"; exit 0; fi
+
+            stamp build-start
+            build_rc=0
+            cargo nextest run --locked --profile ci --no-run --workspace --exclude shekyl-randomx-differential > "$R/build.log" 2>&1 || build_rc=$?
+            stamp build-end
+            echo "build rc=$build_rc" >> "$R/timings.txt"
+            if [ "$build_rc" -ne 0 ]; then grep -E '^error' "$R/build.log"; tail -n 40 "$R/build.log"; exit 0; fi
+
+            stamp test-start
+            test_rc=0
+            cargo nextest run --locked --profile ci --workspace --exclude shekyl-randomx-differential > "$R/test.log" 2>&1 || test_rc=$?
+            stamp test-end
+            # nextest's final status lines, into the job log, where
+            # report-dev-red's failed_tests.py names the failing tests.
+            sed -n '/^ *Summary \[/,$p' "$R/test.log"
+            find "$CARGO_TARGET_DIR/nextest" -name junit.xml -exec cp {} "$R/junit.xml" \;
+            stamp doctest-start
+            doc_rc=0
+            RUST_TESTS=all bash ../scripts/ci/rust_scoped_tests.sh doctests > "$R/doctest.log" 2>&1 || doc_rc=$?
+            stamp doctest-end
+            grep -E '^test .* \.\.\. FAILED$' "$R/doctest.log"
+            echo "test rc=$test_rc doctest rc=$doc_rc" >> "$R/timings.txt"
+            PHASES
+            stamp user-phases-start
+            su -l shekyltest -c "sh $T/phases.sh" || echo "phases rc=$?" >> "$R/timings.txt"
+            if [ -f "$T/results/timings.txt" ]; then
+              cat "$T/results/timings.txt" >> "$R/timings.txt"
+              rm "$T/results/timings.txt"
+            fi
+            stamp user-phases-end
+            kill "$sampler" || true
+            cp -R "$T/results/." "$R/"
+            awk '{ split($5, a, "="); if (min == "" || a[2] + 0 < min) min = a[2] + 0 } END { print "least available MB " min }' "$R/memory.log" >> "$R/timings.txt"
+            awk '{ split($6, a, "="); if (a[2] + 0 > max) max = a[2] + 0 } END { print "most swap used KB " max + 0 }' "$R/memory.log" >> "$R/timings.txt"
+            cat "$R/timings.txt"
+
+      - name: verdict
+        # Each phase passed, and the VM kept at least 1 GB available.
+        run: |
+          set -u
+          t=fbsd-results/timings.txt
+          cat "$t"
+          rc=0
+          for want in 'toolchain rc=0' 'build rc=0' 'test rc=0 doctest rc=0'; do
+            if ! grep -qx "$want" "$t"; then
+              echo "::error::FreeBSD: '$want' not recorded"
+              rc=1
+            fi
+          done
+          least=$(sed -n 's/^least available MB \([0-9][0-9]*\)$/\1/p' "$t")
+          if [ -z "$least" ]; then
+            echo "::error::FreeBSD: no memory sample recorded"
+            rc=1
+          elif [ "$least" -lt 1024 ]; then
+            echo "::error::FreeBSD: the VM's available memory fell to $least MB, under the 1024 MB floor"
+            rc=1
+          fi
+          exit "$rc"
+
+      - name: results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: freebsd-nightly
+          path: fbsd-results/
+          retention-days: 14
+
+  report-dev-red:
+    needs: [freebsd]
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/report-dev-red.yml
