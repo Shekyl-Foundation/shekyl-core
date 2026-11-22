@@ -150,6 +150,14 @@ enum Mode {
     SlhDsa,
     /// `slh-dsa`'s per-device noise calibration: the a/a null alone.
     SlhDsaNoise,
+    /// Diagnostic, not a registered line: ML-DSA's matched pair with key
+    /// generation alone timed (the output's seed derivation and
+    /// `keygen_from_seed`).
+    MlDsaKeygen,
+    /// Diagnostic, not a registered line: ML-DSA's matched pair with signing
+    /// alone timed (fips204's `try_sign_with_seed` on keys generated before
+    /// the loop).
+    MlDsaSign,
 }
 
 /// A class's secrets: one secret for every entry, or a fresh one per entry.
@@ -809,6 +817,128 @@ fn matched_ml_dsa_pair(
     }
 }
 
+/// One diagnostic comparison: `op` timed alone on class `which`'s key, the
+/// classes interleaved by a coin drawn before the loop, as every comparison
+/// here is. Each entry draws a fresh 32-byte nonce seed and 64-byte message.
+fn compare_op<K>(
+    keys: [&K; 2],
+    sizing: Sizing,
+    inputs: &mut Inputs,
+    planted: Option<u64>,
+    mut op: impl FnMut(&K, &[u8; 32], &[u8; 64]) -> bool,
+) -> Outcome {
+    let total = sizing.samples + sizing.calibration;
+    let entries: Vec<(u8, [u8; 32], [u8; 64])> = (0..total)
+        .map(|_| {
+            (
+                u8::from(inputs.next() & 1 == 1),
+                inputs.array(),
+                inputs.array(),
+            )
+        })
+        .collect();
+    let mut times = vec![0u64; total];
+    let mut returned = 0usize;
+    for (index, (class, nonce, message)) in entries.iter().enumerate() {
+        let start = Instant::now();
+        let ok = op(
+            keys[usize::from(*class)],
+            black_box(nonce),
+            black_box(message),
+        );
+        if let Some(iterations) = planted {
+            if *class == 1 {
+                spin(iterations);
+            }
+        }
+        times[index] = start.elapsed().as_nanos() as u64;
+        returned += usize::from(ok);
+    }
+    let checks_hold = returned == total;
+    println!(
+        "  check entries={total} returned={returned} verdict={}",
+        if checks_hold { "as-intended" } else { "FAILED" }
+    );
+    let which: Vec<u8> = entries.iter().map(|e| e.0).collect();
+    let (max_t, median_ns, n) = statistics(&which, &times, sizing);
+    Outcome {
+        raw_sd_ns: raw_sd(&times[sizing.calibration..]),
+        max_t,
+        median_ns,
+        samples: n,
+        checks_hold,
+    }
+}
+
+/// The localisation of ML-DSA's matched-pair crossing (CRYPTO_AUDIT.md
+/// §3.2): the same matched pair the `ml-dsa` mode draws for this seed, with
+/// key generation alone or signing alone timed. Diagnostic: it reads no
+/// registered line and prints no verdict, only the figures.
+fn ml_dsa_localisation(mode: Mode, sizing: Sizing, inputs: &mut Inputs, seed: u64) -> ! {
+    use fips204::traits::Signer as _;
+    use shekyl_crypto_pq::derivation::keygen_from_seed;
+    use shekyl_crypto_pq::output::output_ml_dsa_seed_for_tests;
+
+    let (a, b, a_work, b_work, drawn) = matched_ml_dsa_pair(inputs);
+    let half = if mode == Mode::MlDsaKeygen {
+        "key generation alone (seed derivation + keygen_from_seed)"
+    } else {
+        "signing alone (fips204 try_sign_with_seed, keys generated before the loop)"
+    };
+    println!("CA-3 ML-DSA localisation, diagnostic (no registered line): {half}");
+    println!(
+        "arch={} os={} samples_per_comparison={} seed={seed} matched-pair candidates_drawn={drawn} \
+         expand_s_bytes={}/{} expand_a_rejected={}/{} replicates={}/{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        sizing.samples,
+        a_work.expand_s_bytes,
+        b_work.expand_s_bytes,
+        a_work.expand_a_rejected,
+        b_work.expand_a_rejected,
+        a_work.replicates,
+        b_work.replicates,
+    );
+    let report = |label: &str, o: &Outcome| {
+        println!(
+            "{label} max_abs_t={:.2} median_ns={:.0} raw_sd_ns={:.0} n0={:.0} n1={:.0}",
+            o.max_t, o.median_ns, o.raw_sd_ns, o.samples[0], o.samples[1]
+        );
+    };
+    let (pair, null, control) = if mode == Mode::MlDsaKeygen {
+        let keygen = |ss: &[u8; SHARED_SECRET_LEN], _: &[u8; 32], _: &[u8; 64]| {
+            let seed = output_ml_dsa_seed_for_tests(black_box(ss), 0);
+            black_box(keygen_from_seed(&seed)).is_ok()
+        };
+        let pair = compare_op([&a, &b], sizing, inputs, None, keygen);
+        let null = compare_op([&a, &a], sizing, inputs, None, keygen);
+        let iterations = calibrate_spin(null.median_ns * CONTROL_LEAK_FRACTION);
+        let control = compare_op([&a, &a], sizing, inputs, Some(iterations), keygen);
+        (pair, null, control)
+    } else {
+        let key = |ss: &[u8; SHARED_SECRET_LEN]| {
+            keygen_from_seed(&output_ml_dsa_seed_for_tests(ss, 0))
+                .expect("a derived seed generates")
+                .1
+        };
+        let (sk_a, sk_b) = (key(&a), key(&b));
+        let sign = |sk: &fips204::ml_dsa_65::PrivateKey, nonce: &[u8; 32], message: &[u8; 64]| {
+            black_box(sk.try_sign_with_seed(nonce, message, &[])).is_ok()
+        };
+        let pair = compare_op([&sk_a, &sk_b], sizing, inputs, None, sign);
+        let null = compare_op([&sk_a, &sk_a], sizing, inputs, None, sign);
+        let iterations = calibrate_spin(null.median_ns * CONTROL_LEAK_FRACTION);
+        let control = compare_op([&sk_a, &sk_a], sizing, inputs, Some(iterations), sign);
+        (pair, null, control)
+    };
+    report("diagnostic=fixed-a-vs-fixed-b", &pair);
+    report("null=fixed-a-vs-fixed-a", &null);
+    report("control=fixed-a-vs-fixed-a(planted 0.5%)", &control);
+    std::process::exit(i32::from(
+        !(pair.checks_hold && null.checks_hold && control.checks_hold),
+    ));
+}
+
 fn usage() -> ! {
     eprintln!(
         "usage: ca3_pq_sign_timing ml-dsa [SAMPLES [SEED]]\n       \
@@ -842,6 +972,19 @@ fn main() {
                 Some(plant.parse::<f64>().expect("PLANT_NS is a number")),
             )
         }
+        Some(name @ ("ml-dsa-keygen" | "ml-dsa-sign")) => {
+            let samples = arg(2).map_or(50_000, |s| s.parse().expect("SAMPLES is a number"));
+            (
+                if name == "ml-dsa-keygen" {
+                    Mode::MlDsaKeygen
+                } else {
+                    Mode::MlDsaSign
+                },
+                Sizing::new(samples, ML_DSA_CALIBRATION_DIVISOR),
+                parse_seed(arg(3)),
+                None,
+            )
+        }
         Some("slh-dsa-noise") => {
             let Some(seed) = arg(2) else { usage() };
             (
@@ -854,6 +997,9 @@ fn main() {
         _ => usage(),
     };
     let mut inputs = Inputs(seed);
+    if matches!(mode, Mode::MlDsaKeygen | Mode::MlDsaSign) {
+        ml_dsa_localisation(mode, sizing, &mut inputs, seed);
+    }
 
     println!(
         "CA-3 {} signing timing (the shipped entry, derivation included), inputs prepared before the loop",
@@ -861,6 +1007,7 @@ fn main() {
             Mode::MlDsa => "ML-DSA-65 transaction authorisation (fips204 0.5.0)",
             Mode::SlhDsa | Mode::SlhDsaNoise =>
                 "SLH-DSA-SHA2-192s message signature (fips205 0.5.0)",
+            Mode::MlDsaKeygen | Mode::MlDsaSign => unreachable!("handled above"),
         }
     );
     println!(
@@ -958,6 +1105,7 @@ fn main() {
                 planted_ns,
             )
         }
+        Mode::MlDsaKeygen | Mode::MlDsaSign => unreachable!("handled above"),
         Mode::SlhDsa | Mode::SlhDsaNoise => {
             let segment = segment(&mut inputs);
             let a = Secrets::Fixed("fixed-a", inputs.array());
