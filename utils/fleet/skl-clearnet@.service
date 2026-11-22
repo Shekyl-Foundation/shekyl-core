@@ -33,6 +33,9 @@ RuntimeDirectory=shekyl-fleet/%i
 RuntimeDirectoryMode=0700
 Restart=on-failure
 RestartSec=10
+# Exit 130 is a second stop: an operator forced the stop, so it is not
+# restarted (Rick, 2026-11-21), as in the packaged unit.
+SuccessExitStatus=130
 StateDirectory=shekyl-fleet/%i
 StateDirectoryMode=0750
 LogsDirectory=shekyl-fleet
