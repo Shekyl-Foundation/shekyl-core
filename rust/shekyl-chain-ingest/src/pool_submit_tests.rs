@@ -176,10 +176,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
 async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
     let (mut scenario, mined) = matured("pool-submit-twin").await;
     let paid = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = match &paid.ct {
-        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
-        shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
-    };
+    let fee = paid.fee();
     let twin = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
@@ -508,10 +505,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     let (twin, cheap) = {
         let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
-        let fee = match &paid.ct {
-            shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
-            shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
-        };
+        let fee = paid.fee();
         (
             spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),
             spender.spend_coinbase(wallet, h(1), h(AT), 1),
@@ -622,10 +616,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
 async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     let (mut scenario, mined) = matured("pool-submit-full").await;
     let held = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = match &held.ct {
-        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
-        shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
-    };
+    let fee = held.fee();
     let peer = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(2),

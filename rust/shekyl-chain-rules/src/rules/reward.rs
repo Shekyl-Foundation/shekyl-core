@@ -91,7 +91,7 @@
 
 use shekyl_economics::{configured_emission, price_emission, EmissionInputs, RewardArithmetic};
 use shekyl_types::BlockHeight;
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 
 use crate::block::Candidate;
 use crate::census::CenRow;
@@ -173,10 +173,9 @@ impl Rule for G13 {
 /// `Null` ct carries no fee (H15 refused it off the coinbase already).
 /// `None` when the sum does not fit: F17's refusal.
 fn listed_fees(listed: &[Transaction]) -> Option<u64> {
-    listed.iter().try_fold(0u64, |sum, tx| match &tx.ct {
-        Ct::Fcmp { fee, .. } => sum.checked_add(*fee),
-        Ct::Null(_) => Some(sum),
-    })
+    listed
+        .iter()
+        .try_fold(0u64, |sum, tx| sum.checked_add(tx.fee()))
 }
 
 /// The coinbase's outputs, summed. `None` when the sum does not fit — F7

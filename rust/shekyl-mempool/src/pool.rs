@@ -29,7 +29,7 @@ use shekyl_chain_store::store::StoreError;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::transaction::{Ct, Input};
+use shekyl_wire::transaction::Input;
 use shekyl_wire::Transaction;
 
 use crate::door::{self, DoorFault, Judged};
@@ -159,7 +159,7 @@ impl Held {
     pub(crate) fn of(tx: Transaction, record: PoolRecord, pass: Option<StatelessPass>) -> Self {
         Self {
             weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
-            fee: AtomicUnits::from_raw(fee_of(&tx)),
+            fee: AtomicUnits::from_raw(tx.fee()),
             tx,
             record,
             pass,
@@ -397,7 +397,7 @@ impl Pool {
         // holds nothing it would give up for a candidate paying no more per
         // weight than its cheapest admitted entry.
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
-        let rate = FeeRate::new(fee_of(&tx), weight);
+        let rate = FeeRate::new(tx.fee(), weight);
         if self.room_for(weight, rate).is_none() {
             return Ok(Admission::PoolFull);
         }
@@ -681,15 +681,6 @@ fn judged_tip_after(recorded: Option<JudgedTip>, admitted: JudgedTip) -> Option<
         Some(at) if admitted.work > at.work => Some(admitted),
         Some(at) if admitted.work == at.work => None,
         Some(at) => Some(at),
-    }
-}
-
-/// The fee `tx` pays: the `Fcmp` field, zero on a `Null` ct (which the door
-/// refused off the coinbase before anything reads this).
-pub(crate) fn fee_of(tx: &Transaction) -> u64 {
-    match &tx.ct {
-        Ct::Fcmp { fee, .. } => *fee,
-        Ct::Null(_) => 0,
     }
 }
 

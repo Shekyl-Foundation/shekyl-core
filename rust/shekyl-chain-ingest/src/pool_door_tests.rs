@@ -266,10 +266,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let (twin, cheap) = {
         let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
-        let fee = match &good.ct {
-            shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
-            shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
-        };
+        let fee = good.fee();
         (
             // Another body over the same image, paying more.
             spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),

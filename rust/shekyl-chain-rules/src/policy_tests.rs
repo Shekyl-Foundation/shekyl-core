@@ -19,13 +19,6 @@ use crate::rule_set::AdmissionPolicy;
 /// weight rounded up to the fee lattice.
 const FLOORS: [u64; 1] = [1];
 
-fn fee_of(tx: &Transaction) -> u64 {
-    match &tx.ct {
-        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
-        shekyl_wire::transaction::Ct::Null(_) => 0,
-    }
-}
-
 fn paying_the_floor() -> Transaction {
     paying_its_floor(&listed([0x11; 32]), FLOORS[0])
 }
@@ -52,7 +45,7 @@ fn a_transaction_at_every_bound_passes_and_records_the_three_rows() {
 #[test]
 fn m3_refuses_below_the_floor_and_reads_the_windows_minimum() {
     let tx = paying_the_floor();
-    let short = paying_fee(listed([0x11; 32]), fee_of(&tx) - 1);
+    let short = paying_fee(listed([0x11; 32]), tx.fee() - 1);
     assert_eq!(refused(&short, &FLOORS), Some(PolicyRow::M3));
     // A higher floor beside the low one does not raise the requirement.
     assert_eq!(refused(&tx, &[5, 1, 9]), None);

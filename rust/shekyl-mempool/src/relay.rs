@@ -92,7 +92,7 @@ impl<'p> RelayView<'p> {
     pub fn refuses_for_room(&self, tx: &Transaction) -> bool {
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
         self.pool
-            .room_for(weight, FeeRate::new(crate::pool::fee_of(tx), weight))
+            .room_for(weight, FeeRate::new(tx.fee(), weight))
             .is_none()
     }
 
