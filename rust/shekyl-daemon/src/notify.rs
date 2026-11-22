@@ -467,24 +467,111 @@ mod tests {
             .expect("the command runs")
     }
 
+    /// The probe's argument, `<PROBE_ARG><descriptor>`: the descriptor number
+    /// it looks for. An argument, not a variable, since [`run`] clears the
+    /// environment. libtest takes it as one more name filter, which under
+    /// `--exact` names no test.
+    #[cfg(unix)]
+    const PROBE_ARG: &str = "shekyl-notify-probe-fd=";
+
+    /// The probe's exit when the planted descriptor is open in it and is
+    /// `/dev/null`.
+    #[cfg(unix)]
+    const PROBE_HELD: i32 = 40;
+
+    /// The probe's exit when the planted descriptor is not open in it, or its
+    /// number is another file's.
+    #[cfg(unix)]
+    const PROBE_ABSENT: i32 = 41;
+
+    /// The probe child's role, in a re-run of the test that calls it: exit
+    /// [`PROBE_HELD`] or [`PROBE_ABSENT`]. Returns in the parent. The exits
+    /// are the probe's own, not libtest's 0 and 101, so a re-run that never
+    /// reached the probe is not taken for an answer.
+    ///
+    /// The probe looks at its own table. `/dev/fd/N` would not do: FreeBSD
+    /// without `fdescfs` lists only 0 to 2 there, so a shell's
+    /// `test -e /dev/fd/N` fails whatever the command holds, and the check
+    /// would pass for nothing.
+    #[cfg(unix)]
+    #[allow(
+        unsafe_code,
+        reason = "the probe reads its own table at a raw descriptor number"
+    )]
+    fn probe_if_requested() {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::MetadataExt;
+
+        let Some(fd) = std::env::args().find_map(|a| a.strip_prefix(PROBE_ARG).map(str::to_owned))
+        else {
+            return;
+        };
+        let fd: libc::c_int = fd.parse().expect("a descriptor number");
+        let null = std::fs::metadata("/dev/null").expect("/dev/null");
+        // SAFETY: `F_GETFD` reads only this descriptor's flags; an unopened
+        // `fd` fails with `EBADF`.
+        let open = unsafe { libc::fcntl(fd, libc::F_GETFD) } >= 0;
+        let is_null = open && {
+            // SAFETY: `fd` is open in this process; `ManuallyDrop` never
+            // closes it, so the borrow takes nothing.
+            let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+            file.metadata()
+                .is_ok_and(|m| m.ino() == null.ino() && m.rdev() == null.rdev())
+        };
+        std::process::exit(if is_null { PROBE_HELD } else { PROBE_ABSENT });
+    }
+
+    /// The probe's command line: this test binary, re-running `test` alone and
+    /// looking for `fd`.
+    #[cfg(unix)]
+    fn probe_argv(test: &str, fd: i32) -> Vec<String> {
+        let exe = std::env::current_exe().expect("this test binary");
+        vec![
+            exe.to_str().expect("a UTF-8 test binary path").to_owned(),
+            test.to_owned(),
+            "--exact".to_owned(),
+            "--nocapture".to_owned(),
+            "--test-threads=1".to_owned(),
+            format!("{PROBE_ARG}{fd}"),
+        ]
+    }
+
     /// The operator's command inherits standard input, output and error and
     /// nothing else (§2.10): a planted descriptor without close-on-exec does
     /// not reach it. Fails when [`run`] stops calling
     /// [`shekyl_spawn::inherit::stdio_only`].
+    ///
+    /// The command is the probe ([`probe_if_requested`]). Its control, a plain
+    /// spawn, must see the planted descriptor first, so a probe that cannot
+    /// see a descriptor fails here instead of passing.
     #[cfg(unix)]
     #[test]
     fn the_command_does_not_inherit_a_descriptor_left_open_without_cloexec() {
+        const NAME: &str =
+            "notify::tests::the_command_does_not_inherit_a_descriptor_left_open_without_cloexec";
+        probe_if_requested();
         let planted = Planted::open();
-        // `/dev/fd/N`, not `<&N`: dash takes only one-digit descriptor
-        // numbers in a redirection, and a test process can hold ten.
-        let status = run_now(&[
-            "/bin/sh",
-            "-c",
-            &format!("test -e /dev/fd/{}", planted.number()),
-        ]);
-        assert!(
-            !status.success(),
-            "the planted descriptor reached the command"
+        let argv = probe_argv(NAME, planted.number());
+
+        let mut control = std::process::Command::new(&argv[0]);
+        control
+            .args(&argv[1..])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let control = shekyl_spawn::spawn_lock::status(&mut control).expect("the control runs");
+        assert_eq!(
+            control.code(),
+            Some(PROBE_HELD),
+            "a plain spawn hands the planted descriptor on and the probe sees it ({control})"
+        );
+
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let status = run_now(&argv);
+        assert_eq!(
+            status.code(),
+            Some(PROBE_ABSENT),
+            "the planted descriptor reached the command ({status})"
         );
     }
 
