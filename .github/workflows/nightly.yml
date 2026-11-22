@@ -243,7 +243,9 @@ jobs:
     # the three `--stage2` pins 1 402, 839 and 727, each on one thread; the
     # EUP-4 pair 558 and 532; ESR-10's pair 241 and 227; the J x G slice 177;
     # ESR-11's set 31; the economies slice 645 to 936 s on the same host
-    # (#1476). In one job the set ran 6 111 to 8 001 s on dev over
+    # (#1476). On a GitHub runner at ddf679f89c (2026-11-22) the legs ran:
+    # economies 621 s of test in 13.5 minutes of job, pins 2 967 s in 54,
+    # reader 6 731 s in 116. In one job the set ran 6 111 to 8 001 s on dev over
     # 2026-11-17 to 11-20 against 180 minutes, and main's leg (07c8abba5f)
     # passed in 10 299 s one night and was cut at 10 817 s the next on the
     # same commit. The script stamps every line of its output with the UTC

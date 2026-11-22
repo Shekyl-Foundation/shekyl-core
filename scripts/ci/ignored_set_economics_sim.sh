@@ -68,7 +68,8 @@
 #             time, measured one test at a time on a 16-vCPU build host at
 #             dev 46f266ac08, 2026-11-22;
 #   --economies  the whole-economy table's nightly slice: 34 folds to year
-#             135, 645 to 936 s on the same host (#1476).
+#             135, 645 to 936 s on the same host (#1476), and 621 s
+#             (a 13.5-minute leg) on a GitHub runner at ddf679f89c.
 # With no lane it runs the whole nightly set, as the jobs did before the
 # split; the schedule runs main's copy of nightly.yml, which calls it that
 # way until the split reaches main.
