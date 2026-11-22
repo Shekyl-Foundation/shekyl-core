@@ -330,7 +330,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*sim_lane:[[:space:]]*\[[^]]*\b${LANE}\b" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*sim_lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '--$LANE)' arm: the lane cannot run"
             exit 1
           fi
