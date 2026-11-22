@@ -626,7 +626,16 @@ above. None is chosen before then.
 **Status: registered; the floor device's shake-down crossed on the matched
 pair (10.44 at 50,000 samples, about 1 µs in the single-attempt mode, with
 the nulls and the control clean), so the registered run is held for the
-maintainer (2026-11-22).** The registration and the shake-down are in
+maintainer (2026-11-22).** Localised the same day:
+- key generation alone and signing alone each cross on the same matched
+  pair (9.96, about 0.33 µs; and 16.39, about 0.8 µs in single-attempt
+  signatures), with clean nulls and controls;
+- key generation's share is its by-design rejection pattern;
+- signing's share is either ExpandA re-run on the public ρ in every
+  signature or work on the secret values, and these trials cannot tell
+  which.
+
+The registration, the shake-down and the localisation are in
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
 Its pass line is a fixed pair matched on the work key generation does by
 design (ExpandS bytes, ExpandA rejections), and `fixed-vs-varied` is

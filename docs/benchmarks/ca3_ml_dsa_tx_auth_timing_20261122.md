@@ -247,6 +247,29 @@ result=FAIL fixed_pair=10.44 worst_null=2.09 control=127.03 information_fixed_vs
     does not match the patterns;
   - `infinity_norm`'s data-dependent `max`;
   - the hint check's work on t0.
+- **Localisation** (2026-11-22, 19:28 to about 20:10Z, the maintainer's
+  go; diagnostic, no registered line). The harness's `ml-dsa-keygen` and
+  `ml-dsa-sign` modes (#1504's commit `a3909ffa6d`) ran on the same
+  matched pair (seed `20261124`), at 50,000 samples each, on the same
+  device. Every call returned.
+
+  | Half timed alone | Fixed pair | Null | Control | What differs |
+  | --- | --- | --- | --- | --- |
+  | Key generation (seed derivation + `keygen_from_seed`) | 9.96 | 1.69 | 154.27 | key A about 0.33 µs faster at almost every quantile: a constant per key (0.035 % of 0.95 ms) |
+  | Signing (`try_sign_with_seed`, keys made before the loop) | 16.39 | 2.24 | 163.85 | key A 0.74 to 1.06 µs faster among single-attempt signatures (about 1.01 ms) |
+
+  **Both halves carry a per-key constant.** Matching the pair on ExpandS
+  bytes and ExpandA rejections matches the counts, not the patterns.
+  - Key generation's share is by design. ExpandS and ExpandA reject in
+    patterns that differ per key, and those patterns carry nothing about
+    the coefficients kept.
+  - Signing's share is not yet attributed. fips204 0.5.0 has no
+    pre-expanded key, so every signature runs ExpandA again on the public
+    ρ (`ml_dsa.rs:212`). Its per-key rejection pattern is one candidate,
+    public by construction. Work on the secret values is the other:
+    `infinity_norm`'s data-dependent `max`, and the hint check on t0.
+  - These two trials cannot separate those. That takes ExpandA timed alone
+    inside fips204, a diagnostic build of the crate that exposes it.
 - **Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_ml_*`,
   with `SHA256SUMS`. The device's paths and login are redacted; the raw
   files are in the estate's private captures.
