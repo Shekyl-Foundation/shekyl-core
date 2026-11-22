@@ -562,6 +562,65 @@ async fn a_refusal_ends_the_run_and_is_a_disagreement_the_report_names() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_records_digest_is_reported_unreached_with_every_record_after_it() {
+    // The digest at a record is a barrier: the record is read, its block
+    // commits, then the digest is taken. When the record's own block is
+    // refused there is no state after it to digest, so it is reported
+    // unreached, in order before every later record the run never got to;
+    // a record before the refusal keeps its digest.
+    let path = tmp("pipeline-refusal-events");
+    let main = chain(3);
+    let orphan = block_with_nonce(
+        CurveTreeRoot::EMPTY,
+        2,
+        BlockHash::from_bytes([0x77; 32]),
+        &[],
+        0,
+        5,
+    );
+    let events = vec![
+        IngestEvent::Extend(Box::new(candidate(&main[0].0, &main[0].1))),
+        IngestEvent::Extend(Box::new(candidate(&main[1].0, &main[1].1))),
+        IngestEvent::Extend(Box::new(candidate(&orphan, &[]))),
+    ];
+    let before = SequenceNo::from_raw(1);
+    let at_refusal = SequenceNo::from_raw(2);
+    let past = SequenceNo::from_raw(5);
+    let mut source = Scripted::new(events);
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        Arc::new(Trace::capturing([before, at_refusal, past])),
+        cfg(4),
+    )
+    .await
+    .expect("a refusal is a verdict, not a fault");
+    let (height, verdict) = report.refused.expect("refused");
+    assert_eq!((height, verdict.rule), (h(2), CenRow::A2));
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .map(|event| event.record)
+            .collect::<Vec<_>>(),
+        vec![before],
+        "the record before the refusal is digested"
+    );
+    assert_eq!(report.events_unreached, vec![at_refusal, past]);
+    assert_eq!(
+        report.disagreements().collect::<Vec<_>>(),
+        vec![
+            crate::pipeline::Disagreement::Refused { height, verdict },
+            crate::pipeline::Disagreement::EventUnreached { record: at_refusal },
+            crate::pipeline::Disagreement::EventUnreached { record: past },
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corrupt_record_observed_by_the_validator_halts_through_refuse_corrupt() {
     // SI-10 end to end: replay N + 1 blocks, then lower one recorded
     // cumulative difficulty inside D4's window; the next block's

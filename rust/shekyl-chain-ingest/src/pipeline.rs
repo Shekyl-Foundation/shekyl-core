@@ -209,8 +209,10 @@ pub struct RunReport {
     /// carries one (`CHAIN_FORGE.md` §8). A baseline writes these into the
     /// trace it writes; a replay holds each to the trace's.
     pub events: Vec<EventDigest>,
-    /// The records the trace names that the run never reached: the source
-    /// ended, or a refusal ended the run, before them.
+    /// The records the trace names whose digest the run never took, in
+    /// record order: the source ended before them, or a refusal ended the
+    /// run before or at them (a refused block's record has no state after
+    /// it to digest).
     pub events_unreached: Vec<SequenceNo>,
 }
 
@@ -529,7 +531,8 @@ pub enum Disagreement {
         /// The event's corpus record.
         record: SequenceNo,
     },
-    /// The trace names an indexed event the run never reached.
+    /// The trace names an indexed event whose digest the run never took
+    /// ([`RunReport::events_unreached`]).
     EventUnreached {
         /// The event's corpus record.
         record: SequenceNo,
@@ -1043,9 +1046,18 @@ where
                 break;
             }
         }
-        // A record the run never reached: the source ended, or a refusal
-        // ended the run, before it.
-        self.report.events_unreached = self.capture.drain(..).collect();
+        // A record whose digest the run never took: the source ended, or a
+        // refusal ended the run, before it or at it. A record read and not
+        // yet digested is one of them: it left `capture` when it was read,
+        // and `fill` read nothing past it, so a refusal that ended the run
+        // was of its block or of one ahead of it. It precedes every record
+        // still in `capture`.
+        self.report.events_unreached = self
+            .pending_digest
+            .take()
+            .into_iter()
+            .chain(self.capture.drain(..))
+            .collect();
         self.compare_checkpoint().await?;
         self.report.metrics = self.metrics.snapshot(self.pow.derives());
         Ok(std::mem::take(&mut self.report))
