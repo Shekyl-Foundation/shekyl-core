@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s: floor device passes, laptop run in progress (§3.3); ML-DSA-65 registered, its floor shake-down's matched pair crossed and the run is held (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s: floor device passes, laptop run in progress (§3.3); ML-DSA-65 registered; its floor shake-down's matched pair crossed, and the run is held; the localisation with one working slot crosses nowhere, and the change to the registration is with the maintainer (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -660,23 +660,30 @@ above. None is chosen before then.
 **Status: registered; the floor device's shake-down crossed on the matched
 pair (10.44 at 50,000 samples, about 1 µs in the single-attempt mode, with
 the nulls and the control clean), so the registered run is held for the
-maintainer (2026-11-22).** Localised the same day:
-- key generation alone and signing alone each cross on the same matched
-  pair (9.96, about 0.33 µs; and 16.39, about 0.8 µs in single-attempt
-  signatures), with clean nulls and controls;
-- key generation's share is its by-design rejection pattern;
-- signing's share is either ExpandA re-run on the public ρ in every
-  signature or work on the secret values, and these trials cannot tell
-  which.
+maintainer (2026-11-22).** Localised on the same pair, seed and device,
+each half timed alone from one working slot (50,000 samples each, all
+checks holding):
+- signing alone 3.66 and key generation alone 2.62. Neither crosses. The
+  crossings of an earlier localisation (16.39 and 9.96) came from per-class
+  key objects;
+- the composed call 3.52, so the shake-down's crossing did not recur. It
+  is not attributed: the timed path is unchanged, and the build and the
+  time of the run differ;
+- the hint count differs per key, as ML-DSA's design implies, and is
+  public in the signature. Within equal hint counts the pair reads as it
+  does overall, so the hint count carries none of its timing;
+- every pair figure sits above its null, and signing's per-key rejection
+  rate is not matched, so the registered 500,000 could still cross. The
+  change to the registration is with the maintainer.
 
-The registration, the shake-down and the localisation are in
+The registration, the shake-down and both localisations are in
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
 Its pass line is a fixed pair matched on the work key generation does by
 design (ExpandS bytes, ExpandA rejections), and `fixed-vs-varied` is
 information (the maintainer's rulings, 2026-11-21). The harness is
 `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`, mode `ml-dsa`. It
 times `sign_pqc_auth_for_output` (`shekyl-crypto-pq/src/output.rs:1182`)
-through its seeded twin (`:1206`).
+through its seeded twin (`:1224`).
 
 **Threat model.**
 - **Adversary.** A co-resident process on the wallet's host, or an
@@ -684,7 +691,7 @@ through its seeded twin (`:1206`).
 - **Capability: about one sample per key.** Each output's hybrid key is
   derived from the transaction's combined shared secret and the output
   index. It signs when that output is spent, and is wiped
-  (`sign_derived_output_auth`, `output.rs:1229`). So a timing observer
+  (`sign_derived_output_auth`, `output.rs:1247`). So a timing observer
   sees about one signature per key, more only if the user rebuilds the
   same spend. An enrolled RPC client can request signatures, but it can
   already spend.

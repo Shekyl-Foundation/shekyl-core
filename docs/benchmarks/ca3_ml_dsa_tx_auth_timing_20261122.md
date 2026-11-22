@@ -258,18 +258,8 @@ result=FAIL fixed_pair=10.44 worst_null=2.09 control=127.03 information_fixed_vs
   | Key generation (seed derivation + `keygen_from_seed`) | 9.96 | 1.69 | 154.27 | key A about 0.33 µs faster at almost every quantile: a constant per key (0.035 % of 0.95 ms) |
   | Signing (`try_sign_with_seed`, keys made before the loop) | 16.39 | 2.24 | 163.85 | key A 0.74 to 1.06 µs faster among single-attempt signatures (about 1.01 ms) |
 
-  **Both halves carry a per-key constant.** Matching the pair on ExpandS
-  bytes and ExpandA rejections matches the counts, not the patterns.
-  - Key generation's share is by design. ExpandS and ExpandA reject in
-    patterns that differ per key, and those patterns carry nothing about
-    the coefficients kept.
-  - Signing's share is not yet attributed. fips204 0.5.0 has no
-    pre-expanded key, so every signature runs ExpandA again on the public
-    ρ (`ml_dsa.rs:212`). Its per-key rejection pattern is one candidate,
-    public by construction. Work on the secret values is the other:
-    `infinity_norm`'s data-dependent `max`, and the hint check on t0.
-  - These two trials cannot separate those. That takes ExpandA timed alone
-    inside fips204, a diagnostic build of the crate that exposes it.
+  Read with the second localisation below: this run's footing could not
+  separate the keys from where each class's key object sat in memory.
 - **Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_ml_*`,
   with `SHA256SUMS`. The device's paths and login are redacted; the raw
   files are in the estate's private captures.
@@ -323,3 +313,114 @@ no proposal on the pass line.
     reported, with where it sits. **Minimum:** a hint count enters only
     when each class holds at least 100 entries of it below the cut-off
     being read.
+
+
+### Second localisation: results (2026-11-22, 22:21 to 22:53Z)
+
+The run:
+- the floor device under a quiet claim;
+- the existing clone checked out clean at `0619324b93` (status 0 lines)
+  and built there, 22:07 to 22:20Z;
+- `ml-dsa-sign`, `ml-dsa-keygen` and `ml-dsa`, each at 50,000 samples with
+  seed `20261124`, one after another;
+- 1.5 GHz, about 53 to 56 °C, throttled `0x0`, load about 1 (the run itself);
+- the apt timers enabled; none fired in the window.
+
+These are diagnostics, not attempts. The composed mode's capture prints
+`result=PASS`, but it ran on diagnostic inputs (`inputs=NOT-REGISTERED`,
+seed `20261124`), so it is not an attempt and closes nothing.
+
+Every check held:
+- every call returned;
+- 790 of 790 kept composed signatures verified per comparison;
+- no hint section was malformed;
+- the replica matched fips204's own key.
+
+The matched pair is the shake-down's: 27 candidates drawn, ExpandS bytes
+2488/2488, ExpandA rejections 10/10.
+
+| Comparison | Signing alone | Key generation alone | Composed call (`ml-dsa`) |
+| --- | --- | --- | --- |
+| Fixed pair, largest absolute t | 3.66 | 2.62 | 3.52 |
+| Where, and the difference (A − B) | crop 1, below 1.027 ms: −0.49 µs | crop 10, below 0.956 ms: +0.08 µs | crop 2, below 3.455 ms: −9.3 µs |
+| Fixed pair, raw `t` | −2.27 (means −45 µs) | 0.52 | −0.57 |
+| Null `fixed-a-vs-fixed-a-again` | 2.12 | 1.21 | 2.20 (`fixed-a-vs-fixed-a`) |
+| Second null `varied-vs-other-varied` | — | — | 1.85 |
+| Control (planted 0.5 %) | 210.97 | 164.61 | 141.68 |
+| `fixed-vs-varied` (information) | — | — | 3.32 |
+| Hint means, A and B | 37.53 and 38.76 | — | 37.52 and 38.70 |
+| Hint distributions, chi-square | 536.85, df 37, `z` 18.65 | — | 503.20, df 36, `z` 18.01 |
+| Within equal hint counts, largest absolute t | 3.56 (crop 1) | — | 3.76 (crop 2) |
+| Null within equal hint counts | 2.30 | — | 2.22 and 2.00 |
+| Null hint chi-square `z` | 3.11 | — | 0.33 and 1.51 |
+| Control within equal hint counts | 40.93 | — | 128.78 |
+
+The pair's difference is A − B, from the line that sets the maximum.
+
+**Read by the maintainer's three cases (2026-11-22):**
+- **Signing alone is flat with the working slot.** 3.66, under 4.5, with
+  its null at 2.12 and its control at 210.97. The first localisation's
+  16.39 was placement: the per-class key objects.
+- **Key generation alone is flat too.** 2.62 against the first
+  localisation's 9.96. That figure was mostly placement as well, so it is
+  not a by-design constant. What remains is a shift of about +0.04 to
+  +0.11 µs (key A slower) from the 1st to the 90th percentile, against
+  −0.09 to +0.04 µs in its null. It does not cross.
+- **The composed call does not cross here.** 3.52, against the
+  shake-down's 10.44 on the same mode, pair, seed and device. Neither key
+  generation's residue nor the hint counts carry a crossing, because
+  there is none to carry. Stratifying by hint count does not lower the
+  figure (3.52 overall, 3.76 within equal counts).
+- **What changed since the shake-down:**
+  - Not the timed path. `shekyl-crypto-pq/src` is unchanged between
+    `43ac1dff98` and `0619324b93`, fips204 is the same 0.5.0, and the
+    lockfile's only change is `multiexp`, which ML-DSA signing does not
+    reach.
+  - The `ml-dsa` mode gained only untimed work after each call: the hint
+    read, into a vector allocated before the loop.
+  - Its keys were never per class: each entry carries its own copy of the
+    shared secret.
+  - What differs is the binary (a different tree, so a different code
+    layout) and the time of the run (06:05Z, 56 to 58 °C, against 22:32Z,
+    54 °C).
+  - The shake-down's 10.44 is not attributed. Its binary is kept on the
+    device (`sha256` `3ff1a1b5…`, the shake-down's capture), so running it
+    again would separate the build from the conditions.
+- **The hint counts are per key, and public.** The two keys' distributions
+  differ (means 37.5 and 38.8, `z` about 18.7), as ML-DSA's design implies:
+  the hints depend on the key. Within equal hint counts, the pair reads as
+  it does overall, so the hint count carries none of its timing.
+
+**Not settled by this run:**
+- **Every pair figure sits above its null:** 3.66 against 2.12, 2.62
+  against 1.21, and 3.52 against 2.20. A real effect of the size behind
+  them would read about √10 times larger at the registered 500,000:
+  about 11.6, 8.3 and 11.1. At 50,000 this run cannot tell such an effect
+  from the spread of a maximum taken over 101 cut-offs.
+- **The pair is not matched on signing's rejection rate.** ML-DSA's
+  signing loop restarts at a rate that depends on the key. Signing alone's
+  raw means differ by 45 µs (t −2.27), and its quartiles by 4.6 to
+  10.0 µs. That alone would read about 7 raw at 500,000. FN-DSA's
+  harness reads its restart count from the signature's nonce. ML-DSA's
+  signature does not carry its attempt count.
+- **The signing null's hint chi-square reads `z` 3.11** on one key held
+  as two copies, where the two distributions are the same by construction.
+  The composed call's two nulls read 0.33 and 1.51. It is reported as
+  measured: either chance, about one in a thousand, or the
+  approximation's edge with many sparse cells.
+- **The stratified figure has less reach at the lowest cut-offs.** The
+  minimum of 100 per class drops strata there, so the control reads 40.93
+  within equal hint counts, against 210.97 overall.
+- **About 1 ms of the composed call is in neither half.** The fastest
+  signatures take about 2.97 ms composed, 1.01 ms signing alone and
+  0.94 ms key generation alone. The rest is in `sign_derived_output_auth`
+  (`output.rs:1247`): the Ed25519 key's derivation and its signature in
+  the nested combiner, the ML-DSA key's encoding, and its decode on every
+  call (`signature.rs:354`). The signing-alone mode decodes untimed. Its
+  timed call is the shipped one: `try_sign_with_seed` on the combiner's
+  64-byte inner message with an empty context (`signature.rs:439`, the
+  seeded twin of the production `try_sign` at `:458`).
+
+**Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_loc2_*`
+with `SHA256SUMS`, redacted as before. The raw files are in the estate's
+private captures.
