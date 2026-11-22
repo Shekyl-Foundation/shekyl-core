@@ -49,9 +49,9 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     }
 
     if let Some(warning) = multiplexer_warning() {
-        eprintln!("WARNING: {warning}");
-        eprintln!("Scrollback may retain this secret.");
-        eprint!("Type YES to proceed: ");
+        crate::err_line!("WARNING: {warning}");
+        crate::err_line!("Scrollback may retain this secret.");
+        crate::err_inline!("Type YES to proceed: ");
         drop(io::stderr().flush());
 
         let mut confirm = String::new();
@@ -63,17 +63,34 @@ pub fn preflight_secret_display() -> Result<(), DisplaySafetyError> {
     Ok(())
 }
 
+/// Whether [`show_secret`] put the secret on standard output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum SecretDisplay {
+    /// The secret was written, and standard output accepted the write.
+    Shown,
+    /// Standard output closed before the secret was written. `secret` is wiped.
+    NotShown,
+}
+
 /// Display a secret to the terminal and best-effort clear it afterwards, then
 /// zeroize `secret`. Call ONLY after [`preflight_secret_display`] returned
 /// `Ok` (stdout is a TTY and any multiplexer warning was accepted); there is
 /// deliberately no non-TTY fallback here, so the secret can never reach a pipe
 /// or file.
-pub fn show_secret(label: &str, secret: &mut String) {
-    println!("\n{label}:");
-    println!("{secret}");
-    println!();
+///
+/// [`SecretDisplay::NotShown`] means the secret lines did not land. The caller
+/// must not report the wallet as created successfully: the seed is shown once.
+pub fn show_secret(label: &str, secret: &mut String) -> SecretDisplay {
+    crate::out_line!("\n{label}:");
+    crate::out_line!("{secret}");
+    crate::out_line!();
+    if crate::out::output_closed() {
+        secret.zeroize();
+        return SecretDisplay::NotShown;
+    }
 
-    eprint!("Press Enter to clear screen...");
+    crate::err_inline!("Press Enter to clear screen...");
     drop(io::stderr().flush());
     let mut buf = String::new();
     drop(io::stdin().read_line(&mut buf));
@@ -81,16 +98,17 @@ pub fn show_secret(label: &str, secret: &mut String) {
     // Best-effort scrollback + screen clear.
     // \x1b[3J clears scrollback on xterm and most derivatives.
     // \x1b[2J clears the visible screen. \x1b[H moves cursor to top-left.
-    print!("\x1b[3J\x1b[2J\x1b[H");
+    crate::out_inline!("\x1b[3J\x1b[2J\x1b[H");
     drop(io::stdout().flush());
 
-    eprintln!(
+    crate::err_line!(
         "NOTE: Your terminal may still have this secret in scrollback.\n\
          Clear it manually (Cmd+K / Ctrl+Shift+K / your terminal's\n\
          clear-scrollback command) before walking away."
     );
 
     secret.zeroize();
+    SecretDisplay::Shown
 }
 
 /// Check for well-known terminal multiplexer environment variables.

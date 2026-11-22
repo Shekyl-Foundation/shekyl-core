@@ -11,7 +11,9 @@ Five checks over an enumerated set of files:
 1. Every `--flag` a unit's `ExecStart` passes to `shekyld` is a row of the
    table (the generated fragment `docs/generated/shekyld_options.md`, which
    a `shekyl-daemon-config` test holds equal to the table). A command-line
-   row is fine there; a file-only row is not.
+   row is fine there; a file-only row is not. A unit that restarts
+   `shekyld` counts exit 130 clean (`SuccessExitStatus=130`): a second
+   stop is the operator's, never restarted (Rick, 2026-11-21).
 2. A unit that names `--data-dir` names `/var/lib/<StateDirectory>`, and a
    unit that names `--log-file` names a file under `/var/log/<LogsDirectory>`:
    the paths systemd creates and the paths the daemon writes are one pair,
@@ -202,6 +204,11 @@ def tunnel_rows(table_rs: str) -> dict[str, str]:
     return out
 
 
+# Settings systemd adds to on each line, as a list of words; an empty
+# assignment clears the list. Every other setting is the last line's value.
+LIST_SETTINGS = ("SuccessExitStatus",)
+
+
 def unit_fields(text: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for line in text.splitlines():
@@ -209,8 +216,16 @@ def unit_fields(text: str) -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        fields[key.strip()] = value.strip()
+        key, value = key.strip(), value.strip()
+        if key in LIST_SETTINGS and value and fields.get(key):
+            value = f"{fields[key]} {value}"
+        fields[key] = value
     return fields
+
+
+def second_stop_is_clean(fields: dict[str, str]) -> bool:
+    """The unit counts a second stop's exit as success: 130 is one of its SuccessExitStatus words."""
+    return SECOND_STOP_STATUS in fields.get("SuccessExitStatus", "").split()
 
 
 def exec_flags(exec_start: str) -> tuple[list[str], dict[str, str]]:
@@ -251,6 +266,12 @@ def check_unit(rel: str, text: str, live: dict[str, str], service_home: str) -> 
         return [f"{rel}: no ExecStart that runs shekyld"]
     flags, values = exec_flags(exec_start)
     errors.extend(command_line_rows(rel, "ExecStart", flags, live))
+    restart = fields.get("Restart")
+    if restart not in (None, "no") and not second_stop_is_clean(fields):
+        errors.append(
+            f"{rel}: Restart={restart} without SuccessExitStatus={SECOND_STOP_STATUS}; a second stop's "
+            "exit is the operator's and must not restart shekyld"
+        )
     state = fields.get("StateDirectory")
     logs = fields.get("LogsDirectory")
     if "data-dir" in values:
@@ -379,7 +400,7 @@ def check_rc_script(
     restart = re.search(r"^\s*restart_seconds=(\d+)\s*$", body, flags=re.M)
     unit_restart = shipped.get("Restart")
     unit_delay = shipped.get("RestartSec")
-    if unit_restart != "on-failure" or not unit_delay or shipped.get("SuccessExitStatus") != SECOND_STOP_STATUS:
+    if unit_restart != "on-failure" or not unit_delay or not second_stop_is_clean(shipped):
         errors.append(
             f"{rel}: the shipped unit's restart policy is not Restart=on-failure with RestartSec "
             f"and SuccessExitStatus={SECOND_STOP_STATUS}"
@@ -475,7 +496,7 @@ def check_tunnel_unit(rel: str, text: str, rows: dict[str, str]) -> list[str]:
     if (
         fields.get("Restart") != "on-failure"
         or not fields.get("RestartSec")
-        or fields.get("SuccessExitStatus") != SECOND_STOP_STATUS
+        or not second_stop_is_clean(fields)
     ):
         errors.append(
             f"{rel}: the tunnel's unit is not Restart=on-failure with RestartSec "
@@ -798,6 +819,12 @@ def selftest() -> int:
         ("a service data home not 0700 is named", unit_ok.replace("StateDirectoryMode=0700", "StateDirectoryMode=0755"), fleet_ok, gen_ok, ["is not StateDirectoryMode=0700"]),
         ("a service unit without a StateDirectory is named", unit_ok.replace("\nStateDirectory=shekyl\nStateDirectoryMode=0700", ""), fleet_ok, gen_ok, ["has no StateDirectory for its data home"]),
         ("a log file off LogsDirectory is named", unit_ok.replace("/var/log/shekyl/shekyld.log", "/var/log/other/shekyld.log"), fleet_ok, gen_ok, ["is not under /var/log/shekyl (LogsDirectory)"]),
+        ("a fleet unit that restarts a second stop's exit 130 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
+        ("a fleet unit that counts 130 clean passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=130\n", gen_ok, []),
+        ("a fleet unit listing 130 among other statuses passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=129 130 SIGUSR1\n", gen_ok, []),
+        ("a fleet unit adding 130 on a second line passes", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=129\nSuccessExitStatus=130\n", gen_ok, []),
+        ("a fleet unit whose empty assignment clears 130 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=130\nSuccessExitStatus=\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
+        ("a fleet unit with 1300 is named", unit_ok, fleet_ok + "Restart=on-failure\nRestartSec=10\nSuccessExitStatus=1300\n", gen_ok, ["u/fleet@.service: Restart=on-failure without SuccessExitStatus=130"]),
         ("a dead key written by a generator is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"no-igd = '), ["`no-igd = …`, which is not a row"]),
         ("a command-line row written into a file is named", unit_ok, fleet_ok, gen_ok.replace('"tor = ', '"network = '), ["`network = …`, a command-line-only row"]),
         ("a generator root off the fleet unit is named", unit_ok, fleet_ok, gen_ok.replace("/var/lib/f", "/var/lib/g"), ["DATA_ROOT defaults to /var/lib/g"]),
@@ -867,7 +894,7 @@ def selftest() -> int:
         ("an rc.d script that restarts a death by SIGTERM is named", rc_ok.replace("0 | 129 | 130 | 141 | 143)", "0 | 129 | 130 | 141)"), platform_ok, unit_ok, ["retries a clean exit"]),
         ("an rc.d script that passes daemon -R is named", rc_ok.replace("-f -S", "-f -R 30 -S"), platform_ok, unit_ok, ["daemon(8) is passed -R"]),
         ("an rc.d restart delay off the shipped unit is named", rc_ok.replace("restart_seconds=30", "restart_seconds=5"), platform_ok, unit_ok, ["restart_seconds is 5, not the shipped unit's RestartSec=30"]),
-        ("a shipped unit that restarts a second stop's exit 130 is named", rc_ok, platform_ok, unit_ok.replace("SuccessExitStatus=130\n", ""), ["and SuccessExitStatus=130"]),
+        ("a shipped unit that restarts a second stop's exit 130 is named", rc_ok, platform_ok, unit_ok.replace("SuccessExitStatus=130\n", ""), ["and SuccessExitStatus=130", "Restart=on-failure without SuccessExitStatus=130"]),
     ]
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
