@@ -296,7 +296,7 @@ impl RpcSession {
         // line is not said (Rick, 2026-11-20).
         let inherited = shekyl_process::stop::Inherited::at_start();
         if let Some(line) = inherited.observed_line("shekyl-cli") {
-            eprintln!("shekyl-cli: {line}");
+            crate::err_line!("shekyl-cli: {line}");
         }
         // Multi-thread runtime: Engine create/open paths use
         // `tokio::task::block_in_place`, which a current-thread runtime
