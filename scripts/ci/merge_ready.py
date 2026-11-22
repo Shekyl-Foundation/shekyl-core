@@ -936,6 +936,10 @@ def selftest() -> int:
             ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
             (label_cond, "the condition that runs nothing for another label"),
             ("name: '#${{ github.event.pull_request.number }}'", "the re-test caller named by the pull request"),
+            ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
+             "the label check's script from the base branch"),
+            ('run: git checkout "origin/${BASE}" -- scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py '
+             'scripts/ci/change_scope.py\n', "the plan's scripts from the base branch"),
         ]),
         (".github/workflows/merge-ready-dev.yml", [
             ("name: '#${{ matrix.pr }}'", "the re-test caller named by the pull request"),
@@ -949,6 +953,8 @@ def selftest() -> int:
             ("if: steps.merge.outputs.conflict != 'true'\n", "the steps a conflict skips"),
             ("python3 scripts/ci/merge_ready_overlap.py --scope", "the re-test's own scope"),
             ("group: merge-ready-retest-${{ inputs.pr }}", "one re-test per pull request"),
+            ("          ref: ${{ inputs.base }}\n          sparse-checkout: |\n            scripts/ci/merge_ready.py\n",
+             "the report's scripts from the base branch"),
         ] + [n for out in RETEST_OUTPUTS for n in [
             (f"{out}: ${{{{ steps.", f"the job output {out}"),
             (f'echo "{out}=true" >> "$GITHUB_OUTPUT"', f"a step setting {out}"),

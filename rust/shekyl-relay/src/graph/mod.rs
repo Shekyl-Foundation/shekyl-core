@@ -759,7 +759,7 @@ impl Relay {
         };
         for tx in txs {
             self.stem_watch
-                .stemmed(*tx, successor, source, connector, deadline);
+                .stemmed(*tx, successor, None, source, connector, deadline);
         }
     }
 
