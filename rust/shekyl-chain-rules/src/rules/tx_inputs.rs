@@ -29,7 +29,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
 use shekyl_crypto_pq::multisig::{HYBRID_SCHEME_ID_MULTISIG, MULTISIG_KEY_BLOB_MIN};
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
 use shekyl_wire::transaction::{
-    MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    MAX_FCMP_INPUTS, MIN_NON_COINBASE_OUTPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
 use shekyl_wire::{Ct, Input, PqcAuth};
 
@@ -52,9 +52,10 @@ use shekyl_wire::{Ct, Input, PqcAuth};
 // census names the split: I9 "regular spend; archival shapes use their
 // spend-subset counts, CEN-H21/H22".
 
-/// CEN-I1: a non-coinbase transaction has at least two outputs
-/// (`blockchain.cpp`: *"has fewer than two outputs"*). Spend, bond post and
-/// emission alike. Ratified `≥ 2`
+/// CEN-I1: a non-coinbase transaction has at least
+/// [`MIN_NON_COINBASE_OUTPUTS`] outputs, two (`blockchain.cpp`: *"has fewer
+/// than two outputs"*). Spend, bond post and emission alike; the constant's
+/// own comment says which forms it covers and why. Ratified `≥ 2`
 /// (`GENESIS_TX_WIRE_FORMAT.md` :167 — *"earlier 'exactly one' was
 /// over-strict"*). Non-coinbase: the coinbase's count is CEN-F4's.
 pub(crate) struct I1;
@@ -67,7 +68,7 @@ impl TxRule for I1 {
     const SCOPE: TxScope = TxScope::NonCoinbase;
 
     fn check(cx: &TxContext<'_>) -> Verdict<()> {
-        if cx.tx.prefix.outputs.len() < 2 {
+        if cx.tx.prefix.outputs.len() < MIN_NON_COINBASE_OUTPUTS {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
         }
         Ok(())

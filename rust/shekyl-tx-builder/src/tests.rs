@@ -17,6 +17,7 @@ use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::output_mask::OutputMask;
 use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash};
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 fn dummy_leaf_entry() -> LeafEntry {
     LeafEntry {
@@ -86,6 +87,15 @@ fn dummy_output(amount: u64) -> OutputInfo {
     }
 }
 
+/// The fewest outputs a transaction carries (CEN-I1), paying `total`
+/// between them, so a fixture balances as one output of `total` would.
+fn dummy_outputs(total: u64) -> Vec<OutputInfo> {
+    let n = MIN_NON_COINBASE_OUTPUTS as u64;
+    (0..n)
+        .map(|i| dummy_output(total / n + u64::from(i < total % n)))
+        .collect()
+}
+
 fn dummy_tree() -> TreeContext {
     TreeContext {
         reference_block: BlockHash::from_bytes([30u8; 32]),
@@ -102,7 +112,7 @@ fn test_no_inputs() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -116,7 +126,7 @@ fn test_too_many_inputs() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -134,6 +144,25 @@ fn test_no_outputs() {
         &dummy_tree(),
     );
     assert!(matches!(result, Err(TxBuilderError::NoOutputs)));
+}
+
+#[test]
+fn test_too_few_outputs() {
+    let outputs: Vec<OutputInfo> = (1..MIN_NON_COINBASE_OUTPUTS)
+        .map(|_| dummy_output(100))
+        .collect();
+    let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        PrefixHash::from_bytes([0u8; 32]),
+        &[dummy_spend_input(100 * MIN_NON_COINBASE_OUTPUTS as u64)],
+        &outputs,
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
+    assert!(matches!(
+        result,
+        Err(TxBuilderError::TooFewOutputs(n)) if n == MIN_NON_COINBASE_OUTPUTS - 1
+    ));
 }
 
 #[test]
@@ -156,7 +185,7 @@ fn test_zero_input_amount() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(0)],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -172,7 +201,7 @@ fn test_zero_output_amount() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
-        &[dummy_output(0)],
+        &[dummy_output(0), dummy_output(100)],
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -189,7 +218,7 @@ fn test_input_amount_overflow() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &inputs,
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -216,7 +245,7 @@ fn test_output_plus_fee_overflow() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(u64::MAX)],
-        &[dummy_output(u64::MAX)],
+        &[dummy_output(u64::MAX - 1), dummy_output(1)],
         AtomicUnits::from_raw(1),
         &dummy_tree(),
     );
@@ -229,7 +258,7 @@ fn test_insufficient_funds() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(50)],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -245,7 +274,7 @@ fn test_insufficient_funds_with_fee() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::from_raw(1),
         &dummy_tree(),
     );
@@ -263,7 +292,7 @@ fn test_empty_leaf_chunk() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -282,7 +311,7 @@ fn test_leaf_chunk_too_large() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -300,7 +329,7 @@ fn test_zero_tree_depth() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[dummy_spend_input(100)],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &tree,
     );
@@ -317,7 +346,7 @@ fn test_branch_layer_mismatch() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -335,7 +364,7 @@ fn test_invalid_combined_ss_length() {
         &shekyl_network::HARNESS_NETWORK_ID,
         PrefixHash::from_bytes([0u8; 32]),
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
@@ -452,7 +481,7 @@ fn validate_accepts_all_legal_depths() {
         let tree = dummy_tree_at_depth(depth);
         let result = validate_inputs(
             &[input],
-            &[dummy_output(100)],
+            &dummy_outputs(100),
             AtomicUnits::ZERO,
             &[],
             &[],
@@ -476,7 +505,7 @@ fn validate_rejects_above_max_depth() {
     let tree = dummy_tree_at_depth(bad_depth);
     let result = validate_inputs(
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[],
         &[],
@@ -523,7 +552,7 @@ fn validate_rejects_wrong_branch_count_for_depth() {
     let tree = dummy_tree_at_depth(3);
     let result = validate_inputs(
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[],
         &[],
@@ -548,7 +577,7 @@ fn validate_rejects_swapped_c1_c2_alternation() {
     let tree = dummy_tree_at_depth(4);
     let result = validate_inputs(
         &[input],
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[],
         &[],
@@ -570,7 +599,7 @@ fn extra_output_term_raises_required_total() {
     let tree = dummy_tree_at_depth(1);
     assert!(validate_inputs(
         std::slice::from_ref(&input),
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[],
         &[],
@@ -582,7 +611,7 @@ fn extra_output_term_raises_required_total() {
     let one = AtomicUnits::from_raw(1);
     let result = validate_inputs(
         std::slice::from_ref(&input),
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[],
         &[OutputTerm::new(one)],
@@ -602,7 +631,7 @@ fn extra_output_term_raises_required_total() {
     // ...and a matching InputTerm on the other side closes the gap again.
     assert!(validate_inputs(
         std::slice::from_ref(&input),
-        &[dummy_output(100)],
+        &dummy_outputs(100),
         AtomicUnits::ZERO,
         &[InputTerm::new(one)],
         &[OutputTerm::new(one)],

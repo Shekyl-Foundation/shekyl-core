@@ -247,6 +247,9 @@ impl From<BuildSpendError> for KeyEngineError {
             BuildSpendError::NoOutputs => Self::Primitive {
                 detail: "no outputs after fee variant selection",
             },
+            BuildSpendError::TooFewOutputs { .. } => Self::Primitive {
+                detail: "fewer outputs than consensus admits after fee variant selection",
+            },
             BuildSpendError::TooManyOutputs { count } => {
                 Self::Sign(SignFault::TooManyOutputs { count })
             }
@@ -678,12 +681,20 @@ mod tests {
             ),
         ] {
             let label = label_plaintext_for_recipient(rid).expect("an encodable rid");
+            // A second recipient: no transaction carries fewer than two
+            // outputs (CEN-I1). Recipient 0 is the one checked.
             let spend = BuiltSpend::build(
                 &TxKey::seeded(TX_KEY),
-                &[Recipient {
-                    payee: recipient.payee(&label),
-                    amount: AMOUNT,
-                }],
+                &[
+                    Recipient {
+                        payee: recipient.payee(&label),
+                        amount: AMOUNT,
+                    },
+                    Recipient {
+                        payee: recipient.payee(&label),
+                        amount: 1,
+                    },
+                ],
             )
             .expect("construct payment output");
             let position = spend.position_of(0).expect("the payment's position");
@@ -719,12 +730,20 @@ mod tests {
         assert_eq!(resolved.ml_kem_ek(), &persona.ml_kem_ek[..]);
 
         let label = sentinel_plaintext();
+        // A second recipient: no transaction carries fewer than two outputs
+        // (CEN-I1). Recipient 0 is the one checked.
         let spend = BuiltSpend::build(
             &TxKey::seeded(TX_KEY),
-            &[Recipient {
-                payee: resolved.payee(&label),
-                amount: AMOUNT,
-            }],
+            &[
+                Recipient {
+                    payee: resolved.payee(&label),
+                    amount: AMOUNT,
+                },
+                Recipient {
+                    payee: resolved.payee(&label),
+                    amount: 1,
+                },
+            ],
         )
         .expect("construct the persona's output");
         let position = spend.position_of(0).expect("the persona's position");

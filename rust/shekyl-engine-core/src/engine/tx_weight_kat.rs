@@ -32,7 +32,7 @@ pub(crate) mod support {
     /// `sign_transaction` reads, so a caller can time the signing alone.
     pub(crate) struct KatCell {
         spend_inputs: Vec<SpendInput>,
-        output: OutputInfo,
+        outputs: Vec<OutputInfo>,
         fee: AtomicUnits,
         tree: TreeContext,
         prefix_hash: shekyl_types::PrefixHash,
@@ -46,7 +46,7 @@ pub(crate) mod support {
                 &shekyl_network::Network::Testnet.network_id(),
                 self.prefix_hash,
                 &self.spend_inputs,
-                std::slice::from_ref(&self.output),
+                &self.outputs,
                 self.fee,
                 &self.tree,
             )
@@ -137,26 +137,42 @@ pub(crate) mod support {
             return Err("payment would be zero".into());
         }
 
+        // The fewest outputs a transaction carries (CEN-I1), paying
+        // `payment` between them. The FCMP++ proof this cell measures does
+        // not depend on the output count.
         // Avoid input/output index collision (M3c fixture note): matching
         // `(combined_ss, output_index)` collapses pseudo-out blinding to zero.
         let recipient_output_index = (n_in as u64) + 100;
-        let out_constructed = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
-            &keys.keys.x25519_pk,
-            &keys.keys.ml_kem_ek,
-            &recipient,
-            payment,
-            recipient_output_index,
-        )
-        .map_err(|e| format!("output construct: {e}"))?;
-
-        let output = OutputInfo {
-            dest_key: out_constructed.output_key,
-            amount: AtomicUnits::from_raw(payment),
-            commitment_mask: out_constructed.commitment_mask(),
-            enc_amount: out_constructed.enc_amount_wire(),
-            enc_label: out_constructed.enc_label_wire(),
-        };
+        let n_out = shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS as u64;
+        let mut outputs = Vec::new();
+        let mut kem_blobs = Vec::new();
+        let mut output_keys = Vec::new();
+        let mut view_tags = Vec::new();
+        for j in 0..n_out {
+            let amount = payment / n_out + u64::from(j < payment % n_out);
+            let constructed = construct_output(
+                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
+                &keys.keys.x25519_pk,
+                &keys.keys.ml_kem_ek,
+                &recipient,
+                amount,
+                recipient_output_index + j,
+            )
+            .map_err(|e| format!("output construct: {e}"))?;
+            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+            kem_blobs.push(kem_blob);
+            output_keys.push(constructed.output_key);
+            view_tags.push(Some(constructed.view_tag_prefilter));
+            outputs.push(OutputInfo {
+                dest_key: constructed.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: constructed.commitment_mask(),
+                enc_amount: constructed.enc_amount_wire(),
+                enc_label: constructed.enc_label_wire(),
+            });
+        }
 
         let tree = TreeContext {
             reference_block: shekyl_types::BlockHash::from_bytes([0xD4; 32]),
@@ -167,11 +183,8 @@ pub(crate) mod support {
         use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
         let tx_pubkey_scalar = Scalar::from_bytes_mod_order(TEST_TX_KEY);
         let tx_pubkey: EdwardsPoint = &tx_pubkey_scalar * ED25519_BASEPOINT_TABLE;
-        let mut kem_blob = Vec::with_capacity(32 + out_constructed.kem_ciphertext_ml_kem.len());
-        kem_blob.extend_from_slice(&out_constructed.kem_ciphertext_x25519);
-        kem_blob.extend_from_slice(&out_constructed.kem_ciphertext_ml_kem);
-        let tx_extra = shekyl_scanner::extra::Extra::for_hybrid_transfer(tx_pubkey, vec![kem_blob])
-            .serialize();
+        let tx_extra =
+            shekyl_scanner::extra::Extra::for_hybrid_transfer(tx_pubkey, kem_blobs).serialize();
 
         let key_images: Vec<[u8; 32]> = spend_inputs
             .iter()
@@ -188,8 +201,6 @@ pub(crate) mod support {
             })
             .collect();
 
-        let output_keys = vec![out_constructed.output_key];
-        let view_tags = vec![Some(out_constructed.view_tag_prefilter)];
         let prefix_hash = shekyl_tx_builder::tx_prefix_hash_from_parts(
             &key_images,
             &output_keys,
@@ -199,7 +210,7 @@ pub(crate) mod support {
 
         Ok(KatCell {
             spend_inputs,
-            output,
+            outputs,
             fee: AtomicUnits::from_raw(fee),
             tree,
             prefix_hash,
