@@ -95,5 +95,9 @@ tempfile = "3"
 # production dependency edge above (mirrors the shekyl-scanner precedent).
 shekyl-engine-core = { path = "../shekyl-engine-core", features = ["test-helpers"] }
 
+[target.'cfg(unix)'.dev-dependencies]
+# `tests/stops.rs` names the signal a child died by.
+libc = "0.2"
+
 [lints]
 workspace = true
