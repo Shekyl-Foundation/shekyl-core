@@ -132,7 +132,7 @@ fn offline_node(d: &Path, data: &Path, log: &Path) -> (DaemonConfig, shekyl_node
         version: "test".to_owned(),
         protocol_version: u64::from(shekyl_version::PROTOCOL_VERSION),
         release_build: false,
-        request_stop: Arc::new(crate::signals::request_stop),
+        request_stop: Arc::new(crate::stop::request_stop),
         plan: network::plan(&config, [3u8; 16]),
         supervisor: None,
     })
@@ -158,10 +158,10 @@ fn a_stop_request_runs_the_one_stop_path() {
     };
     let pool = shekyl_runtime::runtime(budget, &ThreadName::new("test-signals").unwrap()).unwrap();
     // Clears a stop an earlier test latched.
-    signals::own(pool.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
+    stop::own(pool.handle(), shekyl_process::stop::Inherited::none()).expect("own");
     let requester = std::thread::spawn(|| {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        crate::signals::request_stop();
+        crate::stop::request_stop();
     });
     let status = supervise(
         &config,
@@ -175,8 +175,8 @@ fn a_stop_request_runs_the_one_stop_path() {
     requester.join().unwrap();
     assert_eq!(status, 0, "a requested stop is the exit status 0");
     assert_eq!(
-        pool.block_on(signals::stop_requested()),
-        signals::StopCause::Requested
+        pool.block_on(stop::stop_requested()),
+        stop::StopCause::Requested
     );
     pool.shutdown_background();
 }
@@ -220,7 +220,7 @@ fn a_daemon_start_locks_marks_logs_announces_runs_and_stops_on_request() {
     let requester = std::thread::spawn(move || {
         while !seen.load(std::sync::atomic::Ordering::SeqCst) {
             if marker.is_file() {
-                crate::signals::request_stop();
+                crate::stop::request_stop();
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -271,7 +271,7 @@ fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
         .build()
         .expect("runtime");
     // Clears a stop an earlier test latched.
-    signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
+    stop::own(rt.handle(), shekyl_process::stop::Inherited::none()).expect("own");
     let (ended_tx, mut ended) = watch::channel(None);
     let waited = rt.block_on(async {
         tokio::time::timeout(
@@ -288,8 +288,8 @@ fn a_reported_end_stops_the_daemon(end: shekyl_node::NodeEnd) {
     note_run(&mut preserve_status, wait);
     assert!(!preserve_status, "the exit was not made a failure");
     assert_eq!(
-        rt.block_on(signals::stop_requested()),
-        signals::StopCause::Fatal(end)
+        rt.block_on(stop::stop_requested()),
+        stop::StopCause::Fatal(end)
     );
 }
 
@@ -305,12 +305,12 @@ fn a_latched_fatal_cause_fails_the_exit() {
         .enable_all()
         .build()
         .expect("runtime");
-    signals::own(rt.handle(), signals::InheritedInterrupt::ordinary()).expect("own");
+    stop::own(rt.handle(), shekyl_process::stop::Inherited::none()).expect("own");
     let end = shekyl_node::NodeEnd::Sync(shekyl_node::EndCause::EngineClosed);
-    signals::fatal(end.clone());
+    stop::fatal(end.clone());
     let (_ended_tx, mut ended) = watch::channel(None);
     let wait = rt.block_on(run_or_stop(&mut ended));
-    assert_eq!(wait, RunWait::StopRequested(signals::StopCause::Fatal(end)));
+    assert_eq!(wait, RunWait::StopRequested(stop::StopCause::Fatal(end)));
     let mut preserve_status = true;
     note_run(&mut preserve_status, wait);
     assert!(!preserve_status, "a fatal cause kept the exit");
@@ -321,19 +321,19 @@ fn a_latched_fatal_cause_fails_the_exit() {
 /// or report an asked-for stop as an error.
 #[test]
 fn an_asked_for_stop_is_announced_and_a_forced_one_is_an_error() {
-    use signals::StopCause;
+    use stop::StopCause;
     assert_eq!(
         stop_report(StopCause::Requested),
         StopReport::Announce("stop requested by the RPC's daemon_stop".to_owned())
     );
     #[cfg(unix)]
     assert_eq!(
-        stop_report(StopCause::Signal(signals::Signal::Terminate)),
+        stop_report(StopCause::Signal(shekyl_process::stop::Trigger::Terminate)),
         StopReport::Announce("stop requested by SIGTERM".to_owned())
     );
     #[cfg(windows)]
     assert_eq!(
-        stop_report(StopCause::Signal(signals::Signal::Shutdown)),
+        stop_report(StopCause::Signal(shekyl_process::stop::Trigger::Shutdown)),
         StopReport::Announce("stop requested by shutdown".to_owned())
     );
     assert_eq!(

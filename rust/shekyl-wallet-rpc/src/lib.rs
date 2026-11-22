@@ -37,7 +37,6 @@ pub mod server;
 pub mod shard_view;
 pub mod staking;
 pub mod staking_actions;
-mod stop_signals;
 pub mod sync;
 pub mod tenant;
 pub mod types;
@@ -45,7 +44,7 @@ pub mod types;
 pub use auth::AuthConfig;
 pub use error::{WalletRpcError, WalletRpcErrorCode, FOUNDATION_POSTURE_WARNING};
 pub use server::{
-    build_router, run_server, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
+    arm_server, build_router, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
     InProcessListen, ListenAddr, ServerConfig,
 };
 // Re-exported so in-process hosts (shekyl-cli) can name the network a
