@@ -14,12 +14,12 @@
 
 use std::path::{Path, PathBuf};
 
-use shekyl_options::{read_file, Cli, Diagnostic, Kind, Value};
+use shekyl_options::{read_file, Cli, Diagnostic, Kind, Table, Value};
 
 use crate::file::ConfigFile;
-use crate::resolve::{choosers, resolve, Resolved};
+use crate::resolve::{choosers, chosen_network, resolve, Resolved};
 use crate::sections::{build, DaemonConfig};
-use crate::{file, paths, Platform, TABLE};
+use crate::{file, paths, Network, Platform, RunMode, TABLE};
 
 /// What the file step did with the configuration file. The startup line is
 /// this match. A file that was opened, a missing default, and `none` are
@@ -232,9 +232,114 @@ pub fn after_file(
     })
 }
 
+/// Another binary's table, read as the daemon reads its own.
+pub struct TableLoaded {
+    /// The network the command line chose.
+    pub network: Network,
+    /// What the file step did. An announcement prints this.
+    pub config_file: ConfigFileFate,
+    /// Every value and its source.
+    pub resolved: Resolved,
+}
+
+/// The one load for a binary with its own table and a per-account file
+/// (`shekyl-rpc-tunnel`, `shekyl-cli`, `shekyl-wallet-rpc`): the file
+/// `config-file` names, or `<account root>/<binary>-<network>.toml`; its
+/// checks; a file holding a secret readable only by the permitted principals;
+/// then the one precedence. The account's root is read only for that
+/// default, so an account with no home runs when it names the file.
+///
+/// # Errors
+///
+/// The refusals, typed (IG-11); the caller renders them.
+pub fn load_table(
+    table: &Table,
+    binary: &str,
+    cli: Cli,
+    platform: &Platform,
+) -> Result<TableLoaded, Vec<Diagnostic>> {
+    let network = chosen_network(&cli);
+    let choice = match cli.given.iter().find(|g| g.row.name == "config-file") {
+        Some(g) => match &g.value {
+            Value::Path(path) => ChosenFile::Named(path.clone()),
+            other => unreachable!("config-file is a path, not {other:?}"),
+        },
+        None => ChosenFile::Default(
+            paths::root(platform, RunMode::User, "config-file")
+                .map_err(|d| vec![d])?
+                .join(format!("{binary}-{}.toml", network.name())),
+        ),
+    };
+    let opened = open_chosen(&choice, DefaultFile::Read, file::open).map_err(|d| vec![d])?;
+    let mut given = Vec::new();
+    if let Some(config_file) = &opened {
+        given = read_file(table, &config_file.path, &config_file.text)?;
+        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
+            config_file
+                .secret_readable_only_by_permitted(g.row.name)
+                .map_err(|d| vec![d])?;
+        }
+    }
+    let config_file = choice.fate(opened.is_some());
+    let resolved = resolve(table, network, cli, given)?;
+    Ok(TableLoaded {
+        network,
+        config_file,
+        resolved,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one load for a binary with its own table: its default file sits
+    /// in the account's root under the binary's name and network, an absent
+    /// default is the defaults, an account with no home must name the file,
+    /// and a named file that is absent is refused. Red edit: drop the
+    /// network from the default name, and the first assertion fails.
+    #[test]
+    fn load_table_finds_the_binarys_file_under_the_account_root() {
+        use shekyl_options::{read_cli, Code};
+        let cli = |list: &[&str]| {
+            read_cli(&TABLE, list.iter().map(std::ffi::OsString::from)).expect("the arguments")
+        };
+        let home = Path::new("/nonexistent-shekyl-test-home");
+        let platform = Platform {
+            home: Some(home.to_path_buf()),
+            ..Platform::default()
+        };
+        let loaded = load_table(
+            &TABLE,
+            "shekyl-x",
+            cli(&["--network", "testnet"]),
+            &platform,
+        )
+        .expect("an absent default file is the defaults");
+        assert_eq!(loaded.network, Network::Testnet);
+        let root = paths::root(&platform, RunMode::User, "config-file").expect("the root");
+        assert_eq!(
+            loaded.config_file,
+            ConfigFileFate::DefaultAbsent(root.join("shekyl-x-testnet.toml"))
+        );
+
+        let no_home = Platform::default();
+        let refused = load_table(&TABLE, "shekyl-x", cli(&[]), &no_home)
+            .err()
+            .expect("no root for the default path");
+        assert_eq!(refused[0].code, Code::PathNoHome);
+
+        let absent = if cfg!(windows) {
+            r"C:\nonexistent-shekyl-test-home\named.toml"
+        } else {
+            "/nonexistent-shekyl-test-home/named.toml"
+        };
+        let named = cli(&["--config-file", absent]);
+        assert!(
+            load_table(&TABLE, "shekyl-x", named, &no_home).is_err(),
+            "a named file that is absent is refused"
+        );
+    }
 
     /// **`config-file none` reaches no opener, whatever is at the default
     /// path.** The file step's opener is the seam: under `None` it is never
