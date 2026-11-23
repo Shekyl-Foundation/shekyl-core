@@ -16,3 +16,9 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# `cargo xtask dist --host <host>` and `cargo xtask build`: the release
+# build, from rust/xtask/matrix.toml. `--locked` so the build tool itself
+# resolves only what Cargo.lock holds.
+[alias]
+xtask = "run --locked --quiet --package xtask --"

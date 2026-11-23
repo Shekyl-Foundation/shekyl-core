@@ -1,0 +1,287 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+# The release matrix: everything the one cargo build of the shipped binaries
+# is given, per host, as data. `cargo xtask` (rust/xtask) reads it and adds
+# nothing of its own: it substitutes the placeholders below and runs cargo.
+# The gates read the same file: scripts/ci/check_rt_p4_standing.py (every
+# variable and every `-C`), scripts/ci/shipped_graph.py and
+# scripts/ci/check_measurement_spans.py (the features),
+# scripts/ci/check_no_first_party_c.py.
+#
+# Placeholders in a value:
+#   {prefix}         the depends prefix (`contrib/depends/<host>`), from the
+#                    environment file depends writes (`share/toolchain.env`)
+#   {cc} {ar}        that file's CC and AR: the first word, found on PATH
+#   {which:NAME}     NAME found on PATH
+#   {target_dir}     rust/target, where the staged binaries are read
+#   {version_full} {release_name} {is_release}   the build identity
+#
+# The C flags and link arguments of each `dist` table are resolved constants:
+# what the compilers depends pins accept, read from a real configure of the
+# build this file replaces in the gitian container (2026-11-23). Nothing is
+# probed at build time.
+#
+# A host's `dist` table is what `cargo xtask dist --host <host>` runs, from
+# depends' environment; its `native` table is what `cargo xtask build` runs
+# on a machine of that triple. A table that is absent is a refusal.
+
+[build]
+# rustc's channel must be this file's (rust/rust-toolchain.toml). The xtask
+# refuses another.
+toolchain_file = "rust/rust-toolchain.toml"
+cargo_args = ["build", "--locked", "--release"]
+target_dir = "rust/target"
+profile_dir = "release"
+
+# Set on every build, before the host's own. The first eight are the
+# variables CMake emptied so that build scripts and proc macros compile for
+# the build machine, not the target: emptied, not removed, as CMake did.
+env = [
+    ["CC", ""],
+    ["CXX", ""],
+    ["CFLAGS", ""],
+    ["CXXFLAGS", ""],
+    ["LDFLAGS", ""],
+    ["AR", ""],
+    ["RANLIB", ""],
+    ["NM", ""],
+    # The staged binaries are read from here; a shell's own
+    # CARGO_TARGET_DIR would build them elsewhere.
+    ["CARGO_TARGET_DIR", "{target_dir}"],
+    # The build identity (DC-Q20), read only by `shekyl-version`.
+    ["SHEKYL_VERSION_FULL", "{version_full}"],
+    ["SHEKYL_RELEASE_NAME", "{release_name}"],
+    ["SHEKYL_VERSION_IS_RELEASE", "{is_release}"],
+]
+
+# Removed from the inner build's environment: what `cargo run` sets for the
+# xtask itself, which a direct cargo build never had. A name ending in `*`
+# is a prefix.
+unset = [
+    "CARGO",
+    "CARGO_MANIFEST_DIR",
+    "CARGO_MANIFEST_PATH",
+    "CARGO_PKG_*",
+    "CARGO_CRATE_NAME",
+    "CARGO_BIN_NAME",
+    "CARGO_PRIMARY_PACKAGE",
+]
+
+# A build machine's own settings that would change the code: the xtask
+# refuses to start while one is set, and names it. `*` is a prefix or, inside
+# a name, any target. `CARGO_INCREMENTAL` is refused at one value only.
+refused = [
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_TARGET_*_RUSTFLAGS",
+    "CARGO_PROFILE_*",
+    "CARGO_BUILD_TARGET",
+]
+refused_values = [["CARGO_INCREMENTAL", "1"]]
+
+[version]
+default = "3.1.0"
+release_name = "Shekyl NG"
+
+# The measurement build only (Rick, 2026-10-14): the Tor gap deadline lifted
+# to 120 s, the clearnet message-size tap, and the relay's transaction ids on
+# its debug lines. `--measurement-spans` adds exactly these; nothing else in
+# this file names a feature. scripts/ci/check_measurement_spans.py keeps it
+# off every release path, and `dist` refuses it at a tagged commit.
+[measurement]
+features = [
+    "shekyl-transport-layer/measurement-spans",
+    "shekyl-clearnet/measurement-spans",
+    "shekyl-relay/measurement-spans",
+]
+warning = "--measurement-spans: this daemon is a measurement build, not a release"
+
+# ── The hosts ──────────────────────────────────────────────────────────────
+#
+# `binaries`: what is built and staged. Windows ships the daemon and the RPC
+# tunnel only: the wallet stack's skip stays until WP-W5 removes it with the
+# job that smoke-tests it (WINDOWS_WALLET_SUPPORT.md §8).
+#
+# `dist.files`: what the release archive carries beside the binaries, as
+# [source, staged path, mode]; tor_bundle.py adds Tor after.
+
+[[host]]
+name = "x86_64-linux-gnu"
+triple = "x86_64-unknown-linux-gnu"
+binaries = ["shekyld", "shekyl-cli", "shekyl-wallet-rpc", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER", "{cc}"],
+    ["CC_x86_64_unknown_linux_gnu", "{cc}"],
+    ["AR_x86_64_unknown_linux_gnu", "{ar}"],
+    ["CFLAGS_x86_64_unknown_linux_gnu", "-pthread -maes  -fno-strict-aliasing -D_GNU_SOURCE  -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fno-extended-identifiers -fstack-reuse=none -fstack-protector -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
+    ["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS", "-C link-arg=-pthread -C link-arg=-maes -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-Wformat-security -C link-arg=-fno-extended-identifiers -C link-arg=-fstack-reuse=none -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-fcf-protection=full -C link-arg=-fstack-clash-protection -C link-arg=-ffunction-sections -C link-arg=-fdata-sections -C link-arg=-Werror=switch -C link-arg=-Werror=return-type"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+]
+
+[host.native]
+target = false
+env = []
+
+[[host]]
+name = "aarch64-linux-gnu"
+triple = "aarch64-unknown-linux-gnu"
+binaries = ["shekyld", "shekyl-cli", "shekyl-wallet-rpc", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", "{cc}"],
+    ["CC_aarch64_unknown_linux_gnu", "{cc}"],
+    ["AR_aarch64_unknown_linux_gnu", "{ar}"],
+    ["CFLAGS_aarch64_unknown_linux_gnu", "-pthread -march=armv8-a+crypto -fno-strict-aliasing -D_GNU_SOURCE  -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fno-extended-identifiers -fstack-reuse=none -mbranch-protection=standard -fstack-protector -fstack-protector-strong -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type -mfix-cortex-a53-835769 -mfix-cortex-a53-843419"],
+    ["CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS", "-C link-arg=-pthread -C link-arg=-march=armv8-a+crypto -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-Wformat-security -C link-arg=-fno-extended-identifiers -C link-arg=-fstack-reuse=none -C link-arg=-mbranch-protection=standard -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-fstack-clash-protection -C link-arg=-ffunction-sections -C link-arg=-fdata-sections -C link-arg=-Werror=switch -C link-arg=-Werror=return-type -C link-arg=-mfix-cortex-a53-835769 -C link-arg=-mfix-cortex-a53-843419"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+]
+
+[host.native]
+target = false
+env = []
+
+[[host]]
+name = "x86_64-w64-mingw32"
+triple = "x86_64-pc-windows-gnu"
+binaries = ["shekyld", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER", "{cc}"],
+    ["CC_x86_64_pc_windows_gnu", "{cc}"],
+    ["AR_x86_64_pc_windows_gnu", "{ar}"],
+    ["CFLAGS_x86_64_pc_windows_gnu", "-maes  -fno-strict-aliasing -D_GNU_SOURCE  -DWIN32_LEAN_AND_MEAN -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -fno-extended-identifiers -fstack-reuse=none -fstack-protector -fstack-protector-strong -fcf-protection=full -Werror=switch -Werror=return-type"],
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS", "-C link-arg=-maes -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-DWIN32_LEAN_AND_MEAN -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-fno-extended-identifiers -C link-arg=-fstack-reuse=none -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-fcf-protection=full -C link-arg=-Werror=switch -C link-arg=-Werror=return-type -C link-arg=-l:libssp.a -C link-arg=-lmsvcrt -C link-arg=-ladvapi32 -C link-arg=-lgcc"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+]
+
+# MSYS2's MinGW shell (weekly-os).
+[host.native]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER", "{which:gcc}"],
+    ["CC_x86_64_pc_windows_gnu", "{which:gcc}"],
+    ["AR_x86_64_pc_windows_gnu", "{which:ar}"],
+]
+
+[[host]]
+name = "x86_64-apple-darwin11"
+triple = "x86_64-apple-darwin"
+binaries = ["shekyld", "shekyl-cli", "shekyl-wallet-rpc", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER", "{prefix}/native/bin/clang"],
+    ["CC_x86_64_apple_darwin", "{prefix}/native/bin/clang"],
+    ["AR_x86_64_apple_darwin", "{prefix}/native/bin/x86_64-apple-darwin11-ar"],
+    ["CFLAGS_x86_64_apple_darwin", "-B{prefix}/native/bin/x86_64-apple-darwin11- -maes  -fno-strict-aliasing -D_GNU_SOURCE  -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fstack-protector -fstack-protector-strong -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type  -B{prefix}/native/bin/x86_64-apple-darwin11- --target=x86_64-apple-darwin11 --sysroot={prefix}/native/SDK/"],
+    ["MACOSX_DEPLOYMENT_TARGET", "10.16"],
+    ["CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS", "-C link-arg=-B{prefix}/native/bin/x86_64-apple-darwin11- -C link-arg=-maes -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-Wformat-security -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-ffunction-sections -C link-arg=-fdata-sections -C link-arg=-Werror=switch -C link-arg=-Werror=return-type -C link-arg=-B{prefix}/native/bin/x86_64-apple-darwin11- -C link-arg=--target=x86_64-apple-darwin11 -C link-arg=--sysroot={prefix}/native/SDK/"],
+    ["SDKROOT", "{prefix}/native/SDK/"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+]
+
+[host.native]
+target = true
+env = [
+    ["CC_x86_64_apple_darwin", "{which:clang}"],
+    ["AR_x86_64_apple_darwin", "{which:ar}"],
+    ["MACOSX_DEPLOYMENT_TARGET", "10.15"],
+]
+
+[[host]]
+name = "aarch64-apple-darwin11"
+triple = "aarch64-apple-darwin"
+binaries = ["shekyld", "shekyl-cli", "shekyl-wallet-rpc", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER", "{prefix}/native/bin/clang"],
+    ["CC_aarch64_apple_darwin", "{prefix}/native/bin/clang"],
+    ["AR_aarch64_apple_darwin", "{prefix}/native/bin/aarch64-apple-darwin11-ar"],
+    ["CFLAGS_aarch64_apple_darwin", "-B{prefix}/native/bin/aarch64-apple-darwin11- -march=armv8-a+crypto -fno-strict-aliasing -D_GNU_SOURCE  -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -mbranch-protection=bti -fstack-protector -fstack-protector-strong -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type -mfix-cortex-a53-835769  -B{prefix}/native/bin/aarch64-apple-darwin11- --target=arm64-apple-darwin11 --sysroot={prefix}/native/SDK/"],
+    ["MACOSX_DEPLOYMENT_TARGET", "10.16"],
+    ["CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS", "-C link-arg=-B{prefix}/native/bin/aarch64-apple-darwin11- -C link-arg=-march=armv8-a+crypto -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-Wformat-security -C link-arg=-mbranch-protection=bti -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-ffunction-sections -C link-arg=-fdata-sections -C link-arg=-Werror=switch -C link-arg=-Werror=return-type -C link-arg=-mfix-cortex-a53-835769 -C link-arg=-B{prefix}/native/bin/aarch64-apple-darwin11- -C link-arg=--target=arm64-apple-darwin11 -C link-arg=--sysroot={prefix}/native/SDK/ -C link-arg=-mmacosx-version-min=10.16"],
+    ["SDKROOT", "{prefix}/native/SDK/"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+]
+
+[host.native]
+target = true
+env = [
+    ["CC_aarch64_apple_darwin", "{which:clang}"],
+    ["AR_aarch64_apple_darwin", "{which:ar}"],
+    ["MACOSX_DEPLOYMENT_TARGET", "10.15"],
+]
+
+[[host]]
+name = "x86_64-unknown-freebsd"
+triple = "x86_64-unknown-freebsd"
+binaries = ["shekyld", "shekyl-cli", "shekyl-wallet-rpc", "shekyl-rpc-tunnel"]
+
+[host.dist]
+target = true
+env = [
+    ["CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_LINKER", "{cc}"],
+    ["CC_x86_64_unknown_freebsd", "{cc}"],
+    ["AR_x86_64_unknown_freebsd", "{which:ar}"],
+    ["CFLAGS_x86_64_unknown_freebsd", "-pthread -maes  -fno-strict-aliasing -D_GNU_SOURCE  -fPIC  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fstack-protector -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
+    ["CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_RUSTFLAGS", "-C link-arg=-pthread -C link-arg=-maes -C link-arg=-fno-strict-aliasing -C link-arg=-D_GNU_SOURCE -C link-arg=-fPIC -C link-arg=-U_FORTIFY_SOURCE -C link-arg=-D_FORTIFY_SOURCE=1 -C link-arg=-Wformat -C link-arg=-Wformat-security -C link-arg=-fstack-protector -C link-arg=-fstack-protector-strong -C link-arg=-fcf-protection=full -C link-arg=-fstack-clash-protection -C link-arg=-ffunction-sections -C link-arg=-fdata-sections -C link-arg=-Werror=switch -C link-arg=-Werror=return-type"],
+]
+files = [
+    ["LICENSE", "LICENSE", "644"],
+    ["docs/USER_GUIDE.md", "USER_GUIDE.md", "644"],
+    ["docs/ANONYMITY_NETWORKS.md", "ANONYMITY_NETWORKS.md", "644"],
+    ["contrib/packaging/freebsd/shekyld", "rc.d/shekyld", "555"],
+    ["contrib/packaging/freebsd/shekyl-rpc-tunnel", "rc.d/shekyl-rpc-tunnel", "555"],
+]
+
+[host.native]
+target = true
+env = [
+    ["CC_x86_64_unknown_freebsd", "{which:cc}"],
+    ["AR_x86_64_unknown_freebsd", "{which:ar}"],
+]
+
+# Windows' MSVC build is native only (no depends host). `--target` is named
+# as CMake named it, so the binaries land under rust/target/<triple>/.
+[[host]]
+name = "x86_64-pc-windows-msvc"
+triple = "x86_64-pc-windows-msvc"
+binaries = ["shekyld", "shekyl-rpc-tunnel"]
+
+[host.native]
+target = true
+env = []

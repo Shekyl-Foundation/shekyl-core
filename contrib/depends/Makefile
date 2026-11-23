@@ -157,6 +157,7 @@ build-only-$(1)_$(3): CMAKE_SHARED_BOOL = $(if $(findstring shared,$(3)),ON,OFF)
 toolchain_path=$($($(host_arch)_$(host_os)_native_toolchain)_prefixbin)
 final_build_id_long+=$(shell $(build_SHA256SUM) config.site.in)
 final_build_id_long+=$(shell $(build_SHA256SUM) toolchain.cmake.in)
+final_build_id_long+=$(shell $(build_SHA256SUM) toolchain.env.in)
 final_build_id+=$(shell echo -n "$(final_build_id_long)" | $(build_SHA256SUM) | cut -c-$(HASH_LENGTH))
 $(host_prefix)/.stamp_$(final_build_id): $(native_packages) $(packages)
 	$(AT)rm -rf $(@D)
@@ -211,6 +212,15 @@ $(host_prefix)/share/toolchain.cmake : toolchain.cmake.in $(host_prefix)/.stamp_
             $< > $@
 	$(AT)touch $@
 
+$(host_prefix)/share/toolchain.env : toolchain.env.in $(host_prefix)/.stamp_$(final_build_id)
+	$(AT)@mkdir -p $(@D)
+	$(AT)sed -e 's|@HOST@|$(host)|' \
+            -e 's|@CC@|$(toolchain_path)$(host_CC)|' \
+            -e 's|@AR@|$(toolchain_path)$(host_AR)|' \
+            -e 's|@prefix@|$($(host_arch)_$(host_os)_prefix)|'\
+            $< > $@
+	$(AT)touch $@
+
 define check_or_remove_cached
   mkdir -p $(BASE_CACHE)/$(host)/$(package) && cd $(BASE_CACHE)/$(host)/$(package); \
   $(build_SHA256SUM) -c $($(package)_cached_checksum) >/dev/null 2>/dev/null || \
@@ -232,11 +242,13 @@ check-sources:
 
 $(host_prefix)/share/config.site: check-packages
 $(host_prefix)/share/toolchain.cmake: check-packages
+$(host_prefix)/share/toolchain.env: check-packages
 
 check-packages: check-sources
 
 install: check-packages $(host_prefix)/share/config.site
 install: check-packages $(host_prefix)/share/toolchain.cmake
+install: check-packages $(host_prefix)/share/toolchain.env
 
 download-one: check-sources $(all_sources)
 

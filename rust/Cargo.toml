@@ -542,6 +542,11 @@ members = [
     # Shard data-source abstraction (list + aggregate lookup) consumed by the
     # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
     "shekyl-shard-source",
+
+    # The release build (`cargo xtask`, rust/.cargo/config.toml): reads
+    # rust/xtask/matrix.toml and runs the one cargo build per host. A build
+    # tool, never a shipped binary (scripts/ci/shipped_graph.py).
+    "xtask",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

@@ -1,0 +1,27 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The release build: one cargo invocation per host, from rust/xtask/matrix.toml"
+publish = false
+
+# Run as `cargo xtask` (the alias in rust/.cargo/config.toml). It builds the
+# shipped binaries and is never one of them: scripts/ci/shipped_graph.py
+# asserts it is outside the release graph.
+
+[dependencies]
+# The matrix is TOML that the Python gates read with `tomllib`. The
+# workspace's own declaration, already in Cargo.lock (shekyl-daemon-config
+# parses its config file with it), so the xtask adds no package.
+toml = { workspace = true }
+
+[lints]
+workspace = true
