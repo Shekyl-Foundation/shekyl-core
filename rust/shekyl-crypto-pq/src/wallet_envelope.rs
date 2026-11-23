@@ -1650,8 +1650,8 @@ mod tests {
             [fill; 32],
             [fill.wrapping_add(1); 32],
             vec![fill; HYBRID_KEM_PUBKEY_LEN],
-            (0..3)
-                .map(|k| vec![fill.wrapping_add(k); HYBRID_KEM_PUBKEY_LEN])
+            (1..=3)
+                .map(|k| vec![fill + k; HYBRID_KEM_PUBKEY_LEN])
                 .collect(),
         )
         .unwrap()
@@ -1677,7 +1677,7 @@ mod tests {
             *address.b_group(),
             *address.y_group(),
             vec![0x31; HYBRID_KEM_PUBKEY_LEN],
-            (0..3)
+            (1..=3)
                 .map(|k| vec![0x21 + k; HYBRID_KEM_PUBKEY_LEN])
                 .collect(),
         )

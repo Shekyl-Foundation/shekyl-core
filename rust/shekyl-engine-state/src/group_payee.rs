@@ -98,15 +98,16 @@ pub(crate) mod tests {
     use shekyl_address::Network;
 
     pub(crate) fn group(seed: u8) -> MultisigAddressPayload {
-        let kem = |i: u8| vec![seed ^ i; 1216];
+        // Distinct bytes whose ML-KEM coefficients are below the modulus.
+        let kem = |i: u8| vec![seed + i; 1216];
         MultisigAddressPayload::new(
             Network::Testnet,
             3,
             2,
             [seed; 32],
             [seed.wrapping_add(1); 32],
-            kem(0xF0),
-            (0..3).map(kem).collect(),
+            kem(0),
+            (1..=3).map(kem).collect(),
         )
         .expect("a valid 2-of-3 address")
     }

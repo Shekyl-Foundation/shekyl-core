@@ -470,10 +470,7 @@ fn derive_primary_source_secrets_bundle_byte_identical_against_legacy_chain() {
     // bundle arithmetic — `construct_output` is unaware of it.
     for (output_index, tx_hash) in inputs.iter().copied() {
         let constructed = construct_output(
-            shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
-                .output_positions(usize::try_from(output_index).unwrap() + 1)
-                .at(output_index)
-                .unwrap(),
+            shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET).position_at_any_index(output_index),
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
             keys.keys.spend_pk.as_canonical_bytes(),

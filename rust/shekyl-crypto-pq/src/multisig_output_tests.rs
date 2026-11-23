@@ -459,8 +459,12 @@ fn a_member_cannot_open_another_members_slot() {
     );
 }
 
-/// A sender that lies about one member's hash is caught: that member sees
-/// its own hash wrong, every other member sees the leaf not open.
+/// A sender that lies about one member's hash is caught. Under a leaf that
+/// commits to the true hashes, every member reaches the same verdict, the
+/// leaf not opening (R-35: the group's checks run first). Under a leaf the
+/// sender computed over the lie, the leaf opens: the member whose hash is
+/// wrong refuses by its own key, and the others accept an output the group
+/// can still spend.
 #[test]
 fn a_lie_about_one_members_hash_is_caught_by_every_member() {
     let g = group(3, 2);
@@ -499,14 +503,31 @@ fn a_lie_about_one_members_hash_is_caught_by_every_member() {
         )
         .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
-    assert_eq!(
-        open_as(&g, &out, index, 1, g.address.n_total(), &lied, &leaf),
-        Err(MultisigReceiveError::MemberKeyHash)
-    );
-    for i in [0, 2] {
+    for i in 0..3 {
         assert_eq!(
             open_as(&g, &out, index, i, g.address.n_total(), &lied, &leaf),
-            Err(MultisigReceiveError::LeafMismatch)
+            Err(MultisigReceiveError::LeafMismatch),
+            "member {i}, the leaf over the true hashes"
+        );
+    }
+
+    let lied_hashes = hashes
+        .chunks_exact(MULTISIG_KEY_HASH_LEN)
+        .map(|h| h.try_into().unwrap())
+        .collect();
+    let committed = MultisigCommittedForm::new(g.address.m_required(), lied_hashes).unwrap();
+    let lied_leaf = pqc_leaf_commitment(&ss, index, &committed.to_bytes())
+        .unwrap()
+        .entry_bytes();
+    assert_eq!(
+        open_as(&g, &out, index, 1, g.address.n_total(), &lied, &lied_leaf),
+        Err(MultisigReceiveError::MemberKeyHash),
+        "the member whose hash is the lie"
+    );
+    for i in [0, 2] {
+        assert!(
+            open_as(&g, &out, index, i, g.address.n_total(), &lied, &lied_leaf).is_ok(),
+            "member {i}, whose hash is true"
         );
     }
 }

@@ -214,8 +214,8 @@ mod tests {
             [fill; 32],
             [fill.wrapping_add(1); 32],
             vec![fill; HYBRID_KEM_PUBKEY_LEN],
-            (0..N)
-                .map(|k| vec![fill.wrapping_add(k); HYBRID_KEM_PUBKEY_LEN])
+            (1..=N)
+                .map(|k| vec![fill + k; HYBRID_KEM_PUBKEY_LEN])
                 .collect(),
         )
         .expect("a valid group address")

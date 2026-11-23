@@ -215,6 +215,18 @@ impl TxKey {
             order: self.output_order(count),
         }
     }
+
+    /// A position at any index, including one no transaction has
+    /// (TEST_ONLY, R-34): a test of the derivation at an extreme index,
+    /// such as `u64::MAX`, which no [`OutputOrder`] can draw.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn position_at_any_index(&self, index: u64) -> OutputPosition<'_> {
+        OutputPosition {
+            tx_key: self,
+            index,
+        }
+    }
 }
 
 /// Where one output sits in its transaction, bound to the key it is built
