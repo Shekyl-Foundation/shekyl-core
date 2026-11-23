@@ -308,18 +308,15 @@ fn check_toolchain(root: &Path, matrix: &Matrix) -> Result<(), String> {
 
 fn identity(root: &Path, matrix: &Matrix, options: &Options) -> Result<Identity, String> {
     let defaults = &matrix.version;
-    let (identity, tagged) = match &options.version_override {
-        Some(v) => (version::from_override(v, &defaults.release_name)?, true),
-        None => {
-            let head = GitHead::read(root)?;
-            let tagged = head.is_tagged();
-            (
-                version::from_git(&head, &defaults.default, &defaults.release_name),
-                tagged,
-            )
-        }
+    let identity = match &options.version_override {
+        Some(v) => version::from_override(v, &defaults.release_name)?,
+        None => version::from_git(
+            &GitHead::read(root)?,
+            &defaults.default,
+            &defaults.release_name,
+        )?,
     };
-    if options.measurement && options.command == "dist" && tagged {
+    if options.measurement && options.command == "dist" && identity.is_release {
         return Err(format!(
             "--measurement-spans at a release ({}): a measurement build is never a release archive",
             identity.full

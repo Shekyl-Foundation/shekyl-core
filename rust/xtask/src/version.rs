@@ -6,13 +6,17 @@
 //! The build identity the binaries print (DC-Q20): computed once here, read
 //! by `rust/shekyl-version` through `option_env!`.
 //!
-//! - A commit with a tag: the first `v`-prefixed token of `git tag -l
-//!   --points-at HEAD` without its `v`, or the default when no tag has one;
-//!   the tag part is `release`.
-//! - Any other commit: the default version, tagged with the commit's first
+//! - A commit with one release tag: the tag without its `v`, tagged
+//!   `release`. A release tag matches the whole grammar
+//!   `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$`
+//!   (the maintainer's ruling, 2026-11-23).
+//! - A commit with two release tags: refused, since neither names it.
+//! - Any other commit, whatever other tags it carries (`archive/…`,
+//!   `core-v3.1.0`): the default version, tagged with the commit's first
 //!   nine hex digits.
 //! - No git work tree (a source archive): refused, unless the caller names
-//!   the version with `--version-override`, which is a release.
+//!   the version with `--version-override`, which is a release and takes
+//!   the same grammar without the `v`.
 
 use std::path::Path;
 use std::process::Command;
@@ -68,49 +72,41 @@ impl GitHead {
         let tags = git(root, &["tag", "-l", "--points-at", "HEAD"])?;
         Ok(Self { commit, tags })
     }
-
-    /// Whether a tag points at HEAD: the output is false when empty or when
-    /// it spells one of the false constants (`0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `NOTFOUND`, or
-    /// `…-NOTFOUND`, any case), so a lone tag named `no` is not a release.
-    pub fn is_tagged(&self) -> bool {
-        let upper = self.tags.to_ascii_uppercase();
-        !(upper.is_empty()
-            || matches!(
-                upper.as_str(),
-                "0" | "OFF" | "NO" | "FALSE" | "N" | "IGNORE" | "NOTFOUND"
-            )
-            || upper.ends_with("-NOTFOUND"))
-    }
 }
 
-/// The identity for HEAD.
-pub fn from_git(head: &GitHead, default: &str, release_name: &str) -> Identity {
-    if head.is_tagged() {
-        let version = first_v_token(&head.tags).unwrap_or(default);
-        Identity {
-            full: format!("{version}-release"),
-            release_name: release_name.to_owned(),
-            is_release: true,
+/// The identity for HEAD. Two release tags on one commit are refused.
+pub fn from_git(head: &GitHead, default: &str, release_name: &str) -> Result<Identity, String> {
+    let releases: Vec<&str> = head
+        .tags
+        .lines()
+        .map(str::trim)
+        .filter(|tag| release_version(tag).is_some())
+        .collect();
+    let full = match releases.as_slice() {
+        [] => format!("{default}-{}", head.commit),
+        [tag] => format!("{}-release", release_version(tag).unwrap_or(default)),
+        many => {
+            return Err(format!(
+                "commit {} carries {} release tags ({}): a release has one",
+                head.commit,
+                many.len(),
+                many.join(", ")
+            ))
         }
-    } else {
-        Identity {
-            full: format!("{default}-{}", head.commit),
-            release_name: release_name.to_owned(),
-            is_release: false,
-        }
-    }
+    };
+    Ok(Identity {
+        is_release: !releases.is_empty(),
+        full,
+        release_name: release_name.to_owned(),
+    })
 }
 
 /// The identity a caller names for a tree with no git history.
 pub fn from_override(version: &str, release_name: &str) -> Result<Identity, String> {
-    let ok = !version.is_empty()
-        && version.starts_with(|c: char| c.is_ascii_digit())
-        && version
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
-    if !ok {
+    if release_version(&format!("v{version}")).is_none() {
         return Err(format!(
-            "--version-override {version:?} is not a version (digits first, then letters, digits, `.` and `-`)"
+            "--version-override {version:?} is not a release version \
+             (<major>.<minor>.<patch>, then optionally `-` and letters, digits and `.`)"
         ));
     }
     Ok(Identity {
@@ -120,23 +116,26 @@ pub fn from_override(version: &str, release_name: &str) -> Result<Identity, Stri
     })
 }
 
-/// The first `v` followed by non-space characters, without the `v`, as
-/// the release rule has always read it: anywhere in the text, so a
-/// tag `x-v1` yields `1`.
-fn first_v_token(tags: &str) -> Option<&str> {
-    let bytes = tags.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'v' {
-            let rest = &tags[i + 1..];
-            let end = rest.find([' ', '\t', '\r', '\n']).unwrap_or(rest.len());
-            if end > 0 {
-                return Some(&rest[..end]);
-            }
-        }
-        i += 1;
-    }
-    None
+/// The version a release tag names, without its `v`; `None` for any other
+/// tag. The whole tag must match the release grammar.
+fn release_version(tag: &str) -> Option<&str> {
+    let version = tag.strip_prefix('v')?;
+    let (core, suffix) = match version.split_once('-') {
+        Some((core, suffix)) => (core, Some(suffix)),
+        None => (version, None),
+    };
+    let mut numbers = core.split('.');
+    let three = (0..3).all(|_| numbers.next().is_some_and(is_release_number));
+    let suffix_ok = suffix
+        .is_none_or(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.'));
+    (three && numbers.next().is_none() && suffix_ok).then_some(version)
+}
+
+/// `0`, or digits with no leading zero.
+fn is_release_number(text: &str) -> bool {
+    !text.is_empty()
+        && text.bytes().all(|b| b.is_ascii_digit())
+        && (text == "0" || !text.starts_with('0'))
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
@@ -173,63 +172,120 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_untagged_commit_is_the_default_and_the_commit() {
-        let id = from_git(&head(""), "3.1.0", "Shekyl NG");
-        assert_eq!(id.full, "3.1.0-842d36361");
-        assert!(!id.is_release);
+    fn identity(tags: &str) -> Identity {
+        from_git(&head(tags), "3.1.0", "Shekyl NG").expect("an identity")
+    }
+
+    fn is_commit_build(tags: &str) {
+        let id = identity(tags);
+        assert_eq!(id.full, "3.1.0-842d36361", "{tags}");
+        assert!(!id.is_release, "{tags}");
     }
 
     #[test]
-    fn a_v_tag_names_the_version() {
-        let id = from_git(&head("v3.1.0-alpha.13"), "3.1.0", "Shekyl NG");
-        assert_eq!(id.full, "3.1.0-alpha.13-release");
-        assert!(id.is_release);
+    fn no_tag_is_the_nine_character_commit() {
+        is_commit_build("");
     }
 
     #[test]
-    fn the_first_v_token_wins_wherever_it_is() {
-        // The `v` inside `archive` comes first.
-        assert_eq!(first_v_token("archive/x-v2\nv3.1.0"), Some("e/x-v2"));
-        assert_eq!(first_v_token("candidate\nv3.1.0"), Some("3.1.0"));
+    fn an_archive_tag_is_not_a_release() {
+        is_commit_build("archive/chore-pqc-0.5-and-crypto-closure-review-2026-11-23");
     }
 
     #[test]
-    fn a_tag_without_a_v_is_a_release_of_the_default() {
-        let id = from_git(&head("candidate"), "3.1.0", "Shekyl NG");
+    fn a_prefixed_tag_is_not_a_release() {
+        is_commit_build("core-v3.1.0");
+    }
+
+    #[test]
+    fn a_plain_release_tag_names_the_version() {
+        let id = identity("v3.1.0");
         assert_eq!(id.full, "3.1.0-release");
         assert!(id.is_release);
     }
 
     #[test]
-    fn a_lone_tag_spelling_a_false_constant_is_not_a_release() {
-        for tag in ["no", "OFF", "0", "x-NOTFOUND"] {
-            assert!(!head(tag).is_tagged(), "{tag}");
+    fn a_prerelease_tag_names_the_version() {
+        let id = identity("v3.1.0-alpha.12");
+        assert_eq!(id.full, "3.1.0-alpha.12-release");
+        assert!(id.is_release);
+    }
+
+    #[test]
+    fn a_release_tag_beside_an_archive_tag_is_the_release() {
+        let id = identity("archive/x-2026-11-23\nv3.1.0-alpha.13");
+        assert_eq!(id.full, "3.1.0-alpha.13-release");
+    }
+
+    #[test]
+    fn two_release_tags_are_refused_and_named() {
+        let err = from_git(&head("v3.1.0\nv3.1.0-alpha.12"), "3.1.0", "Shekyl NG")
+            .expect_err("two release tags");
+        assert!(err.contains("2 release tags"), "{err}");
+        assert!(err.contains("v3.1.0-alpha.12"), "{err}");
+    }
+
+    #[test]
+    fn the_grammar_is_matched_whole() {
+        for good in [
+            "v0.0.0",
+            "v3.1.0",
+            "v10.20.30",
+            "v3.0.0-RC1",
+            "v3.1.0-alpha.12",
+        ] {
+            assert!(release_version(good).is_some(), "{good}");
         }
-        assert!(head("no\nv3.1.0").is_tagged());
+        for bad in [
+            "3.1.0",
+            "V3.1.0",
+            "v3.1",
+            "v3.1.0.1",
+            "v03.1.0",
+            "v3.01.0",
+            "v3.1.00",
+            "v3.1.0-",
+            "v3.1.0-a_b",
+            "v3.1.0-a-b",
+            "v3.1.0+build",
+            "xv3.1.0",
+            "v3.1.0 ",
+        ] {
+            assert!(release_version(bad).is_none(), "{bad}");
+        }
     }
 
     #[test]
     fn the_archive_version_is_the_identitys_own() {
-        let tagged = from_git(&head("v3.1.0-alpha.13"), "3.1.0", "Shekyl NG");
-        assert_eq!(tagged.archive_version().as_deref(), Ok("v3.1.0-alpha.13"));
-        let untagged = from_git(&head(""), "3.1.0", "Shekyl NG");
-        assert_eq!(untagged.archive_version().as_deref(), Ok("3.1.0-842d36361"));
+        assert_eq!(
+            identity("v3.1.0-alpha.13").archive_version().as_deref(),
+            Ok("v3.1.0-alpha.13")
+        );
+        assert_eq!(
+            identity("").archive_version().as_deref(),
+            Ok("3.1.0-842d36361")
+        );
     }
 
     #[test]
     fn a_version_a_file_name_cannot_carry_is_refused() {
-        let id = from_git(&head("archive/x-2026-11-23"), "3.1.0", "Shekyl NG");
+        // The grammar keeps such a value out; this is the backstop behind it.
+        let id = Identity {
+            full: "e/x-2026-11-23-release".to_owned(),
+            release_name: "Shekyl NG".to_owned(),
+            is_release: true,
+        };
         let err = id.archive_version().expect_err("a slash");
         assert!(err.contains("cannot name an archive"), "{err}");
     }
 
     #[test]
     fn an_override_is_a_release_and_must_be_a_version() {
-        let id = from_override("3.1.0", "Shekyl NG").expect("a version");
-        assert_eq!(id.full, "3.1.0-release");
+        let id = from_override("3.1.0-alpha.13", "Shekyl NG").expect("a version");
+        assert_eq!(id.full, "3.1.0-alpha.13-release");
         assert!(id.is_release);
-        assert!(from_override("$(id)", "Shekyl NG").is_err());
-        assert!(from_override("", "Shekyl NG").is_err());
+        for bad in ["$(id)", "", "3.1", "03.1.0", "v3.1.0"] {
+            assert!(from_override(bad, "Shekyl NG").is_err(), "{bad}");
+        }
     }
 }

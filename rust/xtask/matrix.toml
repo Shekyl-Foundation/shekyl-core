@@ -97,7 +97,7 @@ release_name = "Shekyl NG"
 # to 120 s, the clearnet message-size tap, and the relay's transaction ids on
 # its debug lines. `--measurement-spans` adds exactly these; nothing else in
 # this file names a feature. scripts/ci/check_measurement_spans.py keeps it
-# off every release path, and `dist` refuses it at a tagged commit.
+# off every release path, and `dist` refuses it at a release.
 [measurement]
 features = [
     "shekyl-transport-layer/measurement-spans",
