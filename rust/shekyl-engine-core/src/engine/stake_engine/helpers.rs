@@ -10,7 +10,7 @@ use shekyl_crypto_pq::archival_p::ArchivalPKeys;
 use shekyl_crypto_pq::derivation::{derive_output_secrets, derive_pqc_public_key};
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::label::sentinel_plaintext;
-use shekyl_crypto_pq::output::recover_combined_ss;
+use shekyl_crypto_pq::output::{recover_combined_ss, spend_key_image};
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
@@ -343,17 +343,20 @@ pub(crate) fn derive_funding_key_image(
 /// assemble path, which already holds the derived bundle (it needs the
 /// bundle's other secrets too) and must compute the same `KI = x·Hp(O)` the
 /// FCMP++ verifier checks.
+///
+/// The multiplication is [`spend_key_image`]: this adapter only forms
+/// `Hp(O)`, the same compressed point the signer's key-image generator
+/// forms, and does not open `x` (rule 36). Watch and sweep both call here,
+/// so the funding image cannot diverge from the image the membership proof
+/// is checked against.
 pub(crate) fn key_image_from_spend_key_x(
     spend_key_x: &[u8; 32],
     output_key: [u8; 32],
 ) -> Result<[u8; 32], String> {
-    let x_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*spend_key_x))
-            .ok_or_else(|| "non-canonical x".to_owned())?,
-    );
-    Ok((biased_hash_to_point(output_key) * *x_scalar)
-        .compress()
-        .to_bytes())
+    let hp_of_output = biased_hash_to_point(output_key).compress().to_bytes();
+    spend_key_image(spend_key_x, &hp_of_output)
+        .map(|image| *image.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 /// At most one correct-source refusal per this many guarded draws.
