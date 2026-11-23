@@ -717,3 +717,6 @@ mod admission_tests;
 
 #[path = "linger_tests.rs"]
 mod linger_tests;
+
+#[path = "flip_tests.rs"]
+mod flip_tests;
