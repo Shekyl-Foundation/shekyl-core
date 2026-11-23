@@ -32,6 +32,13 @@ A merge **reaches** a pull request when the shared tests are not empty
 manifest, the lock, the toolchain, a path nothing claims) makes its tests
 every member. A documentation-only side has none.
 
+It also reaches it when both change the fuzz inventory (`INVENTORY`: the
+workspace lock, a fuzz crate's files, the inventory check and the two
+workflows it reads), whatever tests they share: a fuzz crate's files are
+no package's, so a fuzz lockfile and the workspace lock it must match share
+no test, and the re-test's inventory step is what checks the pair (#1489
+and #1497, 2026-11-22).
+
 The shared tests are closed under `rdeps()` (an intersection of two closed
 sets), so the re-test passes a few members whose `rdeps()` is the set as
 `rust_tests` (`generators`), and nextest selects exactly the shared set.
@@ -83,9 +90,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import change_scope as cs  # noqa: E402
+import check_fuzz_inventory as cfi  # noqa: E402
 import merge_ready as mr  # noqa: E402
 
 ALL = "all"
+# The paths check_fuzz_inventory.py's default run reads, beside every fuzz
+# crate's own files (cs.FUZZ_CRATE).
+INVENTORY_CHECK = "scripts/ci/check_fuzz_inventory.py"
+INVENTORY = frozenset({cfi.WORKSPACE_LOCK, cfi.WORKFLOW, cfi.FUZZ_WORKFLOW, INVENTORY_CHECK})
 
 
 class Context:
@@ -113,6 +125,23 @@ def changed_packages(files, ctx):
     if tests == "none":
         return set()
     return set(tests)
+
+
+def touches_inventory(files):
+    """Whether `files` change what the fuzz inventory check reads."""
+    return any(f in INVENTORY or cs.FUZZ_CRATE.match(f) for f in files)
+
+
+def both_inventory(merged_files, pr_files):
+    """Both sides change the fuzz inventory: the merge reaches the pull
+    request whatever tests they share."""
+    return touches_inventory(merged_files) and touches_inventory(pr_files)
+
+
+def why_of(shared, inventory, ws):
+    """A row's reason: the shared tests, and the inventory when both change it."""
+    why = f"shares {scope_values(shared, ws)[0]}"
+    return f"{why}; both change the fuzz inventory" if inventory else why
 
 
 def tests_of(changed, rdeps):
@@ -238,29 +267,34 @@ def label_row(number, head, dev, ctx):
     when it shares no test with the merges since its merge base, else
     'retest'. Raises on anything it cannot read; the caller fails closed."""
     since = merge_base(head, dev)
-    shared = shared_tests(changed_packages(diff_files(since, dev), ctx),
-                          changed_packages(diff_files(dev, head), ctx), ctx.workspace.rdeps)
-    return {"pr": number, "head": head, "action": "retest" if shared else "ready", "since": since,
-            "merged": merged_prs(since, dev), "why": f"shares {scope_values(shared, ctx.workspace)[0]}"}
+    merged_files, pr_files = diff_files(since, dev), diff_files(dev, head)
+    shared = shared_tests(changed_packages(merged_files, ctx),
+                          changed_packages(pr_files, ctx), ctx.workspace.rdeps)
+    inventory = both_inventory(merged_files, pr_files)
+    return {"pr": number, "head": head, "action": "retest" if shared or inventory else "ready", "since": since,
+            "merged": merged_prs(since, dev), "why": why_of(shared, inventory, ctx.workspace)}
 
 
-def push_row(number, head, current, dev, before, ctx, merged_push):
+def push_row(number, head, current, dev, before, ctx, merged_push, merged_files):
     """A push's plan for one labelled pull request: a re-test row when the
     push reaches it, else None. Raises on anything it cannot read; the
     caller fails closed."""
     ws = ctx.workspace
-    pr = changed_packages(diff_files(dev, head), ctx)
+    pr_files = diff_files(dev, head)
+    pr = changed_packages(pr_files, ctx)
     # The push reaches the head only past what the head already holds: a
     # head that merged this `dev`, or part of the push, was tested on it by
     # its own run.
     start = later(before, merge_base(head, dev))
     if start != before:
-        merged_push = changed_packages(diff_files(start, dev), ctx) if start != dev else set()
+        merged_files = diff_files(start, dev) if start != dev else []
+        merged_push = changed_packages(merged_files, ctx) if start != dev else set()
     this_merge = shared_tests(merged_push, pr, ws.rdeps)
-    if not this_merge:
+    inventory = both_inventory(merged_files, pr_files)
+    if not this_merge and not inventory:
         return None
     return {"pr": number, "head": head, "since": since_for(current, head, dev), "merged": merged_prs(before, dev),
-            "crates": crates_named(merged_push, pr, ws), "why": f"shares {scope_values(this_merge, ws)[0]}"}
+            "crates": crates_named(merged_push, pr, ws), "why": why_of(this_merge, inventory, ws)}
 
 
 def fail_closed(number, head, why, since):
@@ -300,10 +334,11 @@ def plan(base_ref, before):
         subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin", *[h for _, h in prs]], check=True)
     try:
         ctx = Context()
-        merged_push = changed_packages(diff_files(before, dev), ctx)
+        merged_files = diff_files(before, dev)
+        merged_push = changed_packages(merged_files, ctx)
         context_error = None
     except Exception as e:  # fail closed: every labelled pull request is re-tested on its whole scope
-        ctx, merged_push, context_error = None, ALL, str(e)
+        ctx, merged_push, merged_files, context_error = None, ALL, None, str(e)
     legs, tested = [], []
     for number, head in prs:
         sts = mr.statuses(head)
@@ -315,7 +350,7 @@ def plan(base_ref, before):
         try:
             if ctx is None:
                 raise RuntimeError(context_error)
-            row = push_row(number, head, current, dev, before, ctx, merged_push)
+            row = push_row(number, head, current, dev, before, ctx, merged_push, merged_files)
         except Exception as e:
             row = fail_closed(number, head, e, current["since"] if kind == "re-testing" else mr.UNKNOWN)
             print(f"::warning::#{number}: {row['why']}; re-testing its whole scope")
@@ -365,18 +400,21 @@ def run_merge(merge, prs, before=None):
     out = []
     try:
         ctx = Context()
-        merged = changed_packages(diff_files(before or f"{merge}^1", merge), ctx)
+        merged_files = diff_files(before or f"{merge}^1", merge)
+        merged = changed_packages(merged_files, ctx)
     except Exception as e:  # fail closed: every pull request is reached
         return [{"pr": n, "head": h, "overlap": True, "crates": [], "rust_tests": "all", "rust_doc_pkgs": "",
                  "why": f"cannot decide ({e})"} for n, _, h in prs]
     for number, base, head in prs:
         try:
-            pr = changed_packages(diff_files(base, head), ctx)
+            pr_files = diff_files(base, head)
+            pr = changed_packages(pr_files, ctx)
             shared = shared_tests(merged, pr, ctx.workspace.rdeps)
+            inventory = both_inventory(merged_files, pr_files)
             tests, docs = scope_values(shared, ctx.workspace)
-            out.append({"pr": number, "head": head, "overlap": bool(shared),
+            out.append({"pr": number, "head": head, "overlap": bool(shared) or inventory,
                         "crates": crates_named(merged, pr, ctx.workspace), "rust_tests": tests,
-                        "rust_doc_pkgs": docs, "why": "shared tests" if shared else "no shared test"})
+                        "rust_doc_pkgs": docs, "why": why_of(shared, inventory, ctx.workspace)})
         except Exception as e:
             out.append({"pr": number, "head": head, "overlap": True, "crates": [], "rust_tests": "all",
                         "rust_doc_pkgs": "", "why": f"cannot decide ({e})"})
@@ -475,6 +513,52 @@ def selftest():
     # The kinds a push re-tests: only a head whose label passed its check.
     if set(mr.PUSH_ACTS) != {"checking", "re-testing", "ready"}:
         failed.append(f"PUSH_ACTS: {mr.PUSH_ACTS}")
+    # The fuzz inventory: #1489 added a fuzz lockfile, #1497 moved the
+    # workspace lock under it, and the two shared no test.
+    for label, merged_files, pr_files, want in [
+        ("a fuzz lockfile and the workspace lock", ["rust/shekyl-levin/fuzz/Cargo.lock"], ["rust/Cargo.lock"], True),
+        ("a fuzz target and the inventory check", ["rust/shekyl-wire/fuzz/fuzz_targets/x.rs"], [INVENTORY_CHECK], True),
+        ("a fuzz crate and the fuzz workflow", [cfi.WORKFLOW], ["rust/shekyl-fcmp/fuzz/Cargo.toml"], True),
+        ("a crate's source and the workspace lock", ["rust/shekyl-levin/src/lib.rs"], ["rust/Cargo.lock"], False),
+        ("a fuzz lockfile and a crate's source", ["rust/shekyl-levin/fuzz/Cargo.lock"], ["rust/shekyl-levin/src/x.rs"],
+         False),
+        ("docs on one side", ["docs/FOLLOWUPS.md"], ["rust/Cargo.lock"], False),
+    ]:
+        if both_inventory(merged_files, pr_files) != want:
+            failed.append(f"both_inventory, {label}: {not want} != {want}")
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    for path in sorted(INVENTORY):
+        if not os.path.isfile(os.path.join(root, path)):
+            failed.append(f"INVENTORY names {path}, which is not a file (rule 47)")
+    if "both change the fuzz inventory" not in why_of(set(), True, ws):
+        failed.append("why_of: an inventory-only row does not say so")
+    # The rows themselves, with git stubbed: both sides change the
+    # inventory and share no test (the scope gives each side none).
+    lock, fuzz, src = "rust/Cargo.lock", "rust/shekyl-levin/fuzz/Cargo.lock", "rust/shekyl-levin/src/x.rs"
+
+    class Ctx:
+        workspace = ws
+
+    def rows(merged_files, pr_files):
+        diffs = {("base", "d"): merged_files, ("d", "h"): pr_files, ("b", "d"): merged_files}
+        stubs = {"diff_files": lambda a, b: diffs[(a, b)], "merge_base": lambda h, d: "base",
+                 "merged_prs": lambda a, b: "#1", "changed_packages": lambda files, ctx: set(),
+                 "since_for": lambda *a, **k: "base", "later": lambda a, b: a}
+        saved = {k: globals()[k] for k in stubs}
+        globals().update(stubs)
+        try:
+            return (label_row(7, "h", "d", Ctx())["action"],
+                    push_row(7, "h", None, "d", "b", Ctx(), set(), merged_files) is not None)
+        finally:
+            globals().update(saved)
+
+    for label, merged_files, pr_files, want in [
+        ("a fuzz lockfile merged, the workspace lock in the pull request", [fuzz], [lock], ("retest", True)),
+        ("the workspace lock merged, a fuzz lockfile in the pull request", [lock], [fuzz], ("retest", True)),
+        ("a crate's source merged, the workspace lock in the pull request", [src], [lock], ("ready", False)),
+    ]:
+        if rows(merged_files, pr_files) != want:
+            failed.append(f"label_row/push_row, {label}: {rows(merged_files, pr_files)} != {want}")
     # Fail closed.
     broken = run_merge("not-a-commit", [(7, "x", "y")])
     if not (broken and broken[0]["overlap"] and broken[0]["rust_tests"] == "all"):
@@ -486,7 +570,7 @@ def selftest():
         print(f"selftest FAIL: {f}")
     if not failed:
         print("selftest: shared tests, their generators, the range since the last ready, `since` for each status, "
-              "the kinds a push re-tests, and failing closed")
+              "the kinds a push re-tests, the fuzz inventory, and failing closed")
     return 1 if failed else 0
 
 
