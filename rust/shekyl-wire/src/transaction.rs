@@ -293,7 +293,7 @@ pub const PQC_MAX_SIGNATURE_BLOB: usize = 32768;
 /// already-bounded `n_padded_outputs` (≤ [`MAX_OUTPUTS`] for any valid tx);
 /// `saturating_mul` keeps it overflow-safe.
 #[must_use]
-pub fn bp_plus_weight_clawback(n_padded_outputs: usize) -> usize {
+pub const fn bp_plus_weight_clawback(n_padded_outputs: usize) -> usize {
     if n_padded_outputs <= 2 {
         return 0;
     }
