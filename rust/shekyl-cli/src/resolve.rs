@@ -592,7 +592,7 @@ pub(crate) fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String>
 
 /// The coin-selection settings a Monero user would `set`, in Monero's
 /// spelling and in the deleted prefs file's: REJECTED (Rick, 2026-11-21).
-const COIN_SELECTION_SETTINGS: &[&str] = &[
+pub(crate) const COIN_SELECTION_SETTINGS: &[&str] = &[
     "min-outputs-count",
     "min-outputs-value",
     "ignore-outputs-above",

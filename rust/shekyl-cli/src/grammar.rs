@@ -1354,9 +1354,14 @@ mod tests {
     /// (2026-11-21): each, in Monero's spelling and the deleted prefs
     /// file's, is refused with its reason and the decision, never sent to
     /// the server. Any other `set` stays an unknown command.
+    ///
+    /// The names are the ruled list, written here rather than read from
+    /// `resolve::COIN_SELECTION_SETTINGS`, so a name dropped from the code
+    /// still fails; the set equality below catches one added there and not
+    /// pinned here.
     #[test]
     fn the_coin_selection_settings_are_refused_with_their_reason() {
-        for name in [
+        const RULED: [&str; 10] = [
             "min-outputs-count",
             "min-outputs-value",
             "ignore-outputs-above",
@@ -1367,7 +1372,14 @@ mod tests {
             "ignore_outputs_above",
             "ignore_outputs_below",
             "merge_destinations",
-        ] {
+        ];
+        let ruled: std::collections::BTreeSet<&str> = RULED.into_iter().collect();
+        let refused: std::collections::BTreeSet<&str> = crate::resolve::COIN_SELECTION_SETTINGS
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(refused, ruled, "the code refuses exactly the ruled names");
+        for name in RULED {
             let line = format!("set {name} 1");
             match parse(&line) {
                 ResolvedCommand::Diagnostic { message } => {

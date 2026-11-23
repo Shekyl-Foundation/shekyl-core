@@ -122,8 +122,12 @@ identity → region-1 AAD. The `2k` work routed around the `2a` module without e
 ## 2. The four-tier storage model (canonical)
 
 This is the model that resolves both the region-2 question and the earlier staking (tier-4)
-decision. It is the durable output of this thread, now named in
-[`WALLET_PREFS.md` §2](./completed/WALLET_PREFS.md).
+decision. It is the durable output of this thread. The living placement
+contract is [`WALLET_SETTINGS.md` §1](./WALLET_SETTINGS.md), whose decision
+order supersedes this table: tier 3, the advisory TOML file, was deleted on
+2026-11-21, so a setting is now sealed state, a hardcoded constant, an option
+of the process, or the front end's own (the retired policy that first named
+the tiers is [`WALLET_PREFS.md`](./completed/WALLET_PREFS.md)).
 
 | Tier | Where | Who writes | Integrity | Failure mode | Reset-to-default safe? |
 |------|-------|-----------|-----------|--------------|------------------------|
