@@ -183,7 +183,7 @@ impl BondAssemblyError {
     /// The one constructor for a step that failed. A signer refusal keeps its
     /// [`SignFault`](shekyl_tx_builder::SignFault); every other failure is the
     /// [`Build`](Self::Build) arm. The type of `err` decides which
-    /// ([`PipelineFailure`](crate::engine::error::PipelineFailure)), so a
+    /// ([`PipelineFailure`]), so a
     /// [`TxBuilderError`](shekyl_tx_builder::TxBuilderError) cannot be
     /// stringified into an internal fault.
     pub(crate) fn build(stage: &'static str, err: impl PipelineFailure) -> Self {

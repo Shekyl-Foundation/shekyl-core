@@ -181,7 +181,7 @@ impl DrainAssemblyError {
     /// builder error, a [`KeyEngineError::Sign`](crate::engine::error::KeyEngineError::Sign),
     /// or a bond-path [`Signer`](super::bond_assembly::BondAssemblyError::Signer)
     /// — keeps its fault. Every other failure is the [`Build`](Self::Build)
-    /// arm. See [`PipelineFailure`](crate::engine::error::PipelineFailure).
+    /// arm. See [`PipelineFailure`].
     pub(crate) fn build(stage: &'static str, err: impl PipelineFailure) -> Self {
         match err.carry().classify(stage, "drain") {
             ClassifiedFailure::Signer(fault) => Self::Signer(fault),

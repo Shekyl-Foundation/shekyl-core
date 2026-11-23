@@ -94,7 +94,7 @@ impl PipelineFailure for KeyEngineError {
 }
 
 /// A failure that is never the signer's. Naming it here is what lets it cross
-/// [`PipelineFailure`](PipelineFailure); a type with no impl cannot be
+/// [`PipelineFailure`]; a type with no impl cannot be
 /// stringified by accident, and a type that *is* a signer fault must not be
 /// added to this list.
 macro_rules! pipeline_detail {
