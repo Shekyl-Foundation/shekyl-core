@@ -14,11 +14,13 @@
 //! ([`crate::fee_model::FeeModel::admission_rate`]: the production relay floor
 //! on the lattice, or the control arm's unrounded figure), so the lever is the ratio
 //! `archival_len / weight` over the shapes the builder accepts
-//! (`1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`). That ratio is **maximised by
+//! (`1..=MAX_INPUTS` × `MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS`, CEN-I1's
+//! floor on the outputs). That ratio is **maximised by
 //! inputs, not outputs**: each input carries a hybrid PQC authorisation
 //! (prunable) and a share of the FCMP proof (prunable), while each output's
 //! bytes are mostly the unprunable prefix the fee pays for and the shard does
-//! not count. So the shape is **`MAX_INPUTS`-in / 1-out** — the reverse of the
+//! not count. So the shape is **`MAX_INPUTS`-in /
+//! `MIN_NON_COINBASE_OUTPUTS`-out** — the reverse of the
 //! J-segment era's 1-in / 16-out *leaf* stuffer, which inflated a count of
 //! outputs that the operand no longer measures. It is **not** a
 //! black-marble/decoy construct: FCMP++ has no rings; nothing here poisons a
@@ -28,7 +30,7 @@
 //! computed over every shape at the chain's depth, so if a wire change moved
 //! the balance the model would follow it. The one-shot (binding, attacker-
 //! favouring) cost uses that shape alone; a *sustained* campaign cannot — it
-//! consumes `MAX_INPUTS − 1` outputs per transaction, and outputs are
+//! consumes `MAX_INPUTS − MIN_NON_COINBASE_OUTPUTS` outputs per transaction, and outputs are
 //! conserved — so [`sustained_stuffer_cost_per_shard_atomic`] prices the
 //! cheapest producer/consumer **cycle** whose net output balance is zero, and
 //! the reports carry both.
@@ -49,6 +51,7 @@ use shekyl_tx_weight::{
     OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
 use shekyl_types::SHARD_LENGTH;
+use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 use crate::burden::SHARD_BYTES;
 use shekyl_economics::RelayPolicy;
@@ -253,20 +256,22 @@ impl Shape {
         self.n_out.get() as i64 - self.n_in.get() as i64
     }
 
-    /// `"8-in/1-out"`, for the reports.
+    /// `"8-in/2-out"`, for the reports.
     #[must_use]
     pub fn label(self) -> String {
         format!("{}-in/{}-out", self.n_in.get(), self.n_out.get())
     }
 }
 
-/// Every shape the builder accepts, `1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`. The
-/// input cap is read off the bounded type (it is crate-internal to the
-/// predictor by design); clamping `usize::MAX` lands on it.
+/// Every shape consensus admits, `1..=MAX_INPUTS` ×
+/// `MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS`: CEN-I1 refuses a transaction
+/// with fewer outputs, and the builder will not make one. The input cap is
+/// read off the bounded type (it is crate-internal to the predictor by
+/// design); clamping `usize::MAX` lands on it.
 pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
     let max_in = InputCount::clamped(usize::MAX).get();
     (1..=max_in).flat_map(move |i| {
-        (1..=MAX_OUTPUTS).map(move |o| Shape {
+        (MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS).map(move |o| Shape {
             n_in: InputCount::clamped(i),
             n_out: OutputCount::clamped(o),
         })
@@ -311,7 +316,7 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
 /// This is **not** [`stuffer_shape`]'s packing: the fee-per-byte argmin is the
 /// cheapest shape, but only whole transactions fit a finite block, so a
 /// shape with a slightly worse ratio and a smaller remainder can land more
-/// bytes (at the surge ceiling, 6-in/1-out beats 8-in/1-out by ≈ 3 %). The
+/// bytes, and which shape wins changes with depth (§5.37.2's table). The
 /// physical ceiling on the fold's slew is this search, not the cost search.
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
@@ -541,7 +546,7 @@ mod tests {
     fn stuffer_shape_is_max_inputs_min_outputs() {
         // Inputs carry the archival bytes (PQC auth + FCMP share, both
         // prunable); outputs carry unprunable prefix the fee pays for and the
-        // operand does not count. So the argmax is MAX_INPUTS-in / 1-out at
+        // operand does not count. So the argmax is MAX_INPUTS-in / the minimum out at
         // every depth — and the J-segment era's 1-in/16-out leaf stuffer is
         // now among the DEAREST shapes per archival byte.
         //
@@ -561,7 +566,7 @@ mod tests {
                 let s = priced(stuffer_shape(depth, rate));
                 assert_eq!(
                     (s.n_in.get(), s.n_out.get()),
-                    (max_in, 1),
+                    (max_in, MIN_NON_COINBASE_OUTPUTS),
                     "depth {depth} at {rate:?}: the archival/weight balance moved — the \
                      searched shape is now {}-in/{}-out; update the model's prose and \
                      §12.13, this is not a regression",
