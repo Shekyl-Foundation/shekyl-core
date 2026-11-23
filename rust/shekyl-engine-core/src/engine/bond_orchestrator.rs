@@ -23,6 +23,7 @@ use shekyl_curve_tree::{
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_rpc_transport::DaemonTarget;
+use shekyl_standoff::P_LANE_WEIGHT_CEILING;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 use shekyl_types::{BlockHeight, PSlot};
 use shekyl_units::AtomicUnits;
@@ -44,51 +45,6 @@ use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::{
     load_pscan_state_for_engine, pending_post_store_for_engine, WalletFilePendingSealStore,
 };
-
-/// Structural weight ceiling for the `P`-lane fee derivation: the maximum
-/// predicted weight of any legal `P`-lane spend — up to
-/// [`shekyl_tx_builder::MAX_INPUTS`] funding inputs, up to two outputs
-/// (payment/bond + change), any tree depth up to
-/// [`shekyl_tx_weight::MAX_TREE_DEPTH`], worst-case fee varint. A fee baked
-/// at assembly over this weight clears the daemon's per-byte floor even as
-/// estimates move (overpaying is a miner transfer, never a conservation
-/// term), and every `P`-lane spend quoting the same ceiling keeps the fee
-/// uniform across the lane's tx shapes.
-///
-/// Until 2026-08-26 this was a hardcoded `32 * 1024`, sized for the
-/// single-input bond post — but the drain path spends up to `MAX_INPUTS`
-/// funding outputs, and the depth-24 8-input FCMP++ proof **alone** is
-/// 32,704 bytes, so a legal multi-input drain weighed more than the ceiling
-/// and its quoted fee undercut the daemon's per-byte floor (a relay
-/// refusal, and — until the drain lifecycle driver lands — a sealed record
-/// bricking that persona's drain lane). The exit-fee reserve derivation
-/// (`shekyl-standoff` `reserve.rs`) prices its pessimistic `Release` over
-/// this same structural shape; its headroom arithmetic is derived against
-/// this computed ceiling (currently 80,456 bytes), and the ceiling test
-/// ties the two so a KAT-table regeneration that grows the ceiling forces
-/// the reserve derivation to be re-run.
-pub(crate) fn p_lane_weight_ceiling_bytes() -> usize {
-    static CEILING: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
-        let mut max = 0;
-        for n_in in 1..=shekyl_tx_builder::MAX_INPUTS {
-            // The proof-size table is non-monotonic in depth, so scan every
-            // legal (inputs, outputs, depth) cell rather than assuming the
-            // corner shape is the heaviest.
-            for n_out in 1..=2 {
-                for tree_depth in 1..=shekyl_tx_weight::MAX_TREE_DEPTH {
-                    max = max.max(super::tx_fee_model::predict_weight(
-                        super::tx_fee_model::InputCount::clamped(n_in),
-                        super::tx_fee_model::OutputCount::clamped(n_out),
-                        tree_depth,
-                        u64::MAX,
-                    ));
-                }
-            }
-        }
-        max
-    });
-    *CEILING
-}
 
 /// Bond fee for the first-stake post, from one daemon fee snapshot.
 ///
@@ -125,8 +81,7 @@ fn bond_fee_from_estimates(
 }
 
 /// The canonical `P`-lane floor fee from one daemon fee snapshot: validated
-/// economy tier over the [`p_lane_weight_ceiling_bytes`] structural weight
-/// ceiling. **The single fee decision for every `P`-lane spend** — the bond
+/// economy tier over [`P_LANE_WEIGHT_CEILING`], the weight limit. **The single fee decision for every `P`-lane spend** — the bond
 /// post (via [`bond_fee_from_estimates`]) and the WI-RPC-5 drain façade
 /// ([`drain_to_principal`](super::drain_facade)) both quote this function, so
 /// the P-lane fee-uniformity CONTRACT PIN is one body, not two derivations
@@ -144,7 +99,7 @@ pub(crate) fn p_lane_floor_fee(
     // daemon-supplied number.
     Ok(AtomicUnits::from_raw(super::tx_fee_model::fee_from_weight(
         &estimates.economy(),
-        p_lane_weight_ceiling_bytes(),
+        P_LANE_WEIGHT_CEILING,
     )))
 }
 
@@ -184,6 +139,10 @@ fn funding_refusal_detail(e: &BondAssemblyError) -> String {
         BondAssemblyError::TooManyFundingInputs { max, .. } => format!(
             "persona funding is fragmented across more than {max} spendable              outputs — more than one bond post can carry"
         ),
+        BondAssemblyError::OutputsUnfillable { minimum, .. } => format!(
+            "persona funding leaves too little to fill the {minimum} nonzero outputs a \
+             transaction requires; fund the persona and retry"
+        ),
         BondAssemblyError::OutputNotYetDrained { .. } => {
             "a persona funding output is not yet drained into the reference tree; \
              wait for the tree to catch up and retry"
@@ -218,6 +177,7 @@ fn engine_failure_detail(e: &StakeEngineError) -> String {
 fn preflight_error(e: &BondAssemblyError) -> FirstStakeError {
     match e {
         BondAssemblyError::InsufficientFunding { .. }
+        | BondAssemblyError::OutputsUnfillable { .. }
         | BondAssemblyError::NoSpendableFunding
         | BondAssemblyError::ReferenceResyncing { .. }
         | BondAssemblyError::OutputNotYetDrained { .. } => {

@@ -13,8 +13,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# Default build is the draw + plan only: float-free, dependency-free, the path
-# a wallet ships. `conformance` pulls the statistics utility and compiles the
+# Default build is the draw + plan + the exit-fee reserve, float-free, the path
+# a wallet ships. The reserve reads the weight limit and the fee lattice. `conformance` pulls the statistics utility and compiles the
 # grading + self-certification machinery (test/diagnostic only).
 default = []
 conformance = ["dep:shekyl-stats"]
@@ -28,6 +28,8 @@ gf7-hooks = []
 
 
 [dependencies]
+shekyl-economics = { path = "../shekyl-economics" }
+shekyl-wire = { path = "../shekyl-wire" }
 shekyl-stats = { path = "../shekyl-stats", optional = true }
 
 [lints]

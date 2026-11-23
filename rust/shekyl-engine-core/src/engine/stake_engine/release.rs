@@ -37,6 +37,7 @@ use shekyl_archival_retention::release_cooldown::{
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
 use shekyl_tx_builder::TreeContext;
+use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
 use shekyl_units::AtomicUnits;
 
 use shekyl_types::{PCanonicalId, SigningPayloadHash};
@@ -48,6 +49,7 @@ use super::actor::{persona_canonical_id, StakeEngine};
 use super::bond_post_assemble::{
     assemble_signed_bond_post, require_funding_inputs, BondPostAssembleArgs,
 };
+use super::helpers::split_across_minimum_outputs;
 use super::types::*;
 
 /// The record facts an exit's preconditions read, as the daemon reported them,
@@ -346,8 +348,8 @@ impl Message<AssembleRelease> for StakeEngine {
             }
             .into());
         }
-        // Payout splits across TWO outputs (daemon prunable-tx floor:
-        // `vout.size() < 2` rejects), as the credit path splits its change.
+        // Payout splits across the consensus minimum of outputs, as the
+        // credit path splits its change.
         //
         // These outputs return to P's OWN base address — never the principal.
         // `release()` is post **plus a decorrelated drain** precisely so
@@ -355,8 +357,11 @@ impl Message<AssembleRelease> for StakeEngine {
         // so the retire path's funded gate stays meaningful: wiping the slot
         // while these outputs are unspent would strand them.
         let payout = sources - msg.fee;
-        let payout_lo = payout / 2;
-        let amounts = [payout_lo, payout - payout_lo];
+        let amounts =
+            split_across_minimum_outputs(payout).ok_or(BondAssemblyError::OutputsUnfillable {
+                amount: payout,
+                minimum: MIN_NON_COINBASE_OUTPUTS,
+            })?;
 
         // The scalar precondition is CALLED, not restated. `verify_debit_funding`
         // is the mirror of the consensus rule and owns the side: `debit_term`

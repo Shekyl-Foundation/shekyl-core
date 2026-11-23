@@ -816,7 +816,7 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
 /// is `fee_policy::tests`).
 #[test]
 fn bond_fee_refuses_what_the_send_path_refuses() {
-    use super::{bond_fee_from_estimates, p_lane_weight_ceiling_bytes, FirstStakeError};
+    use super::{bond_fee_from_estimates, FirstStakeError};
     use crate::engine::fee_policy::{CeilingViolation, ValidatedFeeEstimates};
     use crate::engine::traits::FeeEstimates;
     use shekyl_rpc_client::FeeRate;
@@ -835,7 +835,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         fee.to_raw(),
         shekyl_rpc_client::tx_fee::fee_from_weight(
             &FeeRate::new(333).expect("rate"),
-            p_lane_weight_ceiling_bytes()
+            shekyl_standoff::P_LANE_WEIGHT_CEILING
         ),
         "the bond fee is economy over the P-lane ceiling, via the shared formula"
     );
@@ -880,53 +880,23 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
     }
 }
 
-/// The P-lane weight ceiling covers every legal spend shape — including the
-/// one the retired `32 * 1024` constant missed: the depth-24 8-input drain,
-/// whose FCMP++ proof alone (32,704 bytes, `fcmp_proof_len(8, 24)`)
-/// exceeded the old ceiling before a single input auth was counted. A fee
-/// quoted under a too-small ceiling undercut the daemon's per-byte floor, so
-/// a legal multi-input drain was refused at relay — and, until the drain
-/// lifecycle driver lands, its sealed record bricked the persona's drain
-/// lane. Bites against the ceiling being hardcoded back down or the scan
-/// grid being narrowed below the legal shape space.
+/// The reserve pays one `Release` at the headroom rate: the fee the lane
+/// actually quotes at that rate, through the wallet's fee path, is what the
+/// computed reserve holds back. Bites against the reserve and the quoted fee
+/// being priced over different weights or rounded differently.
 #[test]
-fn p_lane_ceiling_covers_the_heaviest_legal_shape() {
-    use super::p_lane_weight_ceiling_bytes;
-    use crate::engine::tx_fee_model::{predict_weight, InputCount, OutputCount};
+fn the_reserve_pays_the_quoted_release_fee_at_the_headroom_rate() {
+    use super::p_lane_floor_fee;
+    use crate::engine::traits::FeeEstimates;
+    use shekyl_rpc_client::FeeRate;
+    use shekyl_standoff::{EXIT_FEE_HEADROOM_RATE, EXIT_FEE_RESERVE_ATOMIC};
 
-    let ceiling = p_lane_weight_ceiling_bytes();
-
-    // The corner shape the old constant missed, computed through the same
-    // KAT-validated model the send path prices with.
-    let heaviest = predict_weight(
-        InputCount::clamped(shekyl_tx_builder::MAX_INPUTS),
-        OutputCount::clamped(2),
-        shekyl_tx_weight::MAX_TREE_DEPTH,
-        u64::MAX,
-    );
-    assert!(
-        ceiling >= heaviest,
-        "ceiling {ceiling} does not cover the heaviest legal P-lane shape ({heaviest})"
-    );
-    assert!(
-        heaviest > 32 * 1024,
-        "the heaviest legal shape no longer exceeds the retired 32 KiB constant \
-         ({heaviest}); this test's premise — and the computed ceiling — should be re-examined"
-    );
-
-    // The exit-fee reserve derivation (`shekyl-standoff` reserve.rs) prices
-    // one pessimistic Release at >= 600 atomic/weight-byte of fee-spike
-    // headroom over this same structural worst case; the reserve must keep
-    // covering it, or a live persona's held-back reserve no longer funds its
-    // terminal Release at the documented headroom. If a KAT-table
-    // regeneration grows the ceiling past `50M / 600 ≈ 83_333`, this goes
-    // red and reserve.rs's derivation must be re-run, not this bound
-    // loosened in place.
-    assert!(
-        shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC
-            >= u64::try_from(ceiling).expect("weight fits u64") * 600,
-        "EXIT_FEE_RESERVE_ATOMIC no longer covers a worst-case Release at the \
-         documented 600 atomic/weight-byte headroom (ceiling {ceiling}) — \
-         re-derive reserve.rs, do not loosen this bound"
-    );
+    let rate = FeeRate::new(EXIT_FEE_HEADROOM_RATE).expect("rate");
+    let quoted = p_lane_floor_fee(FeeEstimates {
+        economy: rate,
+        standard: rate,
+        high: rate,
+    })
+    .expect("the headroom rate is a valid estimate");
+    assert_eq!(quoted.to_raw(), EXIT_FEE_RESERVE_ATOMIC);
 }

@@ -14,6 +14,7 @@ use shekyl_crypto_pq::output::recover_combined_ss;
 use shekyl_curve_generators::biased_hash_to_point;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_standoff::draw::{draw_entry_gap, GapRng};
+use shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS;
 
 use crate::engine::stake_timing::DEFAULT_ENTRY_GAP;
 use shekyl_tx_builder::outputs::{BuiltOutput, BuiltSpend, Payee, Recipient};
@@ -38,6 +39,20 @@ pub(crate) struct PreparedInput {
     pub(crate) key_image: [u8; 32],
     pub(crate) pqc_pubkey: Vec<u8>,
     pub(crate) gindex: GlobalOutputIndex,
+}
+
+/// `amount` as [`MIN_NON_COINBASE_OUTPUTS`] nonzero shares summing to it, the
+/// last taking the remainder. `None` when the amount cannot give every output
+/// one atomic unit: consensus requires the output count and the prover refuses
+/// a zero-valued output, so no such transaction exists (`ICD-F19`).
+pub(crate) fn split_across_minimum_outputs(amount: u64) -> Option<[u64; MIN_NON_COINBASE_OUTPUTS]> {
+    const OUTPUTS: u64 = MIN_NON_COINBASE_OUTPUTS as u64;
+    if amount < OUTPUTS {
+        return None;
+    }
+    let mut shares = [amount / OUTPUTS; MIN_NON_COINBASE_OUTPUTS];
+    shares[MIN_NON_COINBASE_OUTPUTS - 1] += amount % OUTPUTS;
+    Some(shares)
 }
 
 /// One constructed vout batch to `P`'s base address — the shared

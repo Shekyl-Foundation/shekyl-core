@@ -980,7 +980,8 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         ReleaseRequestError::Stake(StakeEngineError::Assembly(
             ref a @ (super::bond_assembly::BondAssemblyError::NoSpendableFunding
             | super::bond_assembly::BondAssemblyError::OutputNotYetDrained { .. }
-            | super::bond_assembly::BondAssemblyError::InsufficientFunding { .. }),
+            | super::bond_assembly::BondAssemblyError::InsufficientFunding { .. }
+            | super::bond_assembly::BondAssemblyError::OutputsUnfillable { .. }),
         )) => UnstakeError::ExitNotFundable {
             detail: a.to_string(),
         },

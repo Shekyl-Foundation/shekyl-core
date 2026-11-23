@@ -5061,7 +5061,9 @@ dependencies = [
 name = "shekyl-standoff"
 version = "3.1.0"
 dependencies = [
+ "shekyl-economics",
  "shekyl-stats",
+ "shekyl-wire",
 ]
 
 [[package]]
