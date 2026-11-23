@@ -702,16 +702,20 @@ wallet's per-depth limit, the sim's `all_shapes`, the GAP-7 sweep's shapes,
 and the P-lane ceiling's scan (`ICD-F11`), which then scans only legal cells.
 Nobody copies the weight limit or the output minimum.
 
-**What goes red in the sim at the cutover, and how it is regenerated.**
-EUP-4 prep 3's whole-economy table (#1476): the A-stuffed rows, the stuffed
-tail's floor, the C arms' adversary columns (C3's D2 escalation prices against
-the W9 stuffer), and the nightly slice's narration and table; and the
-narration pins that include stuffing (ESR-10, EUP-4, J×G, and any others the
-economics-sim-narrations job names). Each is regenerated in the cutover PR
-under `SHEKYL_PINNED_REGEN_DECISION`, citing a dated entry in
-[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md). The
-full table (2 880 folds, about 14 hours on a 16-vCPU host) is an on-demand
-fleet run the sim lane runs once the cutover branch is ready.
+**What moves in the sim at the cutover, and how it is regenerated.** The sim's
+readers of the shape space are `calibration`, `miner_stuffer`, `swing`,
+`stage2`'s reports and EUP-4's stuffing floors (`window_stuffer`). What moves
+with them is the four stage2 narrations (the W9 table, ESR-7's miner envelope,
+A6's slew and flood cost, and the ROI tables built on them) and EUP-4's
+stuffing-floor lines. Each is regenerated in the cutover PR under
+`SHEKYL_PINNED_REGEN_DECISION`, citing a dated entry in
+[`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md).
+The whole-economy table does **not** move with the cap: `whole_economy.rs`
+reads none of those functions, its A-stuffed rows and adversary lines price
+the ordinary 1-in / 2-out body, and the economies narration, the ESR-10
+narrations and the J×G pin regenerate byte-identical with the shape space
+moved (the sim lane's check at #1476 `6d0ad59acc`). So the cap does not by
+itself call for a re-run of the 2 880-fold table.
 
 **Generators and depth (`ICD-R2`, `ICD-R3`):** `shekyl-curve-generators`'s
 `MAX_FCMP_INPUTS = 128` and `MAX_FCMP_LAYERS = 12` give way to the two derived
@@ -1129,7 +1133,7 @@ outputs. Not done.
   "≈3 % margin" was one depth's reading. No honest narration line moved. The
   instrument, `calibration::tests::stuffer_calibration_by_depth` (on demand,
   on #1476 at `85803a140c`), reruns unchanged at the cutover for the 22-input
-  figures; the 2 880-run table stays with the cutover.
+  figures. The cap does not by itself call for the 2 880-run table (§7).
 
 ## 11. Still open
 
