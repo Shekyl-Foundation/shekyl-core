@@ -193,9 +193,9 @@ pub(super) async fn step(forge: &mut Forge, slot: u32) -> Result<(), ForgeFault>
     });
     let block = forge
         .scenario()
-        .mine_listing(vec![claim])
+        .mine_admitted(vec![claim])
         .await
-        .unwrap_or_else(|outcome| panic!("the claim connects: {outcome}"));
+        .unwrap_or_else(|fault| panic!("the claim connects: {fault}"));
     assert_eq!(block.height, connecting);
     forge.chain.push(block);
     Ok(())

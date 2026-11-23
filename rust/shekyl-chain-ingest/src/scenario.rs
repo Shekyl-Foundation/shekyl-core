@@ -85,7 +85,8 @@ use crate::test_support::{open_store, open_store_under, tmp, TestPath};
 mod types;
 
 pub use types::{
-    Clocked, FreeHash, Mined, NextBlock, ReorgTiming, StepOutcome, Unconnected, CLOCK_START,
+    Clocked, FreeHash, Mined, NextBlock, PoolPassage, ReorgTiming, StepOutcome, Unconnected,
+    CLOCK_START,
 };
 
 /// The connector actor's task handle.
@@ -686,6 +687,7 @@ impl<P: Pow> Scenario<P> {
             target,
             bundle_references,
             bundle_bodies,
+            pool_passage: PoolPassage::NotOffered,
         })
     }
 
@@ -1172,6 +1174,7 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
 
 #[path = "scenario_pool.rs"]
 mod pool;
+pub use pool::{ListingFault, PoolRefused};
 
 /// The chain that carries a network's identity: regtest's table genesis as
 /// block 0, its miner and its id (`CHAIN_FORGE.md` §6, `CF-1a`).

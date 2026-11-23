@@ -161,7 +161,7 @@ scripts/ci/test_run_live_tor_tests.sh	grep-gates:grep-gates
 scripts/ci/test_tor_pin_gates.py	grep-gates:grep-gates
 scripts/ci/windows_probe.ps1	build:build-windows-msvc
 scripts/ci/with_small_disk.sh	none
-scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,fuzz-nightly:fuzz-targets,fuzz-nightly:report-red
+scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,fuzz-nightly:fuzz-targets,fuzz-nightly:report-red,grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope,fuzz-nightly:fuzz-targets
 scripts/ci/fuzz_run.py	fuzz-nightly:fuzz,fuzz-nightly:fuzz-build,fuzz-nightly:fuzz-summary,fuzz-nightly:fuzz-targets,fuzz-nightly:fuzz-weekly,fuzz-nightly:report-red
 scripts/ci/fuzz_coverage_floors.tsv	fuzz-harness:scope,fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly

@@ -375,12 +375,12 @@ reason = "Hex under bitcoin_hashes, on bip39's checksum path. 0.2.3 admitted aft
 [[package]]
 name = "hkdf"
 version = "0.12.4"
-reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs); the prefs HMAC key (shekyl-engine-prefs hmac_key.rs)."
+reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs)."
 
 [[package]]
 name = "hmac"
 version = "0.12.1"
-reason = "HMAC under hkdf; the prefs file's MAC (shekyl-engine-prefs); Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
+reason = "HMAC under hkdf; Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
 
 [[package]]
 name = "hybrid-array"

@@ -77,10 +77,12 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
-      # Whether the OS builds do their work: not for a docs-only change, and
-      # not on a draft pull request (ruled 2026-11-16). One decision, read by
-      # macOS, Windows and Ubuntu as `!= 'false'`, so a missing value runs
-      # them. A skip blocks no merge and passes none: the required check is
+      # Whether the OS builds do their work: not for a docs-only change, not
+      # for a change they read nothing of (change_scope.py's `build_jobs`:
+      # a workflow, script or action only other jobs use), and not on a
+      # draft pull request (ruled 2026-11-16). One decision, read by macOS,
+      # Windows and Ubuntu as `!= 'false'`, so a missing value runs them. A
+      # skip blocks no merge and passes none: the required check is
       # `cli-pass` (the `pass` job), not these jobs.
       work: ${{ steps.work.outputs.work }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
@@ -108,9 +110,10 @@ jobs:
           fi
 
           # The classifier is scripts/ci/change_scope.py: it fails closed
-          # (docs_only=false) on anything it cannot decide, and a crash of the
-          # script itself also writes false, so a broken scope runs everything
-          # rather than skipping the jobs that need this one.
+          # (docs_only=false, build_jobs=run) on anything it cannot decide,
+          # and a crash of the script itself writes docs_only=false and no
+          # build_jobs, which the `work` step reads as run, so a broken scope
+          # runs everything rather than skipping the jobs that need this one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
             || echo "docs_only=false" >> "$GITHUB_OUTPUT"
       - id: work
@@ -118,11 +121,13 @@ jobs:
         shell: bash
         env:
           DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
+          # `skip` only when nothing changed is theirs; empty runs them.
+          BUILD_JOBS: ${{ steps.scope.outputs.build_jobs }}
           # A draft skips them; marking it ready (`ready_for_review`) runs
           # them on the same head, and `cli-pass` reports once they finish.
           DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
         run: |
-          if [ "$DOCS_ONLY" = "true" ] || [ "$DRAFT" = "true" ]; then
+          if [ "$DOCS_ONLY" = "true" ] || [ "$BUILD_JOBS" = "skip" ] || [ "$DRAFT" = "true" ]; then
             echo "work=false" >> "$GITHUB_OUTPUT"
           else
             echo "work=true" >> "$GITHUB_OUTPUT"
@@ -201,8 +206,8 @@ jobs:
   build-macos:
     name: 'macOS (brew)'
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`).
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`).
     if: needs.changes.outputs.work != 'false'
     runs-on: macOS-latest
     timeout-minutes: 45  # p90 20.4 min over 13 runs
@@ -245,10 +250,11 @@ jobs:
   build-ubuntu:
     name: ${{ matrix.name }}
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`). A skipped matrix job reports its name expression
-    # unevaluated, not `Ubuntu 24.04`; that blocks nothing, because the
-    # required check is `cli-pass` (the `pass` job below), not this job.
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`). A skipped matrix job reports
+    # its name expression unevaluated, not `Ubuntu 24.04`; that blocks
+    # nothing, because the required check is `cli-pass` (the `pass` job
+    # below), not this job.
     if: needs.changes.outputs.work != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
@@ -348,8 +354,8 @@ jobs:
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`).
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`).
     if: needs.changes.outputs.work != 'false'
     runs-on: windows-2025-vs2026
     timeout-minutes: 180  # p90 89.2 min over 13 runs

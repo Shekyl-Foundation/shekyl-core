@@ -1,24 +1,27 @@
 # Shekyl Wallet Preferences — Categorization & Storage Policy
 
-**Status:** implemented. Commits `2k.1` … `2k.5` landed the three user-facing
-layers (`WalletSafetyConstants`, the `shekyl-engine-prefs` TOML crate, CLI
-overrides); §2.4 adds the fourth — **sealed wallet state** — to align this
-policy with the tier-4 staking storage (`StakingBlock`). The first-draft
-sealed-settings monolith (`shekyl-crypto-pq/src/wallet_state/`) was an orphan and
-has been deleted; see
-[`region_2_consolidated_disposition.md`](./region_2_consolidated_disposition.md).
+**Status:** RETIRED 2026-11-21 (Rick). The plaintext-with-HMAC prefs file this
+policy defined, and its `shekyl-engine-prefs` crate, are deleted: one field had
+a production reader (the Tor binary, now the wallet server's `tor-file`
+option), the rest were `wallet2` carry-over with no reader, and the HMAC made
+every hand edit a tamper event. The record is
+[`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) 2026-11-21. What
+still holds — the decision order, the hardcoded constants, the session
+overrides and sealed wallet state — is restated in
+[`WALLET_SETTINGS.md`](../WALLET_SETTINGS.md). Do not implement from this
+document.
 **Scope:** the ~30 user-tunable wallet settings inherited from the
 Monero-lineage `wallet2` `keys_file_data` blob, restructured for Shekyl
 V3.0 according to their attack-surface profile.
 **Related specs:**
-[WALLET_FILE_FORMAT_V1.md](./WALLET_FILE_FORMAT_V1.md) ·
-[POST_QUANTUM_CRYPTOGRAPHY.md](./POST_QUANTUM_CRYPTOGRAPHY.md).
+[WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md) ·
+[POST_QUANTUM_CRYPTOGRAPHY.md](../POST_QUANTUM_CRYPTOGRAPHY.md).
 **Related rules:**
-[30-cryptography.mdc](../.cursor/rules/30-cryptography.mdc) ·
-[35-secure-memory.mdc](../.cursor/rules/35-secure-memory.mdc) ·
-[40-ffi-discipline.mdc](completed/RULE_40_FFI_DISCIPLINE.md) ·
-[80-usability.mdc](../.cursor/rules/80-usability.mdc) ·
-[82-failure-mode-ux.mdc](../.cursor/rules/82-failure-mode-ux.mdc).
+[30-cryptography.mdc](../../.cursor/rules/30-cryptography.mdc) ·
+[35-secure-memory.mdc](../../.cursor/rules/35-secure-memory.mdc) ·
+[40-ffi-discipline.mdc](RULE_40_FFI_DISCIPLINE.md) ·
+[80-usability.mdc](../../.cursor/rules/80-usability.mdc) ·
+[82-failure-mode-ux.mdc](../../.cursor/rules/82-failure-mode-ux.mdc).
 
 ## 1. Motivation
 
@@ -66,7 +69,7 @@ the funds-first decision order below the table:
 | **Sealed wallet state**    | `.wallet` (file-layout region 2): `shekyl_engine_state` blocks inside `WalletLedger` | Engine only (chain-reconciled) | AEAD (XChaCha20-Poly1305) under the region-2 wrap key | Strict per-block version; **refuse-to-load** on drift/tamper — never reset-to-default. |
 
 The categorization is per-field and not negotiable. Rule
-[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc) pins
+[`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc) pins
 this at the workspace level: **adding a new wallet-tunable field requires
 explicitly choosing a layer and, for TOML or CLI-override, writing the rationale
 in this document.**
@@ -85,7 +88,7 @@ funds question comes *first*, before "is it user-tunable?":
 The hidden assumption *user-tunable ⟹ not funds-threatening* — which a three-layer
 menu bakes in — has no slot for user-chosen, persistent, funds-load-bearing state.
 Tier 4 is that slot. See
-[`region_2_consolidated_disposition.md`](./region_2_consolidated_disposition.md)
+[`region_2_consolidated_disposition.md`](../region_2_consolidated_disposition.md)
 for the full derivation.
 
 ### 2.1 Hardcoded (consensus-relevant, safe defaults)
@@ -173,7 +176,7 @@ would lose or endanger funds.
   `file_kek`. Owned and read/written by the Rust engine; C++ never parses it.
 - **Integrity & evolution:** strict per-block version constants, snapshot-pinned
   and CI-enforced by
-  [`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc); a
+  [`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc); a
   version mismatch refuses rather than migrates — its "no silent migration" stance.
 - **Why not TOML:** filing funds-load-bearing state into advisory TOML means a
   tamper event quarantines it and loads a default — e.g. `staking_enabled = false`,

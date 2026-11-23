@@ -176,8 +176,9 @@ where
     pub async fn start_serving_if_staker(
         engine: Arc<RwLock<Engine<S, D, L, E, R, P, WalletFile>>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
+        tor_file: &crate::TorFile,
     ) -> Result<Option<ServingHandle>, ServingStartError> {
-        Engine::start_serving_if_staker(engine, daemon).await
+        Engine::start_serving_if_staker(engine, daemon, tor_file).await
     }
 }
 

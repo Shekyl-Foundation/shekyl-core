@@ -1,0 +1,19 @@
+objdump -d of the probe's floating-point functions (the binary run.sh analysed, 2026-11-21)
+sha256 7a5a9b3fc4a287936db1e55abdf3d4099b03c8879cd989795611d9f689b9302f
+
+0000000000201618 <fpprobe::driver::div>:
+  201618:	divsd  %xmm1,%xmm0
+  20161c:	ret
+
+0000000000201620 <fpprobe::driver::mul>:
+  201620:	mulsd  %xmm1,%xmm0
+  201624:	ret
+
+0000000000201628 <fpprobe::driver::rint>:
+  201628:	cvtsd2si %xmm0,%rax
+  20162d:	ret
+
+0000000000201630 <fpprobe::driver::sqrt>:
+  201630:	sqrtsd %xmm0,%xmm0
+  201634:	ret
+

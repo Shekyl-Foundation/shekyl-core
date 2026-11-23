@@ -6,11 +6,12 @@
 """Decide whether a change is documentation only, for the CI scope jobs.
 
 A docs-only change runs the documentation gates and skips the builds, the
-test suites and the CodeQL Rust analysis. Every other change runs them all.
-The workflows that consume this (build.yml, rust-audit-test.yml,
-codeql.yml) skip by a job-level `if:`, never a workflow `paths` filter, so
-a required check still reports (as "skipped") and branch protection does
-not wait on a context nobody reports.
+test suites and the CodeQL Rust analysis. Every other change runs them,
+each as far as its own scope below says. The workflows that consume this
+(build.yml, rust-audit-test.yml, codeql.yml) skip by a job-level `if:`,
+never a workflow `paths` filter, so a required check still reports (as
+"skipped") and branch protection does not wait on a context nobody
+reports.
 
 A changed file is documentation when it is prose, that is `.md` or `.mdc`
 anywhere or any other file under `docs/` outside a consumer tree (below),
@@ -66,8 +67,13 @@ dependency, not by topic:
   crate whose test reads a workflow file or a script (the same literal scan,
   over `.github/` and `scripts/` paths too), or that compiles another
   crate's file through `#[path = "…"]`, which cargo has no edge for, is in
-  scope when that file changes. `none` is a job that runs for its own gate
-  steps (a changed script it executes) with no test to run. `all` is for an
+  scope when that file changes. A fuzz crate's file (`rust/<crate>/fuzz/`)
+  is no package's: the fuzz workflows build the harness, and its manifest
+  and lockfile run this job for the crypto closure step, which reads every
+  fuzz lock, with no test (ruled 2026-11-22; a lockfile regeneration ran the
+  fuzzed crate's whole reverse closure and every OS build). `none` is a job
+  that runs for its own gate steps (a changed script it executes) with no
+  test to run. `all` is for an
   input every crate shares: the workspace manifest and lock, the toolchain,
   the cargo and nextest configuration, `config/` (read by build scripts), the
   job's own workflow file, this classifier and its ownership table, any path
@@ -86,6 +92,16 @@ dependency, not by topic:
   moved; both are inputs. A change that reaches the sim only through a
   shared input (the lockfile, the toolchain, the Rust job's workflow) does
   not run them; the nightly lane does.
+
+- `build_jobs`: `run` or `skip`, for build.yml's OS builds (`BUILD_JOBS`,
+  the jobs its `work` output gates). They compile every crate through
+  CMake, so the Rust job's own placement decides it with their jobs and
+  workflow in place of the Rust job's: they run when a change reaches a
+  package, is an input every crate shares or one nothing claims, is
+  build.yml, or is a script or action one of them runs. A change owned by
+  other jobs only (another workflow, a merge-ready or documentation script)
+  skips them: about 100 runner-minutes on every push of such a pull
+  request (ruled 2026-11-22). A missing value runs them.
 
 - `bench_rows`: `all`, `none`, or the benchmark rows a pull request's
   capture runs (`benchmarks.yml`), each `<crate>::<gungraun-target>`. A row
@@ -110,8 +126,9 @@ two directories a row whose path ends in `/` claims a whole directory
 jobs' and no crate's, unless a crate reads it.
 
 Usage:
-  change_scope.py --base <sha> --head <sha>   # writes docs_only=…, rust_job=…,
-                                              # rust_tests=…, rust_doc_pkgs=…,
+  change_scope.py --base <sha> --head <sha>   # writes docs_only=…, build_jobs=…,
+                                              # rust_job=…, rust_tests=…,
+                                              # rust_doc_pkgs=…,
                                               # bench_rows=…
                                               # to $GITHUB_OUTPUT
   change_scope.py --files a b c               # classify the given paths
@@ -133,6 +150,19 @@ SELF = "scripts/ci/change_scope.py"
 JOB_OWNERS = "scripts/ci/job_owners.tsv"
 RUST_WORKFLOW = ".github/workflows/rust-audit-test.yml"
 RUST_JOB = "rust-audit-test:rust-audit-and-test"
+# The OS builds (build.yml): the jobs its `changes` job's `work` output
+# gates. The selftest holds this set to the jobs whose `if:` reads it.
+BUILD_WORKFLOW = ".github/workflows/build.yml"
+BUILD_JOBS = frozenset({"build:build-macos", "build:build-ubuntu", "build:build-windows-msvc"})
+BUILD_GATE = "if: needs.changes.outputs.work != 'false'"
+# A fuzz crate (`rust/<crate>/fuzz/`) is no workspace member and no crate's
+# test: the fuzz workflows build and run it. Its manifest and lockfile are
+# also read by the CI scripts that glob every fuzz crate's (the crypto
+# closure record, the fuzz inventory), whose jobs own them too.
+FUZZ_CRATE = re.compile(r"^rust/[^/]+/fuzz/")
+FUZZ_MANIFEST = re.compile(r"^rust/[^/]+/fuzz/Cargo\.(?:toml|lock)$")
+FUZZ_WORKFLOWS = (".github/workflows/fuzz-harness.yml", ".github/workflows/fuzz-nightly.yml")
+FUZZ_MANIFEST_GLOB = re.compile(r"rust/\*/fuzz/Cargo\.(?:toml|lock)")
 # The economics sim and the job that runs its narration pins.
 SIM = "shekyl-economics-sim"
 SIM_NARRATIONS_JOB = "rust-audit-test:economics-sim-narrations"
@@ -374,9 +404,11 @@ def changed_files(base, head):
     return files
 
 
-def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all", sim_narrations="run"):
+def emit(docs_only, rust_job="run", rust_tests="all", rust_doc_pkgs="", bench_rows="all", sim_narrations="run",
+         build_jobs="run"):
     lines = [
         f"docs_only={'true' if docs_only else 'false'}",
+        f"build_jobs={build_jobs}",
         f"rust_job={rust_job}",
         f"rust_tests={rust_tests}",
         f"rust_doc_pkgs={rust_doc_pkgs}",
@@ -551,9 +583,35 @@ def workflow_owners(path, workflows):
     return owners
 
 
-def rust_scope(files, inputs, trees, workspace, owners, workflows):
+def fuzz_manifest_readers():
+    """The CI scripts whose code (comments aside) globs every fuzz crate's
+    manifest or lockfile, read from the tree."""
+    return sorted(
+        s for s in git("ls-files", "scripts/ci/").splitlines()
+        if s.endswith((".py", ".sh")) and FUZZ_MANIFEST_GLOB.search(code_text(s))
+    )
+
+
+def fuzz_owners(path, owners, workflows, readers=None):
+    """The jobs a fuzz crate's file is for: the fuzz workflows' jobs, and for
+    its manifest or lockfile the jobs of each script that globs them."""
+    jobs = set()
+    for wf in FUZZ_WORKFLOWS:
+        jobs |= workflow_owners(wf, workflows)
+    if FUZZ_MANIFEST.match(path):
+        for s in fuzz_manifest_readers() if readers is None else readers:
+            jobs |= owners.get(s, set())
+    return jobs
+
+
+def rust_scope(files, inputs, trees, workspace, owners, workflows, jobs=frozenset({RUST_JOB}),
+               own=RUST_WORKFLOW, name="the Rust job"):
     """(rust_job, rust_tests, reasons): `rust_tests` is 'all', 'none' or a
     set of package names. Any file nothing claims decides for 'all'.
+
+    `jobs` are the `workflow:job` ids the answer is for and `own` their
+    workflow file; the defaults are the Rust job's. With BUILD_JOBS and
+    BUILD_WORKFLOW the first element is `build_jobs` (`build_scope`).
 
     Every changed file is placed twice: by what it is (a member's file, a
     workflow file, a path the ownership table claims) and by who reads it
@@ -576,7 +634,7 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows):
             reasons.append(f"{f}: read by {r} ({p})")
             return True
         if r in owners:
-            if RUST_JOB in owners[r]:
+            if jobs & owners[r]:
                 job_run = True
             reasons.append(f"{f}: read by {r}, owned by {', '.join(sorted(owners[r])) or 'no job'}")
             return True
@@ -587,30 +645,37 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows):
             return everything(f"{f}: an input every crate shares")
         claimed = False
         if is_workflow(f):
-            if f == RUST_WORKFLOW:
-                return everything(f"{f}: the Rust job's own workflow")
+            if f == own:
+                return everything(f"{f}: the workflow that defines {name}")
             if f not in workflows:
                 return everything(f"{f}: a workflow file not in the tree")
             claimed = True
-            if RUST_JOB in workflow_owners(f, workflows):
+            if jobs & workflow_owners(f, workflows):
                 job_run = True
-                reasons.append(f"{f}: a workflow the Rust job calls")
+                reasons.append(f"{f}: a workflow {name} calls")
             else:
-                reasons.append(f"{f}: owns its own jobs, not the Rust job")
+                reasons.append(f"{f}: owns its own jobs, not {name}")
         elif f.startswith(OWNED_DIRS):
             if f not in owners:
                 return everything(f"{f}: no row in {JOB_OWNERS}")
             claimed = True
-            if RUST_JOB in owners[f]:
+            if jobs & owners[f]:
                 job_run = True
-                reasons.append(f"{f}: a file the Rust job runs")
+                reasons.append(f"{f}: a file {name} runs")
             else:
                 reasons.append(f"{f}: owned by {', '.join(sorted(owners[f])) or 'no job'}")
+        elif FUZZ_CRATE.match(f):
+            claimed = True
+            if jobs & fuzz_owners(f, owners, workflows):
+                job_run = True
+                reasons.append(f"{f}: a fuzz crate's file {name} reads")
+            else:
+                reasons.append(f"{f}: a fuzz crate's file: the fuzz jobs build it, no crate tests it")
         elif (d := dir_claim(f, owners)) is not None:
             claimed = True
-            if RUST_JOB in owners[d]:
+            if jobs & owners[d]:
                 job_run = True
-                reasons.append(f"{f}: under {d}, a directory the Rust job runs")
+                reasons.append(f"{f}: under {d}, a directory {name} runs")
             else:
                 reasons.append(f"{f}: under {d}, owned by {', '.join(sorted(owners[d])) or 'no job'}")
         readers = sorted(inputs.readers(f))
@@ -641,6 +706,19 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows):
     if job_run:
         return "run", "none", reasons
     return "skip", "none", reasons
+
+
+def build_scope(files, inputs, trees, workspace, owners, workflows):
+    """(build_jobs, reason): `run` when the OS builds read a changed file,
+    else `skip`. They compile every workspace crate through CMake and run
+    their own scripts and actions, so a change runs them when it reaches a
+    package, is an input every crate shares or one nothing claims, is
+    build.yml itself, or is a file one of BUILD_JOBS runs. A change owned
+    only by other jobs (another workflow, its scripts, its actions) skips
+    them."""
+    job, _, reasons = rust_scope(files, inputs, trees, workspace, owners, workflows,
+                                 jobs=BUILD_JOBS, own=BUILD_WORKFLOW, name="an OS build job")
+    return job, reasons[-1] if reasons else "no reason recorded"
 
 
 def doc_pkgs(workspace, tests):
@@ -810,15 +888,103 @@ def selftest():
         print("WRONG: a docs file plus a .rs file was called docs-only")
         bad += 1
     bad += rust_selftest(inputs, trees)
+    bad += build_selftest(inputs, trees)
+    bad += fuzz_selftest()
     print(f"selftest: {'FAILED' if bad else 'ok'} ({bad} wrong)")
     return 1 if bad else 0
+
+
+# (path, expected build_jobs) for a change of that file alone
+BUILD_SELFTEST = [
+    ("rust/shekyl-units/src/lib.rs", "run"),                    # a package: the builds compile it
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "skip"),        # a fuzz harness: the fuzz jobs build it
+    ("rust/shekyl-levin/fuzz/Cargo.lock", "skip"),              # read by the fuzz and Rust jobs' scripts, not the builds
+    ("docs/test_vectors/PQC_HYBRID_V2_KAT.json", "run"),        # read by crates' tests
+    ("rust/Cargo.lock", "run"),
+    ("config/anything.h", "run"),
+    ("CMakeLists.txt", "run"),                                  # claimed by nothing
+    ("cmake/BuildRust.cmake", "run"),
+    ("external/randomx-v2/src/x.c", "run"),
+    (SELF, "run"),
+    (JOB_OWNERS, "run"),
+    (BUILD_WORKFLOW, "run"),                                    # their own workflow
+    ("scripts/ci/check_binary_hardening.sh", "run"),            # a step of theirs runs it
+    ("scripts/ci/run_live_daemon_gates.sh", "run"),             # the Ubuntu build's live-daemon gates
+    (".github/actions/set-make-job-count/action.yml", "run"),   # an action they use
+    (".github/actions/install-rust/action.yml", "run"),
+    (".github/workflows/merge-ready.yml", "skip"),              # owns its own jobs
+    (".github/workflows/docs-gates.yml", "skip"),
+    (RUST_WORKFLOW, "skip"),                                    # the Rust job's, not theirs
+    ("scripts/ci/merge_ready.py", "skip"),                      # owned by other jobs
+    ("scripts/ci/check_doc_links.py", "skip"),
+    ("scripts/ci/push_scope_base.sh", "skip"),                  # the scope job's, which always runs
+    ("scripts/ci/workflow_pass.py", "skip"),                    # the pass job's, which always runs
+    ("contrib/depends/Makefile", "skip"),                       # depends.yml's tree
+    (".github/CODEOWNERS", "skip"),
+]
+
+
+def build_selftest(inputs, trees):
+    bad = 0
+    workspace = Workspace.read()
+    owners = read_owners()
+    workflows = sorted(w for w in git("ls-files", WORKFLOW_DIR).splitlines() if w.endswith((".yml", ".yaml")))
+    for path, want in BUILD_SELFTEST:
+        got, why = build_scope([path], inputs, trees, workspace, owners, workflows)
+        bad += got != want
+        print(f"[{'ok' if got == want else 'WRONG'}] {path}: build_jobs={got} — {why}")
+    # One file the builds read decides for the whole change.
+    got, _ = build_scope(["scripts/ci/merge_ready.py", "rust/shekyl-units/src/lib.rs"],
+                         inputs, trees, workspace, owners, workflows)
+    if got != "run":
+        print(f"WRONG: another job's script + a crate gave build_jobs={got}")
+        bad += 1
+    # BUILD_JOBS is exactly the jobs build.yml gates on `work`, and the
+    # `work` step reads this output (rule 47: the subject exists).
+    text = read_text(BUILD_WORKFLOW)
+    gated, job = set(), None
+    for line in text.splitlines():
+        m = JOB_HEADER.match(line)
+        if m:
+            job = m.group(1)
+        elif job and line.strip() == BUILD_GATE:
+            gated.add(f"{workflow_name(BUILD_WORKFLOW)}:{job}")
+    if gated != BUILD_JOBS:
+        print(f"WRONG: {BUILD_WORKFLOW} gates {sorted(gated)} on `work`; BUILD_JOBS is {sorted(BUILD_JOBS)}")
+        bad += 1
+    for needle in ("BUILD_JOBS: ${{ steps.scope.outputs.build_jobs }}", '[ "$BUILD_JOBS" = "skip" ]'):
+        if needle not in text:
+            print(f"WRONG: {BUILD_WORKFLOW}'s `work` step lacks {needle!r}")
+            bad += 1
+    return bad
+
+
+def fuzz_selftest():
+    """The subjects the fuzz placement reads exist (rule 47): the fuzz
+    workflows, a fuzz crate, and the crypto closure script among the
+    readers of every fuzz manifest, which is why a fuzz lockfile runs the
+    Rust job."""
+    bad = 0
+    tracked = set(git("ls-files").splitlines())
+    for wf in FUZZ_WORKFLOWS:
+        if wf not in tracked:
+            print(f"WRONG: FUZZ_WORKFLOWS names {wf}, which is not tracked")
+            bad += 1
+    if not any(FUZZ_MANIFEST.match(f) for f in tracked):
+        print("WRONG: no rust/<crate>/fuzz/Cargo.toml or Cargo.lock is tracked")
+        bad += 1
+    if "scripts/ci/check_crypto_closure.py" not in fuzz_manifest_readers():
+        print(f"WRONG: the crypto closure script is not among the fuzz manifest readers {fuzz_manifest_readers()}")
+        bad += 1
+    return bad
 
 
 # (path, expected rust_job, expected rust_tests) for a change of that file alone
 RUST_SELFTEST = [
     ("rust/shekyl-units/src/lib.rs", "run", {"shekyl-units"}),
-    ("rust/shekyl-wire/fuzz/Cargo.toml", "run", {"shekyl-wire"}),          # an excluded crate maps to the member above it
-    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "run", {"shekyl-fcmp"}),   # maps to the fuzzed crate; fuzz-harness.yml builds the harness
+    ("rust/shekyl-wire/fuzz/Cargo.toml", "run", "none"),                   # a fuzz crate: no crate's test; the crypto closure step reads it
+    ("rust/shekyl-levin/fuzz/Cargo.lock", "run", "none"),                  # likewise its lockfile
+    ("rust/shekyl-fcmp/fuzz/fuzz_targets/x.rs", "skip", "none"),           # a harness: fuzz-harness.yml builds it, no crate tests it
     ("rust/shekyl-mempool/Cargo.toml", "run", {"shekyl-mempool"}),         # a dependency edit: rdeps covers the consumers
     ("rust/Cargo.toml", "run", "all"),
     ("rust/Cargo.lock", "run", "all"),
@@ -1123,6 +1289,7 @@ def main():
             docs = ""
             bench = "none"
             narrations = "skip"
+            build = "skip"
         else:
             workspace = Workspace.read()
             owners = read_owners()
@@ -1131,14 +1298,15 @@ def main():
             docs = doc_pkgs(workspace, tests)
             bench = bench_rows(files, tests, workspace, read_gated_rows())
             narrations, why = sim_narrations_scope(files)
-            more = more + [f"sim narrations {narrations}: {why}"]
+            build, build_why = build_scope(files, inputs, trees, workspace, owners, workflows)
+            more = more + [f"sim narrations {narrations}: {why}", f"OS builds {build}: {build_why}"]
     except Exception as e:  # fail closed on anything
         print(f"scope: cannot decide ({e}); running everything (fail-closed)")
         emit(False)
         return 0
     for r in reasons + more:
         print(f"scope: {r}")
-    emit(docs_only, job, rust_tests_value(tests), docs, bench, narrations)
+    emit(docs_only, job, rust_tests_value(tests), docs, bench, narrations, build)
     return 0
 
 

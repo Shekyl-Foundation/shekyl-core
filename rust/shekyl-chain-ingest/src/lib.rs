@@ -201,6 +201,9 @@ mod pool_submit_tests;
 // trace a replay must reproduce (`DAEMON_REDB_STORE.md` §12.1).
 #[cfg(feature = "pipeline")]
 pub mod pow;
+/// What a forged transaction pays (`CHAIN_FORGE.md` §11.4).
+#[cfg(all(feature = "pipeline", any(test, feature = "forge")))]
+pub mod priced;
 /// The seat `Follow::producer` holds, in every `pipeline` build (rule 25).
 #[cfg(feature = "pipeline")]
 pub mod producer_seat;

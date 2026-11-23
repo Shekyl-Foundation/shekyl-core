@@ -50,6 +50,7 @@ fn test_state() -> Arc<AppState> {
                 url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
+            shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),

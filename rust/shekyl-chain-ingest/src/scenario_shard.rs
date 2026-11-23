@@ -40,7 +40,8 @@ use shekyl_types::archival::SHARD_LENGTH;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, ShardId};
 use shekyl_wire::Transaction;
 
-use crate::archival_driver::{first_spending_height, FEE};
+use crate::archival_driver::first_spending_height;
+use crate::priced::{assert_priced, fee_at, SIZING_FEE};
 use crate::scenario::{FreeHash, Mined, Scenario};
 use crate::schedule::ChainRules;
 use shekyl_harness_spender::{SpendSeeds, Spender};
@@ -341,13 +342,19 @@ fn next_height(chain: &[Mined]) -> BlockHeight {
 /// extends `chain` in place with every block mined. `draw` is called once
 /// per listed spend on this thread, in the order the block lists them,
 /// before the spend's thread starts, so which spend gets which seeds is the
-/// fill's order and never the threads' (§5.3, seam T4). The sizing spend,
-/// which is measured and never listed, draws from the OS.
+/// fill's order and never the threads' (§5.3, seam T4). The sizing spends,
+/// which are measured and never listed, draw from the OS.
+///
+/// Every spend pays what the daemon asks of it (§11.4): each fill block's
+/// batch is priced at the rung a wallet pays by default for that block, over a
+/// sizing spend of the batch's shape, and the block is mined only once the
+/// daemon's pool has admitted every spend it lists.
 ///
 /// # Panics
 ///
 /// If the chain already has `want` shards closed: the caller asked for a
-/// fill it did not need.
+/// fill it did not need. If the pool refuses a spend, or a block does not
+/// connect: the fill built a spend the daemon would not take.
 pub async fn close_shards_drawing(
     scenario: &mut Scenario<FreeHash>,
     chain: &mut Vec<Mined>,
@@ -378,7 +385,7 @@ pub async fn close_shards_drawing(
             scenario.wallet(),
             BlockHeight::from_raw(first_coinbase),
             next_height(chain),
-            FEE,
+            SIZING_FEE,
         )
         .archival_len()
         .to_raw();
@@ -429,6 +436,18 @@ pub async fn close_shards_drawing(
         }
         let coinbases: Vec<u64> = (next_coinbase..next_coinbase + batch as u64).collect();
         next_coinbase += batch as u64;
+        // The batch's price: one sizing spend of its shape, at the rate the
+        // daemon serves for this block (§11.4). Every spend in the batch is
+        // one coinbase against this block's reference, so one weighs what
+        // another does.
+        let rate = scenario.connecting_default_rate().await;
+        let sized = spender.spend_coinbase(
+            scenario.wallet(),
+            BlockHeight::from_raw(coinbases[0]),
+            connecting,
+            SIZING_FEE,
+        );
+        let fee = fee_at(&sized, rate);
         // Every spend's seeds, in listing order, before any thread starts.
         let seeds: Vec<SpendSeeds> = coinbases.iter().map(|_| draw()).collect();
         // The proofs are the cost; build the batch across the cores.
@@ -438,14 +457,17 @@ pub async fn close_shards_drawing(
                 .zip(seeds)
                 .map(|(&c, seeds)| {
                     let spender = &spender;
+                    let sized = &sized;
                     let wallet = scenario.wallet();
                     s.spawn(move || {
-                        spender.drawing(seeds).spend_coinbase(
+                        let built = spender.drawing(seeds).spend_coinbase(
                             wallet,
                             BlockHeight::from_raw(c),
                             connecting,
-                            FEE,
-                        )
+                            fee,
+                        );
+                        assert_priced(&built, sized, rate);
+                        built
                     })
                 })
                 .collect();
@@ -457,9 +479,9 @@ pub async fn close_shards_drawing(
         pending.extend(built);
         let listed = std::mem::take(&mut pending);
         let block = scenario
-            .mine_listing(listed)
+            .mine_admitted(listed)
             .await
-            .unwrap_or_else(|outcome| panic!("a fill block of real spends connects: {outcome}"));
+            .unwrap_or_else(|fault| panic!("a fill block of real spends connects: {fault}"));
         spender.push(&block);
         chain.push(block);
     }
