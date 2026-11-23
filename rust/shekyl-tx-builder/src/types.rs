@@ -9,6 +9,7 @@
 
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::output_mask::OutputMask;
+use shekyl_fcmp::PqcKeyScalar;
 use shekyl_types::{BlockHash, CurveTreeRoot, KeyImage, TxSignableHash};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -159,6 +160,12 @@ impl PqcScheme {
     }
 }
 
+/// The scheme of every spend slot this builder signs: one hybrid signer, the
+/// holder of the spend's key. A multisig spend's slots are its ceremony's, not
+/// the builder's. The placeholder auth, the signed auth and the membership
+/// self-verify's key scalar all take it from here.
+pub const SPEND_SLOT_SCHEME: PqcScheme = PqcScheme::Single;
+
 /// Per-input PQC authentication data (hybrid signature).
 ///
 /// Contains the serialized hybrid signature and the serialized public key
@@ -218,4 +225,9 @@ pub struct SignedProofs {
     /// [`crate::open_spend`] holds the layout's key images to them, so the
     /// prefix carries exactly the images the proof verifies under.
     pub key_images: Vec<KeyImage>,
+    /// Each spend slot's PQC key scalar, in input order: the scalars the
+    /// membership proof was verified against, derived from the hybrid public
+    /// key each slot will carry under [`SPEND_SLOT_SCHEME`].
+    /// [`crate::open_spend`] holds the layout's spend-slot keys to them.
+    pub pqc_keys: Vec<PqcKeyScalar>,
 }

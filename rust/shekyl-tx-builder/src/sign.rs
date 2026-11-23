@@ -28,15 +28,17 @@ use shekyl_crypto_pq::output::spend_key_image;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm, PseudoOutBlinds};
 use shekyl_curve_primitives::Commitment;
-use shekyl_fcmp::proof::{self, BranchLayer, KeyImage, ProveError, ProveInput, ProveResult};
+use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
 use shekyl_fcmp::{PqcKeyScalar, PqcLeafScalar};
 use shekyl_network::NetworkId;
-use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash, TxSignableHash};
+use shekyl_types::{
+    BlockHash, CurveTreeRoot, KeyImage, PrefixHash, SigningPayloadHash, TxSignableHash,
+};
 use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
 use crate::types::{
-    OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION,
+    OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION, SPEND_SLOT_SCHEME,
 };
 use crate::validate::validate_inputs;
 
@@ -339,7 +341,8 @@ fn sign_with<R: RngCore + CryptoRng>(
     // scalar from the spend slot's hybrid public key, the root and the layer
     // count the proof was made for, and `tx_signable`.
     let key_images = own_key_images(inputs)?;
-    verify_own_membership(&prove_result, &key_images, inputs, tree, tx_signable)?;
+    let pqc_keys = own_pqc_keys(inputs)?;
+    verify_own_membership(&prove_result, &key_images, &pqc_keys, tree, tx_signable)?;
 
     // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
@@ -354,6 +357,7 @@ fn sign_with<R: RngCore + CryptoRng>(
         tree_depth: tree.tree_depth,
         tx_signable,
         key_images,
+        pqc_keys,
     })
 }
 
@@ -375,20 +379,11 @@ fn own_key_images(inputs: &[SpendInput]) -> Result<Vec<KeyImage>, TxBuilderError
         .collect()
 }
 
-/// Step 8 of [`sign_with`]: `proved` verifies under
-/// [`shekyl_fcmp::proof::verify`], the function CEN-I15 and the submit
-/// verifier call, against `key_images`, each spend slot's PQC key scalar
-/// (`PqcKeyScalar::from_pqc_auth` over the hybrid public key the slot will
-/// carry, as the consensus verifiers derive it), `tree`'s root and layer
-/// count, and `tx_signable`.
-fn verify_own_membership(
-    proved: &ProveResult,
-    key_images: &[KeyImage],
-    inputs: &[SpendInput],
-    tree: &TreeContext,
-    tx_signable: TxSignableHash,
-) -> Result<(), TxBuilderError> {
-    let pqc_keys = inputs
+/// Each spend slot's PQC key scalar, in input order: `k` over the hybrid
+/// public key the slot will carry, under [`SPEND_SLOT_SCHEME`], as the
+/// consensus verifiers derive it from the slot (`PqcKeyScalar::from_pqc_auth`).
+fn own_pqc_keys(inputs: &[SpendInput]) -> Result<Vec<PqcKeyScalar>, TxBuilderError> {
+    inputs
         .iter()
         .enumerate()
         .map(|(index, input)| {
@@ -404,18 +399,31 @@ fn verify_own_membership(
                         "input {index}: PQC public key: {e}"
                     ))
                 })?;
-            PqcKeyScalar::from_pqc_auth(PqcScheme::Single.id(), &public_key).ok_or_else(|| {
+            PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), &public_key).ok_or_else(|| {
                 TxBuilderError::MembershipSelfCheck(format!(
-                    "input {index}: the PQC public key is not a well-formed single-signer key"
+                    "input {index}: the PQC public key is not well formed for a spend slot"
                 ))
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
+
+/// Step 8 of [`sign_with`]: `proved` verifies under
+/// [`shekyl_fcmp::proof::verify`], the function CEN-I15 and the submit
+/// verifier call, against `key_images`, the spend slots' `pqc_keys`, `tree`'s
+/// root and layer count, and `tx_signable`.
+fn verify_own_membership(
+    proved: &ProveResult,
+    key_images: &[KeyImage],
+    pqc_keys: &[PqcKeyScalar],
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+) -> Result<(), TxBuilderError> {
     match proof::verify(
         &proved.proof,
         key_images,
         &proved.pseudo_outs,
-        &pqc_keys,
+        pqc_keys,
         &tree.tree_root,
         tree.tree_depth,
         tx_signable,
@@ -602,7 +610,7 @@ fn sign_pqc_auths_with(
 
         auths.push(PqcAuth {
             auth_version: PQC_AUTH_VERSION,
-            scheme: crate::types::PqcScheme::Single,
+            scheme: SPEND_SLOT_SCHEME,
             signature: auth_sig.signature,
             public_key: auth_sig.hybrid_public_key,
         });
