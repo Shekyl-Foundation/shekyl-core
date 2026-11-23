@@ -18,6 +18,8 @@ docs/formal/checkct/
 ├── drivers/helio.rs    the vendored HelioseleneField: the same operations
 ├── drivers/ctl.rs      controls: crypto-bigint 0.7.x sub_mod, a branch on a secret bit,
 │                       a table lookup indexed by a secret
+├── drivers/fpprobe.rs  CA-3's probe: SSE2 mulsd, divsd, sqrtsd and cvtsd2si on secret
+│                       operands, beside a positive control (x86_64 only)
 └── results/<date>/     one .txt per run: pins, run window, verdict table, leak lines
 ```
 
@@ -69,6 +71,14 @@ is for the toolchain that compiled the driver: the template pins
 `nightly-2026-10-06`, and the wallet ships from `1.94.0` (LLVM 21.1.8), so
 the runs are repeated on `nightly-2025-12-04`, the last nightly on that
 LLVM line.
+
+A third gap, met on 2026-11-21 for `CA-3`: this BINSEC cannot model the
+SSE2 double-precision instructions. `mulsd`, `divsd`, `sqrtsd` and
+`cvtsd2si` each end the path with verdict `unknown`, while the probe's
+positive control comes back `insecure` (`drivers/fpprobe.rs`,
+`results/2026-11-21/`). So no driver can give a static verdict on FN-DSA
+signing, which is built from those instructions. CA-3 measures it
+dynamically (`CRYPTO_AUDIT.md` §3.1).
 
 Two tool gaps met on 2026-10-24: BINSEC does not model `movmskps`, which
 LLVM emits when it SLP-vectorises the four-limb `is_zero` compare in

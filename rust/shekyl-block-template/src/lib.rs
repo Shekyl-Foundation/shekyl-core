@@ -606,10 +606,7 @@ fn coinbase(cx: &TemplateContext<'_>, amount: u64) -> Result<Transaction, Templa
 fn listed_fees(listed: &[Transaction]) -> Result<AtomicUnits, TemplateError> {
     let mut total = AtomicUnits::ZERO;
     for (index, tx) in listed.iter().enumerate() {
-        let fee = match &tx.ct {
-            Ct::Fcmp { fee, .. } => *fee,
-            Ct::Null(_) => return Err(TemplateError::ListedWithoutFee { index }),
-        };
+        let fee = tx.fee().ok_or(TemplateError::ListedWithoutFee { index })?;
         total = total
             .checked_add(AtomicUnits::from_raw(fee))
             .ok_or(TemplateError::FeeOverflow)?;

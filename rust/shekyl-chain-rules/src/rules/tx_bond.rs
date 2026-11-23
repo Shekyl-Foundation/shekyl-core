@@ -25,7 +25,7 @@ use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_wire::transaction::{BondPost, Holdings as WireHoldings, PqcAuth};
 use shekyl_wire::{Ct, Input};
 
-use crate::archival::{closed_and_final, shard_close_height, BondArm, L7};
+use crate::archival::{final_close_height, BondArm, L7};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
@@ -111,7 +111,10 @@ impl Rule for J14 {
 /// join's own block cannot close a shard it holds (`parent_height =
 /// chain_height − 1`, "tip would self-score"):
 ///
-/// 1. [`closed_and_final`]`(view, shard, parent, rule_set.reorg_cap())` —
+/// 1. [`final_close_height`]`(view, shard, parent, rule_set.reorg_cap())`,
+///    the [`closed_and_final`](crate::archival::closed_and_final) decision
+///    with the height that closed the
+///    shard —
 ///    a ghost shard past the frontier, the open frontier shard and a shard
 ///    closed fewer than `reorg_cap` blocks below the parent are each
 ///    refused here, not at the fold. The cap is the rule set's reorg-cap
@@ -345,10 +348,11 @@ fn judge_join_market<'id, V: ChainView<'id>>(
 /// [`check_admission`]. A complete tree gathers nothing and is admitted; a
 /// compact set connecting at genesis has no parent to read and no shard
 /// can be closed, so it is not admissible. Per shard, in list order:
-/// [`closed_and_final`] under the rule set's reorg cap, then the price at
-/// the slash watermark as of the parent — `None`, watermark or row, is not
-/// admissible (slice 8 Q4) — then the age of the close the predicate just
-/// read, under the rule set's schedule.
+/// [`final_close_height`] under the rule set's reorg cap (closed and final,
+/// with the height that closed it: one placement), then the price at the
+/// slash watermark as of the parent — `None`, watermark or row, is not
+/// admissible (slice 8 Q4) — then the age of that close, under the rule
+/// set's schedule.
 ///
 /// # Errors
 ///
@@ -382,9 +386,9 @@ fn holding_admissible<'id, V: ChainView<'id>>(
     let mut gathered = Vec::with_capacity(holdings.shard_ids.len());
     for &raw in holdings.shard_ids.as_slice() {
         let shard = ShardId::from_raw(raw);
-        if !closed_and_final(view, shard, parent, rule_set.reorg_cap())? {
+        let Some(closed_at) = final_close_height(view, shard, parent, rule_set.reorg_cap())? else {
             return Ok(false);
-        }
+        };
         let Some(r_market) = view
             .r_market(
                 shard,
@@ -395,9 +399,8 @@ fn holding_admissible<'id, V: ChainView<'id>>(
         else {
             return Ok(false);
         };
-        // The close the predicate found: closed through the parent, so the
-        // search places it (a fold that cannot is the predicate's Corrupt).
-        let close = ShardClose::ClosedAt(shard_close_height(view, shard, parent)?);
+        // The close the predicate placed, aged as of the parent.
+        let close = ShardClose::ClosedAt(closed_at);
         gathered.push(AdmissionShard {
             r_market: r_market.to_raw(),
             age_milli: close.age_milli(parent, schedule.blocks().get()),

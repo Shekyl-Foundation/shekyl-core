@@ -7,6 +7,7 @@
 
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_fcmp::MAX_TREE_DEPTH;
+use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 /// Structured error covering every failure mode in transaction signing.
 ///
@@ -29,6 +30,11 @@ pub enum TxBuilderError {
     /// The caller provided an empty `outputs` slice.
     #[error("no outputs provided")]
     NoOutputs,
+
+    /// Fewer outputs than consensus admits on a non-coinbase transaction
+    /// (CEN-I1, [`MIN_NON_COINBASE_OUTPUTS`]), but at least one.
+    #[error("too few outputs: {0} is below the minimum {MIN_NON_COINBASE_OUTPUTS}")]
+    TooFewOutputs(usize),
 
     /// The number of outputs exceeds the consensus limit.
     #[error("too many outputs: {0} exceeds limit {MAX_OUTPUTS}")]
@@ -223,6 +229,7 @@ pub enum SignFault {
 pub enum InternalSignFault {
     NoInputs,
     NoOutputs,
+    TooFewOutputs,
     ZeroInputAmount,
     ZeroOutputAmount,
     InputAmountOverflow,
@@ -246,9 +253,10 @@ pub enum InternalSignFault {
 
 impl InternalSignFault {
     /// Every internal fault, in declaration order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::NoInputs,
         Self::NoOutputs,
+        Self::TooFewOutputs,
         Self::ZeroInputAmount,
         Self::ZeroOutputAmount,
         Self::InputAmountOverflow,
@@ -277,6 +285,7 @@ impl InternalSignFault {
         match self {
             Self::NoInputs => "no-inputs",
             Self::NoOutputs => "no-outputs",
+            Self::TooFewOutputs => "too-few-outputs",
             Self::ZeroInputAmount => "zero-input-amount",
             Self::ZeroOutputAmount => "zero-output-amount",
             Self::InputAmountOverflow => "input-amount-overflow",
@@ -315,6 +324,7 @@ impl TxBuilderError {
             Self::PqcLeafMismatch { index } => return SignFault::PqcLeafMismatch { input: *index },
             Self::NoInputs => I::NoInputs,
             Self::NoOutputs => I::NoOutputs,
+            Self::TooFewOutputs(_) => I::TooFewOutputs,
             Self::ZeroInputAmount { .. } => I::ZeroInputAmount,
             Self::ZeroOutputAmount { .. } => I::ZeroOutputAmount,
             Self::InputAmountOverflow => I::InputAmountOverflow,

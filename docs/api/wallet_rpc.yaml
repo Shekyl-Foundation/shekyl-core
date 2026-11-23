@@ -584,7 +584,13 @@ info:
   # verify this session, and what the refill did, beside the last check
   # that completed (its height and how many shards it read), absent until
   # one does. api_version stays 1.
-  # 0.23.0: -29119 SIGNER_FAILED's data.fault gains membership-self-check
+  # 0.23.0: -29119 SIGNER_FAILED's data.fault gains too-few-outputs (Rick,
+  # 2026-11-22). Consensus refuses a non-coinbase transaction with fewer
+  # than two outputs (CEN-I1), and the wallet's builder now refuses to make
+  # one, as its own fault beside no-outputs. The wallet's send paths always
+  # carry at least two outputs, so the keyword names a bug, as every
+  # builder invariant does. api_version stays 1.
+  # 0.24.0: -29119 SIGNER_FAILED's data.fault gains membership-self-check
   # (Rick, 2026-11-22). The builder verifies the FCMP++ membership proof it
   # has just made, under the consensus verifier and the operands the daemon
   # will use, before the spend leaves the wallet; a proof that does not
@@ -595,7 +601,7 @@ info:
   # path that signs answers a signer fault the same way, so stake, drain,
   # unstake and collect_unstaked now return -29119 (or the code of a fault the
   # user can act on) where they returned -32603. api_version stays 1.
-  version: 0.23.0
+  version: 0.24.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1191,6 +1197,7 @@ components:
                                           the request's doing (data:
                                           {"fault"}, one keyword: a builder
                                           invariant — no-inputs, no-outputs,
+                                          too-few-outputs,
                                           zero-input-amount,
                                           zero-output-amount,
                                           input-amount-overflow,
