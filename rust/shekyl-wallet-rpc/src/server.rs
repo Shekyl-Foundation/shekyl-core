@@ -844,8 +844,8 @@ impl axum::serve::Listener for PipeListener {
 /// `wallet_rpc.yaml`), which is sound only because nothing but this account
 /// can ever connect to it.
 ///
-/// A missing directory is made owner-only whatever the umask
-/// (`shekyl_os_account::create_account_dir_all`); an existing one is held
+/// A missing directory is made owner-only, and a umask that strips the
+/// owner's bits refuses (`shekyl_os_account::create_account_dir_all`); an existing one is held
 /// to the shared rule, and the refusal names what the directory is.
 ///
 /// Unix only, with no Windows counterpart: `CreateNamedPipe` takes the

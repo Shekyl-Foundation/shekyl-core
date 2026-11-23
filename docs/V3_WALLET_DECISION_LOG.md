@@ -39,6 +39,42 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-23 — The daemon never changes a mode, and nothing above its data directory can be swapped
+
+**Decision (Rick, 2026-11-23).** The daemon creates each new directory with
+mode `0700` and never changes a mode, new or existing, by path or by handle.
+After creating one it checks the result with a no-follow `lstat`. A umask that
+stripped the owner's own bits refuses the start, naming the umask
+(`config.data-dir.umask`). Before it creates or uses the data directory, the
+daemon runs the configuration loader's ancestor check on every directory above
+it, on the same function with the same wording: any owner but root or the
+daemon's account, or any group or other write bit, refuses
+(`config.data-dir.ancestor-writable`). A sticky world-writable directory is
+refused too, so a data directory under `/tmp` is refused. A symbolic link is
+judged on both legs: the directory holding the link, where another account
+could replace it, and every directory above where it resolves. **The
+configuration file loader is stricter by the same rule**, since it reads the
+same walk. This narrows the 2026-11-22 entry below: a umask that strips the
+owner's bits is now refused rather than repaired.
+
+**Rationale.** Three findings in a row landed on the one mode change after
+`mkdir`: the new name swapped for a link, the same swap spelled with a trailing
+`/`, and an ancestor swapped for a link, which redirected the change to a
+same-named directory of the daemon's elsewhere (reproduced, `0750` to `0700`).
+Each fix guarded the last component while the path was resolved again. Removing
+the mode change closes that class, and refusing a writable ancestor closes the
+race at its cause: nothing above the data directory can be swapped by another
+account.
+
+**Fixtures.** The real check runs on every test fixture, with no exception. A
+fixture lives in `~/.shekyl-test/<pid>-<name>` (`shekyl_os_account::test_fixture`)
+and is removed when its test ends; a run removes what dead processes left.
+The build's target directory is not used: a checkout under umask `002`, or a CI
+workspace another account owns, would not pass the check.
+
+**Windows.** Not checked here, as in the 2026-11-22 entry: the keys and the
+console's pipe carry owner-only descriptors of their own.
+
 ## 2026-11-22 — The data directory's account check is the shared directory walk
 
 **Decision.** `Lock::owner_only` reads

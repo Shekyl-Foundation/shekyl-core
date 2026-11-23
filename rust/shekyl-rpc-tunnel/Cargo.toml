@@ -40,6 +40,8 @@ http-body-util = { version = "0.1", default-features = false }
 tracing = "0.1"
 
 [dev-dependencies]
+# A test's data directory, where the daemon's real check passes it.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # The end-to-end test's node lives in a directory of its own (`LocalTarget::test_override`).
 # TEST_ONLY: a dev edge alone may enable it.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }

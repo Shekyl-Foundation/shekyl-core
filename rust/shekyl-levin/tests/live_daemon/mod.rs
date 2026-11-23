@@ -57,7 +57,8 @@ impl Daemon {
         // the daemon dies if its admin listener and its clearnet listener
         // are that number.
         let [rpc_port, p2p_port] = distinct_ports();
-        let data_dir = std::env::temp_dir().join(format!("shekyl-{test}-{p2p_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("{test}-{p2p_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).

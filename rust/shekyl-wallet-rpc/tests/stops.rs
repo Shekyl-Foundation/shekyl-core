@@ -431,8 +431,8 @@ fn a_killed_servers_socket_is_replaced_and_a_live_one_is_not_taken_over() {
 /// point during startup** (Rick, 2026-11-21). The socket is 0600 from
 /// before it listens (the listeners' shared bind, Rick, 2026-11-22), so the
 /// first connect that succeeds finds it 0600; the directory stays the
-/// containment: the server makes a missing directory 0700 whatever the
-/// umask, and it is 0700 from the first moment it exists, polled while the
+/// containment: the server makes a missing directory 0700, which this
+/// umask leaves whole, and it is 0700 from the first moment it exists, polled while the
 /// server starts. The control:
 /// a directory the child made under the same umask with mode 0777 is
 /// group-writable (0775), so the umask was live. Red edits: make the

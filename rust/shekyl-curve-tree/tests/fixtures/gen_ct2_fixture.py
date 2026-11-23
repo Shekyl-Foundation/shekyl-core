@@ -37,6 +37,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import pwd
 import tempfile
 import time
 import urllib.request
@@ -84,7 +85,11 @@ class Daemon:
         self.binary = binary
         self.port = port
         self.url = f"http://127.0.0.1:{port}/json_rpc"
-        self.workdir = tempfile.mkdtemp(prefix="ct2_fixture_")
+        # Under the account's home: the daemon refuses a data directory under
+        # a directory another account can write, /tmp included.
+        root = os.path.join(pwd.getpwuid(os.geteuid()).pw_dir, ".shekyl-test")
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        self.workdir = tempfile.mkdtemp(prefix=f"{os.getpid()}-ct2_fixture_", dir=root)
         self.proc: subprocess.Popen | None = None
         self.log = None
 

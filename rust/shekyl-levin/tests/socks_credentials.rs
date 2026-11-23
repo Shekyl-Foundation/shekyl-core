@@ -176,7 +176,8 @@ impl Daemon {
                  --test socks_credentials -- --ignored --nocapture ({test})"
             )
         }));
-        let data_dir = owner_only_base().join(format!("shekyl-{test}-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("{test}-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
         // Owner-only, as the daemon makes a data directory: the daemon refuses
         // a configuration file whose directory its group or others can write,
@@ -261,47 +262,6 @@ impl Drop for Daemon {
         drop(self.child.wait());
         drop(std::fs::remove_dir_all(&self.data_dir));
     }
-}
-
-/// A directory whose every ancestor only root or this account can write:
-/// the daemon refuses a configuration file anywhere else (`file.rs`; a
-/// sticky world-writable `/tmp` included). The runtime directory, then
-/// `$HOME`, then the account's passwd home, which is where the daemon itself
-/// takes its home from; in a CI container running as root, `$HOME` is a
-/// directory another account owns and the passwd home is `/root`.
-fn owner_only_base() -> PathBuf {
-    use std::os::unix::fs::MetadataExt;
-    let probe = std::env::temp_dir().join(format!("shekyl-uid-probe-{}", std::process::id()));
-    std::fs::write(&probe, b"").expect("the uid probe");
-    let me = std::fs::metadata(&probe).expect("the uid probe").uid();
-    drop(std::fs::remove_file(&probe));
-    let safe = |dir: &std::path::Path| {
-        dir.ancestors().all(|a| {
-            std::fs::metadata(a)
-                .map(|m| (m.uid() == 0 || m.uid() == me) && m.mode() & 0o022 == 0)
-                .unwrap_or(false)
-        })
-    };
-    ["XDG_RUNTIME_DIR", "HOME"]
-        .iter()
-        .filter_map(std::env::var_os)
-        .map(PathBuf::from)
-        .chain(passwd_home(me))
-        .find(|dir| dir.is_absolute() && safe(dir))
-        .expect(
-            "none of $XDG_RUNTIME_DIR, $HOME and the passwd home is writable by root and \
-             this account alone",
-        )
-}
-
-/// The home directory `/etc/passwd` names for `uid`.
-fn passwd_home(uid: u32) -> Option<PathBuf> {
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    passwd.lines().find_map(|line| {
-        let fields: Vec<&str> = line.split(':').collect();
-        (fields.len() >= 6 && fields[2].parse::<u32>().ok() == Some(uid))
-            .then(|| PathBuf::from(fields[5]))
-    })
 }
 
 fn pair_toml(option: &str) -> String {

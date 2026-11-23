@@ -50,6 +50,8 @@ libc = "0.2"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A test's data directory, where the daemon's real check passes it.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 tempfile = "3"
 # A valid v3 onion for the operator-Tor tests.
 shekyl-onion-v3 = { path = "../shekyl-onion-v3" }

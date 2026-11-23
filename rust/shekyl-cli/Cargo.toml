@@ -88,6 +88,8 @@ base64 = "0.22"
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
+# A test's data directory, where the daemon's real check passes it.
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # A unit test names a directory for an owner's leg (`LocalTarget::test_override`).
 # TEST_ONLY: a dev edge alone may enable it.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", features = ["test-override"] }

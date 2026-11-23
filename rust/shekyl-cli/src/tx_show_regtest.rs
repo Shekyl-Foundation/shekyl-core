@@ -453,7 +453,8 @@ impl Regtest {
             .local_addr()
             .expect("addr")
             .port();
-        let data_dir = std::env::temp_dir().join(format!("shekyl-tx-show-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("tx-show-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).

@@ -77,6 +77,15 @@ pub enum Code {
     /// changes a mode it did not create; the operator's fix is
     /// `chmod 700` (Rick, 2026-11-22).
     DataDirExposed,
+    /// A directory above the data directory can be written by an account
+    /// other than root and the daemon's, so that account could swap it for
+    /// a link and redirect the daemon's keys. The config file's ancestor
+    /// rule, with no exception for a sticky directory (Rick, 2026-11-23).
+    DataDirAncestorWritable,
+    /// A directory the daemon just made came out without the owner's own
+    /// bits because of the process umask. The daemon never changes a mode,
+    /// so it refuses and names the umask (Rick, 2026-11-23).
+    DataDirUmask,
     /// The data directory's marker names another network.
     MarkerNetwork,
     /// The marker names this network with a different network id.
@@ -177,6 +186,8 @@ impl Code {
             Self::DataDirUnusable => "config.data-dir.unusable",
             Self::DataDirLocked => "config.data-dir.locked",
             Self::DataDirExposed => "config.data-dir.exposed",
+            Self::DataDirAncestorWritable => "config.data-dir.ancestor-writable",
+            Self::DataDirUmask => "config.data-dir.umask",
             Self::MarkerNetwork => "config.marker.network",
             Self::MarkerNetworkId => "config.marker.network-id",
             Self::MarkerMissing => "config.marker.missing",
@@ -363,10 +374,15 @@ impl Diagnostic {
             Code::FileUnreadable => {
                 format!("{} cannot be read: {}", p("path"), p("error"))
             }
-            Code::FilePermissions => format!(
-                "{} can be written by {}, who is not permitted to change the daemon's configuration; restrict it to {}",
+            Code::FilePermissions | Code::DataDirAncestorWritable => format!(
+                "{} can be written by {}, who is not permitted to change the daemon's {}; restrict it to {}",
                 p("path"),
                 p("principal"),
+                if matches!(self.code, Code::FilePermissions) {
+                    "configuration"
+                } else {
+                    "data directory"
+                },
                 p("permitted")
             ),
             Code::FileSecretReadable => format!(
@@ -393,6 +409,12 @@ impl Diagnostic {
                 p("path"),
                 p("mode"),
                 p("path")
+            ),
+            Code::DataDirUmask => format!(
+                "{} was created with mode {} because this process's umask {} removes the owner's own permission; start the daemon under a umask that keeps it, such as 077 (the daemon does not change a mode)",
+                p("path"),
+                p("mode"),
+                p("umask")
             ),
             Code::MarkerNetwork => format!(
                 "the data directory {} belongs to {}, and this daemon is starting on {}; start it on {}, or give it a different `--data-dir`",
@@ -604,6 +626,8 @@ mod tests {
             Code::DataDirUnusable,
             Code::DataDirLocked,
             Code::DataDirExposed,
+            Code::DataDirAncestorWritable,
+            Code::DataDirUmask,
             Code::MarkerNetwork,
             Code::MarkerNetworkId,
             Code::MarkerMissing,

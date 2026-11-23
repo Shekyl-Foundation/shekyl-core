@@ -37,7 +37,7 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # The live gates make a spawned daemon's data directory the way the daemon
 # does (owner-only on Unix), which the daemon requires of an existing one
 # (`config.data-dir.exposed`).
-shekyl-os-account = { path = "../shekyl-os-account" }
+shekyl-os-account = { path = "../shekyl-os-account", features = ["test-fixture"] }
 # Bind a simulated peer to its own loopback address before connecting,
 # without unsafe code. Already in the workspace lockfile (through tokio).
 socket2 = "0.6"

@@ -277,7 +277,8 @@ struct SpawnedDaemon {
 
 impl SpawnedDaemon {
     fn spawn(bin: &std::ffi::OsStr, rpc_port: u16) -> Self {
-        let data_dir = std::env::temp_dir().join(format!("shekyl-cli-daemon-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("cli-daemon-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).

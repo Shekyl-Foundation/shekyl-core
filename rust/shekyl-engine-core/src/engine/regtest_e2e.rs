@@ -995,7 +995,8 @@ impl RegtestDaemon {
         }
         let closed_peer = unanswered.as_ref().map(UnansweredPort::peer);
         let rpc_port = Self::free_port_excluding(&reserved);
-        let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("regtest-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
         // Made as the daemon makes a data directory: it refuses an existing
         // one other accounts can enter (`config.data-dir.exposed`).

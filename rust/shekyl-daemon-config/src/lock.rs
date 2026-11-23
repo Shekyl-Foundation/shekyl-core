@@ -40,9 +40,13 @@ impl Lock {
     /// a daemon is up.
     ///
     /// # Errors
-    /// `config.data-dir.unusable` or `config.data-dir.exposed`, as `take`
-    /// would refuse.
+    /// `config.data-dir.ancestor-writable`, `config.data-dir.unusable` or
+    /// `config.data-dir.exposed`, as `take` would refuse.
     pub fn creatable(data_dir: &Path) -> Result<(), Diagnostic> {
+        // First, before anything is made or used: a directory above that
+        // another account can write could redirect all of it.
+        #[cfg(unix)]
+        crate::file::refuse_writable_ancestor(data_dir)?;
         let unusable = Self::unusable(data_dir);
         probe::directory_creatable(data_dir).map_err(&unusable)?;
         // Windows has no mode to read: the keys and the console's pipe carry
@@ -56,9 +60,8 @@ impl Lock {
     /// (`config.data-dir.exposed`; Rick, 2026-11-22). It holds the daemon's
     /// keys, a service's console key (the host's administrator) among them,
     /// and the console's socket, so it is the account's alone on its own
-    /// account: a directory above it is not counted. The mode is the
-    /// operator's to change; the daemon never changes a mode it did not
-    /// create. A missing directory passes: [`Lock::take`] creates it
+    /// account. The mode is the operator's to change; the daemon never
+    /// changes a mode. A missing directory passes: [`Lock::take`] creates it
     /// owner-only.
     ///
     /// The facts are [`crate::directory::DirectoryFacts`]: the same walk the
@@ -97,6 +100,20 @@ impl Lock {
         Self::unusable(data_dir)(std::io::Error::other(fault.clause(None)))
     }
 
+    /// What a failed create of the data directory is refused as: the umask
+    /// by name when that was the cause, otherwise unusable.
+    fn create_refusal(data_dir: &Path, error: std::io::Error) -> Diagnostic {
+        #[cfg(unix)]
+        if let Some(stripped) = shekyl_os_account::directory::umask_strips_owner(&error) {
+            return Diagnostic::new(Code::DataDirUmask, Source::Machine)
+                .option("data-dir")
+                .param("path", stripped.dir.display().to_string())
+                .param("mode", format!("{:04o}", stripped.mode))
+                .param("umask", format!("{:04o}", stripped.umask));
+        }
+        Self::unusable(data_dir)(error)
+    }
+
     fn unusable(data_dir: &Path) -> impl Fn(std::io::Error) -> Diagnostic {
         let shown = data_dir.display().to_string();
         move |e: std::io::Error| {
@@ -110,19 +127,23 @@ impl Lock {
     /// Creates the data directory if it is missing, then takes the lock.
     /// [`Lock::creatable`] is asked first, so the decision is written once.
     /// Every directory it creates, the data home and the network directory
-    /// included, is owner-only whatever the umask
+    /// included, is made owner-only and no mode is changed
     /// (`shekyl_os_account::create_account_dir_all`).
     ///
     /// # Errors
-    /// `config.data-dir.unusable` when the directory cannot be created or
-    /// the lock file cannot be opened; `config.data-dir.exposed` when it
-    /// exists and other accounts can enter it; `config.data-dir.locked`
-    /// when another process holds the lock.
+    /// `config.data-dir.ancestor-writable` when another account can write a
+    /// directory above it; `config.data-dir.umask` when the umask strips the
+    /// owner's bits from a directory it makes; `config.data-dir.unusable`
+    /// when the directory cannot be created or the lock file cannot be
+    /// opened; `config.data-dir.exposed` when it exists and other accounts
+    /// can enter it; `config.data-dir.locked` when another process holds
+    /// the lock.
     pub fn take(data_dir: &Path) -> Result<Self, Diagnostic> {
         Self::creatable(data_dir)?;
         let shown = data_dir.display().to_string();
         let unusable = Self::unusable(data_dir);
-        shekyl_os_account::create_account_dir_all(data_dir).map_err(&unusable)?;
+        shekyl_os_account::create_account_dir_all(data_dir)
+            .map_err(|e| Self::create_refusal(data_dir, e))?;
         if !data_dir.is_dir() {
             return Err(unusable(std::io::Error::other("not a directory")));
         }
@@ -171,7 +192,7 @@ mod tests {
 
     #[test]
     fn the_lock_is_taken_once_and_refused_to_a_second_holder() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         let first = Lock::take(&data).unwrap();
         assert!(data.join(LOCK_FILE).is_file());
@@ -186,7 +207,7 @@ mod tests {
 
     #[test]
     fn creatable_creates_nothing_and_agrees_with_take() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("deep").join("data");
         Lock::creatable(&data).unwrap();
         assert!(!d.path().join("deep").exists(), "the check created nothing");
@@ -210,7 +231,7 @@ mod tests {
         if rustix::process::geteuid().is_root() {
             return;
         }
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let sealed = d.path().join("sealed");
         std::fs::create_dir(&sealed).unwrap();
         std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o500)).unwrap();
@@ -230,28 +251,261 @@ mod tests {
             & shekyl_os_account::directory::PERMISSION_BITS
     }
 
-    /// A fresh data directory, and the data home above it, are made
-    /// owner-only under the common umask `022`. Red edit: create them with
-    /// `create_dir_all` (`0755`).
+    /// The variable naming the data directory [`umask_child`] takes.
+    #[cfg(unix)]
+    const UMASK_CHILD: &str = "SHEKYL_LOCK_UMASK_CHILD";
+
+    /// Takes the lock in the process [`take_under_umask`] starts, under its
+    /// umask, and prints the outcome. Not a test of its own.
     #[cfg(unix)]
     #[test]
-    fn a_fresh_data_directory_is_created_owner_only_under_umask_022() {
-        use rustix::fs::Mode;
-        let d = tempfile::tempdir().unwrap();
-        let home = d.path().join("home");
-        let data = home.join("testnet");
-        let previous = rustix::process::umask(Mode::from_raw_mode(0o022));
-        let taken = Lock::take(&data);
-        rustix::process::umask(previous);
-        let _held = taken.unwrap();
-        for dir in [&home, &data] {
+    #[ignore = "run by take_under_umask, in a process with its own umask"]
+    fn umask_child() {
+        let Some(data) = std::env::var_os(UMASK_CHILD) else {
+            return;
+        };
+        match Lock::take(Path::new(&data)) {
+            Ok(_held) => println!("UMASK-CHILD ok"),
+            Err(d) => println!(
+                "UMASK-CHILD {} path={} mode={} umask={}",
+                d.code.as_str(),
+                d.get("path").unwrap_or_default(),
+                d.get("mode").unwrap_or_default(),
+                d.get("umask").unwrap_or_default()
+            ),
+        }
+    }
+
+    /// [`Lock::take`] of `data` in a child process under `umask`. The umask
+    /// is process-wide, so it cannot be set beside other tests.
+    #[cfg(unix)]
+    fn take_under_umask(umask: &str, data: &Path) -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", "umask \"$1\"; shift; exec \"$@\"", "sh", umask])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lock::tests::umask_child",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(UMASK_CHILD, data)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout
+            .split_once("UMASK-CHILD ")
+            .and_then(|(_, outcome)| outcome.lines().next())
+            .unwrap_or_else(|| panic!("the child reported nothing: {stdout}"))
+            .to_owned()
+    }
+
+    /// Under the umasks that leave the owner's bits, a new data directory
+    /// and the data home above it come out `0700`. Red edit: create them
+    /// with `create_dir_all` (`0755` under `022`).
+    #[cfg(unix)]
+    #[test]
+    fn a_new_data_directory_is_0700_under_every_ordinary_umask() {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        for umask in ["022", "002", "027", "077"] {
+            let home = d.path().join(format!("home{umask}"));
+            let data = home.join("testnet");
+            assert_eq!(take_under_umask(umask, &data), "ok", "umask {umask}");
+            for dir in [&home, &data] {
+                assert_eq!(
+                    mode_of(dir),
+                    crate::directory::OWNER_ONLY_DIR_MODE,
+                    "{} under umask {umask}",
+                    dir.display()
+                );
+            }
+        }
+    }
+
+    /// A umask that strips the owner's own bits refuses the start, naming
+    /// the umask, and leaves nothing made; no mode is changed to rescue it.
+    /// Red edit: drop the check after `mkdir`, and the short directory is
+    /// taken for the data directory.
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_stripping_umask_refuses_the_start_and_is_named() {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        for (umask, mode) in [("0277", "0500"), ("0477", "0300"), ("0177", "0600")] {
+            let home = d.path().join(format!("home{umask}"));
+            let data = home.join("testnet");
             assert_eq!(
-                mode_of(dir),
-                crate::directory::OWNER_ONLY_DIR_MODE,
-                "{}",
+                take_under_umask(umask, &data),
+                format!(
+                    "config.data-dir.umask path={} mode={mode} umask={umask}",
+                    home.display()
+                )
+            );
+            assert!(!home.exists(), "nothing is left under umask {umask}");
+        }
+    }
+
+    /// The refusal for a directory above the data directory, by the check
+    /// and by the start, naming `place`, with nothing made.
+    #[cfg(unix)]
+    fn assert_refused_above(data: &Path, place: &Path, principal: &str) {
+        for e in [
+            Lock::creatable(data).unwrap_err(),
+            Lock::take(data).unwrap_err(),
+        ] {
+            assert_eq!(e.code, Code::DataDirAncestorWritable, "{e}");
+            assert_eq!(e.option.as_deref(), Some("data-dir"));
+            assert_eq!(e.get("path"), place.to_str(), "{e}");
+            let shown = e.render();
+            assert!(shown.contains(principal), "{shown}");
+            assert!(
+                shown.contains("who is not permitted to change the daemon's data directory"),
+                "{shown}"
+            );
+        }
+        assert!(!data.exists(), "nothing is made at {}", data.display());
+    }
+
+    /// A directory at `path` with exactly `mode`.
+    #[cfg(unix)]
+    fn dir_with_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir(path).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// A directory above the data directory that another account can write
+    /// refuses, world-writable, sticky world-writable and group-writable
+    /// alike, before anything is made. Red edit: skip a sticky directory,
+    /// and the data directory is made under it.
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_ancestor_refuses_before_anything_is_made() {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        for (name, mode, principal) in [
+            ("world", 0o777, "world-writable"),
+            ("sticky", 0o1777, "world-writable"),
+            ("group", 0o770, "its group"),
+        ] {
+            let above = d.path().join(name);
+            dir_with_mode(&above, mode);
+            let data = above.join("home").join("testnet");
+            assert_refused_above(&data, &above, principal);
+            assert!(!above.join("home").exists(), "{name}");
+        }
+    }
+
+    /// The race Copilot found on #1533: an account that can write a parent
+    /// swaps it for a link, and the path lands on a directory of this
+    /// account's elsewhere. The start refuses before it makes or changes
+    /// anything. Red edit: drop the ancestor check, and the lock file is
+    /// made in `elsewhere/child`.
+    #[cfg(unix)]
+    #[test]
+    fn the_ancestor_link_race_is_refused_before_anything_is_made() {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let writable = d.path().join("writable");
+        dir_with_mode(&writable, 0o777);
+        let elsewhere = d.path().join("elsewhere");
+        dir_with_mode(&elsewhere, 0o700);
+        let child = elsewhere.join("child");
+        dir_with_mode(&child, 0o750);
+        let swapped = writable.join("swapped");
+        std::os::unix::fs::symlink(&elsewhere, &swapped).unwrap();
+
+        let e = Lock::take(&swapped.join("child")).unwrap_err();
+        assert_eq!(e.code, Code::DataDirAncestorWritable, "{e}");
+        assert_eq!(e.get("path"), writable.to_str());
+        assert_eq!(mode_of(&child), 0o750, "its mode is not changed");
+        assert!(!child.join(LOCK_FILE).exists(), "nothing is made in it");
+        assert_refused_above(&swapped.join("new"), &writable, "world-writable");
+        assert!(!elsewhere.join("new").exists());
+    }
+
+    /// Both legs of a symbolic link are judged: the directory that holds
+    /// it, and every directory above where it resolves, through a chain of
+    /// links and a relative target too. A link between safe directories
+    /// passes. Red edit: judge only the path as spelled, and the links out
+    /// of `safe` are accepted.
+    #[cfg(unix)]
+    #[test]
+    fn both_legs_of_a_symbolic_link_are_judged() {
+        use std::os::unix::fs::symlink;
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let safe = d.path().join("safe");
+        dir_with_mode(&safe, 0o700);
+        let target = safe.join("target");
+        dir_with_mode(&target, 0o700);
+        let writable = d.path().join("writable");
+        dir_with_mode(&writable, 0o777);
+        let under_writable = writable.join("target");
+        dir_with_mode(&under_writable, 0o700);
+
+        // A link inside a writable directory, to a safe target.
+        let held = writable.join("held");
+        symlink(&target, &held).unwrap();
+        assert_refused_above(&held.join("data"), &writable, "world-writable");
+
+        // A link in a safe directory, to a target under a writable one.
+        let out = safe.join("out");
+        symlink(&under_writable, &out).unwrap();
+        assert_refused_above(&out.join("data"), &writable, "world-writable");
+
+        // A chain: safe, through a link held in the writable directory.
+        let chain = safe.join("chain");
+        symlink(&held, &chain).unwrap();
+        assert_refused_above(&chain.join("data"), &writable, "world-writable");
+
+        // A relative target.
+        let relative = safe.join("relative");
+        symlink("../writable/target", &relative).unwrap();
+        let e = Lock::creatable(&relative.join("data")).unwrap_err();
+        assert_eq!(e.code, Code::DataDirAncestorWritable, "{e}");
+
+        // Between safe directories, the start goes on.
+        let good = safe.join("good");
+        symlink(&target, &good).unwrap();
+        let _held = Lock::take(&good.join("data")).unwrap();
+        assert!(target.join("data").join(LOCK_FILE).is_file());
+    }
+
+    /// macOS's `/var` is a link to `/private/var`, and both legs are
+    /// root's, so a path through it passes. Red edit: refuse any link.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_var_link_passes() {
+        assert_eq!(
+            std::fs::read_link("/var").unwrap(),
+            Path::new("private/var")
+        );
+        crate::file::refuse_writable_ancestor(Path::new("/var/empty/shekyl-not-made")).unwrap();
+    }
+
+    /// Every fixture's real check passes, and this prints what it read: the
+    /// CI log's record of the fixture root's ancestors (`nextest.toml` shows
+    /// this one test's output on success). A fixture root that stopped
+    /// passing would fail every daemon test; this names why.
+    #[cfg(unix)]
+    #[test]
+    fn the_fixture_root_passes_the_real_check() {
+        use std::os::unix::fs::MetadataExt;
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let data = d.path().join("data");
+        for dir in crate::file::directories_through(&data) {
+            let meta = std::fs::metadata(&dir).unwrap();
+            println!(
+                "fixture ancestor: mode {:04o} uid {} {}",
+                meta.mode() & shekyl_os_account::directory::PERMISSION_BITS,
+                meta.uid(),
                 dir.display()
             );
         }
+        crate::file::refuse_writable_ancestor(&data).unwrap();
     }
 
     /// An existing data directory other accounts can enter is refused, by
@@ -262,7 +516,7 @@ mod tests {
     #[test]
     fn an_existing_0755_data_directory_is_refused_with_the_named_fix() {
         use std::os::unix::fs::PermissionsExt;
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         std::fs::create_dir(&data).unwrap();
         std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -297,7 +551,7 @@ mod tests {
     #[test]
     fn a_symbolic_link_data_directory_is_unusable() {
         use std::os::unix::fs::PermissionsExt;
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let real = d.path().join("real");
         std::fs::create_dir(&real).unwrap();
         std::fs::set_permissions(
@@ -332,7 +586,7 @@ mod tests {
         if rustix::process::geteuid().is_root() {
             return;
         }
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         std::fs::create_dir(&data).unwrap();
         std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -348,7 +602,7 @@ mod tests {
 
     #[test]
     fn a_data_directory_that_is_a_file_is_unusable() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let not_a_dir = d.path().join("data");
         std::fs::write(&not_a_dir, "").unwrap();
         let e = Lock::take(&not_a_dir).unwrap_err();

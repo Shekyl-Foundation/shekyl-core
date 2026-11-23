@@ -282,6 +282,19 @@ pub(crate) mod unix {
         if let Some(who) = file.writer(me) {
             return Some((file_shown.display().to_string(), who));
         }
+        directory_writer_outside_permitted(me, dirs, probe)
+    }
+
+    /// The first of `dirs` (each as `probe` reports it, nearest first) a
+    /// principal outside the permitted set can write, with who: the rule for
+    /// the directories above the configuration file and above the data
+    /// directory alike. A directory the probe cannot read is refused as
+    /// unknown.
+    pub fn directory_writer_outside_permitted(
+        me: u32,
+        dirs: &[std::path::PathBuf],
+        probe: &dyn Fn(&Path) -> Option<Entry>,
+    ) -> Option<(String, String)> {
         for dir in dirs {
             let Some(entry) = probe(dir) else {
                 return Some((dir.display().to_string(), UNREADABLE.to_owned()));
@@ -310,9 +323,85 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
     let Ok(meta) = file.metadata() else {
         return Some((path.display().to_string(), unix::UNREADABLE.to_owned()));
     };
-    unix::writer_outside_permitted(me, unix::entry_of(&meta), path, &ancestors(path), &|dir| {
+    unix::writer_outside_permitted(
+        me,
+        unix::entry_of(&meta),
+        path,
+        &directories_through(path),
+        &|dir| std::fs::metadata(dir).ok().as_ref().map(unix::entry_of),
+    )
+}
+
+/// Every directory `path` passes through on its way from the root, judging
+/// both legs of a symbolic link (Rick, 2026-11-23): the directory holding the
+/// link, where another account could replace it, and every directory above
+/// where it resolves. That is `path`'s [`ancestors`], and for `path` itself
+/// or any of them that is a link, the same of its target.
+#[cfg(unix)]
+pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
+    let mut walked = Vec::new();
+    let mut pending: std::collections::VecDeque<PathBuf> = ancestors(path).into();
+    if let Ok(target) = std::fs::read_link(path) {
+        let resolved = path
+            .parent()
+            .map_or_else(|| target.clone(), |above| above.join(&target));
+        pending.extend(ancestors(&resolved));
+    }
+    while let Some(dir) = pending.pop_front() {
+        if walked.contains(&dir) {
+            continue;
+        }
+        if let Ok(target) = std::fs::read_link(&dir) {
+            let resolved = dir
+                .parent()
+                .map_or_else(|| target.clone(), |above| above.join(&target));
+            pending.extend(ancestors(&resolved));
+            pending.push_front(resolved);
+        }
+        walked.push(dir);
+    }
+    walked
+}
+
+/// Refuses a data directory with a directory above it that an account other
+/// than root and the daemon's can write (`config.data-dir.ancestor-writable`;
+/// Rick, 2026-11-23): the configuration file's own rule, on the same function
+/// and with no exception for a sticky directory. Whoever can write one could
+/// swap it for a link and redirect the keys kept below it. A directory not
+/// made yet has nothing to judge; a path through a non-directory is
+/// [`crate::probe`]'s to refuse.
+///
+/// # Errors
+/// `config.data-dir.ancestor-writable`, naming the directory and who can write it.
+#[cfg(unix)]
+pub(crate) fn refuse_writable_ancestor(data_dir: &Path) -> Result<(), Diagnostic> {
+    let me = rustix::process::geteuid().as_raw();
+    let dirs: Vec<PathBuf> = directories_through(data_dir)
+        .into_iter()
+        .filter(|dir| {
+            !matches!(
+                std::fs::symlink_metadata(dir),
+                Err(e) if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                )
+            )
+        })
+        .collect();
+    let found = unix::directory_writer_outside_permitted(me, &dirs, &|dir| {
         std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
-    })
+    });
+    match found {
+        None => Ok(()),
+        Some((where_, principal)) => Err(Diagnostic::new(
+            Code::DataDirAncestorWritable,
+            Source::Machine,
+        )
+        .option("data-dir")
+        .param("path", where_)
+        .param("principal", principal)
+        .param("permitted", PERMITTED)),
+    }
 }
 
 #[cfg(unix)]

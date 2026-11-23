@@ -28,7 +28,8 @@
 //!   wallet binary does at its start, before it makes anything in it.
 //! - [`create_account_dir_all`]: a directory and the missing ones above it,
 //!   made as the daemon makes its data directory: owner-only on Unix
-//!   ([`OWNER_ONLY_DIR_MODE`]), whatever the umask.
+//!   ([`OWNER_ONLY_DIR_MODE`]), or refused under a umask that strips the
+//!   owner's own bits. No mode is ever changed.
 //!   The wallet directory in it is the wallet file crate's
 //!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
 //! - `directory` (Unix): what a path is, as a directory, for this account.
@@ -52,6 +53,8 @@ use std::path::{Path, PathBuf};
 pub mod directory;
 pub mod key_file;
 pub mod private_file;
+#[cfg(feature = "test-fixture")]
+pub mod test_fixture;
 
 /// This process's effective user id.
 #[cfg(unix)]
@@ -151,36 +154,17 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
 }
 
 /// The mode of a directory this account alone may enter: what the daemon
-/// gives every directory it creates on Unix, whatever the umask.
+/// creates every directory with on Unix.
 pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
 
-/// Brings a directory this process just made to [`OWNER_ONLY_DIR_MODE`],
-/// through a handle that refuses a symbolic link. Under a writable parent
-/// another account can swap the new name for a link before this runs, and a
-/// `chmod` by path would follow it and change a directory this account owns
-/// elsewhere. The handle is opened on [`directory::no_follow_spelling`], since
-/// `O_NOFOLLOW` follows a link named with a trailing `/` or `/.`. Under an
-/// ordinary umask `mkdir` already gave the mode and nothing is changed. A umask that removes the owner's own read bit makes the open
-/// fail, and the create reports it.
-#[cfg(unix)]
-fn settle_new_dir_mode(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    let made = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(directory::no_follow_spelling(dir))?;
-    if made.metadata()?.permissions().mode() & directory::PERMISSION_BITS != OWNER_ONLY_DIR_MODE {
-        made.set_permissions(std::fs::Permissions::from_mode(OWNER_ONLY_DIR_MODE))?;
-    }
-    Ok(())
-}
-
 /// Creates `path` and every directory above it that is missing, the way
-/// the daemon creates its data directory (Rick, 2026-11-22).
+/// the daemon creates its data directory (Rick, 2026-11-22, 2026-11-23).
 ///
-/// On Unix each directory this call creates is [`OWNER_ONLY_DIR_MODE`],
-/// whatever the umask: it is created with that mode, which a umask can only
-/// narrow, and then set to it. A directory that already exists, or that
+/// On Unix each directory this call creates is made with
+/// [`OWNER_ONLY_DIR_MODE`], and no mode is ever changed, by path or by handle.
+/// A umask can only narrow that mode: under one that strips the owner's own
+/// bits the new directory is removed and the call refuses
+/// ([`directory::UmaskStripsOwner`]). A directory that already exists, or that
 /// another process creates first, is not this call's and keeps its mode.
 /// The data directory holds the service's console key, the host
 /// administrator's credential, and its console socket, so it is the
@@ -193,7 +177,7 @@ fn settle_new_dir_mode(dir: &Path) -> std::io::Result<()> {
 /// enforces on every open, so the directory is not their containment.
 ///
 /// # Errors
-/// A directory could not be created or its mode set.
+/// A directory could not be created, or the umask stripped the owner's bits.
 pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -220,7 +204,7 @@ pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
                 .mode(OWNER_ONLY_DIR_MODE)
                 .create(dir)
             {
-                Ok(()) => settle_new_dir_mode(dir)?,
+                Ok(()) => directory::check_made_dir(dir)?,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
@@ -534,13 +518,14 @@ mod per_account_root_tests {
         create_account_dir_all(&data).expect("an existing directory is left as it is");
     }
 
-    /// The new directory's mode is settled through a handle that refuses a
-    /// link, so a name swapped for a link in the moment after `mkdir` cannot
-    /// redirect the change to a directory elsewhere. Red edit: `chmod` by path,
-    /// and the link's target becomes 0700.
+    /// The check after `mkdir` changes nothing. A name swapped for a link is
+    /// refused, whatever its spelling, and the race Copilot found on #1533,
+    /// an ancestor swapped for a link so the path lands on a directory
+    /// elsewhere, leaves that directory's mode alone. Red edit: bring the
+    /// mode to 0700 here, and `elsewhere/child` becomes 0700.
     #[cfg(unix)]
     #[test]
-    fn a_new_directory_swapped_for_a_link_does_not_redirect_its_mode() {
+    fn the_check_after_mkdir_changes_no_mode_through_a_link() {
         use std::os::unix::fs::PermissionsExt;
         let mode = |dir: &Path| {
             std::fs::metadata(dir)
@@ -551,12 +536,17 @@ mod per_account_root_tests {
         };
         let base = tempfile::tempdir().expect("a scratch directory");
         let elsewhere = base.path().join("elsewhere");
-        std::fs::create_dir(&elsewhere).expect("made");
-        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o750)).expect("set");
+        let child = elsewhere.join("child");
+        std::fs::create_dir_all(&child).expect("made");
+        std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o750)).expect("set");
+
+        let ancestor = base.path().join("ancestor");
+        std::os::unix::fs::symlink(&elsewhere, &ancestor).expect("a link");
+        directory::check_made_dir(&ancestor.join("child")).expect("nothing to refuse");
+        assert_eq!(mode(&child), 0o750, "through an ancestor link");
+
         let swapped = base.path().join("swapped");
-        std::os::unix::fs::symlink(&elsewhere, &swapped).expect("a link");
-        // `O_NOFOLLOW` follows a link spelled with a trailing `/` or `/.`. Red
-        // edit: open `dir` as given.
+        std::os::unix::fs::symlink(&child, &swapped).expect("a link");
         let shown = swapped.display();
         for spelling in [
             swapped.clone(),
@@ -564,21 +554,30 @@ mod per_account_root_tests {
             PathBuf::from(format!("{shown}/.")),
             PathBuf::from(format!("{shown}//./")),
         ] {
-            settle_new_dir_mode(&spelling).expect_err("a link is refused");
-            assert_eq!(
-                mode(&elsewhere),
-                0o750,
-                "the link's target is untouched through {}",
-                spelling.display()
-            );
+            let error = directory::check_made_dir(&spelling).expect_err("a link is refused");
+            assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+            assert_eq!(mode(&child), 0o750, "through {}", spelling.display());
         }
+    }
 
-        // A umask that narrowed the owner's bits is brought back to the mode.
-        let narrowed = base.path().join("narrowed");
-        std::fs::create_dir(&narrowed).expect("made");
-        std::fs::set_permissions(&narrowed, std::fs::Permissions::from_mode(0o600)).expect("set");
-        settle_new_dir_mode(&narrowed).expect("a directory of its own");
-        assert_eq!(mode(&narrowed), OWNER_ONLY_DIR_MODE);
+    /// A directory the umask left without an owner's bit is refused, naming
+    /// the mode, and removed, with no mode changed to rescue it. Red edit:
+    /// drop the owner-bits test, and the short directory is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_without_the_owners_bits_is_refused_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().expect("a scratch directory");
+        for short in [0o500, 0o300, 0o600] {
+            let made = base.path().join(format!("short{short:o}"));
+            std::fs::create_dir(&made).expect("made");
+            std::fs::set_permissions(&made, std::fs::Permissions::from_mode(short)).expect("set");
+            let error = directory::check_made_dir(&made).expect_err("short of the owner's bits");
+            let refused = directory::umask_strips_owner(&error).expect("typed");
+            assert_eq!(refused.dir, made);
+            assert_eq!(refused.mode, short);
+            assert!(!made.exists(), "the empty directory is removed");
+        }
     }
 
     /// A new directory is made owner-only however its path is spelled. Red

@@ -46,6 +46,90 @@ pub fn no_follow_spelling(path: &Path) -> PathBuf {
     path.components().collect()
 }
 
+/// A directory this account just made came out without all of the owner's
+/// permission bits, because the process umask removed them. `mkdir` with
+/// [`OWNER_ONLY_DIR_MODE`] can only be narrowed by a umask, and the common ones
+/// (`022`, `002`, `027`, `077`) leave it whole. The daemon never changes a mode
+/// (Rick, 2026-11-23), so this is a refusal, not a repair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UmaskStripsOwner {
+    /// The directory that came out short. It is removed again.
+    pub dir: PathBuf,
+    /// Its permission bits.
+    pub mode: u32,
+    /// The process umask.
+    pub umask: u32,
+}
+
+impl fmt::Display for UmaskStripsOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} was created with mode {:04o} because the process umask {:04o} removes the owner's own permission",
+            self.dir.display(),
+            self.mode,
+            self.umask
+        )
+    }
+}
+
+impl std::error::Error for UmaskStripsOwner {}
+
+/// The [`UmaskStripsOwner`] an I/O error from
+/// [`crate::create_account_dir_all`] carries, if that is what it was.
+#[must_use]
+pub fn umask_strips_owner(error: &io::Error) -> Option<&UmaskStripsOwner> {
+    error.get_ref()?.downcast_ref()
+}
+
+/// The process umask. POSIX reads it only by setting it, so this sets the
+/// strictest mask for the instant between the two calls: a file another
+/// thread creates in that instant is narrower, never wider. Only a refusal
+/// reads it.
+#[allow(unsafe_code, reason = "umask has no safe wrapper in std")]
+#[allow(
+    clippy::useless_conversion,
+    reason = "mode_t is u32 on Linux, u16 on the BSDs"
+)]
+fn process_umask() -> u32 {
+    // SAFETY: `umask` takes any mode, cannot fail, and touches no memory.
+    let held = unsafe { libc::umask(0o777) };
+    // SAFETY: as above; this restores the mask just read.
+    unsafe { libc::umask(held) };
+    u32::from(held)
+}
+
+/// Checks a directory this call just made, without following a link and
+/// without changing anything: it is a directory, and the umask left the
+/// owner's bits. A set-group-ID bit inherited from the parent is not the
+/// owner's concern and gives no other account a permission.
+///
+/// # Errors
+///
+/// [`UmaskStripsOwner`] (the empty directory is removed first), or
+/// `NotADirectory` when something else is at the name.
+pub(crate) fn check_made_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::symlink_metadata(no_follow_spelling(dir))?;
+    if !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            format!("{} is not a directory", dir.display()),
+        ));
+    }
+    let mode = meta.permissions().mode() & PERMISSION_BITS;
+    if mode & OWNER_ONLY_DIR_MODE == OWNER_ONLY_DIR_MODE {
+        return Ok(());
+    }
+    // This call's own empty directory; the refusal stands either way.
+    drop(std::fs::remove_dir(dir));
+    Err(io::Error::other(UmaskStripsOwner {
+        dir: dir.to_path_buf(),
+        mode,
+        umask: process_umask(),
+    }))
+}
+
 /// A directory the walk could describe: it exists, it is not a link, and
 /// it is a directory. The mode and the owner are for the caller to judge.
 #[derive(Clone, Copy, Debug)]
