@@ -1,6 +1,6 @@
 # Archival bond sizing: Round 0 note for investigation
 
-**Status: PARKED (Rick, 2026-11-22).** Registered on Rick's direction so it is not lost. No change is proposed. It is taken up only after the economics sim finishes its current series: EUP-4 prep, EUP-4, and the stakers' emission share first look. The right bond depends on what stakers are paid. No brief, measurement or model starts from this note until Rick reopens it, and nothing here is built. Read against `dev` at `27a832cf81`; the economy figures are from #1476's table at `920594b8e4`.
+**Status: PARKED (Rick, 2026-11-22).** Registered on Rick's direction so it is not lost. No change is proposed. It is taken up only after the economics sim finishes its current series: EUP-4 prep, EUP-4, and the stakers' emission share first look. The right bond depends on what stakers are paid. No brief, measurement or model starts from this note until Rick reopens it, and nothing here is built. Read against `dev` at `27a832cf81`. The economy figures are from #1476's derived table (`economies_table.csv`) at `920594b8e4`, its A-honest rows at N = 90 on the baseline; section 5 restates every figure it uses, so the note does not depend on that table.
 
 **Identifier family:** `ABS-`, registered at birth (rule 94) in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2. No `ABS-` identifier is minted yet.
 
