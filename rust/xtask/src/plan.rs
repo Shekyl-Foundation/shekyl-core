@@ -186,11 +186,12 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
         // depends CC of `gcc -m64` gave cargo `/usr/bin/gcc`.
         "cc" => which(first_word(&depends()?.cc), path_var)?,
         "ar" => which(first_word(&depends()?.ar), path_var)?,
-        "target_dir" => fill
-            .target_dir
-            .to_str()
-            .ok_or("the target directory is not UTF-8")?
-            .to_owned(),
+        "target_dir" => target_dir_value(
+            fill.target_dir
+                .to_str()
+                .ok_or("the target directory is not UTF-8")?,
+            cfg!(windows),
+        ),
         "version_full" => identity()?.full.clone(),
         "release_name" => identity()?.release_name.clone(),
         "is_release" => if identity()?.is_release {
@@ -204,6 +205,18 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
             None => return Err(format!("{{{other}}} is not a placeholder the xtask fills")),
         },
     })
+}
+
+/// The target directory as cargo is given it. On Windows it is written with
+/// forward slashes, the form this build has always passed: build scripts'
+/// output paths are compiled into the binaries (`include!` of `OUT_DIR`), so
+/// the separator is part of the daemon's bytes.
+fn target_dir_value(path: &str, windows: bool) -> String {
+    if windows {
+        path.replace('\\', "/")
+    } else {
+        path.to_owned()
+    }
 }
 
 fn first_word(s: &str) -> &str {
@@ -323,6 +336,15 @@ mod tests {
         let err = substitute("x{opt_level}", &fill(), None).expect_err("unknown");
         assert!(err.contains("opt_level"), "{err}");
         assert!(substitute("{prefix", &fill(), None).is_err());
+    }
+
+    #[test]
+    fn the_target_dir_keeps_forward_slashes_on_windows() {
+        assert_eq!(
+            target_dir_value(r"C:\Users\s\src\rust/target", true),
+            "C:/Users/s/src/rust/target"
+        );
+        assert_eq!(target_dir_value(r"/r/a\b/target", false), r"/r/a\b/target");
     }
 
     #[test]
