@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_network::Network;
-use shekyl_p2p_transport::{prefix_for, Initiator, MESSAGE2_LEN, PREFIX_LEN};
+use shekyl_p2p_transport::{
+    prefix_for, Initiator, RecordError, RecvHalf, SendHalf, MESSAGE2_LEN, PREFIX_LEN,
+};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
@@ -23,7 +25,7 @@ use tokio::sync::mpsc;
 
 #[cfg(target_os = "linux")]
 use super::inode::socket_descriptors;
-use super::{channel_choice, listen, ChannelChoice, ClearnetOption, Config, Listener};
+use super::{channel_choice, listen, ChannelChoice, Config, Listener};
 
 const ID: [u8; 16] = [0x11; 16];
 
@@ -59,14 +61,12 @@ fn causes() -> Recorded {
 
 fn config(
     network_id: [u8; 16],
-    option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 ) -> Config {
     Config {
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-        option,
         column: ConnectorId::Clearnet.column(),
         network_id,
         ceiling,
@@ -81,7 +81,6 @@ fn config(
 }
 
 fn start(
-    option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
 ) -> (
@@ -89,13 +88,12 @@ fn start(
     Listener<MonotonicClock>,
     Arc<Mutex<Vec<CloseKind>>>,
 ) {
-    start_on(Sockets::new(), ID, option, within, ceiling)
+    start_on(Sockets::new(), ID, within, ceiling)
 }
 
 fn start_on(
     sockets: Sockets,
     network_id: [u8; 16],
-    option: ClearnetOption,
     within: Tick,
     ceiling: InboundCeiling,
 ) -> (
@@ -111,7 +109,7 @@ fn start_on(
         pool,
         &engine.handle(),
         sockets,
-        &config(network_id, option, within, ceiling, recorded.sink),
+        &config(network_id, within, ceiling, recorded.sink),
     )
     .expect("listen");
     (engine, listener, seen)
@@ -148,14 +146,8 @@ fn await_close_kind(seen: &Arc<Mutex<Vec<CloseKind>>>, kind: CloseKind, why: &st
     }
 }
 
-/// Open a sealed session under `network_id` and deliver `plain`.
-/// Returns what the listener's session read.
-fn sealed_plaintext(
-    listener: &mut Listener<MonotonicClock>,
-    client: &mut StdStream,
-    network_id: &[u8; 16],
-    plain: &[u8],
-) -> Vec<u8> {
+/// Run the initiator's half of the handshake on `client`.
+fn open_sealed(client: &mut StdStream, network_id: &[u8; 16]) -> (SendHalf, RecvHalf) {
     let (initiator, message1) = Initiator::new(network_id).expect("initiator");
     client.write_all(&prefix_for(network_id)).expect("prefix");
     client.write_all(&message1).expect("message1");
@@ -164,10 +156,38 @@ fn sealed_plaintext(
     assert_eq!(prefix, prefix_for(network_id));
     let mut message2 = vec![0u8; MESSAGE2_LEN];
     client.read_exact(&mut message2).expect("message2");
-    let (mut send, _recv) = initiator
+    initiator
         .read_message2(&message2)
         .expect("message2")
-        .split();
+        .split()
+}
+
+/// Read one sealed record off `client` and open it.
+fn read_sealed(client: &mut StdStream, recv: &mut RecvHalf) -> Vec<u8> {
+    let mut wire = Vec::new();
+    let mut chunk = [0u8; 256];
+    loop {
+        match recv.open_one(&wire) {
+            Ok((plain, _used)) => return plain,
+            Err(RecordError::Truncated) => {
+                let n = client.read(&mut chunk).expect("record");
+                assert_ne!(n, 0, "the socket closed inside a record");
+                wire.extend_from_slice(&chunk[..n]);
+            }
+            Err(error) => panic!("record: {error:?}"),
+        }
+    }
+}
+
+/// Open a sealed session under `network_id` and deliver `plain`.
+/// Returns what the listener's session read.
+fn sealed_plaintext(
+    listener: &mut Listener<MonotonicClock>,
+    client: &mut StdStream,
+    network_id: &[u8; 16],
+    plain: &[u8],
+) -> Vec<u8> {
+    let (mut send, _recv) = open_sealed(client, network_id);
     let wire = send.seal(plain).expect("seal");
     client.write_all(&wire).expect("record");
     let handle = listener.runtime_handle().clone();
@@ -175,19 +195,18 @@ fn sealed_plaintext(
     handle.block_on(session.recv()).expect("plain")
 }
 
+/// No plaintext clearnet path remains: the clearnet column names Noise, and
+/// only a network that encrypts by itself names no added layer.
+/// Red edit: answer `Native` for the clearnet column's plan.
 #[test]
-fn the_option_reads_the_plan_and_not_a_connector_id() {
+fn the_clearnet_column_cannot_produce_a_channel_without_noise() {
     assert_eq!(
-        channel_choice(NetworkColumn::Clearnet, ClearnetOption::Off),
-        Ok(ChannelChoice::Plain)
-    );
-    assert_eq!(
-        channel_choice(NetworkColumn::Clearnet, ClearnetOption::On),
+        channel_choice(NetworkColumn::Clearnet),
         Ok(ChannelChoice::Noise)
     );
     assert_eq!(
-        channel_choice(NetworkColumn::Tor, ClearnetOption::On),
-        Ok(ChannelChoice::Plain)
+        channel_choice(NetworkColumn::Tor),
+        Ok(ChannelChoice::Native)
     );
 }
 
@@ -213,34 +232,34 @@ fn one_descriptor_after_the_socket_is_split() {
     pool.shutdown(Duration::from_millis(50));
 }
 
+/// A session carries bytes both ways, and what crosses the socket is
+/// sealed.
 #[test]
-fn option_off_carries_the_bytes_it_is_given() {
-    let (engine, mut listener, _) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+fn a_session_carries_the_bytes_it_is_given_sealed() {
+    let (engine, mut listener, _) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(4));
     let mut client = connect(listener.local_addr());
-    client.write_all(b"levin-bytes").expect("write");
+    let (mut send, mut recv) = open_sealed(&mut client, &ID);
+    let wire = send.seal(b"levin-bytes").expect("seal");
+    assert!(
+        !wire
+            .windows(b"levin-bytes".len())
+            .any(|w| w == b"levin-bytes"),
+        "the record shows its plaintext"
+    );
+    client.write_all(&wire).expect("write");
     let handle = listener.runtime_handle().clone();
     let mut session = handle.block_on(next_session(&mut listener.sessions));
     let got = handle.block_on(session.recv()).expect("bytes");
     assert_eq!(got, b"levin-bytes");
     session.try_send(b"out".to_vec()).expect("send");
-    let mut buf = [0u8; 3];
-    client.read_exact(&mut buf).expect("read");
-    assert_eq!(&buf, b"out");
+    assert_eq!(read_sealed(&mut client, &mut recv), b"out");
     listener.shutdown();
     drop(engine);
 }
 
 #[test]
 fn a_bad_prefix_is_fin_after_zero_bytes() {
-    let (engine, listener, seen) = start(
-        ClearnetOption::On,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+    let (engine, listener, seen) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(4));
     let mut client = connect(listener.local_addr());
     let n = prefix_reply(&mut client, &[0u8; PREFIX_LEN]);
     assert_eq!(n, 0);
@@ -267,7 +286,6 @@ fn a_listener_refuses_every_other_networks_prefix_and_takes_its_own() {
             let (engine, mut listener, seen) = start_on(
                 Sockets::new(),
                 id,
-                ClearnetOption::On,
                 Tick::new(5_000_000_000),
                 InboundCeiling::Bounded(4),
             );
@@ -297,12 +315,8 @@ fn a_listener_refuses_every_other_networks_prefix_and_takes_its_own() {
 }
 
 #[test]
-fn option_on_seals_above_the_seam() {
-    let (engine, mut listener, _) = start(
-        ClearnetOption::On,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+fn a_record_is_sealed_above_the_seam() {
+    let (engine, mut listener, _) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(4));
     let mut client = connect(listener.local_addr());
     let got = sealed_plaintext(&mut listener, &mut client, &ID, b"hello");
     assert_eq!(got, b"hello");
@@ -315,7 +329,7 @@ fn option_on_seals_above_the_seam() {
 #[test]
 fn a_queued_handshake_past_its_deadline_is_skipped() {
     let within = Tick::new(150_000_000);
-    let (engine, listener, _) = start(ClearnetOption::On, within, InboundCeiling::Bounded(4));
+    let (engine, listener, _) = start(within, InboundCeiling::Bounded(4));
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
     listener.pool().spawn_blocking(move || {
@@ -352,11 +366,7 @@ fn a_queued_handshake_past_its_deadline_is_skipped() {
 
 #[test]
 fn a_zero_ceiling_refuses_before_any_handshake() {
-    let (engine, listener, seen) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(0),
-    );
+    let (engine, listener, seen) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(0));
     let mut client = connect(listener.local_addr());
     client.write_all(b"handshake").expect("write");
     let mut buf = [0u8; 4];
@@ -397,7 +407,6 @@ fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
     let (engine, listener, seen) = start_on(
         Sockets::with_clearnet_gate(gate),
         ID,
-        ClearnetOption::On,
         Tick::new(5_000_000_000),
         InboundCeiling::Bounded(4),
     );
@@ -432,13 +441,9 @@ fn an_inbound_over_the_accept_rate_is_not_a_handshake() {
 
 #[test]
 fn the_second_inbound_past_the_ceiling_is_not_a_handshake() {
-    let (engine, mut listener, seen) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(1),
-    );
+    let (engine, mut listener, seen) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(1));
     let mut first = connect(listener.local_addr());
-    first.write_all(b"one").expect("write");
+    let _halves = open_sealed(&mut first, &ID);
     let handle = listener.runtime_handle().clone();
     let _session = handle.block_on(next_session(&mut listener.sessions));
     let mut second = connect(listener.local_addr());
@@ -455,55 +460,15 @@ fn the_second_inbound_past_the_ceiling_is_not_a_handshake() {
         assert!(start.elapsed() < Duration::from_secs(2), "refused");
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(listener.tally.computed(), 0);
+    assert_eq!(listener.tally.computed(), 1, "the first inbound's alone");
     assert_eq!(listener.tally.queued(), 0);
     listener.shutdown();
     drop(engine);
 }
 
 #[test]
-fn a_direct_dial_carries_plaintext_when_the_option_is_off() {
-    let (engine, mut listener, _) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
-    let handle = listener.runtime_handle().clone();
-    let (port, got) = handle.block_on(async {
-        let server = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .await
-            .expect("bind");
-        let port = server.local_addr().expect("addr").port();
-        let got = tokio::spawn(async move {
-            let (mut sock, _) = server.accept().await.expect("accept");
-            let mut buf = [0u8; 3];
-            use tokio::io::AsyncReadExt;
-            sock.read_exact(&mut buf).await.expect("read");
-            buf
-        });
-        (port, got)
-    });
-    listener.dial(
-        NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::LOCALHOST,
-            port,
-        },
-        None,
-    );
-    let session = handle.block_on(next_session(&mut listener.sessions));
-    session.try_send(b"out".to_vec()).expect("send");
-    assert_eq!(handle.block_on(got).expect("peer"), *b"out");
-    listener.shutdown();
-    drop(engine);
-}
-
-#[test]
 fn an_onion_name_is_not_dialed() {
-    let (engine, listener, seen) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+    let (engine, listener, seen) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(4));
     listener.dial(
         NetworkAddress::Tor {
             host: "not-an-address.onion".to_string(),
@@ -526,11 +491,7 @@ fn an_onion_name_is_not_dialed() {
 
 #[test]
 fn a_refused_direct_connect_names_the_address() {
-    let (engine, listener, seen) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+    let (engine, listener, seen) = start(Tick::new(5_000_000_000), InboundCeiling::Bounded(4));
     // Bound, not listening. The port stays ours, so a parallel test cannot
     // accept the dial, and the kernel answers it with RST.
     let refusing = TcpSocket::new_v4().expect("socket");
@@ -564,11 +525,7 @@ fn a_refused_direct_connect_names_the_address() {
 
 #[test]
 fn an_unreachable_network_stays_dialable() {
-    let (engine, listener, seen) = start(
-        ClearnetOption::Off,
-        Tick::new(2_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+    let (engine, listener, seen) = start(Tick::new(2_000_000_000), InboundCeiling::Bounded(4));
     listener.dial(
         NetworkAddress::Ipv4 {
             ip: Ipv4Addr::new(255, 255, 255, 255),
@@ -597,12 +554,10 @@ fn an_unreachable_network_stays_dialable() {
 }
 
 #[test]
-fn option_on_dials_and_both_sides_read_what_was_sent() {
+fn a_direct_dial_and_both_sides_read_what_was_sent() {
     let within = Tick::new(5_000_000_000);
-    let (engine_a, mut responder, _) =
-        start(ClearnetOption::On, within, InboundCeiling::Bounded(4));
-    let (engine_b, mut initiator, _) =
-        start(ClearnetOption::On, within, InboundCeiling::Bounded(4));
+    let (engine_a, mut responder, _) = start(within, InboundCeiling::Bounded(4));
+    let (engine_b, mut initiator, _) = start(within, InboundCeiling::Bounded(4));
     let port = responder.local_addr().port();
     initiator.dial(
         NetworkAddress::Ipv4 {
@@ -628,28 +583,16 @@ fn option_on_dials_and_both_sides_read_what_was_sent() {
 
 #[test]
 fn a_socks_proxy_is_the_path_and_a_refusal_keeps_the_reply() {
-    let (engine, mut listener, _) = start(
-        ClearnetOption::Off,
-        Tick::new(5_000_000_000),
-        InboundCeiling::Bounded(4),
-    );
+    let within = Tick::new(5_000_000_000);
+    let (engine, mut listener, _) = start(within, InboundCeiling::Bounded(4));
+    let (dest_engine, mut dest, _) = start(within, InboundCeiling::Bounded(4));
+    let dest_port = dest.local_addr().port();
     let handle = listener.runtime_handle().clone();
-    let (proxy_port, dest_port, got) = handle.block_on(async {
-        let dest = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-            .await
-            .expect("dest");
-        let dest_port = dest.local_addr().expect("addr").port();
+    let proxy_port = handle.block_on(async {
         let proxy = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
             .await
             .expect("proxy");
         let proxy_port = proxy.local_addr().expect("addr").port();
-        let got = tokio::spawn(async move {
-            let (mut sock, _) = dest.accept().await.expect("accept");
-            let mut buf = [0u8; 3];
-            use tokio::io::AsyncReadExt;
-            sock.read_exact(&mut buf).await.expect("read");
-            buf
-        });
         tokio::spawn(async move {
             let (mut sock, _) = proxy.accept().await.expect("proxy accept");
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -672,7 +615,7 @@ fn a_socks_proxy_is_the_path_and_a_refusal_keeps_the_reply() {
                 Ok(_) | Err(_) => {}
             }
         });
-        (proxy_port, dest_port, got)
+        proxy_port
     });
     listener.dial(
         NetworkAddress::Ipv4 {
@@ -686,9 +629,12 @@ fn a_socks_proxy_is_the_path_and_a_refusal_keeps_the_reply() {
     );
     let session = handle.block_on(next_session(&mut listener.sessions));
     session.try_send(b"out".to_vec()).expect("send");
-    assert_eq!(handle.block_on(got).expect("peer"), *b"out");
+    let dest_handle = dest.runtime_handle().clone();
+    let mut at_dest = dest_handle.block_on(next_session(&mut dest.sessions));
+    assert_eq!(dest_handle.block_on(at_dest.recv()).expect("out"), b"out");
     listener.shutdown();
-    drop(engine);
+    dest.shutdown();
+    drop((engine, dest_engine));
 }
 
 #[test]
@@ -706,7 +652,6 @@ fn a_socks_refusal_carries_the_reply_byte() {
         Sockets::new(),
         &config(
             ID,
-            ClearnetOption::Off,
             Tick::new(5_000_000_000),
             InboundCeiling::Bounded(4),
             sink,

@@ -4584,6 +4584,7 @@ dependencies = [
  "shekyl-miner",
  "shekyl-network",
  "shekyl-p2p-session",
+ "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
  "shekyl-runtime",

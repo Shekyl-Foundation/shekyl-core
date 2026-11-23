@@ -62,7 +62,7 @@ where
         },
         proxy: None,
         sockets: Sockets::new(),
-        kind: crate::seam::ChannelChoice::Plain,
+        kind: crate::seam::ChannelChoice::Native,
         network_id: ID,
         dial_within: Tick::new(2_000_000_000),
         proxied_dial_within: Tick::new(2_000_000_000),
@@ -189,7 +189,7 @@ fn accept_peer_that_writes(gap: Tick, opening: &[u8]) -> AcceptedPeer {
         let inbound = super::super::Inbound {
             sockets,
             ceiling: || InboundCeiling::Bounded(4),
-            kind: ChannelChoice::Plain,
+            kind: ChannelChoice::Native,
             network_id: ID,
             handshake_within,
             gap_within: Some(gap),

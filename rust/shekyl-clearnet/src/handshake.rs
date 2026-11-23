@@ -41,7 +41,7 @@ struct PoolSpans {
 }
 
 pub(crate) enum Setup {
-    Plain,
+    Native,
     Noise { flight: Vec<u8>, send: SendHalf },
 }
 

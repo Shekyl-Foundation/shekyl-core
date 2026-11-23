@@ -210,7 +210,6 @@ pub fn plan(config: &DaemonConfig, network_id: [u8; 16]) -> NetworkPlan {
         Clearnet::On { listen, socks, .. } => Some(ClearnetPlan {
             listen: listen.clone(),
             proxy: socks.as_ref().map(proxy_of),
-            encrypt: config.dev.clearnet_encrypt,
             own: own_clearnet(config),
         }),
     };

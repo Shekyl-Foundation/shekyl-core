@@ -748,15 +748,15 @@ where
         Role::Initiator => "initiator",
     };
     let kind_name = match job.kind {
-        ChannelChoice::Plain => "plain",
+        ChannelChoice::Native => "native",
         ChannelChoice::Noise => "noise",
     };
     let opened = match (job.kind, job.role) {
-        (ChannelChoice::Plain, _) => {
+        (ChannelChoice::Native, _) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
             let writer = tokio::spawn(write_half(write, setup_rx, outbound, overfull, conn));
-            drop(setup_tx.send(Setup::Plain));
-            Ok((writer, SeamRecv::Plain))
+            drop(setup_tx.send(Setup::Native));
+            Ok((writer, SeamRecv::Native))
         }
         (ChannelChoice::Noise, Role::Responder) => {
             let (setup_tx, setup_rx) = tokio::sync::oneshot::channel();
@@ -833,7 +833,7 @@ async fn write_half(
 ) -> Option<CloseCause> {
     let setup = setup.await.ok()?;
     let mut seam = match setup {
-        Setup::Plain => SeamSend::Plain,
+        Setup::Native => SeamSend::Native,
         Setup::Noise { flight, send } => {
             if !flight.is_empty() {
                 let started = Instant::now();

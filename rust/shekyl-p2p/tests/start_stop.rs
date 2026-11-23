@@ -172,7 +172,6 @@ fn clearnet_binds_accepts_and_stops_twice_in_one_process() {
         let clearnet = ClearnetPlan {
             listen: vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 0))],
             proxy: None,
-            encrypt: false,
             own: Vec::new(),
         };
         let network = Network::start(parts(plan(dir.path(), Some(clearnet)))).expect("starts");
@@ -209,7 +208,6 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
     let clearnet = ClearnetPlan {
         listen: vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 0))],
         proxy: None,
-        encrypt: false,
         own: Vec::new(),
     };
     let network = Network::start(parts(plan(dir.path(), Some(clearnet)))).expect("starts");

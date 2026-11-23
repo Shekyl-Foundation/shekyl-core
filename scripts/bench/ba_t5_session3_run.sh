@@ -176,7 +176,7 @@ sync_start() {  # a fresh data directory, then the daemon, then wait until it is
     --rpc-socket-dir "$WORK/syncdata/sock"
     --clearnet-listen none --tor off
     --rpc-admin-listen "127.0.0.1:$SYNC_RPC" --rpc-view-listen "127.0.0.1:$SYNC_RPC_R"
-    --p2p-closed-peer "$PEER" --dev-clearnet-encrypt
+    --p2p-closed-peer "$PEER"
     --log-file "$WORK/syncdata/sync.log" --log-level info)
   case $TOPO in
     t1)

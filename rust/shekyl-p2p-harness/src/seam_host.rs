@@ -5,8 +5,8 @@
 
 //! The seam's recording host.
 //!
-//! Until zone bind, the socket is [`shekyl_clearnet::listen`] with the
-//! option off: the public listener, not the connector's tests. The bytes
+//! Until zone bind, the socket is [`shekyl_clearnet::listen`]: the public
+//! listener, not the connector's tests, so the channel is Noise. The bytes
 //! on that session are what the seam delivers to the Levin handler. This
 //! host does not link epee and does not open a second admission table.
 
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use shekyl_clearnet::{listen, ClearnetOption, Config, Listener, Session};
+use shekyl_clearnet::{listen, Config, Listener, Session};
 use shekyl_levin::{
     response, BucketReader, HandshakeRequest, PortableMap, Received, COMMAND_HANDSHAKE,
     DEFAULT_MAX_PACKET_SIZE,
@@ -27,7 +27,7 @@ use shekyl_timing_engine::{EngineService, MonotonicClock, Tick};
 use shekyl_transport_layer::{CloseCause, CloseKind, ConnectorId, Sockets};
 
 use crate::script::{
-    script, AfterHandshake, Script, READ_PAUSE, SEND_OVER_SETTLE, SEND_QUEUE_BYTES,
+    script, AfterHandshake, Script, READ_PAUSE, SEAM_NETWORK_ID, SEND_OVER_SETTLE, SEND_QUEUE_BYTES,
 };
 use crate::transcript::{End, Event, Role, Transcript, TranscriptVersion};
 use crate::Error;
@@ -77,9 +77,8 @@ pub fn serve_seam_once(seed: u64) -> Result<SeamHost, Error> {
         Sockets::new(),
         &Config {
             listen: SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
-            option: ClearnetOption::Off,
             column: ConnectorId::Clearnet.column(),
-            network_id: [0x11; 16],
+            network_id: SEAM_NETWORK_ID,
             ceiling: InboundCeiling::Bounded(HOST_INBOUND_CEILING),
             handshake_within: Tick::new(HOST_HANDSHAKE_NS),
             shutdown_timeout: HOST_SHUTDOWN,
