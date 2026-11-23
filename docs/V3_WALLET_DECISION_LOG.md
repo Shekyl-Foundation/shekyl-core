@@ -137,6 +137,33 @@ one.
 
 ---
 
+## 2026-11-22 — A send past the input cap is refused with the cap named; consolidation is its own round
+
+**Decision (Rick, 2026-11-22).** A send the balance covers, but only across
+more inputs than one transaction spends (`shekyl_tx_builder::MAX_INPUTS`), is
+refused when its inputs are selected, as the signer's
+`SignFault::TooManyInputs`: `-29123 TOO_MANY_INPUTS` on the wire, with the
+count the send needs and the cap. The refusal reads the constant, so it
+follows the cap wherever the cap's derivation lands. Automatic consolidation
+is a design round of its own, with its privacy priced.
+
+**Rationale.** The selection had no bound. Largest-first kept adding outputs
+until the amount was covered, and the batch reached the curve-tree actor,
+whose own bound refused it as `CurveTreeUnavailable`: an outage, answered by a
+rescan that cannot help. A wallet of many like-sized outputs hits this as soon
+as it sends more than its largest inputs can cover in one transaction, and every solo miner and staker
+holds such a wallet. It was found when the harness wallet on a forged chain
+asked to send a quarter of about 950 coinbases and selected 240 of them. The
+signer's refusal already named this failure and its remedy; the build reaches
+it before anything is reserved. Because largest-first takes the fewest inputs
+that cover an amount, a selection past the cap means no selection fits.
+
+**Not decided here.** The cap's value: 8 is inherited, without a derivation,
+and a separate lane derives it (`docs/FOLLOWUPS.md`, CEN-I4's entry).
+Consolidation is its own round: how the wallet merges outputs for the user,
+how many transactions the cap forces, when they are sent, and what a burst
+of them in one window discloses.
+
 ## 2026-09-20 — A persona's bond is immutable for its life
 
 **Decision.** A persona's bond is **immutable for its life**. The holdings set

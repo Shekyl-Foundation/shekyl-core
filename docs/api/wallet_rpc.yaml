@@ -584,7 +584,13 @@ info:
   # verify this session, and what the refill did, beside the last check
   # that completed (its height and how many shards it read), absent until
   # one does. api_version stays 1.
-  version: 0.22.0
+  # 0.23.0: -29119 SIGNER_FAILED's data.fault gains too-few-outputs (Rick,
+  # 2026-11-22). Consensus refuses a non-coinbase transaction with fewer
+  # than two outputs (CEN-I1), and the wallet's builder now refuses to make
+  # one, as its own fault beside no-outputs. The wallet's send paths always
+  # carry at least two outputs, so the keyword names a bug, as every
+  # builder invariant does. api_version stays 1.
+  version: 0.23.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1178,6 +1184,7 @@ components:
                                           the request's doing (data:
                                           {"fault"}, one keyword: a builder
                                           invariant — no-inputs, no-outputs,
+                                          too-few-outputs,
                                           zero-input-amount,
                                           zero-output-amount,
                                           input-amount-overflow,

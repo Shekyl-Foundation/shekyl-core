@@ -659,14 +659,14 @@ impl TxRule for H18 {
         if !matches!(cx.class, TxClass::Spend { .. }) {
             return Ok(());
         }
-        let Ct::Fcmp { fee, .. } = &cx.tx.ct else {
+        let Some(fee) = cx.tx.fee() else {
             // H15 refused a `Null` spend before this ran.
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
         };
         let balanced = shekyl_ct_balance::verify_ct_balance(
             &flat_pseudo_outs(cx.tx),
             &flat_masks(cx.tx),
-            AtomicUnits::from_raw(*fee),
+            AtomicUnits::from_raw(fee),
             &[],
             &[],
         );
@@ -684,11 +684,11 @@ impl TxRule for H18 {
 /// sum mismatch, or both terms set.
 fn archival_balance(tx: &Transaction, credit: u64, debit: u64) -> Result<(), ()> {
     use shekyl_archival_retention::bond_ct_balance::{verify_bond_post_ct_balance, BondTerm};
-    let Ct::Fcmp { fee, .. } = &tx.ct else {
+    let Some(fee) = tx.fee() else {
         return Err(());
     };
     let term = BondTerm::from_credit_debit(credit, debit).map_err(|_| ())?;
-    verify_bond_post_ct_balance(&flat_pseudo_outs(tx), &flat_masks(tx), *fee, term).map_err(|_| ())
+    verify_bond_post_ct_balance(&flat_pseudo_outs(tx), &flat_masks(tx), fee, term).map_err(|_| ())
 }
 
 /// CEN-H21: the bond-post shape and balance (`ver_non_input_consensus`'s

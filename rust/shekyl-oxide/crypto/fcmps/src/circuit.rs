@@ -5,14 +5,16 @@ use ciphersuite::{group::ff::FromUniformBytes, Ciphersuite};
 pub(crate) use generalized_bulletproofs::arithmetic_circuit_proof::{LinComb, Variable};
 use generalized_bulletproofs::{
     arithmetic_circuit_proof::{
-        AcStatementError, ArithmeticCircuitStatement, ArithmeticCircuitWitness,
+        AcProveError, AcStatementError, ArithmeticCircuitProver, ArithmeticCircuitStatement,
     },
-    transcript::Commitments,
-    PedersenVectorCommitment, ProofGenerators,
+    transcript::{Commitments, ProverCommitments},
+    ProofGenerators,
 };
 
 use generalized_bulletproofs_circuit_abstraction::Circuit as UnderlyingCircuit;
-pub(crate) use generalized_bulletproofs_circuit_abstraction::Transcript;
+pub(crate) use generalized_bulletproofs_circuit_abstraction::{
+    Proving, Role, Transcript, Verifying,
+};
 
 use crate::*;
 
@@ -39,22 +41,24 @@ pub trait FcmpCurves {
     type C2Parameters: DiscreteLogParameters;
 }
 
-/// A struct representing a circuit.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct Circuit<C: Ciphersuite>(pub(crate) UnderlyingCircuit<C>);
+/// A struct representing a circuit, built for one [`Role`].
+pub(crate) struct Circuit<C: Ciphersuite, R: Role<C>>(pub(crate) UnderlyingCircuit<C, R>);
 
-impl<C: Ciphersuite> Circuit<C> {
-    pub(crate) fn muls(&self) -> usize {
-        self.0.muls()
+impl<C: Ciphersuite> Circuit<C, Proving<C>> {
+    pub(crate) fn prove(commitments: ProverCommitments<C>) -> Self {
+        Self(UnderlyingCircuit::prove(commitments))
     }
+}
 
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn prove(commitments: Vec<PedersenVectorCommitment<C>>) -> Self {
-        Self(UnderlyingCircuit::prove(commitments, vec![]))
-    }
-
+impl<C: Ciphersuite> Circuit<C, Verifying> {
     pub(crate) fn verify() -> Self {
         Self(UnderlyingCircuit::verify())
+    }
+}
+
+impl<C: Ciphersuite, R: Role<C>> Circuit<C, R> {
+    pub(crate) fn muls(&self) -> usize {
+        self.0.muls()
     }
 
     pub(crate) fn eval(&self, lincomb: &LinComb<C::F>) -> Option<C::F> {
@@ -75,7 +79,7 @@ impl<C: Ciphersuite> Circuit<C> {
     }
 }
 
-impl<C: Ciphersuite> Circuit<C>
+impl<C: Ciphersuite, R: Role<C>> Circuit<C, R>
 where
     C::F: FromUniformBytes<64>,
 {
@@ -200,19 +204,30 @@ where
             branch.into_iter().map(Into::into).collect::<Vec<_>>(),
         );
     }
+}
 
-    #[allow(clippy::type_complexity)]
+impl<C: Ciphersuite> Circuit<C, Proving<C>>
+where
+    C::F: FromUniformBytes<64>,
+    C::G: subtle::ConditionallySelectable,
+{
+    pub(crate) fn statement(
+        self,
+        generators: ProofGenerators<'_, C>,
+    ) -> Result<ArithmeticCircuitProver<'_, C>, AcProveError> {
+        self.0.statement(generators)
+    }
+}
+
+impl<C: Ciphersuite> Circuit<C, Verifying>
+where
+    C::F: FromUniformBytes<64>,
+{
     pub(crate) fn statement(
         self,
         generators: ProofGenerators<'_, C>,
         commitments: Commitments<C>,
-    ) -> Result<
-        (
-            ArithmeticCircuitStatement<'_, C>,
-            Option<ArithmeticCircuitWitness<C>>,
-        ),
-        AcStatementError,
-    > {
+    ) -> Result<ArithmeticCircuitStatement<'_, C>, AcStatementError> {
         self.0.statement(generators, commitments)
     }
 }

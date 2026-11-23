@@ -44,34 +44,35 @@ linux_arm64 = "b84269e78dfc2d5329a4aab373da3200de95e6c138338cf6c66c10c0a3f248c1"
 windows_amd64 = "ec3d19f386d5d2f0892288772d7b242475a05332aafa64b6773378ca771d76d3"
 
 # shard-fill (CF-4a, CF-R28; corpus layout 5 from CF-3; trace version 2
-# from CF-4b): published by shekyl-test-chains' publish workflow, run
-# 44932808209, at shekyl-core 6bef7f0fbd (pull request #1500), the layers
-# named by that commit's `forge --layers`. Its blocks and corpus are the
-# ones pinned at CF-3's 7e1f143424 (run 44857446184, digest
-# sha256:568aca6c…a300); the trace moves with its version, carrying the
-# tables digest at the chain's three indexed events.
+# from CF-4b; forged fees from CF-R29): published by shekyl-test-chains'
+# publish workflow, run 45071747638, at shekyl-core 30042dfc9a (pull
+# request #1524), the layers named by that commit's `forge --layers`. Every
+# forged transaction pays the standard rung served for its block and
+# passed the daemon's pool; blocks 0 to 927 are the ones pinned at CF-4b's
+# 6bef7f0fbd (run 44932808209, digest sha256:8e9fb90d…e175), and the first
+# moved block is 928, the first spend.
 [[chain]]
 name = "shard-fill"
 plan = "rust/shekyl-chain-forge/plans/shard-fill.toml"
-commit = "6bef7f0fbdcaa82d6fa0169b82430b042389119c"
-created = "2026-11-21T17:40:58Z"
+commit = "30042dfc9a37926f721a38c7a96805aa3372a1b5"
+created = "2026-11-22T18:57:07Z"
 reference = "ghcr.io/shekyl-foundation/test-chains/shard-fill"
-digest = "sha256:8e9fb90d9099dbf159e1447bf2b3daa4d35c32e884e3c1cbf3ec129b4241e175"
+digest = "sha256:6f756839f47b11e0e5fa2c0eab717c94c6f8a7a2fce0faec87a804fd63255629"
 
 [[chain.layer]]
 file = "corpus.e2"
 media_type = "application/vnd.shekyl.corpus.v5"
-size = 12829331
-sha256 = "e9320e381de2247617c075ae32cc692ea8b07fccec60b4bd0622b330ff8f7c1f"
+size = 12830995
+sha256 = "567446079b5b7fc911a058ee1850456b68802694a25befc6e50bf635994138f8"
 
 [[chain.layer]]
 file = "trace.e2"
 media_type = "application/vnd.shekyl.trace.v2"
 size = 95718
-sha256 = "1c79c36f8657ddbc79d38a4f12fef923199fe9cfc1c8205fb2f193a28dc4bd62"
+sha256 = "9036692e3dac3d62e1f8f9d8ca2d909129067831b112947928529557b52e3ed9"
 
 [[chain.layer]]
 file = "manifest.json"
 media_type = "application/vnd.shekyl.manifest.v6+json"
 size = 1163
-sha256 = "93c5a9adec0ee1e868412d88b780823ccfb88bfe4ca1e0276ad33ab3b97f7ed2"
+sha256 = "a11f91d4025de8cd638d9d1ed3610b436a4dcf19143989ebca9a28083fbaac39"

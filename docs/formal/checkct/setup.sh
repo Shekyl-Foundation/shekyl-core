@@ -13,6 +13,7 @@
 #   subject        crypto-bigint =0.5.5 (cb055) and dalek-ff-group =0.5.0 (dfg050)
 #   subject-noslp  the same, x86_64 only, with SLP vectorisation off (see README)
 #   helio          the vendored helioselene (rust/shekyl-oxide/crypto/helioselene)
+#   fpprobe        CA-3's probe: can BINSEC model FN-DSA's SSE2 floating point?
 #   ctl75, ctl76   crypto-bigint =0.7.5 / =0.7.6 with drivers/ctl.rs (controls)
 #   ctlpre         upstream's own checkct driver against the crypto-bigint tree
 #                  just before the 0.7.6 constant-time fixes (#1358's parent)
@@ -174,6 +175,9 @@ ALL3="x86_64-unknown-linux-gnu riscv32imac-unknown-none-elf thumbv7em-none-eabih
 mkws subject       "$ALL3" "" abort "cb055:$CB055" "dfg050:$DFG050"
 mkws subject-noslp "x86_64-unknown-linux-gnu" ', "-C", "no-vectorize-slp"' abort "cb055:$CB055" "dfg050:$DFG050"
 mkws helio         "$ALL3" "" abort "helio:$HELIO"
+# CA-3 probe: SSE2 double-precision instructions on secret operands, x86_64
+# only (the instructions are x86's). No dependency beyond the template's.
+mkws fpprobe       "x86_64-unknown-linux-gnu" "" abort "fpprobe:"
 # Controls mirror upstream's checkct profile (panic-immediate-abort).
 CTL_TARGETS="x86_64-unknown-linux-gnu thumbv6m-none-eabi riscv32imac-unknown-none-elf"
 mkws ctl75  "$CTL_TARGETS" "" immediate-abort 'ctl:crypto-bigint = { version = "=0.7.5", default-features = false }'

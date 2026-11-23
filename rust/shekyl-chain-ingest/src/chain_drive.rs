@@ -44,16 +44,11 @@ use shekyl_harness_spender::{Owner, Spender};
 use shekyl_types::{BlockCount, BlockHeight};
 use shekyl_wire::Transaction;
 
-use crate::archival_driver::FEE;
 use crate::connector::{ArchivalState, Rewound};
 use crate::emission_assembly::{assemble_emission_claim_drawing, ClaimTerms, EmissionSeeds};
+use crate::priced::{assert_priced, fee_at, SIZING_FEE};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
 use shekyl_chain_rules::SettlementSchedule;
-
-/// How many times a relay fee is repriced before its varint width has
-/// settled. The fee is an input of the weight it pays for, so the price
-/// is a fixed point of that width.
-pub const RELAY_FEE_REPRICE_STEPS: u32 = 8;
 
 /// The tables a pruning boundary's batch retires rows from.
 const RETIRED_AT_A_BOUNDARY: &[&str] = &[
@@ -169,15 +164,22 @@ pub struct EmissionClaimParts<'a> {
     pub seeds: Option<&'a EmissionSeeds>,
 }
 
-/// Assemble `parts` at the chain's relay floor, repricing until the fee's
-/// varint covers the weight it pays for.
+/// Assemble `parts` at the fee the daemon asks of it ([`crate::priced`]):
+/// the rung a wallet pays by default for the block it is listed in, over a sizing
+/// assembly from the OS's randomness and a fresh transaction key, then
+/// assembled once from `parts`' own seeds and key and held to that price.
+///
+/// # Panics
+///
+/// If the OS's randomness is unavailable for the sizing key, if the
+/// assembled claim does not parse, or if it weighs other than its sizing
+/// assembly at its fee ([`crate::priced::assert_priced`]).
 pub async fn priced_emission_claim(
     scenario: &mut Scenario<FreeHash>,
     parts: EmissionClaimParts<'_>,
 ) -> Transaction {
-    let floor = scenario.connecting_relay_floor().await;
-    let mut fee = FEE;
-    for _ in 0..RELAY_FEE_REPRICE_STEPS {
+    let rate = scenario.connecting_default_rate().await;
+    let assemble = |seeds: Option<&EmissionSeeds>, tx_key: &TxKey, fee: u64| {
         let backing = parts
             .spender
             .owned_input(parts.owner, parts.backing_key, parts.connecting);
@@ -185,9 +187,9 @@ pub async fn priced_emission_claim(
             .spender
             .owned_input(parts.owner, parts.fee_key, parts.connecting);
         let claim = assemble_emission_claim_drawing(
-            parts.seeds,
+            seeds,
             parts.keys,
-            &TxKey::seeded(parts.tx_key),
+            tx_key,
             vec![fee_input.input],
             backing.input,
             parts.terms.clone(),
@@ -195,15 +197,14 @@ pub async fn priced_emission_claim(
             &backing.network,
             &backing.tree,
         );
-        let tx = Transaction::from_bytes(&claim.bytes).expect("the claim parses");
-        let weight = u64::try_from(tx.weight()).expect("a weight fits");
-        let needed = shekyl_economics::quantized_fee(weight, floor).expect("priceable");
-        if needed <= fee {
-            return tx;
-        }
-        fee = needed;
-    }
-    panic!("the claim's floor price did not settle");
+        Transaction::from_bytes(&claim.bytes).expect("the claim parses")
+    };
+    let sizing_key = TxKey::random().expect("the OS's randomness");
+    let sized = assemble(None, &sizing_key, SIZING_FEE);
+    let fee = fee_at(&sized, rate);
+    let claim = assemble(parts.seeds, &TxKey::seeded(parts.tx_key), fee);
+    assert_priced(&claim, &sized, rate);
+    claim
 }
 
 /// A spender over `network`'s chain `chain` that owns `keys` before the
