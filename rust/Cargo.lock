@@ -5401,6 +5401,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-fcmp",
+ "shekyl-fcmp-proofs",
  "shekyl-network",
  "shekyl-tx-builder",
  "shekyl-types",

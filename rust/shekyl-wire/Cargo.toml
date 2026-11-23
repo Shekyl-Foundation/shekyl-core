@@ -34,6 +34,15 @@ shekyl-types = { path = "../shekyl-types" }
 # reaches (shekyl-curve-generators) plus shekyl-curve-io/-primitives,
 # shekyl-crypto-hash and rand_chacha — no edge back to this crate.
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
+# The weight model lives beside `Transaction::write` (`ICD-R1`,
+# CEN_I4_INPUT_CAP_DERIVATION.md): the proof's length is
+# `FcmpPlusPlus::proof_size`, a `const fn` the input cap is computed from. Only
+# the size arithmetic is read; `compile-time-generators` stays off, so a
+# consumer of this crate does not build the generator tables through this edge.
+shekyl-fcmp-proofs = { path = "../shekyl-fcmp-proofs", default-features = false, features = ["std"] }
+# The hybrid KEM ciphertext and the multisig key-blob and signature-container
+# lengths the weight model prices (`ICD-R1`).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 
 [features]
 # `BoundTx::whole` / `BoundTx::modify`: a fixture's whole body bound to the
