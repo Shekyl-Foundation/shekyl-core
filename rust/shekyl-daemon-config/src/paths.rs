@@ -64,10 +64,12 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
 /// It exists, it is not a link, it is owned by the daemon's account, its
 /// mode is 0700, and the daemon is not root; otherwise the start refuses,
 /// naming the condition (`config.service.root`). In the default layout the
-/// network's data directory `data_dir` inside the root is held to the same
-/// facts when it exists, as the console leg's socket directory check holds
-/// it at start, so the configuration check and the start agree (Rick,
-/// 2026-11-22). A run-as-user daemon is not checked here. On Windows
+/// network's data directory `data_dir` inside the root, when it exists, is
+/// [`shekyl_os_account::directory::account_alone`]: the fact the console
+/// leg's bind and [`crate::Lock::creatable`] hold it to, so a set-id bit is
+/// not a refusal and a directory another account can enter is. A missing
+/// network directory passes; the start makes it. A run-as-user daemon is
+/// not checked here. On Windows
 /// `service` is refused before the walk until RT-W14 builds its dispatcher,
 /// and the installer's ACL is that slice's.
 ///
@@ -122,14 +124,23 @@ fn check_service_data_home_as(
     };
     require_service_account(me).map_err(|found| refuse(&home, found))?;
     service_owned(&home, me).map_err(|found| refuse(&home, found))?;
-    // Only a directory that is not there yet passes unjudged: the start makes
-    // it 0700. One that cannot be read is refused here, as the start would.
-    let absent = matches!(
-        DirectoryFacts::inspect(data_dir),
-        Err(shekyl_os_account::directory::DirectoryFault::Missing)
-    );
-    if data_dir != home && !absent {
-        service_owned(data_dir, me).map_err(|found| refuse(data_dir, found))?;
+    // The network directory is the console's socket directory. It is the
+    // account-alone fact, not the home's exact 0700: a set-id bit the home
+    // refuses is not another account entering. Only a directory that is not
+    // there yet passes unjudged; the start makes it 0700.
+    if data_dir != home {
+        match shekyl_os_account::directory::account_alone(data_dir, me) {
+            Ok(_)
+            | Err(shekyl_os_account::directory::AccountAloneFault::Walk(
+                shekyl_os_account::directory::DirectoryFault::Missing,
+            )) => {}
+            Err(fault) => {
+                return Err(refuse(
+                    data_dir,
+                    fault.clause(Some(&data_dir.display().to_string())),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -240,9 +251,10 @@ mod tests {
             .expect("a run-as-user daemon is not checked here");
 
         // The network's data directory in the default layout, held to the
-        // console leg's facts (review finding): absent passes (the start
-        // makes it 0700); a link, or a wider mode, is named. Red edit: check
-        // only the home, and both pass.
+        // console leg's account-alone fact: absent passes (the start makes
+        // it 0700); a link, or a mode another account can enter, is named.
+        // Set-id and the sticky bit are not that. Red edit: require exact
+        // 0700, and the 2700 directory is refused.
         check(None, me).expect("no network directory yet");
         let elsewhere = parent.path().join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
@@ -257,9 +269,11 @@ mod tests {
         // tests run as root, so the mode is what this case judges.
         std::os::unix::fs::chown(&network, Some(me), None).unwrap();
         std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(found(check(None, me)).contains("not 0700"));
-        std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o700)).unwrap();
-        check(None, me).expect("the service's own 0700 network directory");
+        assert!(found(check(None, me)).contains("other accounts can enter"));
+        for mode in [0o700, 0o2700, 0o1700] {
+            std::fs::set_permissions(&network, std::fs::Permissions::from_mode(mode)).unwrap();
+            check(None, me).expect("no other account can enter");
+        }
 
         // A network directory that cannot be read is refused, never taken
         // for an absent one. Not as root, which reads through any mode. Red

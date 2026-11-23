@@ -7,15 +7,13 @@
 //!
 //! What the path is — it exists, it is not a link, it is a directory, who
 //! owns it, which permission bits are set — is read once, in
-//! [`shekyl_os_account::directory`]. The mode rule stays with the caller:
-//! a service home and the owner's socket directory are
-//! [`shekyl_os_account::OWNER_ONLY_DIR_MODE`] exactly, a data directory and
-//! a socket directory are refused when
-//! [`shekyl_os_account::directory::DirectoryFacts::group_or_other_can_enter`]
-//! is set, and a service rendezvous is refused when
-//! [`shekyl_os_account::directory::DirectoryFacts::group_or_other_can_write`]
-//! is set. This module keeps the judgment that is the daemon's alone: a
-//! service does not run as root.
+//! [`shekyl_os_account::directory`]. A data directory and a socket directory
+//! are [`shekyl_os_account::directory::account_alone`]: this account's, and
+//! no other account can enter. A service home and the owner's socket
+//! directory are [`shekyl_os_account::OWNER_ONLY_DIR_MODE`] exactly. A
+//! service rendezvous is refused when the group or others can write. This
+//! module keeps the judgment that is the daemon's alone: a service does
+//! not run as root.
 
 pub(crate) use shekyl_os_account::directory::{DirectoryFacts, DirectoryFault};
 pub(crate) use shekyl_os_account::OWNER_ONLY_DIR_MODE;

@@ -9,22 +9,59 @@
 //! directory and every socket listener ask the same questions of a path:
 //! it exists, it is not a link, it is a directory, it belongs to an
 //! account, and its mode has these permission bits. The questions are read
-//! here, once. Each caller applies its own mode rule
-//! ([`DirectoryFacts::is_owner_only_mode`],
-//! [`DirectoryFacts::group_or_other_can_enter`],
-//! [`DirectoryFacts::group_or_other_can_write`]), so the rules cannot be
-//! collapsed into one mode and cannot be re-derived beside this walk.
+//! here, once. The judgment that no other account can enter is
+//! [`account_alone`]. Exact mode [`crate::OWNER_ONLY_DIR_MODE`]
+//! ([`DirectoryFacts::is_owner_only_mode`]) and a group-or-other write bit
+//! ([`DirectoryFacts::group_or_other_can_write`]) stay with the callers that
+//! ask for those, so a stricter rule is not re-derived as the account-alone
+//! one. [`directories_entered`] is the directories one open of a path searches.
 //!
 //! This is the operating system's account boundary. It is not a consensus
 //! rule and not a cryptographic one, and it is the same boundary at the
 //! end of the mining era and after the lattice-only transition: a local
 //! directory is this account's, or it is not.
 
+use std::collections::{HashSet, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::OWNER_ONLY_DIR_MODE;
+
+/// One component of a path, owned, so a resolution can restart at a link
+/// target without borrowing the path it came from.
+enum Step {
+    Root,
+    Parent,
+    Name(OsString),
+}
+
+fn steps_of(path: &Path) -> VecDeque<Step> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::RootDir => Some(Step::Root),
+            Component::ParentDir => Some(Step::Parent),
+            Component::CurDir => None,
+            Component::Normal(name) => Some(Step::Name(name.to_os_string())),
+            // The variant exists on every platform. Unix paths do not produce it.
+            Component::Prefix(prefix) => Some(Step::Name(prefix.as_os_str().to_os_string())),
+        })
+        .collect()
+}
+
+fn join_step(current: &Path, step: &Step) -> PathBuf {
+    match step {
+        Step::Root => PathBuf::from(OsStr::new("/")),
+        Step::Parent => current.join(".."),
+        Step::Name(name) => current.join(name),
+    }
+}
+
+/// How many symbolic links one path resolution follows. Linux's
+/// `MAXSYMLINKS`, the most any supported kernel resolves on one lookup.
+/// The next link is `ELOOP`.
+pub const SYMLINKS_IN_ONE_RESOLUTION: usize = 40;
 
 /// Permission bits of `st_mode`, the file type excluded.
 pub const PERMISSION_BITS: u32 = 0o7777;
@@ -205,6 +242,36 @@ impl DirectoryFacts {
     pub fn group_or_other_can_write(self) -> bool {
         self.mode & GROUP_OR_OTHER_WRITE != 0
     }
+
+    /// This account owns the directory, and no other account can enter it.
+    /// A set-id bit or the sticky bit is not entry.
+    ///
+    /// # Errors
+    ///
+    /// [`AccountAloneFault::Walk`] when another account owns it, or
+    /// [`AccountAloneFault::OthersCanEnter`] when the group or others have
+    /// a permission bit.
+    pub fn require_account_alone(self, account: u32) -> Result<Self, AccountAloneFault> {
+        match self.require_owner(account) {
+            Ok(facts) if !facts.group_or_other_can_enter() => Ok(facts),
+            Ok(facts) => Err(AccountAloneFault::OthersCanEnter { mode: facts.mode }),
+            Err(fault) => Err(AccountAloneFault::Walk(fault)),
+        }
+    }
+}
+
+/// Read `path` and require it to be `account`'s alone
+/// ([`DirectoryFacts::require_account_alone`]). A missing path, a link, a
+/// non-directory and an unreadable path are [`AccountAloneFault::Walk`].
+///
+/// # Errors
+///
+/// [`AccountAloneFault`].
+pub fn account_alone(path: &Path, account: u32) -> Result<DirectoryFacts, AccountAloneFault> {
+    match DirectoryFacts::inspect(path) {
+        Ok(facts) => facts.require_account_alone(account),
+        Err(fault) => Err(AccountAloneFault::Walk(fault)),
+    }
 }
 
 /// Why [`DirectoryFacts::inspect`] or [`DirectoryFacts::require_owner`] stopped.
@@ -262,6 +329,148 @@ impl std::error::Error for DirectoryFault {
             _ => None,
         }
     }
+}
+
+/// Why [`account_alone`] stopped. The walk's fault, or another account can
+/// enter. Set-id and the sticky bit are not this.
+#[derive(Debug)]
+pub enum AccountAloneFault {
+    /// [`DirectoryFacts::inspect`] or [`DirectoryFacts::require_owner`] stopped.
+    Walk(DirectoryFault),
+    /// Group or other has a permission bit. `mode` is the permission bits.
+    OthersCanEnter {
+        /// The directory's mode, permission bits only.
+        mode: u32,
+    },
+}
+
+impl AccountAloneFault {
+    /// The operator's clause. `shown` is the path, when the sentence names
+    /// it; without it the sentence is the form a diagnostic already names
+    /// the path around ("its mode is …").
+    #[must_use]
+    pub fn clause(&self, shown: Option<&str>) -> String {
+        match self {
+            Self::Walk(fault) => fault.clause(shown),
+            Self::OthersCanEnter { mode } => match shown {
+                Some(path) => {
+                    format!("{path} has mode {mode:04o}, so other accounts can enter it")
+                }
+                None => format!("its mode is {mode:04o}, so other accounts can enter it"),
+            },
+        }
+    }
+}
+
+impl fmt::Display for AccountAloneFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.clause(None))
+    }
+}
+
+impl std::error::Error for AccountAloneFault {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Walk(fault) => Some(fault),
+            Self::OthersCanEnter { .. } => None,
+        }
+    }
+}
+
+/// Why [`directories_entered`] stopped before the path could be opened.
+#[derive(Debug)]
+pub enum ResolutionFault {
+    /// The hop bound was spent at `at`. The kernel would return `ELOOP`.
+    Loop {
+        /// The link that was not followed.
+        at: PathBuf,
+    },
+    /// `at` could not be read.
+    Unreadable {
+        /// The component that could not be read.
+        at: PathBuf,
+        /// The operating system's error.
+        error: io::Error,
+    },
+}
+
+impl ResolutionFault {
+    /// The path the resolution stopped at.
+    #[must_use]
+    pub fn at(&self) -> &Path {
+        match self {
+            Self::Loop { at } | Self::Unreadable { at, .. } => at,
+        }
+    }
+}
+
+/// Every real directory an open of `path` searches, nearest first.
+///
+/// One resolution, the way the kernel opens. The path is made absolute,
+/// spelled with [`no_follow_spelling`], and each component is read with
+/// `lstat`. A directory is recorded when a component is looked up in it. A
+/// symbolic link is not recorded; the walk continues at its target and the
+/// hop count is this resolution's ([`SYMLINKS_IN_ONE_RESOLUTION`]). The
+/// final component is not recorded, so the path itself stays the caller's
+/// to judge. A component that is not there yet ends the walk, and so does
+/// a component that is a file: neither is a directory an open enters.
+///
+/// # Errors
+///
+/// [`ResolutionFault::Loop`] when the hop bound is spent, or
+/// [`ResolutionFault::Unreadable`] when a component cannot be read. The
+/// working directory being unreadable is the second, at `.`.
+pub fn directories_entered(path: &Path) -> Result<Vec<PathBuf>, ResolutionFault> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| ResolutionFault::Unreadable {
+                at: PathBuf::from("."),
+                error,
+            })?
+            .join(path)
+    };
+    let mut steps = steps_of(&no_follow_spelling(&absolute));
+    let mut current = PathBuf::new();
+    let mut hops = 0usize;
+    let mut entered = Vec::new();
+    let mut seen = HashSet::new();
+    while let Some(step) = steps.pop_front() {
+        if matches!(step, Step::Root) {
+            current = join_step(&current, &step);
+            continue;
+        }
+        if !current.as_os_str().is_empty() && seen.insert(current.clone()) {
+            entered.push(current.clone());
+        }
+        let next = join_step(&current, &step);
+        let meta = match std::fs::symlink_metadata(&next) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+            Err(error) => return Err(ResolutionFault::Unreadable { at: next, error }),
+        };
+        if meta.file_type().is_symlink() {
+            hops += 1;
+            if hops > SYMLINKS_IN_ONE_RESOLUTION {
+                return Err(ResolutionFault::Loop { at: next });
+            }
+            let target = std::fs::read_link(&next)
+                .map_err(|error| ResolutionFault::Unreadable { at: next, error })?;
+            let resolved = no_follow_spelling(&current.join(target));
+            let rest: Vec<Step> = steps.drain(..).collect();
+            steps = steps_of(&resolved);
+            steps.extend(rest);
+            current = PathBuf::new();
+            continue;
+        }
+        if steps.is_empty() || !meta.is_dir() {
+            break;
+        }
+        current = next;
+    }
+    entered.reverse();
+    Ok(entered)
 }
 
 #[cfg(test)]
@@ -339,5 +548,64 @@ mod tests {
             DirectoryFacts::inspect(&file),
             Err(DirectoryFault::NotADirectory)
         ));
+    }
+
+    /// Set-id and the sticky bit are not another account entering. Group
+    /// access is. Red edit: require the mode to be exactly 0700.
+    #[test]
+    fn account_alone_is_entry_not_the_exact_mode() {
+        let base = tempfile::tempdir().expect("a directory");
+        let dir = base.path().join("d");
+        std::fs::create_dir(&dir).expect("a directory");
+        let me = DirectoryFacts::inspect(&dir).expect("a directory").uid();
+        for mode in [0o700, 0o2700, 0o1700] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).expect("chmod");
+            account_alone(&dir, me).expect("no other account can enter");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+        let refused = account_alone(&dir, me).expect_err("the group can enter");
+        assert_eq!(
+            refused.clause(None),
+            "its mode is 0750, so other accounts can enter it"
+        );
+    }
+
+    /// One resolution enters the directory that holds a link and every
+    /// directory above where it resolves, and it does not enter the link
+    /// or a file. A cycle spends the hop bound. Red edit: record the link
+    /// path and stop at the first hop.
+    #[test]
+    fn one_resolution_enters_both_legs_and_a_cycle_spends_the_bound() {
+        let base = tempfile::tempdir().expect("a directory");
+        let safe = base.path().join("safe");
+        let writable = base.path().join("writable");
+        std::fs::create_dir(&safe).expect("safe");
+        std::fs::create_dir(&writable).expect("writable");
+        let target = writable.join("target");
+        std::fs::create_dir(&target).expect("target");
+        let link = safe.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("a link");
+        let entered = directories_entered(&link.join("data")).expect("resolved");
+        assert!(entered.iter().any(|dir| dir == &writable), "{entered:?}");
+        assert!(entered.iter().any(|dir| dir == &safe), "{entered:?}");
+        assert!(entered.iter().all(|dir| dir != &link), "{entered:?}");
+
+        let file = safe.join("file");
+        std::fs::write(&file, b"").expect("a file");
+        let through_file = directories_entered(&file.join("data")).expect("stopped");
+        assert!(
+            through_file.iter().all(|dir| dir != &file),
+            "{through_file:?}"
+        );
+
+        let cycle = safe.join("cycle");
+        std::os::unix::fs::symlink(&cycle, &cycle).expect("a cycle");
+        assert!(
+            matches!(
+                directories_entered(&cycle.join("data")),
+                Err(ResolutionFault::Loop { .. })
+            ),
+            "a cycle spends the hop bound"
+        );
     }
 }

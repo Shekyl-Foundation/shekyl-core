@@ -134,6 +134,8 @@ pub fn open(path: &Path, named: bool) -> Result<Option<ConfigFile>, Diagnostic> 
 }
 
 /// Every directory from the file's parent to the root, nearest first.
+/// Windows only: Unix resolves through [`directories_through`].
+#[cfg(windows)]
 fn ancestors(path: &Path) -> Vec<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -323,115 +325,66 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
     let Ok(meta) = file.metadata() else {
         return Some((path.display().to_string(), unix::UNREADABLE.to_owned()));
     };
-    unix::writer_outside_permitted(
-        me,
-        unix::entry_of(&meta),
-        path,
-        &directories_through(path),
-        &|dir| std::fs::metadata(dir).ok().as_ref().map(unix::entry_of),
-    )
+    let dirs = match directories_through(path) {
+        Ok(dirs) => dirs,
+        Err(at) => return Some((at.display().to_string(), unix::UNREADABLE.to_owned())),
+    };
+    unix::writer_outside_permitted(me, unix::entry_of(&meta), path, &dirs, &|dir| {
+        std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
+    })
 }
 
-/// How many symbolic links one walk follows: the most any supported kernel
-/// resolves on one path (Linux's `MAXSYMLINKS`). A longer chain, or a cycle,
-/// cannot be opened, so what is left unfollowed reads as unreadable and is
-/// refused.
+/// The directories [`shekyl_os_account::directory::directories_entered`]
+/// reports for `path`, nearest first. A resolution that cannot be opened
+/// (a cycle, or a component that cannot be read) is the path it stopped at,
+/// which the caller refuses as unreadable.
 #[cfg(unix)]
-const LINKS_FOLLOWED_AT_MOST: usize = 40;
-
-/// Where the symbolic link at `link` points, as a path from its directory.
-#[cfg(unix)]
-fn link_target(link: &Path) -> Option<PathBuf> {
-    let target = std::fs::read_link(link).ok()?;
-    Some(
-        link.parent()
-            .map_or_else(|| target.clone(), |above| above.join(&target)),
-    )
-}
-
-/// Every directory `path` passes through on its way from the root, judging
-/// both legs of a symbolic link (Rick, 2026-11-23): the directory holding the
-/// link, where another account could replace it, and every directory above
-/// where it resolves. That is `path`'s [`ancestors`], and the same for each
-/// target along a chain of links, at `path` itself or at any directory above.
-#[cfg(unix)]
-pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
-    let mut walked = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut pending: std::collections::VecDeque<PathBuf> = ancestors(path).into();
-    let mut followed = 0;
-    let mut last = path.to_path_buf();
-    while followed < LINKS_FOLLOWED_AT_MOST {
-        let Some(resolved) = link_target(&last) else {
-            break;
-        };
-        followed += 1;
-        pending.extend(ancestors(&resolved));
-        last = resolved;
-    }
-    while let Some(dir) = pending.pop_front() {
-        if !seen.insert(dir.clone()) {
-            continue;
-        }
-        if followed < LINKS_FOLLOWED_AT_MOST {
-            if let Some(resolved) = link_target(&dir) {
-                followed += 1;
-                pending.extend(ancestors(&resolved));
-                pending.push_front(resolved);
-            }
-        }
-        walked.push(dir);
-    }
-    walked
-}
-
-/// Whether the ancestor rule has a directory to judge at `path`. Not when
-/// nothing is there yet, or when a file is: that path is unusable, not
-/// writable. A link to a file is a file. A dangling link, or one that cannot
-/// be read, stays in, so the walk refuses it as unreadable.
-#[cfg(unix)]
-fn could_be_a_directory(path: &Path) -> bool {
-    use std::io::ErrorKind::{NotADirectory, NotFound};
-    match std::fs::symlink_metadata(path) {
-        Err(e) => !matches!(e.kind(), NotFound | NotADirectory),
-        Ok(meta) if meta.file_type().is_symlink() => {
-            !matches!(std::fs::metadata(path), Ok(target) if !target.is_dir())
-        }
-        Ok(meta) => meta.is_dir(),
-    }
+pub(crate) fn directories_through(path: &Path) -> Result<Vec<PathBuf>, PathBuf> {
+    shekyl_os_account::directory::directories_entered(path)
+        .map_err(|fault| fault.at().to_path_buf())
 }
 
 /// Refuses a data directory with a directory above it that an account other
 /// than root and the daemon's can write (`config.data-dir.ancestor-writable`;
 /// Rick, 2026-11-23): the configuration file's own rule, on the same function
 /// and with no exception for a sticky directory. Whoever can write one could
-/// swap it for a link and redirect the keys kept below it. A directory not
-/// made yet has nothing to judge; a path through a non-directory is
-/// [`crate::probe`]'s to refuse, as `config.data-dir.unusable`.
+/// swap it for a link and redirect the keys kept below it. The directories
+/// are the ones one open of the path searches, both legs of a symbolic link
+/// included. A directory not made yet has nothing to judge; a path through
+/// a non-directory is [`crate::probe`]'s to refuse, as
+/// `config.data-dir.unusable`.
 ///
 /// # Errors
 /// `config.data-dir.ancestor-writable`, naming the directory and who can write it.
 #[cfg(unix)]
 pub(crate) fn refuse_writable_ancestor(data_dir: &Path) -> Result<(), Diagnostic> {
     let me = rustix::process::geteuid().as_raw();
-    let dirs: Vec<PathBuf> = directories_through(data_dir)
-        .into_iter()
-        .filter(|dir| could_be_a_directory(dir))
-        .collect();
+    let dirs = match directories_through(data_dir) {
+        Ok(dirs) => dirs,
+        Err(at) => {
+            return Err(ancestor_writable(
+                at.display().to_string(),
+                unix::UNREADABLE.to_owned(),
+            ));
+        }
+    };
     let found = unix::directory_writer_outside_permitted(me, &dirs, &|dir| {
         std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
     });
     match found {
         None => Ok(()),
-        Some((where_, principal)) => Err(Diagnostic::new(
-            Code::DataDirAncestorWritable,
-            Source::Machine,
-        )
+        Some((where_, principal)) => Err(ancestor_writable(where_, principal)),
+    }
+}
+
+/// `config.data-dir.ancestor-writable` for `where_` and `principal`.
+#[cfg(unix)]
+fn ancestor_writable(where_: String, principal: String) -> Diagnostic {
+    Diagnostic::new(Code::DataDirAncestorWritable, Source::Machine)
         .option("data-dir")
         .param("path", where_)
         .param("principal", principal)
-        .param("permitted", PERMITTED)),
-    }
+        .param("permitted", PERMITTED)
 }
 
 #[cfg(unix)]

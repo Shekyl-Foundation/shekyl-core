@@ -33,7 +33,10 @@
 //!   The wallet directory in it is the wallet file crate's
 //!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
 //! - `directory` (Unix): what a path is, as a directory, for this account.
-//!   The one walk every caller reads; the mode rule stays with the caller.
+//!   The one walk every caller reads. [`directory::account_alone`] is the
+//!   judgment that no other account can enter; an exact mode and a
+//!   group-or-other write bit stay with the callers that ask for those.
+//!   [`directory::directories_entered`] is the directories one open searches.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is

@@ -64,33 +64,28 @@ impl Lock {
     /// changes a mode. A missing directory passes: [`Lock::take`] creates it
     /// owner-only.
     ///
-    /// The facts are [`crate::directory::DirectoryFacts`]: the same walk the
-    /// service home and the socket listeners read, which does not follow a
-    /// link. A symbolic link, a non-directory, an unreadable path, or
-    /// another account's directory is `config.data-dir.unusable`, in that
-    /// walk's own clause. Group or other permission is
-    /// `config.data-dir.exposed`. Unix only: on Windows the keys and the
-    /// console's pipe carry owner-only descriptors of their own.
+    /// The fact is [`shekyl_os_account::directory::account_alone`]: the same
+    /// judgment the socket listeners use, which does not follow a link. A
+    /// missing directory passes, because [`Lock::take`] creates it. A
+    /// symbolic link, a non-directory, an unreadable path, or another
+    /// account's directory is `config.data-dir.unusable`, in that walk's
+    /// own clause. Group or other permission is `config.data-dir.exposed`.
+    /// A set-id bit or the sticky bit is not entry. Unix only: on Windows
+    /// the keys and the console's pipe carry owner-only descriptors of
+    /// their own.
     #[cfg(unix)]
     fn owner_only(data_dir: &Path) -> Result<(), Diagnostic> {
-        use crate::directory::{DirectoryFacts, DirectoryFault};
-        let facts = match DirectoryFacts::inspect(data_dir) {
-            Ok(facts) => facts,
-            Err(DirectoryFault::Missing) => return Ok(()),
-            Err(fault) => return Err(Self::unusable_fact(data_dir, &fault)),
-        };
-        let facts = match facts.require_owner(shekyl_os_account::effective_uid()) {
-            Ok(facts) => facts,
-            Err(fault) => return Err(Self::unusable_fact(data_dir, &fault)),
-        };
-        if facts.group_or_other_can_enter() {
-            let mode = facts.mode();
-            return Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
-                .option("data-dir")
-                .param("path", data_dir.display().to_string())
-                .param("mode", format!("{mode:04o}")));
+        use shekyl_os_account::directory::{account_alone, AccountAloneFault, DirectoryFault};
+        match account_alone(data_dir, shekyl_os_account::effective_uid()) {
+            Ok(_) | Err(AccountAloneFault::Walk(DirectoryFault::Missing)) => Ok(()),
+            Err(AccountAloneFault::Walk(fault)) => Err(Self::unusable_fact(data_dir, &fault)),
+            Err(AccountAloneFault::OthersCanEnter { mode }) => {
+                Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
+                    .option("data-dir")
+                    .param("path", data_dir.display().to_string())
+                    .param("mode", format!("{mode:04o}")))
+            }
         }
-        Ok(())
     }
 
     /// `config.data-dir.unusable` for a fact the shared walk refused. The
@@ -457,7 +452,7 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
-        for dir in crate::file::directories_through(&data) {
+        for dir in crate::file::directories_through(&data).unwrap() {
             let meta = std::fs::metadata(&dir).unwrap();
             println!(
                 "fixture ancestor: mode {:04o} uid {} {}",
