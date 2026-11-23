@@ -139,11 +139,6 @@ pub struct BudgetScenarioResult {
 /// year-snapshot engine does not carry.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> BudgetScenarioResult {
-    assert_eq!(
-        params.economy.penalty,
-        crate::economy::PenaltyDestination::Deferred,
-        "this fold pays no part of the penalty: C1 runs on stage2::a1_year_aggs_probed"
-    );
     let economic = params.economic();
 
     let mut already_generated = emitted_at_start(
@@ -225,8 +220,8 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         // supply inside the cursor.
         outputs.accrue(priced.filled.carried_txs());
 
-        // Real ledger advance uses the composition's paid reward (both arms share it).
-        let paid_reward = priced.paid_reward();
+        // The ledger advances by what the block mints. Both budget arms share
+        // that supply; (b) is a counterfactual reading of the unmodulated subsidy.
         // (a): staker emission leg from the MODULATED, penalised reward (shipped).
         let staker_emission_a = priced.paid.split.staker_emission;
         // (b): staker emission leg from the UNMODULATED subsidy
@@ -249,7 +244,7 @@ pub fn run_budget_scenario(params: &SimParams, scenario: &BudgetScenario) -> Bud
         blocks_in_epoch += 1;
 
         // Advance the real ledger (modulated, both arms share it).
-        already_generated += u128::from(paid_reward);
+        already_generated += u128::from(priced.minted());
         total_burned += fee_split.actually_destroyed as u128;
     }
 

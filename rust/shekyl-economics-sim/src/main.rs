@@ -15,6 +15,7 @@ mod engine;
 mod escalation;
 mod esr10;
 mod eup4;
+mod exact_f64;
 mod fee_bar;
 mod fee_floor;
 mod fee_horizon;

@@ -55,7 +55,7 @@ use crate::window_stuffer::{
 const SPENDS: [u64; 12] = [14, 20, 25, 30, 35, 45, 60, 75, 90, 105, 120, 150];
 
 /// The inherited zone (`config/consensus_constants.json`).
-const INHERITED_ZONE: u64 = 300_000;
+pub(crate) const INHERITED_ZONE: u64 = 300_000;
 
 /// Every miner, as a share of the blocks.
 const EVERY_MINER: u64 = 100;
@@ -200,16 +200,21 @@ pub(crate) fn reference_spend_weight(base: &SimParams) -> u64 {
     ) as u64
 }
 
+/// The zone of `spends` reference transactions plus the coinbase reserve.
+pub(crate) fn spend_zone_bytes(reference_weight: u64, spends: u64) -> u64 {
+    let reserve = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    spends * reference_weight + reserve
+}
+
 /// The zone axis, smallest first: the brief's spends at the reference
 /// weight plus the coinbase reserve, and the inherited and re-derived zones.
 pub(crate) fn zones(base: &SimParams, spends: &[u64]) -> Vec<Zone> {
     let reference = reference_spend_weight(base);
-    let reserve = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
     let mut zones: Vec<Zone> = spends
         .iter()
         .map(|&n| Zone {
             label: format!("N = {n}"),
-            bytes: n * reference + reserve,
+            bytes: spend_zone_bytes(reference, n),
         })
         .collect();
     zones.push(Zone {

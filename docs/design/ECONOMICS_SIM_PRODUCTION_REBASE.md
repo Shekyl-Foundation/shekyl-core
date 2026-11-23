@@ -5512,21 +5512,27 @@ rule, unless named.
   `tests/fixtures/economies_full_digests.txt`, in `sha256sum`'s format.
   The run that produced them is the regeneration at `f8e6f1ec4b` above;
   the narration's digest is now that run's summary re-rendered under the
-  wording ruling just above. They are reproducible outputs, and the on-demand full pin
-  (`economies_full_run_matches_its_digests_and_table`) is their proof: it
-  folds the table once, compares both digests, and derives the table from
-  that run's summary. The two files are kept privately, not in this
-  repository.
+  wording ruling just above. They are reproducible outputs. The on-demand
+  `economies_narration_renders_from_the_recorded_summary` renders the
+  narration from the recorded summary and checks its digest, and
+  `economies_table_matches_the_recorded_summary` checks that the committed
+  table is `table()` of that summary. `regen_economies_full_fixtures` is
+  the fresh fold that replaces the record. The two files are kept
+  privately, not in this repository.
 - **The JSON summary reads back as the run's own numbers, bit for bit.**
   Rendered from the recorded summary, the narration first differed from
   the run's in 36 of its 15 431 lines. Each difference was in the last
   digits of a fee variance near 2 × 10¹⁰ on a growth row. The narration
   prints those variances to six decimals, past an f64's precision, and
-  serde_json's default parse can land one ULP off. The sim now parses
-  with serde_json's `float_roundtrip`. The narration rendered from the
-  summary is then the run's, digest for digest. The on-demand
-  `economies_narration_renders_from_the_recorded_summary` pins that, in
-  seconds. A unit test pins one of those variances reading back exactly.
+  serde_json's default parse can land one ULP off. The summary's f64s
+  decode from the decimal text they were written as (`exact_f64`), which
+  reads those bits back. That decode stays in this crate.
+  `float_roundtrip` would do it inside serde_json and change f64 parsing
+  for every crate in a workspace build that includes the sim. The narration
+  rendered from the summary is then the run's, digest for digest. The
+  on-demand `economies_narration_renders_from_the_recorded_summary` pins
+  that, in seconds. A unit test pins one of those variances reading back
+  exactly.
 - **The nightly derives a table from its own slice and pins it**
   (`tests/fixtures/economies_nightly_table.csv`). The derive function runs
   on real output every night, with nothing fetched. The slice's narration
@@ -5684,10 +5690,14 @@ and both template rules that reach it.
   late in those folds, and reads `u64::MAX` there. That is exact: the burn
   reads it through `ratio_scaled_squared`, already saturated at that sum.
 - **What it leaves stale.** Those 60 rows of the committed full table, from
-  year 69, which its header names. They are `stress` rows, not read for the
+  year 69. This section names them. The committed file is `table()` of the
+  recorded summary: one derivation, and the nightly slice's table is the
+  same function on its own fold. They are `stress` rows, not read for the
   tail. The slice has no `sustained_growth` row, so its pin does not move.
-- **The on-demand full run does not pass** until those cells are re-run and
-  the digests and the table regenerated.
+- **A fresh fold of those cells differs from year 69.** The record is
+  replaced by `regen_economies_full_fixtures`, which writes the digests and
+  the table from that one derivation. It is not a pin. The pins that hold
+  are the two that read the recorded summary.
 - **The re-run (Rick, 2026-11-23).** Only the affected cells, 180 of 2 880
   folds, once the table's sharding follow-up lands. The trigger is before J
   is ruled, if the paid-demand economy is still a candidate: these rows are

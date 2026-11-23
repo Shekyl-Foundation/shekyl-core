@@ -152,7 +152,6 @@ on_demand='esr10::tests::esr10_narration_matches_the_committed_fixture
 eup4::tests::eup4_narration_matches_the_committed_fixture
 jg_grid::tests::jg_grid_narration_matches_the_committed_fixture
 growth_trace::tests::growth_trace_narration_matches_the_committed_fixture
-whole_economy::tests::economies_full_run_matches_its_digests_and_table
 whole_economy::tests::every_preflight_cell_ends_at_the_horizon_or_a_named_edge
 whole_economy::tests::economies_table_matches_the_recorded_summary
 whole_economy::tests::economies_narration_renders_from_the_recorded_summary

@@ -156,17 +156,28 @@ pub(crate) struct PricedBlock<'a> {
     pub(crate) filled: Filled,
     /// The block as production prices it, at the weight the fill reports:
     /// the bodies and the coinbase reserve, which the node's template passes
-    /// too (`shekyl_block_template::Fill`). The ledger advances by
-    /// [`Self::paid_reward`]; the fill's own copy of that figure is checked
-    /// against it in [`ChainCursor::price`] and is not what a fold accumulates.
+    /// too (`shekyl_block_template::Fill`). The fill's reward is checked
+    /// against [`PaidEmission::paid`] in [`ChainCursor::price`]. A fold's
+    /// supply advances by [`Self::minted`].
     pub(crate) paid: PaidEmission,
+    /// The stakers' part of the penalty this block mints
+    /// ([`crate::economy::PenaltyDestination`]). Zero when the run defers
+    /// the penalty, which is production.
+    pub(crate) penalty_minted: u64,
 }
 
 impl PricedBlock<'_> {
-    /// The paid reward the ledger advances by: [`PaidEmission::paid`].
+    /// The paid reward: [`PaidEmission::paid`].
     #[must_use]
     pub(crate) fn paid_reward(&self) -> u64 {
         self.paid.paid.to_raw()
+    }
+
+    /// Coins this block adds to the chain: [`Self::paid_reward`] plus
+    /// [`Self::penalty_minted`].
+    #[must_use]
+    pub(crate) fn minted(&self) -> u64 {
+        self.paid_reward().saturating_add(self.penalty_minted)
     }
 }
 
@@ -336,6 +347,15 @@ impl ChainCursor {
             filled.paid_reward,
             "the fill and the composition price one block"
         );
+        // C1 mints the stakers' part of the penalty at this block. Production
+        // defers all of it, so the part is zero and the supply advance is the
+        // paid reward. The part is this block's figure: every ledger reads it
+        // from here.
+        let penalty_minted = params.economy.penalty.stakers_part(
+            filled.past_free.penalty_atomic,
+            filled.block_weight,
+            medians.effective_median.to_raw(),
+        );
         PricedBlock {
             volume,
             medians,
@@ -346,6 +366,7 @@ impl ChainCursor {
             tx,
             filled,
             paid,
+            penalty_minted,
         }
     }
 }
@@ -503,7 +524,7 @@ mod tests {
                 "block {block} fee {} is off the lattice",
                 priced.tx.fee_atomic
             );
-            generated = generated.saturating_add(u128::from(priced.paid_reward()));
+            generated = generated.saturating_add(u128::from(priced.minted()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
             leaves = leaves.saturating_add(priced.filled.carried_txs().saturating_mul(2));
         }
@@ -555,7 +576,7 @@ mod tests {
             if fee % FEE_QUANTIZATION_MASK != 0 {
                 off_the_shipped_lattice += 1;
             }
-            generated = generated.saturating_add(u128::from(priced.paid_reward()));
+            generated = generated.saturating_add(u128::from(priced.minted()));
             burned = burned.saturating_add(u128::from(priced.paid.fee_burn.actually_destroyed));
             leaves = leaves.saturating_add(priced.filled.carried_txs().saturating_mul(2));
         }
@@ -592,7 +613,7 @@ mod tests {
                 chain_height: 1,
                 demand: 5,
                 leaves: 0,
-                already_generated: u128::from(first.paid_reward()),
+                already_generated: u128::from(first.minted()),
                 total_burned: 0,
                 closed_shards: ClosedShardCount::ZERO,
             },
@@ -600,5 +621,45 @@ mod tests {
             economic,
         );
         assert_eq!(second.volume, TxVolume::window(5, 1));
+    }
+
+    /// The destination's mint is the block's own penalty, and the supply
+    /// advance is the paid reward plus that mint. Production defers it.
+    #[test]
+    fn the_destination_mints_its_part_of_the_penalty() {
+        use crate::economy::PenaltyDestination;
+
+        let price_at = |destination: PenaltyDestination| -> (u64, u64, u64, u64) {
+            let mut params = SimParams::default().on_steady();
+            params.economy.penalty = destination;
+            let economic = params.economic();
+            let priced = ChainCursor::default().price(
+                ChainStep {
+                    chain_height: 0,
+                    demand: 3_000,
+                    leaves: 0,
+                    already_generated: 0,
+                    total_burned: 0,
+                    closed_shards: ClosedShardCount::ZERO,
+                },
+                &params,
+                economic,
+            );
+            (
+                priced.filled.past_free.penalty_atomic,
+                priced.penalty_minted,
+                priced.paid_reward(),
+                priced.minted(),
+            )
+        };
+        let (penalty, minted, reward, advance) = price_at(PenaltyDestination::All);
+        let (same_penalty, none, deferred_reward, deferred_advance) =
+            price_at(PenaltyDestination::Deferred);
+        assert!(penalty > 0, "the block crosses the free weight");
+        assert_eq!(same_penalty, penalty);
+        assert_eq!(minted, penalty, "All pays the whole penalty");
+        assert_eq!(advance, reward.saturating_add(penalty));
+        assert_eq!(none, 0);
+        assert_eq!(deferred_advance, deferred_reward);
     }
 }

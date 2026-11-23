@@ -489,18 +489,6 @@ pub(crate) enum FoldEdge {
     RewardDomain,
 }
 
-/// The stakers' part of the penalty `priced`'s weight withheld, on the
-/// run's destination (C1, `ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37): zero
-/// on production's. The fold mints it at the block; a reader of the stakers'
-/// income calls this for the same figure.
-pub(crate) fn penalty_to_stakers(priced: &PricedBlock<'_>, params: &SimParams) -> u64 {
-    params.economy.penalty.stakers_part(
-        priced.filled.past_free.penalty_atomic,
-        priced.filled.block_weight,
-        priced.medians.effective_median.to_raw(),
-    )
-}
-
 /// The probe that asks nothing.
 pub(crate) struct NoProbe;
 
@@ -594,10 +582,10 @@ pub(crate) fn a1_year_aggs_probed(
         year_total_emission_atomic += u128::from(paid_reward);
         year_rungs += priced.filled.rungs;
         let waiting = priced.filled.waiting;
-        // C1 pays the stakers' part of the penalty at this block; production
-        // pays none of it. Either way the rest stays unminted.
-        already_generated +=
-            u128::from(paid_reward) + u128::from(penalty_to_stakers(&priced, params));
+        // The block reward stays the year's emission. The destination's mint
+        // is separate, on the priced block, and the supply cursor counts both.
+        // Production defers the penalty, so the cursor advances by the reward.
+        already_generated += u128::from(priced.minted());
         probe.seen(&BlockSeen {
             block,
             priced: &priced,

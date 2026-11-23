@@ -315,11 +315,6 @@ pub(crate) fn net_supply(already_generated: u128, total_burned: u128) -> Circula
 }
 
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
-    assert_eq!(
-        params.economy.penalty,
-        crate::economy::PenaltyDestination::Deferred,
-        "this fold pays no part of the penalty: C1 runs on stage2::a1_year_aggs_probed"
-    );
     let economic = params.economic();
 
     let total_blocks = params.blocks_per_year() * config.sim_years;
@@ -399,7 +394,7 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         // "no burden yet" baseline (stage2 threads real n via burden::closed_shards).
         let fee_split = priced.paid.fee_burn;
 
-        already_generated += u128::from(paid_reward);
+        already_generated += u128::from(priced.minted());
         total_burned += fee_split.actually_destroyed as u128;
 
         staker_emission_earned_year += staker_emission as u128;
