@@ -44,8 +44,10 @@ the original reasoning and assume it was arbitrary.
 **Decision (Rick, 2026-11-23).** The daemon creates each new directory with
 mode `0700` and never changes a mode, new or existing, by path or by handle.
 After creating one it checks the result with a no-follow `lstat`. A umask that
-stripped the owner's own bits refuses the start, naming the umask
-(`config.data-dir.umask`). Before it creates or uses the data directory, the
+stripped the owner's own bits refuses the start, naming the umask's owner
+digit, such as `02xx` (`config.data-dir.umask`). That digit is read from the
+new directory's mode: reading the whole umask would mean writing the
+process-wide mask, or making a probe other accounts could enter. Before it creates or uses the data directory, the
 daemon runs the configuration loader's ancestor check on every directory above
 it, on the same function with the same wording: any owner but root or the
 daemon's account, or any group or other write bit, refuses

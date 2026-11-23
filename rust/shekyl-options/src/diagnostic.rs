@@ -84,7 +84,8 @@ pub enum Code {
     DataDirAncestorWritable,
     /// A directory the daemon just made came out without the owner's own
     /// bits because of the process umask. The daemon never changes a mode,
-    /// so it refuses and names the umask (Rick, 2026-11-23).
+    /// so it refuses and names the umask's owner digit, the part that caused
+    /// it (Rick, 2026-11-23).
     DataDirUmask,
     /// The data directory's marker names another network.
     MarkerNetwork,
@@ -411,7 +412,7 @@ impl Diagnostic {
                 p("path")
             ),
             Code::DataDirUmask => format!(
-                "{} was created with mode {} because this process's umask {} removes the owner's own permission; start the daemon under a umask that keeps it, such as 077 (the daemon does not change a mode)",
+                "{} was created with mode {} because this process's umask ({}) removes the owner's own permission; start the daemon under a umask that keeps it, such as 077 (the daemon does not change a mode)",
                 p("path"),
                 p("mode"),
                 p("umask")

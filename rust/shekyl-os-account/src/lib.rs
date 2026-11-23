@@ -576,6 +576,10 @@ mod per_account_root_tests {
             let refused = directory::umask_strips_owner(&error).expect("typed");
             assert_eq!(refused.dir, made);
             assert_eq!(refused.mode, short);
+            assert_eq!(
+                refused.umask_shown(),
+                format!("0{:o}xx", (OWNER_ONLY_DIR_MODE & !short) >> 6)
+            );
             assert!(!made.exists(), "the empty directory is removed");
         }
     }

@@ -57,18 +57,27 @@ pub struct UmaskStripsOwner {
     pub dir: PathBuf,
     /// Its permission bits.
     pub mode: u32,
-    /// The process umask.
-    pub umask: u32,
+}
+
+impl UmaskStripsOwner {
+    /// The owner's digit of the umask, the part that caused this, as `02xx`.
+    /// It is read from the new directory's mode. The other digits are not
+    /// read: `umask(2)` reads only by writing the process-wide mask, and a
+    /// probe asking for group or other bits would hand them to those accounts.
+    #[must_use]
+    pub fn umask_shown(&self) -> String {
+        format!("0{:o}xx", (OWNER_ONLY_DIR_MODE & !self.mode) >> 6)
+    }
 }
 
 impl fmt::Display for UmaskStripsOwner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} was created with mode {:04o} because the process umask {:04o} removes the owner's own permission",
+            "{} was created with mode {:04o} because the process umask ({}) removes the owner's own permission",
             self.dir.display(),
             self.mode,
-            self.umask
+            self.umask_shown()
         )
     }
 }
@@ -80,27 +89,6 @@ impl std::error::Error for UmaskStripsOwner {}
 #[must_use]
 pub fn umask_strips_owner(error: &io::Error) -> Option<&UmaskStripsOwner> {
     error.get_ref()?.downcast_ref()
-}
-
-/// The process umask, read from what it does to a directory rather than by
-/// setting it: `umask(2)` can only be read by writing it, which is process-wide
-/// and races every other thread. `dir` is this call's own name, free again,
-/// and is made once more with every permission bit, read, and removed. If that
-/// fails, the owner bits `mode` is missing are the part known.
-fn umask_from_a_probe(dir: &Path, mode: u32) -> u32 {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    const EVERY_ACCESS_BIT: u32 = 0o777;
-    let probed = std::fs::DirBuilder::new()
-        .mode(EVERY_ACCESS_BIT)
-        .create(dir)
-        .and_then(|()| std::fs::symlink_metadata(dir));
-    match probed {
-        Ok(meta) => {
-            drop(std::fs::remove_dir(dir));
-            EVERY_ACCESS_BIT & !meta.permissions().mode()
-        }
-        Err(_) => OWNER_ONLY_DIR_MODE & !mode,
-    }
 }
 
 /// Checks a directory this call just made, without following a link and
@@ -130,7 +118,6 @@ pub(crate) fn check_made_dir(dir: &Path) -> io::Result<()> {
     Err(io::Error::other(UmaskStripsOwner {
         dir: dir.to_path_buf(),
         mode,
-        umask: umask_from_a_probe(dir, mode),
     }))
 }
 

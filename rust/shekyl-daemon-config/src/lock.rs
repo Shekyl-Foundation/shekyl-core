@@ -109,7 +109,7 @@ impl Lock {
                 .option("data-dir")
                 .param("path", stripped.dir.display().to_string())
                 .param("mode", format!("{:04o}", stripped.mode))
-                .param("umask", format!("{:04o}", stripped.umask));
+                .param("umask", stripped.umask_shown());
         }
         Self::unusable(data_dir)(error)
     }
@@ -336,13 +336,18 @@ mod tests {
     #[test]
     fn an_owner_stripping_umask_refuses_the_start_and_is_named() {
         let d = shekyl_os_account::test_fixture::tempdir().unwrap();
-        for (umask, mode) in [("0277", "0500"), ("0477", "0300"), ("0177", "0600")] {
+        for (umask, mode, named) in [
+            ("0277", "0500", "02xx"),
+            ("0477", "0300", "04xx"),
+            ("0177", "0600", "01xx"),
+            ("0777", "0000", "07xx"),
+        ] {
             let home = d.path().join(format!("home{umask}"));
             let data = home.join("testnet");
             assert_eq!(
                 take_under_umask(umask, &data),
                 format!(
-                    "config.data-dir.umask path={} mode={mode} umask={umask}",
+                    "config.data-dir.umask path={} mode={mode} umask={named}",
                     home.display()
                 )
             );
