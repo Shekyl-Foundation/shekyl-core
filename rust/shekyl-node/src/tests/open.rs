@@ -466,6 +466,72 @@ fn a_start_the_pool_refuses_writes_nothing_to_the_data_directory() {
     );
 }
 
+/// A reader holding the chain file (the replay tool takes no daemon lock)
+/// stops the writable open, so the start refuses before it writes: the
+/// preflight and the open agree and the directory keeps its bytes and
+/// modification times. Red edit: drop the claim from the stores' checks.
+#[test]
+fn a_start_a_live_reader_stops_writes_nothing_to_the_data_directory() {
+    let dir = tempfile::tempdir().expect("temp");
+    open_at(dir.path(), Arc::new(|| {})).stop();
+    let reader = redb::Builder::new()
+        .open_read_only(dir.path().join("chain.db"))
+        .expect("a reader");
+    let before = directory(dir.path());
+    let config = config_at(dir.path());
+    let preflight = Node::preflight(&config).expect_err("the preflight refuses a held store");
+    let opened = Node::open(OpenArgs {
+        config: &config,
+        version: "test".to_owned(),
+        protocol_version: 1,
+        release_build: false,
+        supervisor: None,
+        request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
+    });
+    let refused = match opened {
+        Err(refused) => refused,
+        Ok(node) => {
+            node.stop();
+            panic!("a node opened over a store a reader holds");
+        }
+    };
+    assert_eq!(preflight.to_string(), refused.to_string());
+    assert_eq!(
+        directory(dir.path()),
+        before,
+        "a refused start wrote to the data directory"
+    );
+    drop(reader);
+}
+
+/// A store that is not there must be created, so a directory the account
+/// cannot write refuses the start before the store that does exist is
+/// rewritten. An account that may write anyway (root) is admitted. Red edit:
+/// drop `files_creatable` from `StoreSites::check`.
+#[cfg(unix)]
+#[test]
+fn a_store_the_directory_cannot_hold_refuses_before_anything_is_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("temp");
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).expect("the data directory");
+    open_at(&data, Arc::new(|| {})).stop();
+    std::fs::remove_file(data.join("pool.db")).expect("the pool file");
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).expect("read-only");
+    let probe = data.join("can-this-account-write");
+    let writable = std::fs::File::create(&probe).is_ok();
+    if writable {
+        std::fs::remove_file(&probe).expect("the probe");
+    }
+    let before = directory(&data);
+    let checked = Node::preflight(&config_at(&data));
+    let after = directory(&data);
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).expect("restored");
+    assert_eq!(checked.is_ok(), writable, "{checked:?}");
+    assert_eq!(after, before, "the preflight wrote to the data directory");
+}
+
 /// One regtest lever is filled from production on the other side and
 /// the node opens. A cap that is not strictly inside the epoch is
 /// refused. Red edit: require the two levers to be set together, or

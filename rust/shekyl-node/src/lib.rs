@@ -324,6 +324,7 @@ impl Node {
             genesis,
             chain: store_path,
             pool: pool_path,
+            ..
         } = stores;
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
         let store = Arc::new(open_chain(&store_path, horizons, &genesis)?);
@@ -994,6 +995,7 @@ struct StoreSites {
     rules: ChainRules,
     horizons: Horizons,
     genesis: GenesisPin,
+    directory: std::path::PathBuf,
     chain: std::path::PathBuf,
     pool: std::path::PathBuf,
 }
@@ -1007,23 +1009,31 @@ impl StoreSites {
             rules,
             horizons,
             genesis: genesis_pin_of(rules),
+            directory: config.data_dir.clone(),
             chain: config.data_dir.join("chain.db"),
             pool: config.data_dir.join("pool.db"),
         })
     }
 
     /// Both stores' read-only checks ([`Node::preflight`]), the pool's
-    /// after the chain's: nothing is written and nothing is locked.
+    /// after the chain's, then the directory when either store will be
+    /// created in it: nothing is written and no lock outlives the check.
     fn check(&self) -> Result<(), OpenError> {
-        if let Err(error) =
-            ChainStore::check_with_genesis(&self.chain, self.horizons, &self.genesis)
-        {
-            match chain_refusal(error) {
-                ChainRefusal::Refuse(refusal) => return Err(refusal),
-                ChainRefusal::OlderLayout { .. } => {}
-            }
+        let chain_creates =
+            match ChainStore::check_with_genesis(&self.chain, self.horizons, &self.genesis) {
+                Ok(found) => found.creates(),
+                Err(error) => match chain_refusal(error) {
+                    ChainRefusal::Refuse(refusal) => return Err(refusal),
+                    ChainRefusal::OlderLayout { .. } => true,
+                },
+            };
+        let pool_creates = shekyl_chain_store::pool::PoolStore::check(&self.pool)
+            .map_err(pool_refusal)?
+            .creates();
+        if chain_creates || pool_creates {
+            shekyl_daemon_config::lock::Lock::files_creatable(&self.directory)
+                .map_err(OpenError::Directory)?;
         }
-        shekyl_chain_store::pool::PoolStore::check(&self.pool).map_err(pool_refusal)?;
         Ok(())
     }
 }

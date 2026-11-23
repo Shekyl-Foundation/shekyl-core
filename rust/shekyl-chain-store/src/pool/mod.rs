@@ -161,9 +161,10 @@ impl PoolStore {
     }
 
     /// The read-only check of the pool file at `path`: what
-    /// [`create`](Self::create) would decide on the file, with nothing
-    /// written and no lock taken (a daemon checks every store before it
-    /// opens any writable). The open looks again under its lock.
+    /// [`create`](Self::create) would decide on the file, and whether it
+    /// could claim it, with nothing written and no lock held past the return
+    /// (a daemon checks every store before it opens any writable). The open
+    /// looks again under its lock.
     ///
     /// # Errors
     ///

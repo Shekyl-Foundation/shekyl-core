@@ -197,7 +197,7 @@ fn a_dangling_link_at_a_store_path_is_refused_by_the_check() {
 
 /// Each check refuses exactly the file its open could not write, and leaves
 /// it as it was. An account that may write anyway (root) is admitted. Red
-/// edit: drop `writable_at` from either check.
+/// edit: drop `claimable_at` from either check.
 #[cfg(unix)]
 #[test]
 fn a_store_the_open_cannot_write_is_refused_by_the_check() {
@@ -218,4 +218,56 @@ fn a_store_the_open_cannot_write_is_refused_by_the_check() {
     let before = bytes_and_mtime(&pool);
     assert_eq!(PoolStore::check(pool.as_ref()).is_ok(), writable);
     assert_eq!(bytes_and_mtime(&pool), before, "the pool check wrote");
+}
+
+/// A live reader stops the writable open, so each check refuses in the
+/// open's words while it holds the file, leaves the file as it was, and
+/// admits it once the reader is gone. The claim the check took is released:
+/// a writable open follows it. Red edit: make `probe_claim` a plain writable
+/// `File` open, which sees no redb lock.
+#[test]
+fn a_store_a_live_reader_holds_is_refused_by_the_check() {
+    let already_open = |refused: super::StoreError| {
+        assert!(
+            matches!(
+                refused,
+                super::StoreError::Engine(super::EngineError::Open(
+                    redb::DatabaseError::DatabaseAlreadyOpen
+                ))
+            ),
+            "{refused:?}"
+        );
+    };
+
+    let chain = tmp("check-chain-live-reader");
+    drop(ChainStore::create(&chain, EPOCH).expect("a sealed store"));
+    let reader = redb::Builder::new()
+        .open_read_only(&chain)
+        .expect("a reader");
+    let before = bytes_and_mtime(&chain);
+    already_open(check_chain(chain.as_ref()).expect_err("a reader holds the chain file"));
+    assert_eq!(bytes_and_mtime(&chain), before, "the chain check wrote");
+    drop(reader);
+    assert_eq!(
+        check_chain(chain.as_ref()).expect("no reader"),
+        StoreCheck::Admitted
+    );
+    assert_eq!(bytes_and_mtime(&chain), before, "the chain check wrote");
+    drop(ChainStore::create(&chain, EPOCH).expect("the claim was released"));
+
+    let pool = tmp("check-pool-live-reader");
+    drop(PoolStore::create(&pool).expect("a pool"));
+    let reader = redb::Builder::new()
+        .open_read_only(&pool)
+        .expect("a reader");
+    let before = bytes_and_mtime(&pool);
+    already_open(PoolStore::check(&pool).expect_err("a reader holds the pool file"));
+    assert_eq!(bytes_and_mtime(&pool), before, "the pool check wrote");
+    drop(reader);
+    assert_eq!(
+        PoolStore::check(&pool).expect("no reader"),
+        StoreCheck::Admitted
+    );
+    assert_eq!(bytes_and_mtime(&pool), before, "the pool check wrote");
+    drop(PoolStore::create(&pool).expect("the claim was released"));
 }

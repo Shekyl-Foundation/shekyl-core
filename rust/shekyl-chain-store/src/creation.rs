@@ -48,6 +48,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 
 use redb::ReadTransaction;
@@ -262,18 +263,124 @@ pub enum StoreCheck {
 }
 
 impl StoreCheck {
-    /// This verdict, once a file the open will write is known to be
-    /// writable. A file the open only moves aside, or creates, needs no
-    /// write access of its own. The probe opens the file for writing without
-    /// creating, truncating or changing it.
-    pub(crate) fn writable_at(self, path: &Path) -> io::Result<Self> {
+    /// Whether the open will create a file in the store's directory: a new
+    /// store, or a fresh one beside an unfinished initialization it moves
+    /// aside. The directory is the caller's to judge.
+    #[must_use]
+    pub const fn creates(self) -> bool {
+        matches!(self, Self::Absent | Self::Unfinished)
+    }
+
+    /// This verdict, once the writable open could claim a file it will
+    /// write: the account may write it and no other handle holds it.
+    pub(crate) fn claimable_at(self, path: &Path) -> Result<Self, redb::DatabaseError> {
         match self {
             Self::Admitted | Self::NeedsRepair => {
-                OpenOptions::new().read(true).write(true).open(path)?;
+                probe_claim(path)?;
                 Ok(self)
             }
             Self::Absent | Self::Unfinished => Ok(self),
         }
+    }
+}
+
+/// Ask the engine whether its writable open could claim `path`, with nothing
+/// written. The engine's lock layout is its own and changes between
+/// releases, so the engine takes the lock itself, through a [`ClaimProbe`]
+/// that refuses every write. Past the claim the open fails at its first
+/// write, or at a repair this aborts, and closing it releases the lock. Only
+/// [`redb::DatabaseError::DatabaseAlreadyOpen`] answers no: any other failure
+/// past the claim is the real open's to report.
+fn probe_claim(path: &Path) -> Result<(), redb::DatabaseError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| redb::DatabaseError::Storage(e.into()))?;
+    let backend = redb::backends::FileBackend::new(file)?;
+    let mut builder = redb::Builder::new();
+    builder.set_repair_callback(redb::RepairSession::abort);
+    match builder.create_with_backend(ClaimProbe(backend)) {
+        Err(redb::DatabaseError::DatabaseAlreadyOpen) => {
+            Err(redb::DatabaseError::DatabaseAlreadyOpen)
+        }
+        Ok(_) | Err(_) => Ok(()),
+    }
+}
+
+/// A store file as the engine sees it during [`probe_claim`]: reads and
+/// locks reach the file, and every write is refused.
+#[derive(Debug)]
+struct ClaimProbe(redb::backends::FileBackend);
+
+/// The refusal [`ClaimProbe`] answers a write with.
+fn write_refused() -> io::Error {
+    io::Error::new(ErrorKind::PermissionDenied, "a claim probe writes nothing")
+}
+
+impl redb::StorageBackend for ClaimProbe {
+    fn len(&self) -> io::Result<u64> {
+        self.0.len()
+    }
+
+    fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        self.0.read(offset, out)
+    }
+
+    fn set_len(&self, _len: u64) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn sync_data(&self) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn write(&self, _offset: u64, _data: &[u8]) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn close(&self) -> io::Result<()> {
+        self.0.close()
+    }
+
+    fn try_lock_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.try_lock_range(start, end)
+    }
+
+    fn try_lock_shared_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.try_lock_shared_range(start, end)
+    }
+
+    fn lock_range(&self, start: Bound<u64>, end: Bound<u64>) -> Result<(), redb::BackendError> {
+        self.0.lock_range(start, end)
+    }
+
+    fn lock_shared_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<(), redb::BackendError> {
+        self.0.lock_shared_range(start, end)
+    }
+
+    fn unlock_range(&self, start: Bound<u64>, end: Bound<u64>) -> Result<(), redb::BackendError> {
+        self.0.unlock_range(start, end)
+    }
+
+    fn query_lock_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.query_lock_range(start, end)
     }
 }
 

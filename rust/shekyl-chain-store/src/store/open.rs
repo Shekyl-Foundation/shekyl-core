@@ -169,8 +169,8 @@ fn open_existing(
 }
 
 /// The read-only check of the chain file at `path`: [`judge_look`] over
-/// the one [`look`] the open also takes, then whether the open could write
-/// the file. Writes nothing and takes no lock.
+/// the one [`look`] the open also takes, then whether the open could claim
+/// the file. Writes nothing and holds no lock past its return.
 pub(super) fn check_at(
     path: &Path,
     horizons: Horizons,
@@ -183,7 +183,7 @@ pub(super) fn check_at(
         horizons.epoch(),
         admission,
     )?;
-    Ok(judged.writable_at(path).map_err(look_fault)?)
+    Ok(judged.claimable_at(path).map_err(EngineError::Open)?)
 }
 
 /// What a [`Look`] at the chain file decides: the refusals the file's

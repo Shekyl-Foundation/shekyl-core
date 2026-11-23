@@ -473,7 +473,8 @@ impl ChainStore {
 
     /// The read-only check of the store at `path` under `genesis`: what
     /// [`with_genesis`](Self::with_genesis) would decide on the file's
-    /// header, with nothing written and no lock taken.
+    /// header, and whether it could claim the file, with nothing written
+    /// and no lock held past the return.
     ///
     /// A daemon checks every store this way before it opens any of them
     /// writable, so a start one store refuses leaves the others as it found
