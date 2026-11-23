@@ -132,7 +132,9 @@ pub use bundle::{
     SupportCarry, SupportSeat, SupportStepFault, WindowClosed,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
-pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub use close::{
+    closed_and_final, final_close_height, shard_close, shard_close_height, ClosedUniverse,
+};
 pub use count::remember_window_epochs;
 pub(crate) use count::CountMemo;
 pub(crate) use count::L17;

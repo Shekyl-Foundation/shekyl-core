@@ -43,8 +43,9 @@ pub(crate) fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
 ///
 /// A non-zero seed is the with-change call, which starts from the no-change
 /// fee. That seed is at or below this variant's least fixed point; a higher
-/// seed would stick above it. The check runs in debug, where a second
-/// convergence from zero is the least point.
+/// seed would stick above it. The check runs in debug only, where a second
+/// convergence from zero is the least point; a release build does not run
+/// that second convergence, since nothing there would read it.
 #[must_use]
 pub(crate) fn converge_fee(
     rate: &FeeRate,
@@ -56,7 +57,7 @@ pub(crate) fn converge_fee(
     let per_weight = rate.per_weight();
     let price = |weight: u64| shekyl_economics::quantized_fee(weight, per_weight);
     let fee = converge_weight_fee_by(n_in, n_out, tree_depth, initial_fee, price)?;
-    if initial_fee != 0 {
+    if cfg!(debug_assertions) && initial_fee != 0 {
         let least = converge_weight_fee_by(n_in, n_out, tree_depth, 0, price)?;
         debug_assert!(
             initial_fee <= least && fee == least,
@@ -308,6 +309,9 @@ mod tests {
 
     /// A seed above the least fixed point sticks there. The with-change
     /// call must not pass one. Red: seed that call from `2 × fee_no_change`.
+    /// Debug only, as the check is: a release build has no behaviour here to
+    /// assert but the stuck fee the check exists to forbid, which no caller
+    /// can reach (the with-change call is seeded from the no-change fee).
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "least fixed point")]

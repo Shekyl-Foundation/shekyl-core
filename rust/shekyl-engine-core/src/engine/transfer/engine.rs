@@ -28,7 +28,7 @@ use super::super::error::{
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
-use super::super::output_selector::{OutputSelector, SelectedOutputs};
+use super::super::output_selector::{OutputSelector, SelectedInputs, SelectedOutputs};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
@@ -443,6 +443,11 @@ where
                         selector_subset_violation(),
                         BuildErrorKind::SelectorContractViolation,
                     ),
+                    // Shortest cover past one transaction: the signer's fault, unreserved.
+                    OutputSelectorError::TooManyInputs { count } => (
+                        SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs { count }),
+                        BuildErrorKind::TransactionTooLarge,
+                    ),
                     OutputSelectorError::InsufficientFunds { .. }
                     | OutputSelectorError::NoEligibleOutputs => {
                         let mapped = resolve_insufficiency(needed_raw);
@@ -650,7 +655,7 @@ where
     /// (indistinguishable from any post-return spend).
     fn revalidate_selected_inputs(
         ledger: &LedgerBlock,
-        indices: &[usize],
+        indices: &SelectedInputs,
         assemble_inputs: &[AssembleInput],
     ) -> Result<(), SendError> {
         // Parallel arrays in transaction-input order, built in lockstep by

@@ -1422,6 +1422,7 @@ dependencies = [
  "ciphersuite",
  "generalized-bulletproofs",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 
@@ -3409,6 +3410,7 @@ dependencies = [
  "shekyl-thread-priority",
  "shekyl-tor-status",
  "shekyl-tx-builder",
+ "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",

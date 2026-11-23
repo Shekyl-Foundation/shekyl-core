@@ -123,7 +123,7 @@ pub const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000
 /// temporary ends the directory at the end of that statement.
 pub struct TestPath {
     path: std::path::PathBuf,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 impl TestPath {
@@ -131,6 +131,13 @@ impl TestPath {
     #[must_use]
     pub fn path(&self) -> &std::path::Path {
         &self.path
+    }
+
+    /// The directory this owns, beside the store file: a scratch file a
+    /// driver needs next to its store lives here and goes with it.
+    #[must_use]
+    pub fn dir(&self) -> &std::path::Path {
+        self.dir.path()
     }
 }
 
@@ -146,7 +153,7 @@ pub fn tmp(name: &str) -> TestPath {
         .expect("create a test directory");
     TestPath {
         path: dir.path().join(format!("{name}.redb")),
-        _dir: dir,
+        dir,
     }
 }
 

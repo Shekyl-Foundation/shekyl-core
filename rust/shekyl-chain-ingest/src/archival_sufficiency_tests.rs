@@ -39,10 +39,11 @@
 //! deadline scan's progress, not a slash, and a chain that crosses an epoch
 //! carries it — so the `SlashLog` *gate* has a stub witness through the
 //! watermark while the slash *rows* have none. No captured chain crosses an
-//! epoch until SO-D12 4b's evidence run recaptures `emission-claim`
-//! (`docs/FOLLOWUPS.md`); until then the epoch-close families and the
-//! watermark are declared unwitnessed and the watermark's stub test is
-//! ignored.
+//! epoch: the emission walk's capture is a run record, not a corpus
+//! (`CF-R6`), and the chain that crosses one is Chain L (`CHAIN_FORGE.md`
+//! §12.2, SO-D12's row). Until it lands, the epoch-close families and the
+//! watermark are declared unwitnessed and the watermark's stub test
+//! returns unwitnessed.
 //!
 //! **A witness chain that predates a rule suspends its stub half.** The
 //! stub half needs the replay to reach the tip or to be ended by the
@@ -94,7 +95,7 @@ enum Witness {
 
 /// Why the epoch-close families have no corpus witness.
 const EPOCH_CLOSE_UNWITNESSED: &str =
-    "no captured chain crosses a settlement epoch until SO-D12 4b recaptures emission-claim (docs/FOLLOWUPS.md)";
+    "no captured chain crosses a settlement epoch until Chain L does (CHAIN_FORGE.md section 12.2, SO-D12's row)";
 
 /// The witness table, exhaustive over the X-macro. Pre-declared in E4 §6
 /// row 8 (2026-10-02) before the census ran.
@@ -136,7 +137,7 @@ const fn witness(family: ArchivalFamily) -> Witness {
                   writers' disagreement (ARW-26 / ARW-Q17), not a corpus witness. The \
                   family's *gate* is seen through the watermark cell \
                   (`stubbing_the_slash_log_is_noticed_through_the_watermark_alone`) once a \
-                  captured chain crosses an epoch (SO-D12 4b); its rows are not",
+                  captured chain crosses an epoch (Chain L); its rows are not",
         },
         ArchivalFamily::SlashApplied => Witness::Unwitnessed {
             rows: SnapshotFamily::SlashApplied,
@@ -278,8 +279,8 @@ fn the_corpus_exercises_exactly_the_predeclared_families() {
     }
     // The watermark cell sits exactly where a slash deadline passed and
     // nowhere a slash happened. No captured chain crosses an epoch, so no
-    // chain carries it; SO-D12 4b's recapture of `emission-claim` restores
-    // the witness, and this table learns it first.
+    // chain carries it; Chain L restores the witness (`CHAIN_FORGE.md`
+    // §12.2), and this table learns it first.
     let with_watermark: Vec<&String> = actual
         .iter()
         .filter(|(_, f)| f.contains(&SnapshotFamily::LastSlashEpoch))

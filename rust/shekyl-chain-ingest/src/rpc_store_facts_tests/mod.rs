@@ -647,10 +647,7 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
                     candidate
                         .transactions
                         .iter()
-                        .map(|tx| match tx.ct {
-                            shekyl_wire::Ct::Fcmp { fee, .. } => u128::from(fee),
-                            shekyl_wire::Ct::Null(_) => 0,
-                        })
+                        .map(|tx| u128::from(tx.fee().expect("a listed body carries a fee")))
                         .sum(),
                 );
                 corpus_blocks.push(candidate.block);

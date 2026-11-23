@@ -1498,6 +1498,42 @@ mod tests {
         assert!(ok, "a seeded proof verifies like any other");
     }
 
+    /// The seeded fixture's depth-1 proof and its pseudo-outs, hashed: the prover's output pinned
+    /// byte for byte (rule 30). A change to the vendored prover (generalized-bulletproofs,
+    /// circuit-abstraction, ec-gadgets, fcmps) that moves no proof byte keeps this digest; one
+    /// that moves a byte changes the genesis proof format and is re-vetted against the Q6 freeze
+    /// (`GENESIS_TX_WIRE_FORMAT.md` §6) before the digest is re-pinned.
+    #[test]
+    fn a_seeded_proof_is_pinned_byte_for_byte() {
+        use rand_chacha::rand_core::SeedableRng;
+        /// The fixture's stream: its keys, leaf and tree.
+        const FIXTURE_SEED: u64 = 0x5EED_0F1C;
+        /// The prover's stream.
+        const PROVER_SEED: u64 = 7;
+        /// The signed message.
+        const SIGNABLE: [u8; 32] = [0xAB; 32];
+        /// `keccak256(proof || pseudo_outs)` at the pin.
+        const PINNED_DIGEST: &str =
+            "dcb32df4750a5b50aae3d13442e2fbe334ec7484a90b595ad9d694ccb517dcbc";
+        let tree_depth: u8 = 1;
+        let f = depth1_fixture(&mut rand_chacha::ChaCha20Rng::seed_from_u64(FIXTURE_SEED));
+        let proved = prove_inner(
+            &mut rand_chacha::ChaCha20Rng::seed_from_u64(PROVER_SEED),
+            &[f.input()],
+            &f.tree_root,
+            tree_depth,
+            TxSignableHash::from_bytes(SIGNABLE),
+        )
+        .expect("a seeded prove succeeds");
+        let mut preimage = proved.proof.data.clone();
+        preimage.extend(proved.pseudo_outs.as_flattened());
+        let digest: String = shekyl_crypto_hash::keccak256(&preimage)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(digest, PINNED_DIGEST, "the seeded proof's bytes moved");
+    }
+
     /// Seam T1 for the emission's backing proof: as above, for
     /// `prove_membership_only_with_rng`'s stream.
     #[test]

@@ -181,14 +181,16 @@ is `rules/tx_bond.rs` and `archival/close.rs`.
 
 `J15` reads these and mints none of them:
 
-- **Closed and final** — `closed_and_final(view, shard, parent, rule_set.reorg_cap())`.
-  The cap is `RuleSet::reorg_cap()`, the reorg-cap job. A shard at or past the
-  frontier fails the closed leg (`rust/shekyl-chain-rules/src/archival/close.rs:302`);
-  that failure is the existence leg.
+- **Closed and final** — `final_close_height(view, shard, parent, rule_set.reorg_cap())`,
+  `closed_and_final`'s decision with the height that closed the shard (one
+  placement of the close, which the age below reads; 2026-11-23). The cap is
+  `RuleSet::reorg_cap()`, the reorg-cap job. A shard at or past the frontier
+  fails the closed leg (`rust/shekyl-chain-rules/src/archival/close.rs`,
+  `final_close_height`); that failure is the existence leg.
 - **The price** — `view.r_market(shard, last_settled_slash_epoch)`. Absent
   watermark or absent row refuses (slice 8 Q4; `rust/shekyl-chain-rules/src/rules/tx_bond.rs:504`).
 - **Viability** — `check_admission` over that price and the age of the close
-  `closed_and_final` just placed. A complete tree gathers nothing and is
+  `final_close_height` returned. A complete tree gathers nothing and is
   admitted (`rust/shekyl-chain-rules/src/rules/tx_bond.rs:483`).
 
 *Was:* a gate that the predicate could not be implemented before the A4
