@@ -28,8 +28,8 @@ use shekyl_mempool::{judge, Admission, Duplicate, Judged, KeyImages, Pool};
 use shekyl_types::{BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
 
-use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
-use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
+use crate::priced::{assert_priced, fee_at, SIZING_FEE};
+use crate::scenario::{FreeHash, Mined, PoolPassage, Scenario, StepOutcome};
 use crate::test_support::{h, tmp, Family, FIRST_SPEND_HEIGHT};
 
 /// The spending height: block 0's, 1's and 2's coinbases have matured.
@@ -110,9 +110,9 @@ async fn block(scenario: &mut Scenario<FreeHash>, tx: Transaction) -> Verdict {
 }
 
 /// Block `coinbase`'s output spent at `AT`, paying exactly the relay
-/// requirement the chain prices now: `quantized_fee(weight, min F)` over
-/// the floor window at the connecting height (CEN-M3's predicate), re-priced
-/// until the fee's varint holds the weight still.
+/// requirement the chain prices now: the lattice price of its weight at
+/// the floor window's least member (CEN-M3), the fee's varint included
+/// ([`fee_at`]).
 pub(crate) async fn paying_the_floor(
     scenario: &mut Scenario<FreeHash>,
     mined: &[Mined],
@@ -132,17 +132,11 @@ pub(crate) async fn paying_the_floor_at(
     let floor = scenario.connecting_relay_floor().await;
     let spender = Spender::on(scenario.network_id(), mined);
     let wallet = scenario.wallet();
-    let mut fee = Family::Main.fee();
-    for _ in 0..RELAY_FEE_REPRICE_STEPS {
-        let tx = spender.spend_coinbase(wallet, h(coinbase), connecting, fee);
-        let weight = u64::try_from(tx.weight()).expect("a weight fits");
-        let needed = shekyl_economics::quantized_fee(weight, floor).expect("priceable");
-        if needed == fee {
-            return tx;
-        }
-        fee = needed;
-    }
-    panic!("the floor price did not settle");
+    let sized = spender.spend_coinbase(wallet, h(coinbase), connecting, SIZING_FEE);
+    let fee = fee_at(&sized, floor);
+    let tx = spender.spend_coinbase(wallet, h(coinbase), connecting, fee);
+    assert_priced(&tx, &sized, floor);
+    tx
 }
 
 pub(crate) async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>) {
@@ -266,7 +260,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let (twin, cheap) = {
         let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
-        let fee = good.fee();
+        let fee = good.fee().expect("a spend carries a fee");
         (
             // Another body over the same image, paying more.
             spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),
@@ -447,14 +441,14 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
 
 /// The chain forge's price and its pool (`CHAIN_FORGE.md` §11.4): a spend
 /// priced by [`crate::priced`] at the default tier's rung for its block is
-/// admitted, and kept for the block that lists it, once; the same spend one
-/// lattice step under what the shipped policy admits is refused on CEN-M3,
-/// by name; and a second spend of one coinbase in the same listing is
-/// refused, the earlier one held.
+/// admitted, and the block that lists it records
+/// [`PoolPassage::Admitted`]; the same spend one lattice step under what
+/// the shipped policy admits is refused on CEN-M3, by name; a second spend
+/// of one coinbase in the same listing is refused, the earlier one held;
+/// and a listing the pool was not offered does not agree with
+/// [`PoolPassage::NotOffered`].
 #[tokio::test]
 async fn a_spend_at_its_price_is_admitted_and_one_lattice_step_under_the_floor_is_not() {
-    use crate::priced::{assert_priced, fee_at, SIZING_FEE};
-
     let (mut scenario, mined) = matured("pool-door-priced").await;
     let spender = Spender::on(scenario.network_id(), &mined);
     let wallet = scenario.wallet();
@@ -519,23 +513,37 @@ async fn a_spend_at_its_price_is_admitted_and_one_lattice_step_under_the_floor_i
         "refused on CEN-M3: {:?}",
         refused.answer
     );
-    assert!(!scenario.take_admitted(&cheap.txid_parts().hash));
 
-    // At its price: admitted, and taken once.
+    // At its price: the pool takes it. The judgement is not stored on the
+    // scenario; the block that lists the spend records the passage.
     scenario
         .admit(std::slice::from_ref(&priced))
         .await
         .expect("the priced spend is admitted");
-    let txid = priced.txid_parts().hash;
-    assert!(scenario.take_admitted(&txid), "kept for its block");
-    assert!(!scenario.take_admitted(&txid), "taken once");
 
     // One listing spending one coinbase twice: the second is judged with
     // the first held.
     let respend = spender.spend_coinbase(wallet, h(0), h(AT), fee);
     let refused = scenario
-        .admit(&[priced, respend.clone()])
+        .admit(&[priced.clone(), respend.clone()])
         .await
         .expect_err("a second spend of one coinbase");
     assert_eq!(refused.txid, respend.txid_parts().hash);
+
+    let block = scenario
+        .mine_admitted(vec![priced])
+        .await
+        .expect("the priced spend connects");
+    assert_eq!(block.pool_passage, PoolPassage::Admitted);
+    assert!(block.pool_passage_agrees());
+    let mut unoffered = block.clone();
+    unoffered.pool_passage = PoolPassage::NotOffered;
+    assert!(
+        !unoffered.pool_passage_agrees(),
+        "a listed body the pool was not offered does not agree"
+    );
+
+    let empty = scenario.mine(1).await;
+    assert_eq!(empty[0].pool_passage, PoolPassage::NotOffered);
+    assert!(empty[0].pool_passage_agrees());
 }

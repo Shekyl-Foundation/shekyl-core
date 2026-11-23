@@ -1654,13 +1654,13 @@ impl Transaction {
         counter.bytes
     }
 
-    /// The fee the transaction pays: the `Fcmp` ct's field, zero for a
-    /// `Null` ct (a coinbase pays none).
+    /// The fee field. `Some` for an `Fcmp` ct, including `Some(0)`.
+    /// `None` for a `Null` ct, which has no fee field.
     #[must_use]
-    pub const fn fee(&self) -> u64 {
+    pub const fn fee(&self) -> Option<u64> {
         match &self.ct {
-            Ct::Fcmp { fee, .. } => *fee,
-            Ct::Null(_) => 0,
+            Ct::Fcmp { fee, .. } => Some(*fee),
+            Ct::Null(_) => None,
         }
     }
 

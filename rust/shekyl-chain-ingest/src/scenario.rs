@@ -85,7 +85,8 @@ use crate::test_support::{open_store, open_store_under, tmp, TestPath};
 mod types;
 
 pub use types::{
-    Clocked, FreeHash, Mined, NextBlock, ReorgTiming, StepOutcome, Unconnected, CLOCK_START,
+    Clocked, FreeHash, Mined, NextBlock, PoolPassage, ReorgTiming, StepOutcome, Unconnected,
+    CLOCK_START,
 };
 
 /// The connector actor's task handle.
@@ -141,9 +142,6 @@ pub struct Scenario<P> {
     /// A commitment the next template carries instead, once: a test that
     /// holds the witness key and seed itself.
     next_commitment: Option<shekyl_types::archival::DrawCommitment>,
-    /// The transactions the daemon's pool admitted ([`Self::admit`]) and
-    /// no caller has yet taken ([`Self::take_admitted`]).
-    admitted: std::collections::BTreeSet<shekyl_types::TxHash>,
     /// The directory this scenario's store lives in. Last, so it drops
     /// after the store this struct holds. [`Self::close`] joins the
     /// connector; dropping the task handle detaches that task.
@@ -293,7 +291,6 @@ impl<P: Pow> Scenario<P> {
             store: Some(opened),
             witness: None,
             next_commitment: None,
-            admitted: std::collections::BTreeSet::new(),
             path,
         }
     }
@@ -690,6 +687,7 @@ impl<P: Pow> Scenario<P> {
             target,
             bundle_references,
             bundle_bodies,
+            pool_passage: PoolPassage::NotOffered,
         })
     }
 

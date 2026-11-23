@@ -170,12 +170,12 @@ impl Rule for G13 {
 /// The listed bodies' fees, summed — the C++'s `fee_summary`
 /// (`blockchain.cpp:5653`, one `get_tx_fee` per listed body, which is
 /// `ct_signatures.txnFee` for every version this chain has). A body with a
-/// `Null` ct carries no fee (H15 refused it off the coinbase already).
-/// `None` when the sum does not fit: F17's refusal.
+/// `Null` ct has no fee field (H15 refused it off the coinbase already);
+/// that body adds nothing. `None` when the sum does not fit: F17's refusal.
 fn listed_fees(listed: &[Transaction]) -> Option<u64> {
     listed
         .iter()
-        .try_fold(0u64, |sum, tx| sum.checked_add(tx.fee()))
+        .try_fold(0u64, |sum, tx| sum.checked_add(tx.fee().unwrap_or(0)))
 }
 
 /// The coinbase's outputs, summed. `None` when the sum does not fit — F7

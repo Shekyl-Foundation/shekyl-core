@@ -301,7 +301,7 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
 
     let (mut scenario, mined) = matured("pool-keep-policy").await;
     let good = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = good.fee();
+    let fee = good.fee().expect("a spend carries a fee");
     let (paid, cheap) = {
         let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();

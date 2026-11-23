@@ -50,11 +50,6 @@ use crate::priced::{assert_priced, fee_at, SIZING_FEE};
 use crate::scenario::{FreeHash, Mined, NextBlock, Scenario, StepOutcome};
 use shekyl_chain_rules::SettlementSchedule;
 
-/// How many times a relay fee is repriced before its varint width has
-/// settled. The fee is an input of the weight it pays for, so the price
-/// is a fixed point of that width.
-pub const RELAY_FEE_REPRICE_STEPS: u32 = 8;
-
 /// The tables a pruning boundary's batch retires rows from.
 const RETIRED_AT_A_BOUNDARY: &[&str] = &[
     "txs_prunable",

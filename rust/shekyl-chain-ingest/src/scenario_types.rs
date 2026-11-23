@@ -223,6 +223,19 @@ pub struct NextBlock {
     pub target: Target,
 }
 
+/// Whether the daemon's pool admitted this block's listing before the
+/// block connected (`CHAIN_FORGE.md` §11.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolPassage {
+    /// The listing was not offered to the pool. That agrees with the
+    /// block only when the block lists nothing.
+    NotOffered,
+    /// [`super::Scenario::mine_admitted`] admitted every listed
+    /// transaction, evicting nothing, and the block lists those
+    /// transactions.
+    Admitted,
+}
+
 /// One mined block: what the template priced and what the validator
 /// judged it under.
 #[derive(Clone, Debug)]
@@ -258,9 +271,22 @@ pub struct Mined {
     /// The body each reference names, in section order; empty with no
     /// references.
     pub bundle_bodies: Vec<BundleBody>,
+    /// How the daemon's pool stands toward this listing.
+    pub pool_passage: PoolPassage,
 }
 
 impl Mined {
+    /// The pool passage agrees with the listing. [`PoolPassage::Admitted`]
+    /// means the pool judged the listing before the block connected.
+    /// [`PoolPassage::NotOffered`] agrees only when the block lists nothing.
+    #[must_use]
+    pub fn pool_passage_agrees(&self) -> bool {
+        match self.pool_passage {
+            PoolPassage::Admitted => true,
+            PoolPassage::NotOffered => self.template.transactions.is_empty(),
+        }
+    }
+
     /// The block as a candidate: the template's block, its listed bodies,
     /// and the section it carried. A block's header commits its section, so
     /// without it a block that admitted a bundle is refused at CEN-J29.

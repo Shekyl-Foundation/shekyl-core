@@ -10,16 +10,18 @@
 //! the store the connector owns. [`Scenario::reorganize_with_pool`] offers
 //! a switch's returned transactions to the pool after the switch lands.
 //! [`Scenario::connecting_default_rate`] is the fee the daemon serves for
-//! the next block at a wallet's default tier, and [`Scenario::admit`] is the daemon's pool admission:
-//! the chain forge prices every transaction it lists at the one and passes
-//! it through the other (`CHAIN_FORGE.md` §11.4).
+//! the next block at a wallet's default tier, and [`Scenario::admit`] is
+//! the daemon's pool admission. [`Scenario::mine_admitted`] is that
+//! judgement and the block it connects, which records
+//! [`PoolPassage::Admitted`](crate::scenario::PoolPassage::Admitted)
+//! (`CHAIN_FORGE.md` §11.4).
 
 use shekyl_mempool::{Admission, Pool};
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::pow::Pow;
-use crate::scenario::{Mined, StepOutcome};
+use crate::scenario::{Mined, PoolPassage, StepOutcome};
 
 use super::Scenario;
 
@@ -192,32 +194,27 @@ impl<P: Pow> Scenario<P> {
     /// under [`AdmissionPolicy::GENESIS`](shekyl_chain_rules::AdmissionPolicy::GENESIS)
     /// and this chain's network, the node's own policy. Each must be
     /// admitted with nothing evicted, so each later one is judged with the
-    /// earlier ones held (a second spend of one key image is refused). The
-    /// admitted transactions are kept for [`Self::take_admitted`].
-    ///
-    /// [`Self::mine_admitted`] keeps them only once their block connects.
+    /// earlier ones held (a second spend of one key image is refused).
+    /// The judgement is not remembered: the block that lists these
+    /// transactions records it ([`Self::mine_admitted`]).
     ///
     /// The receive time is the driver's clock: the node this driver stands
     /// in for has no other, and the pool's receive time enters no rule.
     ///
     /// # Errors
     ///
-    /// [`PoolRefused`] for the first transaction the pool does not take;
-    /// none of `listed` is then kept.
+    /// [`PoolRefused`] for the first transaction the pool does not take.
     ///
     /// # Panics
     ///
     /// If the pool cannot be opened or faults: a fresh pool over a chain
     /// this driver just held, which is not a scenario outcome.
     pub async fn admit(&mut self, listed: &[Transaction]) -> Result<(), PoolRefused> {
-        let admitted = self.judge(listed).await?;
-        self.admitted.extend(admitted);
-        Ok(())
+        self.judge(listed).await
     }
 
-    /// [`Self::admit`]'s judgement, keeping nothing: the txids of `listed`
-    /// if the pool admits every one of them.
-    async fn judge(&mut self, listed: &[Transaction]) -> Result<Vec<TxHash>, PoolRefused> {
+    /// [`Self::admit`]'s judgement.
+    async fn judge(&mut self, listed: &[Transaction]) -> Result<(), PoolRefused> {
         let network = self.network_id();
         let now = UnixSeconds::from_raw(self.substrate.now().to_raw());
         let dir = tempfile::tempdir_in(self.path.dir()).expect("a pool directory");
@@ -232,48 +229,52 @@ impl<P: Pow> Scenario<P> {
                 &policy,
             )
             .unwrap_or_else(|fault| panic!("the pool opens: {fault:?}"));
-            let mut admitted = Vec::with_capacity(listed.len());
             for tx in listed {
                 let txid = tx.txid_parts().hash;
                 let answer = pool
                     .admit(tx.clone(), now, view, rule_set, &policy)
                     .unwrap_or_else(|fault| panic!("the pool judges {txid}: {fault:?}"));
                 match answer {
-                    Admission::Admitted { evicted } if evicted.is_empty() => {
-                        admitted.push(txid);
-                    }
+                    Admission::Admitted { evicted } if evicted.is_empty() => {}
                     answer => return Err(PoolRefused { txid, answer }),
                 }
             }
-            Ok(admitted)
+            Ok(())
         })
         .await
     }
 
-    /// [`Self::admit`] `listed`, then [`Self::mine_listing`] it. The
-    /// admitted transactions are kept for [`Self::take_admitted`] only once
-    /// the block that lists them connects, so a listing that did not
-    /// connect leaves nothing a later block could take.
+    /// [`Self::admit`] `listed`, then [`Self::mine_listing`] it. The block
+    /// records [`PoolPassage::Admitted`] when it lists the transactions the
+    /// pool admitted.
     ///
     /// # Errors
     ///
     /// [`ListingFault::Pool`] when the pool refuses one, and nothing is
-    /// mined; [`ListingFault::Step`] when the block does not connect. Either
-    /// way nothing of `listed` is kept.
+    /// mined. [`ListingFault::Step`] when the block does not connect.
+    ///
+    /// # Panics
+    ///
+    /// If the connected block lists other transactions than `listed`.
     pub async fn mine_admitted(&mut self, listed: Vec<Transaction>) -> Result<Mined, ListingFault> {
-        let admitted = self.judge(&listed).await.map_err(ListingFault::Pool)?;
-        let mined = self
+        self.judge(&listed).await.map_err(ListingFault::Pool)?;
+        let offered: Vec<_> = listed.iter().map(|tx| tx.txid_parts().hash).collect();
+        let mut mined = self
             .mine_listing(listed)
             .await
             .map_err(ListingFault::Step)?;
-        self.admitted.extend(admitted);
+        let connected: Vec<_> = mined
+            .template
+            .transactions
+            .iter()
+            .map(|tx| tx.txid_parts().hash)
+            .collect();
+        assert_eq!(
+            connected, offered,
+            "the block lists the transactions the pool admitted"
+        );
+        mined.pool_passage = PoolPassage::Admitted;
         Ok(mined)
-    }
-
-    /// Whether the daemon's pool admitted `txid` ([`Self::admit`]), taking
-    /// it: a transaction is taken once, by the block that lists it.
-    pub fn take_admitted(&mut self, txid: &TxHash) -> bool {
-        self.admitted.remove(txid)
     }
 
     /// Lend `f` the store itself and the rules it runs under — for a reader

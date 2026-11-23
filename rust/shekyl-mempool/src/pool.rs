@@ -159,7 +159,7 @@ impl Held {
     pub(crate) fn of(tx: Transaction, record: PoolRecord, pass: Option<StatelessPass>) -> Self {
         Self {
             weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
-            fee: AtomicUnits::from_raw(tx.fee()),
+            fee: AtomicUnits::from_raw(fee_paid(&tx)),
             tx,
             record,
             pass,
@@ -397,7 +397,7 @@ impl Pool {
         // holds nothing it would give up for a candidate paying no more per
         // weight than its cheapest admitted entry.
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
-        let rate = FeeRate::new(tx.fee(), weight);
+        let rate = FeeRate::new(fee_paid(&tx), weight);
         if self.room_for(weight, rate).is_none() {
             return Ok(Admission::PoolFull);
         }
@@ -674,6 +674,12 @@ fn tip_with_work<'id, V: HeaderView<'id>>(chain: &V, tip: Tip) -> Option<JudgedT
 ///
 /// Heavier work replaces it. The same tip refreshes it. Equal work under
 /// another hash clears it. Lighter work leaves it.
+/// The fee `tx` pays. A `Null` ct has no fee field; the door refused that
+/// shape before a hold or a rate is read, and a missing field pays nothing.
+pub(crate) fn fee_paid(tx: &Transaction) -> u64 {
+    tx.fee().unwrap_or(0)
+}
+
 fn judged_tip_after(recorded: Option<JudgedTip>, admitted: JudgedTip) -> Option<JudgedTip> {
     match recorded {
         None => Some(admitted),

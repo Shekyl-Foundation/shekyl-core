@@ -19,8 +19,8 @@ use shekyl_mempool::Pool;
 use shekyl_rpc_types::wire::tx::{Publication, Rejection, Verdict};
 use shekyl_types::UnixSeconds;
 
-use crate::chain_drive::RELAY_FEE_REPRICE_STEPS;
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
+use crate::priced::{assert_priced, fee_at, SIZING_FEE};
 use crate::schedule::ChainRules;
 use crate::test_support::{h, tmp};
 
@@ -176,7 +176,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
 async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
     let (mut scenario, mined) = matured("pool-submit-twin").await;
     let paid = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = paid.fee();
+    let fee = paid.fee().expect("a spend carries a fee");
     let twin = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(0),
@@ -262,7 +262,8 @@ async fn closed_shards_lane(
     (scenario, mined, shards, connecting, floor)
 }
 
-/// A post spending coinbase `coinbase`, paying the relay floor `floor`.
+/// A post spending coinbase `coinbase`, paying the relay floor `floor`:
+/// the lattice price of a sizing post of the same shape ([`fee_at`]).
 fn priced_post(
     spender: &shekyl_harness_spender::Spender,
     wallet: &shekyl_harness_spender::MinerWallet,
@@ -271,23 +272,13 @@ fn priced_post(
     floor: u64,
     post: &shekyl_harness_spender::PostedBond<'_>,
 ) -> shekyl_wire::Transaction {
-    let mut fee = crate::archival_driver::FEE;
-    for _ in 0..RELAY_FEE_REPRICE_STEPS {
-        let tx = spender.spend_coinbase_posting(
-            wallet,
-            shekyl_types::BlockHeight::from_raw(coinbase),
-            connecting,
-            fee,
-            Some(post),
-        );
-        let weight = u64::try_from(tx.weight()).expect("fits");
-        let needed = shekyl_economics::quantized_fee(weight, floor).expect("priced");
-        if needed <= fee {
-            return tx;
-        }
-        fee = needed;
-    }
-    panic!("the floor price did not settle")
+    let coinbase = shekyl_types::BlockHeight::from_raw(coinbase);
+    let sized =
+        spender.spend_coinbase_posting(wallet, coinbase, connecting, SIZING_FEE, Some(post));
+    let fee = fee_at(&sized, floor);
+    let tx = spender.spend_coinbase_posting(wallet, coinbase, connecting, fee, Some(post));
+    assert_priced(&tx, &sized, floor);
+    tx
 }
 
 /// The bond arm of the seam, in the live lane: two JoinMarket posts (a
@@ -505,7 +496,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     let (twin, cheap) = {
         let spender = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();
-        let fee = paid.fee();
+        let fee = paid.fee().expect("a spend carries a fee");
         (
             spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),
             spender.spend_coinbase(wallet, h(1), h(AT), 1),
@@ -616,7 +607,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
 async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     let (mut scenario, mined) = matured("pool-submit-full").await;
     let held = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = held.fee();
+    let fee = held.fee().expect("a spend carries a fee");
     let peer = shekyl_harness_spender::Spender::on(scenario.network_id(), &mined).spend_coinbase(
         scenario.wallet(),
         h(2),

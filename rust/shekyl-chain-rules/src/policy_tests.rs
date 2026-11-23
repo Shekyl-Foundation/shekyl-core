@@ -45,7 +45,8 @@ fn a_transaction_at_every_bound_passes_and_records_the_three_rows() {
 #[test]
 fn m3_refuses_below_the_floor_and_reads_the_windows_minimum() {
     let tx = paying_the_floor();
-    let short = paying_fee(listed([0x11; 32]), tx.fee() - 1);
+    let paid = tx.fee().expect("the floor payer carries a fee");
+    let short = paying_fee(listed([0x11; 32]), paid - 1);
     assert_eq!(refused(&short, &FLOORS), Some(PolicyRow::M3));
     // A higher floor beside the low one does not raise the requirement.
     assert_eq!(refused(&tx, &[5, 1, 9]), None);

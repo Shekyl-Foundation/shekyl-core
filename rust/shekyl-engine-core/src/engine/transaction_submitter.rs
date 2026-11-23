@@ -166,9 +166,9 @@ pub(crate) fn canonical_tx_id_opt(tx_bytes: &[u8]) -> Option<TxHash> {
 pub(crate) fn wire_fee(tx_bytes: &[u8]) -> u64 {
     let tx = Transaction::from_bytes(tx_bytes)
         .expect("wallet-built tx_bytes parse as canonical shekyl-wire");
-    // The transfer dispatch path never builds a Null-ct shape; a fee-less
-    // shape honestly has fee 0.
-    tx.fee()
+    // The transfer path builds an `Fcmp` ct. A shape with no fee field is a
+    // build defect, not a fee of zero the journal could record.
+    tx.fee().expect("a wallet-built transaction carries a fee")
 }
 
 /// [`canonical_tx_id_opt`] for the wallet's own built bytes, which are canonical wire by

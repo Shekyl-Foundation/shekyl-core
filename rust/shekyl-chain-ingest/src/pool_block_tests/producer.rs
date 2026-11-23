@@ -17,7 +17,7 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     let first = paying_the_floor(&mut scenario, &mined, 0).await;
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
-        let floor = second.fee();
+        let floor = second.fee().expect("a spend carries a fee");
         Spender::on(scenario.network_id(), &mined).spend_coinbase(
             scenario.wallet(),
             h(2),
@@ -47,7 +47,7 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
                 );
                 assert!(pool.fluffed(&txid).expect("publish"));
             }
-            let dear_fee = dear.fee();
+            let dear_fee = dear.fee().expect("a spend carries a fee");
             let mut offered = 0;
             let selected =
                 shekyl_mempool::select_admitting(&pool, view, rule_set, u64::MAX, |_, fee| {
@@ -148,7 +148,7 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
     let fees: u64 = produced
         .transactions
         .iter()
-        .map(shekyl_wire::Transaction::fee)
+        .map(|tx| tx.fee().expect("a listed spend carries a fee"))
         .sum();
     let fill = shekyl_block_template::Fill::listed(
         facts.medians.effective_median.to_raw(),
@@ -409,7 +409,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     let first = paying_the_floor(&mut scenario, &mined, 0).await;
     let second = paying_the_floor(&mut scenario, &mined, 1).await;
     let dear = {
-        let floor = second.fee();
+        let floor = second.fee().expect("a spend carries a fee");
         Spender::on(scenario.network_id(), &mined).spend_coinbase(
             scenario.wallet(),
             h(2),
@@ -474,7 +474,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
         scenario.wallet(),
         h(0),
         h(AT),
-        first.fee() + 1_000,
+        first.fee().expect("a spend carries a fee") + 1_000,
     );
     let _connected = scenario
         .mine_listing(vec![twin])
@@ -519,7 +519,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
 async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
     let (mut scenario, mined) = matured("pool-full").await;
     let low = paying_the_floor(&mut scenario, &mined, 0).await;
-    let fee = low.fee();
+    let fee = low.fee().expect("a spend carries a fee");
     let (high, lower) = {
         let spender = Spender::on(scenario.network_id(), &mined);
         let wallet = scenario.wallet();

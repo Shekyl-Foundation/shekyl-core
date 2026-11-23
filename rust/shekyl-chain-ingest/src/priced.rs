@@ -32,17 +32,24 @@ pub const SIZING_FEE: u64 = 0;
 ///
 /// # Panics
 ///
-/// If the price does not fit in `u64`: no forged transaction weighs that
-/// much at any rate a chain serves.
+/// If `sized` has no fee field, or the price does not fit in `u64`: no
+/// forged transaction weighs that much at any rate a chain serves.
 #[must_use]
 pub fn fee_at(sized: &Transaction, rate: u64) -> u64 {
     let measured = u64::try_from(sized.weight()).expect("a weight fits u64");
+    let measured_fee = carried_fee(sized);
     shekyl_tx_weight::converge_fee_by(
-        |fee| shekyl_tx_weight::weight_at_fee(measured, sized.fee(), fee),
+        |fee| shekyl_tx_weight::weight_at_fee(measured, measured_fee, fee),
         0,
         |weight| shekyl_economics::quantized_fee(weight, rate),
     )
     .expect("a forged transaction's fee is priceable")
+}
+
+/// The fee field of a transaction the forge built. A sizing build and the
+/// transaction listed from it are `Fcmp` spends or claims.
+fn carried_fee(tx: &Transaction) -> u64 {
+    tx.fee().expect("a forged transaction carries a fee")
 }
 
 /// Hold `built`, the seeded transaction listed, to the price its sizing
@@ -56,10 +63,14 @@ pub fn fee_at(sized: &Transaction, rate: u64) -> u64 {
 pub fn assert_priced(built: &Transaction, sized: &Transaction, rate: u64) {
     let fee = fee_at(sized, rate);
     let measured = u64::try_from(sized.weight()).expect("a weight fits u64");
-    assert_eq!(built.fee(), fee, "the listed transaction pays its price");
+    assert_eq!(
+        built.fee(),
+        Some(fee),
+        "the listed transaction pays its price"
+    );
     assert_eq!(
         u64::try_from(built.weight()).ok(),
-        shekyl_tx_weight::weight_at_fee(measured, sized.fee(), fee),
+        shekyl_tx_weight::weight_at_fee(measured, carried_fee(sized), fee),
         "the listed transaction weighs what its sizing build weighs at its fee"
     );
 }

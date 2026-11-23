@@ -621,7 +621,8 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
             spender.spend_coinbase(wallet, h(1), h(AT), Family::Main.fee()),
         )
     };
-    let fees = u128::from(a.fee() + b.fee());
+    let fees = u128::from(a.fee().expect("a spend carries a fee"))
+        + u128::from(b.fee().expect("a spend carries a fee"));
     assert!(fees > 0, "the spends pay fees (rule 47)");
     let spending = s
         .mine_listing(vec![a, b])

@@ -542,17 +542,13 @@ impl Forge {
                 height: mined.height,
                 record,
             });
-            // Every listed transaction passed the daemon's pool before its
-            // block was mined (`CHAIN_FORGE.md` §11.4): a listing that skipped
-            // the pool stops the forge here, whichever step built it.
-            for tx in &mined.template.transactions {
-                let txid = tx.txid_parts().hash;
-                assert!(
-                    self.scenario.as_mut().expect("home").take_admitted(&txid),
-                    "block {} lists {txid}, which the daemon's pool never admitted",
-                    mined.height
-                );
-            }
+            // A listing that skipped the pool stops the forge here, whichever
+            // step built the block (`CHAIN_FORGE.md` §11.4).
+            assert!(
+                mined.pool_passage_agrees(),
+                "block {} lists transactions the daemon's pool never admitted",
+                mined.height
+            );
             self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
             let line = Line {
                 height: mined.height.to_raw(),

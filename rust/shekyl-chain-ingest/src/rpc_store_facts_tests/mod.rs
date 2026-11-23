@@ -647,7 +647,7 @@ async fn the_store_facts_report_the_baseline_on_every_captured_chain() {
                     candidate
                         .transactions
                         .iter()
-                        .map(|tx| u128::from(tx.fee()))
+                        .map(|tx| u128::from(tx.fee().expect("a listed body carries a fee")))
                         .sum(),
                 );
                 corpus_blocks.push(candidate.block);
