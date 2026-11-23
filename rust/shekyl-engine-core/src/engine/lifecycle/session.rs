@@ -41,27 +41,18 @@ impl<
     ///
     /// # Errors
     ///
-    /// - [`crate::engine::ChangePasswordError::RotateFailed`] when `old` does not unlock
-    ///   the existing envelope or the keys-file rewrap fails.
-    /// - [`crate::engine::ChangePasswordError::RotatedButPrefsFlushFailed`] when rotation
-    ///   succeeds but the prefs HMAC flush fails.
+    /// [`crate::engine::PersistenceError`] when `old` does not unlock the
+    /// existing envelope or the keys-file rewrap fails.
     pub fn change_password(
         &mut self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
-    ) -> Result<(), crate::engine::ChangePasswordError> {
-        drive_persistence(self.persistence.rotate_password(old, new, new_kdf))
-            .map_err(|e| crate::engine::ChangePasswordError::RotateFailed(e.into()))?;
-        drive_persistence(
-            self.persistence
-                .save_prefs(self.prefs_hmac_key(), &self.prefs),
-        )
-        .map_err(|e| crate::engine::ChangePasswordError::RotatedButPrefsFlushFailed(e.into()))?;
-        Ok(())
+    ) -> Result<(), crate::engine::PersistenceError> {
+        drive_persistence(self.persistence.rotate_password(old, new, new_kdf)).map_err(Into::into)
     }
 
-    /// Persist final state + prefs for close, without consuming `self`.
+    /// Persist final state for close, without consuming `self`.
     ///
     /// Callers that must keep the live `Engine` when flush fails (e.g.
     /// wallet-rpc `close_wallet`, which re-installs the session on I/O
@@ -72,14 +63,14 @@ impl<
     ///
     /// - [`OpenError::OutstandingPendingTx`] when one or more
     ///   reservations are still in flight.
-    /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
+    /// - [`OpenError::Persistence`] for a state-save failure.
     pub fn persist_for_close(&self) -> Result<(), OpenError> {
         let count = self.outstanding_pending_txs();
         if count > 0 {
             return Err(OpenError::OutstandingPendingTx { count });
         }
 
-        // Persist final state and prefs via steady-state sealing keys
+        // Persist final state via steady-state sealing keys
         // (F5(b)); see `docs/WALLET_FILE_FORMAT_V1.md` §4.3.
         //
         // Acquire a `LocalLedger` read guard for the duration of the
@@ -93,17 +84,10 @@ impl<
                 .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
         .map_err(|e| OpenError::Persistence(e.into()))
-        .map(|_| ())?;
-        drop(ledger_guard);
-        drive_persistence(
-            self.persistence
-                .save_prefs(self.prefs_hmac_key(), &self.prefs),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
-        Ok(())
+        .map(|_| ())
     }
 
-    /// Persist final state and prefs because the process is stopping (a stop
+    /// Persist final state because the process is stopping (a stop
     /// signal, a window closing), whatever is outstanding.
     ///
     /// [`Self::persist_for_close`] refuses while reservations are
@@ -117,7 +101,7 @@ impl<
     ///
     /// # Errors
     ///
-    /// [`OpenError::Persistence`] for state-save / prefs-save failures.
+    /// [`OpenError::Persistence`] for a state-save failure.
     pub fn persist_for_shutdown(&self) -> Result<(), OpenError> {
         let outstanding = self.outstanding_pending_txs();
         if outstanding > 0 {
@@ -133,14 +117,7 @@ impl<
                 .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
         .map_err(|e| OpenError::Persistence(e.into()))
-        .map(|_| ())?;
-        drop(ledger_guard);
-        drive_persistence(
-            self.persistence
-                .save_prefs(self.prefs_hmac_key(), &self.prefs),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
-        Ok(())
+        .map(|_| ())
     }
 
     /// Close the wallet: persist, then [`Self::release`]. Errors if
@@ -159,9 +136,8 @@ impl<
     ///    `view_sk`, `ml_kem_dk`, and (for uniform write patterns)
     ///    the public-key fields (see
     ///    `shekyl_crypto_pq::account::AllKeysBlob::drop`).
-    /// 3. `self.ledger`, `self.pending`,
-    ///    `self.prefs` — no special drop semantics; ordinary heap
-    ///    frees.
+    /// 3. `self.ledger`, `self.pending` — no special drop semantics;
+    ///    ordinary heap frees.
     ///
     /// The zeroization chain is single-level
     /// (`Engine<S>.keys: AllKeysBlob`); there is no wrapper layer
@@ -174,7 +150,7 @@ impl<
     ///
     /// - [`OpenError::OutstandingPendingTx`] when one or more
     ///   reservations are still in flight.
-    /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
+    /// - [`OpenError::Persistence`] for a state-save failure.
     ///
     /// On either error variant, `self` is still released and dropped
     /// (by-value `self` cannot be returned through `Result<(), E>`). Callers

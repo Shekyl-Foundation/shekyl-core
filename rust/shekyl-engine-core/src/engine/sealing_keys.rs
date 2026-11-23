@@ -7,12 +7,12 @@
 //!
 //! [`StateWrapKey`] is the steady-state region-2 AEAD key (`wrap_key_region_2`
 //! per [`docs/WALLET_FILE_FORMAT_V1.md`](../../../../docs/WALLET_FILE_FORMAT_V1.md)
-//! §2.6 / HKDF amendment). [`shekyl_engine_prefs::PrefsHmacKey`] covers prefs
-//! integrity. Password material stays on open / `rotate_password` only.
+//! §2.6 / HKDF amendment). Password material stays on open /
+//! `rotate_password` only.
 
 use std::fmt;
 
-use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
+use shekyl_crypto_pq::wallet_envelope::FILE_KEK_BYTES;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 /// Steady-state ledger seal key: HKDF-derived `wrap_key_region_2`.

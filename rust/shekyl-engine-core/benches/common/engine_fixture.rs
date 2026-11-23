@@ -187,7 +187,6 @@ use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, SoloSigner,
 };
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_engine_prefs::WalletPrefs;
 use shekyl_rpc_transport::HttpRpc;
 use tempfile::TempDir;
 
@@ -291,7 +290,6 @@ pub fn build_engine_fixture() -> (Box<Engine<SoloSigner>>, TempDir) {
             p: 1,
         },
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
 
     let daemon = construct_dummy_daemon();

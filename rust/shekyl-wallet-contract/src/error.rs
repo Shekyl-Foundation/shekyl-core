@@ -12,12 +12,11 @@ use shekyl_engine_core::engine::error::{
 };
 use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
-    ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
-    PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
+    CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError, PScanStartError,
+    PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError, SetTxNoteError,
+    SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
-use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_engine_state::{SetNoteError, TxNoteTooLong};
 use shekyl_rpc_client::{DaemonFault, HashHex, IdentityMismatch, Network};
@@ -1903,21 +1902,6 @@ impl From<OpenError> for WalletRpcError {
     }
 }
 
-impl From<ChangePasswordError> for WalletRpcError {
-    fn from(err: ChangePasswordError) -> Self {
-        match err {
-            ChangePasswordError::RotateFailed(e) => e.into(),
-            // The password DID change; only the preferences flush failed. A
-            // storage code here would tell the client the rotation failed, and
-            // a retry with the old password would then refuse. Category-only,
-            // naming what happened.
-            ChangePasswordError::RotatedButPrefsFlushFailed(e) => {
-                internal_detail("password rotated but preferences flush failed", e)
-            }
-        }
-    }
-}
-
 impl From<RefreshError> for WalletRpcError {
     fn from(err: RefreshError) -> Self {
         match err {
@@ -2385,7 +2369,6 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
             wallet: found.to_string(),
             expected: expected.to_string(),
         },
-        F::Prefs(e) => return from_prefs_error(e, err),
         // `save_as` is not a JSON-RPC method, and a write-once violation is a
         // bug by the variant's own contract.
         F::SaveAsCrossFilesystem { .. } | F::KeysFileWriteOnceViolation { .. } => {
@@ -2416,23 +2399,6 @@ fn from_envelope_error(e: &WalletEnvelopeError, whole: &WalletFileError) -> Wall
     code
 }
 
-/// A preferences failure. `logged` is what the log names — the wrapping
-/// file error when there is one, so the log keeps its context.
-fn from_prefs_error(e: &PrefsError, logged: &dyn std::fmt::Display) -> WalletRpcError {
-    let code = match e {
-        PrefsError::Io(io) => from_io_kind(io.kind()),
-        PrefsError::UnsupportedSchemaVersion { .. } => WalletRpcError::WalletFileVersionUnsupported,
-        PrefsError::Bucket3Field { .. }
-        | PrefsError::OversizeToml { .. }
-        | PrefsError::TomlParse(_)
-        | PrefsError::HmacMismatch { .. }
-        | PrefsError::HmacWrongLength { .. } => WalletRpcError::WalletFileCorrupt,
-        PrefsError::TomlSerialize(_) => return internal_detail("wallet preferences", logged),
-    };
-    tracing::warn!(error = %logged, code = code.code().as_i32(), "wallet preferences refused");
-    code
-}
-
 /// A filesystem failure by kind. `NotFound` is the file-level answer: a
 /// missing *directory* on create is named before any write
 /// ([`WalletFileError::DirectoryMissing`]).
@@ -2450,7 +2416,6 @@ impl From<PersistenceError> for WalletRpcError {
     fn from(err: PersistenceError) -> Self {
         match err {
             PersistenceError::WalletFile(e) => from_wallet_file_error(&e),
-            PersistenceError::Prefs(e) => from_prefs_error(&e, &e),
             // A dispatch whose rename landed but whose durability was not
             // confirmed. Nothing was sent. The submit path reports this as
             // `DispatchNotSaved`; this arm is the same answer, by cause, if
@@ -2635,8 +2600,7 @@ pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
             | F::NetworkMismatch { .. }
             | F::UnknownCapability(_)
             | F::SaveAsCrossFilesystem { .. }
-            | F::SaveAsTargetExists { .. }
-            | F::Prefs(_) => WalletRpcError::SaveInternalFault { of },
+            | F::SaveAsTargetExists { .. } => WalletRpcError::SaveInternalFault { of },
         },
         PersistenceError::DurabilityUnconfirmed(why) => match why {
             U::Remote(_) => WalletRpcError::SaveOnNetworkDrive { of },
@@ -2653,8 +2617,6 @@ pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
             // it never reports this; if it did, that would be a fault.
             U::Reopened => WalletRpcError::SaveInternalFault { of },
         },
-        // A send's or a seal's save never writes the preferences.
-        PersistenceError::Prefs(_) => WalletRpcError::SaveInternalFault { of },
     }
 }
 
@@ -4052,14 +4014,6 @@ mod tests {
                 WalletRpcErrorCode::WalletNetworkMismatch,
             ),
             (
-                WalletFileError::Prefs(PrefsError::Io(IoErr::from(ErrorKind::PermissionDenied))),
-                WalletRpcErrorCode::WalletFileAccessDenied,
-            ),
-            (
-                WalletFileError::Prefs(PrefsError::TomlParse("bad".into())),
-                WalletRpcErrorCode::WalletFileCorrupt,
-            ),
-            (
                 WalletFileError::KeysFileWriteOnceViolation { path: path() },
                 WalletRpcErrorCode::InternalError,
             ),
@@ -4621,12 +4575,6 @@ mod tests {
             ),
             (
                 file(WalletFileError::KeysFileWriteOnceViolation { path: path() }),
-                C::SaveInternalFault,
-                None,
-                "report it",
-            ),
-            (
-                PersistenceError::Prefs(PrefsError::TomlParse("bad".into())),
                 C::SaveInternalFault,
                 None,
                 "report it",
