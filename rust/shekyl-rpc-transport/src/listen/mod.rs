@@ -39,9 +39,10 @@ pub const SOCKET_PROBE_BOUND: std::time::Duration = std::time::Duration::from_se
 #[cfg(unix)]
 mod socket;
 
+pub use shekyl_os_account::directory::AccountAloneFault;
 #[cfg(unix)]
 pub use socket::{
-    bind_owner_only_socket, Cleared, OwnerOnlyListener, OwnerSocketRefusal, SocketDirRefusal,
+    bind_owner_only_socket, Cleared, ListenerLine, OwnerOnlyListener, OwnerSocketRefusal,
     SocketRefusal, OWNER_ONLY_SOCKET_MODE,
 };
 

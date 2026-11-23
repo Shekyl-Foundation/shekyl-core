@@ -281,44 +281,25 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 /// tunnel (the connection refused) is replaced.
 #[cfg(unix)]
 fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
-    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
-    let dir = || {
-        path.parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .display()
-    };
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, ListenerLine};
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
     match bind_owner_only_socket(path) {
         Ok(bound) => bound
             .into_tokio()
             .map_err(|e| format!("{}: {e}", path.display())),
-        Err(OwnerSocketRefusal::NoDirectory) => {
-            Err(format!("{} names no directory", path.display()))
-        }
-        Err(OwnerSocketRefusal::Directory(why)) => Err(format!(
-            "{}; the tunnel's socket is not bound there",
-            why.clause(Some(&dir().to_string()))
+        Err(refusal) => Err(refusal.line(
+            path,
+            directory,
+            &ListenerLine {
+                listener: "the tunnel's socket",
+                holder: "a tunnel",
+                answers: &format!("another tunnel answers on {}", path.display()),
+                no_directory: &format!("{} names no directory", path.display()),
+            },
         )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::Answers)) => {
-            Err(format!("another tunnel answers on {}", path.display()))
-        }
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotASocket)) => Err(format!(
-            "{} is not a socket; it is not replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid))) => Err(format!(
-            "{} is a socket another account owns (uid {uid}); it is not replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::Unknown(why))) => Err(format!(
-            "{}: whether a tunnel still holds this socket is not known ({why}); it is not \
-             replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why))) => {
-            Err(format!("{}: {why}", path.display()))
-        }
-        Err(OwnerSocketRefusal::Socket(error)) => Err(format!("{}: {error}", path.display())),
     }
 }
 

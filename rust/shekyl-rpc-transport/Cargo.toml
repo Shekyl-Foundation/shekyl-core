@@ -83,6 +83,10 @@ tracing = "0.1"
 # macOS). Already in the workspace lockfile (through tokio), and a
 # direct dependency of shekyl-levin.
 socket2 = "0.6"
+# The bind holds the socket directory and works from that descriptor:
+# `statat` and `unlinkat` for the replace decision, `fchmod` for the mode.
+# Already in the workspace lockfile (through shekyl-daemon-config).
+rustix = { version = "1", features = ["fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # The logon session, and the pipe's open with its peer check

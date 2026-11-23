@@ -869,7 +869,7 @@ impl axum::serve::Listener for PipeListener {
 /// descriptor at creation (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 #[cfg(unix)]
 fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListener, BoxErr> {
-    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, ListenerLine};
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -880,42 +880,27 @@ fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListen
         }
         shekyl_os_account::create_account_dir_all(dir)?;
     }
-    let refused = match bind_owner_only_socket(path) {
-        Ok(bound) => return Ok(bound),
-        Err(refusal) => refusal,
-    };
-    Err(match refused {
-        OwnerSocketRefusal::NoDirectory => {
-            format!("{} names no directory to hold the socket", path.display())
-        }
-        OwnerSocketRefusal::Directory(why) => format!(
-            "{}; the wallet RPC's socket is not bound there",
-            why.clause(Some(&dir.display().to_string()))
-        ),
-        // A socket a server still answers on is not taken over; one a
-        // stopped or killed server left was removed. Anything else at the
-        // path is not this server's to remove.
-        OwnerSocketRefusal::Path(SocketRefusal::Answers) => {
-            format!("another server answers on {}", path.display())
-        }
-        OwnerSocketRefusal::Path(SocketRefusal::NotASocket) => {
-            format!("{} is not a socket; it is not replaced", path.display())
-        }
-        OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid)) => format!(
-            "{} is a socket another account owns (uid {uid}); it is not replaced",
-            path.display()
-        ),
-        OwnerSocketRefusal::Path(SocketRefusal::Unknown(why)) => format!(
-            "{}: whether a server still holds this socket is not known ({why}); it is not \
-             replaced",
-            path.display()
-        ),
-        OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why)) => {
-            format!("{}: {why}", path.display())
-        }
-        OwnerSocketRefusal::Socket(error) => format!("{}: {error}", path.display()),
+    // A socket a server still answers on is not taken over; one a stopped
+    // or killed server left was removed. Anything else at the path is not
+    // this server's to remove.
+    match bind_owner_only_socket(path) {
+        Ok(bound) => Ok(bound),
+        Err(refusal) => Err(refusal
+            .line(
+                path,
+                dir,
+                &ListenerLine {
+                    listener: "the wallet RPC's socket",
+                    holder: "a server",
+                    answers: &format!("another server answers on {}", path.display()),
+                    no_directory: &format!(
+                        "{} names no directory to hold the socket",
+                        path.display()
+                    ),
+                },
+            )
+            .into()),
     }
-    .into())
 }
 
 /// Per-process spawn counter, so multiple in-process servers in one process

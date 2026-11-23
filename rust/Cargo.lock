@@ -4852,6 +4852,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "rand_core 0.6.4",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-address",

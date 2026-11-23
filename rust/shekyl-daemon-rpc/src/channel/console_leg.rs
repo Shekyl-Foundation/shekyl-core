@@ -60,41 +60,26 @@ pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
 
 #[cfg(unix)]
 fn bind_socket(dir: &Path) -> Result<ConsoleListener, String> {
-    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, ListenerLine};
     let path = place(dir);
     match bind_owner_only_socket(&path) {
         Ok(bound) => bound
             .into_tokio()
             .map_err(|e| format!("{}: {e}", path.display())),
-        Err(OwnerSocketRefusal::NoDirectory) => {
-            Err(format!("{} names no directory", path.display()))
-        }
-        Err(OwnerSocketRefusal::Directory(why)) => Err(format!(
-            "{}; the console's leg is not bound there",
-            why.clause(Some(&dir.display().to_string()))
+        Err(refusal) => Err(refusal.line(
+            &path,
+            dir,
+            &ListenerLine {
+                listener: "the console's leg",
+                holder: "anything",
+                answers: &format!(
+                    "something answers on {} while this daemon holds the data directory's lock; \
+                     it is not replaced",
+                    path.display()
+                ),
+                no_directory: &format!("{} names no directory", path.display()),
+            },
         )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::Answers)) => Err(format!(
-            "something answers on {} while this daemon holds the data directory's lock; it is \
-             not replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotASocket)) => Err(format!(
-            "{} is not a socket; it is not replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid))) => Err(format!(
-            "{} is a socket another account owns (uid {uid}); it is not replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::Unknown(why))) => Err(format!(
-            "{}: whether anything still holds this socket is not known ({why}); it is not \
-             replaced",
-            path.display()
-        )),
-        Err(OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why))) => {
-            Err(format!("{}: {why}", path.display()))
-        }
-        Err(OwnerSocketRefusal::Socket(error)) => Err(format!("{}: {error}", path.display())),
     }
 }
 

@@ -39,6 +39,32 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-23 — The account-alone fact is one judgment, and one open is one resolution
+
+**Decision.** A directory no other account can enter is
+`shekyl_os_account::directory::account_alone`. The data-directory lock, a
+socket listener's directory and a service's network directory in the
+default layout all call it. A set-id bit or the sticky bit is not entry, so
+a service configuration check no longer refuses a network directory the
+console's bind would accept. The service home and the owner's socket
+directory stay exact mode `0700`, which was already their rule. The
+directories above a data directory or a configuration file are the
+directories one open of that path searches
+(`directories_entered`): each component is read without following, a link
+continues at its target, and the hop bound is that one resolution's. The
+socket bind holds the directory and creates, removes and narrows the socket
+through that descriptor.
+
+**Rationale.** The network-directory check had been written with the service
+home's exact `0700`, while the console and the lock refuse only when
+another account can enter. The ancestor walk was a second resolver, with
+one hop budget for every leg and a later `metadata` that followed what the
+walk had stopped following. The socket's mode was set on a path. One
+judgment and one resolution are what the next caller cannot miss. The
+socket's directory entry is what a connect checks; narrowing that name
+through the held directory does not follow a link planted in place of the
+directory.
+
 ## 2026-11-23 — The daemon never changes a mode, and nothing above its data directory can be swapped
 
 **Decision (Rick, 2026-11-23).** The daemon creates each new directory with
