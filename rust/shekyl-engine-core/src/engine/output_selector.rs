@@ -202,23 +202,31 @@ pub(crate) enum LargestFirstFault {
 ///
 /// A zero `target` covers with an empty prefix. An empty
 /// ranking covers only a zero target.
+///
+/// The walk counts to the covering length, since that length
+/// is what a refusal names and what tells a short ranking from
+/// an over-cap one, but keeps at most `cap` items: a cover past
+/// the cap is refused, so nothing past it is ever returned.
 pub(crate) fn cover_largest_first<T>(
     ranked_largest_first: impl IntoIterator<Item = T>,
     amount_of: impl Fn(&T) -> AtomicUnits,
     target: AtomicUnits,
     cap: usize,
 ) -> Result<LargestFirstCover<T>, LargestFirstFault> {
-    let mut chosen = Vec::new();
+    let mut chosen = Vec::with_capacity(cap);
+    let mut count = 0usize;
     let mut total = AtomicUnits::ZERO;
     for item in ranked_largest_first {
         if total >= target {
             break;
         }
-        let amount = amount_of(&item);
         total = total
-            .checked_add(amount)
+            .checked_add(amount_of(&item))
             .ok_or(LargestFirstFault::Overflow)?;
-        chosen.push(item);
+        count += 1;
+        if count <= cap {
+            chosen.push(item);
+        }
     }
     if total < target {
         return Err(LargestFirstFault::Short {
@@ -226,7 +234,6 @@ pub(crate) fn cover_largest_first<T>(
             available: total,
         });
     }
-    let count = chosen.len();
     if count > cap {
         return Err(LargestFirstFault::TooManyInputs { count });
     }
