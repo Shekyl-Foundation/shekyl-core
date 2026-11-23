@@ -1654,6 +1654,16 @@ impl Transaction {
         counter.bytes
     }
 
+    /// The fee field. `Some` for an `Fcmp` ct, including `Some(0)`.
+    /// `None` for a `Null` ct, which has no fee field.
+    #[must_use]
+    pub const fn fee(&self) -> Option<u64> {
+        match &self.ct {
+            Ct::Fcmp { fee, .. } => Some(*fee),
+            Ct::Null(_) => None,
+        }
+    }
+
     /// The consensus **transaction weight** — the serialized size **plus** the
     /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
     /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp` at `ac3836de90`
