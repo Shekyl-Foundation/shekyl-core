@@ -615,7 +615,12 @@ async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
         )),
         "the build reports the request's shape against the cap"
     );
-    assert_eq!(pending.outstanding(), 0, "nothing is reserved");
+    assert_eq!(pending.outstanding(), 0, "no reservation is held");
+    // `outstanding` does not count these: a refusal that locked its inputs
+    // would block every later send while the count above still read zero.
+    let state = pending.state.lock().expect("state lock not poisoned");
+    assert!(state.output_locks.is_empty(), "no input is locked");
+    assert_eq!(state.next_id, 0, "no reservation id was minted");
 }
 
 /// A send that takes exactly the cap's inputs clears selection: with no
