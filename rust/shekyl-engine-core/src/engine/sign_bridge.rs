@@ -22,7 +22,7 @@ use shekyl_tx_builder::outputs::{BuildSpendError, BuiltSpend, Payee, Recipient, 
 use shekyl_tx_builder::{
     phase1_payload_hashes, sign_pqc_auths, sign_transaction as tx_sign_proofs,
     tx_prefix_hash_from_parts, InternalSignFault, LeafEntry, OutputInfo, PqcAuth, SignFault,
-    SignedProofs, SpendInput, WireEncodeInput,
+    SignedProofs, SpendInput, TxBuilderError, WireEncodeInput,
 };
 use shekyl_units::AtomicUnits;
 
@@ -57,6 +57,25 @@ impl DerivedScalars {
     fn change_spend_pk(&self) -> [u8; 32] {
         self.spend_public.compress().to_bytes()
     }
+}
+
+/// The transaction builder's refusal as the key engine reports it: the inner
+/// text (a prover's or encoder's message) stays in the local log, and the
+/// fault that leaves is the variant, bounded.
+fn builder_refused(err: &TxBuilderError) -> KeyEngineError {
+    tracing::debug!(error = %err, "the transaction builder refused the signing pass");
+    KeyEngineError::Sign(err.fault())
+}
+
+/// The PQC authorization of an assembled send: one payload hash and one
+/// signature per spend. A refusal is the builder's own fault.
+pub(super) fn sign_spend_auths(
+    wire: &WireEncodeInput,
+    network: &shekyl_network::NetworkId,
+    spend_inputs: &[SpendInput],
+) -> Result<Vec<PqcAuth>, KeyEngineError> {
+    let payload_hashes = phase1_payload_hashes(wire, network).map_err(|e| builder_refused(&e))?;
+    sign_pqc_auths(&payload_hashes, spend_inputs).map_err(|e| builder_refused(&e))
 }
 
 /// Assemble the transfer-shaped [`WireEncodeInput`] shared by the ordinary
@@ -114,10 +133,7 @@ pub(super) fn assemble_transfer_wire(
     // held here to what the signer's membership self-verify proved against.
     signed
         .hold_spend_layout(&key_images, pqc_pubkeys)
-        .map_err(|e| {
-            tracing::debug!(error = %e, "the transfer's layout is not what its proof verified");
-            KeyEngineError::Sign(e.fault())
-        })?;
+        .map_err(|e| builder_refused(&e))?;
 
     let bulletproof =
         Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
@@ -457,12 +473,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         AtomicUnits::from_raw(fee),
         &tree,
     )
-    .map_err(|e| {
-        // The inner text (a prover's or encoder's message) stays in the
-        // local log; the fault that leaves is the variant, bounded.
-        tracing::debug!(error = %e, "the transaction builder refused the signing pass");
-        KeyEngineError::Sign(e.fault())
-    })?;
+    .map_err(|e| builder_refused(&e))?;
 
     // The wire shape is assembled by the single shared constructor both this
     // path and the F-D2 drain route through, so the two serialize identically
@@ -482,15 +493,7 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
         &pqc_pubkeys,
     )?;
 
-    let payload_hashes = phase1_payload_hashes(&wire_with_proofs, &tx.network.network_id())
-        .map_err(|_| KeyEngineError::Primitive {
-            detail: "phase1 payload hash failed",
-        })?;
-
-    let pqc_auths =
-        sign_pqc_auths(&payload_hashes, &spend_inputs).map_err(|_| KeyEngineError::Primitive {
-            detail: "pqc auth signing failed",
-        })?;
+    let pqc_auths = sign_spend_auths(&wire_with_proofs, &tx.network.network_id(), &spend_inputs)?;
 
     wire_with_proofs.pqc_auths = pqc_auths.clone();
 

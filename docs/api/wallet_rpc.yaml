@@ -600,7 +600,9 @@ info:
   # the proof verified against: a bug, as every builder invariant is. Every
   # path that signs answers a signer fault the same way, so stake, drain,
   # unstake and collect_unstaked now return -29119 (or the code of a fault the
-  # user can act on) where they returned -32603. api_version stays 1.
+  # user can act on) where they returned -32603. One failure has one name:
+  # wire-encode is retired, and a final encoding refused on any path is the
+  # builder's wire. api_version stays 1.
   version: 0.24.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -1219,7 +1221,7 @@ components:
                                           missing-key-image,
                                           source-decapsulation,
                                           rid-not-encodable, proof,
-                                          bulletproof-parse, wire-encode,
+                                          bulletproof-parse,
                                           randomness).
                                           Report it; the wallet log has the
                                           detail (A16). A stake refused here

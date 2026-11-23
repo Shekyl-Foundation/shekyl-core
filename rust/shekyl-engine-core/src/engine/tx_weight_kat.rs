@@ -270,6 +270,61 @@ pub(crate) mod support {
         }
     }
 
+    /// An ordinary send keeps the builder's fault at its PQC signing and its
+    /// final encoding, as the staking paths do, and each reaches the signer's
+    /// error unchanged. Red edit: map either back to a wallet-side fault.
+    #[test]
+    fn a_send_keeps_the_builders_fault_at_its_last_two_steps() {
+        use crate::engine::error::{KeyEngineError, SignerError};
+        use crate::engine::sign_bridge::{assemble_transfer_wire, sign_spend_auths};
+        use crate::engine::signer::encode_signed;
+        use shekyl_tx_builder::{InternalSignFault, SignFault};
+
+        let cell = kat_cell(2, 2).expect("a cell");
+        let signed = cell.sign().expect("it signs");
+        let images: Vec<[u8; 32]> = signed.key_images.iter().map(|i| *i.as_bytes()).collect();
+        let slot_keys: Vec<Vec<u8>> = cell
+            .spend_inputs
+            .iter()
+            .map(|input| {
+                let combined: &[u8; 64] = input.combined_ss[..].try_into().expect("64 bytes");
+                shekyl_crypto_pq::derivation::derive_pqc_public_key(combined, input.output_index)
+                    .expect("a hybrid key")
+            })
+            .collect();
+        let output_count = signed.commitments.len();
+        let mut wire = assemble_transfer_wire(
+            images,
+            vec![[2; 32]; output_count],
+            vec![Some(1); output_count],
+            Vec::new(),
+            cell.fee.to_raw(),
+            signed,
+            &slot_keys,
+        )
+        .expect("its own layout assembles");
+
+        let network = shekyl_network::Network::Testnet.network_id();
+        let pqc_fault = SignFault::Internal(InternalSignFault::PqcSignError);
+        let refused = sign_spend_auths(&wire, &network, &[]).expect_err("no input to sign");
+        assert!(
+            matches!(refused, KeyEngineError::Sign(f) if f == pqc_fault),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            SignerError::from(refused),
+            SignerError::Sign(f) if f == pqc_fault
+        ));
+
+        wire.pseudo_outs.pop();
+        assert!(matches!(
+            encode_signed(&wire),
+            Err(SignerError::Sign(SignFault::Internal(
+                InternalSignFault::WireError
+            )))
+        ));
+    }
+
     /// The path ordinary transfers and drains share holds the transaction to
     /// what its proof verified: its own key images and slot keys assemble, and
     /// another key image, another slot key or a missing image is the signer's
