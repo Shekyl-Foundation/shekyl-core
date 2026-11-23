@@ -424,3 +424,54 @@ The pair's difference is A − B, from the line that sets the maximum.
 **Captures:** `ca3_ml_dsa_tx_auth_timing_20261122_captures/floor_loc2_*`
 with `SHA256SUMS`, redacted as before. The raw files are in the estate's
 private captures.
+
+### The old-binary diagnostic (2026-11-23): the crossing reproduces with its own build
+
+This is a diagnostic, not an attempt (the maintainer's ruling of
+2026-11-22: run it before anything is registered, and let its result pick
+the pass line).
+
+The run:
+- the shake-down's own binary, still on the floor device, its SHA-256
+  checked first:
+  `3ff1a1b523037b0de2f3350333482b44d23d5708cc53c80d4404e05b63de4939`, the
+  shake-down's;
+- `ml-dsa 50000 20261124`, the shake-down's mode, matched pair and seed;
+- 00:09:57 to 00:31:09Z, under a quiet claim, the clock synchronised;
+- 1.5 GHz, 47 then 56 °C, throttled `0x0`.
+
+```text
+matched-pair candidates_drawn=27 fixed-a expand_s_bytes=2488 expand_a_rejected=10 replicates=true fixed-b expand_s_bytes=2488 expand_a_rejected=10 replicates=true
+check=replica replicated=true verdict=as-intended
+information=fixed-a-vs-varied max_abs_t=1.33
+pass-line=fixed-a-vs-fixed-b max_abs_t=7.12 verdict=INCONCLUSIVE
+null=fixed-a-vs-fixed-a max_abs_t=2.12 verdict=no-evidence
+null=varied-vs-other-varied max_abs_t=1.84 verdict=no-evidence
+control=planted-leak planted_ns=22124 max_abs_t=127.31 verdict=detected
+result=INCONCLUSIVE fixed_pair=7.12 worst_null=2.12 control=127.31 information_fixed_vs_varied=1.33
+```
+
+- **It is valid.** Every check held (790 of 790 kept signatures verified
+  per comparison), the control was detected, and both nulls are below
+  4.5.
+- **It reproduces: the pair reads 7.12, at or above 4.5.** The maximum is
+  at the lowest cut-off (below 2.99 ms, the single-attempt signatures).
+  Key A is about 0.62 µs slower there, and 0.63 to 0.76 µs slower from
+  the 1st to the 25th percentile: the shake-down's direction and mode, at
+  somewhat less than its 0.9 to 1.3 µs.
+- **It depends on the build.** On the same mode, pair, seed and device,
+  the second localisation's build (`0619324b93`, the same timed path) read
+  3.52, with key A 0.24 to 0.33 µs slower in the same percentiles.
+  - The composed call therefore carries a per-key effect whose size
+    follows the code layout.
+  - Its likely carrier is the branch predictor learning each repeated
+    key's rejection pattern under a given layout. The test repeats each
+    key 25,000 times, and production signs with each output key about
+    once. It is not identified.
+- **What it decides** (the ruling): the composed call cannot be a
+  reliable line, so the pass line is signing alone from the working slot,
+  with the key decode timed. The composed call and key generation alone
+  are information.
+
+**Captures:** `floor_oldbin_*` with `SHA256SUMS`, redacted as before. The
+raw files are in the estate's private captures.

@@ -1,0 +1,35 @@
+== conditions oldbin-start at 2026-11-23T00:09:57Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 0.00 0.00 0.00
+clock_khz: 1500000
+soc_temp_millic: 46738
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 167288
+time_in_state:
+  600000 3199161
+  700000 39445
+  800000 6080
+  900000 4657
+  1000000 8066
+  1100000 9169
+  1200000 6121
+  1300000 6587
+  1400000 4768
+  1500000 6850852
+mem_available_kb: 3304964
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    47486 <agent>  100       00:00 ps
+    47463 root     34.3       00:00 systemd-timedat
+    47464 <agent>  5.5       00:00 bash
+    47219 <agent>  0.4       01:02 systemd
+       59 root      0.0  1-04:09:08 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    47383 <agent>  0.0       01:00 dbus-daemon
+    47380 <agent>  0.0       01:00 tmux: server
+tmux: ca3oldbin: 1 windows (created Sun Nov 22 19:08:57 2026);
