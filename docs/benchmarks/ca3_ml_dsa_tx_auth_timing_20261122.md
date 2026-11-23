@@ -1078,3 +1078,26 @@ faster.
 
 **The other Pi.** skl-pi4-1 holds the cover-traffic lane's measurement until
 2026-11-24 17:11Z. These runs do not wait for it.
+
+### Step 2, the builds as verified, before any timing run
+
+All were built on the floor device from the clean clone at `84f9d24714`.
+
+| Build | SHA-256 | How | Against the registered binary |
+| --- | --- | --- | --- |
+| Registered | `e13550da…` | the registered binary | the baseline |
+| Alignment | `a7d0db96…` | every function aligned to 128 bytes | **layout only:** 1,059 functions and 152,297 instructions identical; 78 of 78 fips204 and 2 of 2 keccak functions moved |
+| Moved | `d8f2969a…` | same objects, `.text` 0x1240 bytes later | **layout only:** the same counts, all moved |
+| Sorted (the fallback) | `22721d0c…` | same objects, `--sort-section=name` | **rejected, not run:** it reorders data as well as code (`.rodata` and `.bss` change size) |
+
+**A correction to the verifier, before any timing run.** It first refused the
+alignment build on one instruction in `__init_cpu_features_constructor`: an
+`ldr` whose ADRP page offset is zero in that layout, which disassembles as
+`[x11]` rather than `[x11, #imm]`. That is address-only content the normaliser
+missed, so the fallback in the method was not needed. With the form handled, the
+verifier still refuses a binary against itself, the Step 1 build and the sorted
+relink. Its outputs are `floor_step2_verify_*`.
+
+**The timing runs** each copy their binary to one path of the same length as
+the registered run's, from the same working directory, with the same command.
+The stack's starting address therefore does not vary between them.

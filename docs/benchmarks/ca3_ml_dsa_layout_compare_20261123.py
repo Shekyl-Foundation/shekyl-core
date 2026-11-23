@@ -34,7 +34,8 @@ HEADER = re.compile(r"^([0-9a-f]+) <(.+)>:$")
 INSTRUCTION = re.compile(r"^\s*([0-9a-f]+):\s+(\S+)(?:\s+(.*))?$")
 SYMBOL_HASH = re.compile(r"::h[0-9a-f]{16}")
 TARGET = re.compile(r"\b[0-9a-f]+ <([^>]+)>")
-MEMORY_BASE = re.compile(r"\[(x\d+|sp), #(-?(?:0x)?[0-9a-f]+)\]")
+# The offset is optional: a low-12 offset of zero disassembles as `[x11]`.
+MEMORY_BASE = re.compile(r"\[(x\d+|sp)(?:, #(-?(?:0x)?[0-9a-f]+))?\]")
 PADDING = {"nop", "udf", ".inst", ".word"}
 LOW12_USERS = {"add", "ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "ldrsw", "str", "strb", "strh"}
 
@@ -55,7 +56,11 @@ def normalise(mnemonic, operands, page_registers):
         else:
             match = MEMORY_BASE.search(operands)
             if match and match.group(1) in page_registers:
-                operands = operands[: match.start()] + f"[{match.group(1)}, IMM]"
+                operands = (
+                    operands[: match.start()]
+                    + f"[{match.group(1)}, IMM]"
+                    + operands[match.end() :]
+                )
     if first in page_registers and mnemonic not in {"str", "strb", "strh"}:
         if mnemonic != "add" or not operands.endswith("IMM"):
             page_registers.discard(first)
