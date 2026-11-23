@@ -281,8 +281,11 @@ when the attacker holds the key. Per-region HKDF labels deliver load-bearing
 separation; address binding on region 1 was redundant under CSPRNG-random
 per-wallet `file_kek` and is omitted so bootstrap ordering stays clean.
 Region 2 retains `\|\| addr` binding. Steady-state session code may
-cache only `wrap_key_region_2` while zeroizing `file_kek` and
-`wrap_key_region_1` after open.
+cache `wrap_key_region_2` and keys derived from `file_kek` under their own
+domain before it is wiped, while zeroizing `file_kek` and
+`wrap_key_region_1` after open. Today that is one key: a staking wallet's
+body-store key (`shekyl_p_store::derive_store_key`, cSHAKE256 customization
+`shekyl/p-store-aead-v1`), held by the body store for its serving data.
 
 **Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced
 under a pre-amendment implementation that keyed region AEAD with raw `file_kek`
@@ -360,7 +363,8 @@ guarantees : .wallet.keys bytes on disk are untouched by auto-save
 Each auto-save re-runs the Argon2id wrap derivation. The design accepts
 this per-save latency in exchange for the invariant that `file_kek` is
 transient at open: derived from the password, used to HKDF the region wrap
-keys (§2.6), then zeroized. Steady-state auto-save
+keys (§2.6) and, for a staking wallet, the body-store key, then zeroized.
+Steady-state auto-save
 may cache `wrap_key_region_2` (not `file_kek`, not `wrap_key_region_1`) for
 the unlocked session; see
 [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
