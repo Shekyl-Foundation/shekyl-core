@@ -28,6 +28,26 @@ pub struct Identity {
     pub is_release: bool,
 }
 
+impl Identity {
+    /// The version in a release archive's name, from this identity and no
+    /// other read of git: `v<version>` at a release, the binaries' own value
+    /// otherwise. A value a file name cannot carry is refused.
+    pub fn archive_version(&self) -> Result<String, String> {
+        let name = match self.full.strip_suffix("-release") {
+            Some(version) if self.is_release => format!("v{version}"),
+            _ => self.full.clone(),
+        };
+        if name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        {
+            Ok(name)
+        } else {
+            Err(format!("the version {name:?} cannot name an archive"))
+        }
+    }
+}
+
 /// What git says about HEAD.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitHead {
@@ -188,6 +208,21 @@ mod tests {
             assert!(!head(tag).is_tagged(), "{tag}");
         }
         assert!(head("no\nv3.1.0").is_tagged());
+    }
+
+    #[test]
+    fn the_archive_version_is_the_identitys_own() {
+        let tagged = from_git(&head("v3.1.0-alpha.13"), "3.1.0", "Shekyl NG");
+        assert_eq!(tagged.archive_version().as_deref(), Ok("v3.1.0-alpha.13"));
+        let untagged = from_git(&head(""), "3.1.0", "Shekyl NG");
+        assert_eq!(untagged.archive_version().as_deref(), Ok("3.1.0-842d36361"));
+    }
+
+    #[test]
+    fn a_version_a_file_name_cannot_carry_is_refused() {
+        let id = from_git(&head("archive/x-2026-11-23"), "3.1.0", "Shekyl NG");
+        let err = id.archive_version().expect_err("a slash");
+        assert!(err.contains("cannot name an archive"), "{err}");
     }
 
     #[test]

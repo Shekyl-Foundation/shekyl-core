@@ -9,14 +9,18 @@
 //! cargo xtask dist --host <depends host> [--out DIR] [--measurement-spans] [--version-override V]
 //! cargo xtask build [--out DIR] [--measurement-spans] [--version-override V]
 //! cargo xtask plan (--host <depends host> | --native)
+//! cargo xtask triple --host <depends host>
+//! cargo xtask archive-version [--version-override V]
 //! ```
 //!
 //! `dist` builds a release host from depends' environment file
 //! (`contrib/depends/<host>/share/toolchain.env`) and stages the binaries and
 //! the files the archive carries; gitian then adds Tor and packs. `build` is
 //! a native release build of this machine's triple. `plan` prints what
-//! either would run, and runs nothing. Every variable and argument comes
-//! from `rust/xtask/matrix.toml`.
+//! either would run, and runs nothing. `triple` prints a host's Rust triple,
+//! for the toolchain's `rustup target add`, and `archive-version` the version
+//! a release archive is named with. Every variable and argument comes from
+//! `rust/xtask/matrix.toml`.
 
 mod matrix;
 mod plan;
@@ -58,12 +62,17 @@ const STAGED_DIR_MODE: u32 = 0o755;
 const USAGE: &str = "usage:\n  \
     cargo xtask dist --host <depends host> [--out DIR] [--measurement-spans] [--version-override V]\n  \
     cargo xtask build [--out DIR] [--measurement-spans] [--version-override V]\n  \
-    cargo xtask plan (--host <depends host> | --native)";
+    cargo xtask plan (--host <depends host> | --native)\n  \
+    cargo xtask triple --host <depends host>\n  \
+    cargo xtask archive-version [--version-override V]";
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut it = args.iter();
     let command = it.next().ok_or(USAGE)?.clone();
-    if !matches!(command.as_str(), "dist" | "build" | "plan") {
+    if !matches!(
+        command.as_str(),
+        "dist" | "build" | "plan" | "triple" | "archive-version"
+    ) {
         return Err(format!("{command:?} is not a command\n{USAGE}"));
     }
     let mut o = Options {
@@ -88,6 +97,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
     let fits = match o.command.as_str() {
         "dist" => o.host.is_some() && !o.native,
         "build" => o.host.is_none() && !o.native,
+        "triple" => {
+            o.host.is_some()
+                && !o.native
+                && o.out.is_none()
+                && !o.measurement
+                && o.version_override.is_none()
+        }
+        "archive-version" => o.host.is_none() && !o.native && o.out.is_none() && !o.measurement,
         _ => {
             (o.host.is_some() != o.native)
                 && o.out.is_none()
@@ -106,6 +123,19 @@ fn run(args: &[String]) -> Result<(), String> {
     let root = repository_root()?;
     let matrix = Matrix::load(&root.join("rust/xtask/matrix.toml"))?;
     let target_dir = root.join(&matrix.build.target_dir);
+
+    match options.command.as_str() {
+        "triple" => {
+            let name = options.host.as_deref().ok_or(USAGE)?;
+            println!("{}", matrix.dist_host(name)?.0.triple);
+            return Ok(());
+        }
+        "archive-version" => {
+            println!("{}", identity(&root, &matrix, &options)?.archive_version()?);
+            return Ok(());
+        }
+        _ => {}
+    }
 
     // `--host` is a release host built from depends; without it, this
     // machine's own triple.
@@ -504,5 +534,11 @@ mod tests {
         assert!(parse(&args("plan --native --measurement-spans")).is_err());
         assert!(parse(&args("build --frobnicate")).is_err());
         assert!(parse(&args("install")).is_err());
+        assert!(parse(&args("triple --host x86_64-linux-gnu")).is_ok());
+        assert!(parse(&args("triple")).is_err());
+        assert!(parse(&args("triple --host x --out y")).is_err());
+        assert!(parse(&args("archive-version")).is_ok());
+        assert!(parse(&args("archive-version --version-override 3.1.0")).is_ok());
+        assert!(parse(&args("archive-version --host x")).is_err());
     }
 }
