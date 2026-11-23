@@ -7,8 +7,7 @@
 //! by `rust/shekyl-version` through `option_env!`.
 //!
 //! - A commit with one release tag: the tag without its `v`, tagged
-//!   `release`. A release tag matches the whole grammar
-//!   `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$`
+//!   `release`. A release tag matches [`RELEASE_TAG_GRAMMAR`] in full
 //!   (the maintainer's ruling, 2026-11-23).
 //! - A commit with two release tags: refused, since neither names it.
 //! - Any other commit, whatever other tags it carries (`archive/…`,
@@ -20,6 +19,13 @@
 
 use std::path::Path;
 use std::process::Command;
+
+/// The one release-tag grammar. `docs/RELEASE_PROMOTION.md` §3 and
+/// `scripts/release/check_staging_deadlines.py` carry this text verbatim
+/// (`scripts/ci/check_release_tag_grammar.py`); [`release_version`] is its
+/// std-only matcher, and `release_tags.tsv` holds the two to one answer.
+pub const RELEASE_TAG_GRAMMAR: &str =
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$";
 
 /// The three values the binaries carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,8 +111,8 @@ pub fn from_git(head: &GitHead, default: &str, release_name: &str) -> Result<Ide
 pub fn from_override(version: &str, release_name: &str) -> Result<Identity, String> {
     if release_version(&format!("v{version}")).is_none() {
         return Err(format!(
-            "--version-override {version:?} is not a release version \
-             (<major>.<minor>.<patch>, then optionally `-` and letters, digits and `.`)"
+            "--version-override {version:?} is not a release version: with a `v` \
+             in front it must match {RELEASE_TAG_GRAMMAR}"
         ));
     }
     Ok(Identity {
@@ -253,6 +259,20 @@ mod tests {
         ] {
             assert!(release_version(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_matcher_decides_every_shared_case() {
+        let cases = include_str!("../release_tags.tsv");
+        let mut read = 0;
+        for line in cases.lines().filter(|l| !l.starts_with('#')) {
+            let mut cells = line.split('\t');
+            let tag = cells.next().expect("a tag");
+            let release = cells.next().expect("a release cell") == "release";
+            assert_eq!(release_version(tag).is_some(), release, "{tag}");
+            read += 1;
+        }
+        assert!(read > 0, "the case table is empty");
     }
 
     #[test]

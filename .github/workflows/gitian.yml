@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v3.0.2-RC1)'
+        description: 'Tag to build (e.g. v3.1.0-alpha.13)'
         required: true
       repo_url:
         description: 'Repository URL override (leave empty for default)'
@@ -65,7 +65,7 @@ jobs:
           # a recognised pre-release passes, and any other shape is refused,
           # not waved on. The tag reaches grep on a here-string, so the
           # verdict is grep's own exit status and not a pipeline's.
-          if grep -Eiq '^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
+          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
             echo "::notice::$GITIAN_TAG predates the fn-dsa genesis gate and is a pre-release: nothing to refuse"
             exit 0
           fi
@@ -463,6 +463,18 @@ jobs:
           echo "=== Release contents ==="
           cat SHA256SUMS
 
+      - name: Read whether the tag is a pre-release
+        id: release_kind
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # The pre-release grammar, the same text as the gate's fallback above
+          # (scripts/ci/check_release_tag_grammar.py).
+          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITHUB_REF_NAME"; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -470,4 +482,4 @@ jobs:
           files: release-assets/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'RC') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+          prerelease: ${{ steps.release_kind.outputs.prerelease == 'true' }}

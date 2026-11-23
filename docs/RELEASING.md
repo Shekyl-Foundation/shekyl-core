@@ -107,22 +107,22 @@ wire's reply, so the sweep checks only its human lines' words against
    # Sign with the Foundation release-signing subkey explicitly.
    # -u overrides git config user.signingkey for this single command,
    # so your personal commit-signing key stays configured for normal work.
-   git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main -m "Shekyl v3.0.3-RC1"
+   git tag -u 6914D74823DDA8DC -a -s v3.0.3-rc.1 origin/main -m "Shekyl v3.0.3-rc.1"
 
    # Verify BEFORE pushing. A wrong signer can still be undone locally.
-   git verify-tag v3.0.3-RC1
+   git verify-tag v3.0.3-rc.1
    # Expected: "Good signature from 'Shekyl Foundation (Release Signing Key) ...'"
    # Expected: Primary key fingerprint F5F7 5A47 70C9 4FE1 D5A5 AE59 844E 424F 9866 4F44
    ```
 
-   For pre-releases use a suffix: `v3.0.3-RC1`, `v3.1.0-alpha.5`,
+   For pre-releases use a suffix: `v3.0.3-rc.1`, `v3.1.0-alpha.5`,
    `v3.1.0-beta.1`, etc.
 
 4. **Push the tag.** CI triggers on tag push. `main` is already on the
    remote, because the merge happened there:
 
    ```bash
-   git merge-base --is-ancestor v3.0.3-RC1 origin/main && git push origin v3.0.3-RC1
+   git merge-base --is-ancestor v3.0.3-rc.1 origin/main && git push origin v3.0.3-rc.1
    ```
 
    > **Important:** The tag must point to a commit that is already on
@@ -171,14 +171,16 @@ wire's reply, so the sweep checks only its human lines' words against
 - Release tags: `v3.1.0`, `v3.2.0`, `v4.0.0`
 - Pre-release tags, in the canonical form `docs/VERSIONING.md` defines:
   `v3.1.0-alpha.9`, `v3.1.0-beta.1`, `v3.1.0-rc.1`
-- The release job marks a tag as a pre-release when its name contains `RC`,
-  `alpha` or `beta` (`.github/workflows/gitian.yml`, the `prerelease:`
-  expression). GitHub's `contains()` is not case sensitive, so the canonical
-  lowercase `rc.N` is covered as well as the older `-RC1` spelling.
+- The release job marks a tag as a pre-release when it matches the pre-release
+  grammar (`docs/RELEASE_PROMOTION.md` §3), the same test the fn-dsa genesis
+  gate uses. The older `-RC1` spelling is a release tag, but not a recognised
+  pre-release.
 
 ## Release Artifacts
 
-Each release produces these files (all binaries are Gitian reproducible builds):
+Each release produces these files. Gitian builds them all. The Linux, macOS and
+FreeBSD archives are byte-reproducible; the Windows archive is not yet
+(`docs/FOLLOWUPS.md`):
 
 | File | Description |
 |------|-------------|
@@ -282,14 +284,14 @@ grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
 If a tag needs to be moved (e.g. to include a last-minute fix):
 
 ```bash
-git tag -d v3.0.3-RC1                              # delete local
-git push origin :refs/tags/v3.0.3-RC1               # delete remote
+git tag -d v3.0.3-rc.1                              # delete local
+git push origin :refs/tags/v3.0.3-rc.1               # delete remote
 git fetch origin                                    # the fix reached main by pull request
 gpg --card-status                                   # warm the agent
-git tag -u 6914D74823DDA8DC -a -s v3.0.3-RC1 origin/main \
-  -m "Shekyl v3.0.3-RC1"                           # recreate on the new merge commit, signed
-git verify-tag v3.0.3-RC1                           # MUST pass before pushing
-git push origin v3.0.3-RC1
+git tag -u 6914D74823DDA8DC -a -s v3.0.3-rc.1 origin/main \
+  -m "Shekyl v3.0.3-rc.1"                           # recreate on the new merge commit, signed
+git verify-tag v3.0.3-rc.1                           # MUST pass before pushing
+git push origin v3.0.3-rc.1
 ```
 
 Re-tagging goes through the same signing ceremony as a fresh release;
@@ -301,7 +303,7 @@ Or trigger manually from the Actions tab without retagging.
 
 ```bash
 # From the Actions tab, use "Run workflow" with:
-#   tag: v3.0.3-RC1
+#   tag: v3.0.3-rc.1
 #   repo_url: https://github.com/youruser/shekyl-core
 ```
 

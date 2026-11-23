@@ -370,6 +370,13 @@ jobs:
           # request, not first at a cut.
           run_one "Staging-deadline gate reads the table" \
             python3 scripts/release/check_staging_deadlines.py v0.0.1
+          # One release-tag grammar: the xtask's is canonical, and the
+          # promotion doc, the staging gate, the genesis gate and the gitian
+          # workflow carry it verbatim.
+          run_one "Release-tag grammar gate" \
+            python3 scripts/ci/check_release_tag_grammar.py
+          run_one "Release-tag grammar gate self-test" \
+            python3 scripts/ci/check_release_tag_grammar.py --selftest
           # The domain-binding ratchet must be empty at v3.1.0 (the signing
           # envelope §2.5, ruled 2026-11-05); the release-time gate refuses
           # a cut at or past it with rows left. Its rule and its read of

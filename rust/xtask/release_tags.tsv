@@ -1,0 +1,29 @@
+# The release-tag grammar's cases: tag, whether it is a release, whether it
+# is a pre-release. rust/xtask/src/version.rs and
+# scripts/ci/check_release_tag_grammar.py both decide every row, so the
+# hand-written matcher and the regular expressions cannot disagree.
+v0.0.0	release	final
+v3.1.0	release	final
+v10.20.30	release	final
+v3.1.0-alpha	release	pre
+v3.1.0-alpha.12	release	pre
+v3.1.0-beta.1	release	pre
+v3.1.0-rc.1	release	pre
+v3.1.0-rc1	release	pre
+v3.0.3-RC1	release	final
+v3.1.0-final	release	final
+v3.1.0-alphabet	release	final
+v3.1.0-alpha.1.2	release	final
+3.1.0-alpha.1	not	final
+V3.1.0-alpha.1	not	final
+v03.1.0	not	final
+v3.01.0	not	final
+v3.1.00	not	final
+v3.1	not	final
+v3.1.0.1	not	final
+v3.1.0-	not	final
+v3.1.0-a_b	not	final
+v3.1.0-a-b	not	final
+v3.1.0+build	not	final
+core-v3.1.0	not	final
+archive/x-2026-11-23	not	final
