@@ -417,7 +417,7 @@ pub fn unpadded_submission() -> RpcError {
 ///
 /// The refusal, in the operator's words ([`StartFault::Refused`]).
 pub fn check_store(data_dir: &Path) -> Result<(), StartFault> {
-    Ok(Store::check(data_dir).map_err(|e| e.to_string())?)
+    Store::check(data_dir).map_err(|e| StartFault::Refused(e.to_string()))
 }
 
 /// Replace a service's console key. The new private half, the fingerprint
