@@ -734,10 +734,12 @@ mod tests {
             Err(VerifyCostRefusal::UnpopulatedCell { n_in: 4, depth: 4 }),
         );
         // Outside the consensus input domain: a table cannot be evaluated
-        // at 9 (§80.5).
+        // one past the cap (§80.5).
         assert_eq!(
-            SPEC_VERIFY_COST.f_ms(9, GENESIS_TREE_DEPTH),
-            Err(VerifyCostRefusal::InputCountOutsideDomain { n_in: 9 }),
+            SPEC_VERIFY_COST.f_ms(MAX_TABLE_INPUTS + 1, GENESIS_TREE_DEPTH),
+            Err(VerifyCostRefusal::InputCountOutsideDomain {
+                n_in: MAX_TABLE_INPUTS + 1
+            }),
         );
         assert_eq!(
             SPEC_VERIFY_COST.f_ms(0, GENESIS_TREE_DEPTH),

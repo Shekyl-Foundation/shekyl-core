@@ -65,7 +65,7 @@ use shekyl_harness_spender::{complete_tree, Persona, Spender};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_network::Network;
 use shekyl_types::BlockHeight;
-use shekyl_wire::transaction::{Input, COINBASE_RESERVE, MAX_FCMP_INPUTS, MAX_OUTPUTS};
+use shekyl_wire::transaction::{Input, COINBASE_RESERVE, MAX_OUTPUTS};
 use shekyl_wire::Transaction;
 
 use crate::archival_driver::{ENDPOINT, FEE};
@@ -148,11 +148,12 @@ const SHAPES: &[Shape] = &[
             spender.spend_coinbase(wallet, coinbases[0], at, Family::Main.fee())
         },
     },
-    // Shape 2: spends at the input cap. The most membership proof, key
-    // images and signatures a transaction carries.
+    // Shape 2: an eight-input spend, the fixture's own recorded shape. It
+    // reads no consensus limit, so a change to the input cap replays these
+    // bytes unchanged.
     Shape {
         name: "spend_8in_2out",
-        inputs_per_tx: MAX_FCMP_INPUTS as u64,
+        inputs_per_tx: 8,
         outputs_per_tx: 2,
         posts_a_bond: false,
         sizes: Size::BLOCK_PATH,

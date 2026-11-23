@@ -466,25 +466,17 @@ mod tests {
     /// still selects: the cap refuses one past itself, not its own count.
     #[test]
     fn selection_caps_at_max_inputs_with_an_exact_refusal() {
-        // Nine mature candidates of 10 each: the eight largest sum to 80.
+        // The selector stops at the limit it is handed. Nine mature candidates
+        // of 10 each under a limit of eight: the eight largest sum to 80.
+        const CAP: usize = 8;
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
 
-        let over = select_for_drain(
-            &candidates,
-            amount(90, 90),
-            REFERENCE,
-            shekyl_tx_builder::MAX_INPUTS,
-        );
+        let over = select_for_drain(&candidates, amount(90, 90), REFERENCE, CAP);
         assert_eq!(over, Err(DrainSelectError::InputCapExceeded));
 
-        let at_cap = select_for_drain(
-            &candidates,
-            amount(80, 90),
-            REFERENCE,
-            shekyl_tx_builder::MAX_INPUTS,
-        )
-        .expect("eight inputs cover 80");
-        assert_eq!(at_cap.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        let at_cap = select_for_drain(&candidates, amount(80, 90), REFERENCE, CAP)
+            .expect("eight inputs cover 80");
+        assert_eq!(at_cap.chosen.len(), CAP);
         assert_eq!(at_cap.input_total, AtomicUnits::from_raw(80));
     }
 
@@ -535,16 +527,13 @@ mod tests {
     /// sequencing (the one-live-drain gate's).
     #[test]
     fn sweep_caps_at_max_inputs_and_takes_a_full_pass() {
-        // Nine mature candidates of 10 each: one pass spends the cap (80).
+        // Nine mature candidates of 10 each under a limit of eight: one pass
+        // spends the limit (80).
+        const CAP: usize = 8;
         let candidates: Vec<_> = (1..=9).map(|i| candidate(i, 10, 10)).collect();
-        let sel = select_for_sweep(
-            &candidates,
-            AtomicUnits::from_raw(5),
-            REFERENCE,
-            shekyl_tx_builder::MAX_INPUTS,
-        )
-        .expect("a full pass fits the cap");
-        assert_eq!(sel.chosen.len(), shekyl_tx_builder::MAX_INPUTS);
+        let sel = select_for_sweep(&candidates, AtomicUnits::from_raw(5), REFERENCE, CAP)
+            .expect("a full pass fits the cap");
+        assert_eq!(sel.chosen.len(), CAP);
         assert_eq!(sel.input_total, AtomicUnits::from_raw(80));
         assert_eq!(sel.payment, AtomicUnits::from_raw(75));
     }

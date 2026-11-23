@@ -227,33 +227,28 @@ fn the_in_loop_fixed_point_is_not_the_rounded_unrounded_fee() {
     // rounding crosses a varint boundary the unrounded point does not.
     // Red: delete the boundary search and keep only `rates_for`, which
     // aims the zero-fee weight at the boundary and lands above it.
-    let (n_in, n_out) = shape(1, 1);
-    let mut found = false;
-    for depth in 1..=MAX_TREE_DEPTH {
-        for bits in [14u32, 21, 28, 35, 42] {
-            let boundary = 1u64 << bits;
-            let weight = predict_weight(n_in, n_out, depth, boundary - 1) as u64;
-            let Some(rate) = rate_in_the_last_step_below(weight, boundary) else {
-                continue;
-            };
-            let Some(unrounded) = converge_weight_fee(rate, n_in, n_out, depth) else {
-                continue;
-            };
-            let Some(third) = unrounded.checked_next_multiple_of(FEE_QUANTIZATION_MASK) else {
-                continue;
-            };
-            let Some(looped) = loop_lattice(n_in, n_out, depth, rate, 0) else {
-                continue;
-            };
-            if looped != third {
-                found = true;
-                break;
-            }
-        }
-        if found {
-            break;
-        }
-    }
+    let cells = (1..=MAX_INPUTS).flat_map(|inputs| {
+        (1..=MAX_TREE_DEPTH).flat_map(move |depth| {
+            [14u32, 21, 28, 35, 42]
+                .into_iter()
+                .map(move |bits| (inputs, depth, bits))
+        })
+    });
+    let found = cells.into_iter().any(|(inputs, depth, bits)| {
+        let (n_in, n_out) = shape(inputs, 1);
+        let boundary = 1u64 << bits;
+        let weight = predict_weight(n_in, n_out, depth, boundary - 1) as u64;
+        let Some(rate) = rate_in_the_last_step_below(weight, boundary) else {
+            return false;
+        };
+        let Some(unrounded) = converge_weight_fee(rate, n_in, n_out, depth) else {
+            return false;
+        };
+        let Some(third) = unrounded.checked_next_multiple_of(FEE_QUANTIZATION_MASK) else {
+            return false;
+        };
+        loop_lattice(n_in, n_out, depth, rate, 0).is_some_and(|looped| looped != third)
+    });
     assert!(
         found,
         "no cell differed: rounding the unrounded fee matched the loop on this grid"
