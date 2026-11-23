@@ -168,6 +168,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 release_name: "{release_name}".to_owned(),
                 is_release: false,
             }),
+            macos: host.macos.clone(),
         };
         let plan = plan::plan(
             &matrix,
@@ -192,6 +193,7 @@ fn run(args: &[String]) -> Result<(), String> {
         depends,
         target_dir,
         identity: Some(identity.clone()),
+        macos: host.macos.clone(),
     };
     let plan = plan::plan(
         &matrix,

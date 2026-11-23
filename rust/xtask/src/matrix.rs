@@ -55,8 +55,19 @@ pub struct Host {
     pub name: String,
     pub triple: String,
     pub binaries: Vec<String>,
+    /// A macOS host's minimum, and how depends' compiler must spell it.
+    pub macos: Option<MacosMinimum>,
     pub dist: Option<Dist>,
     pub native: Option<Invocation>,
+}
+
+/// One minimum macOS per host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacosMinimum {
+    /// `macos_minimum`.
+    pub value: String,
+    /// `macos_minimum_depends`, or the value when the compiler accepts it.
+    pub depends_spelling: String,
 }
 
 /// How cargo is run for one host and mode.
@@ -223,6 +234,23 @@ impl Host {
         let name = t.string("name")?;
         let triple = t.string("triple")?;
         let binaries = t.strings("binaries")?;
+        let macos = match t.optional_string("macos_minimum")? {
+            Some(value) => {
+                let depends_spelling = t
+                    .optional_string("macos_minimum_depends")?
+                    .unwrap_or_else(|| value.clone());
+                Some(MacosMinimum {
+                    value,
+                    depends_spelling,
+                })
+            }
+            None => None,
+        };
+        if macos.is_some() != triple.contains("-apple-") {
+            return Err(format!(
+                "host {name}: macos_minimum is for the macOS hosts, and each must have one"
+            ));
+        }
         let dist = match t.optional_table("dist")? {
             Some(mut d) => {
                 let invocation = Invocation {
@@ -276,6 +304,7 @@ impl Host {
             name,
             triple,
             binaries,
+            macos,
             dist,
             native,
         })
@@ -319,6 +348,14 @@ impl Fields {
         match self.take(key)? {
             Value::String(s) => Ok(s),
             _ => Err(format!("{}: `{key}` is not a string", self.what)),
+        }
+    }
+
+    fn optional_string(&mut self, key: &str) -> Result<Option<String>, String> {
+        if self.table.contains_key(key) {
+            self.string(key).map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -457,6 +494,43 @@ mod tests {
         let planted = text.replacen("[build]\n", "[build]\nopt_level = \"3\"\n", 1);
         let err = Matrix::parse(&planted).expect_err("an unread key is refused");
         assert!(err.contains("opt_level"), "{err}");
+    }
+
+    #[test]
+    fn each_macos_host_has_one_minimum() {
+        let m = committed();
+        let of = |name: &str| {
+            m.hosts
+                .iter()
+                .find(|h| h.name == name)
+                .and_then(|h| h.macos.clone())
+                .expect("a macOS host")
+        };
+        let x86 = of("x86_64-apple-darwin11");
+        assert_eq!(
+            (x86.value.as_str(), x86.depends_spelling.as_str()),
+            ("10.15", "10.15")
+        );
+        let arm = of("aarch64-apple-darwin11");
+        assert_eq!(
+            (arm.value.as_str(), arm.depends_spelling.as_str()),
+            ("11.0", "10.16")
+        );
+        assert!(m
+            .hosts
+            .iter()
+            .filter(|h| !h.triple.contains("-apple-"))
+            .all(|h| h.macos.is_none()));
+    }
+
+    #[test]
+    fn a_macos_host_without_a_minimum_is_refused() {
+        let text =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("matrix.toml"))
+                .expect("read");
+        let err = Matrix::parse(&text.replacen("macos_minimum = \"10.15\"\n", "", 1))
+            .expect_err("no minimum");
+        assert!(err.contains("macos_minimum"), "{err}");
     }
 
     #[test]

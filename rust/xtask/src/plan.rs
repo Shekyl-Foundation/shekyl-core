@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::matrix::{Build, Host, Invocation, Matrix};
+use crate::matrix::{Build, Host, Invocation, MacosMinimum, Matrix};
 use crate::version::Identity;
 
 /// What the run is given and what it leaves.
@@ -34,6 +34,8 @@ pub struct Fill {
     /// `{target_dir}` as an absolute path.
     pub target_dir: PathBuf,
     pub identity: Option<Identity>,
+    /// `{macos_minimum}`, `{macos_minimum_depends}`: the host's.
+    pub macos: Option<MacosMinimum>,
 }
 
 /// `contrib/depends/<host>/share/toolchain.env`: the prefix and the
@@ -180,6 +182,11 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
             .as_ref()
             .ok_or_else(|| format!("{{{key}}} needs the build identity"))
     };
+    let macos = || {
+        fill.macos
+            .as_ref()
+            .ok_or_else(|| format!("{{{key}}} is for a macOS host"))
+    };
     Ok(match key {
         "prefix" => depends()?.prefix.clone(),
         // CMake's compiler variable: the first word, found on PATH. A
@@ -200,6 +207,8 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
             "false"
         }
         .to_owned(),
+        "macos_minimum" => macos()?.value.clone(),
+        "macos_minimum_depends" => macos()?.depends_spelling.clone(),
         other => match other.strip_prefix("which:") {
             Some(name) => which(name, path_var)?,
             None => return Err(format!("{{{other}}} is not a placeholder the xtask fills")),
@@ -272,7 +281,27 @@ mod tests {
                 release_name: "Shekyl NG".to_owned(),
                 is_release: false,
             }),
+            macos: Some(MacosMinimum {
+                value: "11.0".to_owned(),
+                depends_spelling: "10.16".to_owned(),
+            }),
         }
+    }
+
+    #[test]
+    fn the_macos_minimum_has_one_value_and_one_compiler_spelling() {
+        let m = matrix();
+        let (host, dist) = m.dist_host("aarch64-apple-darwin11").expect("host");
+        let p = plan(&m, host, &dist.invocation, &fill(), false, None).expect("plan");
+        let get = |n: &str| &p.env.iter().find(|(k, _)| k == n).expect(n).1;
+        assert_eq!(get("MACOSX_DEPLOYMENT_TARGET"), "10.16");
+        assert!(get("CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS")
+            .ends_with("-C link-arg=-mmacosx-version-min=10.16"));
+        assert_eq!(
+            substitute("{macos_minimum}", &fill(), None).as_deref(),
+            Ok("11.0")
+        );
+        assert!(substitute("{macos_minimum}", &Fill::default(), None).is_err());
     }
 
     #[test]

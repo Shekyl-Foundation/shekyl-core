@@ -41,11 +41,14 @@ BUILD_KEYS = {
     "toolchain_file", "cargo_args", "target_dir", "profile_dir", "env", "unset",
     "refused", "refused_values",
 }
-HOST_KEYS = {"name", "triple", "binaries", "dist", "native"}
+HOST_KEYS = {"name", "triple", "binaries", "macos_minimum", "macos_minimum_depends", "dist", "native"}
 DIST_KEYS = {"target", "env", "binary_mode", "files"}
 NATIVE_KEYS = {"target", "env"}
 PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
-PLACEHOLDERS = {"prefix", "cc", "ar", "target_dir", "version_full", "release_name", "is_release"}
+PLACEHOLDERS = {
+    "prefix", "cc", "ar", "target_dir", "version_full", "release_name", "is_release",
+    "macos_minimum", "macos_minimum_depends",
+}
 
 
 class MatrixError(ValueError):
