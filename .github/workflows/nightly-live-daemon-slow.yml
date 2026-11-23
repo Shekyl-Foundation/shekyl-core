@@ -44,8 +44,10 @@ name: nightly/live-daemon-slow-gates
 # quietly: the arm gone is red here, a listed name gone or an empty list
 # is red in the script (its name checks and its empty-lane check). The
 # skip ends by itself when the lane reaches the other branch; there is no
-# exclude to remember to delete. The probe reads text, so the matrix's
-# `lane:` list stays on one line and the script's arms stay `<lane>)`.
+# exclude to remember to delete. The probe reads text: it finds the lane
+# as `"lane":"<lane>"` in the planner's fallback matrix, or as an item of a
+# pre-planner revision's `lane: [...]` list, so the fallback matrix stays
+# on one line and the script's arms stay `<lane>)`.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
 # per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
@@ -79,7 +81,7 @@ name: nightly/live-daemon-slow-gates
 
 on:
   schedule:
-    - cron: "30 3 * * *"
+    - cron: "43 3 * * *"
   workflow_dispatch:
     inputs:
       lane:
@@ -111,7 +113,52 @@ env:
     EOF
 
 jobs:
+  plan:
+    # Which legs run tonight (scripts/ci/nightly_skip.py): a leg whose key
+    # (the commit it tests, this file, the toolchain pin, the pinned test
+    # chains, the runner image) matches a scheduled run in the last week
+    # where it passed is skipped, and the summary names that run. Fuzzing,
+    # property tests with no fixed seed and anything whose verdict is about
+    # an outside host are never skipped; a dispatch runs
+    # every leg it selects. If this job does not succeed, every planned job
+    # falls back to its full matrix (its `matrix` expression): the failure
+    # runs more, never less.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API reads only: the last week's scheduled runs, their jobs and keys
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      slow-gates: ${{ steps.plan.outputs['slow-gates'] }}
+      body-fill: ${{ steps.plan.outputs['body-fill'] }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_skip.py
+            scripts/ci/check_workflows_parse.py
+            .github/workflows/nightly-live-daemon-slow.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: plan tonight's legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_REF: ${{ inputs.ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: python3 scripts/ci/nightly_skip.py --plan --workflow .github/workflows/nightly-live-daemon-slow.yml
+      - name: the keys, for the nights after
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-keys
+          path: nightly-keys.json
+          retention-days: 8
+
   slow-gates:
+    name: slow-gates (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['slow-gates'] != '{"include":[]}' }}
     # Scheduled workflows execute from the default branch (main); the branch
     # matrix makes each run cover both active branches, the nightly.yml
     # house pattern. workflow_dispatch with ref=dev exercises a newer config
@@ -127,11 +174,7 @@ jobs:
     timeout-minutes: 330
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
-        # One line: the lane probe below reads this list from the
-        # checked-out copy of this file.
-        lane: [slow, embargo]
+      matrix: ${{ fromJSON(needs.plan.outputs['slow-gates'] || '{"include":[{"branch":"main","lane":"slow"},{"branch":"main","lane":"embargo"},{"branch":"dev","lane":"slow"},{"branch":"dev","lane":"embargo"}]}') }}
     container:
       image: ubuntu:24.04
       env:
@@ -147,7 +190,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
       - name: does this revision have the ${{ matrix.lane }} lane
         # See the header: run where the checked-out script has the lane,
@@ -176,7 +219,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -204,6 +247,9 @@ jobs:
         run: scripts/ci/run_live_daemon_gates.sh
 
   body-fill:
+    name: body-fill (${{ matrix.branch }}, ${{ matrix.lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && needs.plan.outputs['body-fill'] != '{"include":[]}' }}
     runs-on: ubuntu-latest
     # One leg per walk; one number for both (the timeout gate takes a whole
     # number per job), sized for the longer and set generously below the
@@ -219,11 +265,7 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
-        # One line: the lane probe reads this list from the checked-out
-        # copy of this file.
-        lane: [body-fill-complete-tree, body-fill-market]
+      matrix: ${{ fromJSON(needs.plan.outputs['body-fill'] || '{"include":[{"branch":"main","lane":"body-fill-complete-tree"},{"branch":"main","lane":"body-fill-market"},{"branch":"dev","lane":"body-fill-complete-tree"},{"branch":"dev","lane":"body-fill-market"}]}') }}
     # The steps are slow-gates' own, written out (actionlint cannot check
     # a job behind a YAML alias); scripts/ci/nightly_red.py --check holds
     # the two copies equal.
@@ -242,7 +284,7 @@ jobs:
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
       - name: does this revision have the ${{ matrix.lane }} lane
         # See the header: run where the checked-out script has the lane,
@@ -271,7 +313,7 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -f "$workflow" ] && grep -Eq "^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
+          if [ -f "$workflow" ] && grep -Eq "\"lane\":\"${LANE}\"|^[[:space:]]*lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
             echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '$LANE)' arm: the lane's gates cannot run"
             exit 1
           fi
@@ -302,7 +344,7 @@ jobs:
     # The route to a human (header). Every leg, red or green, scheduled or
     # dispatched with `report`; not a run cancelled as a whole.
     # scripts/ci/nightly_red.py --check holds `needs` and this condition.
-    needs: [slow-gates, body-fill]
+    needs: [plan, slow-gates, body-fill]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # API calls only; nightly.yml's report-red p90 is 0.1 min
@@ -354,29 +396,47 @@ jobs:
               'body-fill-complete-tree': 'the body-store fill\'s CompleteTree walk',
               'body-fill-market': 'the body-store fill\'s market walk',
             };
+            // A leg is routed by its job's id (nightly_red.py's `key`), never
+            // by parsing its name alone: `plan` has no matrix values. A lane
+            // job's leg is named `<job> (<branch>, <lane>)`; the values are
+            // read from the name as data, and nothing here evaluates them. A
+            // red leg of a job named nowhere here fails this job by name
+            // (nightly_red.py --check holds the jobs named here to `needs`).
+            const laneJobs = ['slow-gates', 'body-fill'];
             for (const leg of red) {
-              // A leg is named `<job> (<branch>, <lane>)`; the values are read
-              // from the name as data, and nothing here evaluates them.
-              const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
-              if (!m) {
-                core.setFailed(`report-red cannot read the branch and lane from the leg "${leg.name}"`);
-                continue;
-              }
-              const [, branch, lane] = m;
-              const title = `nightly ${lane} live-daemon gates RED (${branch})`;
               // `why` is GitHub's own annotation on a cancelled job, quoted;
               // `minutes` is null when GitHub recorded no start or end.
               const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
               const said = leg.why ? ` (GitHub: "${leg.why}")` : '';
-              const how = {
-                'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
-                'timed out': `The leg ran out of time${ran}${said} (${what[lane] || lane}). This is not a test failure. Read the log for the gate it was in when it was cut.`,
-                'cancelled': `The leg was cancelled${ran}${said} (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
-              }[leg.kind];
+              let title;
+              let how;
+              if (leg.key === 'plan') {
+                title = 'nightly slow-lane planner RED';
+                how = {
+                  'failed': 'The `plan` job (`nightly_skip.py --plan`) failed. Every lane job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref. The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
+                  'timed out': `The \`plan\` job ran out of time${ran}${said}. Every lane job ran its full fallback matrix; read the log for the API call it was in.`,
+                  'cancelled': `The \`plan\` job was cancelled${ran}${said}. Every lane job ran its full fallback matrix; read the log for what stopped it.`,
+                }[leg.kind];
+              } else if (laneJobs.includes(leg.key)) {
+                const m = /^\S+ \((.+), (\S+)\)$/.exec(leg.name);
+                if (!m) {
+                  core.setFailed(`report-red cannot read the branch and lane from the leg "${leg.name}"`);
+                  continue;
+                }
+                const [, branch, lane] = m;
+                title = `nightly ${lane} live-daemon gates RED (${branch})`;
+                how = {
+                  'failed': `The GATE_LANE=${lane} gates failed (${what[lane] || lane}). A red here is a consensus regression and blocks release the same as a per-PR red.`,
+                  'timed out': `The leg ran out of time${ran}${said} (${what[lane] || lane}). This is not a test failure. Read the log for the gate it was in when it was cut.`,
+                  'cancelled': `The leg was cancelled${ran}${said} (${what[lane] || lane}): not a timeout, and not a test failure. Read the log for what stopped it.`,
+                }[leg.kind];
+              } else {
+                core.setFailed(`report-red has no route for the red leg "${leg.name}": name its job here`);
+                continue;
+              }
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
                 `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
-                `Branch: ${branch}`,
                 how,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);
