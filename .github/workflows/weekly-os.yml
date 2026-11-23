@@ -47,8 +47,20 @@ jobs:
         with:
           update: true
           install: mingw-w64-x86_64-toolchain mingw-w64-x86_64-rustup git
-      - name: install the pinned Rust
-        run: ${{env.PINNED_TOOLCHAIN}}
+      # rustup's default host on Windows is MSVC, even inside MSYS2. This leg
+      # exists to build with MinGW, so it names that host and then checks it:
+      # an MSVC build here would pass and test nothing this job is for.
+      - name: install the pinned Rust for MinGW
+        run: |
+          rustup set default-host x86_64-pc-windows-gnu
+          ${{env.PINNED_TOOLCHAIN}}
+      - name: the toolchain is MinGW's
+        run: |
+          verbose=$(cd rust && rustc -vV)
+          case "$verbose" in
+            *"host: x86_64-pc-windows-gnu"*) echo "rustc host is x86_64-pc-windows-gnu" ;;
+            *) echo "::error::this leg builds with MinGW, and rustc is: $verbose"; exit 1 ;;
+          esac
       - name: build
         run: ${{env.BUILD_NATIVE}}
 

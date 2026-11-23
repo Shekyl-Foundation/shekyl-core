@@ -350,9 +350,10 @@ application.
     git checkout <tag>
     ```
 
-* Install the Rust channel the tree pins, then build the 64-bit release binaries:
+* Make MinGW rustup's default host (on Windows it otherwise picks MSVC), install the Rust channel the tree pins, then build the 64-bit release binaries:
 
     ```bash
+    rustup set default-host x86_64-pc-windows-gnu
     rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust/rust-toolchain.toml)" --profile minimal
     cd rust && cargo xtask build
     ```

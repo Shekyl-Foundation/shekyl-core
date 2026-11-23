@@ -166,6 +166,7 @@ Then:
 ```bash
 git clone --recursive <your-shekyl-repo-url>
 cd shekyl-core
+rustup set default-host x86_64-pc-windows-gnu  # on Windows rustup otherwise picks MSVC
 rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust/rust-toolchain.toml)" --profile minimal
 cd rust && cargo xtask build
 ```
