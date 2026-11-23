@@ -24,6 +24,7 @@ use shekyl_p2p::{
     PerConnector, PoolDoor, ProbeArrival, ProbeSink, Sockets, SupervisorFeeds, SyncInbound,
     SyncOwner, Taken, TorPlan, TxId,
 };
+use shekyl_p2p_transport::{prefix_for, Initiator, RecordError, MESSAGE2_LEN, PREFIX_LEN};
 use tokio::sync::watch;
 
 struct NoSync;
@@ -217,10 +218,23 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("read timeout");
+    // The clearnet channel first: a clearnet session is always Noise.
+    let id = [7; 16];
+    let (initiator, message1) = Initiator::new(&id).expect("an initiator");
+    let mut flight = prefix_for(&id).to_vec();
+    flight.extend_from_slice(&message1);
+    stream.write_all(&flight).expect("the first flight");
+    let mut prefix = [0u8; PREFIX_LEN];
+    stream.read_exact(&mut prefix).expect("the node's prefix");
+    assert_eq!(prefix, prefix_for(&id));
+    let mut message2 = vec![0u8; MESSAGE2_LEN];
+    stream.read_exact(&mut message2).expect("message 2");
+    let (mut send, mut recv) = initiator
+        .read_message2(&message2)
+        .expect("message 2 opens")
+        .split();
     let request = HandshakeRequest {
-        node_data: BasicNodeData {
-            network_id: [7; 16],
-        },
+        node_data: BasicNodeData { network_id: id },
         payload_data: CoreSyncData {
             current_height: 1,
             cumulative_difficulty: 1,
@@ -229,13 +243,15 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
         },
         nonce: [0x5c; 32],
     };
-    stream
-        .write_all(&invoke(
+    let sealed = send
+        .seal(&invoke(
             COMMAND_HANDSHAKE,
             &request.store().expect("a handshake encodes"),
         ))
-        .expect("the handshake is written");
+        .expect("the handshake seals");
+    stream.write_all(&sealed).expect("the handshake is written");
     let mut reader = BucketReader::new();
+    let mut wire = Vec::new();
     let mut buf = vec![0u8; 65536];
     let answered = loop {
         match reader.next_message() {
@@ -248,9 +264,18 @@ fn a_clearnet_handshake_is_answered_with_tor_off() {
             Ok(None) => {}
             Err(e) => panic!("the response did not frame: {e}"),
         }
+        match recv.open_one(&wire) {
+            Ok((plain, used)) => {
+                wire.drain(..used);
+                reader.feed(&plain).expect("feed");
+                continue;
+            }
+            Err(RecordError::Truncated) => {}
+            Err(e) => panic!("the record did not open: {e:?}"),
+        }
         match stream.read(&mut buf) {
             Ok(0) => break false,
-            Ok(n) => reader.feed(&buf[..n]).expect("feed"),
+            Ok(n) => wire.extend_from_slice(&buf[..n]),
             Err(e) => panic!("the peer's read ended: {e}"),
         }
     };

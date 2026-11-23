@@ -4543,6 +4543,7 @@ dependencies = [
  "shekyl-network",
  "shekyl-onion-v3",
  "shekyl-p2p-session",
+ "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-peerlist",
  "shekyl-relay",

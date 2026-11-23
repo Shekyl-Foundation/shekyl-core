@@ -437,13 +437,13 @@ mod tests {
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 56);
+        assert_eq!(live, 55);
         let levers = TABLE
             .rows
             .iter()
             .filter(|r| matches!(r.visibility, Visibility::Dev { .. }))
             .count();
-        assert_eq!(levers, 9);
+        assert_eq!(levers, 8);
     }
 
     #[test]

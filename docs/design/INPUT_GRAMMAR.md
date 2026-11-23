@@ -334,7 +334,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 56 live names with IG-Q113's `tor-onion-key-file`, the four environment levers among them (`rpc-admin-listen` becomes an X row at RT-W12, RT-O33; `rpc-listen` and `rpc-console-key-reset` arrived with RT-W10 step 4, 2026-11-14; `owning-connection` arrived with IG-Q106, 2026-11-13; `service`, `instance` and `rpc-socket-dir` arrived with IG-Q103…IG-Q105, 2026-11-12; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment; `console` left with the C++ console, 2026-11-03).
+**Count:** 82 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`, DRS-X's `dev-rpc` and Part D's `config-verify`; 55 live names with IG-Q113's `tor-onion-key-file`, the four environment levers among them (`rpc-admin-listen` becomes an X row at RT-W12, RT-O33; `rpc-listen` and `rpc-console-key-reset` arrived with RT-W10 step 4, 2026-11-14; `owning-connection` arrived with IG-Q106, 2026-11-13; `service`, `instance` and `rpc-socket-dir` arrived with IG-Q103…IG-Q105, 2026-11-12; `txpool-weight-max` became an X row with IG-Q11; `mine` arrived with IG-Q21's 2026-11-02 amendment; `console` left with the C++ console, 2026-11-03).
 
 ---
 
