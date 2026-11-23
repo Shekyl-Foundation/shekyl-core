@@ -213,8 +213,8 @@ jobs:
           python3 scripts/ci/check_test_only_features.py
       # Same placement reason: reads `cargo metadata`. The measurement build's
       # lifted Tor spans (Rick, 2026-10-14) reach a binary only through the
-      # SHEKYL_MEASUREMENT_SPANS CMake option, default OFF; no Cargo edge and
-      # no release path may turn them on.
+      # xtask's measurement flag (rust/xtask/matrix.toml's [measurement]); no
+      # Cargo edge and no release path may turn them on.
       - name: the measurement spans never reach a release build
         run: |
           python3 scripts/ci/check_measurement_spans.py --selftest

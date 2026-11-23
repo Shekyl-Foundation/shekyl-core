@@ -62,7 +62,7 @@ jobs:
           # mismatch there is not this job's subject (ripgrep + PyYAML)
           # and has already failed the gate before any script ran
           # (2026-09-09, PR #671 — same class as the 2026-08-18 apt-get
-          # update stalls recorded in cmake-gate-test.yml). Naming
+          # update stalls). Naming
           # google-chrome.list and .list.save left .sources / google.list
           # live; the drop script deletes every chrome source and asserts
           # the URI is gone.
@@ -254,9 +254,9 @@ jobs:
             scripts/ci/check_debit_auth_single_source.sh
           # SF-D4: the shard-fetch client is cut from the serving/wallet side,
           # the SOCKS dial is out of consensus/store/server, and p-serve's
-          # `test-signer` resolves off in every graph BuildRust.cmake ships.
+          # `test-signer` resolves off in every graph the release ships.
           # Read from manifests (this job has no toolchain): shipped roots
-          # are parsed out of BuildRust.cmake itself, and features are
+          # are read from rust/xtask/matrix.toml itself, and features are
           # unified Cargo-style (aliases, defaults, optional and weak deps),
           # not grepped. The selftest first: it plants each forwarding path
           # on synthetic manifests and proves the resolver sees it (rule 47).
@@ -426,12 +426,16 @@ jobs:
             python3 scripts/ci/check_sim_integer_seams.py
 
           # The end state of the C++ removal (Rick, 2026-11-06): no
-          # first-party C or C++ is tracked outside external/, and no CMake
-          # target compiles any. The tree half here; the build job adds the
+          # first-party C or C++ is tracked outside external/, and no
+          # workspace build script compiles any. The tree half here; the build job adds the
           # half that reads the linked daemon. Selftest first (rule 47).
           run_one "No first-party C or C++ (selftest)" \
             python3 scripts/ci/check_no_first_party_c.py --selftest
-          run_one "No first-party C or C++ tracked, and no CMake target compiling any" \
+          run_one "No first-party C or C++ tracked, and no build script compiling any" \
             python3 scripts/ci/check_no_first_party_c.py --tree
+          # depends refuses an Android host at parse time: Shekyl ships
+          # nothing on Android. Make only, no build.
+          run_one "depends refuses an Android triple" \
+            ./tests/build-target-refusal/run.sh
 
           exit "${failed}"

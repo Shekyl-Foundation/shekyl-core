@@ -4,10 +4,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     # Which legs a pull request runs is scripts/ci/depends_legs.py's (the
-    # `legs` job below): all six when the depends tree, the Makefile, this
-    # workflow or that script changes; the MinGW leg alone when a change can
-    # alter how an executable links (a CMakeLists.txt, cmake/, or a Rust
-    # crate that defines a C export; Rick, 2026-10-19); none otherwise. These paths only wake the selector:
+    # `legs` job below): all six when the depends tree, this workflow or that
+    # script changes; the MinGW leg alone when a change can alter how an
+    # executable links (the release build, rust/xtask/ and its matrix,
+    # rust/.cargo/config.toml, or a Rust crate that defines a C export;
+    # Rick, 2026-10-19); none otherwise. These paths only wake the selector:
     # `rust/**` is wide because which crates define an export is read from
     # the tree, not listed here. Unrelated PRs used to pay ~124 billed
     # minutes for six cross-compiles. ARM v8 qemu KATs live in
@@ -15,11 +16,8 @@ on:
     # cross-arch-deterministic crates).
     paths:
       - 'contrib/depends/**'
-      - 'Makefile'
       - '.github/workflows/depends.yml'
       - 'scripts/ci/depends_legs.py'
-      - '**/CMakeLists.txt'
-      - 'cmake/**'
       - 'rust/**'
   schedule:
     - cron: "7 4 * * *"   # daily 04:07 UTC — the rest of the matrix
@@ -103,7 +101,7 @@ jobs:
     - name: set apt conf
       run: ${{env.APT_SET_CONF}}
     - name: install dependencies
-      run: apt update; apt -y install build-essential libtool cmake autotools-dev automake pkg-config python3 gperf bsdmainutils curl git ca-certificates unzip ccache ${{ matrix.toolchain.packages }}
+      run: apt update; apt -y install build-essential libtool autotools-dev automake pkg-config python3 gperf bsdmainutils curl git ca-certificates unzip ccache ${{ matrix.toolchain.packages }}
     - name: configure git
       run: git config --global --add safe.directory '*'
     - uses: actions/checkout@v5
@@ -158,13 +156,14 @@ jobs:
     - name: build
       run: |
         ${{env.CCACHE_SETTINGS}}
-        make depends target=${{ matrix.toolchain.host }} -j4
+        make -C contrib/depends HOST=${{ matrix.toolchain.host }} -j4
+        cd rust && cargo xtask dist --host ${{ matrix.toolchain.host }} --out ../build/${{ matrix.toolchain.host }}/release/bin
     # The hardening gate on what this leg staged, in the leg's own object
     # format (DAEMON_CONFIG_CUTOVER.md DC-Q21): ELF for the Linux and FreeBSD
     # hosts (the host readelf parses any ELF), PE through the mingw
     # toolchain's objdump, Mach-O through the depends-built cctools otool,
     # named by the prefix `contrib/depends/<host>/native/bin/<host>-`. The
-    # Rust wallet binaries are not built for Windows (cmake/BuildRust.cmake),
+    # Rust wallet binaries are not built for Windows (rust/xtask/matrix.toml),
     # so that leg checks the daemon alone.
     - name: binary hardening on the staged binaries
       shell: bash
@@ -178,7 +177,7 @@ jobs:
         # shellcheck disable=SC2086
         scripts/ci/check_binary_hardening.sh --tool-prefix "contrib/depends/$host/native/bin/$host-" $bins
     - uses: actions/upload-artifact@v6
-      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'aarch64-apple-darwin11' || matrix.toolchain.host == 'x86_64-unknown-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
+      if: ${{ matrix.toolchain.host == 'x86_64-w64-mingw32' || matrix.toolchain.host == 'x86_64-apple-darwin11' || matrix.toolchain.host == 'aarch64-apple-darwin11' || matrix.toolchain.host == 'x86_64-linux-gnu' || matrix.toolchain.host == 'aarch64-linux-gnu' }}
       with:
         name: ${{ matrix.toolchain.name }}
         path: |

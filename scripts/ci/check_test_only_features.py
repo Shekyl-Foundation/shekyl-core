@@ -16,8 +16,9 @@ That trade is sound only while the feature stays on dev-dependency edges:
 
   * `resolver = "2"` (pinned in `rust/Cargo.toml`) unifies a dev-dependency's
     features only when dev-dependency targets are actually being built, and
-  * the release path never builds test targets (`cmake/BuildRust.cmake` invokes
-    cargo with no `--all-targets` / `--tests`),
+  * the release path never builds test targets (`cargo xtask` invokes cargo
+    with `rust/xtask/matrix.toml`'s arguments, no `--all-targets` / `--tests`;
+    check_rt_p4_standing.py holds every argument),
 
 so a shipped binary cannot contain the arm. One normal-dependency edge enabling
 the feature dissolves both of those, silently: the code still compiles, the

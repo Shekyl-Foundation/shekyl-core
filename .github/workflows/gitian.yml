@@ -339,9 +339,9 @@ jobs:
           if [ -n "$LINUX_X86" ]; then
             # The tunnel is a guaranteed product beside them (stage_tunnel).
             # The three wallet binaries are guaranteed products since the
-            # C1/C2 install cutover (shekyld from C++, shekyl-cli and
-            # shekyl-wallet-rpc from cmake/BuildRust.cmake, staged into
-            # bin/ which is what gitian tars). These copies deliberately
+            # C1/C2 install cutover (all four from `cargo xtask dist`,
+            # rust/xtask/matrix.toml, staged into bin/, which is what
+            # gitian tars). These copies deliberately
             # hard-fail: `|| true` here previously meant a release with no
             # wallet-rpc and no CLI packaged successfully and silently.
             echo "=== Packaging Linux x86_64 .deb/.rpm from $LINUX_X86 ==="

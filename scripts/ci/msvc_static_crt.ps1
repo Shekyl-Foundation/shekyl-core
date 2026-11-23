@@ -28,17 +28,15 @@ Set-StrictMode -Version Latest
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location -LiteralPath $RepoRoot
 
-# Output path of the daemon.
-$Shekyld = 'build\bin\Release\shekyld.exe'
+# Where the build stages the binaries, and the daemon in it.
+$StageDir = Join-Path $RepoRoot 'build\bin'
+$Shekyld = 'build\bin\shekyld.exe'
 $MsvcLinkSubjects = @($Shekyld)
 
-# The target that builds the daemon: one cargo invocation for the Rust
-# binaries (on Windows, `shekyld` alone), which stages the binary into
-# `build\bin\Release\` (DC-Q23).
-$MsvcBuildTargets = @('shekyl_rust_bins')
-# The runner's parallelism for this one build. A name, so the cmake line
-# is not where the number lives.
-$MsvcBuildParallelism = 2
+# The release build: one cargo invocation for this triple's binaries
+# (`cargo xtask build`, rust/xtask/matrix.toml's x86_64-pc-windows-msvc
+# row), run from rust/, where the alias is.
+$XtaskArguments = @('xtask', 'build', '--out', $StageDir)
 
 $LinkLog = 'msvc-link.log'
 $MixedRuntimeDiagnostic = 'LNK4098'
@@ -100,12 +98,9 @@ function Invoke-LoggedNative {
 
 switch ($Stage) {
     'link' {
-        $cmakeArguments = @(
-            '--build', 'build',
-            '--config', 'Release',
-            '--target'
-        ) + $MsvcBuildTargets + @('--parallel', "$MsvcBuildParallelism")
-        Invoke-LoggedNative -FilePath 'cmake' -ArgumentList $cmakeArguments -LogPath $LinkLog
+        Push-Location -LiteralPath (Join-Path $RepoRoot 'rust')
+        Invoke-LoggedNative -FilePath 'cargo' -ArgumentList $XtaskArguments -LogPath (Join-Path $RepoRoot $LinkLog)
+        Pop-Location
         if ($script:NativeExit -ne 0) {
             Exit-Gate -Code $script:NativeExit -Message "the build failed ($script:NativeExit)"
         }

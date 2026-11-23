@@ -50,7 +50,7 @@ name: nightly/live-daemon-slow-gates
 # on one line and the script's arms stay `<lane>)`.
 #
 # Build recipe mirrors build.yml's ubuntu:24.04 job (the one that runs the
-# per-PR lane): same container, same apt set, same BUILD_DEFAULT_LINUX, so
+# per-PR lane): same container, same apt set, same BUILD_LINUX, so
 # the shekyld under test here is the same shape the per-PR gates run against.
 #
 # A red here is PUSHED at a human, not left to be noticed: the `report-red`
@@ -103,8 +103,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
+  BUILD_LINUX: 'cd rust && cargo xtask build --out ../build/bin'
+  APT_INSTALL_LINUX: 'apt -y install build-essential git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -230,13 +230,9 @@ jobs:
         # for why it must come after checkout and before the daemon build.
         if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
-      - uses: ./.github/actions/set-make-job-count
-        if: steps.lane.outputs.run == 'true'
       - name: build
         if: steps.lane.outputs.run == 'true'
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_LINUX}}
       - name: ${{ matrix.lane }} live-daemon gates
         if: steps.lane.outputs.run == 'true'
         # `shell: bash` for the same reason as build.yml's per-PR step: the
@@ -324,13 +320,9 @@ jobs:
         # for why it must come after checkout and before the daemon build.
         if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
-      - uses: ./.github/actions/set-make-job-count
-        if: steps.lane.outputs.run == 'true'
       - name: build
         if: steps.lane.outputs.run == 'true'
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_LINUX}}
       - name: ${{ matrix.lane }} live-daemon gates
         if: steps.lane.outputs.run == 'true'
         # `shell: bash` for the same reason as build.yml's per-PR step: the

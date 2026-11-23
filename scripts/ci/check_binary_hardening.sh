@@ -26,7 +26,7 @@
 #
 # What is not read here, and why: the compile-time mitigations (stack
 # protector, FORTIFY, CET, `/GS`) leave no uniform header mark. Their presence
-# is the compiler flag lists in CMakeLists.txt, and a pure-Rust binary has no
+# is the C flags rust/xtask/matrix.toml gives each host, and a pure-Rust binary has no
 # `__stack_chk_fail` to find. Nor is the tracing dispatcher: `shekyld` is one
 # cargo link, so its graph holds the one `tracing-core` Cargo.lock resolves.
 #

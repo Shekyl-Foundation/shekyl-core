@@ -64,7 +64,7 @@ jobs:
     - name: set apt conf
       run: ${{env.APT_SET_CONF}}
     - name: install dependencies
-      run: apt update; apt -y install build-essential cmake pkg-config python3 g++-aarch64-linux-gnu qemu-user-static git curl ca-certificates
+      run: apt update; apt -y install build-essential pkg-config python3 g++-aarch64-linux-gnu qemu-user-static git curl ca-certificates
     - name: configure git
       run: git config --global --add safe.directory '*'
     - uses: actions/checkout@v5

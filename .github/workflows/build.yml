@@ -34,8 +34,10 @@ permissions:
 # The below variables reduce repetitions across similar targets
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # ARCH="default" (not "native") ensures, that a different execution host can execute binaries compiled elsewhere.
-  BUILD_DEFAULT_LINUX: 'cmake -S . -B build -D ARCH="default" -D CMAKE_BUILD_TYPE=Release && cmake --build build --target all'
+  # The release build for this machine's triple (rust/xtask/matrix.toml's
+  # native row), staged into build/bin. It passes no -march, so a different
+  # execution host can run what it builds.
+  BUILD_LINUX: 'cd rust && cargo xtask build --out ../build/bin'
   # clang + libclang-dev: the live-daemon gates step runs
   # `cargo test -p shekyl-engine-core --lib`, and lib tests build the crate's
   # dev-dependencies -- which include gungraun with `client_requests`, whose
@@ -44,7 +46,7 @@ env:
   # "stdbool.h file not found" otherwise). GitHub-hosted runners ship clang,
   # which is why the Rust workflow never needed this; these jobs run in bare
   # ubuntu containers, which do not.
-  APT_INSTALL_LINUX: 'apt -y install build-essential cmake git curl clang libclang-dev'
+  APT_INSTALL_LINUX: 'apt -y install build-essential git curl clang libclang-dev'
   APT_SET_CONF: |
     tee -a /etc/apt/apt.conf.d/80-custom << EOF
     Acquire::Retries "3";
@@ -223,28 +225,16 @@ jobs:
             exit 1
           fi
           echo "Cargo path portability guard passed."
-      - uses: ./.github/actions/set-make-job-count
-      - name: install dependencies
-        run: |
-          brew uninstall cmake
-          brew update
-          brew install --quiet cmake
-      # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
-      # auto-install race in the daemon build). Bump both together.
+      # Pinned to match rust/rust-toolchain.toml; the build refuses another
+      # channel. Bump both together.
       - uses: dtolnay/rust-toolchain@1.94.0
       - name: build
-        run: make -j${{env.MAKE_JOB_COUNT}}
+        run: cd rust && cargo xtask build --out ../build/bin
       # The Mach-O half of the hardening gate (MH_PIE, no executable stack,
-      # no LC_RPATH) on the three staged Rust binaries; otool is Xcode's.
-      # The Makefile's build directory carries the OS and the branch name
-      # (`build/Darwin/<branch>/release`), so the staged directory is found,
-      # and the gate itself fails on a path that is not a file.
+      # no LC_RPATH) on the four staged Rust binaries; otool is Xcode's. The
+      # gate fails on a path that is not a file.
       - name: binary hardening on the staged binaries (otool)
-        run: |
-          staged=$(find build -type f -name shekyld -path '*/release/bin/*' -print -quit)
-          if [ -z "$staged" ]; then echo "no staged shekyld under build/" >&2; exit 1; fi
-          bindir=$(dirname "$staged")
-          scripts/ci/check_binary_hardening.sh "$bindir/shekyld" "$bindir/shekyl-cli" "$bindir/shekyl-wallet-rpc" "$bindir/shekyl-rpc-tunnel"
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc build/bin/shekyl-rpc-tunnel
 
   # Windows MSYS2 and Arch Linux moved to `.github/workflows/weekly-os.yml`.
   # PR Windows coverage is the MSVC daemon job below (the only runner that
@@ -299,18 +289,15 @@ jobs:
       - name: install Rust
         # Composite action (.github/actions/install-rust): the one
         # hardened download-then-run recipe, installing the
-        # rust-toolchain.toml pin + components up front so the daemon
-        # build's parallel cargos (cmake -j over BuildRust targets)
-        # find the toolchain present instead of racing to auto-install
-        # it (which corrupts ~/.rustup/downloads). Must come AFTER
+        # rust-toolchain.toml pin + components up front so the build
+        # and the gates' cargo runs find the toolchain present instead
+        # of racing to auto-install it (which corrupts
+        # ~/.rustup/downloads). Must come AFTER
         # checkout — a `./`-referenced local action does not exist on
         # the runner until the repo is checked out.
         uses: ./.github/actions/install-rust
-      - uses: ./.github/actions/set-make-job-count
       - name: build
-        env:
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{env.MAKE_JOB_COUNT}}
-        run: ${{env.BUILD_DEFAULT_LINUX}}
+        run: ${{env.BUILD_LINUX}}
       # Armed #[ignore]d regtest_e2e gates against the shekyld just built.
       # Runs here rather than in the test job because that job installs no
       # Rust by design, and here the binary and the toolchain already coexist.
@@ -333,15 +320,15 @@ jobs:
         run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       # The hardening the link flags claim, read off the staged ELF binaries
       # (PIE, non-executable stack, full RELRO, no run path). The three are
-      # Rust binaries built by one cargo invocation; no CMake flag list
-      # reaches them, so the result is what is asserted. readelf is binutils.
+      # Rust binaries built by one cargo invocation; a native build passes
+      # no C flag list, so the result is what is asserted. readelf is binutils.
       - name: binary hardening on the staged binaries (readelf)
         shell: bash
         run: scripts/ci/check_binary_hardening.sh build/bin/shekyld build/bin/shekyl-cli build/bin/shekyl-wallet-rpc build/bin/shekyl-rpc-tunnel
       # The C++ removal's end state (Rick, 2026-11-06), on what this job
       # built: the staged shekyld needs no C++ runtime and holds no C++
-      # symbol. The tree half (no first-party C or C++ tracked, no CMake
-      # target compiling any) runs in the grep gates. Selftest first, so a
+      # symbol. The tree half (no first-party C or C++ tracked, no build
+      # script compiling any) runs in the grep gates. Selftest first, so a
       # gate that cannot fail is caught before it passes.
       - name: the daemon holds no C++ (no C++ runtime, no C++ symbol)
         shell: bash
@@ -382,9 +369,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with:
           components: clippy
-      # Every Rust step below builds into rust/target, the CMake daemon
-      # build included (cmake/BuildRust.cmake sets CARGO_TARGET_DIR there),
-      # so one workspace entry covers the job. Without a cache each run
+      # Every Rust step below builds into rust/target, the release build
+      # included (rust/xtask/matrix.toml pins CARGO_TARGET_DIR there), so
+      # one workspace entry covers the job. Without a cache each run
       # compiled the dependency graph cold, once per profile and feature
       # set. Saved by push runs only: a pull request's save is readable by
       # that pull request alone and evicts the `dev` cache the others
@@ -776,19 +763,14 @@ jobs:
           $results | Format-Table -AutoSize | Out-String | Write-Host
           exit $first_failure
 
-      - name: configure
-        shell: pwsh
-        run: |
-          cmake -S . -B build `
-            -G "Visual Studio 18 2026" -A x64 `
-            -DCMAKE_BUILD_TYPE=Release
       # Daemon only: the Rust wallet binaries are not built for Windows
       # targets — see docs/design/WINDOWS_WALLET_SUPPORT.md. Slice WP-W5 of
       # that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
-        # The link gate is the script: shekyld exists, and the link log
-        # has no LNK4098.
+        # The link gate is the script: `cargo xtask build` (the matrix's
+        # x86_64-pc-windows-msvc row) stages into build\bin, shekyld exists,
+        # and the link log has no LNK4098.
         run: |
           pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       # The PE half of the hardening gate on the linked daemon: PE32+ and
@@ -798,7 +780,7 @@ jobs:
       # developer shell. `/GS` leaves no header mark and is not read here.
       - name: binary hardening on the linked daemon (PE headers)
         shell: bash
-        run: scripts/ci/check_binary_hardening.sh build/bin/Release/shekyld.exe build/bin/Release/shekyl-rpc-tunnel.exe
+        run: scripts/ci/check_binary_hardening.sh build/bin/shekyld.exe build/bin/shekyl-rpc-tunnel.exe
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
@@ -825,7 +807,7 @@ jobs:
         # Ctrl-Break takes its one stop path (Rick, 2026-10-22). RT-W14 later
         # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
-          pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
+          pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\shekyld.exe'
 
   source-archive:
     name: "source archive"

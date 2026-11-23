@@ -736,7 +736,9 @@ jobs:
         # of 47-gate-subject-assertion.mdc: a missing descriptor or one with
         # no `cp ... bin` line fails.
         if: '!cancelled()'
-        run: python3 scripts/ci/check_release_archive_docs.py
+        run: |
+          python3 scripts/ci/check_release_archive_docs.py --selftest
+          python3 scripts/ci/check_release_archive_docs.py
 
       - name: Run claim-era basename check
         # docs/design/ must not grow CONFIDENTIAL_STAKING.md or a
