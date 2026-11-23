@@ -474,6 +474,51 @@ mod tests {
         assert!(target.join("data").join(LOCK_FILE).is_file());
     }
 
+    /// A chain of links to the configuration file is judged at every link:
+    /// `safe/config -> safe/alias -> writable/config`. Red edit: follow only
+    /// the first link, and the file is read through `writable`.
+    #[cfg(unix)]
+    #[test]
+    fn a_chain_of_links_to_the_configuration_file_is_judged_to_its_end() {
+        use std::os::unix::fs::{symlink, OpenOptionsExt};
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let safe = d.path().join("safe");
+        dir_with_mode(&safe, 0o700);
+        let writable = d.path().join("writable");
+        dir_with_mode(&writable, 0o777);
+        let target = writable.join("config.toml");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&target)
+            .unwrap();
+        let alias = safe.join("alias.toml");
+        symlink(&target, &alias).unwrap();
+        let config = safe.join("config.toml");
+        symlink(&alias, &config).unwrap();
+        let e = crate::file::open(&config, true).unwrap_err();
+        assert_eq!(e.code, Code::FilePermissions, "{e}");
+        assert_eq!(e.get("path"), writable.to_str());
+    }
+
+    /// A cycle of links ends the walk and refuses. Spelled through `..`,
+    /// each turn is a longer path, so comparing paths alone would not end
+    /// it. Red edit: drop the bound on links followed, and this never
+    /// returns.
+    #[cfg(unix)]
+    #[test]
+    fn a_cycle_of_links_above_the_data_directory_is_refused() {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let safe = d.path().join("safe");
+        dir_with_mode(&safe, 0o700);
+        let cycle = safe.join("cycle");
+        std::os::unix::fs::symlink("../safe/cycle", &cycle).unwrap();
+        let e = Lock::creatable(&cycle.join("data")).unwrap_err();
+        assert_eq!(e.code, Code::DataDirAncestorWritable, "{e}");
+        assert!(e.render().contains("unreadable"), "{e}");
+    }
+
     /// macOS's `/var` is a link to `/private/var`, and both legs are
     /// root's, so a path through it passes. Red edit: refuse any link.
     #[cfg(target_os = "macos")]

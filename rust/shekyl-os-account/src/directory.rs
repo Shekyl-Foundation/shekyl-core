@@ -82,21 +82,25 @@ pub fn umask_strips_owner(error: &io::Error) -> Option<&UmaskStripsOwner> {
     error.get_ref()?.downcast_ref()
 }
 
-/// The process umask. POSIX reads it only by setting it, so this sets the
-/// strictest mask for the instant between the two calls: a file another
-/// thread creates in that instant is narrower, never wider. Only a refusal
-/// reads it.
-#[allow(unsafe_code, reason = "umask has no safe wrapper in std")]
-#[allow(
-    clippy::useless_conversion,
-    reason = "mode_t is u32 on Linux, u16 on the BSDs"
-)]
-fn process_umask() -> u32 {
-    // SAFETY: `umask` takes any mode, cannot fail, and touches no memory.
-    let held = unsafe { libc::umask(0o777) };
-    // SAFETY: as above; this restores the mask just read.
-    unsafe { libc::umask(held) };
-    u32::from(held)
+/// The process umask, read from what it does to a directory rather than by
+/// setting it: `umask(2)` can only be read by writing it, which is process-wide
+/// and races every other thread. `dir` is this call's own name, free again,
+/// and is made once more with every permission bit, read, and removed. If that
+/// fails, the owner bits `mode` is missing are the part known.
+fn umask_from_a_probe(dir: &Path, mode: u32) -> u32 {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    const EVERY_ACCESS_BIT: u32 = 0o777;
+    let probed = std::fs::DirBuilder::new()
+        .mode(EVERY_ACCESS_BIT)
+        .create(dir)
+        .and_then(|()| std::fs::symlink_metadata(dir));
+    match probed {
+        Ok(meta) => {
+            drop(std::fs::remove_dir(dir));
+            EVERY_ACCESS_BIT & !meta.permissions().mode()
+        }
+        Err(_) => OWNER_ONLY_DIR_MODE & !mode,
+    }
 }
 
 /// Checks a directory this call just made, without following a link and
@@ -126,7 +130,7 @@ pub(crate) fn check_made_dir(dir: &Path) -> io::Result<()> {
     Err(io::Error::other(UmaskStripsOwner {
         dir: dir.to_path_buf(),
         mode,
-        umask: process_umask(),
+        umask: umask_from_a_probe(dir, mode),
     }))
 }
 

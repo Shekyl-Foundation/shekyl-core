@@ -332,31 +332,52 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
     )
 }
 
+/// How many symbolic links one walk follows: the most any supported kernel
+/// resolves on one path (Linux's `MAXSYMLINKS`). A longer chain, or a cycle,
+/// cannot be opened, so what is left unfollowed reads as unreadable and is
+/// refused.
+#[cfg(unix)]
+const LINKS_FOLLOWED_AT_MOST: usize = 40;
+
+/// Where the symbolic link at `link` points, as a path from its directory.
+#[cfg(unix)]
+fn link_target(link: &Path) -> Option<PathBuf> {
+    let target = std::fs::read_link(link).ok()?;
+    Some(
+        link.parent()
+            .map_or_else(|| target.clone(), |above| above.join(&target)),
+    )
+}
+
 /// Every directory `path` passes through on its way from the root, judging
 /// both legs of a symbolic link (Rick, 2026-11-23): the directory holding the
 /// link, where another account could replace it, and every directory above
-/// where it resolves. That is `path`'s [`ancestors`], and for `path` itself
-/// or any of them that is a link, the same of its target.
+/// where it resolves. That is `path`'s [`ancestors`], and the same for each
+/// target along a chain of links, at `path` itself or at any directory above.
 #[cfg(unix)]
 pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
     let mut walked = Vec::new();
     let mut pending: std::collections::VecDeque<PathBuf> = ancestors(path).into();
-    if let Ok(target) = std::fs::read_link(path) {
-        let resolved = path
-            .parent()
-            .map_or_else(|| target.clone(), |above| above.join(&target));
+    let mut followed = 0;
+    let mut last = path.to_path_buf();
+    while followed < LINKS_FOLLOWED_AT_MOST {
+        let Some(resolved) = link_target(&last) else {
+            break;
+        };
+        followed += 1;
         pending.extend(ancestors(&resolved));
+        last = resolved;
     }
     while let Some(dir) = pending.pop_front() {
         if walked.contains(&dir) {
             continue;
         }
-        if let Ok(target) = std::fs::read_link(&dir) {
-            let resolved = dir
-                .parent()
-                .map_or_else(|| target.clone(), |above| above.join(&target));
-            pending.extend(ancestors(&resolved));
-            pending.push_front(resolved);
+        if followed < LINKS_FOLLOWED_AT_MOST {
+            if let Some(resolved) = link_target(&dir) {
+                followed += 1;
+                pending.extend(ancestors(&resolved));
+                pending.push_front(resolved);
+            }
         }
         walked.push(dir);
     }
