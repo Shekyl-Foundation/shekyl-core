@@ -722,9 +722,38 @@ Read against the lines:
   measured load before the launch, not during the run, and did not check
   for a browser.
 
-**Next:** the registration allows a void to be made again once, after its
-cause is named and fixed. The fix, and whether to make attempt 2, are with
-the maintainer. The clone and binary are kept.
+**Attempt 2: ruled by the maintainer on 2026-11-23.** The registration
+allows a void to be made again once, after its cause is named and fixed.
+The fix is this gate, recorded before the run:
+- **The same binary and command:** `d5fc9dbc…`, from the `84f9d24714`
+  clone; `ca3_pq_sign_timing ml-dsa-registered`, with no argument. No new
+  shake-down.
+- **Before the launch:**
+  - the same four quiet 30-second samples: Defender under 10 % of one
+    logical processor, total under 15 %, logical processor 5 under 5 %;
+  - no browser process running (Chrome, Edge, Firefox, Brave, Opera);
+  - the process list snapshotted into the conditions file.
+- **During the run:**
+  - logical processor 5 is sampled every 10 seconds, beside the
+    one-minute samples, all kept;
+  - any 10-second sample at 5 % or more is recorded with a process
+    snapshot taken at that moment;
+  - **the stop rule:** three consecutive 10-second samples of logical
+    processor 5 at 5 % or more stop the run, which is then killed. This
+    judges the conditions, never the output.
+- **A stopped run is not an attempt.** Its partial output is kept in the
+  private captures and not read; no figure from it is reported. The gate
+  is then passed again and the run restarted. After a third stop, nothing
+  further runs and the conditions go to the maintainer.
+- **A run that completes is attempt 2**, read against the lines as
+  registered. Its sibling samples are reported as conditions, and they do
+  not void a completed run. The control's detection is what guards
+  against noise.
+- **The maintainer** leaves the laptop alone from the gate to the end
+  (about 10 minutes), with no browser open. Whether the desktop AI client
+  is paused for those minutes is his call, and the record states which.
+- **Whatever attempt 2 reads, it is not made again.** A second void goes
+  to the maintainer.
 
 **Captures** (public): `laptop_reg2_shakedown_50000.txt` and
 `laptop_reg2_registered_attempt1.txt`, the outputs byte for byte;
