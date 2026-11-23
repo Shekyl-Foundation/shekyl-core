@@ -2320,6 +2320,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "rand_core",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-network",
