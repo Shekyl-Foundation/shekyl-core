@@ -152,8 +152,9 @@ pub const CAPABILITY_FULL: u8 = 0x01;
 /// used by the address invariant check in region 1.
 pub const EXPECTED_CLASSICAL_ADDRESS_BYTES: usize = 65;
 
-/// File-kek length, matching XChaCha20-Poly1305 key size.
-const FILE_KEK_BYTES: usize = 32;
+/// File-kek length, matching XChaCha20-Poly1305 key size. The length of the
+/// file-kek and of every key HKDF-expanded from it (the region-2 wrap key).
+pub const FILE_KEK_BYTES: usize = 32;
 
 /// HKDF `info` label for region 1 AEAD. Label-only (no `|| addr`) so open
 /// can derive the decrypt key before reading `addr` from ciphertext.
@@ -378,9 +379,9 @@ pub struct OpenedKeysFile {
     pub seed_block_tag: [u8; AEAD_TAG_BYTES],
     /// The recovered 32-byte `file_kek` that decrypted region 1 — the
     /// same value that is stored re-encrypted under the wrap key on
-    /// disk. Exposed so higher layers (notably
-    /// [`shekyl_engine_prefs`](https://docs.rs/shekyl-engine-prefs))
-    /// can derive per-wallet subkeys under HKDF-Expand without a
+    /// disk. Exposed so higher layers (the wallet file's region-2 wrap
+    /// key, the persona body store's key) can derive per-wallet subkeys
+    /// under HKDF-Expand without a
     /// second Argon2id run, and without this crate having to know
     /// about their key-schedule labels.
     ///
@@ -861,7 +862,7 @@ pub fn open_keys_file(
         cap_content: cap_content_buf,
         seed_block_tag: region1_tag,
         // Hand the caller the recovered `file_kek` so it can derive
-        // per-wallet subkeys (e.g. `shekyl-engine-prefs`' HMAC key)
+        // per-wallet subkeys (e.g. the region-2 wrap key)
         // without a second Argon2id run. `file_kek_z` was already a
         // `Zeroizing` container above; we move it straight into the
         // struct so the wipe semantics are preserved end-to-end.
