@@ -26,8 +26,9 @@
 //!   [`shekyl_tx_builder::MAX_INPUTS`].
 //! - [`SelectedOutputs`] — the (indices, total_covered)
 //!   pair the selector returns.
-//! - `cover_largest_first` — the minimum-cardinality cover
-//!   the default selector and the drain selector both call.
+//! - `cover_largest_first` — given a largest-first ranking,
+//!   the minimum-cardinality cover; the default selector and
+//!   the drain selector both rank and then call it.
 //! - [`WalletGreedyOutputSelector`] — the V3.0 default impl
 //!   (largest-first greedy; matches the pre-PR-5
 //!   `build_pending_tx_in_state` selection loop byte-for-byte).

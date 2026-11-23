@@ -569,7 +569,8 @@ const FRAGMENT_ATOMIC: u64 = 1_000_000;
 /// A ledger of more like-sized outputs than one transaction spends, as a
 /// miner's wallet holds its coinbases.
 fn fragmented_ledger() -> Arc<LocalLedger> {
-    let count = u8::try_from(shekyl_tx_builder::MAX_INPUTS + 4).expect("a small count");
+    let count = u8::try_from(shekyl_tx_builder::MAX_INPUTS + 4)
+        .expect("the FCMP generator tables bound the cap at 128, so this fits a seed");
     let ledger = Arc::new(test_ledger());
     let outputs = (1..=count)
         .map(|seed| make_recovered_output(seed, 100 + u64::from(seed), FRAGMENT_ATOMIC))
