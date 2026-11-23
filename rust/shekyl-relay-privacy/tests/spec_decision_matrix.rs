@@ -57,8 +57,8 @@ use shekyl_relay_privacy::verify_cost::{
 };
 
 /// Measured x86 verification cost at depth 2, `n_out = 2`, over the whole
-/// consensus domain (`FCMP_MAX_INPUTS_PER_TX = 8`; asserted against
-/// [`shekyl_fcmp::MAX_INPUTS`] below).
+/// consensus domain (asserted against
+/// [`shekyl_wire::transaction::MAX_FCMP_INPUTS`] below).
 ///
 /// **Diagnostic, not spec (§84.2).** The x86 arm exists to detect a workload
 /// change. Nothing on the spec path derives from it.
@@ -310,14 +310,13 @@ fn scaling_the_spec_row_from_x86_would_underprovision_the_tail() {
 /// assertion against the literal `8` could never fail, and would go on
 /// reporting "the whole range, not an extrapolation" after the cap moved. The
 /// comparison has to be against the cap **as the code enforces it**:
-/// [`shekyl_fcmp::MAX_INPUTS`] is checked by `proof::verify` itself, which is
-/// the call the surface times. Its consensus twin is
-/// `FCMP_MAX_INPUTS_PER_TX` (`cryptonote_config.h`).
+/// [`shekyl_wire::transaction::MAX_FCMP_INPUTS`], computed from the weight
+/// limit and read by the wire's `validate` and by CEN-I4.
 #[test]
 fn the_measured_surface_covers_the_whole_consensus_domain() {
     assert_eq!(
         MAX_TABLE_INPUTS,
-        shekyl_fcmp::MAX_INPUTS,
+        shekyl_wire::transaction::MAX_FCMP_INPUTS,
         "the production table's input domain must be the consensus domain; if \
          the cap moves, `MAX_TABLE_INPUTS` moves with it and the new cells are \
          measured on the spec machine, never extrapolated (§84.2) — otherwise \
@@ -326,7 +325,7 @@ fn the_measured_surface_covers_the_whole_consensus_domain() {
     );
     assert_eq!(
         F_X86_MS.len(),
-        shekyl_fcmp::MAX_INPUTS,
+        shekyl_wire::transaction::MAX_FCMP_INPUTS,
         "the measured surface must cover the whole consensus domain; if the \
          cap moves, re-measure the new cells rather than extrapolating into \
          them — the tail is where §75's sorting lives"

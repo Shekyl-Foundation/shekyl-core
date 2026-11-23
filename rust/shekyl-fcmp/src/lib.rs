@@ -37,14 +37,7 @@ pub use shekyl_fcmp_proofs::{Input, Output};
 // the KEM salt at `shekyl_crypto_pq::kem::KEM_DOMAIN_SALT`.
 pub use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN;
 
-/// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
-pub const MAX_INPUTS: usize = 8;
-
-pub use shekyl_curve_generators::MAX_TREE_DEPTH;
-
-/// The fewest FCMP++ layers a spend proves under: the leaf layer and one
-/// branch above it.
-pub const MIN_SPEND_LAYERS: u8 = 2;
+pub use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
 
 /// The on-chain `curve_trees_tree_depth` a spend proving under `layers`
 /// FCMP++ layers writes: the layer count less the leaf layer. `None` for a
@@ -66,7 +59,10 @@ mod depth_tests {
     #[test]
     fn the_on_chain_depth_is_the_layers_above_the_leaf() {
         assert_eq!(curve_trees_tree_depth(MIN_SPEND_LAYERS), Some(1));
-        assert_eq!(curve_trees_tree_depth(MAX_TREE_DEPTH), Some(23));
+        assert_eq!(
+            curve_trees_tree_depth(MAX_TREE_DEPTH),
+            Some(u64::from(MAX_TREE_DEPTH) - 1)
+        );
         assert_eq!(curve_trees_tree_depth(MIN_SPEND_LAYERS - 1), None);
         assert_eq!(curve_trees_tree_depth(MAX_TREE_DEPTH + 1), None);
     }

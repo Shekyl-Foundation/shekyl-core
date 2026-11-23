@@ -26,11 +26,11 @@
 //! were wrong by 1.55x and 5.9x. Nothing could go red, because nothing
 //! connected them to a transaction. That is the gap this closes.
 
-use shekyl_fcmp::MAX_INPUTS;
 use shekyl_levin::{notify, NewTransactions, PortableMap as _, NOTIFY_NEW_TRANSACTIONS};
 use shekyl_relay_privacy::params::{carrier, inherited};
 use shekyl_tx_weight::{
-    predict_size_and_weight, InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    legal_shapes_at, predict_size_and_weight, InputCount, OutputCount, MAX_TREE_DEPTH,
+    MIN_SPEND_LAYERS,
 };
 
 /// The Dandelion++ epoch the carrier is provisioned against, in seconds.
@@ -59,6 +59,19 @@ fn message_bytes(n_in: usize, n_out: usize, depth: u8) -> usize {
         dandelionpp_fluff: false,
     };
     notify(NOTIFY_NEW_TRANSACTIONS, &msg.store().expect("store")).len()
+}
+
+/// The largest message any transaction consensus can mine produces, over every
+/// legal shape and depth. A cap-sized spend at the deepest tree is over the
+/// weight limit, so the corner of the count limits is not a message.
+fn structural_max_message() -> usize {
+    (MIN_SPEND_LAYERS..=MAX_TREE_DEPTH)
+        .flat_map(|depth| {
+            legal_shapes_at(depth).map(move |(n_in, n_out)| (n_in.get(), n_out.get(), depth))
+        })
+        .map(|(n_in, n_out, depth)| message_bytes(n_in, n_out, depth))
+        .max()
+        .expect("consensus admits a shape")
 }
 
 /// The window holds the modal transaction whole at EVERY tree depth.
@@ -95,11 +108,11 @@ fn the_window_holds_the_modal_transaction_at_max_tree_depth() {
 /// max over the window; equality is what makes 20 unable to hide.
 ///
 /// What edit reds this: raising or lowering `carrier::MAX_FRAGMENTS` without
-/// a matching window or wire-size change, shrinking the window, or raising
-/// `MAX_INPUTS` / `MAX_OUTPUTS` / `MAX_TREE_DEPTH`.
+/// a matching window or wire-size change, shrinking the window, or a change to
+/// what consensus can mine (the weight limit, the input cap, the depth).
 #[test]
 fn the_fragment_cap_is_ceil_of_the_structural_max_over_the_window() {
-    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let structural_max = structural_max_message();
     let needs = structural_max.div_ceil(carrier::WINDOW_BYTES);
     assert_eq!(
         u32::try_from(needs).expect("fragment count is small"),
@@ -196,7 +209,7 @@ fn the_window_at_the_worst_posture_stays_under_the_bandwidth_ceiling() {
         node_bytes / mean_ms,
     );
 
-    let structural_max = message_bytes(MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH);
+    let structural_max = structural_max_message();
     let whole_tx_bytes = (structural_max as u64) * channels * 1_000;
     assert!(
         whole_tx_bytes > ceiling * mean_ms,

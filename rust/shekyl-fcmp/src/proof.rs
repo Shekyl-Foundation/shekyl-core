@@ -13,7 +13,8 @@
 //! being a public function of the key.
 
 use crate::leaf::PqcKeyScalar;
-use crate::{MAX_INPUTS, MAX_TREE_DEPTH};
+use crate::MAX_TREE_DEPTH;
+use shekyl_curve_generators::fcmp_fits_generators;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -55,10 +56,23 @@ pub use crate::batch_weights::{
     FCMP_MEMBERSHIP_ONLY_BATCH_WEIGHTS_CUSTOMIZATION, FCMP_PP_BATCH_WEIGHTS_CUSTOMIZATION,
 };
 
+/// Whether `inputs` is past what the generator tables prove at `tree_depth`:
+/// the one bound the prover and both verifiers read, so a proof that can be
+/// built can be verified (a wallet's self-check of its own proof depends on
+/// it). Consensus refuses far earlier, at the input cap; this is the proof
+/// system's own limit.
+///
+/// Safe on an untrusted count, and run before anything is sized by it. A
+/// depth outside the protocol's range is the depth check's to refuse by name,
+/// so here it is read at the nearest legal depth and the count stays bounded.
+fn exceeds_generators(inputs: usize, tree_depth: u8) -> bool {
+    !fcmp_fits_generators(inputs, usize::from(tree_depth.clamp(1, MAX_TREE_DEPTH)))
+}
+
 /// Errors during FCMP++ proof construction.
 #[derive(Debug, Error)]
 pub enum ProveError {
-    #[error("too many inputs: {0} exceeds maximum {MAX_INPUTS}")]
+    #[error("too many inputs: {0} exceed what the generators prove at this tree depth")]
     TooManyInputs(usize),
 
     #[error("empty inputs")]
@@ -530,7 +544,7 @@ fn prove_inner<R: RngCore + CryptoRng>(
     if inputs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if inputs.len() > MAX_INPUTS {
+    if exceeds_generators(inputs.len(), tree_depth) {
         return Err(ProveError::TooManyInputs(inputs.len()));
     }
 
@@ -734,7 +748,7 @@ fn prove_membership_only_inner<R: RngCore + CryptoRng>(
     if inputs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if inputs.len() > MAX_INPUTS {
+    if exceeds_generators(inputs.len(), tree_depth) {
         return Err(ProveError::TooManyInputs(inputs.len()));
     }
 
@@ -836,7 +850,7 @@ pub fn prove_with_sal(
     if sal_pairs.is_empty() {
         return Err(ProveError::EmptyInputs);
     }
-    if sal_pairs.len() > MAX_INPUTS {
+    if exceeds_generators(sal_pairs.len(), tree_depth) {
         return Err(ProveError::TooManyInputs(sal_pairs.len()));
     }
     if sal_pairs.len() != original_outputs.len()
@@ -976,9 +990,10 @@ pub fn verify(
     // Self-defending arity cap (mirrors `verify_membership_only`): a crafted
     // `proof.num_inputs` sizes the batch verifiers, so an out-of-range value
     // drives large allocations/CPU. A valid proof never has 0 inputs nor
-    // exceeds `MAX_INPUTS`; `DeserializationFailed` (code 1) matches the FFI's
-    // existing invalid-parameters mapping, so no error-code surface changes.
-    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+    // exceeds what the generators prove at its depth; `DeserializationFailed`
+    // (code 1) is the invalid-parameters mapping, so no error-code surface
+    // changes.
+    if num_inputs == 0 || exceeds_generators(num_inputs, tree_depth) {
         return Err(VerifyError::DeserializationFailed);
     }
     if key_images.len() != num_inputs {
@@ -1108,7 +1123,7 @@ pub fn verify(
 /// # Errors
 /// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-key count vs proof input
 /// count), [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
-/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
+/// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or past the generators' capacity at the depth),
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
 /// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
 pub fn verify_membership_only(
@@ -1122,10 +1137,10 @@ pub fn verify_membership_only(
     let num_inputs = proof.num_inputs as usize;
     // Self-defending arity cap: a crafted `proof.num_inputs` sizes the batch verifiers, so an
     // out-of-range value drives large allocations/CPU. A valid proof never has 0 inputs (all
-    // provers reject empty) nor exceeds `MAX_INPUTS`, so reject before allocating. Independent
-    // of the FFI's own `po_count` cap — this holds for any Rust caller. `DeserializationFailed`
-    // (code 1) matches the FFI's mapping for the same out-of-range condition.
-    if num_inputs == 0 || num_inputs > MAX_INPUTS {
+    // provers reject empty) nor exceeds what the generators prove at its depth, so reject
+    // before allocating; this holds for any Rust caller. `DeserializationFailed` (code 1) is
+    // the invalid-parameters mapping.
+    if num_inputs == 0 || exceeds_generators(num_inputs, tree_depth) {
         return Err(VerifyError::DeserializationFailed);
     }
     if pseudo_outs.len() != num_inputs {
@@ -1327,6 +1342,33 @@ fn deserialize_tree_root(bytes: &[u8; 32], layers: usize) -> Option<TreeRoot<Sel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The most inputs the generator tables prove at `tree_depth`.
+    fn most_provable_inputs(tree_depth: u8) -> usize {
+        (1..)
+            .take_while(|&n| !exceeds_generators(n, tree_depth))
+            .last()
+            .expect("the generators prove one input at every legal depth")
+    }
+
+    /// The bound is the generators' at each legal depth, the count the
+    /// verifier reads from a proof cannot overflow it, and an illegal depth
+    /// still bounds the count at the nearest legal one.
+    #[test]
+    fn the_one_bound_is_the_generators_capacity() {
+        for depth in crate::MIN_SPEND_LAYERS..=MAX_TREE_DEPTH {
+            let most = most_provable_inputs(depth);
+            assert!(fcmp_fits_generators(most, usize::from(depth)));
+            assert!(!fcmp_fits_generators(most + 1, usize::from(depth)));
+        }
+        for hostile in [usize::try_from(u32::MAX).expect("fits"), usize::MAX] {
+            assert!(exceeds_generators(hostile, 2), "{hostile}");
+        }
+        assert!(exceeds_generators(
+            most_provable_inputs(MAX_TREE_DEPTH) + 1,
+            u8::MAX
+        ));
+    }
 
     /// A random `PL-D3` leaf commitment: `k`, `K = k·G_k`, `r`, `CM = K + r·J`,
     /// and `CM.x` as the Selene leaf scalar.
@@ -1883,7 +1925,7 @@ mod tests {
     /// deserialization (so dummy inputs suffice here — the cap fires first).
     #[test]
     fn full_verify_rejects_out_of_range_num_inputs() {
-        for bad in [0usize, MAX_INPUTS + 1] {
+        for bad in [0usize, most_provable_inputs(1) + 1] {
             let proof = ShekylFcmpProof {
                 data: Vec::new(),
                 num_inputs: u32::try_from(bad).expect("test bad-count fits u32"),
@@ -1979,10 +2021,9 @@ mod tests {
             );
         }
 
-        // Arity cap: a crafted `num_inputs` (0 or > MAX_INPUTS) must reject as
-        // DeserializationFailed before sizing the batch verifiers — self-defending, independent
-        // of the FFI's `po_count` cap.
-        for bad in [0usize, crate::MAX_INPUTS + 1] {
+        // Arity cap: a crafted `num_inputs` (0 or past the generators' capacity) must reject
+        // as DeserializationFailed before sizing the batch verifiers.
+        for bad in [0usize, most_provable_inputs(tree_depth) + 1] {
             let mut tampered = mo.proof.clone();
             tampered.num_inputs = u32::try_from(bad).expect("test bad-count fits u32");
             let r = verify_membership_only(
@@ -2152,7 +2193,9 @@ mod tests {
 
     #[test]
     fn prove_rejects_max_plus_one_inputs() {
-        let inputs: Vec<ProveInput> = (0..=MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let inputs: Vec<ProveInput> = (0..=most_provable_inputs(8))
+            .map(|_| dummy_prove_input())
+            .collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
@@ -2164,7 +2207,9 @@ mod tests {
 
     #[test]
     fn prove_at_max_inputs_count() {
-        let inputs: Vec<ProveInput> = (0..MAX_INPUTS).map(|_| dummy_prove_input()).collect();
+        let inputs: Vec<ProveInput> = (0..most_provable_inputs(8))
+            .map(|_| dummy_prove_input())
+            .collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
@@ -2173,7 +2218,7 @@ mod tests {
         );
         assert!(
             !matches!(result, Err(ProveError::TooManyInputs(_))),
-            "MAX_INPUTS should be accepted (may fail for other reasons)"
+            "the generators' capacity should be accepted (may fail for other reasons)"
         );
     }
 

@@ -21,15 +21,18 @@
 //! [`Transaction::write`]: super::Transaction::write
 
 use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
-use shekyl_curve_generators::MAX_TREE_DEPTH;
+use shekyl_curve_generators::{
+    FCMP_HELIOS_GENERATORS, FCMP_SELENE_GENERATORS, MAX_TREE_DEPTH, MIN_SPEND_LAYERS,
+};
+use shekyl_fcmp_proofs::fcmps::Fcmp;
 use shekyl_fcmp_proofs::FcmpPlusPlus;
 
 use super::{
-    bp_plus_weight_clawback, MAX_FCMP_INPUTS, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN,
-    TX_VERSION,
+    bp_plus_weight_clawback, MAX_FCMP_INPUTS, MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS,
+    PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN, TX_VERSION, TX_WEIGHT_LIMIT,
 };
 use crate::tx_extra::PQC_LEAF_ENTRY_LEN;
-use crate::varint::varint_len;
+use crate::varint::{varint_len, MAX_VARINT_LEN};
 
 // Each constant is one field of `Transaction::write`. Sizes with a canonical
 // home are imported, not re-typed.
@@ -149,7 +152,29 @@ pub const fn spend_weight(
     auth_weight: usize,
     multisig_extra: usize,
 ) -> usize {
-    let fcmp = fcmp_proof_len(n_in, tree_depth);
+    weight_with_proof(
+        n_in,
+        n_out,
+        tree_depth,
+        fee,
+        auth_weight,
+        multisig_extra,
+        fcmp_proof_len(n_in, tree_depth),
+    )
+}
+
+/// [`spend_weight`] given the proof's length. The input cap is computed through
+/// this and the closed form, because [`fcmp_proof_len`]'s fallback reads the
+/// cap.
+const fn weight_with_proof(
+    n_in: usize,
+    n_out: usize,
+    tree_depth: u8,
+    fee: u64,
+    auth_weight: usize,
+    multisig_extra: usize,
+    fcmp: usize,
+) -> usize {
     let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
         + extra_kem_field_weight(n_out)
         + extra_leaf_hashes_field_weight(n_out)
@@ -191,4 +216,160 @@ pub const fn archival_len(n_in: usize, n_out: usize, tree_depth: u8) -> usize {
         + varint_len(fcmp as u64) // fcmp_proof length prefix
         + fcmp // fcmp_proof body
         + n_in * PSEUDO_OUT_LEN // pseudoOuts
+}
+
+// ── What consensus admits ───────────────────────────────────────────────────
+
+/// The floor of the maximum tree depth (`ICD-R9`, step 1), set on the chain's
+/// own limit. The tree holds every output ever created, so this bounds
+/// cumulative outputs. An output weighs 1 269 bytes, so the store's 1 GB/day
+/// write budget (PB-R2) allows at most about 788 000 outputs a day, and depth
+/// 12 (about 10^17 outputs) is about 360 million years of that.
+///
+/// The write budget is a design budget and block size is dynamic, so this is
+/// re-checked when EUP-5 G rules block growth.
+pub const TREE_DEPTH_FLOOR: u8 = 12;
+
+/// The weight of the lightest spend of this shape: a solo signer and a
+/// one-byte fee varint, on the closed-form proof.
+const fn lightest_weight(n_in: usize, n_out: usize, tree_depth: u8) -> usize {
+    weight_with_proof(
+        n_in,
+        n_out,
+        tree_depth,
+        0,
+        pqc_auth_weight(),
+        0,
+        FcmpPlusPlus::proof_size(n_in, tree_depth as usize),
+    )
+}
+
+/// The most inputs the weight limit admits for `n_out` outputs at `tree_depth`.
+const fn inputs_under_weight_limit(n_out: usize, tree_depth: u8) -> usize {
+    let mut n_in = 0;
+    while lightest_weight(n_in + 1, n_out, tree_depth) <= TX_WEIGHT_LIMIT {
+        n_in += 1;
+    }
+    n_in
+}
+
+/// The input cap (`ICD-R1`): the most inputs the weight limit admits at the
+/// lightest legal shape, over every legal depth. [`MAX_FCMP_INPUTS`] is this.
+pub(super) const fn derive_input_cap() -> usize {
+    let mut cap = 0;
+    let mut depth = MIN_SPEND_LAYERS;
+    while depth <= MAX_TREE_DEPTH {
+        let n_in = inputs_under_weight_limit(MIN_NON_COINBASE_OUTPUTS, depth);
+        if n_in > cap {
+            cap = n_in;
+        }
+        depth += 1;
+    }
+    cap
+}
+
+/// The most generator rows, per curve, any legal transaction's proof needs
+/// on a tree no deeper than `max_depth` (`ICD-R2`): the largest
+/// `ipa_rows(N(d), d)` over those depths, not `ipa_rows(cap, max_depth)`, which
+/// would overstate the second curve.
+const fn generator_rows_through(max_depth: u8) -> (usize, usize) {
+    let (mut selene, mut helios) = (0, 0);
+    let mut depth = MIN_SPEND_LAYERS;
+    while depth <= max_depth {
+        let n_in = inputs_under_weight_limit(MIN_NON_COINBASE_OUTPUTS, depth);
+        let (c1, c2) = Fcmp::<()>::ipa_rows(n_in, depth as usize);
+        if c1 > selene {
+            selene = c1;
+        }
+        if c2 > helios {
+            helios = c2;
+        }
+        depth += 1;
+    }
+    (selene, helios)
+}
+
+/// The maximum tree depth's derivation (`ICD-R9`, step 2): the deepest tree that
+/// needs no more generators than [`TREE_DEPTH_FLOOR`] does.
+const fn deepest_depth_free_of_generators() -> u8 {
+    let floor = generator_rows_through(TREE_DEPTH_FLOOR);
+    let mut depth = TREE_DEPTH_FLOOR;
+    loop {
+        let next = generator_rows_through(depth + 1);
+        if next.0 != floor.0 || next.1 != floor.1 {
+            return depth;
+        }
+        depth += 1;
+    }
+}
+
+// The constants held below this crate are the derivations computed here. A
+// weight-limit change that moves one fails the build until it is moved
+// (`ICD-R2`, `ICD-R8`, `ICD-R9`).
+const _: () = {
+    let (selene, helios) = generator_rows_through(MAX_TREE_DEPTH);
+    assert!(
+        selene == FCMP_SELENE_GENERATORS,
+        "FCMP_SELENE_GENERATORS is not the largest row count a legal proof needs"
+    );
+    assert!(
+        helios == FCMP_HELIOS_GENERATORS,
+        "FCMP_HELIOS_GENERATORS is not the largest row count a legal proof needs"
+    );
+    assert!(
+        MAX_TREE_DEPTH == deepest_depth_free_of_generators(),
+        "MAX_TREE_DEPTH is not the deepest tree needing no more generators than the floor"
+    );
+};
+
+/// The most inputs a mineable transaction of `n_out` outputs carries at
+/// `tree_depth`, or 0 when no transaction has that output count or depth.
+///
+/// This is the **consensus** shape space: what can be mined (CEN-I1's output
+/// minimum, `MAX_OUTPUTS`, the legal depths, and CEN-H3's weight limit at the
+/// lightest signer and fee). Relay policy keeps its own narrower rules on top.
+/// A heavier signer or a wider fee can still put a shape at this count over the
+/// limit, and CEN-H3 refuses it.
+#[must_use]
+pub const fn max_inputs_at(n_out: usize, tree_depth: u8) -> usize {
+    if n_out < MIN_NON_COINBASE_OUTPUTS
+        || n_out > MAX_OUTPUTS
+        || tree_depth < MIN_SPEND_LAYERS
+        || tree_depth > MAX_TREE_DEPTH
+    {
+        return 0;
+    }
+    inputs_under_weight_limit(n_out, tree_depth)
+}
+
+/// Whether consensus can mine a spend of this shape: see [`max_inputs_at`].
+#[must_use]
+pub const fn is_legal_shape(n_in: usize, n_out: usize, tree_depth: u8) -> bool {
+    n_in >= 1 && n_in <= max_inputs_at(n_out, tree_depth)
+}
+
+/// The weight of the heaviest mineable solo spend of `n_out` outputs, over
+/// every legal depth and fee width: at each depth the most inputs that fit,
+/// with the widest fee varint the weight limit still admits. 0 when no
+/// transaction has that output count.
+#[must_use]
+pub const fn heaviest_legal_weight(n_out: usize) -> usize {
+    let mut heaviest = 0;
+    let mut depth = MIN_SPEND_LAYERS;
+    while depth <= MAX_TREE_DEPTH {
+        let n_in = max_inputs_at(n_out, depth);
+        if n_in > 0 {
+            let widest_fee = lightest_weight(n_in, n_out, depth) + (MAX_VARINT_LEN - 1);
+            let weight = if widest_fee < TX_WEIGHT_LIMIT {
+                widest_fee
+            } else {
+                TX_WEIGHT_LIMIT
+            };
+            if weight > heaviest {
+                heaviest = weight;
+            }
+        }
+        depth += 1;
+    }
+    heaviest
 }

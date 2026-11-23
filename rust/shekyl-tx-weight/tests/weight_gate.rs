@@ -72,7 +72,7 @@ use shekyl_wire::Transaction;
 /// `MAX_INPUTS` is crate-internal to `shekyl-tx-weight` on purpose (it comes
 /// from `shekyl-fcmp`, its upstream home). Read it from that home, not from a
 /// re-export, for the same reason the crate itself does.
-const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
+const MAX_INPUTS: usize = shekyl_wire::transaction::MAX_FCMP_INPUTS;
 
 /// Distinct filler byte for index `i`. Weight depends only on field LENGTHS,
 /// never on their contents, so these bytes carry no meaning beyond being

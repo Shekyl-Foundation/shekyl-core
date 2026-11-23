@@ -141,8 +141,15 @@ const MAX_BRANCH_SCALARS: usize = 256;
 // §10 resource bounds (structural; the chain-context rules of §13 — double-spend,
 // CT balance, referenceBlock window, per-arm pqc_auths semantics — are the
 // consensus layer's job, not the wire serializer's).
-/// Max key-image (fcmp) inputs per tx (`FCMP_MAX_INPUTS_PER_TX`).
-pub const MAX_FCMP_INPUTS: usize = 8;
+/// Max inputs per transaction, counting the whole `vin` (CEN-I4).
+///
+/// **Computed, not chosen** (`ICD-R1`,
+/// `docs/design/CEN_I4_INPUT_CAP_DERIVATION.md`): the most inputs
+/// [`TX_WEIGHT_LIMIT`] admits at the lightest legal shape, over every legal tree
+/// depth. It follows the weight limit, and every table sized by it asserts its
+/// range against it (`ICD-R8`). The limit a transaction meets at a given depth
+/// can be lower: [`weight::max_inputs_at`].
+pub const MAX_FCMP_INPUTS: usize = weight::derive_input_cap();
 /// Max outputs per tx (`BULLETPROOF_PLUS_MAX_OUTPUTS`).
 pub const MAX_OUTPUTS: usize = 16;
 /// The fewest outputs a non-coinbase transaction carries: consensus row
@@ -1968,7 +1975,7 @@ impl Transaction {
         // a single input and uses the non-fcmp path, so scope this to non-coinbase.
         if !is_coinbase && self.prefix.inputs.len() > MAX_FCMP_INPUTS {
             return Err(io::Error::other(format!(
-                "shekyl-wire: {} inputs exceed {MAX_FCMP_INPUTS}",
+                "shekyl-wire: CEN-I4: {} inputs exceed {MAX_FCMP_INPUTS}",
                 self.prefix.inputs.len()
             )));
         }

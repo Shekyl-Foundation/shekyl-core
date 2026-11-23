@@ -185,16 +185,65 @@ fn frozen_bulletproof_tables() {
     );
 }
 
+/// The table lengths the two digests below were pinned at, before the tables
+/// were sized to the protocol's need (`ICD-R2`). A record of the pin, not a
+/// protocol limit.
+const PINNED_SELENE_GENERATORS: usize = 65_536;
+const PINNED_HELIOS_GENERATORS: usize = 32_768;
+
+/// The production table is exactly the first part of `long`.
+fn assert_is_prefix<C>(production: &FcmpGenerators<C>, long: &FcmpGenerators<C>, what: &str)
+where
+    C: ciphersuite::Ciphersuite,
+    C::G: GroupEncoding<Repr = [u8; 32]> + PartialEq,
+{
+    let (table, pinned) = (&production.generators, &long.generators);
+    assert!(table.g() == pinned.g(), "{what}: g moved");
+    assert!(table.h() == pinned.h(), "{what}: h moved");
+    let n = table.g_bold_slice().len();
+    assert!(
+        n < pinned.g_bold_slice().len(),
+        "{what}: not a shorter table"
+    );
+    assert!(
+        table.g_bold_slice() == &pinned.g_bold_slice()[..n],
+        "{what}: g_bold is not a prefix"
+    );
+    assert!(
+        table.h_bold_slice() == &pinned.h_bold_slice()[..n],
+        "{what}: h_bold is not a prefix"
+    );
+}
+
+/// The derivation is the one the digests were pinned on, and the production
+/// tables are prefixes of it. The long tables come from the **production**
+/// derivation at a larger length, so the unchanged digests speak for the code
+/// that builds the shipped tables. A proof uses the first `n` generators, so
+/// a prefix changes nothing a proof can see.
 #[test]
 fn frozen_fcmp_tables() {
+    let helios = FcmpGenerators::<Helios>::new_internal(PINNED_HELIOS_GENERATORS);
+    let selene = FcmpGenerators::<Selene>::new_internal(PINNED_SELENE_GENERATORS);
     assert_eq!(
-        fcmp_digest(&FcmpGenerators::<Helios>::new()),
+        fcmp_digest(&helios),
         "a34f6eedcdaf2e182366f8a39cbfb547948b16e32abab03e5d7225a49df9d71d",
         "FCMP Helios generator table moved"
     );
     assert_eq!(
-        fcmp_digest(&FcmpGenerators::<Selene>::new()),
+        fcmp_digest(&selene),
         "962475d4395396be7196a15581ea57b5a2cbd5a8f15cb451c467447a25b7ca3e",
         "FCMP Selene generator table moved"
     );
+    let shipped_helios = FcmpGenerators::<Helios>::new();
+    let shipped_selene = FcmpGenerators::<Selene>::new();
+    assert_eq!(
+        shipped_helios.generators.g_bold_slice().len(),
+        crate::FCMP_HELIOS_GENERATORS
+    );
+    assert_eq!(
+        shipped_selene.generators.g_bold_slice().len(),
+        crate::FCMP_SELENE_GENERATORS
+    );
+    assert_is_prefix(&shipped_helios, &helios, "Helios");
+    assert_is_prefix(&shipped_selene, &selene, "Selene");
 }

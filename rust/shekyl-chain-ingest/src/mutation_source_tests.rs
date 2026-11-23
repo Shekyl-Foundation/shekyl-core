@@ -349,7 +349,7 @@ fn the_last_representable_height_is_yielded_and_another_event_is_a_fault() {
     assert!(source.next().expect("clean end").is_none());
 }
 
-/// [`EXTRA_KEY_IMAGES`] are what they claim: `k·G` for `k` in `2..=9`,
+/// [`EXTRA_KEY_IMAGES`] are what they claim: `k·G` for `k` from 2 up,
 /// each canonical, torsion-free and not the identity, all distinct.
 #[test]
 fn the_extra_images_are_k_times_g() {

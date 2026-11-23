@@ -130,29 +130,55 @@ pub fn pqc_leaf_point_valid(point: &[u8; 32]) -> Option<EdwardsPoint> {
     Some(p)
 }
 
-/// The maximum amount of input tuples provable for within a single FCMP.
-// https://github.com/seraphis-migration/monero
-//  /blob/8bf178a3009ee066001189d05869445bdf4ed28c/src/cryptonote_config.h#L217
-pub const MAX_FCMP_INPUTS: usize = 128;
-/// The maximum amount of layers supported within a FCMP.
-///
-/// The FCMP itself theoretically supports an unbounded amount of layers, with exponential growth
-/// in set size as additional layers are added. The size of the proof (for each input) still grows
-/// linearly with the amount of layers, requiring a sufficiently-large constant reference string.
-/// This constant is used to generate the constant reference string, and it's that which bounds the
-/// amount of layers supported.
-///
-/// Theoretically, the generators could be dynamically built/extended at runtime to remove this
-/// limit, yet this offers such a large set size it will never be reached.
-// https://github.com/seraphis-migration/monero
-//  /blob/8bf178a3009ee066001189d05869445bdf4ed28c/src/cryptonote_config.h#L222
-pub const MAX_FCMP_LAYERS: usize = 12;
+/// The fewest FCMP++ layers a spend proves under: the leaf layer and one
+/// branch above it. An empty tree has one layer and nothing to spend.
+pub const MIN_SPEND_LAYERS: u8 = 2;
 
-/// Maximum tree depth the protocol supports.
+/// The deepest curve tree the protocol admits (`ICD-R9`,
+/// `docs/design/CEN_I4_INPUT_CAP_DERIVATION.md`).
 ///
-/// Held here, below the wire crate, because the weight model, the prover and
-/// the generator tables all read it.
-pub const MAX_TREE_DEPTH: u8 = 24;
+/// Derived in two steps. The floor is `shekyl_wire::transaction::weight::
+/// TREE_DEPTH_FLOOR`, set on the chain's own write budget. This value is then
+/// the deepest tree that needs no more generators than the floor does: past
+/// the floor the margin is free up to here, and at the ceiling the chain
+/// accepts no new outputs, so a raise is a hard fork. `shekyl-wire` computes
+/// the derivation and asserts it equals this at compile time; the constant
+/// lives here because this crate sits below the wire and sizes its tables by
+/// it.
+pub const MAX_TREE_DEPTH: u8 = 14;
+
+/// The Selene generators the protocol builds: the largest row count any legal
+/// transaction's proof needs, at any legal depth (`ICD-R2`). `shekyl-wire`
+/// computes that need from the weight limit and asserts it equals this at
+/// compile time, so a weight-limit change fails the build until this moves.
+///
+/// **Not a consensus change when it moves.** A proof over `n` padded rows uses
+/// the first `n` generators (`Generators::reduce`), and each generator's
+/// derivation string and index are frozen, so a longer or shorter table agrees
+/// with this one on every index both hold (`tests::frozen_points`).
+pub const FCMP_SELENE_GENERATORS: usize = 8192;
+
+/// The Helios generators the protocol builds; see [`FCMP_SELENE_GENERATORS`].
+pub const FCMP_HELIOS_GENERATORS: usize = 4096;
+
+/// Whether a proof of `inputs` inputs over `layers` layers fits the generator
+/// tables: the one bound the prover and the verifier both read, so a proof
+/// that can be built can be verified.
+///
+/// Safe on an untrusted count. The first comparison bounds `inputs` before
+/// `ipa_rows` multiplies it, since every input needs at least one row.
+#[must_use]
+pub const fn fcmp_fits_generators(inputs: usize, layers: usize) -> bool {
+    if inputs == 0
+        || layers == 0
+        || layers > MAX_TREE_DEPTH as usize
+        || inputs > FCMP_SELENE_GENERATORS
+    {
+        return false;
+    }
+    let (selene, helios) = full_chain_membership_proofs::Fcmp::<()>::ipa_rows(inputs, layers);
+    selene <= FCMP_SELENE_GENERATORS && helios <= FCMP_HELIOS_GENERATORS
+}
 
 /// The maximum amount of commitments provable for within a single Bulletproof(+).
 pub const MAX_BULLETPROOF_COMMITMENTS: usize = 16;
@@ -232,11 +258,6 @@ pub static SELENE_HASH_INIT: LazyLock<SelenePoint> = LazyLock::new(|| {
     // FROZEN DST
     rejection_sampling_hash_to_curve::<SelenePoint>(b"Monero Selene Hash Initializer")
 });
-
-const FCMP_GENERATORS: (usize, usize) =
-    full_chain_membership_proofs::Fcmp::<()>::ipa_rows(MAX_FCMP_INPUTS, MAX_FCMP_LAYERS);
-const FCMP_SELENE_GENERATORS: usize = FCMP_GENERATORS.0;
-const FCMP_HELIOS_GENERATORS: usize = FCMP_GENERATORS.1;
 
 /// Container struct for FCMP generators.
 pub struct FcmpGenerators<C: ciphersuite::Ciphersuite> {

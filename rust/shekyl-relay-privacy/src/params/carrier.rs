@@ -114,7 +114,7 @@ pub const WINDOW_BYTES: usize = 20_480;
 /// is `ceil(S_max / WINDOW_BYTES)`, pinned as equality there — the inherited
 /// 20 sat in `[ceil, epoch-ceiling]` and would still go green under a
 /// one-sided bound.
-pub const MAX_FRAGMENTS: u32 = 5;
+pub const MAX_FRAGMENTS: u32 = 8;
 
 /// Minimum gap between covert emissions, in **milliseconds**.
 ///

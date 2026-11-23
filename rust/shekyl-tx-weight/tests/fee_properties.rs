@@ -11,11 +11,11 @@
 //! call that the loop.
 
 use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
-use shekyl_fcmp::MAX_INPUTS;
 use shekyl_tx_weight::{
     converge_fee_by, converge_weight_fee, converge_weight_fee_by, predict_weight, weight_at_fee,
     InputCount, OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
 };
+use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 
 fn shape(n_in: usize, n_out: usize) -> (InputCount, OutputCount) {
     (InputCount::clamped(n_in), OutputCount::clamped(n_out))

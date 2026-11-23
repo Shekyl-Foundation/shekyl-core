@@ -52,15 +52,16 @@ use {
     shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN},
     shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN,
 };
-// Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
-// via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
+// Consensus limits from their UPSTREAM home (constraint 1 — never via
+// shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
 // and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
 // shapes (the economics sim's leaf-stuffer, DQ-2G) can single-source them through
 // this crate — the sanctioned window into the weight model — instead of depping
-// shekyl-fcmp / shekyl-wire directly; `MAX_INPUTS` stays crate-internal.
-use shekyl_fcmp::MAX_INPUTS;
-pub use shekyl_fcmp::MAX_TREE_DEPTH;
-pub use shekyl_wire::transaction::MAX_OUTPUTS;
+// shekyl-wire directly; the cap stays crate-internal under this crate's name.
+pub use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
+pub use shekyl_wire::transaction::weight::{heaviest_legal_weight, is_legal_shape, max_inputs_at};
+use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
+pub use shekyl_wire::transaction::{MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS};
 
 // ── Bounded input/output counts ─────────────────────────────────────────────
 
@@ -155,6 +156,19 @@ pub struct SpendShape<'a> {
     /// The groups the spend pays, one per output paying a group: each such
     /// output carries a `0x0D` entry with one ciphertext per member.
     pub group_payees: &'a [GroupSize],
+}
+
+// ── The shapes consensus admits ─────────────────────────────────────────────
+
+/// Every `(inputs, outputs)` shape consensus can mine at `tree_depth`, from the
+/// one legal-shape function in the wire ([`max_inputs_at`]): a search over
+/// transaction shapes reads this, so it never picks one no node admits. Empty
+/// at a depth no spend proves under.
+pub fn legal_shapes_at(tree_depth: u8) -> impl Iterator<Item = (InputCount, OutputCount)> {
+    (MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS).flat_map(move |n_out| {
+        (1..=max_inputs_at(n_out, tree_depth))
+            .map(move |n_in| (InputCount::clamped(n_in), OutputCount::clamped(n_out)))
+    })
 }
 
 // ── The model at a shape ────────────────────────────────────────────────────

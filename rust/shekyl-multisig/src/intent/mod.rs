@@ -67,10 +67,14 @@ pub const MAX_RECIPIENTS: u32 = 16;
 
 /// Maximum inputs per intent: the consensus cap on a transaction's key-image
 /// inputs (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, CEN-I4), so an
-/// intent no transaction can carry is refused before anyone signs. Pinned to
-/// that constant by `max_inputs_is_the_consensus_cap` below
-/// ([`SpendIntent::validate_structural`] enforces it).
-pub const MAX_INPUTS: u32 = 8;
+/// intent no transaction can carry is refused before anyone signs
+/// ([`SpendIntent::validate_structural`] enforces it). A `u32` because the
+/// intent's wire counts are; the cap is far below `u32::MAX`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the computed cap is a small count"
+)]
+pub const MAX_INPUTS: u32 = shekyl_wire::transaction::MAX_FCMP_INPUTS as u32;
 
 /// Maximum address byte length ([`SpendIntent::validate_structural`]).
 pub const MAX_ADDRESS_LEN: u32 = 65536;

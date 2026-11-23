@@ -197,22 +197,18 @@ pub const GENESIS_TREE_DEPTH: u32 = 2;
 /// this edge [`SpecVerifyCost::f_ms`] refuses — see the module docs.
 pub const MAX_TABLE_DEPTH: u32 = 7;
 
-/// The input-count domain the table covers: `1..=FCMP_MAX_INPUTS_PER_TX`.
+/// The input-count domain the table covers: `1..=` the consensus input cap
+/// (CEN-I4), which is computed from the weight limit
+/// (`shekyl_wire::transaction::MAX_FCMP_INPUTS`, `ICD-R1`).
 ///
-/// `8` is consensus-enforced at three layers (`cryptonote_config.h`'s
-/// `FCMP_MAX_INPUTS_PER_TX`, the verify FFI, and `proof::verify` itself —
-/// §80.1), so the surface over `1..=8` **is** the specification, not a
-/// sample of it. The cross-crate pin lives in `tests/spec_decision_matrix.rs`
-/// (this crate does not depend on `shekyl-fcmp`; the dev-dependency does):
-/// `the_measured_surface_covers_the_whole_consensus_domain` asserts **this
-/// constant** against `shekyl_fcmp::MAX_INPUTS`, not just the diagnostic x86
-/// array beside it — a cap rise that moved only the array would leave
-/// `f_ms` refusing consensus-legal shapes as `InputCountOutsideDomain`, a
-/// refusal this module documents as *correct* and which would therefore read
-/// as design rather than a stale cap. If the cap moves: new cells are
-/// **measured** on the spec machine, never extrapolated (§84.2) — and until
-/// they are, the table refuses them, which is the correct interim.
-pub const MAX_TABLE_INPUTS: usize = 8;
+/// The cap is enforced by the wire's `validate` and by CEN-I4, so the surface
+/// over this domain **is** the specification, not a sample of it. This crate
+/// cannot see the wire, so the equality is asserted at compile time in
+/// `shekyl-node`, which links both: a weight-limit change that moves the cap
+/// fails the build until this moves (`ICD-R8`). New cells are **measured** on
+/// the floor device, never extrapolated (§84.2), and until they are, the table
+/// refuses them, which is the correct interim.
+pub const MAX_TABLE_INPUTS: usize = 22;
 
 const DEPTH_TIERS: usize = (MAX_TABLE_DEPTH - GENESIS_TREE_DEPTH + 1) as usize;
 

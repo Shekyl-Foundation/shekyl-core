@@ -50,7 +50,7 @@ use shekyl_curve_tree::{
     OneTimePubkey, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{key_image_generator, layer_count_for_leaves, SELENE_CHUNK_WIDTH};
-use shekyl_fcmp::MAX_INPUTS;
+use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 
 use crate::corpus::{min_leaves_for_depth, worst_case_window_leaves};
 use crate::timing::DEFAULT_TOLERANCE_PCT;

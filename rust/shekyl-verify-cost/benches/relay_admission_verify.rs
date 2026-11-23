@@ -107,7 +107,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand_core::OsRng;
 
+use shekyl_curve_generators::MIN_SPEND_LAYERS;
 use shekyl_verify_cost::relay::{admission_verify, build_fixture, ChunkLayout};
+use shekyl_wire::transaction::weight::max_inputs_at;
 
 fn bench_admission(c: &mut Criterion) {
     let mut group = c.benchmark_group("relay_admission_verify");
@@ -141,16 +143,14 @@ fn bench_admission(c: &mut Criterion) {
         // ~0.07 ms each, which cannot move the constant, and holding it fixed
         // keeps this sweep on the axis §79 is about.
         let n_out = 2usize;
-        // EXHAUSTIVE over the consensus domain. `shekyl_wire::transaction::
-        // MAX_FCMP_INPUTS = 8` and `shekyl_fcmp::MAX_INPUTS = 8` agree, and the
-        // cap is enforced at three layers: consensus (CEN-I4,
-        // `shekyl-chain-rules` `rules/tx_inputs.rs`), the wire's `validate`,
-        // and `proof::verify` itself.
-        //
-        // So there is no functional form to choose and nothing to extrapolate:
-        // the domain has EIGHT points, and measuring all of them makes the
-        // surface itself the specification (§80).
-        for n_in in 1usize..=8 {
+        // EXHAUSTIVE over the consensus domain at this depth: every input
+        // count a mineable transaction of this shape can carry
+        // (`max_inputs_at`, the one legal-shape function; `ICD-R5`). So there
+        // is no functional form to choose and nothing to extrapolate: measuring
+        // all of them makes the surface itself the specification (§80). The
+        // sub-production depth 1 reads depth 2's domain.
+        let most = max_inputs_at(n_out, tree_depth.max(MIN_SPEND_LAYERS));
+        for n_in in 1usize..=most {
             // Wall-clock timing averages over many samples, so a fresh random
             // fixture each build is fine (and closer to production variety). The
             // instruction-count sibling (`relay_admission_verify_iai`) pins a
