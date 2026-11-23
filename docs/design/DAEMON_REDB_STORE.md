@@ -2335,6 +2335,38 @@ exception is a file redb must repair first, which a read-only open refuses
 state with nothing lost, and then refuses it. Judging a repaired copy instead
 would cost a second copy of the store at every start after a crash (PB-S3).
 
+**A start a store refuses on its file writes nothing (2026-11-23).** A writable
+redb open rewrites the file's header even when nothing else in it changes (the
+god byte's primary slot flips), so judging each store only as it is opened left
+a refusal by a later store after an earlier one was already rewritten: a
+refused start was not side-effect free (found by the structural cleanup lane,
+2026-11-22, on copies of a rollback data directory). Each store's file is now
+judged by one read-only decision, `creation::look` and the store's own
+`judge_look`, which its open and its check (`ChainStore::check_with_genesis`,
+`PoolStore::check`, the enrollment store's `Store::check`) both take, so the two
+cannot disagree; a check writes nothing and holds no lock past its return, and
+the open looks again under its lock. `Node::open` checks both of its stores before it opens
+either, and the daemon checks all three, right after it takes the data
+directory's lock and before its marker, its RPC channel and any store is
+written. The guarantee is drawn at **what is true of the files and the
+directory when the check runs**. So a check also refuses a file the writable
+open could not write, a dangling link at a store's path, an enrollment store
+whose table has another type, a store that must be created in a directory the
+account cannot write, and a chain or pool file another handle holds (the replay
+tool reads a chain file without the daemon's lock). The last is asked of the
+engine, whose lock layout is its own: `creation::probe_claim` runs its writable
+open over a backend that takes the real locks and refuses every write, then
+closes it. What another process does after the check is not a state the check
+can see, and the open still refuses it; nothing in the tree opens the
+enrollment store read-only, so it takes no such probe. A refused start still
+writes two things, on purpose: the data-directory lock, which must be held for
+the check to mean anything, and its refusal, in the log file the configuration
+names, which may be inside the data directory. Also outside the guarantee,
+because only a writable open can act on them and it writes: a file redb must repair first, an unfinished initialization
+(moved aside), the older chain layout the pre-genesis wipe replaces, and a
+refusal after the stores have opened (a genesis that does not connect, a
+service that does not answer).
+
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
 changing a value encoding, because under the accumulator design the redb value
