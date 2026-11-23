@@ -72,6 +72,8 @@ pub struct Invocation {
 #[derive(Debug)]
 pub struct Dist {
     pub invocation: Invocation,
+    /// The staged binaries' permission bits; `None` keeps what the build left.
+    pub binary_mode: Option<u32>,
     pub files: Vec<StagedFile>,
 }
 
@@ -82,8 +84,8 @@ pub struct StagedFile {
     pub source: String,
     /// Relative to the staging directory.
     pub staged: String,
-    /// Octal permission bits, `644` or `555`.
-    pub mode: u32,
+    /// Its permission bits; `None` keeps the source file's.
+    pub mode: Option<u32>,
 }
 
 impl Matrix {
@@ -227,16 +229,14 @@ impl Host {
                     target: d.boolean("target")?,
                     env: d.pairs("env")?,
                 };
+                let binary_mode = parse_mode(&d.string("binary_mode")?)
+                    .map_err(|e| format!("host {name}: binary_mode: {e}"))?;
                 let mut files = Vec::new();
                 for row in d.rows("files", 3)? {
                     let [source, staged, mode] = <[String; 3]>::try_from(row)
                         .map_err(|_| format!("host {name}: a files row is not three strings"))?;
-                    let mode = u32::from_str_radix(&mode, 8)
-                        .ok()
-                        .filter(|m| matches!(m, 0o644 | 0o555 | 0o755))
-                        .ok_or_else(|| {
-                            format!("host {name}: {staged}'s mode {mode} is not 644, 555 or 755")
-                        })?;
+                    let mode =
+                        parse_mode(&mode).map_err(|e| format!("host {name}: {staged}: {e}"))?;
                     files.push(StagedFile {
                         source,
                         staged,
@@ -244,7 +244,11 @@ impl Host {
                     });
                 }
                 d.done()?;
-                Some(Dist { invocation, files })
+                Some(Dist {
+                    invocation,
+                    binary_mode,
+                    files,
+                })
             }
             None => None,
         };
@@ -276,6 +280,18 @@ impl Host {
             native,
         })
     }
+}
+
+/// `644`, `555` or `755`, or `inherit`: leave the bits as the copy made them.
+fn parse_mode(text: &str) -> Result<Option<u32>, String> {
+    if text == "inherit" {
+        return Ok(None);
+    }
+    u32::from_str_radix(text, 8)
+        .ok()
+        .filter(|m| matches!(m, 0o644 | 0o555 | 0o755))
+        .map(Some)
+        .ok_or_else(|| format!("mode {text} is not 644, 555, 755 or inherit"))
 }
 
 /// A table being read: each read removes its key, and [`Fields::done`]
@@ -444,13 +460,21 @@ mod tests {
     }
 
     #[test]
+    fn a_mode_is_one_of_the_named_values() {
+        assert_eq!(parse_mode("755"), Ok(Some(0o755)));
+        assert_eq!(parse_mode("inherit"), Ok(None));
+        assert!(parse_mode("777").is_err());
+        assert!(parse_mode("rwx").is_err());
+    }
+
+    #[test]
     fn a_host_named_twice_is_refused() {
         let text =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("matrix.toml"))
                 .expect("read");
         let extra =
             "\n[[host]]\nname = \"x86_64-linux-gnu\"\ntriple = \"x\"\nbinaries = [\"shekyld\"]\n\
-                     [host.dist]\ntarget = true\nenv = []\nfiles = []\n";
+                     [host.dist]\ntarget = true\nenv = []\nbinary_mode = \"755\"\nfiles = []\n";
         let err = Matrix::parse(&format!("{text}{extra}")).expect_err("a second row is refused");
         assert!(err.contains("listed twice"), "{err}");
     }

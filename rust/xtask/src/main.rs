@@ -52,6 +52,9 @@ struct Options {
     version_override: Option<String>,
 }
 
+/// A subdirectory of the staged tree.
+const STAGED_DIR_MODE: u32 = 0o755;
+
 const USAGE: &str = "usage:\n  \
     cargo xtask dist --host <depends host> [--out DIR] [--measurement-spans] [--version-override V]\n  \
     cargo xtask build [--out DIR] [--measurement-spans] [--version-override V]\n  \
@@ -106,18 +109,24 @@ fn run(args: &[String]) -> Result<(), String> {
 
     // `--host` is a release host built from depends; without it, this
     // machine's own triple.
-    let (host, invocation, depends, files) = if let Some(name) = &options.host {
+    let (host, invocation, depends, binary_mode, files) = if let Some(name) = &options.host {
         let (host, dist) = matrix.dist_host(name)?;
         let env_file = root
             .join("contrib/depends")
             .join(name)
             .join("share/toolchain.env");
         let depends = DependsEnv::read(&env_file)?;
-        (host, &dist.invocation, Some(depends), &dist.files[..])
+        (
+            host,
+            &dist.invocation,
+            Some(depends),
+            dist.binary_mode,
+            &dist.files[..],
+        )
     } else {
         let triple = host_triple(&root)?;
         let (host, invocation) = matrix.native_host(&triple)?;
-        (host, invocation, None, &[][..])
+        (host, invocation, None, None, &[][..])
     };
 
     if options.command == "plan" {
@@ -167,7 +176,7 @@ fn run(args: &[String]) -> Result<(), String> {
     execute(&root, &plan)?;
 
     let out = options.out.unwrap_or_else(|| root.join("build/bin"));
-    stage(&root, &plan, files, &out)?;
+    stage(&root, &plan, binary_mode, files, &out)?;
     eprintln!("xtask: staged in {}", out.display());
     Ok(())
 }
@@ -362,22 +371,35 @@ fn library_path_without_cargo_run(root: &Path) -> Option<OsString> {
     std::env::join_paths(kept).ok()
 }
 
-/// Copies the binaries (mode 755) and the host's files into `out`.
-fn stage(root: &Path, plan: &Plan, files: &[matrix::StagedFile], out: &Path) -> Result<(), String> {
+/// Copies the binaries and the host's files into `out`. A directory the
+/// files need under `out` is 755 (FreeBSD's `rc.d`).
+fn stage(
+    root: &Path,
+    plan: &Plan,
+    binary_mode: Option<u32>,
+    files: &[matrix::StagedFile],
+    out: &Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     for built in &plan.outputs {
         let name = built
             .file_name()
             .ok_or_else(|| format!("{} has no file name", built.display()))?;
-        copy(built, &out.join(name), 0o755)?;
+        copy(built, &out.join(name), binary_mode)?;
     }
     for file in files {
-        copy(&root.join(&file.source), &out.join(&file.staged), file.mode)?;
+        let to = out.join(&file.staged);
+        copy(&root.join(&file.source), &to, file.mode)?;
+        if let Some(dir) = to.parent().filter(|dir| *dir != out) {
+            set_mode(dir, STAGED_DIR_MODE)?;
+        }
     }
     Ok(())
 }
 
-fn copy(from: &Path, to: &Path, mode: u32) -> Result<(), String> {
+/// Copies `from` to `to`. `std::fs::copy` carries the source's permission
+/// bits, which is what `None` keeps.
+fn copy(from: &Path, to: &Path, mode: Option<u32>) -> Result<(), String> {
     if let Some(dir) = to.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -387,7 +409,10 @@ fn copy(from: &Path, to: &Path, mode: u32) -> Result<(), String> {
         std::fs::remove_file(to).map_err(|e| format!("{}: {e}", to.display()))?;
     }
     std::fs::copy(from, to).map_err(|e| format!("{} -> {}: {e}", from.display(), to.display()))?;
-    set_mode(to, mode)
+    match mode {
+        Some(mode) => set_mode(to, mode),
+        None => Ok(()),
+    }
 }
 
 #[cfg(unix)]
