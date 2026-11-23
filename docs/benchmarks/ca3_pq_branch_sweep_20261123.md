@@ -82,7 +82,7 @@ runs it on x86_64. A toolchain bump re-pins it on x86_64 and on the floor device
 | `ca3_pq_sign_timing` | x86_64 Linux | fork | 27 | 4 | **0** |
 | `ca3_pq_sign_timing` | aarch64 Linux | tag | 0 | 0 | **88** |
 | `ca3_pq_sign_timing` | aarch64 Linux | fork | 27 | 0 | **0** |
-| `ca3_pq_sign_timing` | x86_64 Windows MSVC | tag | 0 | 1 | **110** |
+| `ca3_pq_sign_timing` | x86_64 Windows MSVC | tag | 18 | 1 | **110** |
 | `ca3_pq_sign_timing` | x86_64 Windows MSVC | fork | 21 | 4 | **0** |
 
 The count needs line tables, and line tables move code elsewhere in the binary.
