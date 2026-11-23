@@ -27,7 +27,7 @@ use ec_divisors::DivisorCurve;
 use generalized_bulletproofs::{
     arithmetic_circuit_proof::{AcProveError, AcStatementError, AcVerifyError},
     transcript::{Transcript as ProverTranscript, VerifierTranscript},
-    BatchVerifier, PedersenVectorCommitment,
+    BatchVerifier, Openings,
 };
 
 mod gadgets;
@@ -375,16 +375,16 @@ where
 
     // Prove for a single input's membership
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-    fn input(
+    fn input<R1: Role<C::C1>, R2: Role<C::C2>>(
         params: &FcmpParams<C>,
         layers: usize,
         transcript: &mut impl Transcript,
-        c1_circuit: &mut Circuit<C::C1>,
+        c1_circuit: &mut Circuit<C::C1, R1>,
         c1_dlog_challenge: &mut Option<(
             DiscreteLogChallenge<<C::C1 as Ciphersuite>::F, C::C2Parameters>,
             ChallengedGenerator<<C::C1 as Ciphersuite>::F, C::C2Parameters>,
         )>,
-        c2_circuit: &mut Circuit<C::C2>,
+        c2_circuit: &mut Circuit<C::C2, R2>,
         c2_dlog_challenge: &mut Option<(
             DiscreteLogChallenge<<C::C2 as Ciphersuite>::F, C::C1Parameters>,
             ChallengedGenerator<<C::C2 as Ciphersuite>::F, C::C1Parameters>,
@@ -672,9 +672,20 @@ where
             pvc_blinds_2.push(<C::C2 as Ciphersuite>::F::random(&mut *rng));
         }
 
-        // Actually commit
-        let commitments_1 = c1_tape.commit(&params.curve_1_generators, &pvc_blinds_1);
-        let commitments_2 = c2_tape.commit(&params.curve_2_generators, &pvc_blinds_2);
+        // Commit to the tapes' openings: each commitment is computed from the opening the circuit's
+        // witness then holds, so the two cannot disagree
+        let opened_1 = Openings {
+            vector: c1_tape.openings(&pvc_blinds_1),
+            scalar: vec![],
+        }
+        .commit(&params.curve_1_generators)
+        .map_err(|_| FcmpError::NotEnoughGenerators)?;
+        let opened_2 = Openings {
+            vector: c2_tape.openings(&pvc_blinds_2),
+            scalar: vec![],
+        }
+        .commit(&params.curve_2_generators)
+        .map_err(|_| FcmpError::NotEnoughGenerators)?;
 
         // Decide the nonce which will be used for proving knowledge of the tree root blind
         let mut root_blind_r_C1 = None;
@@ -703,8 +714,8 @@ where
                 .collect::<Vec<_>>(),
             &root_blind_R,
         ));
-        let commitments_1 = transcript.write_commitments(commitments_1, vec![]);
-        let commitments_2 = transcript.write_commitments(commitments_2, vec![]);
+        let commitments_1 = transcript.write_commitments(opened_1);
+        let commitments_2 = transcript.write_commitments(opened_2);
 
         let mut root_blind_pok = [0; 64];
         if matches!(tree, TreeRoot::C1(_)) {
@@ -719,29 +730,11 @@ where
             root_blind_pok[32..].copy_from_slice(s.to_repr().as_ref());
         }
 
-        // Create the circuits
-        let mut c1_circuit = Circuit::<C::C1>::prove(
-            c1_tape
-                .commitments
-                .into_iter()
-                .zip(pvc_blinds_1.iter())
-                .map(|(g_values, mask)| PedersenVectorCommitment {
-                    g_values,
-                    mask: *mask,
-                })
-                .collect(),
-        );
-        let mut c2_circuit = Circuit::<C::C2>::prove(
-            c2_tape
-                .commitments
-                .into_iter()
-                .zip(pvc_blinds_2.iter())
-                .map(|(g_values, mask)| PedersenVectorCommitment {
-                    g_values,
-                    mask: *mask,
-                })
-                .collect(),
-        );
+        // Create the circuits over the commitments and their openings
+        let c1_points = commitments_1.commitments().C().to_vec();
+        let c2_points = commitments_2.commitments().C().to_vec();
+        let mut c1_circuit = Circuit::prove(commitments_1);
+        let mut c2_circuit = Circuit::prove(commitments_2);
 
         let mut c1_dlog_challenge = None;
         let mut c2_dlog_challenge = None;
@@ -754,16 +747,12 @@ where
         let mut transcripted_blinds_c2 = transcripted_blinds_c2.into_iter();
 
         // Perform the layers
-        let mut c1_commitments = commitments_1
-            .C()
-            .iter()
-            .copied()
+        let mut c1_commitments = c1_points
+            .into_iter()
             .zip(pvc_blinds_1.into_iter().map(Some))
             .zip(&mut transcripted_blinds_c2);
-        let mut c2_commitments = commitments_2
-            .C()
-            .iter()
-            .copied()
+        let mut c2_commitments = c2_points
+            .into_iter()
             .zip(pvc_blinds_2.into_iter().map(Some))
             .zip(&mut transcripted_blinds_c1);
 
@@ -799,26 +788,26 @@ where
         debug_assert!(c1_circuit.muls() <= c1_padded_pow_2);
         debug_assert!(c2_circuit.muls() <= c2_padded_pow_2);
 
-        let (c1_statement, c1_witness) = c1_circuit.statement(
-            params
-                .curve_1_generators
-                .reduce(c1_padded_pow_2)
-                .ok_or(FcmpError::NotEnoughGenerators)?,
-            commitments_1,
-        )?;
-        c1_statement.prove(rng, &mut transcript, c1_witness.unwrap())?;
+        c1_circuit
+            .statement(
+                params
+                    .curve_1_generators
+                    .reduce(c1_padded_pow_2)
+                    .ok_or(FcmpError::NotEnoughGenerators)?,
+            )?
+            .prove(rng, &mut transcript);
 
         // This circuit may be empty, meaning we don't have to prove a Bulletproof for it
         // It should only be empty in negligible environments and at worst is an inefficiency so it's
         // on-purposely left as-is
-        let (c2_statement, c2_witness) = c2_circuit.statement(
-            params
-                .curve_2_generators
-                .reduce(c2_padded_pow_2)
-                .ok_or(FcmpError::NotEnoughGenerators)?,
-            commitments_2,
-        )?;
-        c2_statement.prove(rng, &mut transcript, c2_witness.unwrap())?;
+        c2_circuit
+            .statement(
+                params
+                    .curve_2_generators
+                    .reduce(c2_padded_pow_2)
+                    .ok_or(FcmpError::NotEnoughGenerators)?,
+            )?
+            .prove(rng, &mut transcript);
 
         let res = Fcmp {
             _curves: PhantomData,
@@ -1055,8 +1044,8 @@ where
         };
 
         // Create the circuits
-        let mut c1_circuit = Circuit::<C::C1>::verify();
-        let mut c2_circuit = Circuit::<C::C2>::verify();
+        let mut c1_circuit = Circuit::<C::C1, Verifying>::verify();
+        let mut c2_circuit = Circuit::<C::C2, Verifying>::verify();
 
         let mut c1_dlog_challenge = None;
         let mut c2_dlog_challenge = None;
@@ -1100,7 +1089,7 @@ where
         debug_assert!(c1_circuit.muls() <= c1_padded_pow_2);
         debug_assert!(c2_circuit.muls() <= c2_padded_pow_2);
 
-        let (c1_statement, _witness) = c1_circuit.statement(
+        let c1_statement = c1_circuit.statement(
             params
                 .curve_1_generators
                 .reduce(c1_padded_pow_2)
@@ -1109,7 +1098,7 @@ where
         )?;
         c1_statement.verify(rng, verifier_1, &mut transcript)?;
 
-        let (c2_statement, _witness) = c2_circuit.statement(
+        let c2_statement = c2_circuit.statement(
             params
                 .curve_2_generators
                 .reduce(c2_padded_pow_2)
