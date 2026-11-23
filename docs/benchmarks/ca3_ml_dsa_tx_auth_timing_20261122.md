@@ -1014,3 +1014,67 @@ carry.
 **Captures:** `floor_step1_*` with `SHA256SUMS`, including the analysis's output
 and the hashes of the three per-signature dumps. The dumps are in the estate's
 private captures.
+
+### Step 2, method, fixed before the runs: is it a layout-dependent repetition artifact?
+
+**Why.** The fixed pair repeats each key 25,000 times, so the branch predictor
+can learn each key's patterns, and how well it learns them depends on where the
+code sits. A dependence on the key's values keeps its direction wherever the
+code is placed.
+
+**Step 1's build is not a layout variant.** The verifier below compares it with
+the registered build and finds different code: adding the dump mode changed how
+the compiler emitted three fips204 functions (`sig_encode`, `rej_ntt_poly`,
+`sample_in_ball`), alongside the harness's own. Its source for the timed path is
+the same, but its 3.01 is not evidence about layout, and it is not read here.
+
+**The builds.** All come from the registered commit `84f9d24714`, in the floor
+device's existing clean clone of it, with the same toolchain:
+1. **Registered:** the registered binary itself, `e13550da…`, not rebuilt.
+2. **Alignment:** every function aligned to 128 bytes
+   (`RUSTFLAGS="-C llvm-args=-align-all-functions=7"`).
+3. **Moved:** the registered build's objects relinked with `.text` starting
+   0x1240 bytes later (`-C link-arg=-Wl,--section-start=.text=0x9640`, against
+   0x8400). That is padding ahead of all the code, fips204 included.
+
+If the alignment build's code differs from the registered build's, it is
+replaced before any timing run by a relink of the same objects with the
+functions in a different order (`-Wl,--sort-section=name`).
+
+**Verified before any timing run** by
+`ca3_ml_dsa_layout_compare_20261123.py`, which compares each variant's `.text`
+with the registered binary's, by disassembly. Every function's name and
+instruction stream must match once address-only content is removed, and
+fips204's functions must have moved. The check was shown able to fail: it
+refuses a binary against itself (nothing moved) and the Step 1 build (code
+differs). A variant that does not pass is not run.
+
+**The runs.** `ca3_pq_sign_timing ml-dsa-registered`, the registered pair and
+inputs at 50,000 samples, under a quiet claim, in this order:
+registered, alignment, moved, registered again. The identical binary brackets
+the variants, so a change between runs of one binary is not mistaken for a
+layout effect. Only the signing pair, its null and its control are read; the
+information comparisons those runs also print are recorded and not read.
+
+**A run is void** if its checks fail, its control is at or below 10, or its null
+is at or above 4.5. A void run is made again once, after its cause is named.
+
+**Direction:** the sign of A − B at the cut-off where the pair's `|t|` is
+largest (the `max_at_crop` line). The registered attempt's is negative: key A
+faster.
+
+**The reading:**
+- **The baseline reproduces** when both registered runs read `|t|` ≥ 4.5 with
+  key A faster.
+- **Unstable, a layout-dependent repetition artifact:** the baseline reproduces,
+  and at least one variant reads below 4.5 or has the opposite direction. The
+  diagnostics go to the close.
+- **Stable, a dependence on the key's values:** the baseline reproduces, and both
+  variants read `|t|` ≥ 4.5 with key A faster. Step 3 follows.
+- **Not reproduced:** a registered run reads below 4.5 or has the opposite
+  direction. The figure then moves between runs of one identical binary. That is
+  **not** a layout finding, and it does not close anything. It goes to the
+  maintainer with the figures.
+
+**The other Pi.** skl-pi4-1 holds the cover-traffic lane's measurement until
+2026-11-24 17:11Z. These runs do not wait for it.
