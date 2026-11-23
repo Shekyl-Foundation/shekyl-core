@@ -354,12 +354,11 @@ pub(super) async fn close_shard(
         daemon.generate_blocks(scan_tip + 1 - count).await;
     }
     refresh(arc).await;
-    let scanned = pscan_until_within(
+    let scanned = pscan_until(
         arc,
         pscan_seal,
         "the shard fill, ahead of the retention prune",
         |s| s.synced_height().to_raw() > close_height,
-        Duration::from_secs(1800),
     )
     .await;
     eprintln!(

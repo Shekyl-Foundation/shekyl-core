@@ -4298,31 +4298,127 @@ pub(super) fn persona_destination(
     super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
 
+/// How long a P-scan wait may go without a new height sealed. The scan's
+/// work is its backlog, which a walk grows to thousands of blocks, so the
+/// wait is bounded by progress: a scan that keeps sealing is never cut off,
+/// and one that stops, or that has caught up without satisfying the
+/// predicate, fails here.
+const PSCAN_STALL_LIMIT: Duration = Duration::from_secs(300);
+
+/// What one P-scan wait has seen: the heights sealed and when the last new
+/// one landed. It names its rate in blocks per second on every outcome, so
+/// a scan that slows is visible even when it passes.
+#[derive(Debug)]
+struct ScanProgress {
+    started: Instant,
+    advanced: Instant,
+    /// The first and the highest synced height read.
+    heights: Option<(u64, u64)>,
+}
+
+impl ScanProgress {
+    fn new(now: Instant) -> Self {
+        Self {
+            started: now,
+            advanced: now,
+            heights: None,
+        }
+    }
+
+    /// Record a sealed height. Only a height above the best counts as
+    /// progress: a re-seal at the same height, or lower after a reorg, is
+    /// not new work done.
+    fn observe(&mut self, synced: u64, now: Instant) {
+        match &mut self.heights {
+            None => {
+                self.heights = Some((synced, synced));
+                self.advanced = now;
+            }
+            Some((_, best)) if synced > *best => {
+                *best = synced;
+                self.advanced = now;
+            }
+            Some(_) => {}
+        }
+    }
+
+    fn stalled(&self, now: Instant) -> bool {
+        now.duration_since(self.advanced) >= PSCAN_STALL_LIMIT
+    }
+
+    /// `synced <first> → <best> in <secs> s (<rate> blocks/s)`, the rate
+    /// to a tenth, in integers.
+    fn report(&self, now: Instant) -> String {
+        let elapsed = now.duration_since(self.started);
+        let secs = elapsed.as_secs();
+        match self.heights {
+            None => format!("no seal in {secs} s"),
+            Some((first, best)) => {
+                let tenths = u128::from(best - first)
+                    .saturating_mul(10_000)
+                    .checked_div(elapsed.as_millis())
+                    .unwrap_or(0);
+                format!(
+                    "synced {first} → {best} in {secs} s ({}.{} blocks/s)",
+                    tenths / 10,
+                    tenths % 10
+                )
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scan_wait_is_bounded_by_progress_not_by_its_length() {
+    let start = Instant::now();
+    let at = |secs: u64| start + Duration::from_secs(secs);
+    let limit = PSCAN_STALL_LIMIT.as_secs();
+
+    // No seal at all stalls at the limit.
+    let progress = ScanProgress::new(start);
+    assert!(!progress.stalled(at(limit - 1)));
+    assert!(progress.stalled(at(limit)));
+
+    // A scan that keeps sealing runs far past the limit.
+    let mut progress = ScanProgress::new(start);
+    let mut now = 0;
+    for height in 0..20 {
+        now = height * (limit - 1);
+        progress.observe(4_000 + height, at(now));
+        assert!(!progress.stalled(at(now + limit - 1)));
+    }
+    assert!(now > limit);
+
+    // A re-seal at the same height, or a lower one, is not progress.
+    let best = 4_019;
+    progress.observe(best, at(now + 1));
+    progress.observe(best - 5, at(now + 2));
+    assert!(progress.stalled(at(now + limit)));
+
+    // The rate is over the heights the wait itself saw.
+    let mut progress = ScanProgress::new(start);
+    progress.observe(4_067, at(0));
+    progress.observe(8_963, at(300));
+    assert_eq!(
+        progress.report(at(300)),
+        "synced 4067 → 8963 in 300 s (16.3 blocks/s)"
+    );
+    assert_eq!(ScanProgress::new(start).report(at(5)), "no seal in 5 s");
+}
+
 /// Run the production P-scan (tight cadence + the shallow
 /// [`PSCAN_TEST_REORG_DEPTH`] horizon, via the injectable
 /// [`Engine::start_pscan_with`](super::Engine::start_pscan_with) seam) until
 /// the sealed `.wallet.pscan` state satisfies `pred`, then shut the task down
 /// and return that state. The caller mines the finality horizon past the
 /// blocks under test *before* calling; the scan then only has to catch up to
-/// `tip − horizon`. Panics if no satisfying seal appears within the deadline.
+/// `tip − horizon`. Panics after [`PSCAN_STALL_LIMIT`] with no new height
+/// sealed. Prints the scan's rate either way ([`ScanProgress`]).
 async fn pscan_until(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     pscan_seal: &std::path::Path,
     what: &str,
     pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
-) -> shekyl_engine_state::pscan_state::PScanState {
-    pscan_until_within(arc, pscan_seal, what, pred, Duration::from_secs(300)).await
-}
-
-/// [`pscan_until`] under the caller's deadline: a scan over a long stretch
-/// of full-bodied blocks (the shard fill, some three hundred spends) is a
-/// debug-build cost the default does not fit.
-async fn pscan_until_within(
-    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
-    pscan_seal: &std::path::Path,
-    what: &str,
-    pred: impl Fn(&shekyl_engine_state::pscan_state::PScanState) -> bool,
-    within: Duration,
 ) -> shekyl_engine_state::pscan_state::PScanState {
     use super::pscan::start::load_pscan_state_for_engine;
     use super::pscan::task::PScanConfig;
@@ -4331,10 +4427,9 @@ async fn pscan_until_within(
         arc.clone(),
         PScanConfig {
             reorg_depth: BlockCount::from_raw(PSCAN_TEST_REORG_DEPTH),
-            // Small batches so each seal lands quickly: the sweep persists state
-            // only at batch boundaries, and a debug-build scan-step is slow
-            // enough that a whole-backlog batch could outlive the deadline
-            // without ever sealing.
+            // Small batches so each seal lands quickly: the sweep persists
+            // state only at batch boundaries, and progress is read from the
+            // seals.
             batch_blocks: 16,
         },
         Duration::from_millis(150),
@@ -4342,52 +4437,50 @@ async fn pscan_until_within(
     .await
     .expect("start pscan");
 
-    let deadline = Instant::now() + within;
+    let mut progress = ScanProgress::new(Instant::now());
     let mut last_report = Instant::now();
     let mut last_seal_mtime: Option<std::time::SystemTime> = None;
     loop {
         tokio::time::sleep(Duration::from_millis(200)).await;
         // Cheap change gate: the seal lands by atomic rename, so a changed
         // mtime is exactly "a new batch sealed" — only then pay the full
-        // decrypt + decode of the sealed state (up to 1 500 polls fit in
-        // the deadline; re-loading an unchanged seal every 200 ms is pure
-        // waste). An absent/unreadable file falls through to the loader,
-        // which reports the no-seal-yet state.
+        // decrypt + decode of the sealed state; re-loading an unchanged
+        // seal every 200 ms is pure waste. An absent/unreadable file falls
+        // through to the loader, which reports the no-seal-yet state.
         let seal_mtime = std::fs::metadata(pscan_seal)
             .ok()
             .and_then(|m| m.modified().ok());
-        if seal_mtime.is_some() && seal_mtime == last_seal_mtime {
-            assert!(
-                Instant::now() < deadline,
-                "pscan did not observe {what} within the deadline"
-            );
-            continue;
-        }
-        last_seal_mtime = seal_mtime;
-        if let Some(state) = load_pscan_state_for_engine(arc.clone())
-            .await
-            .expect("load pscan state")
-        {
-            if pred(&state) {
-                handle.shutdown().await;
-                return state;
-            }
-            if last_report.elapsed() > Duration::from_secs(2) {
+        if seal_mtime.is_none() || seal_mtime != last_seal_mtime {
+            last_seal_mtime = seal_mtime;
+            if let Some(state) = load_pscan_state_for_engine(arc.clone())
+                .await
+                .expect("load pscan state")
+            {
+                progress.observe(state.synced_height().to_raw(), Instant::now());
+                if pred(&state) {
+                    handle.shutdown().await;
+                    eprintln!("pscan: {what}: {}", progress.report(Instant::now()));
+                    return state;
+                }
+                if last_report.elapsed() > Duration::from_secs(2) {
+                    last_report = Instant::now();
+                    eprintln!(
+                        "pscan progress: synced={:?}, funding={}, matches={}",
+                        state.synced_height(),
+                        state.funding_outputs().len(),
+                        state.bond_post_matches().len(),
+                    );
+                }
+            } else if last_report.elapsed() > Duration::from_secs(2) {
                 last_report = Instant::now();
-                eprintln!(
-                    "pscan progress: synced={:?}, funding={}, matches={}",
-                    state.synced_height(),
-                    state.funding_outputs().len(),
-                    state.bond_post_matches().len(),
-                );
+                eprintln!("pscan progress: no seal yet");
             }
-        } else if last_report.elapsed() > Duration::from_secs(2) {
-            last_report = Instant::now();
-            eprintln!("pscan progress: no seal yet");
         }
+        let now = Instant::now();
         assert!(
-            Instant::now() < deadline,
-            "pscan did not observe {what} within the deadline"
+            !progress.stalled(now),
+            "pscan did not observe {what}: no new height sealed for {PSCAN_STALL_LIMIT:?} ({})",
+            progress.report(now),
         );
     }
 }
