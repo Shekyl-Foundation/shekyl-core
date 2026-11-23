@@ -1044,6 +1044,14 @@ fn a_signer_fault_keeps_its_type_through_every_staking_lane() {
         ))),
         DrainToPrincipalError::Signer(f) if f == fault
     ));
+    let finalized =
+        DrainAssemblyError::from_bond("drain finalize", BondAssemblyError::Signer(fault));
+    assert!(matches!(
+        DrainToPrincipalError::from(DrainRequestError::Drain(DrainOrchestrationError::Stake(
+            StakeEngineError::DrainAssembly(finalized)
+        ))),
+        DrainToPrincipalError::Signer(f) if f == fault
+    ));
     assert!(matches!(
         DrainToPrincipalError::from(DrainRequestError::Stake(drain())),
         DrainToPrincipalError::Signer(f) if f == fault

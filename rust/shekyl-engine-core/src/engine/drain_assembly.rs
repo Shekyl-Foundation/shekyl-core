@@ -183,6 +183,18 @@ impl DrainAssemblyError {
         }
     }
 
+    /// A refusal from a step the drain shares with the bond path, in the
+    /// drain's taxonomy. The signer's fault keeps its type.
+    pub(crate) fn from_bond(
+        stage: &'static str,
+        err: super::bond_assembly::BondAssemblyError,
+    ) -> Self {
+        match err {
+            super::bond_assembly::BondAssemblyError::Signer(fault) => Self::Signer(fault),
+            other => Self::build(stage, other),
+        }
+    }
+
     /// The signer's refusal at `stage`: its detail goes to the log, and its
     /// typed fault travels on.
     fn signer(stage: &'static str, err: &shekyl_tx_builder::TxBuilderError) -> Self {
@@ -401,7 +413,7 @@ pub(super) async fn assemble_drain_tx(
     // never mis-reports as "bond assembly" (bare `?` would coerce via
     // `StakeEngineError::Assembly(#[from] BondAssemblyError)`). ──
     let prepared = prepare_funding_inputs(keys, funding)
-        .map_err(|e| DrainAssemblyError::build("drain funding input preparation", e))?;
+        .map_err(|e| DrainAssemblyError::from_bond("drain funding input preparation", e))?;
     let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
     let funding_gindexes: Vec<GlobalOutputIndex> = prepared.iter().map(|p| p.gindex).collect();
 
@@ -496,7 +508,7 @@ pub(super) async fn assemble_drain_tx(
     // too returns `BondAssemblyError`; remap into the drain taxonomy for the
     // same reason as Step 4.
     let bound_tx = finalize_bond_tx(persona, &wire)
-        .map_err(|e| DrainAssemblyError::build("drain finalize", e))?;
+        .map_err(|e| DrainAssemblyError::from_bond("drain finalize", e))?;
 
     Ok(AssembledDrain {
         bound_tx,
