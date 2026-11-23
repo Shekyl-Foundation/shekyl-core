@@ -346,7 +346,8 @@ pub(crate) async fn require_open_engine(
 /// the address named and its proxy, which travel as one value.
 pub use shekyl_rpc_transport::DaemonTarget;
 
-/// Process-level wallet directory + tenant slot + daemon/network binding.
+/// Process-level wallet directory, tenant slot, and the daemon and Tor
+/// binary this process binds every wallet to.
 #[derive(Debug)]
 pub struct TenantState {
     /// Directory that holds wallet files for this process.
@@ -355,21 +356,34 @@ pub struct TenantState {
     pub network: shekyl_engine_core::Network,
     /// The daemon target every wallet connects to.
     pub daemon: DaemonTarget,
+    /// The `tor-file` option: the Tor binary a serving wallet runs, resolved
+    /// once when the server read its options. Unset is
+    /// [`TorFile::discover`](shekyl_engine_core::TorFile::discover), which
+    /// the caller passes.
+    pub tor_file: shekyl_engine_core::TorFile,
     /// The single tenant (Phase 4b).
     pub tenant: Tenant,
 }
 
 impl TenantState {
-    /// Construct tenant state for `wallet_dir` on `network`.
+    /// Tenant state for one process: wallets in `wallet_dir` on `network`,
+    /// talking to `daemon`, serving with `tor_file`.
+    ///
+    /// `tor_file` is required. An absent option is
+    /// [`TorFile::discover`](shekyl_engine_core::TorFile::discover) at the
+    /// call site, so a host that read a path and did not hand it over does
+    /// not compile.
     pub fn new(
         wallet_dir: PathBuf,
         network: shekyl_engine_core::Network,
         daemon: DaemonTarget,
+        tor_file: shekyl_engine_core::TorFile,
     ) -> Self {
         Self {
             wallet_dir,
             network,
             daemon,
+            tor_file,
             tenant: Tenant::new(),
         }
     }

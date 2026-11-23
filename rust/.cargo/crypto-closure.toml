@@ -69,8 +69,8 @@ reason = "AEAD trait under chacha20poly1305 (shekyl-crypto-pq, shekyl-chacha, an
 
 [[package]]
 name = "aes"
-version = "0.9.1"
-reason = "RandomX's AES rounds (shekyl-pow-randomx): consensus proof-of-work, every node must hash identically."
+version = "0.9.4"
+reason = "RandomX's AES rounds (shekyl-pow-randomx): consensus proof-of-work, every node must hash identically. 0.9.4 admitted after reading the 0.9.2-0.9.4 CHANGELOG and src/hazmat.rs plus each backend's hazmat (the only API RandomX calls: cipher_round, equiv_inv_cipher_round): the AES-NI and ARMv8 rounds are the same intrinsics behind safe wrappers; the software round, the Pi 4 floor's path (no ARMv8 crypto extensions, rule 76), is rewritten from fixslice32/64 into one word-generic fixslice (backends/fixslice/hazmat.rs). The keyed-cipher changes (compact round keys, VAES by default) are outside the hazmat path. MSRV 1.89. Admission evidence, reported in the PR: shekyl-pow-randomx's spec vectors under AES-NI, under the forced software backend (--cfg aes_backend=\"soft\") and under ARMv8 AES."
 
 [[package]]
 name = "argon2"
@@ -79,8 +79,8 @@ reason = "Wallet envelope key derivation (shekyl-crypto-pq wallet_envelope.rs) a
 
 [[package]]
 name = "arrayvec"
-version = "0.7.6"
-reason = "Fixed-capacity buffers under hex-conservative, on bip39's checksum path."
+version = "0.7.8"
+reason = "Fixed-capacity buffers under hex-conservative, on bip39's checksum path. 0.7.8 admitted after reading its CHANGELOG (0.7.7-0.7.8) and diffing src: a double drop of zero-sized elements fixed (extend), spare_capacity_mut added, a 16-bit length on 16-bit targets, a lifetime spelled out."
 
 [[package]]
 name = "base16ct"
@@ -99,13 +99,13 @@ reason = "Seed mnemonic: 24 English words decode to the 32-byte seed through par
 
 [[package]]
 name = "bitcoin_hashes"
-version = "0.14.1"
-reason = "SHA-256 for bip39's mnemonic checksum word."
+version = "0.14.101"
+reason = "SHA-256 for bip39's mnemonic checksum word. 0.14.101 admitted after reading the CHANGELOG (0.14.2, 0.14.100: the version jump is the MSRV bump) and diffing src: schemars/alloc feature gating and lint silencing; the SHA-256 compression and engine are unchanged."
 
 [[package]]
 name = "bitvec"
-version = "1.0.1"
-reason = "Bit views under ff: scalar bit decomposition (PrimeFieldBits) in proofs and multiexp."
+version = "1.1.1"
+reason = "Bit views under ff: scalar bit decomposition (PrimeFieldBits) in proofs and multiexp. 1.1.1 admitted after diffing src against 1.0.1 (the crate ships no CHANGELOG): BitSpan's address mask keeps pointer provenance (wrapping offsets, not an int-to-pointer cast), serde slice deserialization checks head plus length against the buffer (behind serde, not enabled here), shift_left/shift_right become shift_start/shift_end with deprecated aliases (no Shekyl code calls bitvec), and cast cleanups."
 
 [[package]]
 name = "blake2"
@@ -119,13 +119,13 @@ reason = "Block buffering inside every RustCrypto digest (SHA-2, SHA-3, Blake2).
 
 [[package]]
 name = "borsh"
-version = "1.6.1"
-reason = "Serialization of DKG and FROST messages (dkg, modular-frost) on the multisig path."
+version = "1.8.1"
+reason = "Serialization of DKG and FROST messages (dkg, modular-frost) on the multisig path. 1.8.1 admitted after diffing src: optional uuid impls (not enabled), import order, sort_by_key in the hash-map serializer (same order)."
 
 [[package]]
 name = "borsh-derive"
-version = "1.6.1"
-reason = "Derives borsh encodings of DKG and FROST messages."
+version = "1.8.1"
+reason = "Derives borsh encodings of DKG and FROST messages. 1.8.1 admitted after diffing src: several #[borsh(...)] attributes on one item are merged instead of refused; a single attribute parses and expands as before."
 
 [[package]]
 name = "byteorder"
@@ -134,18 +134,18 @@ reason = "Little/big-endian reads inside merlin's transcript."
 
 [[package]]
 name = "bytes"
-version = "1.11.1"
-reason = "Byte buffers under borsh's DKG and FROST encodings."
+version = "1.12.2"
+reason = "Byte buffers under borsh's DKG and FROST encodings. 1.12.2 admitted after reading the 1.12.0-1.12.2 CHANGELOG: fixes (sign extension in try_get_int, a panic in get_int with zero bytes, a panic-safe Box::new, a shared reference released on truncate to zero, chunk order in Chain::chunks_vectored), BufMut fast paths, extend_from_within and try_unsplit added."
 
 [[package]]
 name = "cfg-if"
-version = "1.0.4"
-reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2."
+version = "1.0.5"
+reason = "Backend selection inside chacha20, curve25519-dalek, getrandom, k256 and sha2. 1.0.5 admitted after diffing src: a doc note pointing at core's cfg_select!."
 
 [[package]]
 name = "cfg_aliases"
-version = "0.2.1"
-reason = "borsh 1.6's build.rs: the `hash_collections` cfg alias its DKG and FROST message encodings compile with."
+version = "0.2.2"
+reason = "borsh 1.6's build.rs: the `hash_collections` cfg alias its DKG and FROST message encodings compile with. 0.2.2 admitted after diffing src: trailing semicolons dropped from the macro's recursive calls and a doc example."
 
 [[package]]
 name = "chacha20"
@@ -189,8 +189,8 @@ reason = "Runtime CPU detection choosing the SIMD backends of chacha20, curve255
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.0"
-reason = "Runtime AES-NI / ARMv8 crypto detection inside aes 0.9 (RandomX)."
+version = "0.3.1"
+reason = "Runtime AES-NI / ARMv8 crypto detection inside aes 0.9 (RandomX). 0.3.1 admitted after diffing src: AVX detection now checks the OS saves ymm state (was xmm), under Miri the target features compiled in are reported, u8::MAX spelling."
 
 [[package]]
 name = "crypto-bigint"
@@ -199,8 +199,8 @@ reason = "Field and wide arithmetic of helioselene, ec-divisors and the curve ge
 
 [[package]]
 name = "crypto-common"
-version = "0.1.6"
-reason = "Key/nonce/output size types of the RustCrypto 0.10 family (digests, AEAD, ciphers)."
+version = "0.1.7"
+reason = "Key/nonce/output size types of the RustCrypto 0.10 family (digests, AEAD, ciphers). 0.1.7 admitted after diffing it: no source change; it pins generic-array =0.14.7, the last release before 0.14.8/0.14.9's crate-level deprecation (see generic-array 0.14.7)."
 
 [[package]]
 name = "crypto-common"
@@ -284,18 +284,18 @@ reason = "Formally generated field arithmetic backend of curve25519-dalek."
 
 [[package]]
 name = "fips203"
-version = "0.4.3"
-reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, shekyl-p2p-transport, shekyl-rpc-channel). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, shekyl-p2p-transport, shekyl-rpc-channel). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; a decaps key with a secret coefficient of q or more is now refused at parse; Decompress rounds to nearest (FIPS 203 eq. 4.8, a correct encapsulation no longer decapsulates to the rejection key against a crafted key pair); keygen, encaps and honest decaps on Shekyl's paths byte-identical to 0.4.3."
 
 [[package]]
 name = "fips204"
-version = "0.4.6"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"
-version = "0.4.1"
-reason = "SLH-DSA-SHA2-192s: the inner signature of wallet message signing (shekyl-crypto-pq message_signing.rs). 0.5.0 is PR 2's review."
+version = "0.5.0"
+reason = "SLH-DSA-SHA2-192s: the inner signature of wallet message signing (shekyl-crypto-pq message_signing.rs). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; keygen_with_seeds renamed keygen_from_seed, try_from_bytes takes the array by value, Ph removed; signing time no longer varies with the digest; deterministic keygen and signing byte-identical to 0.4.1."
 
 [[package]]
 name = "flexible-transcript"
@@ -339,13 +339,13 @@ reason = "Integer traits under bitvec (scalar bit decomposition)."
 
 [[package]]
 name = "generic-array"
-version = "0.14.9"
-reason = "Fixed-size arrays of the RustCrypto 0.10 family: digest outputs, keys, nonces."
+version = "0.14.7"
+reason = "Fixed-size arrays of the RustCrypto 0.10 family: digest outputs, keys, nonces. 0.14.7 is crypto-common 0.1.7's exact pin; diffed against 0.14.9 the only code difference is 0.14.9's build.rs cfg and crate-level deprecated attribute (impl_zeroize.rs differs in line endings only)."
 
 [[package]]
 name = "generic-array"
-version = "1.3.5"
-reason = "Fixed-size arrays sizing FCMP++ layers and the EC gadgets (full-chain-membership-proofs, shekyl-fcmp-proofs)."
+version = "1.4.5"
+reason = "Fixed-size arrays sizing FCMP++ layers and the EC gadgets (full-chain-membership-proofs, shekyl-fcmp-proofs; feature alloc only). 1.4.5 admitted after reading the 1.4.0-1.4.5 CHANGELOG and diffing src/internal.rs, iter.rs, lib.rs and sequence.rs: new API (fallible generation, each_ref/each_mut, optional subtle/bitvec/bytemuck impls, none enabled here) and soundness fixes (chunks_from_slice_mut, const_transmute leaking on panic, the by-value iterator forming no reference over moved-out slots); the lock gains no package."
 
 [[package]]
 name = "getrandom"
@@ -369,23 +369,23 @@ reason = "Hex under modular-frost's encodings."
 
 [[package]]
 name = "hex-conservative"
-version = "0.2.2"
-reason = "Hex under bitcoin_hashes, on bip39's checksum path."
+version = "0.2.3"
+reason = "Hex under bitcoin_hashes, on bip39's checksum path. 0.2.3 admitted after diffing src: the serde hex deserializer asks for a string, not a map (a fix behind serde), and the digit tables are spelled as byte strings."
 
 [[package]]
 name = "hkdf"
 version = "0.12.4"
-reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs); the prefs HMAC key (shekyl-engine-prefs hmac_key.rs)."
+reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs)."
 
 [[package]]
 name = "hmac"
 version = "0.12.1"
-reason = "HMAC under hkdf; the prefs file's MAC (shekyl-engine-prefs); Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
+reason = "HMAC under hkdf; Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.12"
-reason = "Sized arrays of the RustCrypto 0.5 family under aes 0.9 (RandomX)."
+version = "0.4.15"
+reason = "Sized arrays of the RustCrypto 0.5 family under aes 0.9 (RandomX). 0.4.15 admitted after diffing src: only new ArraySize impls (U513, U521, U522, the sntrup sizes)."
 
 [[package]]
 name = "inout"
@@ -394,8 +394,8 @@ reason = "In-place buffers under cipher 0.4 (chacha20)."
 
 [[package]]
 name = "inout"
-version = "0.2.2"
-reason = "In-place buffers under cipher 0.5 (aes 0.9, RandomX)."
+version = "0.2.6"
+reason = "In-place buffers under cipher 0.5 (aes 0.9, RandomX). 0.2.6 admitted after reading the 0.2.3-0.2.6 CHANGELOG and diffing src: soundness fixes in InOutBufReserved/PaddedInOutBuf (the output length checked before padded blocks are formed, a Stacked and a Tree Borrows violation removed), pointer casts via ptr::from_ref/from_mut/cast, must_use attributes."
 
 [[package]]
 name = "k256"
@@ -409,8 +409,8 @@ reason = "Keccak-f permutation under sha3 and merlin: Shekyl's Keccak hashes, ha
 
 [[package]]
 name = "libc"
-version = "0.2.184"
-reason = "The getrandom syscall and CPU-feature probes under getrandom, cpufeatures and rand."
+version = "0.2.191"
+reason = "The getrandom syscall and CPU-feature probes under getrandom, cpufeatures and rand. 0.2.191 admitted after reading the 0.2.185-0.2.191 CHANGELOG and checking the diff for every libc item getrandom 0.2.17 and cpufeatures use (getrandom, SYS_getrandom, GRND_*, getentropy, getauxval, AT_HWCAP and the HWCAP bits, sysctl/sysctlbyname, KERN_ARND, errno locations, open/read/poll/close, pthread mutexes, dlsym): none changes value or signature on Linux, Android, macOS, FreeBSD or NetBSD; the GRND_* constants move with DragonFly's split from freebsdlike (DragonFly's own values, not a Shekyl target)."
 
 [[package]]
 name = "merlin"
@@ -424,13 +424,13 @@ reason = "Ed448, carried by ciphersuite."
 
 [[package]]
 name = "modular-frost"
-version = "0.11.0"
-reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 is not admitted: its manifest moves it to multiexp 0.5, so its review is multiexp 0.5's batch verifier on the multisig FROST path, not its 2-line diff."
+version = "0.11.1"
+reason = "Multisig FROST signing (shekyl-fcmp, shekyl-fcmp-proofs). 0.11.1 admitted after diffing it against 0.11.0: the manifest moves it to multiexp 0.5 (reviewed there) and spells optional features as dep:, lib.rs swaps doc_auto_cfg for doc_cfg."
 
 [[package]]
 name = "multiexp"
-version = "0.4.2"
-reason = "Multi-scalar multiplication and batch verification in FCMP++, generalized Bulletproofs and FROST."
+version = "0.5.2"
+reason = "Multi-scalar multiplication and batch verification in the FCMP++ prover and verifier (fcmps, generalized-bulletproofs, shekyl-fcmp, shekyl-fcmp-proofs, shekyl-engine-core, shekyl-verify-cost; one workspace declaration with alloc) and under modular-frost 0.11.1 (multisig FROST). Every non-vartime multiexp in the prover takes secret scalars: generalized-bulletproofs lib.rs:323 (Pedersen commit) and :353 (PedersenVectorCommitment::commit), arithmetic_circuit_proof.rs:377 (AI), :390 (AO), :412 (S, the blinds) and :585/:591 (the t/tau transcript points), point_vector.rs:122, and fcmps tape.rs (the witness tape's commitments); the verifiers use verify_vartime. Admitted after diffing src against 0.4.2, which indexed its Straus tables and Pippenger buckets by secret scalar bits: 0.5's non-vartime Straus and Pippenger select table entries and buckets with subtle's conditional_assign over every index (the reason the group gains a ConditionallySelectable bound), BatchVerifier's constant-time verify moves to that bound's impl block with an unchanged body, std-shims gives way to alloc, and the vartime paths are unchanged. The full scan costs the prover 1.3-2.2x on the Pi 4 floor (rule 76; verification unaffected). Without its alloc feature multiexp is a naive sum, so the workspace declaration and modular-frost both enable it. Owner: the DRS lane (Rick, 2026-11-21)."
 
 [[package]]
 name = "once_cell"
@@ -479,8 +479,8 @@ reason = "Atomic bit storage under bitvec."
 
 [[package]]
 name = "rand"
-version = "0.8.6"
-reason = "RNG front end of key generation and transaction building; 0.8.8 is not reviewed."
+version = "0.8.8"
+reason = "RNG front end of key generation and transaction building. 0.8.8 admitted after reading the 0.8.7-0.8.8 CHANGELOG and diffing src: UniformChar's serde deserialization now checks its range (a memory-safety fix behind serde1, which Shekyl does not enable) and a serde1-only build fix; no sampling or RNG code changes."
 
 [[package]]
 name = "rand_chacha"
@@ -499,13 +499,13 @@ reason = "curve25519-dalek 4.1.3's build.rs: reads the compiler's channel and ve
 
 [[package]]
 name = "rustversion"
-version = "1.0.22"
-reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims."
+version = "1.0.23"
+reason = "Compiler-version gates in dalek-ff-group, generic-array, minimal-ed448, multiexp and std-shims. 1.0.23 admitted after diffing src: version string and a lint allowance."
 
 [[package]]
 name = "schnorr-signatures"
-version = "0.5.2"
-reason = "Schnorr signatures inside FROST's DKG (modular-frost)."
+version = "0.5.3"
+reason = "Schnorr signatures inside FROST's DKG (modular-frost). 0.5.3 admitted after diffing it against 0.5.2: no source change; dependency ranges widen to admit multiexp 0.5 and std-shims 0.3, and the crate drops its lint table."
 
 [[package]]
 name = "sec1"
@@ -519,18 +519,18 @@ reason = "Parses the compiler version for rustc_version, in curve25519-dalek's b
 
 [[package]]
 name = "serde"
-version = "1.0.228"
-reason = "Serialization of keys and signatures (bip39, ed25519-dalek, x25519-dalek, serdect)."
+version = "1.0.229"
+reason = "Serialization of keys and signatures (bip39, ed25519-dalek, x25519-dalek, serdect). 1.0.229 admitted after diffing src: the in-place seq visitors reborrow through &mut *self.0, a lint renamed, never_type gated to docs."
 
 [[package]]
 name = "serde_core"
-version = "1.0.228"
-reason = "serde's core traits."
+version = "1.0.229"
+reason = "serde's core traits. 1.0.229: the same in-place seq visitor reborrow as serde."
 
 [[package]]
 name = "serde_derive"
-version = "1.0.228"
-reason = "Derives serde encodings of key and signature types."
+version = "1.0.229"
+reason = "Derives serde encodings of key and signature types. 1.0.229 admitted after diffing src: a port from syn 2 to syn 3 (already in the lock) with iterator chains written as loops; the expansion's field and bound logic is unchanged. Any change to generated encodings would show in the persisted-schema snapshots (rule 42) and the key/signature round-trip tests."
 
 [[package]]
 name = "serdect"
@@ -579,33 +579,28 @@ reason = "Helper traits under bitvec, elliptic-curve and wyz."
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
-reason = "Error types of dkg, dkg-recovery and modular-frost."
+version = "2.0.21"
+reason = "Error types of dkg, dkg-recovery and modular-frost. 2.0.21 admitted after diffing src: the version string only."
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
-reason = "Derives thiserror's error types."
+version = "2.0.21"
+reason = "Derives thiserror's error types. 2.0.21 admitted after diffing src: format-string parsing understands turbofish generics; clippy allowances; no change to the generated Display/Error impls otherwise."
 
 [[package]]
 name = "tinyvec"
-version = "1.11.0"
-reason = "Small vectors inside unicode-normalization, on bip39's NFKD path."
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-reason = "tinyvec's macros."
+version = "1.13.3"
+reason = "Small vectors inside unicode-normalization, on bip39's NFKD path. 1.13.3 admitted after diffing src and the manifest (no CHANGELOG ships): impl_mirrored is inlined, so tinyvec_macros leaves the graph; deserialization caps its pre-allocation at 4096 bytes of items (behind serde/borsh/bin-proto, none enabled here); optional bin-proto and schemars impls."
 
 [[package]]
 name = "typenum"
-version = "1.20.0"
-reason = "Type-level sizes under generic-array and hybrid-array."
+version = "1.20.1"
+reason = "Type-level sizes under generic-array and hybrid-array. 1.20.1 admitted after diffing src: tarr! names itself through $crate, docs and package metadata."
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.25"
-reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and no PBKDF2 step (shekyl-crypto-pq/src/bip39.rs): parse_in(English, ...) normalizes the input, then matches ASCII words, and the entropy comes from word indices. Unicode 17 to 18 (0.1.26) can change which odd spellings of the words are accepted, never the derived key."
+version = "0.1.26"
+reason = "bip39's NFKD of the mnemonic input. The mnemonic has no passphrase and no PBKDF2 step (shekyl-crypto-pq/src/bip39.rs): parse_in(English, ...) normalizes the input, then matches ASCII words, and the entropy comes from word indices. 0.1.26 admitted: its only change is the tables, Unicode 17 to 18 (UNICODE_VERSION in src/tables.rs). NFKD stays on, as ruled, under Unicode's normalization stability policy: an assigned character's decomposition never changes, so input that parsed before parses the same; newly assigned characters can only change which odd spellings of the words are accepted, never the derived key."
 
 [[package]]
 name = "universal-hash"
@@ -634,20 +629,20 @@ reason = "X25519: the classical half of the hybrid KEM (shekyl-crypto-pq, shekyl
 
 [[package]]
 name = "zerocopy"
-version = "0.8.48"
-reason = "Byte casts inside ppv-lite86, under rand_chacha."
+version = "0.8.64"
+reason = "Byte casts inside ppv-lite86, under rand_chacha. 0.8.64 admitted after diffing the three surfaces ppv-lite86 0.2.21 uses (src/soft.rs, generic.rs, x86_64/): cryptocorrosion_derive_traits! changes only its hidden TryFromBytes hook's name (is_bit_valid to is_safe), transmute! changes only doc examples, and impls.rs renames the internal pointer invariant Valid to Safe and adds tests; the rest of the 0.8.49-0.8.64 diff is the pointer/transmute machinery behind that rename and new DST-layout support. Release notes live on GitHub Releases, not in the crate."
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.48"
-reason = "Derives zerocopy's casts."
+version = "0.8.64"
+reason = "Derives zerocopy's casts. Moves with zerocopy, which pins it exactly (=0.8.64); only half (under ciborium) enables the derive, and nothing on the rand_chacha path invokes it."
 
 [[package]]
 name = "zeroize"
-version = "1.8.2"
-reason = "Wipes every secret buffer (rule 35). 1.9.x rewrites slice zeroization; not reviewed."
+version = "1.9.2"
+reason = "Wipes every secret buffer (rule 35). 1.9.2 admitted (Rick, 2026-11-21), reviewed against rule 35 after reading 1.9.2's CHANGELOG (1.9.0-1.9.2), src/bulk.rs, src/barrier.rs and lib.rs: elision is prevented by an ordinary fill plus an opaque readonly asm barrier on asm targets (asm!(\"# {}\", in(reg) ptr, options(readonly, preserves_flags, nostack)): not nomem, so the compiler must assume it reads the zeroed memory and cannot drop the stores; the memzero_explicit technique), and by per-element volatile writes elsewhere. The Vec wipe still covers spare capacity, then the elements. Zeroizing's Debug is opaque (1.9.1); no Shekyl test, log or panic message relied on the old output. The fallback barrier's possible uninitialised read is fixed (1.9.1)."
 
 [[package]]
 name = "zeroize_derive"
-version = "1.4.3"
-reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types."
+version = "1.5.0"
+reason = "Derives the Zeroize and ZeroizeOnDrop wipes of secret-bearing types. 1.5.0 admitted after diffing src/lib.rs against 1.4.3: edition 2024, inline panic formats, two panics turned into asserts, and the generated wipe gains allow(unused_assignments); the emitted zeroize calls are unchanged. zeroize 1.9.2 requires it (zeroize_derive ^1.5)."

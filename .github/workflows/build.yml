@@ -75,10 +75,12 @@ jobs:
     timeout-minutes: 10  # p90 0.6 min over 23 runs; the floor
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
-      # Whether the OS builds do their work: not for a docs-only change, and
-      # not on a draft pull request (ruled 2026-11-16). One decision, read by
-      # macOS, Windows and Ubuntu as `!= 'false'`, so a missing value runs
-      # them. A skip blocks no merge and passes none: the required check is
+      # Whether the OS builds do their work: not for a docs-only change, not
+      # for a change they read nothing of (change_scope.py's `build_jobs`:
+      # a workflow, script or action only other jobs use), and not on a
+      # draft pull request (ruled 2026-11-16). One decision, read by macOS,
+      # Windows and Ubuntu as `!= 'false'`, so a missing value runs them. A
+      # skip blocks no merge and passes none: the required check is
       # `cli-pass` (the `pass` job), not these jobs.
       work: ${{ steps.work.outputs.work }}
     # `actions: read` lists this workflow's earlier runs for a push's base.
@@ -106,9 +108,10 @@ jobs:
           fi
 
           # The classifier is scripts/ci/change_scope.py: it fails closed
-          # (docs_only=false) on anything it cannot decide, and a crash of the
-          # script itself also writes false, so a broken scope runs everything
-          # rather than skipping the jobs that need this one.
+          # (docs_only=false, build_jobs=run) on anything it cannot decide,
+          # and a crash of the script itself writes docs_only=false and no
+          # build_jobs, which the `work` step reads as run, so a broken scope
+          # runs everything rather than skipping the jobs that need this one.
           python3 scripts/ci/change_scope.py --base "$base" --head "$head" \
             || echo "docs_only=false" >> "$GITHUB_OUTPUT"
       - id: work
@@ -116,11 +119,13 @@ jobs:
         shell: bash
         env:
           DOCS_ONLY: ${{ steps.scope.outputs.docs_only }}
+          # `skip` only when nothing changed is theirs; empty runs them.
+          BUILD_JOBS: ${{ steps.scope.outputs.build_jobs }}
           # A draft skips them; marking it ready (`ready_for_review`) runs
           # them on the same head, and `cli-pass` reports once they finish.
           DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
         run: |
-          if [ "$DOCS_ONLY" = "true" ] || [ "$DRAFT" = "true" ]; then
+          if [ "$DOCS_ONLY" = "true" ] || [ "$BUILD_JOBS" = "skip" ] || [ "$DRAFT" = "true" ]; then
             echo "work=false" >> "$GITHUB_OUTPUT"
           else
             echo "work=true" >> "$GITHUB_OUTPUT"
@@ -199,8 +204,8 @@ jobs:
   build-macos:
     name: 'macOS (brew)'
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`).
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`).
     if: needs.changes.outputs.work != 'false'
     runs-on: macOS-latest
     timeout-minutes: 45  # p90 20.4 min over 13 runs
@@ -255,10 +260,11 @@ jobs:
   build-ubuntu:
     name: ${{ matrix.name }}
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`). A skipped matrix job reports its name expression
-    # unevaluated, not `Ubuntu 24.04`; that blocks nothing, because the
-    # required check is `cli-pass` (the `pass` job below), not this job.
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`). A skipped matrix job reports
+    # its name expression unevaluated, not `Ubuntu 24.04`; that blocks
+    # nothing, because the required check is `cli-pass` (the `pass` job
+    # below), not this job.
     if: needs.changes.outputs.work != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 90  # p90 44.7 min over 15 runs (the 24.04 leg)
@@ -361,8 +367,8 @@ jobs:
   build-windows-msvc:
     name: 'Windows (MSVC, daemon)'
     needs: changes
-    # Skipped for a docs-only change and on a draft pull request
-    # (`changes.work`).
+    # Skipped for a docs-only change, a change they read nothing of, and on
+    # a draft pull request (`changes.work`).
     if: needs.changes.outputs.work != 'false'
     runs-on: windows-2025-vs2026
     timeout-minutes: 180  # p90 89.2 min over 13 runs
@@ -553,6 +559,23 @@ jobs:
             exit 1
           }
 
+      # The redb crates' tests below (shard-fill's readers in
+      # shekyl-chain-store) need the hosted shard-fill chain, as on Linux
+      # (rust_scoped_tests.sh). Keyed by the pin file, so a runner pulls the
+      # pinned digest once; the fetch checks every layer against the pin
+      # whether it pulled or found it here (CHAIN_FORGE.md §10.4). The
+      # script installs the pinned oras for Windows (its zip and oras.exe).
+      - name: Cache the hosted test chains, by their pins
+        uses: actions/cache@v5
+        with:
+          path: |
+            rust/shekyl-chain-forge/chains/*/hosted
+            ${{ runner.temp }}/shekyl-oras
+          key: test-chains-windows-${{ hashFiles('rust/shekyl-chain-forge/chains/hosted.toml') }}
+      - name: Fetch the hosted shard-fill chain
+        shell: pwsh
+        run: python scripts/ci/fetch_test_chain.py shard-fill
+
       # DC-F39 / DC-F40 / DC-F42 (DAEMON_CONFIG_CUTOVER.md §11): the daemon
       # crates' tests on MSVC, the RPC crate among them (review 3 §3). Nothing ran them here before, and the first Windows
       # run found a lib test that did not link (link.exe resolves every
@@ -580,7 +603,7 @@ jobs:
           # `--color never`: PowerShell's redirect stripped cargo's colour
           # codes, a raw handle keeps them, and "Running" followed by an
           # escape is not the "Running " the floors below look for.
-          cmd /c "cargo test --locked --color never -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account --no-fail-fast > daemon-crates.out 2>&1"
+          cmd /c "cargo test --locked --color never -p shekyl-options -p shekyl-daemon-config -p shekyl-daemon -p shekyl-daemon-rpc -p shekyl-process -p shekyl-spawn -p shekyl-rpc-transport -p shekyl-os-account -p shekyl-chain-ingest -p shekyl-chain-store -p shekyl-curve-tree -p shekyl-mempool -p shekyl-node -p shekyl-store-codec --no-fail-fast > daemon-crates.out 2>&1"
           $rc = $LASTEXITCODE
           # shekyl-win-sec's library alone: its probes are the step below.
           # Appended the same way, so its "Running" line is in order too.
@@ -615,7 +638,17 @@ jobs:
           # tests); win-sec 5 (the rename and rendezvous tests; the RT-P8
           # probe is ignored), plus the two registry-key tests that need
           # this elevated runner (7).
-          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1; 'shekyl_os_account-' = 8; 'shekyl_win_sec-' = 7 }
+          # The redb crates the daemon links on Windows (Rick's ruling,
+          # 2026-11-21: redb's file locking is per OS, and the chain store is
+          # the daemon's database): chain-ingest, chain-store, curve-tree,
+          # mempool, node and store-codec beside daemon-rpc above; not
+          # chain-forge or p-store, which shekyld does not link there.
+          # Counted on the Windows host at dev c9ee8f0679 (2026-11-21), with
+          # shard-fill fetched: chain-ingest lib 327 (29 ignored),
+          # chain-store lib 525 (2 ignored), curve-tree lib 220 and its
+          # store_kat 3, mempool lib 28, node lib 58, store-codec lib 17.
+          # No test of theirs is unix-only.
+          $floors = @{ 'shekyl_options-' = 25; 'shekyl_daemon-' = 30; 'shekyl_daemon_config-' = 60; 'shekyl_daemon_rpc-' = 164; 'dc_q21_a_fault_ends_with_its_code-' = 4; 'shekyl_spawn-' = 3; 'shekyl_rpc_transport-' = 40; 'local_peer_check-' = 1; 'shekyl_os_account-' = 8; 'shekyl_win_sec-' = 7; 'shekyl_chain_ingest-' = 327; 'shekyl_chain_store-' = 525; 'shekyl_curve_tree-' = 220; 'store_kat-' = 3; 'shekyl_mempool-' = 28; 'shekyl_node-' = 58; 'shekyl_store_codec-' = 17 }
           $lines = Get-Content daemon-crates.out
           foreach ($binary in $floors.Keys) {
             $at = ($lines | Select-String -Pattern ("Running .*\\deps\\" + [regex]::Escape($binary)) | Select-Object -First 1).LineNumber

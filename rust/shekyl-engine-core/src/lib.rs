@@ -22,21 +22,21 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 #[cfg(feature = "multisig")]
 pub use engine::MultisigSignerV2;
 pub use engine::{
-    AcknowledgeOutcomeError, Capability, CapabilityInput, ChangePasswordError, CollectOutcome,
-    CollectUnstakedError, CompleteTreeFillError, Credentials, CurveTreeIngestFault, DaemonClient,
-    DaemonExpectation, DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome,
-    DrainToPrincipalError, Engine, EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote,
-    FillFailure, FirstStakeError, FirstStakeOutcome, GroupDestination, InFlightRecord,
-    InFlightState, InputCount, IoError, KeyError, LocalRefresh, MalformedKind, Network,
-    NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle, PScanStartError,
-    PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind, RefreshDiagnostic,
-    RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent,
-    RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError, ShardAlarm,
-    ShardAlarmCause, ShardAlarmReport, ShardCheck, ShardRefill, SignerFault, SoloSigner,
-    StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
-    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
-    TracingDiagnosticSink, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
+    AcknowledgeOutcomeError, Capability, CapabilityInput, CollectOutcome, CollectUnstakedError,
+    CompleteTreeFillError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
+    DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
+    EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote, FillFailure, FirstStakeError,
+    FirstStakeOutcome, GroupDestination, InFlightRecord, InFlightState, InputCount, IoError,
+    KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine,
+    OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError,
+    ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions,
+    RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary, ReportedOutcome,
+    ReservationId, ScannableBlock, SendError, ShardAlarm, ShardAlarmCause, ShardAlarmReport,
+    ShardCheck, ShardRefill, SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance,
+    StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey,
+    SubmitOutcome, SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome,
+    ViewMaterial, DAEMON_METHODS,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The signing pass's fault, bounded, that [`SendError::Sign`] carries, and
@@ -67,7 +67,8 @@ pub use engine::cadence::CadenceHandle;
 /// on close. Re-exported here rather than through `engine`'s own list because
 /// that module sits at its decomposition ceiling.
 pub use engine::stake_engine::serving::{
-    ServingHandle, ServingPosture, ServingStartError, ServingStatus, TorConfigError,
+    ServingHandle, ServingPosture, ServingStartError, ServingStatus, TorConfigError, TorFile,
+    TorFileRefused,
 };
 pub use engine::stake_facade::StakeFacade;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult};

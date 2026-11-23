@@ -569,7 +569,7 @@ const SITES: &[Site] = &[
         "H8 holds by construction on the wire: the tripping value does not round-trip",
     ),
     rule(
-        "spend has {n_out} output(s), needs >= 2",
+        "spend has {n_out} output(s), needs >= {MIN_NON_COINBASE_OUTPUTS}",
         Face::Memory,
         CenRow::I1,
         i1_one_output_spend,
@@ -577,7 +577,7 @@ const SITES: &[Site] = &[
     ),
     // -- `validate` (prunable-coupled) ----------------------------------------
     diverges(
-        "spend/bond_post has {n_out} output(s), needs >= 2",
+        "spend/bond_post has {n_out} output(s), needs >= {MIN_NON_COINBASE_OUTPUTS}",
         Arm::Rule(CenRow::I1),
         i1_one_output_bond_post,
         Outcome::RefusedOn(CenRow::H21),

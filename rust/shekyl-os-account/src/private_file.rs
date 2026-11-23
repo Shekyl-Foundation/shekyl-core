@@ -6,6 +6,8 @@
 //! Files this account alone may read, and files it publishes for every
 //! account to read (`docs/design/RPC_CHANNEL.md` §5, §7.1; RT-O34).
 //!
+//! A key file the superuser may also hand this account is [`crate::key_file`].
+//!
 //! A channel key, a console key and an enrolled set are each readable by
 //! the account that holds them alone: created `0600` with `O_EXCL` on Unix,
 //! and on Windows with an owner-only descriptor and the no-read-up label set

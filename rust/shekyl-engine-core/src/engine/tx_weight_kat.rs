@@ -23,13 +23,38 @@ pub(crate) mod support {
 
     /// Measure `sign_transaction` FCMP proof blob size for a KAT grid cell.
     pub(crate) fn measure_fcmp_proof_len(n_in: usize, tree_depth: u8) -> Result<usize, String> {
-        measure_kat_sign(n_in, tree_depth).map(|signed| signed.fcmp_proof.len())
+        kat_cell(n_in, tree_depth)?
+            .sign()
+            .map(|signed| signed.fcmp_proof.len())
     }
 
-    fn measure_kat_sign(
-        n_in: usize,
-        tree_depth: u8,
-    ) -> Result<shekyl_tx_builder::SignedProofs, String> {
+    /// One KAT grid cell, built and ready to sign: everything
+    /// `sign_transaction` reads, so a caller can time the signing alone.
+    pub(crate) struct KatCell {
+        spend_inputs: Vec<SpendInput>,
+        outputs: Vec<OutputInfo>,
+        fee: AtomicUnits,
+        tree: TreeContext,
+        prefix_hash: shekyl_types::PrefixHash,
+    }
+
+    impl KatCell {
+        /// `sign_transaction` over this cell: the Bulletproofs+ range proof,
+        /// the hybrid PQC authorizations and the FCMP++ membership proof.
+        pub(crate) fn sign(&self) -> Result<shekyl_tx_builder::SignedProofs, String> {
+            sign_transaction(
+                &shekyl_network::Network::Testnet.network_id(),
+                self.prefix_hash,
+                &self.spend_inputs,
+                &self.outputs,
+                self.fee,
+                &self.tree,
+            )
+            .map_err(|e| format!("sign_transaction: {e}"))
+        }
+    }
+
+    pub(crate) fn kat_cell(n_in: usize, tree_depth: u8) -> Result<KatCell, String> {
         if n_in == 0 || n_in > 8 || tree_depth == 0 || tree_depth > 24 {
             return Err("grid cell out of bounds".into());
         }
@@ -113,28 +138,49 @@ pub(crate) mod support {
             return Err("payment would be zero".into());
         }
 
+        // The fewest outputs a transaction carries (CEN-I1), paying
+        // `payment` between them. The FCMP++ proof this cell measures does
+        // not depend on the output count.
         // Avoid input/output index collision (M3c fixture note): matching
         // `(combined_ss, output_index)` collapses pseudo-out blinding to zero.
         let recipient_output_index = (n_in as u64) + 100;
-        let out_constructed = construct_output(
-            shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY)
-                .output_positions(usize::try_from(recipient_output_index).unwrap() + 1)
-                .at(recipient_output_index)
-                .unwrap(),
-            &keys.keys.x25519_pk,
-            &keys.keys.ml_kem_ek,
-            &recipient,
-            payment,
-        )
-        .map_err(|e| format!("output construct: {e}"))?;
-
-        let output = OutputInfo {
-            dest_key: out_constructed.output_key,
-            amount: AtomicUnits::from_raw(payment),
-            commitment_mask: out_constructed.commitment_mask(),
-            enc_amount: out_constructed.enc_amount_wire(),
-            enc_label: out_constructed.enc_label_wire(),
-        };
+        let n_out = shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS as u64;
+        if payment < n_out {
+            return Err(format!(
+                "payment {payment} cannot pay {n_out} nonzero outputs"
+            ));
+        }
+        let mut outputs = Vec::new();
+        let mut kem_blobs = Vec::new();
+        let mut output_keys = Vec::new();
+        let mut view_tags = Vec::new();
+        for j in 0..n_out {
+            let amount = payment / n_out + u64::from(j < payment % n_out);
+            let constructed = construct_output(
+                shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY)
+                    .output_positions(usize::try_from(recipient_output_index + j).unwrap() + 1)
+                    .at(recipient_output_index + j)
+                    .unwrap(),
+                &keys.keys.x25519_pk,
+                &keys.keys.ml_kem_ek,
+                &recipient,
+                amount,
+            )
+            .map_err(|e| format!("output construct: {e}"))?;
+            let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
+            kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
+            kem_blobs.push(kem_blob);
+            output_keys.push(constructed.output_key);
+            view_tags.push(Some(constructed.view_tag_prefilter));
+            outputs.push(OutputInfo {
+                dest_key: constructed.output_key,
+                amount: AtomicUnits::from_raw(amount),
+                commitment_mask: constructed.commitment_mask(),
+                enc_amount: constructed.enc_amount_wire(),
+                enc_label: constructed.enc_label_wire(),
+            });
+        }
 
         let tree = TreeContext {
             reference_block: shekyl_types::BlockHash::from_bytes([0xD4; 32]),
@@ -145,11 +191,8 @@ pub(crate) mod support {
         use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
         let tx_pubkey_scalar = Scalar::from_bytes_mod_order(TEST_TX_KEY);
         let tx_pubkey: EdwardsPoint = &tx_pubkey_scalar * ED25519_BASEPOINT_TABLE;
-        let mut kem_blob = Vec::with_capacity(32 + out_constructed.kem_ciphertext_ml_kem.len());
-        kem_blob.extend_from_slice(&out_constructed.kem_ciphertext_x25519);
-        kem_blob.extend_from_slice(&out_constructed.kem_ciphertext_ml_kem);
-        let tx_extra = shekyl_scanner::extra::Extra::for_hybrid_transfer(tx_pubkey, vec![kem_blob])
-            .serialize();
+        let tx_extra =
+            shekyl_scanner::extra::Extra::for_hybrid_transfer(tx_pubkey, kem_blobs).serialize();
 
         let key_images: Vec<[u8; 32]> = spend_inputs
             .iter()
@@ -166,8 +209,6 @@ pub(crate) mod support {
             })
             .collect();
 
-        let output_keys = vec![out_constructed.output_key];
-        let view_tags = vec![Some(out_constructed.view_tag_prefilter)];
         let prefix_hash = shekyl_tx_builder::tx_prefix_hash_from_parts(
             &key_images,
             &output_keys,
@@ -175,14 +216,59 @@ pub(crate) mod support {
             &tx_extra,
         );
 
-        sign_transaction(
-            &shekyl_network::Network::Testnet.network_id(),
+        Ok(KatCell {
+            spend_inputs,
+            outputs,
+            fee: AtomicUnits::from_raw(fee),
+            tree,
             prefix_hash,
-            &spend_inputs,
-            &[output],
-            AtomicUnits::from_raw(fee),
-            &tree,
-        )
-        .map_err(|e| format!("sign_transaction: {e}"))
+        })
+    }
+
+    /// The signing cost a wallet pays per transfer, at the shapes a user
+    /// meets: wall time of `sign_transaction` alone (the cell is built
+    /// outside the timed region), median of `REPS` runs, in a release
+    /// build. The FCMP++ membership proof dominates it, and every
+    /// non-vartime multiexp in that prover takes secret scalars, so this
+    /// is the figure that prices a change to multiexp's constant-time
+    /// selection (rule 76: read it on the floor device). Diagnostic, not a
+    /// gate: it prints, and asserts only that every cell signs.
+    #[test]
+    #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
+    fn time_sign_transaction_by_shape() {
+        const REPS: usize = 5;
+        // Depth 1 and 4 are a young tree; the consensus maximum is where
+        // the prover's multiexps, and so a full-scan multiexp's cost, peak.
+        const DEEPEST: u8 = shekyl_tx_weight::MAX_TREE_DEPTH;
+        const SHAPES: [(usize, u8); 8] = [
+            (1, 1),
+            (2, 1),
+            (8, 1),
+            (1, 4),
+            (2, 4),
+            (8, 4),
+            (1, DEEPEST),
+            (2, DEEPEST),
+        ];
+        println!("sign_transaction wall time, median of {REPS} (ms):");
+        for (n_in, tree_depth) in SHAPES {
+            let cell =
+                kat_cell(n_in, tree_depth).unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+            let mut ms: Vec<f64> = (0..REPS)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    cell.sign()
+                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+                    start.elapsed().as_secs_f64() * 1e3
+                })
+                .collect();
+            ms.sort_by(f64::total_cmp);
+            println!(
+                "  inputs={n_in} depth={tree_depth}: median {:.1} min {:.1} max {:.1}",
+                ms[REPS / 2],
+                ms[0],
+                ms[REPS - 1]
+            );
+        }
     }
 }

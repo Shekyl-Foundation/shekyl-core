@@ -29,7 +29,7 @@
 //! This commit defines the variants but does not yet wire `#[from]`
 //! impls for upstream errors (`shekyl_engine_file::WalletFileError`,
 //! `shekyl_crypto_pq::CryptoError`, `shekyl_engine_state::WalletLedgerError`,
-//! `shekyl_engine_prefs::PrefsError`, daemon-RPC errors, scanner
+//! daemon-RPC errors, scanner
 //! errors, tx-builder errors). Each `#[from]` lands in the same commit
 //! that introduces the lifecycle / refresh / send method whose `?`
 //! operator needs the conversion. This keeps each commit's dependency
@@ -72,7 +72,7 @@ pub(crate) use key::KeyEngineError;
 pub use key::KeyError;
 #[cfg(feature = "conformance")]
 pub(crate) use lifecycle::StakeSelfCertFailure;
-pub use lifecycle::{ChangePasswordError, OpenError, PersistenceError};
+pub use lifecycle::{OpenError, PersistenceError};
 pub(crate) use refresh::LedgerError;
 pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshError};
 pub use send::{PendingTxError, SendError};

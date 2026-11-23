@@ -857,9 +857,13 @@ impl SlashedChain {
 /// shard fill);
 /// `88fdad5b8f041428de75c0583f9a3e85f4de2f3c11001c4472c618ea155626c8`
 /// (24 896 bytes, 40 rows, until `CF-4a`, 2026-11-20, which started the
-/// chain from the forged shard fill under regtest's identity).
+/// chain from the forged shard fill under regtest's identity);
+/// `8599229fdd92c1470f338585e10c7d4e4513e858ca59c3db214650d3c740c2b2`
+/// (until `CF-R29`, 2026-11-22, which re-forged the shard fill with every
+/// transaction paying the daemon's standard rung, moving the fees the
+/// budget rows carry).
 const SLASHED_SNAPSHOT_BODY_KECCAK: &str =
-    "8599229fdd92c1470f338585e10c7d4e4513e858ca59c3db214650d3c740c2b2";
+    "c2b995df36c0049dae8500de0d432dc357d57519db232200b9f1e0d05617e804";
 
 /// Each family's byte range inside a body, walked by the record framing
 /// alone (`n_rows u64`, then `len u32 ‖ row` each) — the test's own

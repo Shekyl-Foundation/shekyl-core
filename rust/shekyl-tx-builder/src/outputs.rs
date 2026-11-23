@@ -57,6 +57,7 @@ use shekyl_wire::{CtBase, Output};
 use crate::types::OutputInfo;
 use crate::wire::committed_base;
 use crate::{TxBuilderError, MAX_OUTPUTS};
+use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 /// Who an output pays.
 #[derive(Clone, Copy)]
@@ -325,6 +326,13 @@ pub enum BuildSpendError {
     /// A spend pays at least one output.
     #[error("a spend pays no output")]
     NoOutputs,
+    /// Fewer recipients than consensus admits outputs on a non-coinbase
+    /// transaction (CEN-I1), but at least one.
+    #[error("{count} outputs are below the transaction's minimum {MIN_NON_COINBASE_OUTPUTS}")]
+    TooFewOutputs {
+        /// The recipients handed in.
+        count: usize,
+    },
     /// More recipients than a transaction carries outputs.
     #[error("{count} outputs exceed the transaction's {MAX_OUTPUTS}")]
     TooManyOutputs {
@@ -364,13 +372,17 @@ impl BuiltSpend {
     ///
     /// # Errors
     ///
-    /// [`BuildSpendError`]: no recipient or more than [`MAX_OUTPUTS`], a
+    /// [`BuildSpendError`]: no recipient, fewer than
+    /// [`MIN_NON_COINBASE_OUTPUTS`] or more than [`MAX_OUTPUTS`], a
     /// recipient's output the crypto crate refuses, or `tx_extra` the wire
     /// codec refuses.
     pub fn build(tx_key: &TxKey, recipients: &[Recipient<'_>]) -> Result<Self, BuildSpendError> {
         let count = recipients.len();
         if count == 0 {
             return Err(BuildSpendError::NoOutputs);
+        }
+        if count < MIN_NON_COINBASE_OUTPUTS {
+            return Err(BuildSpendError::TooFewOutputs { count });
         }
         if count > MAX_OUTPUTS {
             return Err(BuildSpendError::TooManyOutputs { count });
@@ -654,9 +666,10 @@ mod tests {
         assert_eq!(spend.position_of(recipients.len()), None);
     }
 
-    /// No recipient, or more than a transaction carries, builds nothing.
+    /// No recipient, fewer than consensus admits (CEN-I1), or more than a
+    /// transaction carries, builds nothing.
     #[test]
-    fn a_spend_pays_one_to_max_outputs() {
+    fn a_spend_pays_the_minimum_to_max_outputs() {
         let tx_key = TxKey::random().unwrap();
         assert!(matches!(
             BuiltSpend::build(&tx_key, &[]),
@@ -667,6 +680,13 @@ mod tests {
             address: &address,
             network: &NET,
         };
+        let under = vec![Recipient { payee, amount: 1 }; MIN_NON_COINBASE_OUTPUTS - 1];
+        assert!(matches!(
+            BuiltSpend::build(&tx_key, &under),
+            Err(BuildSpendError::TooFewOutputs { count }) if count == MIN_NON_COINBASE_OUTPUTS - 1
+        ));
+        let least = vec![Recipient { payee, amount: 1 }; MIN_NON_COINBASE_OUTPUTS];
+        assert!(BuiltSpend::build(&tx_key, &least).is_ok());
         let over = vec![Recipient { payee, amount: 1 }; MAX_OUTPUTS + 1];
         assert!(matches!(
             BuiltSpend::build(&tx_key, &over),

@@ -84,17 +84,21 @@ placed by a **funds-first** decision order — the funds question is asked
    **Tier 4: a sealed `shekyl-engine-state` block** — which this rule governs
    (strict version, snapshot-pinned, refuse-to-load). Stop here.
 2. Network-fixed with no legitimate per-wallet variance? → Tier 1
-   (`NetworkSafetyConstants`), plus a CLI-ephemeral override for sessions.
-3. User-tunable and *not* funds-threatening? → Tier 3 (advisory
-   `<base>.prefs.toml`).
+   (`NetworkSafetyConstants`), plus a session override where a session may
+   need to deviate.
+3. A property of the machine running the wallet? → an option of that process,
+   never stored with a wallet. A front end's display or behaviour? → that
+   front end's own configuration.
 
-All four tiers are specified in [`docs/WALLET_PREFS.md`](../../docs/WALLET_PREFS.md)
-§2; tier 4 (sealed blocks) is the layer whose version-pairing this rule enforces.
+There is no advisory per-wallet settings file: the `<base>.prefs.toml` tier was
+deleted (Rick, 2026-11-21), so a setting a wallet carries is tier 4. The
+placement is specified in [`docs/WALLET_SETTINGS.md`](../../docs/WALLET_SETTINGS.md)
+§1; tier 4 (sealed blocks) is the layer whose version-pairing this rule enforces.
 The trap this order exists to prevent: a user-chosen, persistent,
-funds-load-bearing field (`staking_enabled`, `p_slot`, the bonded set)
-reflexively filed into advisory TOML, where a tamper-quarantine default-resets
-it and endangers funds. Such fields are tier 4 — which is exactly why
-`StakingBlock` carries a version constant in the table below.
+funds-load-bearing field (`staking_enabled`, `p_slot`, the bonded set) filed
+anywhere a reset to default can reach, which endangers funds. Such fields are
+tier 4 — which is exactly why `StakingBlock` carries a version constant in the
+table below.
 
 ## The pairing
 

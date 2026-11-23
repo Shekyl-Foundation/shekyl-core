@@ -5,7 +5,7 @@
 
 //! Submit verdict + `PendingTxEngine` collaborator error vocabulary (PR 5).
 
-use shekyl_tx_builder::{InternalSignFault, SignFault};
+use shekyl_tx_builder::{InternalSignFault, SignFault, MAX_INPUTS};
 
 use crate::engine::pending::{ReservationId, SnapshotId};
 
@@ -430,10 +430,9 @@ mod reservation_after_tests {
             (
                 SubmitError::DispatchNotSaved {
                     reservation_id: rid,
-                    source: PersistenceError::Prefs(
-                        shekyl_engine_prefs::PrefsError::UnsupportedSchemaVersion {
-                            file: 9,
-                            binary: 1,
+                    source: PersistenceError::WalletFile(
+                        shekyl_engine_file::WalletFileError::ReadOnly {
+                            target: std::path::PathBuf::from("w.wallet"),
                         },
                     ),
                 },
@@ -508,6 +507,22 @@ pub enum OutputSelectorError {
     /// shape's P6 disposition).
     #[error("output selector: no eligible outputs")]
     NoEligibleOutputs,
+
+    /// The shortest cover of the target is longer than one transaction.
+    ///
+    /// `count` is that cover's length. Only a minimum-cardinality
+    /// cover may say so. The wallet's greedy selector does: largest-first
+    /// is that cover. The build maps this to the signer's
+    /// [`SignFault::TooManyInputs`] before anything is reserved. A strategy
+    /// that has not established the shortest cover returns a
+    /// [`SelectedInputs`](crate::engine::output_selector::SelectedInputs)
+    /// within the cap, or a different error: the success type will not
+    /// carry a longer set.
+    #[error("{count} inputs exceed the limit of {MAX_INPUTS} per transaction")]
+    TooManyInputs {
+        /// How many inputs the shortest cover needs.
+        count: usize,
+    },
 
     /// F4 caller-side subset re-verification: the selector returned
     /// an output index that is **not** a subset of the filtered

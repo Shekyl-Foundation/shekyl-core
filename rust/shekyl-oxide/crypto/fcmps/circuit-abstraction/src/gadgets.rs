@@ -2,7 +2,7 @@ use ciphersuite::{group::ff::Field as _, Ciphersuite};
 
 use crate::*;
 
-impl<C: Ciphersuite> Circuit<C> {
+impl<C: Ciphersuite, R: Role<C>> Circuit<C, R> {
     /// Constrain two linear combinations to be equal.
     pub fn equality(&mut self, a: LinComb<C::F>, b: &LinComb<C::F>) {
         self.constrain_equal_to_zero(a - b);

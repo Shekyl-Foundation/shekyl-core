@@ -6,11 +6,11 @@
 //! The dispatch table: each command reaches its owner, and a bad frame is refused.
 
 use crate::common::{
-    inbound_clearnet, kind, new_transactions, request_headers, timed_sync_request,
+    first_fragment, inbound_clearnet, kind, new_transactions, request_headers, timed_sync_request,
     txpool_complement, Event, Rig, Settings,
 };
 use crate::session_test;
-use shekyl_levin::{invoke, notify, PortableMap, Received, RequestHeaders};
+use shekyl_levin::{invoke, notify, BucketHead, Flags, PortableMap, Received, RequestHeaders};
 use shekyl_p2p_session::{CloseKind, Command};
 
 session_test!(
@@ -60,6 +60,61 @@ session_test!(
         let (_, end) = rig.closed(wire.id).await;
         assert_eq!(kind(end), CloseKind::SessionRefused);
         assert!(rig.no_event().await);
+    }
+);
+
+// PWD-B12: each fragment-train refusal closes with a cause of its own,
+// not folded into `SessionRefused`. Each train here is one `BEGIN`
+// fragment, so the close comes with the train unfinished.
+//
+// Red edit, for all three: map the error to `None` in
+// `handshake::framing_kind`, or close with `form_end()` in the reader
+// arms of `session.rs`; the close is then `SessionRefused`.
+session_test!(
+    an_inner_message_over_its_cap_closes_with_its_own_cause,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let (mut wire, _gap) = rig.accept(inbound_clearnet(31));
+        let _session = rig.establish_inbound(&mut wire).await;
+        let over = Command::NewTransactions.payload_cap() + 1;
+        let inner = BucketHead::make(
+            Command::NewTransactions.wire_id(),
+            over,
+            Flags::REQUEST,
+            false,
+        );
+        wire.inject(first_fragment(&inner.write())).await;
+        let (facts, end) = rig.closed(wire.id).await;
+        assert!(facts.established);
+        assert_eq!(kind(end), CloseKind::InnerMessageOversize);
+        assert!(rig.no_event().await, "no owner saw a message");
+    }
+);
+
+session_test!(
+    a_train_that_overruns_its_inner_message_closes_with_its_own_cause,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let (mut wire, _gap) = rig.accept(inbound_clearnet(32));
+        let _session = rig.establish_inbound(&mut wire).await;
+        // The whole inner message in a fragment that does not end the train.
+        wire.inject(first_fragment(&new_transactions(1))).await;
+        let (_, end) = rig.closed(wire.id).await;
+        assert_eq!(kind(end), CloseKind::FragmentTrainOverrun);
+        assert!(rig.no_event().await, "no owner saw a message");
+    }
+);
+
+session_test!(
+    an_inner_message_that_is_not_a_request_or_response_closes_with_its_own_cause,
+    async {
+        let mut rig = Rig::new(Settings::default());
+        let (mut wire, _gap) = rig.accept(inbound_clearnet(33));
+        let _session = rig.establish_inbound(&mut wire).await;
+        let dummy = BucketHead::make(0, 0, Flags::BEGIN.union(Flags::END), false);
+        wire.inject(first_fragment(&dummy.write())).await;
+        let (_, end) = rig.closed(wire.id).await;
+        assert_eq!(kind(end), CloseKind::InnerMessageNotDispatch);
     }
 );
 

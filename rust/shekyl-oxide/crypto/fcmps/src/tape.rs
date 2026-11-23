@@ -7,10 +7,9 @@ use zeroize::Zeroize;
 use generic_array::{typenum::Unsigned as _, GenericArray};
 
 use ciphersuite::{group::ff::PrimeFieldBits, Ciphersuite};
-use multiexp::multiexp;
 
 use ec_divisors::Poly;
-use generalized_bulletproofs::Generators;
+use generalized_bulletproofs::PedersenVectorOpening;
 
 use crate::{
     gadgets::{DiscreteLogParameters, Divisor, PointWithDlog},
@@ -255,25 +254,38 @@ impl<F: Zeroize + PrimeFieldBits> VectorCommitmentTape<F> {
         )
     }
 
-    pub(crate) fn commit<C: Ciphersuite<F = F>>(
-        &self,
-        generators: &Generators<C>,
-        blinds: &[C::F],
-    ) -> Vec<C::G> {
-        assert_eq!(self.commitments.len(), blinds.len());
-
-        let mut res = Vec::with_capacity(self.commitments.len());
-        for (i, (values, blind)) in self.commitments.iter().zip(blinds).enumerate() {
-            let g_generators = generators.g_bold_slice()[..values.len()].iter().copied();
-            let commitment = g_generators.enumerate().map(|(i, g)| (values[i], g));
-            let mut commitment = if let Some(branch_length) = self.branch_lengths.get(i) {
-                commitment.take(*branch_length).collect::<Vec<_>>()
-            } else {
-                commitment.collect::<Vec<_>>()
-            };
-            commitment.push((*blind, generators.h()));
-            res.push(multiexp(&commitment));
-        }
-        res
+    /// The openings of this tape's vector commitments, one blind per commitment.
+    ///
+    /// A branch's commitment opens to the branch alone: the zero padding after it commits to
+    /// nothing, so leaving it out keeps the commitment's point and costs the branch's length rather
+    /// than the commitment's.
+    pub(crate) fn openings<C: Ciphersuite<F = F>>(
+        self,
+        blinds: &[F],
+    ) -> Vec<PedersenVectorOpening<C>> {
+        let VectorCommitmentTape {
+            commitments,
+            branch_lengths,
+            ..
+        } = self;
+        assert_eq!(
+            commitments.len(),
+            blinds.len(),
+            "one blind per vector commitment"
+        );
+        commitments
+            .into_iter()
+            .zip(blinds)
+            .enumerate()
+            .map(|(i, (mut g_values, blind))| {
+                if let Some(branch_length) = branch_lengths.get(i) {
+                    g_values.truncate(*branch_length);
+                }
+                PedersenVectorOpening {
+                    g_values,
+                    mask: *blind,
+                }
+            })
+            .collect()
     }
 }

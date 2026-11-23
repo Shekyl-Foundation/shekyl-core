@@ -159,9 +159,21 @@ impl Core {
 
     /// A round of `descriptor` began. One that was still open, its end
     /// lost, gives way to it.
+    /// A check asked or open learns of it: the counter it reads, or read,
+    /// may be older than what this round uploads (§4.5, "Another
+    /// publisher").
     pub(super) fn round_started(&mut self, now: u64, descriptor: DescriptorKey) -> Vec<Action> {
         self.take_track(descriptor);
         self.rounds.push(RoundTrack::new(descriptor, now));
+        match &mut self.directories {
+            Some(DirectoryHalf::AwaitingDraw { republished }) => {
+                if !republished.contains(&descriptor) {
+                    republished.push(descriptor);
+                }
+            }
+            Some(DirectoryHalf::Open(check)) => check.round_started(descriptor),
+            None => {}
+        }
         Vec::new()
     }
 
@@ -293,12 +305,15 @@ impl Core {
 
     /// When the descriptor's lifetime runs out with no round begun: the
     /// lifetime from its anchor, while no round is open and a republish
-    /// could help. Standing down does not move the anchor, so a check that
-    /// came due while a republish could not help is due when one can. A
-    /// round that ends with no upload leaves the old anchor, so the check
-    /// can be due at once: nothing shows a fresh descriptor.
+    /// would be sent. Another publisher holds the check off the same way a
+    /// clock or a refused round does, and leaves the anchor where it is, so
+    /// a check that came due while the send was held is due when one can
+    /// go. The probe keeps running under another publisher: only a clock or
+    /// a refused round stands it down. A round that ends with no upload
+    /// leaves the old anchor, so the check can be due at once: nothing
+    /// shows a fresh descriptor.
     pub(super) fn overdue_due(&self) -> Option<u64> {
-        if !self.rounds.is_empty() || self.republish_cannot_help() {
+        if !self.rounds.is_empty() || self.republish_held_off() {
             return None;
         }
         self.lifetime_from
@@ -310,21 +325,22 @@ impl Core {
     /// descriptor at their next cleanup. Publish the onion again from the
     /// held seed, which forces a fresh upload; that round's probe judges the
     /// facet. Inbound is not marked down: nothing shows peers cannot reach
-    /// the onion yet. Not while the clock is named or the latest round was
-    /// refused, and the backoff may hold it ([`Core::republish`]). The next
-    /// lifetime counts from now, so a republish that brings no round does
-    /// not ask again at every tick. A republish still waiting for its round
-    /// a whole lifetime later never got one: that is its failed judgment,
-    /// and the backoff holds this one. Standing down because a republish
-    /// cannot help leaves the anchor where it is. The onion not being
-    /// published yet does move it: a past deadline would otherwise fire on
-    /// every tick.
+    /// the onion yet. Not while the send is held — the clock is named, the
+    /// latest round was refused, or another publisher is — and the backoff
+    /// may hold it ([`Core::republish`]). Another publisher leaves the
+    /// anchor where it is; the probe and the directory check keep running.
+    /// The next lifetime counts from now, so a republish that brings no
+    /// round does not ask again at every tick. A republish still waiting
+    /// for its round a whole lifetime later never got one: that is its
+    /// failed judgment, and the backoff holds this one. Holding the send
+    /// leaves the anchor where it is. The onion not being published yet
+    /// does move it: a past deadline would otherwise fire on every tick.
     pub(super) fn on_overdue_deadline(&mut self, now: u64) -> Vec<Action> {
         if !self.onion_done() {
             self.lifetime_from = Some(now);
             return Vec::new();
         }
-        if self.republish_cannot_help() {
+        if self.republish_held_off() {
             return Vec::new();
         }
         self.republish_failed(now);
@@ -514,9 +530,10 @@ impl Core {
         ours: Option<ServiceDescriptor>,
         open_uploads: &OpenUploads,
     ) -> Vec<Action> {
-        if !matches!(self.directories, Some(DirectoryHalf::AwaitingDraw)) {
+        let Some(DirectoryHalf::AwaitingDraw { republished }) = &mut self.directories else {
             return Vec::new();
-        }
+        };
+        let republished = std::mem::take(republished);
         let rows = fetches
             .into_iter()
             .map(|fetch| {
@@ -536,7 +553,11 @@ impl Core {
                 }
             })
             .collect();
-        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(rows, ours)));
+        self.directories = Some(DirectoryHalf::Open(DirectoryCheck::new(
+            rows,
+            ours,
+            republished,
+        )));
         self.on_directories_deadline(now)
     }
 
@@ -561,7 +582,7 @@ impl Core {
     pub(super) fn directories_due(&self) -> Option<u64> {
         match &self.directories {
             Some(DirectoryHalf::Open(check)) => check.due(),
-            Some(DirectoryHalf::AwaitingDraw) | None => None,
+            Some(DirectoryHalf::AwaitingDraw { .. }) | None => None,
         }
     }
 
@@ -653,7 +674,7 @@ impl Core {
             return Vec::new();
         };
         let (verdict, report) = match &self.directories {
-            Some(DirectoryHalf::AwaitingDraw) => return Vec::new(),
+            Some(DirectoryHalf::AwaitingDraw { .. }) => return Vec::new(),
             Some(DirectoryHalf::Open(check)) if !check.is_complete() => return Vec::new(),
             Some(DirectoryHalf::Open(check)) => (check.verdict(), check.report()),
             None => {
@@ -682,6 +703,24 @@ impl Core {
         // is no fact about the path.
         if arrived.is_some() && verdict == DirectoryVerdict::Held {
             actions.extend(self.path_fact(OnionPath::Working, now));
+        }
+        // A newer copy this node did not publish is decided at once, probe
+        // or not, first miss or not. A named clock or a standing refused
+        // round explains it, and stays the cause: a clock that went back
+        // leaves this node's own earlier copy above its counter, and its
+        // uploads are refused (Rick, 2026-11-21: the new cause never
+        // swallows the clock case). Otherwise another Tor holds this onion's
+        // key. No refetch and no republish: either would only race it.
+        if verdict == DirectoryVerdict::Contested {
+            self.probe_confirms = false;
+            if self.republish_is_judging() {
+                self.republish_failed(now);
+            }
+            if !self.clock_is_behind() && !self.any_refused() && !self.published_elsewhere() {
+                self.inbound_unreachable(now, InboundCause::PublishedElsewhere);
+                actions.extend(self.say(now, Cadence::Due));
+            }
+            return actions;
         }
         match (arrived, verdict) {
             (Some(evidence_at), DirectoryVerdict::Held | DirectoryVerdict::Unmatched) => {
@@ -801,7 +840,9 @@ impl Core {
                     minted_at: None,
                     attempt,
                 };
-                self.directories = Some(DirectoryHalf::AwaitingDraw);
+                self.directories = Some(DirectoryHalf::AwaitingDraw {
+                    republished: Vec::new(),
+                });
                 vec![Action::Probe, Action::CheckDirectories]
             }
             Probe::InFlight {

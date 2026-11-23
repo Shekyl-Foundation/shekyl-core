@@ -163,6 +163,10 @@ SITES: dict[tuple[str, str], tuple[str, int, str]] = {
     ("shekyl-crypto-pq/src/fn_dsa_hybrid.rs", "fn_dsa_keygen"): (
         "G1", 1, "FN-DSA keygen from a seed its callers derive (or, in generate_keypair, "
         "draw from the OS)"),
+    ("shekyl-crypto-pq/src/message_signing.rs", "slh_identity_from_okm"): (
+        "G1", 1, "SLH-DSA-SHA2-192s keygen (FIPS 205 Algorithm 18, deterministic by design) "
+        "from SK.seed, SK.prf and PK.seed split out of an HKDF-SHA512 over the wallet's master "
+        "seed (derive_message_signing_identity); its only caller"),
     ("shekyl-crypto-pq/src/multisig_intent.rs", "rng"): (
         "G1", 1, "a multisig input's rerandomization seed (RerandomizationSeed): the blinds "
         "r_o, r_i, r_r_i that shekyl-fcmp's SalSigningParams::new draws from this stream, "

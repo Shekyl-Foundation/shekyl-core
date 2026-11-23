@@ -47,7 +47,7 @@ use shekyl_types::archival::Holdings;
 use shekyl_types::{
     BlockHash, BlockHeight, KeyImage, PCanonicalId, PowHash, SettlementEpoch, ShardId, TxHash,
 };
-use shekyl_wire::{carries_archival_good, Ct, Transaction};
+use shekyl_wire::{carries_archival_good, Transaction};
 
 use super::{
     archival_cumulative_at, connecting, count_at, derivation_fault, held_draws, store_fault,
@@ -122,14 +122,11 @@ fn fees_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<u128, FactsFa
             FactsFault::Inconsistent
         })?;
         // A listed body is an FCMP++ spend. The coinbase is the miner
-        // transaction, not a hash in `transaction_hashes`, so a `Null`
-        // base here is the block disagreeing with its own list.
-        let fee = match tx.ct {
-            Ct::Fcmp { fee, .. } => fee,
-            Ct::Null(_) => {
-                tracing::error!(?hash, "a listed transaction is not an FCMP++ spend");
-                return Err(FactsFault::Inconsistent);
-            }
+        // transaction, not a hash in `transaction_hashes`, so a body with
+        // no fee field is the block disagreeing with its own list.
+        let Some(fee) = tx.fee() else {
+            tracing::error!(?hash, "a listed transaction is not an FCMP++ spend");
+            return Err(FactsFault::Inconsistent);
         };
         fees += u128::from(fee);
     }

@@ -495,8 +495,8 @@ impl std::error::Error for TorBinaryError {}
 /// Mission #1: an unpinned tor defeats every downstream guarantee, so "refuse
 /// to launch" is the only safe outcome.
 ///
-/// For a caller-supplied path (a settings file), use [`discover_and_verify_at`]
-/// — never route configuration through the env var.
+/// For a caller-supplied path (`tor-file`), use [`discover_and_verify_at`].
+/// Nothing is read from the environment.
 ///
 /// This performs blocking file I/O (hashing the bundle, about 12 MiB, once at
 /// setup); call it before entering the actor's async hot path — from async
@@ -512,10 +512,13 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
     verify_candidate(&path, &pin)
 }
 
-/// Verify a **caller-supplied** tor path (e.g. from a settings file)
-/// against the pin — the same gate as [`discover_and_verify`], minus discovery.
-/// This is the route for configuration: the daemon's `tor-file` row and the
-/// wallet's setting arrive here, never through the process environment.
+/// Verify a caller-supplied tor path against the pin — the same gate as
+/// [`discover_and_verify`], minus discovery.
+///
+/// This is the route for `tor-file`: the daemon's row and the wallet
+/// binaries' option. Nothing is read from the process environment. A
+/// missing or unpinned file fails this call; it is not replaced by a
+/// discovered binary.
 pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinaryError> {
     let pin = current_pin()?;
     verify_candidate(path, &pin)

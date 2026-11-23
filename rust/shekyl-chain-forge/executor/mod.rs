@@ -47,9 +47,10 @@ use shekyl_chain_forge::{
     Manifest, Plan, PlanRef, ScheduleRecord, SwitchRecord, MANIFEST_FORMAT_VERSION,
 };
 use shekyl_chain_ingest::admitted_draws::{assert_issued_pair, mine_serving, DriverWitness};
-use shekyl_chain_ingest::archival_driver::{ENDPOINT, FEE};
+use shekyl_chain_ingest::archival_driver::ENDPOINT;
 use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::PipelineConfig;
+use shekyl_chain_ingest::priced::{assert_priced, fee_at, SIZING_FEE};
 use shekyl_chain_ingest::rebaseline::{baseline, ReplayFault};
 use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario};
 use shekyl_chain_ingest::scenario_archival::shard_set;
@@ -58,6 +59,7 @@ use shekyl_chain_ingest::scenario_shard::{
     settled_epoch_blocks, ClosedShard, FILL_FROM_COINBASE,
 };
 use shekyl_chain_ingest::schedule::ChainRules;
+use shekyl_chain_ingest::source::SequenceNo;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, CenRow, SettlementEpochBlocks, SettlementSchedule};
 use shekyl_corpus::{CorpusFault, CorpusWriter, CORPUS_FORMAT_VERSION};
@@ -540,6 +542,13 @@ impl Forge {
                 height: mined.height,
                 record,
             });
+            // A listing that skipped the pool stops the forge here, whichever
+            // step built the block (`CHAIN_FORGE.md` §11.4).
+            assert!(
+                mined.pool_passage_agrees(),
+                "block {} lists transactions the daemon's pool never admitted",
+                mined.height
+            );
             self.transactions += u64::try_from(listed.len()).expect("a block's list fits");
             let line = Line {
                 height: mined.height.to_raw(),
@@ -591,7 +600,8 @@ impl Forge {
         Ok(close_events(&closes, &written, self.stopped.is_some()))
     }
 
-    /// The miner spends `inputs` kept coinbases in one transaction.
+    /// The miner spends `inputs` kept coinbases in one transaction, paying
+    /// what the daemon asks of it (`CHAIN_FORGE.md` §11.4).
     async fn spend(&mut self, inputs: u32) -> Result<(), ForgeFault> {
         let connecting = self.connecting();
         let heights = (0..inputs)
@@ -599,11 +609,17 @@ impl Forge {
             .collect::<Result<Vec<_>, _>>()?;
         let spend = self.next_spend();
         let seeds = self.seeds.spend(spend);
+        let rate = self.scenario().connecting_default_rate().await;
         let spender = self.spender();
         let wallet = self.scenario().wallet();
-        let (spend, _) = spender
-            .drawing(seeds)
-            .spend_coinbases(wallet, &heights, connecting, FEE);
+        let (sized, _) = spender.spend_coinbases(wallet, &heights, connecting, SIZING_FEE);
+        let (spend, _) = spender.drawing(seeds).spend_coinbases(
+            wallet,
+            &heights,
+            connecting,
+            fee_at(&sized, rate),
+        );
+        assert_priced(&spend, &sized, rate);
         self.built.push(Built {
             body: spend.clone(),
             connecting,
@@ -611,9 +627,9 @@ impl Forge {
         });
         let block = self
             .scenario()
-            .mine_listing(vec![spend])
+            .mine_admitted(vec![spend])
             .await
-            .unwrap_or_else(|outcome| panic!("the plan's spend connects: {outcome}"));
+            .unwrap_or_else(|fault| panic!("the plan's spend connects: {fault}"));
         self.chain.push(block);
         Ok(())
     }
@@ -684,17 +700,31 @@ impl Forge {
         let coinbase = self.reserve(join_height)?;
         let spend = self.next_spend();
         let seeds = self.seeds.spend(spend);
+        let rate = self.scenario().connecting_default_rate().await;
         let spender = self.spender();
         let wallet = self.scenario().wallet();
+        // The sizing build's post is signed from the OS's randomness, by the
+        // same persona's keys: the seeded persona signs one post, the one
+        // listed (`crate::priced`'s reason).
+        let sizing = Persona::from_master(&self.seeds.persona_master(slot), Network::Regtest, slot);
+        let sized = spender.spend_coinbase_to(
+            wallet,
+            coinbase,
+            join_height,
+            SIZING_FEE,
+            Some(&sizing.join(shard_set(shards.to_vec()), ENDPOINT)),
+            &recipient,
+        );
         let join = persona.join(shard_set(shards.to_vec()), ENDPOINT);
         let funding = spender.drawing(seeds).spend_coinbase_to(
             wallet,
             coinbase,
             join_height,
-            FEE,
+            fee_at(&sized, rate),
             Some(&join),
             &recipient,
         );
+        assert_priced(&funding, &sized, rate);
         let backing_key = funding.prefix.outputs[0].key;
         let fee_key = funding.prefix.outputs[1].key;
         self.built.push(Built {
@@ -708,9 +738,9 @@ impl Forge {
         });
         let block = self
             .scenario()
-            .mine_listing(vec![funding])
+            .mine_admitted(vec![funding])
             .await
-            .unwrap_or_else(|outcome| panic!("the join connects: {outcome}"));
+            .unwrap_or_else(|fault| panic!("the join connects: {fault}"));
         assert_eq!(block.height, join_height);
         assert!(
             block.judged_by.contains(&CenRow::J15),
@@ -821,6 +851,16 @@ impl Forge {
             shekyl_hasher::Hasher::start(shekyl_hash_budget::Budget::new(hashers))
                 .map_err(|fault| ForgeFault::Hasher(format!("{fault:?}")))?;
         let pow = Arc::new(ProductionPow::new(hasher, Arc::clone(&metrics)));
+        // The trace carries the store's tables digest right after each
+        // indexed event's record (`CHAIN_FORGE.md` §8): the expectation a
+        // replay, and a snapshot opened at the event, are held to.
+        let event_records: Vec<SequenceNo> = self
+            .events
+            .iter()
+            .map(|event| SequenceNo::from_raw(event.record))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let replayed = baseline(
             &corpus_path,
             &store.path().join("trace.redb"),
@@ -833,6 +873,7 @@ impl Forge {
             pow,
             metrics,
             &trace_path,
+            &event_records,
         )
         .await;
         owner.stop();

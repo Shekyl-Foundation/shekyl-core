@@ -18,6 +18,9 @@
 # pinned by version and by each archive's SHA-256 from the release's
 # checksums file (rule 17). A changed checksum is red, never re-pinned in
 # passing.
+# Windows' archive is a zip holding `oras.exe`, every other a tar.gz holding
+# `oras`; FreeBSD and Windows were added for the redb crates' tests there
+# (2026-11-21), from the same oras_1.3.6_checksums.txt.
 #
 # Why 1.3.6 (ruled 2026-11-18): the newest release with weeks behind it
 # when CF-4a pinned it (published 2026-10-24); 1.4.0 had been out a day.
@@ -35,37 +38,41 @@ version = "1.3.6"
 [oras.sha256]
 darwin_amd64 = "844e26430aa0afe2c40fdbddafc3b39ef968a6d41955b7380684bd02907fa397"
 darwin_arm64 = "e2b25a53234e2471c5fc81936f957fa612065ab559c21834c02d8bfbc2f62b30"
+freebsd_amd64 = "f32cba18c77cb90122f5a920bea3e94f37ad738c8167e6ea1c5243463d3cce68"
 linux_amd64 = "66fb0ad7206f3f6fa77ed5b552049d364ccf4b50b1684554f731f76302b52ca0"
 linux_arm64 = "b84269e78dfc2d5329a4aab373da3200de95e6c138338cf6c66c10c0a3f248c1"
+windows_amd64 = "ec3d19f386d5d2f0892288772d7b242475a05332aafa64b6773378ca771d76d3"
 
-# shard-fill (CF-4a, CF-R28; corpus layout 5 from CF-3): published by
-# shekyl-test-chains' publish workflow, run 44857446184, at shekyl-core
-# 7e1f143424 (pull request #1491), the layers named by that commit's
-# `forge --layers`. Its blocks and trace are the ones pinned at CF-4a's
-# 8ecd609385 (runs 44452616267 and 44533937333, digest
-# sha256:1cd48e4d…c1296); the corpus moves with the layout.
+# shard-fill (CF-4a, CF-R28; corpus layout 5 from CF-3; trace version 2
+# from CF-4b; forged fees from CF-R29): published by shekyl-test-chains'
+# publish workflow, run 45071747638, at shekyl-core 30042dfc9a (pull
+# request #1524), the layers named by that commit's `forge --layers`. Every
+# forged transaction pays the standard rung served for its block and
+# passed the daemon's pool; blocks 0 to 927 are the ones pinned at CF-4b's
+# 6bef7f0fbd (run 44932808209, digest sha256:8e9fb90d…e175), and the first
+# moved block is 928, the first spend.
 [[chain]]
 name = "shard-fill"
 plan = "rust/shekyl-chain-forge/plans/shard-fill.toml"
-commit = "7e1f143424e17151de3c48ea6b682c812ffa4324"
-created = "2026-11-21T02:41:15Z"
+commit = "30042dfc9a37926f721a38c7a96805aa3372a1b5"
+created = "2026-11-22T18:57:07Z"
 reference = "ghcr.io/shekyl-foundation/test-chains/shard-fill"
-digest = "sha256:568aca6c0776228da682b71d5766262208180ad18b0a9b24a0f2e82f9b01a300"
+digest = "sha256:6f756839f47b11e0e5fa2c0eab717c94c6f8a7a2fce0faec87a804fd63255629"
 
 [[chain.layer]]
 file = "corpus.e2"
 media_type = "application/vnd.shekyl.corpus.v5"
-size = 12829331
-sha256 = "e9320e381de2247617c075ae32cc692ea8b07fccec60b4bd0622b330ff8f7c1f"
+size = 12830995
+sha256 = "567446079b5b7fc911a058ee1850456b68802694a25befc6e50bf635994138f8"
 
 [[chain.layer]]
 file = "trace.e2"
-media_type = "application/vnd.shekyl.trace.v1"
-size = 95587
-sha256 = "5879def7701debf86ee6f3f4917397c2c4802f6a942a5d3deb5bde5ee40eaee2"
+media_type = "application/vnd.shekyl.trace.v2"
+size = 95718
+sha256 = "9036692e3dac3d62e1f8f9d8ca2d909129067831b112947928529557b52e3ed9"
 
 [[chain.layer]]
 file = "manifest.json"
 media_type = "application/vnd.shekyl.manifest.v6+json"
 size = 1163
-sha256 = "6b94820a2d56720c005f6013be0994de4b03971581f74480a6bd63dd67b888ab"
+sha256 = "a11f91d4025de8cd638d9d1ed3610b436a4dcf19143989ebca9a28083fbaac39"

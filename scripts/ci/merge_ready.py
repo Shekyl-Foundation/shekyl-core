@@ -65,10 +65,14 @@ by name alike.
                      vouches for a head its owner did not see, and the new
                      head's checks have only just started
   labeled            `checking`, then every check run and status on the
-                     head, this flow's own and `EXCLUDED` by name aside,
-                     must have concluded, none red; no review thread may be
-                     open; the pull request may not be a draft. Anything
-                     else: `refused`. Then the plan: the tests the head
+                     head, this flow's own, `EXCLUDED` by name and
+                     `EXCLUDED_APPS` by app aside, must have concluded,
+                     none red (of a workflow's `pull_request` runs on the
+                     head, its newest one's only, `SUPERSEDING_EVENTS`; a
+                     review bot's job is judged by its review instead,
+                     `REVIEW_JOBS`); no review thread may be open; the
+                     pull request may not be a draft. Anything else:
+                     `refused`. Then the plan: the tests the head
                      shares with the merges since its merge base, `ready`
                      at once when there are none, else `re-testing` and a
                      re-test (merge-ready-retest.yml)
@@ -145,6 +149,40 @@ SELF_LEG = re.compile(rf"^#\d+ / ({RETEST_JOB}|{REPORT_JOB})$")
 # Checks that never conclude on this repository, each with why. A check
 # left out of a judgment is named here, never dropped silently.
 EXCLUDED: dict[str, str] = {}
+# Apps whose check runs are never judged, running or concluded, each with
+# why; known by the app's slug, never the check's name, which any
+# workflow's job can take. Named in every refusal comment beside EXCLUDED.
+EXCLUDED_APPS: dict[str, str] = {
+    # Rick, 2026-11-22: Bugbot is informational only, too unreliable to
+    # wait on. Its check run on #1489's head sat queued from 10:52Z and
+    # refused the label at 12:26Z. A red Bugbot refuses nothing either;
+    # what it posts is a review thread, and an open thread is judged.
+    "cursor": "Cursor Bugbot, informational only",
+}
+# Review bots whose job is judged by the review it posts, not by how the job
+# ends: the workflow run's path, the reviewer's login, and why. Copilot's
+# review job ended red 19 minutes after it had posted its review on the head
+# (#1497 at fc1cf82f33, 2026-11-22). With a review from the bot on this head,
+# its job is not judged, running or red; without one, it is judged as any
+# other check, and a red one says that no review came. Matched by the run's
+# path, never the check's name, which any workflow's job can take.
+REVIEW_JOBS: dict[str, tuple[str, str]] = {
+    "dynamic/agents/copilot-pull-request-reviewer": (
+        "copilot-pull-request-reviewer[bot]",
+        "Copilot's review job can end red after its review is posted",
+    ),
+}
+# The events whose newer run of a workflow on the head replaces its older
+# runs there (`superseded_suites`). A `pull_request` run's scope is the head
+# and the pull request's diff, so a newer one covers an older one: a draft's
+# run skips the heavy jobs and the run when it is marked ready runs them all
+# (#1497). A run of any other event is never replaced and replaces nothing:
+# a `workflow_dispatch` on the head is chosen by its inputs, narrower than
+# the pull request's run (benchmarks.yml's capture skips its `compare` job,
+# nightly.yml's `job` picks one leg), and a `push` run's scope is measured
+# from the branch's previous tip, not the head alone. Each such run's reds
+# stay judged until a re-run attempt clears them.
+SUPERSEDING_EVENTS = frozenset({"pull_request"})
 # A check run the labelling itself started (a workflow listening for
 # labels, its jobs skipped at once) concludes within seconds.
 SETTLE_SECONDS = 90
@@ -171,11 +209,13 @@ PUSH_ACTS = ("checking", "re-testing", "ready")
 
 # merge-ready-retest.yml's names, held to the file by the selftest: the
 # report finds its re-test job by name and reads the verdict from the job's
-# outputs. The merge and the tests steps end green whatever they find, so a
-# red re-test is the pull request's and never fails a push run on `dev`.
+# outputs. The merge, the inventory and the tests steps end green whatever
+# they find, so a red re-test is the pull request's and never fails a push
+# run on `dev`.
 RETEST_WORKFLOW = ".github/workflows/merge-ready-retest.yml"
-RETEST_OUTPUTS = ("conflict", "tests_failed", "timed_out")
+RETEST_OUTPUTS = ("conflict", "inventory_failed", "tests_failed", "timed_out")
 MERGE_STEP = "merge the newest dev into the head"
+INVENTORY_STEP = "the fuzz inventory against the newest dev"
 TESTS_STEP = "the shared tests against the newest dev"
 
 
@@ -310,20 +350,28 @@ def is_self(name: str) -> bool:
 
 
 def judge(check_runs: list[dict], sts: list[dict], open_threads: int, draft: bool,
-          labelled_at: str | None = None) -> list[tuple[str, bool]]:
+          labelled_at: str | None = None,
+          review_suites: tuple[set[int], set[int]] = (set(), set())) -> list[tuple[str, bool]]:
     """Why the label cannot stand on this head, each with whether it may
     still settle: each check still running (settling when the labelling may
     have started it) or red, by name, an open review thread, a draft. Empty
-    means it stands."""
+    means it stands. `review_suites` is `review_job_suites`' pair: the
+    review jobs whose review is on the head, not judged, and those whose
+    review is not, a red one saying so."""
+    reviewed, unreviewed = review_suites
     out = []
     for c in check_runs:
         name = c.get("name", "")
-        if is_self(name) or name in EXCLUDED:
+        suite = (c.get("check_suite") or {}).get("id")
+        if is_self(name) or name in EXCLUDED or suite in reviewed:
+            continue
+        if (c.get("app") or {}).get("slug") in EXCLUDED_APPS:
             continue
         if c.get("status") != "completed":
             out.append((f"`{name}` is {c.get('status')}", settling(c, labelled_at)))
         elif c.get("conclusion") not in GREEN:
-            out.append((f"`{name}` concluded {c.get('conclusion')}", False))
+            no_review = ", and its review is not on this head" if suite in unreviewed else ""
+            out.append((f"`{name}` concluded {c.get('conclusion')}{no_review}", False))
     for s in sts:
         context = s.get("context", "")
         if context == CONTEXT or context in EXCLUDED:
@@ -354,6 +402,68 @@ def decide(event: str, label: str, has: bool) -> str:
     if event in ("opened", "reopened"):
         return "judge" if has else "wait"
     raise ValueError(f"merge-ready.yml does not listen for {event!r}")
+
+
+def superseded_suites(workflow_runs: list[dict]) -> set[int]:
+    """The check suites of workflow runs a newer run of the same workflow
+    replaced on this head.
+
+    `filter=latest` keeps the newest check run of each name within a check
+    suite, and a re-run attempt stays in its run's suite, so it covers
+    re-runs. It does not cover a second run of a workflow on the same head:
+    a draft marked ready without a push starts new runs, and the draft's
+    cancelled jobs, its `(draft)` pass jobs and a matrix job cancelled
+    before its name expanded (`matrix.name`) stay on the head beside the
+    newer runs' green ones (#1497 at fc1cf82f33, 2026-11-22: 14 of its 15
+    reasons). Of each workflow's runs of a `SUPERSEDING_EVENTS` event, only
+    the newest is judged; every run of another event is judged in full. A
+    check run from a suite no workflow run names (another app's) is always
+    judged.
+    """
+    replaceable = [run for run in workflow_runs if run.get("event") in SUPERSEDING_EVENTS]
+    newest: dict[tuple[object, object], dict] = {}
+    for run in replaceable:
+        key = (run.get("workflow_id"), run.get("event"))
+        if key not in newest or (run.get("created_at") or "", run.get("id", 0)) > (
+                newest[key].get("created_at") or "", newest[key].get("id", 0)):
+            newest[key] = run
+    current = {run.get("check_suite_id") for run in newest.values()}
+    return {run.get("check_suite_id") for run in replaceable} - current
+
+
+def reviewers_on(reviews: list[dict], head: str) -> set[str]:
+    """The logins that posted a review on this head."""
+    return {(r.get("user") or {}).get("login", "") for r in reviews if r.get("commit_id") == head}
+
+
+def review_job_suites(workflow_runs: list[dict], reviewers: set[str]) -> tuple[set[int], set[int]]:
+    """The check suites of `REVIEW_JOBS` runs on the head: those whose bot
+    posted a review on it, and those whose bot did not."""
+    reviewed, unreviewed = set(), set()
+    for run in workflow_runs:
+        bot = REVIEW_JOBS.get(run.get("path", ""))
+        if bot is not None:
+            (reviewed if bot[0] in reviewers else unreviewed).add(run.get("check_suite_id"))
+    return reviewed, unreviewed
+
+
+def current_runs(check_runs: list[dict], superseded: set[int]) -> list[dict]:
+    """The check runs not in a superseded suite."""
+    return [c for c in check_runs if (c.get("check_suite") or {}).get("id") not in superseded]
+
+
+def workflow_runs(sha: str) -> list[dict]:
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/actions/runs?head_sha={sha}&per_page=100",
+         "--jq", ".workflow_runs[]"], check=True, capture_output=True, text=True).stdout
+    return [json.loads(x) for x in out.splitlines() if x]
+
+
+def reviews(pr: int) -> list[dict]:
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/pulls/{pr}/reviews?per_page=100", "--jq", ".[]"],
+        check=True, capture_output=True, text=True).stdout
+    return [json.loads(x) for x in out.splitlines() if x]
 
 
 def check_runs(sha: str) -> list[dict]:
@@ -416,7 +526,10 @@ def run() -> int:
     deadline = time.monotonic() + SETTLE_SECONDS
     labelled_at = os.environ.get("LABELLED_AT")
     while True:
-        found = judge(with_suite_times(check_runs(head)), statuses(head), open_threads(pr), draft, labelled_at)
+        wf = workflow_runs(head)
+        runs = current_runs(check_runs(head), superseded_suites(wf))
+        bots = review_job_suites(wf, reviewers_on(reviews(pr), head))
+        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at, bots)
         if not found or not all(may_settle for _, may_settle in found) or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
@@ -433,6 +546,8 @@ def run() -> int:
         *[f"- {w}" for w in why],
         "",
         *([f"Not judged here, by name: {', '.join(f'`{n}` ({r})' for n, r in EXCLUDED.items())}."] if EXCLUDED else []),
+        *([f"Not judged here, by app: {', '.join(f'`{a}` ({r})' for a, r in EXCLUDED_APPS.items())}."]
+          if EXCLUDED_APPS else []),
     ])
     return 0
 
@@ -475,23 +590,28 @@ def plan() -> int:
 # The re-test's report.
 
 
-def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool) -> str:
+def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool,
+               inventory_failed: bool = False) -> str:
     """The re-test's result as the pull request sees it: the job's own
-    result, except that a job which ended green with a conflict, failing
-    tests or the time budget in its outputs is a failure."""
-    if result == "success" and (conflict or tests_failed or timed_out):
+    result, except that a job which ended green with a conflict, a failing
+    fuzz inventory, failing tests or the time budget in its outputs is a
+    failure."""
+    if result == "success" and (conflict or inventory_failed or tests_failed or timed_out):
         return "failure"
     return result
 
 
-def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool) -> dict:
+def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool,
+              inventory_failed: bool = False) -> dict:
     """The job's failed steps with the step that carried the verdict added:
     that step ended green, so the API does not list it."""
-    carried = [MERGE_STEP] if conflict else [TESTS_STEP] if (tests_failed or timed_out) else []
+    carried = ([MERGE_STEP] if conflict else [INVENTORY_STEP] if inventory_failed
+               else [TESTS_STEP] if (tests_failed or timed_out) else [])
     return {**info, "failed_steps": info["failed_steps"] + [x for x in carried if x not in info["failed_steps"]]}
 
 
-def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str) -> str:
+def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str,
+              inventory_failed: bool = False) -> str:
     """Why a re-test that did not pass is red. `result` is not 'success'
     or 'cancelled'."""
     after = f"after {merged}"
@@ -499,6 +619,9 @@ def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, m
         return f"re-test did not run ({result}, {after})"
     if conflict:
         return f"does not merge with dev {after}"
+    if inventory_failed:
+        return (f"the fuzz inventory fails against dev {after} "
+                "(scripts/ci/check_fuzz_inventory.py; a lockfile: --regenerate)")
     if timed_out:
         return f"timed out {after}"
     if info is None:
@@ -523,9 +646,12 @@ def report(pr: int, head: str, result: str) -> int:
     run_url, dev, since = os.environ["RUN_URL"], os.environ["DEV"], os.environ["SINCE"]
     merged, crates = os.environ.get("MERGED", ""), os.environ.get("CRATES", "")
     conflict = os.environ.get("CONFLICT") == "true"
+    # Read with get, as the others: a re-test workflow from a merge made
+    # before this output existed passes no INVENTORY_FAILED.
+    inventory_failed = os.environ.get("INVENTORY_FAILED") == "true"
     tests_failed = os.environ.get("TESTS_FAILED") == "true"
     timed_out = os.environ.get("TIMED_OUT") == "true"
-    result = verdict_of(result, conflict, tests_failed, timed_out)
+    result = verdict_of(result, conflict, tests_failed, timed_out, inventory_failed)
     moved = current_head(pr) != head
     current = parse(newest(statuses(head)))
     postable = not moved and may_post(current, run_url, dev, "report", lambda t: dev_is_newer_than(t, dev))
@@ -543,10 +669,10 @@ def report(pr: int, head: str, result: str) -> int:
 
     info = failed_tests.describe(job) if job and result == "failure" else None
     if info is not None:
-        info = red_steps(info, conflict, tests_failed, timed_out)
+        info = red_steps(info, conflict, tests_failed, timed_out, inventory_failed)
     if result == "failure" and job is None:
         print(f"::warning::no job named '#{pr} / {RETEST_JOB}' in this run; the description cannot name the failure")
-    words = red_words(result, conflict, timed_out, info, merged)
+    words = red_words(result, conflict, timed_out, info, merged, inventory_failed)
     remove_label(pr)
     post_kind(head, "red", words, dev, since)
     lines = [
@@ -594,9 +720,111 @@ def selftest() -> int:
         got = len(judge(runs, sts, threads, draft))
         if got != want:
             problems.append(f"judge, {label}: {got} reason(s), want {want}")
+    # A second run of a workflow on the same head (a draft marked ready
+    # without a push, #1497): only each workflow's newest run is judged.
+    def suite(c, sid):
+        return {**c, "check_suite": {"id": sid}}
+
+    def wf_run(rid, wid, created, sid, event="pull_request"):
+        return {"id": rid, "workflow_id": wid, "created_at": f"2026-11-22T{created}:00Z",
+                "check_suite_id": sid, "event": event}
+
+    wf = [wf_run(1, 10, "01:32", 101), wf_run(2, 10, "05:00", 102), wf_run(3, 20, "01:32", 201)]
+    stale = [suite(done("Rust: audit, test, determinism", "cancelled"), 101),
+             suite(done("rust-pass (draft)", "failure"), 101), suite(done("matrix.name", "cancelled"), 101)]
+    fresh = [suite(done("Rust: audit, test, determinism"), 102), suite(done("rust-pass"), 102),
+             suite(done("cli-pass"), 201)]
+    other_app = [suite(done("an app's check", "failure"), 999)]
+    sup = superseded_suites(wf)
+    for label, runs, want in [
+        ("an earlier run's cancelled and draft jobs on the same head are not judged", stale + fresh, 0),
+        # Negative controls.
+        ("the newest run's own red is judged",
+         stale + fresh + [suite(done("Windows (MSVC, daemon)", "cancelled"), 102)], 1),
+        ("a workflow with a single run is judged",
+         stale + fresh + [suite(done("cli-pass (draft)", "failure"), 201)], 1),
+        ("a suite no workflow run names (another app's) is judged", stale + fresh + other_app, 1),
+    ]:
+        got = len(judge(current_runs(runs, sup), [], 0, False))
+        if got != want:
+            problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
+    if superseded_suites(wf[:1] + wf[2:]):
+        problems.append("superseded runs: a workflow's only run was superseded")
+    # Only a `pull_request` run replaces, and only another `pull_request`
+    # run: a narrower run of another event never hides a red (Copilot on
+    # #1521: benchmarks.yml's capture-only dispatch skips `compare`).
+    pr_red = [suite(done("compare & post PR comment", "failure"), 501)]
+    for label, runs_wf, runs, want in [
+        ("a pull_request run's red beside a newer dispatch of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501), wf_run(7, 50, "02:00", 502, "workflow_dispatch")],
+         pr_red + [suite(done("capture-pr"), 502)], 1),
+        ("an older dispatch's red beside a newer dispatch of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "workflow_dispatch"), wf_run(7, 50, "02:00", 502, "workflow_dispatch")],
+         [suite(done("proptest-exhaustive", "failure"), 501), suite(done("store-ignored"), 502)], 1),
+        ("a dispatch's red beside a newer pull_request run of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "workflow_dispatch"), wf_run(7, 50, "02:00", 502)],
+         [suite(done("capture-pr", "failure"), 501), suite(done("capture-pr"), 502)], 1),
+        ("a push run's red beside a newer pull_request run of its workflow is judged",
+         [wf_run(6, 50, "01:00", 501, "push"), wf_run(7, 50, "02:00", 502)],
+         [suite(done("rust", "failure"), 501), suite(done("rust"), 502)], 1),
+        # Control: a draft's run and the ready run, both pull_request (#1497).
+        ("a draft's pull_request red beside the newer ready run is not judged",
+         [wf_run(6, 50, "01:00", 501), wf_run(7, 50, "02:00", 502)],
+         [suite(done("rust-pass (draft)", "failure"), 501), suite(done("rust-pass"), 502)], 0),
+    ]:
+        got = len(judge(current_runs(runs, superseded_suites(runs_wf)), [], 0, False))
+        if got != want:
+            problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
+    # A review bot's job is judged by its review on the head (#1497).
+    bot_path, (bot, _) = next(iter(REVIEW_JOBS.items()))
+    head, older_head = "f" * 40, "b" * 40
+    bot_wf = wf + [{"id": 4, "workflow_id": 30, "created_at": "2026-11-22T01:40:43Z", "check_suite_id": 301,
+                    "path": bot_path},
+                   {"id": 5, "workflow_id": 40, "created_at": "2026-11-22T01:40:43Z", "check_suite_id": 401,
+                    "path": ".github/workflows/lookalike.yml"}]
+    bot_red = [suite(done("copilot-pull-request-reviewer", "failure"), 301)]
+    bot_running = [suite(going("copilot-pull-request-reviewer"), 301)]
+    lookalike_red = [suite(done("copilot-pull-request-reviewer", "failure"), 401)]
+    on_head = [{"user": {"login": bot}, "commit_id": head}]
+    on_older = [{"user": {"login": bot}, "commit_id": older_head}]
+    by_human = [{"user": {"login": "a-maintainer"}, "commit_id": head}]
+    for label, runs, revs, want, says in [
+        ("a red review job whose review is on the head is not judged", fresh + bot_red, on_head, 0, None),
+        ("a running review job whose review is on the head is not judged", fresh + bot_running, on_head, 0, None),
+        # Negative controls.
+        ("a red review job with its review on an older head only", fresh + bot_red, on_older, 1,
+         "its review is not on this head"),
+        ("a red review job with no review", fresh + bot_red, [], 1, "its review is not on this head"),
+        ("a red review job when only someone else reviewed the head", fresh + bot_red, by_human, 1,
+         "its review is not on this head"),
+        ("a running review job with no review waits", fresh + bot_running, [], 1, "is in_progress"),
+        ("a job named like the bot in another workflow is judged", fresh + lookalike_red, on_head, 1,
+         "concluded failure"),
+    ]:
+        found = judge(current_runs(runs, superseded_suites(bot_wf)), [], 0, False, None,
+                      review_job_suites(bot_wf, reviewers_on(revs, head)))
+        if len(found) != want or (says and not all(says in w for w, _ in found)):
+            problems.append(f"review jobs, {label}: {[w for w, _ in found]}, want {want}")
     for name in EXCLUDED:
         if judge(ok + [going(name, "queued")], [], 0, False):
             problems.append(f"judge: {name!r} is in EXCLUDED and still refused the label")
+    # An excluded app's check runs are never judged, whatever their state
+    # (#1489: Bugbot queued); a job of another app taking its name is.
+    by_app = lambda c, slug: {**c, "app": {"slug": slug}}  # noqa: E731
+    for slug in EXCLUDED_APPS:
+        for label, c, want in [
+            ("queued", going("Cursor Bugbot", "queued"), 0),
+            ("in progress", going("Cursor Bugbot"), 0),
+            ("concluded failure", done("Cursor Bugbot", "failure"), 0),
+            ("concluded neutral", done("Cursor Bugbot", "neutral"), 0),
+            # Negative controls.
+            ("taken by a workflow's job, red", by_app(done("Cursor Bugbot", "failure"), "github-actions"), 1),
+            ("taken by a workflow's job, queued", by_app(going("Cursor Bugbot", "queued"), "github-actions"), 1),
+        ]:
+            run_ = c if "app" in c else by_app(c, slug)
+            got = len(judge(ok + [run_], [], 0, False))
+            if got != want:
+                problems.append(f"excluded app {slug!r}, {label}: {got} reason(s), want {want}")
     t = "2026-11-19T22:10:24Z"
     for label, created, want in [
         ("a check whose run began before the label", "2026-11-19T22:10:06Z", False),
@@ -681,6 +909,10 @@ def selftest() -> int:
         if report_step(*args) != want:
             problems.append(f"report_step, {label}: {report_step(*args)} != {want}")
     info = {"failed_steps": [], "tests": [], "builds": [], "url": "u"}
+    if "fuzz inventory fails" not in red_words("failure", False, False, info, "#1", True):
+        problems.append("red_words: a failing fuzz inventory is not named")
+    if "does not merge" not in red_words("failure", True, False, info, "#1", True):
+        problems.append("red_words: a conflict is not named first")
     for label, result, conflict, timed_out, inf, want in [
         ("never started", "skipped", False, False, None, "did not run"),
         ("timed out", "failure", False, True, {**info, "failed_steps": ["tests"]}, "timed out"),
@@ -696,6 +928,7 @@ def selftest() -> int:
         ("green, nothing in the outputs", ("success", False, False, False), "success"),
         ("green with failing tests", ("success", False, True, False), "failure"),
         ("green with a conflict", ("success", True, False, False), "failure"),
+        ("green with a failing fuzz inventory", ("success", False, False, False, True), "failure"),
         ("green past the time budget", ("success", False, False, True), "failure"),
         ("a setup step failed", ("failure", False, False, False), "failure"),
         ("cancelled", ("cancelled", False, False, False), "cancelled"),
@@ -707,6 +940,8 @@ def selftest() -> int:
         problems.append("red_steps: failing tests do not name the tests step")
     if red_steps(base, True, False, False)["failed_steps"] != [MERGE_STEP]:
         problems.append("red_steps: a conflict does not name the merge step")
+    if red_steps(base, False, False, False, True)["failed_steps"] != [INVENTORY_STEP]:
+        problems.append("red_steps: a failing fuzz inventory does not name the inventory step")
     # The workflows carry the names this reads (rule 47).
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     label_cond = (f"(github.event.action != 'labeled' && github.event.action != 'unlabeled')\n"
@@ -721,6 +956,11 @@ def selftest() -> int:
             ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
             (label_cond, "the condition that runs nothing for another label"),
             ("name: '#${{ github.event.pull_request.number }}'", "the re-test caller named by the pull request"),
+            ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
+             "the label check's script from the base branch"),
+            ('git checkout "origin/${BASE}" --\n          scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py '
+             'scripts/ci/change_scope.py\n          scripts/ci/check_fuzz_inventory.py\n',
+             "the plan's scripts from the base branch, the overlap's imports among them"),
         ]),
         (".github/workflows/merge-ready-dev.yml", [
             ("name: '#${{ matrix.pr }}'", "the re-test caller named by the pull request"),
@@ -731,9 +971,15 @@ def selftest() -> int:
             (f"    name: {REPORT_JOB}\n", "the report job's name"),
             (f"- name: {MERGE_STEP}\n", "the merge step's name"),
             (f"- name: {TESTS_STEP}\n", "the tests step's name"),
+            (f"- name: {INVENTORY_STEP}\n", "the inventory step's name"),
+            ("python3 scripts/ci/check_fuzz_inventory.py || rc=$?", "the inventory step's check"),
+            (f"- name: {TESTS_STEP}\n        if: steps.merge.outputs.conflict != 'true' && "
+             "steps.inventory.outputs.inventory_failed != 'true'\n", "the tests a failing inventory skips"),
             ("if: steps.merge.outputs.conflict != 'true'\n", "the steps a conflict skips"),
             ("python3 scripts/ci/merge_ready_overlap.py --scope", "the re-test's own scope"),
             ("group: merge-ready-retest-${{ inputs.pr }}", "one re-test per pull request"),
+            ("          ref: ${{ inputs.base }}\n          sparse-checkout: |\n            scripts/ci/merge_ready.py\n",
+             "the report's scripts from the base branch"),
         ] + [n for out in RETEST_OUTPUTS for n in [
             (f"{out}: ${{{{ steps.", f"the job output {out}"),
             (f'echo "{out}=true" >> "$GITHUB_OUTPUT"', f"a step setting {out}"),

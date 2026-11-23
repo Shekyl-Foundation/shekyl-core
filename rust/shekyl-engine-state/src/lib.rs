@@ -28,8 +28,9 @@
 //! defined here use `postcard` for on-disk storage. The earlier JSON metadata bundle in
 //! `shekyl-crypto-pq` (identity + settings) was a superseded first draft and has been
 //! deleted; identity is carried in the encrypted `.wallet.keys` envelope, and user
-//! settings follow the four-layer model in `docs/WALLET_PREFS.md` §2 (hardcoded
-//! constants, advisory TOML, CLI-ephemeral overrides, and tier-4 sealed ledger state).
+//! settings follow the placement in `docs/WALLET_SETTINGS.md` §1 (hardcoded
+//! constants, session overrides, options of the process, and sealed ledger
+//! state).
 
 pub mod bookkeeping_block;
 pub mod error;

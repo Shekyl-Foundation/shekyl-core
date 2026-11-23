@@ -141,10 +141,10 @@ one mechanism, so distinctness is an intra-mechanism property; a flat all-pairs 
 would be a category error (and would spuriously flag the legitimate cross-mechanism
 reuse of `b"nonce"`).
 
-**Census (dated snapshot, 2026-11-17, counted from the TSV's production rows): 129 registered rows across the five mechanisms —
-134 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
+**Census (dated snapshot, 2026-11-22, counted from the TSV's production rows): 130 registered rows across the five mechanisms —
+135 including the two micro-buckets.** The `shekyl/`-prefix lens saw ~28 at SA-3b — a severalfold undercount, which is the
 measure of the blind spot SA-3b closes (SIGNATURE_ALIGNMENT §3.1). (The table below
-sums to 134: the five mechanisms 129, plus the two micro-buckets, 1 + 4.) **This table is a
+sums to 135: the five mechanisms 130, plus the two micro-buckets, 1 + 4.) **This table is a
 snapshot, not the checked copy** — the per-mechanism counts are pinned once, against
 the parsed TSV rows, in `domain_registry.rs::PRODUCTION_PINS`; when the registry
 legitimately changes, that pin fails and this table is refreshed with a new as-of
@@ -295,12 +295,28 @@ rows that the persona scan seals per shard and a body store recomputes from
 a frame (`shekyl-wire` `shard_frame.rs`, `rows_digest_step`). It is a local
 store check, never read by consensus. Its step is pinned by two vectors
 computed with a pure-Python cSHAKE256 checked against NIST SP 800-185
-sample 3, not regenerated from this crate's output. Mechanism 1 is 57.
+sample 3, not regenerated from this crate's output.
+
+The 2026-11-21 refresh (`CF-4b`, trace version 2) adds one mechanism-1
+customization, `shekyl/chain-store/tables-digest/v1`: one 32-byte
+commitment to every table a chain store holds, row for row, that a replay
+trace carries at each indexed event of a forged chain and a replay holds
+the store to (`shekyl-chain-store` `tables_digest.rs`, `tables_digest_v1`).
+It is a comparison against a trace, never read by consensus. Its known
+answer is computed by `scripts/kat/stdlib_cshake.py`, not regenerated from
+the crate's output. Mechanism 1 is 58.
+
+The 2026-11-21 refresh removes one mechanism-2 info, `shekyl-prefs-hmac-v1`:
+the wallet prefs file and its HMAC key are deleted (Rick, 2026-11-21;
+`V3_WALLET_DECISION_LOG.md`), and the row goes with its code, as a label
+with no production caller does before genesis (the registry's retired
+section, 2026-11-05). Mechanism 2 is 46, and the five mechanisms total
+130 (135 with the two micro-buckets).
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 57 | 0 |
-| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 40 infos | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 58 | 0 |
+| 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 7 salts + 39 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 8 | 0 |
 | 5 — keccak / schnorr challenge DST | schnorr domain; `keccak256(..)` hash-to-point/scalar prefix | 14 | 8 |
@@ -312,13 +328,13 @@ three info labels (`shekyl-ed25519-spend/-view/-ml-kem-768`) are reused by the w
 derivation and the harness fixture wallet's test-only derivation, which differ only by
 salt — legitimately distinct, not a collision.
 
-**Frozen vs. live.** 11 of the 135 are **frozen-inherited** (mech-3: the FROST
+**Frozen vs. live.** 11 of the 136 are **frozen-inherited** (mech-3: the FROST
 ciphersuite id/context and the SAL-multisig transcript root; mech-5: the FCMP++
 generator and Bulletproof(+) DSTs). Frozen strings are byte-identical to the
 un-vendored upstream, are pinned by derived-output KATs, and are **rule-93
 carve-outs** (a rebrand sweep skips them) — enumerated with per-seam consequences in
 [`FROZEN_DOMAIN_SEPARATORS.md`](FROZEN_DOMAIN_SEPARATORS.md), and the CI gate
-cross-checks that every frozen row still has its entry there. The remaining 124 are
+cross-checks that every frozen row still has its entry there. The remaining 125 are
 Shekyl-authored **live** strings: still byte-load-bearing, but ours to version (mint
 a `…-v2` alongside a migration, never edit `…-v1` in place — SIGNATURE_ALIGNMENT §5).
 

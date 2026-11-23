@@ -367,9 +367,7 @@ macro_rules! expect {
 /// serialized size, and the signed solo spend with a group output is the
 /// engine's send (4a-2).
 pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload, paid: &Paid) {
-    let Ct::Fcmp { fee, .. } = &tx.ct else {
-        panic!("an FCMP++ spend");
-    };
+    let fee = tx.fee().expect("an FCMP++ spend");
     let size = GroupSize::new(group.n_total(), group.m_required()).unwrap();
     let weigh = |signer: Signer| {
         predict_spend_weight(
@@ -380,7 +378,7 @@ pub fn assert_weight_predicted(tx: &Transaction, group: &MultisigAddressPayload,
                 signer,
                 group_payees: &[size],
             },
-            *fee,
+            fee,
         )
     };
     assert_eq!(weigh(Signer::Group(size)), Some(tx.weight()));

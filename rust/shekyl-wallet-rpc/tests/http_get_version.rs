@@ -41,6 +41,7 @@ fn test_state(auth: AuthConfig) -> Arc<AppState> {
                 url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
+            shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(auth),
         kdf: test_kdf(),
@@ -58,6 +59,7 @@ fn lifecycle_state(dir: &TempDir) -> Arc<AppState> {
                 url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
+            shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
@@ -325,6 +327,7 @@ async fn spawn_in_process_serves_get_version_over_private_uds() {
         std::env::temp_dir(),
         Network::Stagenet,
         shekyl_wallet_rpc::tenant::DaemonTarget::address("http://127.0.0.1:1"),
+        shekyl_wallet_rpc::server::TorFile::discover(),
     )
     .await
     .expect("spawn");
@@ -394,6 +397,7 @@ async fn spawn_in_process_serves_get_version_over_the_verified_pipe() {
         std::env::temp_dir(),
         Network::Stagenet,
         shekyl_wallet_rpc::tenant::DaemonTarget::address("http://127.0.0.1:1"),
+        shekyl_wallet_rpc::server::TorFile::discover(),
     )
     .await
     .expect("spawn");
@@ -798,6 +802,7 @@ async fn create_wallet_into_a_missing_directory_says_so() {
                 url: "http://127.0.0.1:1".into(),
                 proxy: None,
             },
+            shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: test_kdf(),
@@ -887,6 +892,7 @@ async fn spawn_refuses_a_malformed_proxy_at_startup() {
         },
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
+        tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
     })
     .await
     .err()
@@ -914,6 +920,7 @@ async fn spawn_refuses_a_malformed_daemon_address_at_startup() {
         },
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
+        tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
     })
     .await
     .err()
@@ -942,6 +949,7 @@ async fn spawn_in_process_with_lifecycle() {
         },
         auth: AuthConfig::Disabled,
         kdf: test_kdf(),
+        tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
     })
     .await
     .expect("spawn");

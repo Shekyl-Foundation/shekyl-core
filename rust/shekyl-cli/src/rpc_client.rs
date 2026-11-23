@@ -287,6 +287,7 @@ impl RpcSession {
         wallet_dir: PathBuf,
         network: Network,
         daemon: shekyl_wallet_rpc::tenant::DaemonTarget,
+        tor_file: shekyl_wallet_rpc::server::TorFile,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // What this process can know about an inherited ignore, read before
@@ -296,7 +297,7 @@ impl RpcSession {
         // line is not said (Rick, 2026-11-20).
         let inherited = shekyl_process::stop::Inherited::at_start();
         if let Some(line) = inherited.observed_line("shekyl-cli") {
-            eprintln!("shekyl-cli: {line}");
+            crate::err_line!("shekyl-cli: {line}");
         }
         // Multi-thread runtime: Engine create/open paths use
         // `tokio::task::block_in_place`, which a current-thread runtime
@@ -309,6 +310,7 @@ impl RpcSession {
                 wallet_dir.clone(),
                 network,
                 daemon,
+                tor_file,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         // A stop (SIGTERM, SIGINT, SIGHUP; every Windows console event)
@@ -563,21 +565,75 @@ impl RpcSession {
         }
     }
 
-    /// Shut the session down: close any open wallet (best effort) and stop
-    /// the self-hosted server, removing its socket and private directory.
-    pub fn shutdown(self) {
-        if self.is_open() {
-            if let Err(e) = self.call("close_wallet", json!({})) {
-                eprintln!("Warning: failed to close wallet: {e}");
+    /// Shut the session down: close any open wallet and stop the self-hosted
+    /// server, removing its socket and private directory.
+    ///
+    /// A failed close is written to standard error here. The returned value
+    /// is what a later line may claim about the wallet: [`WalletClose::Saved`]
+    /// is the only result that means the wallet was closed and saved.
+    #[must_use = "a closed output says whether the wallet was saved"]
+    pub fn shutdown(self) -> WalletClose {
+        let close = if self.is_open() {
+            match self.call("close_wallet", json!({})) {
+                Ok(_) => WalletClose::Saved,
+                Err(e) => {
+                    crate::err_line!("Warning: failed to close wallet: {e}");
+                    WalletClose::Failed
+                }
             }
-        }
+        } else {
+            WalletClose::NotOpen
+        };
         if let Some(mut hosted) = self.hosted {
             if let Some(handle) = hosted.handle.take() {
                 if let Err(e) = hosted.runtime.block_on(handle.shutdown()) {
-                    eprintln!("Warning: in-process wallet RPC shutdown failed: {e}");
+                    crate::err_line!("Warning: in-process wallet RPC shutdown failed: {e}");
                 }
             }
         }
+        close
+    }
+}
+
+/// What [`RpcSession::shutdown`] did with the wallet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WalletClose {
+    /// No wallet was open.
+    NotOpen,
+    /// `close_wallet` succeeded.
+    Saved,
+    /// `close_wallet` failed. The failure is already on standard error.
+    Failed,
+}
+
+impl WalletClose {
+    /// The line a session says when it ends because standard output closed.
+    #[must_use]
+    pub fn closed_output_line(self) -> &'static str {
+        match self {
+            Self::Saved => {
+                "shekyl-cli: the output was closed, so the session ended; \
+                 the open wallet was closed and saved"
+            }
+            Self::NotOpen => "shekyl-cli: the output was closed, so the session ended",
+            Self::Failed => {
+                "shekyl-cli: the output was closed, so the session ended; \
+                 the open wallet could not be closed"
+            }
+        }
+    }
+}
+
+/// Say [`WalletClose::closed_output_line`] and exit [`crate::out::CLOSED_OUTPUT_EXIT`].
+pub fn end_for_closed_output(close: WalletClose) -> ! {
+    crate::err_line!("{}", close.closed_output_line());
+    std::process::exit(crate::out::CLOSED_OUTPUT_EXIT);
+}
+
+/// Exit through [`end_for_closed_output`] when a write to standard output has failed.
+pub fn exit_if_output_closed(close: WalletClose) {
+    if crate::out::output_closed() {
+        end_for_closed_output(close);
     }
 }
 
@@ -759,6 +815,25 @@ fn http_post_tcp(agent: &ureq::Agent, url: &str, payload: &[u8]) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line claims a save only when the close succeeded. Red edit: one
+    /// sentence for every [`WalletClose`].
+    #[test]
+    fn the_closed_output_line_matches_the_wallet_close() {
+        assert!(WalletClose::Saved
+            .closed_output_line()
+            .contains("the open wallet was closed and saved"));
+        assert!(WalletClose::Failed
+            .closed_output_line()
+            .contains("could not be closed"));
+        assert!(!WalletClose::Failed
+            .closed_output_line()
+            .contains("was closed and saved"));
+        assert!(!WalletClose::NotOpen.closed_output_line().contains("wallet"));
+        assert!(WalletClose::NotOpen
+            .closed_output_line()
+            .contains("the session ended"));
+    }
 
     #[test]
     fn connect_rejects_unknown_scheme() {

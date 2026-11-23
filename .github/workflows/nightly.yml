@@ -2,7 +2,7 @@ name: nightly/proptest-exhaustive
 
 on:
   schedule:
-    - cron: "0 3 * * *"
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -44,6 +44,55 @@ jobs:
   # GitHub has evicted what a lane saved. The saves only pushed the
   # per-PR jobs' caches out, which are the ones that hit. A lane builds
   # from source; a nightly has the time and a PR does not.
+  plan:
+    # Which legs run tonight (scripts/ci/nightly_skip.py): a leg whose key
+    # (the commit it tests, this file, the toolchain pin, the pinned test
+    # chains, the runner image) matches a scheduled run in the last week
+    # where it passed is skipped, and the summary names that run. Fuzzing,
+    # property tests with no fixed seed and anything whose verdict is about
+    # an outside host are never skipped; a dispatch runs
+    # every leg it selects. If this job does not succeed, every planned job
+    # falls back to its full matrix (its `matrix` expression): the failure
+    # runs more, never less.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # API reads only: the last week's scheduled runs, their jobs and keys
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      store-ignored: ${{ steps.plan.outputs['store-ignored'] }}
+      producer-gate: ${{ steps.plan.outputs['producer-gate'] }}
+      economics-sim-ignored: ${{ steps.plan.outputs['economics-sim-ignored'] }}
+      staking-sim-ignored: ${{ steps.plan.outputs['staking-sim-ignored'] }}
+      chain-ingest-ignored: ${{ steps.plan.outputs['chain-ingest-ignored'] }}
+      hasher-ignored: ${{ steps.plan.outputs['hasher-ignored'] }}
+      wire-ignored: ${{ steps.plan.outputs['wire-ignored'] }}
+      trybuild-ignored: ${{ steps.plan.outputs['trybuild-ignored'] }}
+      bench-full: ${{ steps.plan.outputs['bench-full'] }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_skip.py
+            scripts/ci/check_workflows_parse.py
+            .github/workflows/nightly.yml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: plan tonight's legs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          INPUT_REF: ${{ inputs.ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: python3 scripts/ci/nightly_skip.py --plan --workflow .github/workflows/nightly.yml
+      - name: the keys, for the nights after
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-keys
+          path: nightly-keys.json
+          retention-days: 8
+
   proptest-exhaustive:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'proptest-exhaustive' }}
     # Scheduled workflows always execute from the default branch (main), so the
@@ -115,7 +164,9 @@ jobs:
           cargo test --locked --release -p shekyl-hasher --lib -- --exact core::tests::random_sequences_hold_the_invariants_quiesce_to_the_list_and_grant_every_request --nocapture
 
   store-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored' }}
+    name: store-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'store-ignored') && needs.plan.outputs['store-ignored'] != '{"include":[]}' }}
     # The chain store's `#[ignore]`d set: the two benches
     # (`weights_read_bench`, `slash_scan_bench`, which starts from the
     # forged shard-fill chain) and the RT-W10 harness. This job is the
@@ -141,12 +192,11 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['store-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -175,7 +225,9 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_store.sh
 
   producer-gate:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate' }}
+    name: producer-gate (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'producer-gate') && needs.plan.outputs['producer-gate'] != '{"include":[]}' }}
     # The bundle producer's gate (`SO-D12` increment 4c,
     # `ARCHIVAL_SETTLEMENT_WRITER.md` §16.11): a bundle the producer made is
     # admitted by the bundle verifier (CEN-J29 to J37) on a driven chain and
@@ -190,12 +242,11 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['producer-gate'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -223,12 +274,30 @@ jobs:
         run: bash scripts/ci/producer_gate.sh
 
   economics-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
-    # The economics sim's `#[ignore]`d set: the two `--stage2` narrations
-    # against their committed fixtures (150 s and 100 s in release), the
-    # secret draw at ESR-11's timing on ESR-13's loop, the per-mode reader
-    # test, and ESR-10's nightly scope. This job is the lane that invokes
-    # them.
+    name: economics-sim-ignored (${{ matrix.branch }}, ${{ matrix.sim_lane }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored') && needs.plan.outputs['economics-sim-ignored'] != '{"include":[]}' }}
+    # The economics sim's `#[ignore]`d set, one job per lane
+    # (scripts/ci/ignored_set_economics_sim.sh names each lane's tests):
+    #   pins    the narrations against their committed fixtures (the
+    #           `--stage2` pair, ESR-10's, EUP-4 prep 2's and the J x G
+    #           grid's nightly scopes), the steady control's pins, and the
+    #           secret draw at ESR-11's timing on ESR-13's loop;
+    #   reader  the per-mode reader test,
+    #           `baseline::tests::every_declared_reader_moves_its_report`.
+    # Each (branch, lane) leg is its own job on its own runner with its own
+    # timeout, so one slow test cannot cut the others and a test that grows
+    # shows in its own lane.
+    #
+    # Measured one test at a time on a 16-vCPU build host at dev 46f266ac08
+    # (2026-11-22), wall seconds: the reader test 4 273 of the set's 9 007;
+    # the three `--stage2` pins 1 402, 839 and 727, each on one thread; the
+    # EUP-4 pair 558 and 532; ESR-10's pair 241 and 227; the J x G slice 177;
+    # ESR-11's set 31. In one job the set ran 6 111 to 8 001 s on dev over
+    # 2026-11-17 to 11-20 against 180 minutes, and main's leg (07c8abba5f)
+    # passed in 10 299 s one night and was cut at 10 817 s the next on the
+    # same commit. The script stamps every line of its output with the UTC
+    # time it arrived, so a cut leg names the test still running.
     #
     # ESR-10's split (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.29): its full
     # narration, every cell on both w_ref arms over all nine scenarios, is
@@ -256,40 +325,89 @@ jobs:
     # The crate's regeneration helpers WRITE the committed fixtures and are
     # never run here; the script names them so the set is exact.
     #
-    # Same matrix as above. The schedule runs main's copy of this file over
-    # both branches, but the set is read from the checked-out ref's
-    # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
-    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
-    # The per-PR Rust job runs this script with `--check` and stops after
-    # that judgement.
+    # Same matrix as above, crossed with the lanes. The schedule runs
+    # main's copy of this file over both branches, but the set is read from
+    # the checked-out ref's scripts/ci/ignored_set_economics_sim.sh, so each
+    # leg is judged by its own tree; `workflow_dispatch` with `ref` proves
+    # one branch's set. The per-PR Rust job runs this script with `--check`
+    # and stops after that judgement.
+    #
+    # A leg runs its lane only where the CHECKED-OUT revision has it, as
+    # nightly-live-daemon-slow.yml does: a dispatch from a branch whose
+    # matrix names a lane the other branch's script does not know would
+    # fail there as an unknown argument and open a tracking issue for
+    # nothing. The step after checkout asks the checked-out tree:
+    #   - does its script have the lane's `--<lane>)` arm? Yes: the leg runs.
+    #   - if not, does its own copy of this file name the lane, as
+    #     `"sim_lane":"<lane>"` in the planner's fallback matrix (or in the
+    #     `sim_lane: [...]` list of a revision from before the planner)? Yes:
+    #     the revision claims a lane it cannot run, and the leg is RED. No:
+    #     the revision predates the lane; the leg ends green with a notice
+    #     that says so, and builds nothing.
+    # The skip ends by itself when the lane reaches the other branch. The
+    # probe reads text, so the fallback matrix stays on one line and the
+    # script's arms stay `--<lane>)`.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      # One line: the lane probe below reads `"sim_lane":"<lane>"` from the
+      # checked-out copy of this file.
+      matrix: ${{ fromJSON(needs.plan.outputs['economics-sim-ignored'] || '{"include":[{"branch":"main","sim_lane":"pins"},{"branch":"main","sim_lane":"reader"},{"branch":"dev","sim_lane":"pins"},{"branch":"dev","sim_lane":"reader"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
           persist-credentials: false
 
+      - name: does this revision have the ${{ matrix.sim_lane }} lane
+        # See the job's comment: run where the checked-out script has the
+        # lane, red where the checked-out workflow names a lane its script
+        # lacks, a visible skip where the revision predates the lane.
+        id: lane
+        env:
+          LANE: ${{ matrix.sim_lane }}
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/ignored_set_economics_sim.sh
+          workflow=.github/workflows/nightly.yml
+          [ -f "$script" ] || {
+            echo "::error::$BRANCH has no $script: the economics sim's ignored set has no runner"
+            exit 1
+          }
+          if grep -Eq "^[[:space:]]*--${LANE}\)" "$script"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Eq "\"sim_lane\":\"${LANE}\"|^[[:space:]]*sim_lane:[[:space:]]*\[([^]]*[,[:space:]])?${LANE}([,[:space:]][^]]*)?\]" "$workflow"; then
+            echo "::error::$BRANCH names the $LANE lane in $workflow, but its $script has no '--$LANE)' arm: the lane cannot run"
+            exit 1
+          fi
+          echo "::notice title=$LANE lane not on $BRANCH::$BRANCH predates the economics sim's $LANE lane (neither its $script nor its $workflow names it). This leg ran nothing. It runs once the lane reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
+        if: steps.lane.outputs.run == 'true'
         uses: ./.github/actions/install-rust
 
-      - name: Run the economics sim's ignored tests
+      - name: Run the economics sim's ${{ matrix.sim_lane }} lane
+        if: steps.lane.outputs.run == 'true'
         # The set, the helpers and their assertions are
         # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
         # each branch judges itself.
         env:
           BRANCH: ${{ matrix.branch }}
-        run: bash scripts/ci/ignored_set_economics_sim.sh
+          LANE: ${{ matrix.sim_lane }}
+        run: bash scripts/ci/ignored_set_economics_sim.sh "--$LANE"
 
   staking-sim-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored' }}
+    name: staking-sim-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'staking-sim-ignored') && needs.plan.outputs['staking-sim-ignored'] != '{"include":[]}' }}
     # The staking sim's `#[ignore]`d set: the five-seed L11/L13 pins on both
     # reward arms (EUP-3 check half). The registered plateau arm is the check
     # half's falsifier; the production arm is the default the documents
@@ -302,12 +420,11 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['staking-sim-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -324,7 +441,9 @@ jobs:
         run: bash scripts/ci/ignored_set_staking_sim.sh
 
   chain-ingest-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored' }}
+    name: chain-ingest-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'chain-ingest-ignored') && needs.plan.outputs['chain-ingest-ignored'] != '{"include":[]}' }}
     # The chain-ingest crate's `#[ignore]`d set: the scenarios that fill
     # shards with real proofs (the emission claims, the levered slash chain,
     # the join, the pool-shim posts), the miner over real RandomX, the
@@ -349,12 +468,11 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['chain-ingest-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -382,7 +500,9 @@ jobs:
         run: bash scripts/ci/ignored_set_chain_ingest.sh
 
   hasher-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored' }}
+    name: hasher-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'hasher-ignored') && needs.plan.outputs['hasher-ignored'] != '{"include":[]}' }}
     # The hasher's `#[ignore]`d set (scripts/ci/ignored_set_hasher.sh): the
     # core's property test driven through the real shell, with threads and
     # hundreds of real 256 MiB RandomX derives
@@ -398,12 +518,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['hasher-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -420,7 +539,9 @@ jobs:
         run: bash scripts/ci/ignored_set_hasher.sh
 
   wire-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored' }}
+    name: wire-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'wire-ignored') && needs.plan.outputs['wire-ignored'] != '{"include":[]}' }}
     # shekyl-wire's `#[ignore]`d set: the RT-W10 listed-tx parse harness,
     # run with RT_W10_OUT unset so it writes a few samples to a scratch
     # directory and removes it (the run proves the harness works; its
@@ -439,12 +560,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['wire-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -462,7 +582,9 @@ jobs:
         run: bash scripts/ci/ignored_set_wire.sh
 
   trybuild-ignored:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored' }}
+    name: trybuild-ignored (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'trybuild-ignored') && needs.plan.outputs['trybuild-ignored'] != '{"include":[]}' }}
     # The trybuild harnesses of shekyl-chain-rules, shekyl-mempool and
     # shekyl-crypto-pq: programs compiled as a downstream crate whose whole
     # stderr must match a snapshot (the brand gate on `validate`, the pool
@@ -484,12 +606,11 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['trybuild-ignored'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -506,7 +627,9 @@ jobs:
         run: bash scripts/ci/ignored_set_trybuild.sh
 
   bench-full:
-    if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'bench-full' }}
+    name: bench-full (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') && needs.plan.outputs['bench-full'] != '{"include":[]}' }}
     # The block path's instruction counts on blocks at the weight limit:
     # `shekyl-chain-ingest` `benches/block_path_full_iai.rs`, the capture
     # script's nightly set. The shapes are DAEMON_REDB_STORE.md §1.3a.7's,
@@ -529,12 +652,11 @@ jobs:
     timeout-minutes: 100
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['bench-full'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           submodules: recursive
           # The steps below run the checked-out ref's code. It gets no
           # credential to find in .git/config.
@@ -582,7 +704,10 @@ jobs:
           if-no-files-found: error
 
   bench-full-drift:
-    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') }}
+    name: bench-full-drift (${{ matrix.branch }})
+    # It follows bench-full's planned legs: it compares tonight's capture
+    # with the one before, so it runs exactly where bench-full ran.
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'bench-full') && needs.plan.outputs['bench-full'] != '{"include":[]}' }}
     # Tonight's full-block counts against the capture before tonight's of
     # the same branch, through compare.py's thresholds
     # (scripts/bench/nightly_drift.sh). A row past its fail threshold, or a
@@ -592,7 +717,7 @@ jobs:
     #
     # Its own job: it holds `actions: read`, to list and fetch the earlier
     # artifact, and the capture job above holds no token at all.
-    needs: bench-full
+    needs: [plan, bench-full]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -600,12 +725,11 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      matrix:
-        branch: ${{ fromJSON(inputs.ref && format('[{0}]', toJSON(inputs.ref)) || '["main","dev"]') }}
+      matrix: ${{ fromJSON(needs.plan.outputs['bench-full'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.branch }}
+          ref: ${{ matrix.sha || matrix.branch }}
           persist-credentials: false
 
       - name: Artifact name for this branch
@@ -652,18 +776,64 @@ jobs:
     #
     # Scheduled runs report. A dispatched run reports only when asked
     # (`report`): the person who dispatched it is reading it.
-    needs: [store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
-    if: ${{ failure() && (github.event_name == 'schedule' || inputs.report) }}
+    #
+    # It runs on every such run not cancelled as a whole, red or green: a
+    # leg past its `timeout-minutes` ends `cancelled`, not `failure`, and is
+    # red (scripts/ci/nightly_red.py names it a timeout). On `failure()`
+    # alone, 2026-11-21's economics-sim-ignored legs, cut at 180 minutes on
+    # both branches, opened no issue. A run cancelled as a whole reports
+    # nothing: this workflow has no concurrency group, so no newer run
+    # supersedes a scheduled one, and a run cancelled by hand was cancelled
+    # by someone who already knows (ruled 2026-11-22). A job timeout leaves
+    # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
+    # --check holds `needs` and this condition.
+    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
     permissions:
       actions: read
+      # checks: each cancelled job's annotations, GitHub's record of
+      # whether it timed out (nightly_red.py).
+      checks: read
+      contents: read
       issues: write
     steps:
+      # The classifier and this file, at the run's own commit: merged code,
+      # so the job that can write runs nothing a review has not passed.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            scripts/ci/nightly_red.py
+            scripts/ci/check_workflows_parse.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: the red legs, a timeout among them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/nightly_red.py --run "${{ github.run_id }}" > "$RUNNER_TEMP/red.json"
+          cat "$RUNNER_TEMP/red.json"
       - uses: actions/github-script@v8
+        env:
+          RED: ${{ runner.temp }}/red.json
         with:
           script: |
             const lanes = {
+              'plan': {
+                title: 'nightly planner RED',
+                lines: [
+                  'The `plan` job (`nightly_skip.py --plan`) failed. Every planned job ran its full fallback matrix, `main` and `dev`, so no leg was skipped tonight; a dispatched run with `ref` ran `main` and `dev` in place of that ref.',
+                  'The run uploaded no keys, so the next scheduled run relies on none of tonight\'s passes. The job\'s log names the step that failed.',
+                ],
+              },
+              'proptest-exhaustive': {
+                title: 'nightly proptest-exhaustive RED',
+                lines: [
+                  'The `proptest-exhaustive` job failed. It runs `shekyl-crypto-pq`\'s `prop_round_trip` at 200 000 cases, the timing engine\'s model (`model::random_ops_match_a_scanned_reference`) and the hasher core\'s model at 8 192 cases each, in release.',
+                  'A failure names its shrunk case in the log: keep it as a regression case beside the property before fixing the code.',
+                ],
+              },
               'chain-ingest-ignored': {
                 title: 'nightly chain-ingest ignored set RED',
                 lines: [
@@ -711,9 +881,10 @@ jobs:
               'economics-sim-ignored': {
                 title: 'nightly economics-sim ignored tests RED',
                 lines: [
-                  'The `economics-sim-ignored` job failed. It runs five `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture`, `esr10_nightly_narration_matches_the_committed_fixture`, `the_esr11_timing_set_runs_and_the_table_renders` and `every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
-                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with `regen_stage2_narration_fixtures` or `regen_esr10_narration_fixtures` under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
+                  'A leg of the `economics-sim-ignored` job failed. Each leg runs one lane of `scripts/ci/ignored_set_economics_sim.sh` on one branch; the leg\'s name says which. The `pins` lane runs the `#[ignore]`d narration pins of `shekyl-economics-sim` (the `--stage2` pair, ESR-10\'s, EUP-4 prep 2\'s and the J x G grid\'s nightly scopes), the steady control\'s pins and the ESR-11 timing set; the `reader` lane runs `baseline::tests::every_declared_reader_moves_its_report` (a field a mode declares as read that does not move its report fails by name).',
+                  'If a narration drifted and the sim change is intended: record it in `ECONOMICS_SIM_PRODUCTION_REBASE.md` and regenerate with the pin\'s `regen_*` helper under `SHEKYL_PINNED_REGEN_DECISION` citing that entry; otherwise the sim drifted from its record.',
+                  'If a leg timed out, its log stamps each line with the UTC time: the tests with no `... ok` line were still running. Compare with the measurements in nightly.yml\'s economics-sim-ignored comment before raising the budget.',
+                  'If a leg stopped before running anything, the crate\'s ignored set changed (decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run, is a regeneration helper or runs on demand), or the branch names a lane its script lacks.',
                 ],
               },
               'trybuild-ignored': {
@@ -739,22 +910,31 @@ jobs:
                 ],
               },
             };
+            const fs = require('fs');
             const { owner, repo } = context.repo;
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
-              owner,
-              repo,
-              run_id: context.runId,
-              per_page: 100,
-            });
-            // A leg is named `<job> (<branch>)`. The branch is read from the
-            // name as data; nothing here evaluates it.
-            const red = jobs
-              .filter((job) => job.conclusion === 'failure')
-              .map((job) => /^(\S+) \((.+)\)$/.exec(job.name))
-              .filter((m) => m && lanes[m[1]]);
-            if (red.length === 0) {
-              core.setFailed('report-red ran and found no red leg of a lane it reports: a job was renamed, or the run failed somewhere this job does not read.');
+            const legs = JSON.parse(fs.readFileSync(process.env.RED, 'utf8'));
+            if (legs.length === 0) {
+              core.notice('No red leg in this run.');
               return;
+            }
+            // A leg is routed by its job's id (nightly_red.py's `key`), never
+            // by parsing its name: a job with no matrix, `plan` among them,
+            // has no values in its name. A matrix leg's values follow the id
+            // in its name, `<job> (<values>)`, and are read as data; nothing
+            // here evaluates them. A red leg of a job this table does not
+            // name fails this job by name: it would otherwise reach no one
+            // (nightly_red.py --check holds the table to `needs`).
+            const red = [];
+            for (const leg of legs) {
+              if (!lanes[leg.key]) {
+                core.setFailed(`report-red has no lane for the red leg "${leg.name}": add it to the table`);
+                continue;
+              }
+              const prefix = `${leg.key} (`;
+              const values = leg.name.startsWith(prefix) && leg.name.endsWith(')')
+                ? leg.name.slice(prefix.length, -1)
+                : '';
+              red.push([leg, leg.key, values]);
             }
             // Exact-title match over open issues, not text search: the search
             // API's in:title is a substring match and lags on freshly created
@@ -765,12 +945,22 @@ jobs:
               state: 'open',
               per_page: 100,
             });
-            for (const [, lane, branch] of red) {
-              const title = `${lanes[lane].title} (${branch})`;
+            for (const [leg, lane, values] of red) {
+              const title = values ? `${lanes[lane].title} (${values})` : lanes[lane].title;
+              // A timeout is named as one, so nobody reads it as a test
+              // failure; the lane's own lines are for a leg that failed.
+              // `why` is GitHub's own annotation on a cancelled job, quoted;
+              // `minutes` is null when GitHub recorded no start or end.
+              const ran = leg.minutes === null ? '' : ` after ${leg.minutes} minutes`;
+              const what = {
+                'failed': lanes[lane].lines,
+                'timed out': [`The leg ran out of time${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}. This is not a test failure. Read the log for the test it was in when it was cut.`],
+                'cancelled': [`The leg was cancelled${ran}${leg.why ? ` (GitHub: "${leg.why}")` : ''}: not a timeout, and not a test failure. Read the log for what stopped it.`],
+              }[leg.kind];
               const body = [
                 `Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
-                `Branch: ${branch}`,
-                ...lanes[lane].lines,
+                `Leg: [${leg.name}](${leg.url}): ${leg.kind}`,
+                ...what,
               ].join('\n');
               const existing = open.find((i) => !i.pull_request && i.title === title);
               if (existing) {

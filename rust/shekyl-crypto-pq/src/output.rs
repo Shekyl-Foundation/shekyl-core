@@ -640,7 +640,7 @@ fn decap_ml_kem_and_combine(
         .try_into()
         .map_err(|_| CryptoError::InvalidKeyMaterial)?;
     let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
+        .map_err(|e| CryptoError::MalformedDecapsKey(e.into()))?;
 
     let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
         .try_into()
@@ -1599,6 +1599,24 @@ mod tests {
 
     fn random_tx_key() -> TxKey {
         TxKey::random().expect("the OS draws a key")
+    }
+
+    /// Scanning parses the wallet's stored ML-KEM decapsulation key. fips203
+    /// 0.5.0 refuses one with a secret coefficient of q or more (here the
+    /// first, set to 0xFFF: the low 12 bits of the first two bytes), and the
+    /// scan reports a malformed key, not a failed decapsulation.
+    #[test]
+    fn a_stored_decaps_key_with_a_coefficient_of_q_or_more_is_malformed() {
+        let kem = HybridX25519MlKem;
+        let (public, secret) = kem.keypair_generate().unwrap();
+        let (_, ct) = kem.encapsulate(&public).unwrap();
+        recover_combined_ss(&secret.x25519, &secret.ml_kem, &ct.x25519, &ct.ml_kem)
+            .expect("the honest key recovers");
+        let mut dk = secret.ml_kem.clone();
+        dk[0] = 0xFF;
+        dk[1] |= 0x0F;
+        let err = recover_combined_ss(&secret.x25519, &dk, &ct.x25519, &ct.ml_kem).unwrap_err();
+        assert!(matches!(err, CryptoError::MalformedDecapsKey(_)), "{err:?}");
     }
 
     #[test]

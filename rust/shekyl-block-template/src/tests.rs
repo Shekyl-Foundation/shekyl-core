@@ -344,10 +344,7 @@ fn the_coinbase_pays_exactly_the_miners_leg_of_the_split_plus_its_fee_share() {
 
     let fees: u64 = listed
         .iter()
-        .map(|tx| match &tx.ct {
-            Ct::Fcmp { fee, .. } => *fee,
-            Ct::Null(_) => unreachable!("fixture spends carry a fee"),
-        })
+        .map(|tx| tx.fee().expect("fixture spends carry a fee"))
         .sum();
     let supply = CirculatingSupply::derive(
         cx.emission.already_generated_coins,
