@@ -63,19 +63,18 @@ const OTHERS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stage
 /// Blocks mined at the tip, each committing its draws, before one draws.
 const DRAWING_WITHIN: u64 = 64;
 
-fn plan() -> Plan {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plans/small.toml");
+fn plan(file: &str) -> Plan {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("plans")
+        .join(file);
     Plan::parse(&std::fs::read_to_string(path).expect("the plan reads")).expect("parses")
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "minutes of proofs; run in release by chain-forge.yml"]
-async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
-    let plan = plan();
-    let out = tempfile::tempdir().expect("a directory");
+/// `plan`, forged in this process and held open at its tip.
+async fn forged_open(plan: &Plan, out: &std::path::Path) -> Forge {
     let mut forge = Forge::open(
-        &plan,
-        out.path(),
+        plan,
+        out,
         Options {
             swapped: BTreeSet::new(),
             stop_at_difference: None,
@@ -86,11 +85,32 @@ async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
     .await
     .expect("the forging opens");
     assert!(
-        forge.run(&plan).await.expect("the plan runs").is_none(),
+        forge.run(plan).await.expect("the plan runs").is_none(),
         "nothing to stop at"
     );
+    forge
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "minutes of proofs; run in release by chain-forge.yml"]
+async fn the_small_plan_is_regtests_alone_and_refuses_a_tampered_receipt() {
+    let plan = plan("small.toml");
+    let out = tempfile::tempdir().expect("a directory");
+    let mut forge = forged_open(&plan, out.path()).await;
     identity_locks(&mut forge).await;
     receipt_tamper(&mut forge).await;
+    forge.abandon().await;
+}
+
+/// §6's four locks on Chain L (`CF-4b`): every body the lifecycle chain
+/// lists, every kind included, is regtest's alone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "a forging of Chain L; run in release by chain-forge.yml's nightly"]
+async fn chain_l_is_regtests_alone() {
+    let plan = plan("chain-l.toml");
+    let out = tempfile::tempdir().expect("a directory");
+    let mut forge = forged_open(&plan, out.path()).await;
+    identity_locks(&mut forge).await;
     forge.abandon().await;
 }
 
@@ -213,6 +233,16 @@ async fn identity_locks(forge: &mut Forge) {
         };
         if !block.template.transactions.contains(&item.body) {
             continue; // popped by the plan's reorg
+        }
+        let leg = match &item.kind {
+            BuiltKind::Spend { coinbases } if coinbases.len() == 1 => Some(CenRow::I15),
+            BuiltKind::Join { .. } => Some(CenRow::J27),
+            BuiltKind::Claim { .. } => Some(CenRow::J26),
+            _ => None,
+        };
+        // One body of each kind reaches its row; a longer chain lists many.
+        if leg.is_none_or(|row| legs.contains(&row)) {
+            continue;
         }
         let claims = claims_for(&chain, block);
         let spender = Spender::on(

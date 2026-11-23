@@ -314,13 +314,13 @@ impl Forge {
                 )
             })
             .await;
-        if !sigma.is_some_and(|work| work.to_raw() > 0) {
+        if sigma.is_none_or(|work| work.to_raw() == 0) {
             return Err(failed(what, format!("Σwork({epoch}) is {sigma:?}")));
         }
-        if !budget.is_some_and(|units| units.to_raw() > 0) {
+        if budget.is_none_or(|units| units.to_raw() == 0) {
             return Err(failed(what, format!("the budget of {epoch} is {budget:?}")));
         }
-        if !market.is_some_and(|holders| holders.to_raw() > 0) {
+        if market.is_none_or(|holders| holders.to_raw() == 0) {
             return Err(failed(
                 what,
                 format!("r_market({shard:?}, {epoch}) is {market:?}"),

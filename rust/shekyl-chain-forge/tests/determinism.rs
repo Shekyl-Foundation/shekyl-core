@@ -55,6 +55,10 @@ const COMMITTED: &str = "chains/small";
 const SHARD_FILL: &str = "shard-fill";
 const SHARD_FILL_PLAN: &str = "plans/shard-fill.toml";
 const SHARD_FILL_COMMITTED: &str = "chains/shard-fill";
+/// Chain L (`CF-4b`): hosted like the shard-fill chain.
+const CHAIN_L: &str = "chain-l";
+const CHAIN_L_PLAN: &str = "plans/chain-l.toml";
+const CHAIN_L_COMMITTED: &str = "chains/chain-l";
 
 /// The child process's switches: the directory it writes, the sources it
 /// swaps, and the ledger it stops at.
@@ -462,12 +466,26 @@ fn the_producer_plan_forges_the_same_bytes_in_two_processes() {
 #[test]
 #[ignore = "two shard-fill forgings, minutes each; run by chain-forge.yml's nightly"]
 fn the_shard_fill_plan_forges_its_pinned_chain_in_two_processes() {
-    let outs = forge_in_two_processes("shard-fill", SHARD_FILL_PLAN);
+    forges_its_pinned_chain(SHARD_FILL, SHARD_FILL_PLAN, SHARD_FILL_COMMITTED);
+}
+
+/// [`the_shard_fill_plan_forges_its_pinned_chain_in_two_processes`] for
+/// Chain L (`CF-4b`).
+#[test]
+#[ignore = "two Chain L forgings, minutes each; run by chain-forge.yml's nightly"]
+fn the_chain_l_plan_forges_its_pinned_chain_in_two_processes() {
+    forges_its_pinned_chain(CHAIN_L, CHAIN_L_PLAN, CHAIN_L_COMMITTED);
+}
+
+/// `plan`'s two forgings, in the two environments, and each hosted `chain`
+/// as pinned: its committed `blocks.txt`, every layer its pin's.
+fn forges_its_pinned_chain(chain: &str, plan: &str, committed: &str) {
+    let outs = forge_in_two_processes(chain, plan);
     let a = outs[0].path();
     if let Some(difference) = first_difference(a, outs[1].path()) {
-        panic!("two forgings of the shard-fill plan differ: {difference}");
+        panic!("two forgings of the {chain} plan differ: {difference}");
     }
-    let committed = crate_dir().join(SHARD_FILL_COMMITTED).join(BLOCKS_FILE);
+    let committed = crate_dir().join(committed).join(BLOCKS_FILE);
     let ours = BlocksTxt::parse(&std::fs::read_to_string(a.join(BLOCKS_FILE)).expect("forged"))
         .expect("parses");
     let theirs = BlocksTxt::parse(
@@ -477,17 +495,17 @@ fn the_shard_fill_plan_forges_its_pinned_chain_in_two_processes() {
     .expect("the committed ledger parses");
     if let Some(difference) = ours.first_difference(&theirs) {
         panic!(
-            "the forged shard-fill chain is not the committed one (ours, committed): {difference}. \
+            "the forged {chain} chain is not the committed one (ours, committed): {difference}. \
              A change that moves it regenerates blocks.txt, re-publishes the chain and moves its \
              pin in the same pull request (CHAIN_FORGE.md §9)"
         );
     }
     let pin = shekyl_chain_forge::Pins::load()
-        .and_then(|pins| pins.chain(SHARD_FILL).cloned())
+        .and_then(|pins| pins.chain(chain).cloned())
         .unwrap_or_else(|fault| panic!("{fault}"));
     shekyl_chain_forge::hosted::open_in(a, pin).unwrap_or_else(|fault| {
         panic!(
-            "forging the shard-fill plan here does not give its pinned artifact: {fault}. A merged \
+            "forging the {chain} plan here does not give its pinned artifact: {fault}. A merged \
              change moved the chain without re-publishing it (CHAIN_FORGE.md §9)"
         )
     });

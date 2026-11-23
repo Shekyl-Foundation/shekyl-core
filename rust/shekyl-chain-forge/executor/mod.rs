@@ -131,6 +131,9 @@ pub struct Forged {
     pub manifest: Manifest,
     /// Its `blocks.txt`, as written.
     pub blocks: BlocksTxt,
+    /// The harness persona's funding output and the block that listed it,
+    /// for a walk's owner to check against the wallet it restores.
+    pub harness_funding: Option<([u8; 32], BlockHeight)>,
 }
 
 /// What a forging came to.
@@ -440,8 +443,21 @@ impl Forge {
             if let Some(name) = &step.event {
                 let tip = self.chain.last().expect("genesis at least").height;
                 let height = self.event_at.take().unwrap_or(tip);
-                let (record, branch) =
+                let (written_at, branch) =
                     self.record_at[usize::try_from(height.to_raw()).expect("a height fits")];
+                // A block written as an offer is on the chain only from the
+                // record its branch won at: a snapshot stopped earlier does
+                // not hold it.
+                let record = match branch {
+                    Branch::Main => written_at,
+                    Branch::Alt(_) => self
+                        .expected
+                        .iter()
+                        .map(|switch| switch.at_record)
+                        .filter(|at| *at >= written_at)
+                        .min()
+                        .expect("an offered block on the chain is on a branch that won"),
+                };
                 self.events.push(EventRecord {
                     name: name.clone(),
                     height: height.to_raw(),
@@ -1631,6 +1647,9 @@ impl Forge {
         Ok(Forged {
             manifest,
             blocks: self.ledger,
+            harness_funding: self
+                .harness_funding
+                .map(|funding| (funding.output_key, funding.paid_at)),
         })
     }
 }
