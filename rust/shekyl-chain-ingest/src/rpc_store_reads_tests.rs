@@ -37,7 +37,6 @@ use shekyl_rpc_types::wire::chain::{CoinbaseSumRange, CurveSelect};
 use shekyl_rpc_types::wire::shared::Selector;
 use shekyl_rpc_types::HashHex;
 use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::{Ct, Transaction};
 
 use crate::connector::Offered;
 use crate::rpc_store_facts_tests::{facts_over, facts_with_hasher, hex, KeccakPow};
@@ -46,14 +45,6 @@ use crate::test_support::{h, open_store, open_store_under, tmp, Family, FIRST_SP
 
 fn hash_budget() -> shekyl_daemon_rpc::hash_budget::HashBudget {
     shekyl_daemon_rpc::hash_budget::HashBudget::new(std::time::Instant::now())
-}
-
-/// The fee a listed body pays.
-fn fee_of(tx: &Transaction) -> u64 {
-    match tx.ct {
-        Ct::Fcmp { fee, .. } => fee,
-        Ct::Null(_) => 0,
-    }
 }
 
 /// The coinbase's outputs, summed.
@@ -630,7 +621,8 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
             spender.spend_coinbase(wallet, h(1), h(AT), Family::Main.fee()),
         )
     };
-    let fees = u128::from(fee_of(&a) + fee_of(&b));
+    let fees = u128::from(a.fee().expect("a spend carries a fee"))
+        + u128::from(b.fee().expect("a spend carries a fee"));
     assert!(fees > 0, "the spends pay fees (rule 47)");
     let spending = s
         .mine_listing(vec![a, b])

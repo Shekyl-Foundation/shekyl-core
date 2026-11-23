@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 
 use ciphersuite::Ciphersuite;
 
-use crate::ScalarVector;
+use crate::{zip_exact, ScalarVector};
 
 /// A point vector struct with the functionality necessary for Bulletproofs.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize)]
@@ -55,65 +55,28 @@ impl<C: Ciphersuite> Mul<C::F> for PointVector<C> {
 }
 
 impl<C: Ciphersuite> PointVector<C> {
-    /// Add two point vectors together.
-    ///
-    /// May panic if the vectors are of different lengths.
-    #[allow(unused)]
-    pub(crate) fn add_vec(mut self, vector: &Self) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            vector.len(),
-            "adding point vectors of different lengths"
-        );
-        for (i, val) in self.0.iter_mut().enumerate() {
-            *val += vector.0[i];
-        }
-        self
-    }
-
-    /// Subtract a point vector from another.
-    ///
-    /// May panic if the vectors are of different lengths.
-    #[allow(unused)]
-    pub(crate) fn sub_vec(mut self, vector: &Self) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            vector.len(),
-            "subtracting point vectors of different lengths"
-        );
-        for (i, val) in self.0.iter_mut().enumerate() {
-            *val -= vector.0[i];
-        }
-        self
-    }
-
     /// Scales the points in this vector by the corresponding scalars within the scalar vector.
     ///
-    /// May panic if the vectors are different lengths.
+    /// The vectors must be the same length, in every build ([`zip_exact`]).
     pub(crate) fn mul_vec(mut self, vector: &ScalarVector<C::F>) -> Self {
-        debug_assert_eq!(
-            self.len(),
-            vector.len(),
-            "scaling a point vector by a scalar vector of a different length"
-        );
-        for (i, val) in self.0.iter_mut().enumerate() {
-            *val *= vector.0[i];
-        }
+        zip_exact(&mut self.0, &vector.0, "scaling", |point, scalar| {
+            *point *= *scalar
+        });
         self
     }
 
     /// Compute the multi-scalar multiplication of this point vector by the scalar vector.
     ///
-    /// May panic if the vectors are different lengths.
-    #[cfg(test)] // Only used by the tests at this time
+    /// The vectors must be the same length.
+    #[cfg(test)] // The tests' reference computation
     pub(crate) fn multiexp(&self, vector: &ScalarVector<C::F>) -> C::G
     where
         C::G: subtle::ConditionallySelectable,
     {
-        debug_assert_eq!(
+        assert_eq!(
             self.len(),
             vector.len(),
-            "performing a multiexp for a point vector by a scalar vector of a different length"
+            "multiexp of vectors of different lengths"
         );
         let mut res = Vec::with_capacity(self.len());
         for (point, scalar) in self.0.iter().copied().zip(vector.0.iter().copied()) {
@@ -126,13 +89,17 @@ impl<C: Ciphersuite> PointVector<C> {
         self.0.len()
     }
 
-    /// Split this point vector into two equally-sized parts.
+    /// Split this point vector into two equally-sized halves.
     ///
-    /// May panic if `self.len()` is not a power of two at least `2^1`.
+    /// The length must be even and non-zero, in every build: an odd length cannot halve, and the
+    /// inner-product argument folds the two halves together element by element.
     pub(crate) fn split(mut self) -> (Self, Self) {
-        debug_assert!(self.len() > 1);
+        assert!(
+            (self.len() != 0) && (self.len() % 2 == 0),
+            "splitting a point vector of length {} into halves",
+            self.len()
+        );
         let r = self.0.split_off(self.len() / 2);
-        debug_assert_eq!(self.len(), r.len());
         (self, PointVector(r))
     }
 }

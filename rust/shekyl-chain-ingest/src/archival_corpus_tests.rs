@@ -147,8 +147,8 @@ fn enumerate(dir: &Path) -> Vec<(PCanonicalId, Archival)> {
 /// - **No claim, and no Release or Reinstate** anywhere in the corpus:
 ///   J13, J18–J20 have no
 ///   corpus-positive witness, which is why (b)–(d) build theirs on the
-///   driver. No captured chain crosses a settlement epoch; `emission-claim`
-///   returns with SO-D12 4b's evidence run (`docs/FOLLOWUPS.md`).
+///   driver. No captured chain crosses a settlement epoch; the chain that
+///   does is Chain L (`CHAIN_FORGE.md` §12.2).
 fn expected(shape: &str) -> Vec<Archival> {
     match shape {
         "bond-post" => vec![Archival::Post {

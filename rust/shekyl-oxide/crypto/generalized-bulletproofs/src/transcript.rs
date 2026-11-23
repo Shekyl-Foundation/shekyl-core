@@ -12,7 +12,7 @@ use ciphersuite::{
     Ciphersuite,
 };
 
-use crate::PointVector;
+use crate::{OpenedCommitments, Openings, PointVector};
 
 const SCALAR: u8 = 0;
 const POINT: u8 = 1;
@@ -31,6 +31,28 @@ where
     assert!(!bool::from(res.is_zero()), "zero challenge");
 
     res
+}
+
+/// The prover's commitments as written to its transcript, held with their openings.
+///
+/// Made only by [`Transcript::write_commitments`] from [`OpenedCommitments`]; consumed by
+/// [`crate::arithmetic_circuit_proof::ArithmeticCircuitProver::new`], which forms the statement
+/// from the commitments and the witness from the openings, so the two cannot disagree.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ProverCommitments<C: Ciphersuite> {
+    pub(crate) commitments: Commitments<C>,
+    pub(crate) openings: Openings<C>,
+}
+
+impl<C: Ciphersuite> ProverCommitments<C> {
+    /// The commitments, as the verifier will read them.
+    pub fn commitments(&self) -> &Commitments<C> {
+        &self.commitments
+    }
+    /// The openings of the commitments.
+    pub fn openings(&self) -> &Openings<C> {
+        &self.openings
+    }
 }
 
 /// Commitments written to/read from a transcript.
@@ -91,12 +113,23 @@ impl Transcript {
         self.transcript.extend(bytes.as_ref());
     }
 
-    /// Write the Pedersen (vector) commitments to this transcript.
+    /// Write the prover's commitments to this transcript, keeping their openings beside them.
+    ///
+    /// Only commitments computed from openings ([`Openings::commit`]) can be written, so every
+    /// commitment a proof transcripts is one its witness opens.
     pub fn write_commitments<C: Ciphersuite>(
         &mut self,
-        C: Vec<C::G>,
-        V: Vec<C::G>,
-    ) -> Commitments<C> {
+        opened: OpenedCommitments<C>,
+    ) -> ProverCommitments<C> {
+        let OpenedCommitments { C, V, openings } = opened;
+        let commitments = self.write_points(C.0, V.0);
+        ProverCommitments {
+            commitments,
+            openings,
+        }
+    }
+
+    fn write_points<C: Ciphersuite>(&mut self, C: Vec<C::G>, V: Vec<C::G>) -> Commitments<C> {
         #[allow(clippy::as_conversions)]
         const _NO_128_BIT_PLATFORMS: [(); (u64::BITS - usize::BITS) as usize] =
             [(); (u64::BITS - usize::BITS) as usize];

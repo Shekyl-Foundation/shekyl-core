@@ -63,10 +63,10 @@
 //!    The caller is the validator's J15 row (`shekyl-chain-rules`,
 //!    `holding_admissible`): per held shard it reads the closed-shard
 //!    count and the `r_market` row, and places the shard's close height
-//!    twice, once inside `closed_and_final` and once for the age operand.
-//!    Each placement is a binary search over the parent's
-//!    `cumulative_archival_len` fold (one recorded-row read per probe)
-//!    and one more read of the landing row. One bond post is at most
+//!    once (`final_close_height`), the height both the closed-and-final
+//!    test and the age operand read. The placement is a binary search over
+//!    the parent's `cumulative_archival_len` fold (one recorded-row read
+//!    per probe) and one more read of the landing row. One bond post is at most
 //!    `MAX_HOLDINGS_SHARDS` of these per-shard gathers. Real, but
 //!    not a cheap DoS: every shard in the holding is priced at a full
 //!    `ARCHIVAL_BOND_FLOOR_ATOMIC` of locked

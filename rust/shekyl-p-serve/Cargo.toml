@@ -52,6 +52,16 @@ bench-internals = []
 # instruction count does not move with the OS's randomness: `seeded-rng`
 # (TEST_ONLY), on this dev edge only.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["seeded-rng"] }
+# CA-3's receipt-signing timing harness (`examples/ca3_receipt_sign_timing.rs`,
+# `docs/design/CRYPTO_AUDIT.md` §3) replicates the scheme's FN-DSA key
+# generation and recovers each signature's restart count from its nonce,
+# which needs the crate's SHAKE256, `compute_mu` and the receipt preimage's
+# cSHAKE. `fn-dsa-sign` is named so the harness's baseline-path build can
+# select `--features fn-dsa-sign/no_avx2`. All three pinned as
+# `shekyl-crypto-pq` pins them; dev edges only.
+fn-dsa = "=0.4.0"
+fn-dsa-sign = "=0.4.0"
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # `test-util`: the write-stall tests pause time. A drain is spaced across
 # the stall bound, and a late poll finds the socket writable after the
 # bound has already run out.

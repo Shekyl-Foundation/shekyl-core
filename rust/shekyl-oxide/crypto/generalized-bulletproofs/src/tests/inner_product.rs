@@ -2,13 +2,10 @@
 
 use rand_core::OsRng;
 
-use ciphersuite::{
-    group::{ff::Field as _, Group as _},
-    Ciphersuite, Ristretto,
-};
+use ciphersuite::{group::ff::Field as _, Ciphersuite, Ristretto};
 
 use crate::{
-    inner_product::{IpStatement, IpWitness, P},
+    inner_product::{IpProveError, IpStatement, IpWitness},
     tests::insecure_test_generators,
     transcript::*,
     Generators, PointVector, ScalarVector,
@@ -16,8 +13,6 @@ use crate::{
 
 #[test]
 fn test_zero_inner_product() {
-    let P = <Ristretto as Ciphersuite>::G::identity();
-
     let generators = insecure_test_generators::<_, Ristretto>(&mut OsRng, 1).unwrap();
     let reduced = generators.reduce(1).unwrap();
     let witness = IpWitness::<Ristretto>::new(
@@ -26,34 +21,54 @@ fn test_zero_inner_product() {
     )
     .unwrap();
 
+    let statement = IpStatement::<Ristretto>::new(
+        reduced,
+        ScalarVector(vec![<Ristretto as Ciphersuite>::F::ONE; 1]),
+        <Ristretto as Ciphersuite>::F::ONE,
+    )
+    .unwrap();
+
     let proof = {
         let mut transcript = Transcript::new([0; 32]);
-        IpStatement::<Ristretto>::new(
-            reduced,
-            ScalarVector(vec![<Ristretto as Ciphersuite>::F::ONE; 1]),
-            <Ristretto as Ciphersuite>::F::ONE,
-            P::Prover(P),
-        )
-        .unwrap()
-        .clone()
-        .prove(&mut transcript, witness)
-        .unwrap();
+        statement.clone().prove(&mut transcript, witness).unwrap();
         transcript.complete()
     };
 
     let mut verifier = Generators::batch_verifier();
-    IpStatement::<Ristretto>::new(
-        reduced,
-        ScalarVector(vec![<Ristretto as Ciphersuite>::F::ONE; 1]),
-        <Ristretto as Ciphersuite>::F::ONE,
-        P::Verifier {
-            verifier_weight: <Ristretto as Ciphersuite>::F::ONE,
-        },
-    )
-    .unwrap()
-    .verify(&mut verifier, &mut VerifierTranscript::new([0; 32], &proof))
-    .unwrap();
+    statement
+        .verify(
+            <Ristretto as Ciphersuite>::F::ONE,
+            &mut verifier,
+            &mut VerifierTranscript::new([0; 32], &proof),
+        )
+        .unwrap();
     assert!(generators.verify(verifier));
+}
+
+// A generator vector of a different length is a different statement. `reduce` is how a caller takes
+// the prefix it intends to prove against.
+#[test]
+fn test_inner_product_rejects_a_generator_vector_of_a_different_length() {
+    let generators = insecure_test_generators::<_, Ristretto>(&mut OsRng, 2).unwrap();
+    let one = <Ristretto as Ciphersuite>::F::ONE;
+    let short_generators = generators.reduce(1).unwrap();
+    let long_generators = generators.reduce(2).unwrap();
+    let short_witness =
+        IpWitness::<Ristretto>::new(ScalarVector::new(1), ScalarVector::new(1)).unwrap();
+    let long_witness =
+        IpWitness::<Ristretto>::new(ScalarVector::new(2), ScalarVector::new(2)).unwrap();
+
+    let err = IpStatement::<Ristretto>::new(long_generators, ScalarVector(vec![one; 2]), one)
+        .unwrap()
+        .prove(&mut Transcript::new([0; 32]), short_witness)
+        .unwrap_err();
+    assert_eq!(err, IpProveError::IncorrectAmountOfGenerators);
+
+    let err = IpStatement::<Ristretto>::new(short_generators, ScalarVector(vec![one; 1]), one)
+        .unwrap()
+        .prove(&mut Transcript::new([0; 32]), long_witness)
+        .unwrap_err();
+    assert_eq!(err, IpProveError::IncorrectAmountOfGenerators);
 }
 
 #[test]
@@ -85,41 +100,32 @@ fn test_inner_product() {
         let P = g_bold.multiexp(&a) + h_bold.multiexp(&b) + (g * a.inner_product(b.0.iter()));
 
         let witness = IpWitness::<Ristretto>::new(a, b).unwrap();
-
-        let proof = {
-            let mut transcript = Transcript::new([0; 32]);
-            IpStatement::<Ristretto>::new(
-                generators,
-                ScalarVector(vec![
-                    <Ristretto as Ciphersuite>::F::ONE;
-                    i.next_power_of_two()
-                ]),
-                <Ristretto as Ciphersuite>::F::ONE,
-                P::Prover(P),
-            )
-            .unwrap()
-            .prove(&mut transcript, witness)
-            .unwrap();
-            transcript.complete()
-        };
-
-        verifier
-            .additional
-            .push((<Ristretto as Ciphersuite>::F::ONE, P));
-        IpStatement::<Ristretto>::new(
+        let statement = IpStatement::<Ristretto>::new(
             generators,
             ScalarVector(vec![
                 <Ristretto as Ciphersuite>::F::ONE;
                 i.next_power_of_two()
             ]),
             <Ristretto as Ciphersuite>::F::ONE,
-            P::Verifier {
-                verifier_weight: <Ristretto as Ciphersuite>::F::ONE,
-            },
         )
-        .unwrap()
-        .verify(&mut verifier, &mut VerifierTranscript::new([0; 32], &proof))
         .unwrap();
+
+        let proof = {
+            let mut transcript = Transcript::new([0; 32]);
+            statement.clone().prove(&mut transcript, witness).unwrap();
+            transcript.complete()
+        };
+
+        verifier
+            .additional
+            .push((<Ristretto as Ciphersuite>::F::ONE, P));
+        statement
+            .verify(
+                <Ristretto as Ciphersuite>::F::ONE,
+                &mut verifier,
+                &mut VerifierTranscript::new([0; 32], &proof),
+            )
+            .unwrap();
     }
     assert!(generators.verify(verifier));
 }

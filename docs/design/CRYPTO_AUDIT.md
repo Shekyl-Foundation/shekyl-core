@@ -7,6 +7,7 @@ not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
 operand-dependent timing in the vendored `HelioseleneField` on x86_64,
 mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
 constant-time evidence covers any of Shekyl's post-quantum signing (§3).
+Its FN-DSA run is registered and unmeasured (§3.1).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -20,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — unmeasured (§3) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); ML-DSA-65 and SLH-DSA-192s unmeasured (§3) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -433,3 +434,223 @@ share the floor device's quiet-claim schedule with RT-P4.
 registered run. Each signer's row closes on its own passing run on both
 devices, with its source read recorded here.
 
+
+### 3.1 FN-DSA, the receipt countersignature
+
+**Status: CLOSED 2026-11-22: all three registered runs PASS.** The
+registration and its results are in
+[`ca3_fn_dsa_receipt_sign_timing_20261121.md`](../benchmarks/ca3_fn_dsa_receipt_sign_timing_20261121.md).
+| Run | Fixed pair | Nulls | Control |
+| --- | --- | --- | --- |
+| 4 GB Pi 4, 500,000 samples | 2.90 | 2.77, 1.77 | 200.07 |
+| Laptop, AVX2 path | 1.71 | 2.28, 2.49 | 159.34 |
+| Laptop, SSE2 path | 1.85 | 2.25, 1.99 | 162.04 |
+
+Each pass excludes a key-value dependence of 0.5 % of a signature or more on
+its path: 10.19 µs on the floor device, about 2 µs on x86. The record
+discloses one coverage difference. On the SSE2 path, which runs only on x86
+without AVX2, the wallet inlines `sign_inner` where the harness does not.
+The sampler and the LDL decomposition it calls are instruction-identical.
+
+`sign_inner` (`fn-dsa-sign` 0.4.0, `lib.rs:482`) does key-derived
+floating-point work of its own:
+- the Gram matrix from the basis (`poly_mulownadj_fft`, `poly_muladj_fft`,
+  `lib.rs:590-604`);
+- the target and lattice-point products (`poly_mul_fft`, `lib.rs:632-635`
+  and `:680-686`);
+- the inverse FFT (`lib.rs:688-689`);
+- `rint` (`lib.rs:700`, `:715`), which on x86_64 is `cvtsd2si`
+  (`_mm_cvtsd_si64`, `flr_native.rs:373-384`).
+
+All of it is multiplies, adds, subtractions and conversions, whose latency
+on x86_64 does not depend on operand values for normal inputs. Every
+division and square root on key-derived values in signing is in the two
+functions the comparison found identical between the harness and the
+wallet:
+- `poly_LDL_fft`, whose divisions on x86_64 are `_mm_div_pd` and
+  `_mm_div_sd` (`poly.rs:1130`, `:1148`; the AVX2 path's `_mm256_div_pd`
+  at `poly_avx2.rs:393`; `poly.rs:1215` is the same division on targets
+  without SIMD);
+- `ffsamp_fft_inner`, whose leaf divides once (`sampler.rs:512`) and takes
+  two square roots (`:532`, `:553`); on the AVX2 path
+  `sampler_avx2.rs:280`, `:300` and `:321`.
+
+So the differently compiled `sign_inner` contains no operation whose time
+can vary with the key's values.
+It covers three runs: the laptop's AVX2 path, the laptop's baseline (SSE2)
+path, and the floor device. The row closes when all three pass.
+- **The pass line** is the fixed pair, key A against key B (the
+  maintainer's ruling, 2026-11-21).
+- **`fixed-vs-varied` is information.** It shows dependence on a key being
+  repeated, and the receipt key is repeated in production.
+- **The evidence** for FN-DSA is the timing runs and the source read below.
+  There is no static row: BINSEC cannot model the SSE2 floating-point
+  instructions the signer is built from (item 8).
+
+**Threat model.** Written before anything was measured.
+
+- **Adversary.** Anyone who can reach a persona's onion. A read and a
+  challenge are the same request, and `P` cannot tell them apart
+  (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §1, *Indistinguishability*). So `P` serves
+  every read and countersigns every pass.
+- **Capability.**
+  - The adversary triggers one countersignature per pass. Each is signed
+    with the persona's receipt key, through the held signer
+    (`shekyl-p-serve/src/countersign.rs:184`, `sign_receipt_transcript`).
+  - They observe the response's latency through Tor. Circuit jitter is
+    milliseconds and a signature is 0.46 ms on x86 (2.24 ms on the floor
+    device), so a difference of nanoseconds needs very many samples.
+  - The number of samples is bounded only by the onion's proof-of-work and
+    the serve endpoint's concurrency (`MAX_INFLIGHT` = 64,
+    `shekyl-p-serve/src/serve.rs:180`). The key does not rotate: a bond
+    record is immutable, and its receipt key with it (§17.1, `SCS-P19`). So
+    the samples accumulate over the bond's whole life.
+- **Harm, from the design.**
+  - *Forged receipts.* Someone holding the whole receipt key, both halves,
+    can sign receipts as `P`. A receipt counts only as a pass inside a
+    producer's bundle, for a draw that producer issued (§9.1, §9.2). A
+    forged pass makes `P`'s pair settle Served without serving, which pays
+    `P` from the epoch's reward. It benefits `P` alone.
+  - *What a stolen key cannot do.* It cannot cause a miss: a miss is the
+    absence of a receipt, and nobody asserts one (§1, *Derived, never
+    asserted*). So it cannot push `P` toward a slash. A forged pass also
+    gives an outsider nothing that a producer colluding with `P` could not
+    already arrange with `P`'s own key.
+  - *The FN-DSA half alone.* Recovering only the FN-DSA half forges
+    nothing, because the hybrid is nested and every signature needs the
+    Ed25519 half too. It matters only to an adversary who can also break
+    Ed25519. A receipt's value expires within an epoch (§6.3).
+  - *Other keys.* The receipt key is derived from the wallet seed under its
+    own labels and shares no seed with the identity key (§6.3). Recovering
+    it reveals neither the seed nor any other key.
+  - *Linking.* A per-key timing fingerprint links nothing the persona's
+    onion address does not already link.
+- **Severity.** Low. The worst outcome is that a recovered key lets `P` be
+  paid for passes it did not serve, which `P` and a colluding producer can
+  already arrange. The run is still owed: `CA-3`'s ruling closes the row on
+  measurement, not on this argument.
+- **The other FN-DSA signer.** The block producer's per-block witness key
+  signs one bundle with a fresh key (`shekyl-bundle-producer/src/ring.rs`),
+  and only its producer can trigger that. It gives an observer no repeated
+  samples.
+
+**Source read** (`fn-dsa-sign` 0.4.0, at source). Scope: the signing path
+from `SigningKey::sign`, and the operations on it that could make time
+depend on the key. It is not a line-by-line audit of the crate's 10,000
+lines.
+
+1. **Arithmetic.**
+   - x86_64 and aarch64 use the hardware's `f64` (`flr.rs:66-80`). Every
+     operation is strict IEEE-754 with no fused multiply-add (the comment at `flr.rs:41-63`).
+   - The crate's emulated backend (`flr_emu.rs`) is chosen by architecture
+     only. No feature selects it on x86_64 or aarch64.
+2. **Divisions and square roots: every signature, every operand derived
+   from the key alone.**
+   - The expanded key holds the secret basis in FFT form. Every signature
+     recomputes its Gram matrix (`lib.rs:575-600`) and decomposes it into
+     the LDL tree inside fast-Fourier sampling.
+   - At each node, `poly_LDL_fft` divides by the node's `g00` coefficients
+     (`sampler.rs:565`; `sampler_avx2.rs:333`). It calls the hardware
+     instructions directly:
+     - `_mm_div_pd` / `_mm_div_sd` on x86_64 SSE2 (`poly.rs:1130`, `:1148`);
+     - `_mm256_div_pd` on AVX2 (`poly_avx2.rs:393`);
+     - `vdivq_f64` / `vdiv_f64` on aarch64 (`poly.rs:1176`, `:1192`).
+   - Each leaf divides once (`FLR::ONE / g00_re`, `sampler.rs:512`;
+     `sampler_avx2.rs:280`) and takes two square roots (`.sqrt()`,
+     `sampler.rs:532`, `:553`; `sampler_avx2.rs:300`, `:321`).
+   - At n = 1024 that is about 4,600 tree divisions, 512 leaf divisions
+     and 1,024 square roots per signature.
+   - The message enters only the target vector, never these operands. So
+     an operand-dependent latency in them adds the same time to every
+     signature one key makes: a per-key constant. Averaging estimates it,
+     but it is one number per key. What it can carry about the key is
+     bounded by how finely that one number can be resolved, not by the
+     number of signatures. The registration's `fixed-a-vs-fixed-b` pass line is
+     the measurement that sees such a constant.
+   **What the devices promise about those instructions: nothing.**
+   - **Cortex-A72** (the floor device). Arm's optimisation guide (UAN 0016A)
+     gives FDIV double precision 6 to 18 cycles and FSQRT 6 to 32 (§3.10),
+     and vector FDIV F64 12 to 36 (§3.15). It calls each "performed using an
+     iterative algorithm". The guide does not say the range depends on the
+     operands, but it gives a range rather than one figure. The A72 is
+     Armv8.0 and has no `FEAT_DIT` (its ID_AA64PFR0_EL1 DIT field is
+     RES0). In Arm's A64 instruction descriptions, FDIV and FSQRT are not
+     among the instructions PSTATE.DIT affects in any case.
+   - **Tiger Lake** (the laptop). Intel's data-operand-independent-timing
+     list (document 768547) has no division or square root, integer or
+     floating point. Intel's guidance says that outside that subset "the
+     data values operated on could potentially affect the timing". The
+     published per-core latencies (uops.info, "≤ 13" cycles for DIVSD on
+     Ice Lake and Tiger Lake) are measured on fixed operands, so they say
+     nothing about operand dependence.
+   - **Falcon's own literature.** Pornin's "New Efficient, Constant-Time
+     Implementations of Falcon" (2019, §3.2) reports division and square
+     root on recent x86 as "mostly constant-time". The exceptions are a
+     divisor that is a power of two and a square-root operand that is a
+     power of four, a difference of under 10 cycles. The paper places
+     these operations in building the Falcon tree. This crate builds the
+     tree on every signature (`sampler.rs:565` inside `ffsamp_fft_inner`),
+     so for it they are on the signing path.
+   - So whether the floor device's divider shows these operands in its
+     timing is a question only the floor run answers.
+3. **`div_emu` and `sqrt_emu`.** They replace hardware division and square
+   root with integer emulation.
+   - The crate's README documents them for riscv64. In the code, neither is
+     gated by architecture (`flr_native.rs:512-525`, `:538-586`), so either
+     takes effect on x86_64 and aarch64.
+   - They reach only what goes through `FLR`: the leaf divisions (`Div`
+     calls `set_div`, `flr.rs:150-157`) and the square roots.
+   - The tree divisions in `poly_LDL_fft` call the intrinsics directly, so
+     `div_emu` does not reach them on any shipped target.
+4. **Work that depends on both the key and the message: the sampler.**
+   - The base sampler (`gaussian0`, `sampler.rs:241`) scans its whole
+     table, comparing arithmetically, with no branch on the sample.
+   - `Sampler::next` (`sampler.rs:132`) is a rejection loop with a scaled
+     Bernoulli trial (`ber_exp`, `sampler.rs:264`), so its iteration count
+     varies. The crate's argument is that the scaling decorrelates the
+     rejection rate from the centre and the deviation (the comment at
+     `sampler.rs:178-183`). The registered run tests that argument in
+     aggregate, over every coefficient of a signature.
+5. **The signing loop restarts** when a candidate is too long or does not
+   encode (`lib.rs:503`, `:729`, `:737`; up to 27 attempts). The seed it
+   uses is hedged with the hashed signing key (`lib.rs:289-296`).
+   - The crate's comment gives the failure rate as about 1 in 820 at
+     n = 1024 (`lib.rs:499`). The harness's development runs measured about
+     1 in 430: 464 restarts in 200,000 signatures.
+   - Whether the rate depends on the key is one of the registration's
+     lines.
+6. **AVX2.** It is chosen at decode, by a CPUID test at run time
+   (`lib.rs:248`; dispatch at `:209` and `:298`). It is the same algorithm on different code, so
+   both paths are registered.
+7. **Decoding.** The serve path decodes the key once, when the persona
+   first signs, and holds it (`HeldReceiptKey`,
+   `shekyl-engine-core/src/engine/stake_engine/types.rs`). Decoding is not
+   on the per-signature path. It refuses invalid keys on checks that depend
+   on the secret (`decode_inner`, `lib.rs:343-450`), but it runs once per
+   valid key and an outsider cannot repeat it.
+8. **Static verification is not available.** BINSEC 0.11.3, in the
+   checkct container this register uses, cannot model `mulsd`, `divsd`,
+   `sqrtsd` or `cvtsd2si`: each one ends the path, with verdict `unknown`.
+   - Shown by a probe with one instruction per entrypoint on secret
+     operands, beside a positive control that came back `insecure`
+     (`docs/formal/checkct/drivers/fpprobe.rs`; the record and disassembly
+     are in `results/2026-11-21/`).
+   - FN-DSA signing is built from those instructions, so no driver for it
+     can get a verdict from this tool on x86_64. BINSEC does not decode
+     aarch64 at all.
+   - A static check of the signer would need a tool that models SSE2
+     floating point. Even then, floating-point latency is outside what
+     BINSEC checks. The timing runs are the instrument.
+
+**If a run fails.** The options go to the maintainer with the threat model
+above. None is chosen before then.
+- **Emulated division and square root on the affected target.** It is not
+  enough as the crate stands: `div_emu` does not reach the tree divisions,
+  so `poly_LDL_fft` would need to route through `FLR`. That is a change
+  upstream, or in a fork. The README puts the cost of both features at
+  about 25 % of signing time on the core it names.
+- **Full floating-point emulation** (the crate's `flr_emu.rs`). No feature
+  selects it on x86_64 or aarch64, so it is also an upstream change or a
+  fork.
+- **Blinding the key's Gram matrix**, or **a different implementation**.
+- **Accepting the result within bounds**, given the severity above.

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use shekyl_wire::transaction::{COINBASE_RESERVE, MIN_BLOCK_WEIGHT};
-use shekyl_wire::{Ct, Transaction};
+use shekyl_wire::Transaction;
 
 const WARMUP: usize = 5;
 const SAMPLES: usize = 100;
@@ -77,10 +77,7 @@ fn hex_bytes(s: &str) -> Vec<u8> {
 }
 
 fn fee_of(tx: &Transaction) -> u64 {
-    match &tx.ct {
-        Ct::Fcmp { fee, .. } => *fee,
-        Ct::Null(_) => panic!("the parity spend is an FCMP++ transaction"),
-    }
+    tx.fee().expect("the parity spend is an FCMP++ transaction")
 }
 
 #[test]

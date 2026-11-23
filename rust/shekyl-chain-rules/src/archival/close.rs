@@ -299,13 +299,34 @@ pub fn closed_and_final<'id, V: ChainView<'id>>(
     at: BlockHeight,
     reorg_cap: BlockCount,
 ) -> Result<bool, ViewRead<V::Fault>> {
+    Ok(final_close_height(view, shard, at, reorg_cap)?.is_some())
+}
+
+/// The height that closed `shard`, when the shard is **closed and final**
+/// as of `at` ([`closed_and_final`]'s decision, which reads this); `None`
+/// when it is open, or closed less than `reorg_cap` below `at`.
+///
+/// One placement answers both questions a caller asks of a held shard:
+/// whether it is closed and final, and when it closed. CEN-J15 ages the
+/// close it returns rather than placing it a second time.
+///
+/// # Errors
+///
+/// As [`closed_and_final`].
+pub fn final_close_height<'id, V: ChainView<'id>>(
+    view: &V,
+    shard: ShardId,
+    at: BlockHeight,
+    reorg_cap: BlockCount,
+) -> Result<Option<BlockHeight>, ViewRead<V::Fault>> {
     if shard.to_raw() >= closed_shards_through(view, at)?.get() {
-        return Ok(false);
+        return Ok(None);
     }
     let closed_at = shard_close_height(view, shard, at)?;
     Ok(closed_at
         .checked_add(reorg_cap)
-        .is_some_and(|final_from| final_from <= at))
+        .is_some_and(|final_from| final_from <= at)
+        .then_some(closed_at))
 }
 
 /// The as-of-`E` snapshot: the operands [`epoch_close_compute`] folds
