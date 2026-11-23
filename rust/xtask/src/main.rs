@@ -309,7 +309,7 @@ fn check_toolchain(root: &Path, matrix: &Matrix) -> Result<(), String> {
 fn identity(root: &Path, matrix: &Matrix, options: &Options) -> Result<Identity, String> {
     let defaults = &matrix.version;
     let identity = match &options.version_override {
-        Some(v) => version::from_override(v, &defaults.release_name)?,
+        Some(v) => version::from_override_at(root, v, &defaults.release_name)?,
         None => version::from_git(
             &GitHead::read(root)?,
             &defaults.default,

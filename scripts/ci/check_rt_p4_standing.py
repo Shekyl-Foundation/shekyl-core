@@ -134,6 +134,9 @@ KNOWN_XTASK_CALLS = frozenset({
     "command.env(name, value);",
     'let out = Command::new("git")',
     ".args(args)",
+    # Whether the tree has git history: `--version-override` is refused if so.
+    'let mut git = Command::new("git");',
+    'git.args(["rev-parse", "--git-dir"]).current_dir(root);',
 })
 XTASK_CALL = re.compile(r"\.(?:env|envs|env_remove|env_clear|arg|args)\s*\(|Command::new")
 # The lines a descriptor runs the xtask on: the build, the host's Rust

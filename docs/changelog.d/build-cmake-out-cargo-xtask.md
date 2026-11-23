@@ -3,5 +3,6 @@
 - **A native release build gives `ring`'s C the host's hardening flags,** as a cross build always has.
 - **A commit is a release only when one tag matches the release grammar in full** (`v3.1.0`, `v3.1.0-alpha.12`). Other tags, such as `archive/...`, no longer make a build a release, and two release tags on one commit are refused. The staging, genesis and release-publishing checks now use this one grammar, so a tag without its `v`, with a capital `V` or with a leading zero is no longer read as a release. The existing `-RC1` tags stay recognised pre-releases, in exactly that spelling.
 - **The Windows archive's file times are now fixed,** but the archive is not yet independently reproducible: two builds still differ in 22 symbols that are never loaded.
+- **`--version-override` is for an exported source tree only.** On a checkout it is refused, because the tag decides.
 - **Off a release, an archive is named with the version its binaries report** (`shekyl-<host>-3.1.0-<commit>`). Releases keep their names.
 - **Removed:** `external/randomx` (the unused v1 submodule), the Dockerfile, the iOS CMake file and `utils/health`. The RandomX v2 C reference, used only by the differential harness, is built by `scripts/build_randomx_v2_ref.sh`.

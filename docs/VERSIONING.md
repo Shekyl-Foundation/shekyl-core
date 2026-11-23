@@ -202,8 +202,9 @@ For shekyl-core, `cargo xtask` computes the build version once
 - **Any other commit,** whatever other tags it carries (`archive/...`,
   `core-v3.1.0`): `[version] default` from `rust/xtask/matrix.toml`,
   with the 9-char commit hash (e.g., `3.1.0-1a2b3c4d5`).
-- **No git available:** `cargo xtask` refuses, and a source archive is
-  built with `--version-override <version>`.
+- **No git history:** `cargo xtask` refuses, and an exported source tree
+  is built with `--version-override <version>`. A checkout refuses the
+  override: there the tag decides.
 - **A plain `cargo build`:** `3.1.0-unknown`, not a release.
 
 For shekyl-gui-wallet, the `package.json` version is the source of

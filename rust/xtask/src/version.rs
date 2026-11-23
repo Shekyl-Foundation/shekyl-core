@@ -13,9 +13,11 @@
 //! - Any other commit, whatever other tags it carries (`archive/…`,
 //!   `core-v3.1.0`): the default version, tagged with the commit's first
 //!   nine hex digits.
-//! - No git work tree (a source archive): refused, unless the caller names
-//!   the version with `--version-override`, which is a release and takes
-//!   the same grammar without the `v`.
+//! - No git history (an exported source tree): refused, unless the caller
+//!   names the version with `--version-override`, which stands in for the
+//!   tag: it is a release and takes the same grammar without the `v`.
+//! - `--version-override` on a checkout: refused, because there the tag
+//!   decides.
 
 use std::path::Path;
 use std::process::Command;
@@ -107,8 +109,50 @@ pub fn from_git(head: &GitHead, default: &str, release_name: &str) -> Result<Ide
     })
 }
 
-/// The identity a caller names for a tree with no git history.
-pub fn from_override(version: &str, release_name: &str) -> Result<Identity, String> {
+/// The identity `--version-override` names, for a source tree with no git
+/// history. On a checkout the tag decides, so the override is refused.
+pub fn from_override_at(
+    root: &Path,
+    version: &str,
+    release_name: &str,
+) -> Result<Identity, String> {
+    override_identity(root, version, release_name, |_| {})
+}
+
+fn override_identity(
+    root: &Path,
+    version: &str,
+    release_name: &str,
+    configure: impl FnOnce(&mut Command),
+) -> Result<Identity, String> {
+    if let Some(found) = git_history(root, configure) {
+        return Err(format!(
+            "--version-override {version:?}: this source has git history ({found}), so its \
+             tag decides the version. Tag the commit, or build an exported tree with no `.git`"
+        ));
+    }
+    from_override(version, release_name)
+}
+
+/// Where this tree's git history is, if it has any: a `.git` at its root,
+/// or anything `git rev-parse --git-dir` finds from there. The first test
+/// holds where git cannot answer, as on a checkout another user owns.
+fn git_history(root: &Path, configure: impl FnOnce(&mut Command)) -> Option<String> {
+    let dot_git = root.join(".git");
+    if dot_git.exists() {
+        return Some(dot_git.display().to_string());
+    }
+    let mut git = Command::new("git");
+    git.args(["rev-parse", "--git-dir"]).current_dir(root);
+    configure(&mut git);
+    let out = git.output().ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// The identity a caller names, once the tree is known to have no history.
+fn from_override(version: &str, release_name: &str) -> Result<Identity, String> {
     if release_version(&format!("v{version}")).is_none() {
         return Err(format!(
             "--version-override {version:?} is not a release version: with a `v` \
@@ -297,6 +341,84 @@ mod tests {
         };
         let err = id.archive_version().expect_err("a slash");
         assert!(err.contains("cannot name an archive"), "{err}");
+    }
+
+    /// A directory of its own under the system's temporary folder, removed
+    /// when the test ends.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("xtask-version-{name}-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            if let Err(why) = std::fs::remove_dir_all(&self.0) {
+                eprintln!("{}: not removed: {why}", self.0.display());
+            }
+        }
+    }
+
+    /// Git sees only the scratch tree: no inherited repository, and no
+    /// discovery above the temporary folder.
+    fn isolated(git: &mut Command) {
+        git.env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir());
+    }
+
+    fn init_repository(dir: &Path) {
+        let mut git = Command::new("git");
+        git.args(["init", "-q"]).current_dir(dir);
+        isolated(&mut git);
+        assert!(git.status().expect("git runs").success(), "git init");
+    }
+
+    #[test]
+    fn an_override_on_a_checkout_is_refused() {
+        let tree = Scratch::new("checkout");
+        init_repository(&tree.0);
+        let err = override_identity(&tree.0, "3.1.0-alpha.13", "Shekyl NG", isolated)
+            .expect_err("a checkout");
+        assert!(err.contains("tag decides the version"), "{err}");
+    }
+
+    #[test]
+    fn an_override_below_a_checkouts_root_is_refused() {
+        let tree = Scratch::new("subdirectory");
+        init_repository(&tree.0);
+        let below = tree.0.join("exported");
+        std::fs::create_dir(&below).expect("a subdirectory");
+        let err = override_identity(&below, "3.1.0-alpha.13", "Shekyl NG", isolated)
+            .expect_err("git finds the repository above");
+        assert!(err.contains("tag decides the version"), "{err}");
+    }
+
+    #[test]
+    fn an_override_in_an_exported_tree_is_accepted() {
+        let tree = Scratch::new("exported");
+        let id = override_identity(&tree.0, "3.1.0-alpha.13", "Shekyl NG", isolated)
+            .expect("no git history");
+        assert_eq!(id.full, "3.1.0-alpha.13-release");
+        assert!(id.is_release);
+    }
+
+    #[test]
+    fn an_exported_tree_still_holds_the_override_to_the_grammar() {
+        let tree = Scratch::new("grammar");
+        for bad in ["v3.1.0", "03.1.0", "3.1", "$(id)"] {
+            assert!(
+                override_identity(&tree.0, bad, "Shekyl NG", isolated).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

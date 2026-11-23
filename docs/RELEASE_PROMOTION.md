@@ -95,6 +95,11 @@ because 17 of `shekyl-core`'s existing tags carry it; new tags use `rc`:
 `RELEASE_TAG_GRAMMAR` in `rust/xtask/src/version.rs` is canonical, and
 `scripts/ci/check_release_tag_grammar.py` holds every other reader to it.
 
+`cargo xtask --version-override <version>` stands in for a tag on an exported
+source tree, and takes the grammar without the `v`. It is refused on a checkout
+(a `.git` at the root, or `git rev-parse --git-dir` succeeds), because there
+the tag decides.
+
 The grammar covers git tags and no package version. The GUI has one mapping:
 its package version (`package.json`, synced to `src-tauri/Cargo.toml` and
 `tauri.conf.json`) is the tag without its `v`, with the first `-` written as
