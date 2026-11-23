@@ -605,8 +605,8 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   tx; `shekyl-pow-randomx` consumes the blob. Rename the crate (it's more than
   "tx-wire"); see §1/§4.
 - **Q6 — proof / Bp+ canonical-serialization coverage.** *(RESOLVED → freeze by
-  reference; **re-vetted 2026-11-21 on pin `4ea2c03215`** (the merge of fork PR #8,
-  the live pin), and before it on 2026-09-29 on `2485a176` (merged into the fork as
+  reference; **re-vetted 2026-11-23 on pin `6bf40e5118`** (the merge of fork PR #9,
+  the live pin), on 2026-11-21 on `4ea2c03215` (fork PR #8), and before it on 2026-09-29 on `2485a176` (merged into the fork as
   `3378433c`, with an identical crypto tree), earlier that day on `a08001f14c` and
   on 2026-06-25 on `2753111c50`)* The wire layer
   length-prefixes the FCMP++ proof as **opaque bytes** (`shekyl-wire`
@@ -675,6 +675,22 @@ Format: **ID — item.** *(status)* disposition / what's needed.
   `FCMP_PROOF_SIZE_KAT`, and the workspace suite is green, `shekyl-fcmp` 112
   passed and `shekyl-fcmp-proofs` 20 passed (9 566 passed in all). The freeze
   **holds** at `4ea2c03215`.
+
+  **Re-vet (2026-11-23, pin `4ea2c03215` → `6bf40e5118`, fork PR #9).**
+  `generalized-bulletproofs` is made correct in every build: the inner-product
+  prover takes no opening point (it folded one and never read it), vector
+  lengths are checked in every build, and the arithmetic-circuit prover is
+  formed from commitments computed from their openings, checking every length
+  and constraint in every build; `circuit-abstraction` gains prover and verifier
+  roles, and `fcmps` commits its tape's openings once. None of it reaches the
+  wire: the transcript never took the opening point, a commitment computed from
+  its opening is the point the tape computed (a branch's zero padding commits
+  to nothing), and the verifier is unchanged. Proof bytes are pinned:
+  `a_seeded_proof_is_pinned_byte_for_byte` (shekyl-fcmp, new) holds the
+  keccak256 of a seeded depth-1 proof and its pseudo-outs, computed at
+  `4ea2c03215` and equal at `6bf40e5118`; the seeded signer's FCMP++ proof,
+  Bp+ and pseudo-outs were byte-identical at 1/1, 2/3, 8/4 and 2/24
+  inputs/depth. The freeze **holds** at `6bf40e5118`.
 - **Q7 — tag-numbering decision.** *(RESOLVED → clean dense renumber)* Monero is a
   proven *pattern*, not a *basis*: tags renumbered to the §2.0 dense scheme
   (inputs `0x00`–`0x04`, outputs `0x00`–`0x01`, ct `Null=0x00`/`Fcmp=0x01`); dead
