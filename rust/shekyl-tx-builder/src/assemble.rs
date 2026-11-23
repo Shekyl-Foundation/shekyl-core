@@ -23,7 +23,6 @@
 //! A spend with no extra input seals with an empty signature list.
 
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_fcmp::PqcKeyScalar;
 use shekyl_network::NetworkId;
 use shekyl_types::SigningPayloadHash;
 use shekyl_wire::Input;
@@ -172,25 +171,6 @@ fn open_spend_with(
             layout.key_images.len()
         )));
     }
-    // The membership proof was verified against `signed.key_images` when it
-    // was made (`sign_with`'s step 8); the prefix must carry those images, or
-    // the consensus verifier, which reads them from the prefix, refuses it.
-    if signed.key_images.len() != spend_slots {
-        return Err(TxBuilderError::WireError(format!(
-            "the proof's key images ({}) and spend inputs ({spend_slots}) disagree",
-            signed.key_images.len()
-        )));
-    }
-    if let Some(index) = layout
-        .key_images
-        .iter()
-        .zip(&signed.key_images)
-        .position(|(laid, proved)| laid != proved.as_bytes())
-    {
-        return Err(TxBuilderError::WireError(format!(
-            "key image {index} is not the image the membership proof was verified against"
-        )));
-    }
     if layout.slots.spend.len() != spend_slots {
         return Err(TxBuilderError::WireError(format!(
             "spend auth slots ({}) and spend inputs ({spend_slots}) disagree",
@@ -204,30 +184,7 @@ fn open_spend_with(
             layout.extra_inputs.len()
         )));
     }
-    // The membership proof was verified against `signed.pqc_keys`; each spend
-    // slot must carry the key those scalars were derived from, as the consensus
-    // verifier derives them from the slot.
-    if signed.pqc_keys.len() != spend_slots {
-        return Err(TxBuilderError::WireError(format!(
-            "the proof's PQC keys ({}) and spend inputs ({spend_slots}) disagree",
-            signed.pqc_keys.len()
-        )));
-    }
-    if let Some(index) =
-        layout
-            .slots
-            .spend
-            .iter()
-            .zip(&signed.pqc_keys)
-            .position(|(slot_key, proved)| {
-                PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), slot_key).as_ref()
-                    != Some(proved)
-            })
-    {
-        return Err(TxBuilderError::WireError(format!(
-            "spend slot {index}'s key is not the key the membership proof was verified against"
-        )));
-    }
+    signed.hold_spend_layout(&layout.key_images, &layout.slots.spend)?;
 
     let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .map_err(|e| TxBuilderError::WireError(format!("bulletproof parse: {e}")))?;
@@ -404,6 +361,7 @@ impl OpenSpend {
 mod tests {
     use super::*;
     use crate::types::SignedProofs;
+    use shekyl_fcmp::PqcKeyScalar;
     use shekyl_types::{BlockHash, KeyImage};
     use shekyl_units::AtomicUnits;
 
@@ -498,7 +456,7 @@ mod tests {
         layout.key_images[0][0] ^= 1;
         let err = open_spend(blank_signed(), &[blank_spend()], layout, &[0; 16]).unwrap_err();
         assert!(
-            matches!(&err, TxBuilderError::WireError(reason)
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
                 if reason.contains("not the image the membership proof was verified against")),
             "{err:?}"
         );
@@ -510,8 +468,8 @@ mod tests {
         signed.key_images.clear();
         let err = open_spend(signed, &[blank_spend()], layout_with(1, 0, 0), &[0; 16]).unwrap_err();
         assert!(
-            matches!(&err, TxBuilderError::WireError(reason)
-                if reason.contains("the proof's key images (0) and spend inputs (1) disagree")),
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("key images (1) and the proof's (0) disagree")),
             "{err:?}"
         );
     }
@@ -522,7 +480,7 @@ mod tests {
         layout.slots.spend[0] = slot_key(6);
         let err = open_spend(blank_signed(), &[blank_spend()], layout, &[0; 16]).unwrap_err();
         assert!(
-            matches!(&err, TxBuilderError::WireError(reason)
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
                 if reason.contains("spend slot 0's key is not the key the membership proof")),
             "{err:?}"
         );
@@ -534,8 +492,8 @@ mod tests {
         signed.pqc_keys.clear();
         let err = open_spend(signed, &[blank_spend()], layout_with(1, 0, 0), &[0; 16]).unwrap_err();
         assert!(
-            matches!(&err, TxBuilderError::WireError(reason)
-                if reason.contains("the proof's PQC keys (0) and spend inputs (1) disagree")),
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("spend slots (1) and the proof's PQC keys (0) disagree")),
             "{err:?}"
         );
     }

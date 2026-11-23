@@ -254,6 +254,60 @@ pub(crate) mod support {
         }
     }
 
+    /// The path ordinary transfers and drains share holds the transaction to
+    /// what its proof verified: its own key images and slot keys assemble, and
+    /// another key image, another slot key or a missing image is the signer's
+    /// `membership-self-check` fault. Red edit: drop `hold_spend_layout` from
+    /// `assemble_transfer_wire`.
+    #[test]
+    fn a_transfer_carrying_what_its_proof_did_not_verify_is_refused_at_assembly() {
+        use crate::engine::error::KeyEngineError;
+        use crate::engine::sign_bridge::assemble_transfer_wire;
+        use shekyl_tx_builder::{InternalSignFault, SignFault};
+
+        let cell = kat_cell(2, 1).expect("a cell");
+        let signed = cell.sign().expect("it signs");
+        let images: Vec<[u8; 32]> = signed.key_images.iter().map(|i| *i.as_bytes()).collect();
+        let slot_keys: Vec<Vec<u8>> = cell
+            .spend_inputs
+            .iter()
+            .map(|input| {
+                let combined: &[u8; 64] = input.combined_ss[..].try_into().expect("64 bytes");
+                shekyl_crypto_pq::derivation::derive_pqc_public_key(combined, input.output_index)
+                    .expect("a hybrid key")
+            })
+            .collect();
+        let assemble = |images: Vec<[u8; 32]>, slot_keys: &[Vec<u8>]| {
+            assemble_transfer_wire(
+                images,
+                vec![[2; 32]],
+                vec![Some(1)],
+                Vec::new(),
+                cell.fee.to_raw(),
+                signed.clone(),
+                slot_keys,
+            )
+        };
+        assemble(images.clone(), &slot_keys).expect("its own layout assembles");
+
+        let mut other_image = images.clone();
+        other_image[1][0] ^= 1;
+        let mut other_key = slot_keys.clone();
+        other_key.swap(0, 1);
+        for refused in [
+            assemble(other_image, &slot_keys),
+            assemble(images.clone(), &other_key),
+            assemble(images[..1].to_vec(), &slot_keys[..1]),
+        ] {
+            assert!(matches!(
+                refused,
+                Err(KeyEngineError::Sign(SignFault::Internal(
+                    InternalSignFault::MembershipSelfCheck
+                )))
+            ));
+        }
+    }
+
     #[test]
     #[ignore = "timing: run in release with --ignored --nocapture; prices the prover (rule 76)"]
     fn time_sign_transaction_by_shape() {

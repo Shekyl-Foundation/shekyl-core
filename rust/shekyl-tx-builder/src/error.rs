@@ -168,7 +168,10 @@ pub enum TxBuilderError {
     /// spend-slot PQC keys, tree root, layer count and `tx_signable` the
     /// daemon will use, it does not verify. A prover fault, or a tree path
     /// that does not reach the root the wallet was given, caught before the
-    /// spend leaves the wallet rather than as a daemon rejection.
+    /// spend leaves the wallet rather than as a daemon rejection. Also a
+    /// transaction assembled with key images or spend-slot keys other than
+    /// those the proof verified against
+    /// ([`SignedProofs::hold_spend_layout`](crate::SignedProofs::hold_spend_layout)).
     #[error("construct-side membership self-check failed: {0}")]
     MembershipSelfCheck(String),
 }

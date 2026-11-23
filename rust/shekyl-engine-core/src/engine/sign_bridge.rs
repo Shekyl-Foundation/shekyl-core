@@ -110,6 +110,14 @@ pub(super) fn assemble_transfer_wire(
             detail: "assemble_transfer_wire: pqc_pubkeys length must equal key_images length",
         });
     }
+    // The cached key images and the slots' keys are what the daemon will read:
+    // held here to what the signer's membership self-verify proved against.
+    signed
+        .hold_spend_layout(&key_images, pqc_pubkeys)
+        .map_err(|e| {
+            tracing::debug!(error = %e, "the transfer's layout is not what its proof verified");
+            KeyEngineError::Sign(e.fault())
+        })?;
 
     let bulletproof =
         Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice()).map_err(|_| {
@@ -137,7 +145,7 @@ pub(super) fn assemble_transfer_wire(
             .iter()
             .map(|pk| PqcAuth {
                 auth_version: shekyl_tx_builder::PQC_AUTH_VERSION,
-                scheme: shekyl_tx_builder::PqcScheme::Single,
+                scheme: shekyl_tx_builder::SPEND_SLOT_SCHEME,
                 signature: Vec::new(),
                 public_key: pk.clone(),
             })

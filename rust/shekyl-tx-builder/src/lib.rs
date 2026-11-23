@@ -105,7 +105,7 @@ pub use sign::{
 };
 pub use types::{
     LeafEntry, OutputInfo, PqcAuth, PqcScheme, SignedProofs, SpendInput, TreeContext,
-    PQC_AUTH_VERSION,
+    PQC_AUTH_VERSION, SPEND_SLOT_SCHEME,
 };
 
 /// Cleartext balance terms, re-exported so `sign_transaction_with_terms`
