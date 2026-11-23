@@ -1513,7 +1513,8 @@ mod tests {
         /// The signed message.
         const SIGNABLE: [u8; 32] = [0xAB; 32];
         /// `keccak256(proof || pseudo_outs)` at the pin.
-        const PINNED_DIGEST: &str = "dcb32df4750a5b50aae3d13442e2fbe334ec7484a90b595ad9d694ccb517dcbc";
+        const PINNED_DIGEST: &str =
+            "dcb32df4750a5b50aae3d13442e2fbe334ec7484a90b595ad9d694ccb517dcbc";
         let tree_depth: u8 = 1;
         let f = depth1_fixture(&mut rand_chacha::ChaCha20Rng::seed_from_u64(FIXTURE_SEED));
         let proved = prove_inner(
