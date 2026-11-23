@@ -1097,8 +1097,9 @@ change.
   nothing compared the Rust `RMarket` and `SigmaWork` rows with the
   daemon's before this step and nothing does after it. The two now
   differ by ruling, in timing and in content. Which families stay
-  compared is decided when that chain is re-captured from Rust, which is
-  `DEL-008`'s re-baseline.
+  compared is decided on Chain L, the corpus chain that crosses an epoch
+  (`CHAIN_FORGE.md` §12.2); the emission walk's Rust capture is a run
+  record, not a corpus.
 
 Tests: the end-to-end claim (`scenario_emission_tests`, live lane) issues
 three passed draws, asserts the pass's gather against the arithmetic,
