@@ -163,7 +163,7 @@ pub(crate) async fn assemble_signed_bond_post(
     })
     .await
     .map_err(|e| BondAssemblyError::build("proving offload join", e))?
-    .map_err(|e| BondAssemblyError::build("proving", e))?;
+    .map_err(|e| BondAssemblyError::signer("proving", &e))?;
 
     let output_amounts = vec![0; output_keys.len()];
     let open = open_spend(
@@ -184,7 +184,7 @@ pub(crate) async fn assemble_signed_bond_post(
         },
         &args.network,
     )
-    .map_err(|e| BondAssemblyError::build("open spend", e))?;
+    .map_err(|e| BondAssemblyError::signer("open spend", &e))?;
     let bond_sig = {
         let bond_payload = open
             .sole_extra_payload()

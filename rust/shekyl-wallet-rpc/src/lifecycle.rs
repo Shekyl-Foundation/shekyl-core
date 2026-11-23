@@ -928,6 +928,7 @@ pub(crate) async fn stake(
                 E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
                     "stake failed mid-flow ({d}); call stake again to resume"
                 )),
+                E::Signer(fault) => fault.into(),
                 // A designed refusal with a named remedy, not an internal
                 // fault and not a funding problem: shard assignment is an
                 // unbuilt round, so market staking has nothing to bond over

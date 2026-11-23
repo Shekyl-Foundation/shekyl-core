@@ -1023,3 +1023,47 @@ fn a_sync_refusal_flattens_to_the_resyncing_disposition() {
         other => panic!("a sync refusal must not present as a different remedy: {other:?}"),
     }
 }
+
+/// The signer's fault keeps its type from the assembly to every public
+/// staking error, on each road a refusal takes. Red edit: drop the
+/// `sign_fault` check from any one of the four mappings.
+#[test]
+fn a_signer_fault_keeps_its_type_through_every_staking_lane() {
+    use crate::engine::bond_assembly::BondAssemblyError;
+    use crate::engine::drain_assembly::DrainAssemblyError;
+    use crate::engine::drain_facade::DrainToPrincipalError;
+    use shekyl_tx_builder::{InternalSignFault, SignFault};
+
+    let fault = SignFault::Internal(InternalSignFault::MembershipSelfCheck);
+    let bond = || StakeEngineError::Assembly(BondAssemblyError::Signer(fault));
+    let drain = || StakeEngineError::DrainAssembly(DrainAssemblyError::Signer(fault));
+
+    assert!(matches!(
+        DrainToPrincipalError::from(DrainRequestError::Drain(DrainOrchestrationError::Stake(
+            drain()
+        ))),
+        DrainToPrincipalError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        DrainToPrincipalError::from(DrainRequestError::Stake(drain())),
+        DrainToPrincipalError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        flatten_collect_error(DrainRequestError::Drain(DrainOrchestrationError::Stake(
+            drain()
+        ))),
+        CollectUnstakedError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        flatten_collect_error(DrainRequestError::Stake(drain())),
+        CollectUnstakedError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        flatten_unstake_error(ReleaseRequestError::Stake(bond())),
+        UnstakeError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        crate::engine::bond_orchestrator::post_assembly_failure(bond()),
+        crate::engine::bond_orchestrator::FirstStakeError::Signer(f) if f == fault
+    ));
+}

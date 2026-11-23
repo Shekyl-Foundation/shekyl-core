@@ -166,6 +166,12 @@ pub(crate) enum DrainAssemblyError {
         /// Rendered cause.
         detail: String,
     },
+
+    /// The signer refused the drain, with its own bounded fault, which
+    /// reaches the wallet RPC as it does for a transfer. Nothing was
+    /// persisted (§3.6).
+    #[error("the signer refused the drain: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
 }
 
 impl DrainAssemblyError {
@@ -175,6 +181,13 @@ impl DrainAssemblyError {
             stage,
             detail: err.to_string(),
         }
+    }
+
+    /// The signer's refusal: its detail goes to the log, and its typed fault
+    /// travels on.
+    fn signer(err: &shekyl_tx_builder::TxBuilderError) -> Self {
+        tracing::debug!(error = %err, "the signer refused a drain");
+        Self::Signer(err.fault())
     }
 }
 
@@ -425,7 +438,7 @@ pub(super) async fn assemble_drain_tx(
     })
     .await
     .map_err(|e| DrainAssemblyError::build("drain proving offload join", e))?
-    .map_err(|e| DrainAssemblyError::build("drain proving", e))?;
+    .map_err(|e| DrainAssemblyError::signer(&e))?;
 
     // ── Step 7: assemble the wire input through the SHARED transfer-wire
     // constructor (`sign_bridge::assemble_transfer_wire`) — the exact same
@@ -447,7 +460,10 @@ pub(super) async fn assemble_drain_tx(
         signed,
         &pqc_pubkeys,
     )
-    .map_err(|e| DrainAssemblyError::build("drain wire assembly", e))?;
+    .map_err(|e| match e {
+        super::error::KeyEngineError::Sign(fault) => DrainAssemblyError::Signer(fault),
+        other => DrainAssemblyError::build("drain wire assembly", other),
+    })?;
 
     // ── Step 8: PQC auth completion (fast; inline). One payload hash per spend
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a

@@ -408,7 +408,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                 &[],
                 &tree,
             )
-            .map_err(|e| StakeEngineError::from(BondAssemblyError::build("proving", e)))?;
+            .map_err(|e| StakeEngineError::from(BondAssemblyError::signer("proving", &e)))?;
             // Step-7 self-check, backing leg: the landed consensus verifier
             // over the assembled vin (cause-blind on refusal, CB-5).
             if let Err(e) =
@@ -462,7 +462,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             },
             &self.network,
         )
-        .map_err(|e| BondAssemblyError::build("open spend", e))?;
+        .map_err(|e| BondAssemblyError::signer("open spend", &e))?;
         drop(spend_inputs); // secrets end here; nothing below needs them
 
         // ── Step 18: remaining self-check legs (fast; inline). Claims leg:

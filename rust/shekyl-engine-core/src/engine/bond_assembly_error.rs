@@ -169,6 +169,12 @@ pub(crate) enum BondAssemblyError {
         /// Rendered cause.
         detail: String,
     },
+
+    /// The signer refused the spend, with its own bounded fault, which
+    /// reaches the wallet RPC as it does for a transfer. Nothing was
+    /// persisted (§3.6).
+    #[error("the signer refused the spend: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
 }
 
 impl BondAssemblyError {
@@ -178,5 +184,12 @@ impl BondAssemblyError {
             stage,
             detail: err.to_string(),
         }
+    }
+
+    /// The signer's refusal at `stage`: its detail goes to the log, and its
+    /// typed fault travels on.
+    pub(crate) fn signer(stage: &'static str, err: &shekyl_tx_builder::TxBuilderError) -> Self {
+        tracing::debug!(stage, error = %err, "the signer refused a bond-family spend");
+        Self::Signer(err.fault())
     }
 }

@@ -591,8 +591,11 @@ info:
   # verify is refused as its own fault beside balance-self-check. It names a
   # prover fault, a tree path that does not reach the wallet's root, or a
   # transaction assembled with key images or spend-slot keys other than those
-  # the proof verified against: a bug, as every builder invariant is.
-  # api_version stays 1.
+  # the proof verified against: a bug, as every builder invariant is. Every
+  # path that signs answers a signer fault the same way, so stake, drain,
+  # unstake and collect_unstaked now return -29119 (or the code of a fault the
+  # user can act on) where they returned -32603. A stake refused here keeps
+  # its durable slot, and calling stake again resumes it. api_version stays 1.
   version: 0.23.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -1182,8 +1185,10 @@ components:
                                           wallet could not read. Distinct from
                                           -29102 (no answer) and -29109 (an
                                           answer refused as unreasonable)
-          -29119 SIGNER_FAILED            build: the wallet's own signer hit
-                                          an internal fault — a bug, never
+          -29119 SIGNER_FAILED            build (a send, stake, drain,
+                                          unstake or collect_unstaked): the
+                                          wallet's own signer hit an
+                                          internal fault — a bug, never
                                           the request's doing (data:
                                           {"fault"}, one keyword: a builder
                                           invariant — no-inputs, no-outputs,
