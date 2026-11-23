@@ -148,6 +148,10 @@ pub struct Scenario<P> {
     path: TestPath,
 }
 
+/// Where the template counter starts on an adopted store: above any count
+/// of templates a forging makes.
+const ADOPTED_STORE_TX_SECRETS: u64 = 1 << 40;
+
 /// The rules every scenario runs under: regtest at fixed difficulty one,
 /// so a nonce of zero satisfies any longhash — real or free — and the
 /// subject stays the chain, not the search. The driver mines its own
@@ -1013,6 +1017,20 @@ impl<P: Pow> Scenario<P> {
         self.stop_connector().await;
         edit(self.path.path());
         self.start_connector();
+    }
+
+    /// Continue this driver on a store `place` writes over its file: a
+    /// snapshot's copy (`crate::snapshot`). The clock moves to the tip's
+    /// time, and the template counter past any a forging used, so a coinbase
+    /// mined here never repeats a key the snapshot's chain paid.
+    pub async fn adopt_store(
+        &mut self,
+        place: impl FnOnce(&std::path::Path),
+        tip_timestamp: Timestamp,
+    ) {
+        self.reopen(place).await;
+        self.substrate.set_now(tip_timestamp);
+        self.next_tx_secret = ADOPTED_STORE_TX_SECRETS;
     }
 
     /// Every table of the store as stored bytes (`TableRows`), for a

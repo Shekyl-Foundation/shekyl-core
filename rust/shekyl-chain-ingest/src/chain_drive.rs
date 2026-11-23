@@ -228,6 +228,26 @@ pub fn spender_owning_before(
     spender
 }
 
+/// The block of `chain` at `height`. A chain mined from genesis is indexed
+/// by height; one resumed from a snapshot starts at its first block mined
+/// since.
+///
+/// # Panics
+///
+/// If `chain` holds no block at `height`.
+#[must_use]
+pub fn block_at(chain: &[Mined], height: BlockHeight) -> &Mined {
+    let first = chain.first().expect("a chain with a block").height.to_raw();
+    let at = height
+        .to_raw()
+        .checked_sub(first)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .and_then(|offset| chain.get(offset))
+        .unwrap_or_else(|| panic!("the chain holds no block at {height}"));
+    assert_eq!(at.height, height, "a chain's blocks are consecutive");
+    at
+}
+
 /// Feed `spender` every block of `chain` it has not seen.
 pub fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
     for block in &chain[*seen..] {
@@ -434,12 +454,12 @@ impl Driven {
         }
     }
 
-    /// The height of the next block. Mined from genesis, the chain's length
-    /// is that height.
+    /// The height of the next block, one past the last held. A chain resumed
+    /// from a snapshot holds only the blocks mined since.
     pub fn height(&self) -> BlockHeight {
-        BlockHeight::from_raw(
-            u64::try_from(self.chain.len()).expect("a test chain's length is a height"),
-        )
+        self.chain
+            .last()
+            .map_or(BlockHeight::ZERO, |tip| tip.height + BlockCount::ONE)
     }
 
     /// The scenario and the chain back, for a caller that mines on past

@@ -371,7 +371,7 @@ pub async fn bundle_for(
         .expect("a drawing block has a parent");
     let anchor = Anchor {
         height: parent,
-        hash: mined[usize::try_from(parent.to_raw()).expect("a test chain's length")].hash,
+        hash: crate::chain_drive::block_at(mined, parent).hash,
     };
     let filed = file_passes(
         h,

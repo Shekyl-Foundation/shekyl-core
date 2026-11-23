@@ -149,6 +149,8 @@ mod cache_window;
 pub mod chain_drive;
 #[cfg(feature = "pipeline")]
 mod chain_facts;
+#[cfg(all(test, feature = "pipeline"))]
+mod chain_l;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;

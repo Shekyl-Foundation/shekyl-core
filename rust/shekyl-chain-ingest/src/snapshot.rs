@@ -42,7 +42,7 @@ use shekyl_hasher::Hasher;
 
 use crate::metrics::Metrics;
 use crate::pipeline::PipelineConfig;
-use crate::rebaseline::{horizons, replay_corpus_through, ReplayFault};
+use crate::rebaseline::{horizons, publish_bytes, replay_corpus_through, ReplayFault};
 use crate::schedule::ChainRules;
 use crate::source::SequenceNo;
 use crate::trace::{Digest, Trace, TraceFault};
@@ -251,7 +251,7 @@ fn file_sha256(path: &Path) -> io::Result<String> {
 }
 
 /// Seal the closed store in `dir` as `key`'s snapshot at `record`. Written
-/// through a rename, so a seal on disk is a whole one.
+/// through the tree's one replace, so a seal on disk is a whole one.
 ///
 /// # Errors
 ///
@@ -262,9 +262,7 @@ pub fn seal(dir: &Path, key: &SnapshotKey, record: SequenceNo) -> Result<(), Sna
         record: record.to_raw(),
         file_sha256: file_sha256(&dir.join(STORE_FILE))?,
     };
-    let staged = dir.join(format!("{SEAL_FILE}.new"));
-    fs::write(&staged, serde_json::to_vec_pretty(&seal)?)?;
-    fs::rename(&staged, dir.join(SEAL_FILE))?;
+    publish_bytes(&dir.join(SEAL_FILE), &serde_json::to_vec_pretty(&seal)?)?;
     Ok(())
 }
 
