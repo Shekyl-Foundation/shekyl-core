@@ -584,7 +584,14 @@ info:
   # verify this session, and what the refill did, beside the last check
   # that completed (its height and how many shards it read), absent until
   # one does. api_version stays 1.
-  version: 0.22.0
+  # 0.23.0: -29119 SIGNER_FAILED's data.fault gains membership-self-check
+  # (Rick, 2026-11-22). The builder verifies the FCMP++ membership proof it
+  # has just made, under the consensus verifier and the operands the daemon
+  # will use, before the spend leaves the wallet; a proof that does not
+  # verify is refused as its own fault beside balance-self-check. It names a
+  # prover fault or a tree path that does not reach the wallet's root, a
+  # bug, as every builder invariant does. api_version stays 1.
+  version: 0.23.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
