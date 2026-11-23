@@ -89,7 +89,9 @@ The count needs line tables, and line tables move code elsewhere in the binary.
 So each target compares the two builds function by function. All 68 functions
 holding fips204 code in `fips204_branch_subject` are instruction-identical with
 and without line tables on x86_64 and on aarch64, and all 86 in the Windows
-binary. Data addresses are masked in that comparison.
+binary. Data addresses are masked in that comparison. The Windows comparison also
+masks external call targets, so it does not show that a call reaches the same
+callee.
 
 ## The sweep
 
