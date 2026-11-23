@@ -135,6 +135,17 @@ impl ListenAddr {
     }
 }
 
+/// The option naming the Tor binary a serving wallet runs, on both wallet
+/// binaries (`INPUT_GRAMMAR.md` §12.1, §12.4). Unset is discovery; a path
+/// that is relative or names no file refuses the start
+/// ([`shekyl_engine_core::TorFile`]).
+pub const TOR_FILE_OPTION: &str = "tor-file";
+
+/// The resolved `tor-file` option a host passes in ([`ServerConfig::tor_file`],
+/// [`spawn_in_process`]), and its refusal, re-exported so a host reaches them
+/// through this crate.
+pub use shekyl_engine_core::{TorFile, TorFileRefused};
+
 /// Server configuration.
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -152,6 +163,10 @@ pub struct ServerConfig {
     /// Argon2id cost for `create_wallet` / password rotation.
     /// Production uses [`KdfParams::default`]; tests may clamp.
     pub kdf: KdfParams,
+    /// The `tor-file` option, resolved: the Tor binary a serving wallet
+    /// runs. Machine-scoped, so an option of the process, never stored with
+    /// a wallet.
+    pub tor_file: shekyl_engine_core::TorFile,
 }
 
 /// Manual (not derived): the daemon address may carry digest credentials in
@@ -166,6 +181,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("daemon", &self.daemon)
             .field("auth", &self.auth)
             .field("kdf", &self.kdf)
+            .field("tor_file", &self.tor_file)
             .finish()
     }
 }
@@ -202,6 +218,7 @@ impl AppState {
                 config.wallet_dir,
                 config.network,
                 config.daemon,
+                config.tor_file,
             )),
             auth: Arc::new(config.auth),
             kdf: config.kdf,
@@ -1040,12 +1057,17 @@ pub async fn spawn_in_process(
     wallet_dir: PathBuf,
     network: Network,
     daemon: DaemonTarget,
+    tor_file: shekyl_engine_core::TorFile,
 ) -> Result<InProcessHandle, BoxErr> {
     #[cfg(unix)]
     {
         let socket = private_socket::create(next_spawn())?;
         let listen = ListenAddr::Uds(socket.path().join(SOCKET_FILE));
-        match spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await {
+        match spawn_in_process_with(private_config(
+            listen, wallet_dir, network, daemon, tor_file,
+        ))
+        .await
+        {
             Ok(mut handle) => {
                 handle.socket = Some(socket);
                 Ok(handle)
@@ -1066,7 +1088,10 @@ pub async fn spawn_in_process(
         let owner = shekyl_win_sec::current_user_sid()?;
         let name = shekyl_win_sec::self_hosted_pipe_name(&owner, next_spawn());
         let listen = ListenAddr::SelfHostedPipe(SelfHostedPipe { name });
-        spawn_in_process_with(private_config(listen, wallet_dir, network, daemon)).await
+        spawn_in_process_with(private_config(
+            listen, wallet_dir, network, daemon, tor_file,
+        ))
+        .await
     }
 }
 
@@ -1077,6 +1102,7 @@ fn private_config(
     wallet_dir: PathBuf,
     network: Network,
     daemon: DaemonTarget,
+    tor_file: shekyl_engine_core::TorFile,
 ) -> ServerConfig {
     ServerConfig {
         listen,
@@ -1085,6 +1111,7 @@ fn private_config(
         daemon,
         auth: AuthConfig::Disabled,
         kdf: KdfParams::default(),
+        tor_file,
     }
 }
 
@@ -1239,6 +1266,7 @@ mod tests {
             daemon: endpoint.clone(),
             auth: AuthConfig::from_rpc_login("rpcuser:opensesame").expect("login parses"),
             kdf: KdfParams::default(),
+            tor_file: TorFile::discover(),
         };
 
         for rendered in [
@@ -1270,6 +1298,7 @@ mod tests {
             daemon: DaemonTarget::address("http://127.0.0.1:1"),
             auth,
             kdf: KdfParams::default(),
+            tor_file: TorFile::discover(),
         }
     }
 

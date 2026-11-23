@@ -93,6 +93,7 @@ fn run_child_if_asked() -> bool {
         },
         auth: AuthConfig::Disabled,
         kdf: shekyl_crypto_pq::wallet_envelope::KdfParams::default(),
+        tor_file: shekyl_wallet_rpc::server::TorFile::discover(),
     };
     if mode == BEFORE_THE_ARM {
         send("TERM", std::process::id());

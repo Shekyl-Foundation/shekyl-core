@@ -16,7 +16,6 @@ use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::{LedgerIndexes, StakingBlock, WalletLedger};
 
 use crate::engine::error::{IoError, KeyError, OpenError};
@@ -38,7 +37,6 @@ impl Engine<SoloSigner> {
         master_seed: &[u8; MASTER_SEED_BYTES],
         mut ledger: WalletLedger,
         indexes: LedgerIndexes,
-        prefs: WalletPrefs,
         daemon: DaemonClient,
         network: Network,
         capability: Capability,
@@ -181,10 +179,6 @@ impl Engine<SoloSigner> {
             &id_of_slot,
         )?;
 
-        let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
-            &file.opened_keys().file_kek,
-            file.expected_classical_address(),
-        );
         // `WSS-Q1`(a): the body store belongs to the stake actor, and only
         // a staker opens one. `file_kek` is wiped on the next line, so the
         // key is derived here, and only when a stake engine will spawn.
@@ -360,14 +354,12 @@ impl Engine<SoloSigner> {
         Ok(Self {
             persistence: file,
             state_wrap_key,
-            prefs_hmac_key,
             key,
             curve_tree,
             merge_view_secret,
             ledger,
             pending,
             submit_driver,
-            prefs,
             daemon,
             network,
             capability,

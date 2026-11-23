@@ -11,7 +11,6 @@ use shekyl_address::Network;
 use shekyl_crypto_pq::account::SEED_BYTES;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_engine_prefs::WalletPrefs;
 
 use crate::engine::local_ledger::LocalLedger;
 use crate::engine::local_refresh::LocalRefresh;
@@ -256,9 +255,6 @@ pub struct EngineCreateParams<'a> {
     /// CLI-ephemeral safety overrides. Provisioning passes
     /// [`SafetyOverrides::none`].
     pub overrides: SafetyOverrides,
-    /// Initial preferences value to persist alongside the wallet
-    /// file pair.
-    pub prefs: WalletPrefs,
 }
 
 #[cfg(test)]
@@ -267,8 +263,8 @@ impl<'a> EngineCreateParams<'a> {
     /// with the supplied `base_path`, `credentials`, and `seed`, and pins
     /// all other fields to known-good defaults: `Network::Stagenet`,
     /// `creation_timestamp = 0`, `restore_height_hint = 0`,
-    /// minimum-wall-clock KDF, [`SafetyOverrides::none`], and
-    /// [`WalletPrefs::default`]. Any 32 bytes are a seed.
+    /// minimum-wall-clock KDF and [`SafetyOverrides::none`]. Any 32 bytes
+    /// are a seed.
     pub(crate) fn for_test_full(
         base_path: &'a Path,
         credentials: &'a Credentials<'a>,
@@ -290,7 +286,6 @@ impl<'a> EngineCreateParams<'a> {
                 p: 1,
             },
             overrides: SafetyOverrides::none(),
-            prefs: WalletPrefs::default(),
         }
     }
 }

@@ -19,7 +19,7 @@ It is not “you forgot modules.” Looking at the tree:
 | 7 Stage‑1 traits | Composition root with **7 type params + ~15 fields** |
 | `KeyActor` / `CurveTreeActor` | **Inherent API surface** for almost every user action |
 | Local* implementors | **Cross-domain orchestration** (refresh ↔ merge ↔ pending ↔ submit ↔ stake ↔ pscan) |
-| File / prefs / units crates | **Remaining FILE-baselined modules** (over `NEW_FILE_CAP` 1200): `pscan/scan_step` ~1.9k, `transfer/engine` ~1.8k, `engine/mod` ~1.4k, `local_refresh` ~1.3k, `backing_set` ~1.3k. Carved: `local_pending_tx`, `stake_engine`, `lifecycle`, `refresh`, `local_keys`, `merge`. |
+| File / units crates | **Remaining FILE-baselined modules** (over `NEW_FILE_CAP` 1200): `pscan/scan_step` ~1.9k, `transfer/engine` ~1.8k, `engine/mod` ~1.4k, `local_refresh` ~1.3k, `backing_set` ~1.3k. Carved: `local_pending_tx`, `stake_engine`, `lifecycle`, `refresh`, `local_keys`, `merge`. |
 
 So modularization moved **implementation** out; **identity, wiring, and workflow ownership** stayed on `Engine`. That is normal at Stage 1–2. The next step is not “`Engine<8,9,10 params>`” — it is **stop treating Engine as the place workflows live**.
 
@@ -168,13 +168,13 @@ Suggested ownership:
 |------|--------|-------------|
 | Supervisors | `ScanSupervisor`, `PScanSupervisor`, `SubmitDriver` | spawn/stop + hold handles/slots |
 | Request API | Transfer / Stake / Account façades | sync/async ops, short borrows |
-| Shell | `Engine` | open, close, password, prefs, capability, “are supervisors running?” |
+| Shell | `Engine` | open, close, password, capability, “are supervisors running?” |
 
 `refresh_slot` / `pscan_slot` / `pending_write_lock` / `submit_driver` already look like supervisor state — group them under one `Runtime` or `Supervisors` field so the struct reads as:
 
 ```text
 Engine {
-  identity: network, capability, prefs, persistence,
+  identity: network, capability, persistence,
   caps: Caps { key, ledger, daemon, refresh, pending, economics, tree },
   runtime: Supervisors { refresh_slot, pscan_slot, submit_driver, pending_write_lock },
   stake: Option<StakeEngine>,  // or StakeWorkflow handle
@@ -263,7 +263,7 @@ own (rule 19) and shares nothing with the file carve. `TransferFacade` /
 has to fit `METHODS_CEILING`):
 
 1. **Lifecycle** — create / open / close / password.
-2. **Capability accessors** — network, capability, address, ledger, prefs, daemon, `has_stake_engine`.
+2. **Capability accessors** — network, capability, address, ledger, daemon, `has_stake_engine`.
 3. **Façade constructors** — `stake()` (and later `transfer()` / `scan()`).
 4. **Supervisor start/stop** that is not staking-specific (refresh/rescan).
 5. **Pre-freeze inherent names** that already existed (`first_stake`, `stake_in`,
