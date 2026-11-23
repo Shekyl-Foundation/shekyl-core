@@ -1,0 +1,482 @@
+{
+  "name": "MultisigState",
+  "ty": {
+    "Struct": [
+      {
+        "name": "version",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "reservations",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "Reservation",
+              "ty": {
+                "Struct": [
+                  {
+                    "name": "intent_hash",
+                    "ty": {
+                      "name": "[T; N]",
+                      "ty": {
+                        "Tuple": [
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          },
+                          {
+                            "name": "u8",
+                            "ty": "U8"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "inputs",
+                    "ty": {
+                      "name": "Vec<T>",
+                      "ty": {
+                        "Seq": {
+                          "name": "GlobalOutputIndex",
+                          "ty": {
+                            "NewtypeStruct": {
+                              "name": "u64",
+                              "ty": "U64"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "reference_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "responder_approvals",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "[T; N]",
+              "ty": {
+                "Tuple": [
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "seen_seeds",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "[T; N]",
+              "ty": {
+                "Tuple": [
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}
