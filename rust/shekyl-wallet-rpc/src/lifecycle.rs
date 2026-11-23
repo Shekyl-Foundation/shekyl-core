@@ -1296,6 +1296,7 @@ mod tests {
                 url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
+            crate::server::TorFile::discover(),
         ))
     }
 
@@ -1639,6 +1640,7 @@ mod tests {
                 url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
+            crate::server::TorFile::discover(),
         ))
     }
 

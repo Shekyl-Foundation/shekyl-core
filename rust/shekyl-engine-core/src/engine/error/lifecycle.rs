@@ -68,7 +68,7 @@ pub enum OpenError {
         count: usize,
     },
 
-    /// Final ledger/prefs flush during [`crate::engine::Engine::close`] failed.
+    /// Final ledger flush during [`crate::engine::Engine::close`] failed.
     /// Distinct from [`Self::Io`] so save-path vocabulary is not
     /// squeezed into open-shaped variants (PR 6 R10 / §2.6).
     #[error("persistence failure during close: {0}")]

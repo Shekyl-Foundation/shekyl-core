@@ -214,10 +214,12 @@ impl AppState {
     /// one thing that needs the config after validation.
     fn new(config: ServerConfig) -> Arc<Self> {
         Arc::new(Self {
-            tenants: tokio::sync::Mutex::new(
-                TenantState::new(config.wallet_dir, config.network, config.daemon)
-                    .with_tor_file(config.tor_file),
-            ),
+            tenants: tokio::sync::Mutex::new(TenantState::new(
+                config.wallet_dir,
+                config.network,
+                config.daemon,
+                config.tor_file,
+            )),
             auth: Arc::new(config.auth),
             kdf: config.kdf,
             shutdown: Arc::new(Notify::new()),

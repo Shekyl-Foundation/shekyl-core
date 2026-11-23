@@ -748,8 +748,9 @@ redb = "4.6"
 # without seconds; the key grammar is unchanged. Verified at source
 # (1.2.1+spec-1.1.0, rule 17): `std`, `serde` and `parse` give `from_str`,
 # `Table`, `Value`, `Spanned` (re-exported unconditionally, `lib.rs`) and
-# `de::Error::{message, span}` (`de/error.rs`); `display` (engine-prefs only)
-# gives `to_string`/`to_string_pretty`. Unlike 0.8, `str::parse::<Value>()`
+# `de::Error::{message, span}` (`de/error.rs`). `display` is off: no caller
+# serializes a `toml` value back to text (`to_string` / `to_string_pretty`).
+# Unlike 0.8, `str::parse::<Value>()`
 # parses one value, not a document: a document is a `Table`. Already in
 # Cargo.lock at this version (through trybuild), and the GUI wallet's graph
 # carries the same line through tauri, so core's config parser is never

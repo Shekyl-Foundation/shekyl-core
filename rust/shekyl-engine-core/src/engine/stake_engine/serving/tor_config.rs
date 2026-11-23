@@ -129,7 +129,7 @@ impl std::error::Error for TorConfigError {
 /// machine's, so a missing file is a typo or a removed install, and serving
 /// a different binary than the one named would hide it. A path naming a file
 /// is taken, and the hash gate still decides whether it runs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TorFile(Option<std::path::PathBuf>);
 
 /// Why a `tor-file` was refused at start.
@@ -162,7 +162,8 @@ impl std::fmt::Display for TorFileRefused {
 impl std::error::Error for TorFileRefused {}
 
 impl TorFile {
-    /// Unset: discovery.
+    /// Unset: discovery. The only constructor for an absent option, so a
+    /// host names discovery on purpose.
     #[must_use]
     pub fn discover() -> Self {
         Self(None)
