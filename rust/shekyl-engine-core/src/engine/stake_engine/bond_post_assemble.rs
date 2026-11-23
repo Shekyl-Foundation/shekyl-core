@@ -134,7 +134,7 @@ pub(crate) async fn assemble_signed_bond_post(
         &view_tags,
         &tx_extra,
     )
-    .map_err(|e| BondAssemblyError::build("prefix hash", e))?;
+    .map_err(|e| BondAssemblyError::signer("prefix hash", &e))?;
 
     let mut spend_inputs = Vec::with_capacity(prepared.len());
     let mut pqc_pubkeys = Vec::with_capacity(prepared.len());
@@ -188,12 +188,12 @@ pub(crate) async fn assemble_signed_bond_post(
     let bond_sig = {
         let bond_payload = open
             .sole_extra_payload()
-            .map_err(|e| BondAssemblyError::build("bond slot payload", e))?;
+            .map_err(|e| BondAssemblyError::signer("bond slot payload", &e))?;
         sign_bond_slot(bond_payload)?
     };
     let wire = open
         .seal(vec![bond_sig])
-        .map_err(|e| BondAssemblyError::build("seal spend", e))?;
+        .map_err(|e| BondAssemblyError::signer("seal spend", &e))?;
     drop(spend_inputs);
 
     let bound_tx = finalize_bond_tx(args.persona, &wire)?;

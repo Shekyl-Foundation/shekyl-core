@@ -183,10 +183,10 @@ impl DrainAssemblyError {
         }
     }
 
-    /// The signer's refusal: its detail goes to the log, and its typed fault
-    /// travels on.
-    fn signer(err: &shekyl_tx_builder::TxBuilderError) -> Self {
-        tracing::debug!(error = %err, "the signer refused a drain");
+    /// The signer's refusal at `stage`: its detail goes to the log, and its
+    /// typed fault travels on.
+    fn signer(stage: &'static str, err: &shekyl_tx_builder::TxBuilderError) -> Self {
+        tracing::debug!(stage, error = %err, "the signer refused a drain");
         Self::Signer(err.fault())
     }
 }
@@ -438,7 +438,7 @@ pub(super) async fn assemble_drain_tx(
     })
     .await
     .map_err(|e| DrainAssemblyError::build("drain proving offload join", e))?
-    .map_err(|e| DrainAssemblyError::signer(&e))?;
+    .map_err(|e| DrainAssemblyError::signer("drain proving", &e))?;
 
     // ── Step 7: assemble the wire input through the SHARED transfer-wire
     // constructor (`sign_bridge::assemble_transfer_wire`) — the exact same
@@ -469,7 +469,7 @@ pub(super) async fn assemble_drain_tx(
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a
     // bond is exactly this: a drain has no identity auth). ──
     let payload_hashes = phase1_payload_hashes(&wire, network)
-        .map_err(|e| DrainAssemblyError::build("phase1 payload hash", e))?;
+        .map_err(|e| DrainAssemblyError::signer("phase1 payload hash", &e))?;
     if payload_hashes.len() != spend_inputs.len() {
         return Err(DrainAssemblyError::build(
             "phase1 payload hash",
@@ -482,7 +482,7 @@ pub(super) async fn assemble_drain_tx(
         .into());
     }
     wire.pqc_auths = sign_pqc_auths(&payload_hashes, &spend_inputs)
-        .map_err(|e| DrainAssemblyError::build("pqc auth signing", e))?;
+        .map_err(|e| DrainAssemblyError::signer("pqc auth signing", &e))?;
     drop(spend_inputs); // secrets end here; nothing below needs them
 
     // ── Step 9: encode + mint at the P-1 site. The drain is a P-spend, so its

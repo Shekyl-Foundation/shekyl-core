@@ -594,8 +594,7 @@ info:
   # the proof verified against: a bug, as every builder invariant is. Every
   # path that signs answers a signer fault the same way, so stake, drain,
   # unstake and collect_unstaked now return -29119 (or the code of a fault the
-  # user can act on) where they returned -32603. A stake refused here keeps
-  # its durable slot, and calling stake again resumes it. api_version stays 1.
+  # user can act on) where they returned -32603. api_version stays 1.
   version: 0.23.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
@@ -1216,7 +1215,9 @@ components:
                                           bulletproof-parse, wire-encode,
                                           randomness).
                                           Report it; the wallet log has the
-                                          detail (A16)
+                                          detail (A16). A stake refused here
+                                          keeps its durable slot, and calling
+                                          stake again resumes it
           -29120 SAVE_NOT_WRITABLE        submit: the send's record (its
                                           signed bytes, tx secret and input
                                           locks) could not be saved because
