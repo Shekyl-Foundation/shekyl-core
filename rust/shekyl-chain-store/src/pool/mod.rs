@@ -112,7 +112,7 @@ use redb::{Database, ReadableDatabase, TableHandle, WriteTransaction};
 use shekyl_store_codec::CodecError;
 
 use crate::store::{
-    CellFault, EngineError, StoreError, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
+    CellFault, EngineError, StoreCheck, StoreError, StoreInvariant, DURABILITY, TWO_PHASE_COMMIT,
 };
 
 /// The pool file's cache: 64 MiB. A pool is a few thousand transactions at
@@ -158,6 +158,20 @@ impl PoolStore {
                 how,
             )
         })
+    }
+
+    /// The read-only check of the pool file at `path`: what
+    /// [`create`](Self::create) would decide on the file, with nothing
+    /// written and no lock taken (a daemon checks every store before it
+    /// opens any writable). The open looks again under its lock.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::PoolFileForeign`](crate::store::StoreCannot::PoolFileForeign)
+    /// for a file this store neither wrote nor may recreate;
+    /// [`EngineError::Open`] for the engine's own refusal.
+    pub fn check(path: impl AsRef<Path>) -> Result<StoreCheck, StoreError> {
+        header::check(path.as_ref())
     }
 
     /// Run `f` inside a write batch and commit if it returns `Ok`. The

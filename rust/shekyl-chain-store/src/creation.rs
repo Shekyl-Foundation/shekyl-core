@@ -237,6 +237,86 @@ pub(crate) fn open_is_foreign(err: &redb::DatabaseError) -> bool {
     }
 }
 
+/// What a store's read-only check found, before anything is written
+/// ([`ChainStore::check_with_genesis`](crate::store::ChainStore::check_with_genesis),
+/// [`PoolStore::check`](crate::pool::PoolStore::check)).
+///
+/// Every refusal the file itself decides is the check's `Err`, the error
+/// the store's open would return. These are the files the open accepts,
+/// each with the write the open makes before it can serve: a check that
+/// passes every store of a node before any is opened writable is what lets
+/// a refused start leave every store as it found it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreCheck {
+    /// Nothing at the path. The open creates the store.
+    Absent,
+    /// The file was judged on a read-only open and admitted. The open
+    /// claims it (and, for the pool, recreates a file of another layout).
+    Admitted,
+    /// The engine must repair the file before anything can read it. Only a
+    /// writable open can, and it judges the file after the repair.
+    NeedsRepair,
+    /// An initialization the engine never finished. The open moves it
+    /// aside, never deleting it, and creates a fresh store.
+    Unfinished,
+}
+
+/// What a store file is to a read-only look, before anything is written.
+///
+/// The one look both stores take: their preflight ([`StoreCheck`]) and
+/// their writable open read the same answer, so a file a preflight passes
+/// is one the open would not refuse on its header. Taking it writes
+/// nothing: a read-only open neither creates an absent file nor touches
+/// the header of one it finds, and the unfinished-initialization test reads
+/// the header bytes alone. It takes no lock; the open looks again under
+/// its [`PathGuard`].
+///
+/// [`StoreCheck`]: crate::store::StoreCheck
+pub(crate) enum Look {
+    /// Nothing is at the path. The open creates the store.
+    Absent,
+    /// A database the store judges on this read-only handle.
+    Readable(redb::ReadOnlyDatabase),
+    /// The engine must repair the file before anything can read it
+    /// (`RepairAborted`). Only a writable open can, so only it judges.
+    NeedsRepair,
+    /// An initialization the engine never finished (empty, or the
+    /// pre-magic header), with the engine's refusal of it. The open moves
+    /// it aside and creates a fresh one.
+    Unfinished(redb::DatabaseError),
+    /// Bytes the engine will not open that are not an unfinished
+    /// initialization: the store refuses them, and the open would too.
+    Foreign(redb::DatabaseError),
+    /// The engine refused the open for another reason (permissions, a full
+    /// disk): the error itself.
+    Refused(redb::DatabaseError),
+}
+
+/// Take the read-only [`Look`] at `path` through `builder`.
+///
+/// # Errors
+///
+/// The header of a foreign-looking file could not be read.
+pub(crate) fn look(builder: &redb::Builder, path: &Path) -> io::Result<Look> {
+    if !path.try_exists()? {
+        return Ok(Look::Absent);
+    }
+    Ok(match builder.open_read_only(path) {
+        Ok(read_only) => Look::Readable(read_only),
+        Err(redb::DatabaseError::RepairAborted) => Look::NeedsRepair,
+        Err(refused) if open_is_foreign(&refused) => {
+            let mut file = File::open(path)?;
+            let len = file.metadata()?.len();
+            if unfinished_init(&mut file, len)? {
+                Look::Unfinished(refused)
+            } else {
+                Look::Foreign(refused)
+            }
+        }
+        Err(refused) => Look::Refused(refused),
+    })
+}
+
 /// The sibling lock that excludes every other open of one store for the
 /// whole creation decision.
 ///

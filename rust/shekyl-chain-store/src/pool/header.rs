@@ -81,7 +81,8 @@ use redb::{Database, ReadTransaction, ReadableDatabase, TableDefinition};
 use shekyl_store_codec::{Canonical, Raw};
 
 use crate::codec::PropertyCellBytes;
-use crate::store::{EngineError, StoreCannot, StoreError};
+use crate::creation::Look;
+use crate::store::{EngineError, StoreCannot, StoreCheck, StoreError};
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
 use super::schema_version::{PoolSchemaVersion, POOL_SCHEMA_VERSION};
@@ -169,22 +170,47 @@ fn open_existing(
     path: &Path,
     guard: &crate::creation::PathGuard,
 ) -> Result<(Database, PoolOpen), StoreError> {
-    match builder.open_read_only(path) {
-        Ok(read_only) => {
-            judge(&read_only)?;
-        }
-        Err(redb::DatabaseError::RepairAborted) => {}
-        Err(e) if crate::creation::open_is_foreign(&e) => return set_aside(builder, path, guard),
-        Err(e) => return Err(EngineError::Open(e).into()),
+    match judge_look(crate::creation::look(builder, path).map_err(io_open)?)? {
+        StoreCheck::Unfinished => return set_aside(builder, path, guard),
+        StoreCheck::Absent => return Err(io_open(std::io::ErrorKind::NotFound.into()).into()),
+        StoreCheck::Admitted | StoreCheck::NeedsRepair => {}
     }
     let claimed = claim(builder, path)?;
     admit(builder, claimed, path)
 }
 
-/// A file the engine would not open. A cut before the engine finished
-/// initializing — empty, or the pre-magic header (`crate::creation`) — is
-/// moved aside, never deleted, and a fresh file sealed at the path.
-/// Anything else is [`StoreCannot::PoolFileForeign`], kept as it is.
+/// The read-only check of the pool file at `path`: [`judge_look`] over the
+/// one look the open also takes. Writes nothing and takes no lock.
+pub(super) fn check(path: &Path) -> Result<StoreCheck, StoreError> {
+    let mut builder = redb::Builder::new();
+    builder.set_cache_size(POOL_CACHE_SIZE);
+    judge_look(crate::creation::look(&builder, path).map_err(io_open)?)
+}
+
+/// What a look at the pool file decides: a file this store does not own
+/// ([`StoreCannot::PoolFileForeign`]) and the engine's own refusal are the
+/// `Err`; a readable file is judged (a seal at another layout is admitted:
+/// the open recreates it). The one decision [`check`] and
+/// [`open_existing`] share.
+fn judge_look(found: Look) -> Result<StoreCheck, StoreError> {
+    match found {
+        Look::Absent => Ok(StoreCheck::Absent),
+        Look::Readable(read_only) => {
+            judge(&read_only)?;
+            Ok(StoreCheck::Admitted)
+        }
+        Look::NeedsRepair => Ok(StoreCheck::NeedsRepair),
+        Look::Unfinished(_) => Ok(StoreCheck::Unfinished),
+        Look::Foreign(_) => Err(StoreCannot::PoolFileForeign.into()),
+        Look::Refused(refused) => Err(EngineError::Open(refused).into()),
+    }
+}
+
+/// An initialization the engine did not finish — empty, or the pre-magic
+/// header (`crate::creation`) — moved aside, never deleted, and a fresh
+/// file sealed at the path. The look found it; this decides again under
+/// `guard`, and anything else is [`StoreCannot::PoolFileForeign`], kept as
+/// it is.
 fn set_aside(
     builder: &redb::Builder,
     path: &Path,
