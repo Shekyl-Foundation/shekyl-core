@@ -402,6 +402,70 @@ fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
     assert!(opened.is_err(), "a corrupt pool file is refused");
     assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
 }
+/// Every entry of `dir`: its name, and for a file its bytes and
+/// modification time.
+fn directory(
+    dir: &std::path::Path,
+) -> std::collections::BTreeMap<std::ffi::OsString, Option<(Vec<u8>, std::time::SystemTime)>> {
+    std::fs::read_dir(dir)
+        .expect("the data directory")
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            let meta = entry.metadata().expect("its metadata");
+            let file = meta.is_file().then(|| {
+                (
+                    std::fs::read(entry.path()).expect("its bytes"),
+                    meta.modified().expect("its mtime"),
+                )
+            });
+            (entry.file_name(), file)
+        })
+        .collect()
+}
+
+/// A start the pool refuses on its file leaves the whole data directory as
+/// it found it: the chain file, opened before the pool on a start that
+/// checked nothing first, keeps its bytes and modification time (a
+/// writable redb open rewrites the header even when nothing else changes).
+/// The preflight refuses in the open's words. Red edit: drop the check
+/// from `Node::open`.
+#[test]
+fn a_start_the_pool_refuses_writes_nothing_to_the_data_directory() {
+    let dir = tempfile::tempdir().expect("temp");
+    open_at(dir.path(), Arc::new(|| {})).stop();
+    std::fs::write(dir.path().join("pool.db"), b"not a pool file").expect("overwrite");
+    let before = directory(dir.path());
+    let config = config_at(dir.path());
+    let preflight = Node::preflight(&config).expect_err("the preflight refuses the pool file");
+    let opened = Node::open(OpenArgs {
+        config: &config,
+        version: "test".to_owned(),
+        protocol_version: 1,
+        release_build: false,
+        supervisor: None,
+        request_stop: Arc::new(|| {}),
+        plan: test_plan(&config),
+    });
+    let refused = match opened {
+        Err(refused) => refused,
+        Ok(node) => {
+            node.stop();
+            panic!("a node opened over a foreign pool file");
+        }
+    };
+    assert!(matches!(refused, OpenError::Pool(_)), "{refused}");
+    assert_eq!(
+        preflight.to_string(),
+        refused.to_string(),
+        "the preflight and the open differ"
+    );
+    assert_eq!(
+        directory(dir.path()),
+        before,
+        "a refused start wrote to the data directory"
+    );
+}
+
 /// One regtest lever is filled from production on the other side and
 /// the node opens. A cap that is not strictly inside the epoch is
 /// refused. Red edit: require the two levers to be set together, or

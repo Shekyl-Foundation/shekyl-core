@@ -286,19 +286,46 @@ pub struct Node {
 }
 
 impl Node {
+    /// Check both stores this node opens, read-only, before either is
+    /// opened writable.
+    ///
+    /// A writable redb open rewrites the file's header even when nothing
+    /// else in it changes, so a start one store refuses after another was
+    /// opened would leave that other one changed. [`open`](Self::open) runs
+    /// this first. A daemon runs it before anything of its own is written
+    /// (its network marker, its RPC channel), so a start a store refuses on
+    /// its file writes nothing. A file the engine must repair first, an
+    /// unfinished initialization and the older chain layout the pre-genesis
+    /// wipe replaces are not refusals: only their open can act on them, and
+    /// it writes.
+    ///
+    /// # Errors
+    ///
+    /// The refusals [`open`](Self::open) makes on the files themselves:
+    /// [`OpenError::NewerChainLayout`], the chain store's other header
+    /// refusals ([`OpenError::Store`]) and the pool file's
+    /// ([`OpenError::Pool`]); [`OpenError::Rules`] when the configuration
+    /// makes no rule schedule.
+    pub fn preflight(config: &DaemonConfig) -> Result<(), OpenError> {
+        StoreSites::of(config)?.check()
+    }
+
     /// Open the store, start ingest, and connect genesis when the store is empty.
     ///
     /// # Errors
     ///
     /// [`OpenError`]. A failure stops anything this call started.
     pub fn open(args: OpenArgs<'_>) -> Result<Self, OpenError> {
-        let rules = rules_of(args.config)?;
-        let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
-            .map_err(|error| OpenError::Rules(format!("the store horizons: {error}")))?;
-        let genesis = genesis_pin_of(rules);
+        let stores = StoreSites::of(args.config)?;
+        stores.check()?;
+        let StoreSites {
+            rules,
+            horizons,
+            genesis,
+            chain: store_path,
+            pool: pool_path,
+        } = stores;
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
-        let store_path = args.config.data_dir.join("chain.db");
-        let pool_path = args.config.data_dir.join("pool.db");
         let store = Arc::new(open_chain(&store_path, horizons, &genesis)?);
         tracing::info!("{}", store_durability_line());
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
@@ -891,24 +918,20 @@ fn open_chain(
     horizons: Horizons,
     genesis: &GenesisPin,
 ) -> Result<ChainStore, OpenError> {
-    use shekyl_chain_store::store::{StoreCannot, StoreError};
-    match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis) {
+    let refused = match ChainStore::with_genesis(path, ApplyPolicy::Full, horizons, genesis) {
         Ok((store, cut)) => {
             log_chain_cut(cut);
-            Ok(store)
+            return Ok(store);
         }
-        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
-            if found > expected =>
-        {
-            Err(OpenError::NewerChainLayout { found, expected })
-        }
+        Err(error) => error,
+    };
+    match chain_refusal(refused) {
+        ChainRefusal::Refuse(refusal) => Err(refusal),
         // TEMPORARY, pre-genesis only (FOLLOWUPS, trigger: before mainnet
         // genesis): an older layout is removed so an alpha starts on a fresh
         // store. The permanent policy ships each layout bump with its
         // migration and never deletes (`DAEMON_REDB_STORE.md` §11.1, S3).
-        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected }))
-            if found < expected =>
-        {
+        ChainRefusal::OlderLayout { found, expected } => {
             tracing::warn!(
                 %found,
                 %expected,
@@ -920,7 +943,88 @@ fn open_chain(
             log_chain_cut(cut);
             Ok(store)
         }
-        Err(error) => Err(error.into()),
+    }
+}
+
+/// What a chain-store refusal is to the node: one it refuses on, or the
+/// older layout the pre-genesis wipe replaces. The one split
+/// [`open_chain`] and [`StoreSites::check`] share.
+enum ChainRefusal {
+    /// The node refuses to start.
+    Refuse(OpenError),
+    /// The file is sealed at an older layout than this release writes.
+    OlderLayout {
+        /// The layout the file was sealed at.
+        found: shekyl_chain_store::codec::SchemaVersion,
+        /// The layout this binary writes.
+        expected: shekyl_chain_store::codec::SchemaVersion,
+    },
+}
+
+fn chain_refusal(error: shekyl_chain_store::store::StoreError) -> ChainRefusal {
+    use shekyl_chain_store::store::{StoreCannot, StoreError};
+    match error {
+        StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })
+            if found > expected =>
+        {
+            ChainRefusal::Refuse(OpenError::NewerChainLayout { found, expected })
+        }
+        StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })
+            if found < expected =>
+        {
+            ChainRefusal::OlderLayout { found, expected }
+        }
+        error => ChainRefusal::Refuse(error.into()),
+    }
+}
+
+/// A pool-store refusal as the node reports it: the pool's own fault, in
+/// the words [`open_pool`] reports a fault of [`Pool::open`] with.
+fn pool_refusal(error: shekyl_chain_store::store::StoreError) -> OpenError {
+    OpenError::Pool(format!(
+        "{:?}",
+        shekyl_mempool::PoolFault::<std::convert::Infallible>::Store(error)
+    ))
+}
+
+/// Where this node's stores are, and what they are judged against: the
+/// configuration's rule schedule, its store horizons and its network's
+/// genesis.
+struct StoreSites {
+    rules: ChainRules,
+    horizons: Horizons,
+    genesis: GenesisPin,
+    chain: std::path::PathBuf,
+    pool: std::path::PathBuf,
+}
+
+impl StoreSites {
+    fn of(config: &DaemonConfig) -> Result<Self, OpenError> {
+        let rules = rules_of(config)?;
+        let horizons = Horizons::under(&rules.in_force(BlockHeight::ZERO))
+            .map_err(|error| OpenError::Rules(format!("the store horizons: {error}")))?;
+        Ok(Self {
+            rules,
+            horizons,
+            genesis: genesis_pin_of(rules),
+            chain: config.data_dir.join("chain.db"),
+            pool: config.data_dir.join("pool.db"),
+        })
+    }
+
+    /// Both stores' read-only checks ([`Node::preflight`]), the pool's
+    /// after the chain's: nothing is written and nothing is locked.
+    fn check(&self) -> Result<(), OpenError> {
+        if let Err(error) =
+            ChainStore::check_with_genesis(&self.chain, self.horizons, &self.genesis)
+        {
+            match chain_refusal(error) {
+                ChainRefusal::Refuse(refusal) => return Err(refusal),
+                ChainRefusal::OlderLayout { .. } => {}
+            }
+        }
+        shekyl_chain_store::pool::PoolStore::check(&self.pool).map_err(pool_refusal)?;
+        Ok(())
     }
 }
 
