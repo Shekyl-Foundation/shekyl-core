@@ -20,8 +20,11 @@
 # Moving a version here is a review, not a refresh: read the change at
 # source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
 # and run the KATs, the pinned FCMP++ vectors and the checkct rows on it
-# (rule 17). A new primitive dependency adds its name to `roots` in the
-# change that adds it.
+# (rule 17). For fips204 that includes both of its branch guards: the
+# `fips204ct` checkct row (docs/formal/checkct/) and
+# scripts/ci/check_fips204_branch_counts.py on x86_64 and on the floor
+# device. A toolchain bump re-pins that script's counts on both. A new
+# primitive dependency adds its name to `roots` in the change that adds it.
 
 roots = [
     "aes",
@@ -295,7 +298,7 @@ reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, she
 name = "fips204"
 version = "0.5.0"
 source = "git+https://github.com/Shekyl-Foundation/fips204?rev=072a7d68bef14c2332d4b5ebd006189a3eedb2eb#072a7d68bef14c2332d4b5ebd006189a3eedb2eb"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true (CRYPTO_AUDIT.md section 3.2); every value they compute is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true, and the NTT path's range is hardened (docs/benchmarks/ca3_pq_branch_sweep_20261123.md); every value the tag returned is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"

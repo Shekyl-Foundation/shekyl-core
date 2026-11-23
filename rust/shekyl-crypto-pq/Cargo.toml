@@ -293,6 +293,10 @@ harness = false
 name = "fn_dsa_stack_ladder"
 path = "examples/fn_dsa_stack_ladder.rs"
 
+[[example]]
+name = "fips204_branch_subject"
+path = "examples/fips204_branch_subject.rs"
+
 [[bin]]
 name = "fa6_decap_prefilter_gate"
 path = "examples/fa6_decap_prefilter_gate.rs"
