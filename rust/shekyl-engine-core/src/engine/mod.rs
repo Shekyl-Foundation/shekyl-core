@@ -330,6 +330,8 @@ pub(crate) mod fee_variant;
 #[cfg(all(test, feature = "gf7-hooks"))]
 mod gf7_sealing_run;
 pub(crate) mod group_destination;
+#[cfg(feature = "multisig")]
+mod group_wallet;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -506,6 +508,10 @@ pub use drain_read::DrainBalanceReadError;
 // drain façade's outcome/error pair and the `stake_in` error the handler
 // matches on for its refusal codes.
 pub use drain_facade::{DrainOutcome, DrainToPrincipalError};
+/// A group wallet's files and member file (R-30) — only under
+/// `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use group_wallet::{GroupWallet, GroupWalletCreate, GroupWalletError};
 pub use principal_stake::StakeInError;
 pub use pscan::start::{PScanHandle, PScanStartError, DEFAULT_PSCAN_CADENCE};
 pub use refresh::{

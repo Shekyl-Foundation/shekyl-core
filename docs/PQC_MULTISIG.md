@@ -1388,6 +1388,12 @@ A held nonce is used once: signing takes it out of the store.
 
 ### 13.2 The durable records: `.wallet.multisig`
 
+A group wallet is its own wallet files. Its `.wallet.keys` holds the member
+file as capability `0x04`, sealed by the password as a seed is and written
+once, and its second-region key binds to the group's address
+(`WALLET_FILE_FORMAT_V1.md` §2.3). The member file is the wallet's backup:
+a group wallet has no recovery words, and creating one returns none.
+
 A group wallet keeps what changes as its member takes part in ceremonies
 in `.wallet.multisig`, beside `.wallet`, sealed under the wallet's
 second-region key with its own payload kind (`0x04`), so a swapped sibling

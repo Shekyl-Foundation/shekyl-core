@@ -2351,7 +2351,9 @@ fn from_wallet_file_error(err: &WalletFileError) -> WalletRpcError {
             | WalletLedgerError::UnsupportedGroupFormatVersion { .. }
             | WalletLedgerError::UnsupportedBlockVersion { .. },
         )
-        | F::UnknownCapability(_) => WalletRpcError::WalletFileVersionUnsupported,
+        | F::UnknownCapability(_)
+        | F::GroupWalletKeysFile
+        | F::NotAGroupWalletKeysFile => WalletRpcError::WalletFileVersionUnsupported,
         F::Ledger(WalletLedgerError::Postcard(_) | WalletLedgerError::InvariantFailed { .. }) => {
             WalletRpcError::WalletFileCorrupt
         }
@@ -2600,6 +2602,8 @@ pub fn from_unsaved_send(err: &PersistenceError, of: SaveOf) -> WalletRpcError {
             | F::UnknownNetwork(_)
             | F::NetworkMismatch { .. }
             | F::UnknownCapability(_)
+            | F::GroupWalletKeysFile
+            | F::NotAGroupWalletKeysFile
             | F::SaveAsCrossFilesystem { .. }
             | F::SaveAsTargetExists { .. } => WalletRpcError::SaveInternalFault { of },
         },

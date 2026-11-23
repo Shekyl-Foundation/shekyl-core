@@ -16,7 +16,8 @@
 //!   future bug happened to feed to `open_state_file`." (`SWSP` magic)
 //! - "Which payload schema am I?" (`payload_kind`:
 //!   `WalletLedgerPostcard = 0x01`, `PScanStatePostcard = 0x02`,
-//!   `PendingPostBlockPostcard = 0x03`, `MultisigStatePostcard = 0x04`)
+//!   `PendingPostBlockPostcard = 0x03`, `MultisigStatePostcard = 0x04`,
+//!   `GroupWalletLedgerPostcard = 0x05`)
 //! - "Which version of that schema?" (`payload_version`, currently `0x01`)
 //! - "How long is the body?" (`body_len`, u32 LE)
 //!
@@ -59,7 +60,7 @@
 //! |--------|-------|-------------------|---------------------------------|
 //! | 0      | 4     | `magic = "SWSP"`  | ASCII, fixed                    |
 //! | 4      | 1     | `payload_version` | `0x01` for V3.0                 |
-//! | 5      | 1     | `payload_kind`    | `0x01`=ledger, `0x02`=pscan-state, `0x03`=pending-post, `0x04`=multisig-state |
+//! | 5      | 1     | `payload_kind`    | `0x01`=ledger, `0x02`=pscan-state, `0x03`=pending-post, `0x04`=multisig-state, `0x05`=group-ledger |
 //! | 6      | 2     | `_reserved = 00`  | must be zero on V3.0            |
 //! | 8      | 4     | `body_len` (LE)   | u32, length of `body` in bytes  |
 //! | 12     | N     | `body`            | kind-specific bytes             |
@@ -137,6 +138,11 @@ pub enum PayloadKind {
     /// fingerprints. A sibling seal under the group wallet's region-2 key;
     /// the distinct kind byte keeps a swapped sibling a loud refusal.
     MultisigStatePostcard = 0x04,
+    /// `body` is a postcard-encoded `shekyl_engine_state::GroupWalletLedger`
+    /// — a group wallet's state file (`.wallet`, R-30/R-36). Its own kind:
+    /// the group ledger is its own type and version, never read as a solo
+    /// ledger.
+    GroupWalletLedgerPostcard = 0x05,
 }
 
 impl PayloadKind {
@@ -148,6 +154,7 @@ impl PayloadKind {
             0x02 => Ok(Self::PScanStatePostcard),
             0x03 => Ok(Self::PendingPostBlockPostcard),
             0x04 => Ok(Self::MultisigStatePostcard),
+            0x05 => Ok(Self::GroupWalletLedgerPostcard),
             other => Err(PayloadError::UnknownPayloadKind(other)),
         }
     }
