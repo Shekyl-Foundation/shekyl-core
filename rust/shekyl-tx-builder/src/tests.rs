@@ -131,7 +131,7 @@ fn test_too_many_inputs() {
         AtomicUnits::ZERO,
         &dummy_tree(),
     );
-    assert!(matches!(result, Err(TxBuilderError::TooManyInputs(_))));
+    assert!(matches!(result, Err(TxBuilderError::TooManyInputs { .. })));
 }
 
 #[test]
@@ -473,6 +473,32 @@ fn dummy_tree_at_depth(depth: u8) -> TreeContext {
         tree_root: CurveTreeRoot::from_bytes([31u8; 32]),
         tree_depth: depth,
     }
+}
+
+/// A count within the cap but past what the weight limit admits at this depth
+/// is refused before signing, with the depth's own limit.
+#[test]
+fn a_count_past_the_per_depth_limit_is_refused() {
+    let depth = shekyl_fcmp::MAX_TREE_DEPTH;
+    let limit = shekyl_wire::transaction::weight::max_inputs_at(2, depth);
+    assert!(limit < MAX_INPUTS);
+    let inputs: Vec<SpendInput> = (0..=limit).map(|_| dummy_spend_input(100)).collect();
+    let result = sign_transaction(
+        &shekyl_network::HARNESS_NETWORK_ID,
+        PrefixHash::from_bytes([0u8; 32]),
+        &inputs,
+        &dummy_outputs(100),
+        AtomicUnits::ZERO,
+        &dummy_tree_at_depth(depth),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(TxBuilderError::TooManyInputs { count, limit: reported })
+                if count == limit + 1 && reported == limit
+        ),
+        "{result:?}"
+    );
 }
 
 #[test]

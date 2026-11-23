@@ -710,9 +710,7 @@ mod marginal_input_weight_pin {
     #[test]
     fn marginal_input_weight_is_pinned() {
         let w = marginal_input_weight_at_d_ref();
-        // 9136 → 9008 with PL-D3 (2026-09-14): the opening leg replaces the
-        // per-input extra-scalar branch, so the marginal input weight fell.
-        assert_eq!(w, 9008, "weight-model movement changes the dust boundary");
+        assert_eq!(w, 7728, "weight-model movement changes the dust boundary");
         assert!(
             w > 3457,
             "the marginal weight must exceed the retired proofless stub"

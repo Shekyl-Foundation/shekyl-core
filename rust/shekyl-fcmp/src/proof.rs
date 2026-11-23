@@ -1629,14 +1629,15 @@ mod tests {
 
     #[test]
     fn prove_rejects_too_many_inputs() {
-        let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
+        let count = most_provable_inputs(8) + 1;
+        let inputs: Vec<ProveInput> = (0..count).map(|_| dummy_prove_input()).collect();
         let result = prove(
             &inputs,
             &CurveTreeRoot::from_bytes([0; 32]),
             8,
             TxSignableHash::from_bytes([0; 32]),
         );
-        assert!(matches!(result, Err(ProveError::TooManyInputs(9))));
+        assert!(matches!(result, Err(ProveError::TooManyInputs(n)) if n == count));
     }
 
     /// `pad_branch_chunk` zero-pads short chunks (the partial-chunk fix) but

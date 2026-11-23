@@ -8,9 +8,11 @@ use std::num::NonZeroUsize;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
-use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use crate::{MAX_INPUTS, MAX_OUTPUTS, MAX_TREE_DEPTH};
 use shekyl_ct_balance::{InputTerm, OutputTerm};
+use shekyl_fcmp::MIN_SPEND_LAYERS;
 use shekyl_units::AtomicUnits;
+use shekyl_wire::transaction::weight::max_inputs_at;
 use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
 /// Prover-side input validation for FCMP++ signing.
@@ -41,7 +43,10 @@ pub(crate) fn validate_inputs(
         return Err(TxBuilderError::NoInputs);
     };
     if inputs.len() > MAX_INPUTS {
-        return Err(TxBuilderError::TooManyInputs(inputs.len()));
+        return Err(TxBuilderError::TooManyInputs {
+            count: inputs.len(),
+            limit: MAX_INPUTS,
+        });
     }
     if outputs.is_empty() {
         return Err(TxBuilderError::NoOutputs);
@@ -53,6 +58,18 @@ pub(crate) fn validate_inputs(
     }
     if outputs.len() > MAX_OUTPUTS {
         return Err(TxBuilderError::TooManyOutputs(outputs.len()));
+    }
+    // CEN-H3 at this shape: in a deep tree the weight limit admits fewer inputs
+    // than the cap. A depth outside the legal range is the prover's refusal.
+    let limit = max_inputs_at(
+        outputs.len(),
+        tree.tree_depth.clamp(MIN_SPEND_LAYERS, MAX_TREE_DEPTH),
+    );
+    if inputs.len() > limit {
+        return Err(TxBuilderError::TooManyInputs {
+            count: inputs.len(),
+            limit,
+        });
     }
 
     // --- Amount checks ---

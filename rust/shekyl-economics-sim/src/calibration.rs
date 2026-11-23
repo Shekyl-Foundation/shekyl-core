@@ -45,8 +45,8 @@
 use serde::{Serialize, Serializer};
 use shekyl_curve_tree::segment::outputs_per_node;
 use shekyl_tx_weight::{
-    converge_weight_fee, converge_weight_fee_by, predict_archival_len, predict_weight, InputCount,
-    OutputCount, MAX_OUTPUTS, MAX_TREE_DEPTH,
+    converge_weight_fee, converge_weight_fee_by, legal_shapes_at, predict_archival_len,
+    predict_weight, InputCount, OutputCount, MAX_TREE_DEPTH, MIN_SPEND_LAYERS,
 };
 use shekyl_types::SHARD_LENGTH;
 
@@ -260,17 +260,11 @@ impl Shape {
     }
 }
 
-/// Every shape the builder accepts, `1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`. The
-/// input cap is read off the bounded type (it is crate-internal to the
-/// predictor by design); clamping `usize::MAX` lands on it.
-pub(crate) fn all_shapes() -> impl Iterator<Item = Shape> {
-    let max_in = InputCount::clamped(usize::MAX).get();
-    (1..=max_in).flat_map(move |i| {
-        (1..=MAX_OUTPUTS).map(move |o| Shape {
-            n_in: InputCount::clamped(i),
-            n_out: OutputCount::clamped(o),
-        })
-    })
+/// Every shape consensus can mine at `tree_depth`, read from the wire's
+/// legal-shape function (`ICD-R1`). A depth below the first spendable one reads
+/// as that depth: the sim's tree size can start under it.
+pub(crate) fn all_shapes(tree_depth: u8) -> impl Iterator<Item = Shape> {
+    legal_shapes_at(tree_depth.max(MIN_SPEND_LAYERS)).map(|(n_in, n_out)| Shape { n_in, n_out })
 }
 
 /// Fee per archival byte of `shape` at `tree_depth`, as a rational
@@ -293,7 +287,7 @@ fn cheaper(a: (u128, u128), b: (u128, u128)) -> bool {
 /// `None` when no shape's fee fits in `u64`.
 #[must_use]
 pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
-    all_shapes()
+    all_shapes(tree_depth)
         .filter_map(|s| fee_per_archival(s, tree_depth, rate).map(|ratio| (s, ratio)))
         .fold(
             None,
@@ -315,7 +309,7 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
 /// physical ceiling on the fold's slew is this search, not the cost search.
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
-    all_shapes()
+    all_shapes(tree_depth)
         .filter_map(|s| {
             let weight = s.tx_weight(tree_depth, rate)?;
             Some(if weight == 0 {
@@ -450,7 +444,7 @@ pub fn sustained_stuffer_cost_per_shard_atomic(
     rate: PerByteRate,
 ) -> Option<u128> {
     let depth = tree_depth_for_leaves(chain_leaves);
-    let shapes: Vec<(Shape, (u128, u128))> = all_shapes()
+    let shapes: Vec<(Shape, (u128, u128))> = all_shapes(depth)
         .filter_map(|s| fee_per_archival(s, depth, rate).map(|ratio| (s, ratio)))
         .collect();
     let mut best: Option<(u128, u128)> = None;
@@ -487,6 +481,7 @@ mod tests {
     use super::*;
     use crate::engine::SimParams;
     use crate::fee_model::SECTION_12_13_ADMISSION_RATE as CONTROL;
+    use shekyl_tx_weight::MAX_OUTPUTS;
 
     /// The relay floor at the penalty-free zone with `C = 1`, at the tail
     /// subsidy and at genesis, with the control arm's 300 between them. The

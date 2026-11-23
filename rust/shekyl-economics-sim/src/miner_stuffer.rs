@@ -511,7 +511,7 @@ impl<'a> Block<'a> {
         // The search key is the body, not the shape that produced it. The
         // shape walk stays in builder order, so a tie keeps the earlier shape.
         let mut seen = HashSet::new();
-        for shape in all_shapes() {
+        for shape in all_shapes(self.depth) {
             let Some(body) = StuffingBody::from_shape(shape, self.depth, floor) else {
                 continue;
             };
@@ -1339,7 +1339,7 @@ mod tests {
     ) -> PricedPacking {
         let mut best: Option<PricedPacking> = None;
         let mut seen = HashSet::new();
-        for shape in all_shapes() {
+        for shape in all_shapes(block.depth) {
             let Some(body) = StuffingBody::from_shape(shape, block.depth, floor) else {
                 continue;
             };

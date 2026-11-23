@@ -5,7 +5,7 @@
 //! begins when possible (validation errors) or after a proof operation fails
 //! (crypto errors).
 
-use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use crate::MAX_OUTPUTS;
 use shekyl_fcmp::MAX_TREE_DEPTH;
 use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
@@ -23,9 +23,15 @@ pub enum TxBuilderError {
     #[error("no inputs provided")]
     NoInputs,
 
-    /// The number of inputs exceeds the consensus limit.
-    #[error("too many inputs: {0} exceeds limit {MAX_INPUTS}")]
-    TooManyInputs(usize),
+    /// The number of inputs exceeds what consensus admits for this shape:
+    /// the cap, or the weight limit's lower answer in a deep tree.
+    #[error("too many inputs: {count} exceeds limit {limit}")]
+    TooManyInputs {
+        /// How many inputs the build carried.
+        count: usize,
+        /// The most this shape can spend at this tree depth.
+        limit: usize,
+    },
 
     /// The caller provided an empty `outputs` slice.
     #[error("no outputs provided")]
@@ -181,7 +187,7 @@ pub enum TxBuilderError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SignFault {
     /// More inputs than one transaction of this shape may spend: at most
-    /// [`MAX_INPUTS`], and fewer in a deep tree, where the weight limit binds.
+    /// [`MAX_INPUTS`](crate::MAX_INPUTS), and fewer in a deep tree, where the weight limit binds.
     #[error("{count} inputs exceed the limit of {limit} per transaction")]
     TooManyInputs {
         /// How many inputs the build carried.
@@ -304,10 +310,10 @@ impl TxBuilderError {
     pub const fn fault(&self) -> SignFault {
         use InternalSignFault as I;
         let internal = match self {
-            Self::TooManyInputs(count) => {
+            Self::TooManyInputs { count, limit } => {
                 return SignFault::TooManyInputs {
                     count: *count,
-                    limit: MAX_INPUTS,
+                    limit: *limit,
                 }
             }
             Self::TooManyOutputs(count) => return SignFault::TooManyOutputs { count: *count },

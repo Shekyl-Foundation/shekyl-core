@@ -410,18 +410,24 @@ use shekyl_verify_cost::connect::{
     bp_verify, bp_verify_block, build_bp, build_connect_tx, parse_wire, pqc_verify,
     ConnectTxFixture,
 };
+use shekyl_wire::transaction::weight::max_inputs_at;
+use shekyl_wire::transaction::{MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS};
+
 use shekyl_verify_cost::relay::{admission_verify, masks_check, membership_verify, ChunkLayout};
 
 /// The candidate worst-case shapes. The argmax must EMERGE from the sweep —
 /// these are the two density extremes plus the interior, not a presumed
 /// winner.
 const SWEEP_SHAPES: [(usize, usize); 6] = [
-    (1, 2),  // modal control (relay bench's pinned shape)
-    (8, 2),  // max input density — fcmp + pqc heavy
-    (1, 16), // max output density — bp + extra heavy
-    (8, 16), // both caps
-    (4, 4),  // interior
-    (2, 8),  // interior
+    (1, MIN_NON_COINBASE_OUTPUTS), // modal control (relay bench's pinned shape)
+    (
+        max_inputs_at(MIN_NON_COINBASE_OUTPUTS, TREE_DEPTH),
+        MIN_NON_COINBASE_OUTPUTS,
+    ), // max input density — fcmp + pqc heavy
+    (1, MAX_OUTPUTS),              // max output density — bp + extra heavy
+    (max_inputs_at(MAX_OUTPUTS, TREE_DEPTH), MAX_OUTPUTS), // both at their limit
+    (4, 4),                        // interior
+    (2, 8),                        // interior
 ];
 
 /// Today's production topology: depth 2, scattered inputs. The depth axis is

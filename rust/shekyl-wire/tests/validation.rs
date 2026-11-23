@@ -165,11 +165,15 @@ fn nonempty_key_offsets_rejected() {
 
 #[test]
 fn too_many_inputs_rejected() {
-    // The cap is on total inputs (C++ caps vin.size()); 9 descending key images
-    // (so the ordering check passes) must be rejected by the input-count cap alone.
-    let ins: Vec<Input> = (1u8..=9).rev().map(ki).collect(); // 9 > MAX_FCMP_INPUTS (8)
+    // The cap is on total inputs; descending key images (so the ordering check
+    // passes) one past it must be rejected by the input-count cap alone, under
+    // the census row's name.
+    let past_the_cap = u8::try_from(shekyl_wire::transaction::MAX_FCMP_INPUTS + 1).unwrap();
+    let ins: Vec<Input> = (1..=past_the_cap).rev().map(ki).collect();
     let err = spend(ins, vec![out()], 0, 1).validate().unwrap_err();
-    assert!(err.to_string().contains("inputs exceed"), "{err}");
+    let message = err.to_string();
+    assert!(message.contains("CEN-I4"), "{message}");
+    assert!(message.contains("inputs exceed"), "{message}");
 }
 
 #[test]

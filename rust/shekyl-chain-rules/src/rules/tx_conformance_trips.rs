@@ -13,7 +13,7 @@ use crate::harness::fixture::{
 };
 use shekyl_types::KeyImage;
 use shekyl_wire::transaction::{
-    MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    MAX_FCMP_INPUTS, MAX_TX_EXTRA, MAX_TX_SIZE, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
     UNLOCK_TIME_BLOCK_SENTINEL,
 };
 use shekyl_wire::tx_extra::{self, conforming_pqc_leaf_blob, TxExtraField, HYBRID_KEM_CT_BYTES};
@@ -291,9 +291,9 @@ pub(super) fn h16_the_sentinel() -> Transaction {
     tx
 }
 
-pub(super) fn i4_nine_inputs() -> Transaction {
+pub(super) fn i4_one_past_the_cap() -> Transaction {
     let mut tx = spend2();
-    tx.prefix.inputs = (1..=9).map(spend_input).collect();
+    tx.prefix.inputs = (1..=MAX_FCMP_INPUTS + 1).map(spend_input).collect();
     tx
 }
 
