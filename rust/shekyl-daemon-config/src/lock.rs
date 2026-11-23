@@ -106,6 +106,10 @@ impl Lock {
         if !data_dir.is_dir() {
             return Err(unusable(std::io::Error::other("not a directory")));
         }
+        // Again after the create: a directory another process made between
+        // the check and the create is not this call's, and keeps its mode.
+        #[cfg(unix)]
+        Self::owner_only(data_dir)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)

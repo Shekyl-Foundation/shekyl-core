@@ -199,6 +199,14 @@ pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
                 Err(error) => return Err(error),
             }
         }
+        // What is at the path now, whoever made it, must be a directory: a
+        // file, or a link to nothing, is not one.
+        if !path.as_os_str().is_empty() && !path.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                format!("{} is not a directory", path.display()),
+            ));
+        }
         Ok(())
     }
     #[cfg(not(unix))]
@@ -498,6 +506,28 @@ mod per_account_root_tests {
             "an existing directory is not this call's"
         );
         create_account_dir_all(&data).expect("an existing directory is left as it is");
+    }
+
+    /// A path that is a file, or a link to nothing, is not a directory, and
+    /// the creator says so rather than succeeding. Red edit: drop the final
+    /// check, and both return `Ok`.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_or_a_dangling_link_at_the_path_is_refused() {
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let file = base.path().join("file");
+        std::fs::write(&file, b"").expect("a file");
+        let dangling = base.path().join("dangling");
+        std::os::unix::fs::symlink(base.path().join("nowhere"), &dangling).expect("a link");
+        for path in [&file, &dangling] {
+            let error = create_account_dir_all(path).expect_err("not a directory");
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotADirectory,
+                "{}",
+                path.display()
+            );
+        }
     }
 
     /// The root this account resolves is its home's, on every platform the

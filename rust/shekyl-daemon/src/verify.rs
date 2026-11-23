@@ -81,8 +81,13 @@ pub(crate) fn walk(
         Some(Source::Cli | Source::File { .. })
     )
     .then_some(config.data_dir.as_path());
-    shekyl_daemon_config::paths::check_service_data_home(platform, config.run_mode, explicit)
-        .map_err(one)?;
+    shekyl_daemon_config::paths::check_service_data_home(
+        platform,
+        config.run_mode,
+        explicit,
+        &config.data_dir,
+    )
+    .map_err(one)?;
     Lock::creatable(&config.data_dir).map_err(one)?;
     let network_id = network.network_id();
     marker::read(&config.data_dir, network, network_id).map_err(one)?;

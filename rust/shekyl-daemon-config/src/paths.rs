@@ -63,9 +63,13 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
 /// data directory when `data-dir` is given, otherwise the service's root.
 /// It exists, it is not a link, it is owned by the daemon's account, its
 /// mode is 0700, and the daemon is not root; otherwise the start refuses,
-/// naming the condition (`config.service.root`). A run-as-user daemon is
-/// not checked here. On Windows `service` is refused before the walk until
-/// RT-W14 builds its dispatcher, and the installer's ACL is that slice's.
+/// naming the condition (`config.service.root`). In the default layout the
+/// network's data directory `data_dir` inside the root is held to the same
+/// facts when it exists, as the console leg's socket directory check holds
+/// it at start, so the configuration check and the start agree (Rick,
+/// 2026-11-22). A run-as-user daemon is not checked here. On Windows
+/// `service` is refused before the walk until RT-W14 builds its dispatcher,
+/// and the installer's ACL is that slice's.
 ///
 /// # Errors
 ///
@@ -74,6 +78,7 @@ pub fn check_service_data_home(
     platform: &Platform,
     mode: RunMode,
     explicit_data_dir: Option<&Path>,
+    data_dir: &Path,
 ) -> Result<(), Diagnostic> {
     #[cfg(unix)]
     {
@@ -81,12 +86,13 @@ pub fn check_service_data_home(
             platform,
             mode,
             explicit_data_dir,
+            data_dir,
             rustix::process::geteuid().as_raw(),
         )
     }
     #[cfg(not(unix))]
     {
-        let _ = (platform, mode, explicit_data_dir);
+        let _ = (platform, mode, explicit_data_dir, data_dir);
         Ok(())
     }
 }
@@ -98,6 +104,7 @@ fn check_service_data_home_as(
     platform: &Platform,
     mode: RunMode,
     explicit_data_dir: Option<&Path>,
+    data_dir: &Path,
     me: u32,
 ) -> Result<(), Diagnostic> {
     if mode != RunMode::Service {
@@ -107,26 +114,36 @@ fn check_service_data_home_as(
         Some(dir) => (dir.to_path_buf(), "data-dir"),
         None => (root(platform, mode, "data-dir")?, "service"),
     };
-    let shown = home.display().to_string();
-    let refuse = |found: String| {
+    let refuse = |path: &Path, found: String| {
         Diagnostic::new(Code::ServiceRoot, Source::Machine)
             .option(option)
-            .param("path", shown.clone())
+            .param("path", path.display().to_string())
             .param("found", found)
     };
-    require_service_account(me).map_err(refuse)?;
-    let account =
-        DirectoryAccount::inspect(&home).map_err(|fault| refuse(fault.clause(Some(&shown))))?;
-    let account = account
-        .require_owner(me)
-        .map_err(|fault| refuse(fault.clause(Some(&shown))))?;
-    let mode = account.mode();
-    if mode != ACCOUNT_ONLY_MODE {
-        return Err(refuse(format!(
-            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
-        )));
+    require_service_account(me).map_err(|found| refuse(&home, found))?;
+    service_owned(&home, me).map_err(|found| refuse(&home, found))?;
+    if data_dir != home && std::fs::symlink_metadata(data_dir).is_ok() {
+        service_owned(data_dir, me).map_err(|found| refuse(data_dir, found))?;
     }
     Ok(())
+}
+
+/// `dir` is a directory, not a link, owned by `me`, mode 0700; otherwise the
+/// clause naming what it is instead.
+#[cfg(unix)]
+fn service_owned(dir: &Path, me: u32) -> Result<(), String> {
+    let shown = dir.display().to_string();
+    let account = DirectoryAccount::inspect(dir)
+        .and_then(|account| account.require_owner(me))
+        .map_err(|fault| fault.clause(Some(&shown)))?;
+    let mode = account.mode();
+    if mode == ACCOUNT_ONLY_MODE {
+        Ok(())
+    } else {
+        Err(format!(
+            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
+        ))
+    }
 }
 
 /// The configuration file's default path for a network.
@@ -183,8 +200,10 @@ mod tests {
             assert_eq!(d.code, Code::ServiceRoot);
             d.get("found").unwrap_or_default().to_owned()
         };
+        let network = home.join("testnet");
         let check = |explicit: Option<&Path>, uid| {
-            check_service_data_home_as(&platform, RunMode::Service, explicit, uid)
+            let data_dir = explicit.map_or(network.as_path(), |dir| dir);
+            check_service_data_home_as(&platform, RunMode::Service, explicit, data_dir, uid)
         };
 
         assert!(found(check(None, 4242)).contains("does not exist"));
@@ -211,8 +230,27 @@ mod tests {
         assert!(found(check(Some(&link), me)).contains("symbolic link"));
         check(Some(&home), me).expect("an explicit data directory, checked the same way");
 
-        check_service_data_home_as(&platform, RunMode::User, None, me)
+        check_service_data_home_as(&platform, RunMode::User, None, &network, me)
             .expect("a run-as-user daemon is not checked here");
+
+        // The network's data directory in the default layout, held to the
+        // console leg's facts (review finding): absent passes (the start
+        // makes it 0700); a link, or a wider mode, is named. Red edit: check
+        // only the home, and both pass.
+        check(None, me).expect("no network directory yet");
+        let elsewhere = parent.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &network).unwrap();
+        let refused = check(None, me).expect_err("a linked network directory");
+        assert_eq!(refused.get("path"), network.to_str());
+        assert!(found(Err(refused)).contains("symbolic link"));
+        std::fs::remove_file(&network).unwrap();
+        std::fs::create_dir(&network).unwrap();
+        std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found(check(None, me)).contains("not 0700"));
+        std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o700)).unwrap();
+        check(None, me).expect("the service's own 0700 network directory");
     }
 
     use super::*;

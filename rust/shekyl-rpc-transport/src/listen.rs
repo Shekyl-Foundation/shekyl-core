@@ -295,6 +295,10 @@ fn bind_owner_only_socket_observed(
         None => return Err(OwnerSocketRefusal::NoDirectory),
     };
     owner_only_socket_dir(dir).map_err(OwnerSocketRefusal::Directory)?;
+    // Held from the decision through the listen: between its bind and its
+    // listen a socket refuses a connect as a stopped server's does, so a
+    // second start probing it then would take it for stale and replace it.
+    let _start = hold_the_directory(dir)?;
     let cleared = clear_replaceable_socket(path).map_err(OwnerSocketRefusal::Path)?;
     let address = socket2::SockAddr::unix(path).map_err(OwnerSocketRefusal::Socket)?;
     let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)
@@ -327,6 +331,42 @@ fn bind_owner_only_socket_observed(
                 ),
             },
         )),
+    }
+}
+
+/// How often a start polls for another start's hold on the directory.
+#[cfg(unix)]
+const START_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Take the socket directory's exclusive lock (`flock` on the directory
+/// itself, so nothing is added to a directory its owner may remove), waiting
+/// up to [`SOCKET_PROBE_BOUND`] for another start, which holds it only from
+/// its decision to its listen. Starts on one directory therefore never
+/// interleave, and every socket a start observes is live or a stopped
+/// server's. Released when the returned file drops.
+#[cfg(unix)]
+fn hold_the_directory(dir: &std::path::Path) -> Result<std::fs::File, OwnerSocketRefusal> {
+    let held = std::fs::File::open(dir).map_err(OwnerSocketRefusal::Socket)?;
+    let deadline = std::time::Instant::now() + SOCKET_PROBE_BOUND;
+    loop {
+        match held.try_lock() {
+            Ok(()) => return Ok(held),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(START_POLL);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(OwnerSocketRefusal::Socket(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    format!(
+                        "another start held {} for longer than {SOCKET_PROBE_BOUND:?}",
+                        dir.display()
+                    ),
+                )));
+            }
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(OwnerSocketRefusal::Socket(error));
+            }
+        }
     }
 }
 
@@ -717,6 +757,32 @@ mod tests {
             bind_owner_only_socket(std::path::Path::new("/")),
             Err(OwnerSocketRefusal::NoDirectory)
         ));
+    }
+
+    /// A start waits while another start holds the socket's directory, and
+    /// past [`SOCKET_PROBE_BOUND`] refuses with nothing bound, so a socket
+    /// bound and not yet listening is never probed as a stopped server's
+    /// (review finding). Once the other start is done, the bind goes ahead.
+    /// Red edit: drop the hold, and the bind succeeds at once.
+    #[test]
+    fn a_start_waits_for_another_start_on_the_same_directory() {
+        let dir = owner_only_dir();
+        let path = dir.path().join("s.sock");
+        let other = std::fs::File::open(dir.path()).expect("the directory");
+        other.lock().expect("the other start's hold");
+        let started = std::time::Instant::now();
+        let refused = bind_owner_only_socket(&path).expect_err("another start holds it");
+        assert!(
+            started.elapsed() >= SOCKET_PROBE_BOUND,
+            "it waited out the bound"
+        );
+        assert!(
+            matches!(&refused, OwnerSocketRefusal::Socket(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "{refused:?}"
+        );
+        assert!(!path.exists(), "nothing was bound");
+        other.unlock().expect("released");
+        bind_owner_only_socket(&path).expect("bound once the other start is done");
     }
 
     /// **The bind replaces a socket whose server is gone and refuses a live
