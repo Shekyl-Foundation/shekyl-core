@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 registered, revised 2026-11-23 to signing alone at 50,000 per comparison after the localisations; no attempt yet (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 revision 2 (signing alone, 50,000): laptop PASSES; floor device INCONCLUSIVE (7.55), with the maintainer (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -658,10 +658,19 @@ above. None is chosen before then.
 ### 3.2 ML-DSA-65, transaction authorisation
 
 **Status: registered, and revised 2026-11-23 before any attempt (the
-maintainer's ruling of 2026-11-22). The laptop's attempt 1 is void: its
-control was not detected, under load on the measured core's sibling, and a
-second attempt is with the maintainer. The floor device's attempt is
-running.** The record is
+maintainer's ruling of 2026-11-22).**
+- **The laptop PASSES:** attempt 2, sign pair 1.32, null 3.38, control
+  65.73, δ₁₀ 415 ns. Attempt 1 was void: its control was not detected,
+  under load on the measured core's sibling.
+- **The floor device is INCONCLUSIVE:** attempt 1, sign pair 7.55, null
+  3.15, control 118.00, δ₁₀ 1,145 ns. Key A is about 0.4 µs faster in the
+  single-attempt signatures, about 0.03 %.
+- **Observed, not established:** on all three floor pairs the key with
+  more hints per signature is the slower. The hint count is public.
+- **The attempt is not made again.** It is with the maintainer, and no
+  option is chosen before that.
+
+The record is
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
 - **The line:** signing alone from one working slot, with the key's
   decode timed as the shipped call decodes on every call

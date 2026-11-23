@@ -1,7 +1,9 @@
 # `CA-3`, ML-DSA-65: the transaction authorisation's signing time, registered 2026-11-22
 
 **State of this record: registered, and revised on 2026-11-23 before any
-attempt (the maintainer's ruling of 2026-11-22). No attempt has been made.**
+attempt (the maintainer's ruling of 2026-11-22). The laptop PASSES
+(attempt 2, after a void attempt 1). The floor device's attempt 1 is
+INCONCLUSIVE (7.55) and is with the maintainer.**
 The revision is "Registered before the run: revision 2". It replaces the
 first registration's pass line, size and seed, and is the one the attempts
 are read against. Results are added below both, and neither registration
@@ -761,3 +763,137 @@ The fix is this gate, recorded before the run:
 byte for byte (`.gitattributes`), with `SHA256SUMS`. The conditions,
 process snapshots and samples name the machine's user profile and
 processes, so they stay in the estate's private captures.
+
+### Revision 2: the laptop's registered attempt 2 (2026-11-23): PASS
+
+Made under the gate recorded above, with the same binary (`d5fc9dbc…`) and
+command. The run completed on its first try, so no run was stopped.
+- **Before the launch:** the gate passed at 01:31:04Z on its first four
+  samples: logical processor 5 at 0.1 to 1.3 %, total 0.6 to 1.3 %,
+  Defender 0.0 to 0.9 %, no browser in any sample.
+- **Conditions:** no browser at the start or the end. The desktop AI client
+  was not running: it was closed, not paused.
+- **Run:** 01:31:09 to 01:35:40Z (271 s), exit 0.
+- **Logical processor 5 during it:** 26 ten-second samples, from 0.00 to
+  0.43 %, mean 0.06 %. None was at 5 % or more.
+- **Logical processor 4's performance counter:** 175 to 181 %.
+
+```text
+matched-pair candidates_drawn=51 fixed-a expand_s_bytes=2511 expand_a_rejected=6 replicates=true fixed-b expand_s_bytes=2511 expand_a_rejected=6 replicates=true
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=1.32 median_ns=456600 raw_sd_ns=459656
+  hints mean0=37.40 mean1=38.42 chi2=396.87 df=37 chi2_z=15.63 | within-equal-hints max_abs_t=1.35 at crop 9 at 456600 ns (n=21843, strata need >= 100 per class) | raw_mean_diff_ns=-3668.9 raw_t=-0.89
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=3.38 median_ns=544900 raw_sd_ns=459785
+control=sign-planted-leak planted_ns=2724 max_abs_t=65.73 delta10_ns=415
+information=composed-fixed-a-vs-fixed-b max_abs_t=1.43
+information=composed-planted-leak planted_ns=4139 max_abs_t=16.36 delta10_ns=2530
+information=keygen-fixed-a-vs-fixed-b max_abs_t=3.35
+information=keygen-planted-leak planted_ns=854 max_abs_t=113.01 delta10_ns=76
+result=PASS sign_pair=1.32 sign_null=3.38 sign_control=65.73 delta10_ns=415 information_composed_pair=1.43 information_keygen_pair=3.35
+```
+
+Read against the lines:
+- every check held in every comparison;
+- the control was detected (65.73);
+- the null is below 4.5 (3.38);
+- the pass line reads 1.32: **PASS**.
+
+On the laptop, a pass excludes a per-key dependence of signing, the decode
+included, of δ₁₀ = 415 ns or more (about 0.08 % of the median signature),
+and nothing smaller.
+
+**Captures:** `laptop_reg2_registered_attempt2.txt`, byte for byte (9,654
+bytes, `ca7f918c…`). The gate's script, its log, the 10-second sibling
+series and the conditions are in the estate's private captures.
+
+### Revision 2: the floor device's shake-down and registered attempt 1 (2026-11-23): INCONCLUSIVE
+
+The floor device is the 4 GB Raspberry Pi 4 (rule 76's floor, Rev 1.2,
+`c03112`). The maintainer confirmed it as the floor for these runs on
+2026-11-23, after checking that memory was not a factor:
+- 3.30 to 3.31 GB was available at the start and the end of every run;
+- no swap is configured, so nothing was paged to the SD card (the kernel's
+  swap counters read 0);
+- the harness uses tens of MB.
+
+The build and the runs:
+- **Build:** a fresh recursive clone of `84f9d24714`, `git status` clean,
+  built on the device at `-j 2` (00:45:33 to 01:04:28Z). The binary's
+  SHA-256 is
+  `e13550daad61d4b39f150fb2a0e3a9e67bb10ec5b54fa5e442264e0a3a4fd1ce`.
+- Both runs were made under a quiet claim, at 1.5 GHz, 53 to 57 °C,
+  throttled `0x0`, with the apt timers enabled (none fired).
+
+**The shake-down** (`ml-dsa-registered 20261126`, not an attempt; 01:05 to
+01:29Z) was not void, so the attempt followed as registered.
+
+```text
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=8.48
+  hints mean0=39.19 mean1=37.51 chi2=988.63 df=36 chi2_z=25.75 | within-equal-hints max_abs_t=2.26 at crop 22 at 5114580 ns (n=39797, strata need >= 100 per class) | raw_mean_diff_ns=39575.9 raw_t=1.96
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=3.39
+control=sign-planted-leak planted_ns=11139 max_abs_t=90.29 delta10_ns=1234
+result=INCONCLUSIVE sign_pair=8.48 sign_null=3.39 sign_control=90.29 delta10_ns=1234 information_composed_pair=1.83 information_keygen_pair=2.95
+```
+
+The pair's maximum is at the lowest cut-off (below 1.244 ms, the
+single-attempt signatures). Key A is slower there: +0.30 µs at that
+cut-off, and +0.50 to +0.67 µs from the 1st to the 10th percentile.
+
+**Attempt 1** (`ml-dsa-registered`, `inputs=registered`; 01:30 to 01:53Z;
+exit 1):
+
+```text
+matched-pair candidates_drawn=51 fixed-a expand_s_bytes=2511 expand_a_rejected=6 replicates=true fixed-b expand_s_bytes=2511 expand_a_rejected=6 replicates=true
+check=replica replicated=true verdict=as-intended
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=7.55 median_ns=2229474 raw_sd_ns=2238428
+  hints mean0=37.40 mean1=38.42 chi2=396.87 df=37 chi2_z=15.63 | within-equal-hints max_abs_t=1.93 at crop 5 at 1744336 ns (n=14246, strata need >= 100 per class) | raw_mean_diff_ns=-16283.5 raw_t=-0.81
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=3.15 median_ns=2701446 raw_sd_ns=2238295
+control=sign-planted-leak planted_ns=13507 max_abs_t=118.00 delta10_ns=1145
+information=composed-fixed-a-vs-fixed-b max_abs_t=1.81
+information=composed-planted-leak planted_ns=22121 max_abs_t=136.46 delta10_ns=1621
+information=keygen-fixed-a-vs-fixed-b max_abs_t=3.85
+information=keygen-planted-leak planted_ns=4749 max_abs_t=145.95 delta10_ns=325
+result=INCONCLUSIVE sign_pair=7.55 sign_null=3.15 sign_control=118.00 delta10_ns=1145 information_composed_pair=1.81 information_keygen_pair=3.85
+```
+
+Read against the lines:
+- every check held in every comparison (790 of 790 kept results verified
+  each time, no malformed hint section, the replica as intended);
+- the control was detected (118.00);
+- the null is below 4.5 (3.15);
+- the pass line reads 7.55, from 4.5 to 10: **INCONCLUSIVE.** It is not
+  made again, and it goes to the maintainer with the options.
+
+The maximum is at the lowest cut-off (below 1.243 ms, the single-attempt
+signatures). Key A is faster there: −0.26 µs at that cut-off, and −0.41 to
+−0.44 µs from the 1st to the 10th percentile. That is about 0.03 % of a
+single-attempt signature. Above the 10th percentile the quantiles do not
+move together (−1.3 to −0.3 µs, then −5 and −19 µs in the tail), and the
+raw means do not differ (t −0.81).
+
+**An observation, not a registered statistic: the direction follows the
+hint count on every floor pair.** Signing alone on the floor device, three
+matched pairs, the fastest signatures:
+
+| Pair | Hint means, A and B | A − B, 1st to 10th percentile | Figure |
+| --- | --- | --- | --- |
+| Second localisation (seed `20261124`, decode untimed) | 37.53 and 38.76 | −0.09 to +0.09 µs; −0.49 µs below the crop-1 cut-off | 3.66 |
+| Revision 2's shake-down (seed `20261126`) | 39.19 and 37.51 | +0.50 to +0.67 µs | 8.48 |
+| Revision 2's attempt 1 (registered seed) | 37.40 and 38.42 | −0.41 to −0.44 µs | 7.55 |
+
+In each, the key with more hints per signature is the slower one in the
+single-attempt mode. The size is about 0.3 to 0.4 µs per hint. The laptop
+shows the same direction on the same pairs at about 0.1 µs (shake-down
++0.1, attempt 2 −0.1, at the 1st percentile).
+- The within-equal-hints figure cannot test this where the effect sits.
+  At the lowest cut-off, no hint count holds the 100 per class the method
+  requires: about 1,500 signatures per class are spread over some 30 hint
+  counts.
+- The registered captures keep summaries, not per-signature times. So
+  this observation cannot be tested from them.
+- The hint count is public: it is the signature's last byte. If it is the
+  carrier, the timing tells an observer nothing the signature does not.
+  It is not established.
+
+**Captures:** `floor_reg2_*` with `SHA256SUMS`: the build's files and
+log, both runs' outputs, and their conditions. They are redacted as before;
+the raw files are in the estate's private captures.
