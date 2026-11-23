@@ -897,3 +897,68 @@ shows the same direction on the same pairs at about 0.1 µs (shake-down
 **Captures:** `floor_reg2_*` with `SHA256SUMS`: the build's files and
 log, both runs' outputs, and their conditions. They are redacted as before;
 the raw files are in the estate's private captures.
+
+## Diagnostics after the floor's registered attempt (2026-11-23)
+
+The maintainer's direction of 2026-11-23: an inconclusive result is a reason
+to investigate. **Everything in this section is a diagnostic.** The registered
+floor attempt stays recorded as inconclusive at 7.55, and no figure here is a
+pass or a second attempt, whatever a run's result line prints.
+
+### Step 1, method, fixed before the run: is the public hint count the carrier?
+
+**The run.** The floor device under a quiet claim, a fresh clone of the commit
+that carries this section, and `ca3_pq_sign_timing ml-dsa-dump DIR`.
+- **A new build, so a new code layout.** Its SHA-256 is recorded with the
+  result. From the registered commit `84f9d24714` to this one, nothing on the
+  signing path moved: the toolchain file, the build profiles, `rust/.cargo`,
+  `shekyl-crypto-pq/src`, and the locked versions of fips204, sha3, keccak,
+  zeroize, sha2, ed25519-dalek, curve25519-dalek, hkdf and digest.
+- **The same inputs.** The registered seed, with the same draws in the same
+  order: the matched pair, then the signing pair, its null and its control at
+  50,000 samples. `compare_op` and `sign_comparisons` are unchanged.
+- **The dump.** The three comparisons' per-signature class, time and hint count
+  are held in memory and written only after the control's loop, so no file I/O
+  falls inside or between the timed loops.
+
+**The analysis** is `ca3_ml_dsa_hint_carrier_20261123.py`, committed here and
+tested on synthetic dumps with a known slope and key term. On the entries after
+the calibration batch, in two windows:
+- **First-attempt signatures:** time below **1,500,000 ns**, a fixed time inside
+  the gap between the first-attempt mode (about 1.24 to 1.27 ms) and the
+  second-attempt mode (about 1.74 ms).
+- **The lowest sub-mode:** time below a boundary set once, blind to class, from
+  the null's pooled first-attempt times: the centre of the first valley in a
+  500 ns histogram (at or below 20 % of the first peak). If no valley begins
+  within 30 µs, the boundary is 1,250,000 ns.
+
+No sample inside a window is removed. Interrupt-hit samples stay, and the
+standard errors are heteroskedasticity-robust (HC1). Per window:
+- each key's slope of time on hint count, in ns per hint, with its standard
+  error;
+- the pooled model `time ~ key + hints`: the key term (A − B, ns) with its `t`,
+  and the shared slope with its `t`;
+- the unadjusted A − B difference, with its Welch `t`.
+
+**The prediction:** tens of ns per hint. `hint_bit_pack`
+(`conversion.rs:277`) is a branch and a store per hint.
+
+**Void, and made again only after its cause is named:**
+- a registered check fails, the control is not detected, or the null is at or
+  above 4.5;
+- the hint statistics differ from the registered attempt's (pair 37.40 and
+  38.42, χ² 396.87, 25,134 and 24,866 entries; null χ² 21.58; control χ²
+  42.05). Hint counts do not depend on the device or the build, so a difference
+  means the inputs differ;
+- the model's key term on the null reaches `|t|` 4.5 in either window;
+- the model's key term on the control is more than 25 % from the planted size.
+
+**The reading, on the pair:**
+- **Carried by the hint count:** a difference is present (unadjusted `|t|` ≥ 4.5
+  in a window), and in **both** windows the shared slope is at least 100 ns per
+  hint with `|t|` ≥ 4.5 and the key term's `|t|` is below 4.5. It is then
+  harmless, and the diagnostics go to the close.
+- **Vacuous:** this build's unadjusted `|t|` is below 4.5 in both windows, so
+  there is no difference for the hint count to carry. That proves nothing about
+  the carrier. It is recorded as a layout data point, and Step 2 follows.
+- **Not carried:** anything else. Step 2 follows.

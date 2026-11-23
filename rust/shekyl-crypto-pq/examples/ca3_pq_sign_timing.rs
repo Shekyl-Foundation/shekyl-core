@@ -169,6 +169,10 @@ enum Mode {
     /// key decode timed; the composed call and key generation alone as
     /// information.
     MlDsaRegistered,
+    /// Diagnostic, not an attempt: the registered session's signing line
+    /// alone, on its seed, with each comparison's per-signature class, time
+    /// and hint count written to a directory after the last loop.
+    MlDsaDump,
 }
 
 /// A class's secrets: one secret for every entry, or a fresh one per entry.
@@ -1482,9 +1486,94 @@ fn ml_dsa_registered(sizing: Sizing, inputs: &mut Inputs, seed: u64) -> ! {
     std::process::exit(i32::from(!passed));
 }
 
+/// Write one comparison's per-signature vectors as CSV, the calibration
+/// batch included and marked in the header.
+fn write_dump(path: &std::path::Path, label: &str, compared: &Compared, sizing: Sizing) {
+    use std::io::Write as _;
+    let (_, which, times, hints) = compared;
+    let file = std::fs::File::create(path).expect("the dump file is created");
+    let mut out = std::io::BufWriter::new(file);
+    writeln!(
+        out,
+        "# label={label} samples={} calibration={}",
+        sizing.samples, sizing.calibration
+    )
+    .expect("the dump is written");
+    writeln!(out, "index,class,time_ns,hint").expect("the dump is written");
+    for (index, ((class, time), hint)) in which.iter().zip(times).zip(hints).enumerate() {
+        writeln!(out, "{index},{class},{time},{hint}").expect("the dump is written");
+    }
+    out.flush().expect("the dump is written");
+}
+
+/// The hint-carrier diagnostic's run (CA-3 ML-DSA, 2026-11-23): the
+/// registered session's opening, with the same draws in the same order (the
+/// matched pair, then the signing pair, its null and its control through
+/// [`sign_comparisons`] with the decode timed). The three comparisons' vectors
+/// are held in memory and written to `dir` only after the control's loop, so
+/// no file I/O falls inside or between the timed loops. Diagnostic: not an
+/// attempt, whatever its result line reads.
+fn ml_dsa_dump(dir: &str, sizing: Sizing, inputs: &mut Inputs, seed: u64) -> ! {
+    println!(
+        "CA-3 ML-DSA-65 per-signature dump, diagnostic (not an attempt): signing alone from one \
+         working slot, the key decoded inside the timed call"
+    );
+    println!(
+        "arch={} os={} mode=ml-dsa-dump samples_per_comparison={} calibration={} crops={CROPS} \
+         seed={}",
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        sizing.samples,
+        sizing.calibration,
+        if seed == ML_DSA_REGISTERED_SEED {
+            "registered".to_string()
+        } else {
+            seed.to_string()
+        }
+    );
+    let (a, b, a_work, b_work, drawn) = matched_ml_dsa_pair(inputs);
+    let replicated = print_matched_pair(drawn, &a_work, &b_work);
+    let (pair, null, control, planted_ns) = sign_comparisons(&a, &b, true, sizing, inputs);
+    report_slot("diagnostic=sign-fixed-a-vs-fixed-b", &pair, sizing, true);
+    report_slot("null=sign-fixed-a-vs-fixed-a-again", &null, sizing, true);
+    report_slot(
+        "control=sign-fixed-a-vs-fixed-a-again(planted 0.5%)",
+        &control,
+        sizing,
+        true,
+    );
+    println!(
+        "control=sign-planted-leak planted_ns={planted_ns:.0} max_abs_t={:.2} delta10_ns={:.0}",
+        control.0.max_t,
+        delta_10(planted_ns, control.0.max_t)
+    );
+    let directory = std::path::Path::new(dir);
+    std::fs::create_dir_all(directory).expect("the dump directory is created");
+    for (name, compared) in [("pair", &pair), ("null", &null), ("control", &control)] {
+        write_dump(
+            &directory.join(format!("{name}.csv")),
+            name,
+            compared,
+            sizing,
+        );
+    }
+    let checks = replicated && pair.0.checks_hold && null.0.checks_hold && control.0.checks_hold;
+    let (words, passed) = read_lines(checks, pair.0.max_t, null.0.max_t, control.0.max_t);
+    println!(
+        "diagnostic-result={words} sign_pair={:.2} sign_null={:.2} sign_control={:.2} \
+         delta10_ns={:.0}",
+        pair.0.max_t,
+        null.0.max_t,
+        control.0.max_t,
+        delta_10(planted_ns, control.0.max_t),
+    );
+    std::process::exit(i32::from(!passed));
+}
+
 fn usage() -> ! {
     eprintln!(
         "usage: ca3_pq_sign_timing ml-dsa-registered [SEED]\n       \
+         ca3_pq_sign_timing ml-dsa-dump DIR [SEED]\n       \
          ca3_pq_sign_timing ml-dsa SAMPLES SEED\n       \
          ca3_pq_sign_timing ml-dsa-keygen SAMPLES SEED\n       \
          ca3_pq_sign_timing ml-dsa-sign SAMPLES SEED\n       \
@@ -1509,6 +1598,17 @@ fn main() {
             arg(2).map_or(ML_DSA_REGISTERED_SEED, |s| number(Some(s), "SEED")),
             None,
         ),
+        Some("ml-dsa-dump") => {
+            if arg(2).is_none() {
+                usage();
+            }
+            (
+                Mode::MlDsaDump,
+                Sizing::new(ML_DSA_SAMPLES, ML_DSA_CALIBRATION_DIVISOR),
+                arg(3).map_or(ML_DSA_REGISTERED_SEED, |s| number(Some(s), "SEED")),
+                None,
+            )
+        }
         // The diagnostic ML-DSA modes take an explicit size and seed, so no
         // diagnostic draws the registered pair.
         Some(name @ ("ml-dsa" | "ml-dsa-keygen" | "ml-dsa-sign")) => (
@@ -1545,6 +1645,9 @@ fn main() {
     match mode {
         Mode::MlDsaKeygen | Mode::MlDsaSign => ml_dsa_localisation(mode, sizing, &mut inputs, seed),
         Mode::MlDsaRegistered => ml_dsa_registered(sizing, &mut inputs, seed),
+        Mode::MlDsaDump => {
+            ml_dsa_dump(arg(2).unwrap_or_else(|| usage()), sizing, &mut inputs, seed)
+        }
         Mode::MlDsa | Mode::SlhDsa | Mode::SlhDsaNoise => {}
     }
 
@@ -1556,7 +1659,7 @@ fn main() {
                  (the registered line is ml-dsa-registered)",
             Mode::SlhDsa | Mode::SlhDsaNoise =>
                 "SLH-DSA-SHA2-192s message signature (fips205 0.5.0)",
-            Mode::MlDsaKeygen | Mode::MlDsaSign | Mode::MlDsaRegistered => {
+            Mode::MlDsaKeygen | Mode::MlDsaSign | Mode::MlDsaRegistered | Mode::MlDsaDump => {
                 unreachable!("handled above")
             }
         }
@@ -1640,7 +1743,7 @@ fn main() {
                 planted_ns,
             )
         }
-        Mode::MlDsaKeygen | Mode::MlDsaSign | Mode::MlDsaRegistered => {
+        Mode::MlDsaKeygen | Mode::MlDsaSign | Mode::MlDsaRegistered | Mode::MlDsaDump => {
             unreachable!("handled above")
         }
         Mode::SlhDsa | Mode::SlhDsaNoise => {
