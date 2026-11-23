@@ -263,17 +263,27 @@ fn which(name: &str, path_var: Option<&std::ffi::OsStr>) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     fn matrix() -> Matrix {
         Matrix::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("matrix.toml")).expect("matrix")
+    }
+
+    /// A file that exists on every build machine, standing for the compiler
+    /// and the archiver: found by name on [`tool_path`], as a real one is.
+    const TOOL: &str = "matrix.toml";
+
+    /// The `PATH` the fixture's tool is on.
+    fn tool_path() -> OsString {
+        OsString::from(env!("CARGO_MANIFEST_DIR"))
     }
 
     fn fill() -> Fill {
         Fill {
             depends: Some(DependsEnv {
                 prefix: "/d/x86_64-apple-darwin11".to_owned(),
-                cc: "/bin/sh -m64".to_owned(),
-                ar: "/bin/sh".to_owned(),
+                cc: format!("{TOOL} -m64"),
+                ar: TOOL.to_owned(),
             }),
             target_dir: PathBuf::from("/r/rust/target"),
             identity: Some(Identity {
@@ -327,20 +337,23 @@ mod tests {
     fn cc_is_the_first_word_of_depends_cc() {
         let m = matrix();
         let (host, dist) = m.dist_host("x86_64-linux-gnu").expect("host");
-        let p = plan(&m, host, &dist.invocation, &fill(), false, None).expect("plan");
+        let path = tool_path();
+        let p = plan(&m, host, &dist.invocation, &fill(), false, Some(&path)).expect("plan");
         let cc = p
             .env
             .iter()
             .find(|(n, _)| n == "CC_x86_64_unknown_linux_gnu")
             .expect("CC");
-        assert_eq!(cc.1, "/bin/sh");
+        let found = Path::new(env!("CARGO_MANIFEST_DIR")).join(TOOL);
+        assert_eq!(Path::new(&cc.1), found);
     }
 
     #[test]
     fn the_measurement_build_adds_exactly_the_three_features() {
         let m = matrix();
         let (host, dist) = m.dist_host("x86_64-linux-gnu").expect("host");
-        let p = plan(&m, host, &dist.invocation, &fill(), true, None).expect("plan");
+        let path = tool_path();
+        let p = plan(&m, host, &dist.invocation, &fill(), true, Some(&path)).expect("plan");
         let at = p
             .args
             .iter()
@@ -353,7 +366,8 @@ mod tests {
     fn windows_binaries_carry_exe() {
         let m = matrix();
         let (host, dist) = m.dist_host("x86_64-w64-mingw32").expect("host");
-        let p = plan(&m, host, &dist.invocation, &fill(), false, None).expect("plan");
+        let path = tool_path();
+        let p = plan(&m, host, &dist.invocation, &fill(), false, Some(&path)).expect("plan");
         assert!(p
             .outputs
             .iter()
