@@ -75,8 +75,10 @@ pre-releases). Recommended: `v3.0.0-rc.1`, `-rc.2`, … for rehearsals. **The fi
 non-pre-release tag is reserved for the genesis mainnet release.** This uses the
 existing machinery and keeps the trust boundary legible to anyone verifying.
 
-**The release-tag grammar.** A commit is a release only if one of its tags
-matches this in full, and two matching tags on one commit are refused:
+**The release-tag grammar.** A release tag in `shekyl-core` or
+`shekyl-gui-wallet` matches this in full. In `shekyl-core`, a commit is a
+release only if one of its tags matches, and two matching tags on one commit
+are refused:
 
 ```text
 ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$
@@ -84,7 +86,7 @@ matches this in full, and two matching tags on one commit are refused:
 
 A pre-release is the same grammar with its suffix restricted to `alpha`, `beta`
 or `rc`, with no optional `v` and no ignored case. `RC` is listed as itself
-because 17 existing tags carry it; new tags use `rc`:
+because 17 of `shekyl-core`'s existing tags carry it; new tags use `rc`:
 
 ```text
 ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$
@@ -92,6 +94,14 @@ because 17 existing tags carry it; new tags use `rc`:
 
 `RELEASE_TAG_GRAMMAR` in `rust/xtask/src/version.rs` is canonical, and
 `scripts/ci/check_release_tag_grammar.py` holds every other reader to it.
+
+The grammar covers git tags and no package version. The GUI has one mapping:
+its package version (`package.json`, synced to `src-tauri/Cargo.toml` and
+`tauri.conf.json`) is the tag without its `v`, with the first `-` written as
+`+`, so `v3.1.0-alpha.12` is `3.1.0+alpha.12`. Tauri needs SemVer and RPM
+forbids `-` (the GUI's README, "Version management").
+
+The displayed name converts it back (the GUI's `vite.config.ts`).
 
 Three version axes stay distinct and live in one authority doc:
 - **Software semver** (`v3.x`) — MAJOR bumps only on consensus-incompatible
