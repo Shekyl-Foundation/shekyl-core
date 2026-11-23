@@ -8,7 +8,7 @@
 //! One order, so the wallet RPC, the daemon's owner socket, the daemon's
 //! console leg and the tunnel cannot disagree: the directory is this
 //! account's alone, what is at the path is replaceable and is removed, the
-//! socket is created close-on-exec, bound, narrowed to
+//! socket is created and close-on-exec before its bind, bound, narrowed to
 //! [`OWNER_ONLY_SOCKET_MODE`], and only then listens. The directory check
 //! and the replace decision are this module's; a caller reaches them
 //! through [`bind_owner_only_socket`], which holds the directory from the
@@ -255,7 +255,10 @@ impl OwnerOnlyListener {
 /// In order: `path`'s directory must be this account's alone (not a link,
 /// owned by this account, and not enterable by its group or by others);
 /// what is at `path` must be replaceable, and is removed; then the socket
-/// is created (close-on-exec from creation), bound, narrowed to
+/// is created (close-on-exec before its bind: atomically on Linux and
+/// FreeBSD, and just after creation on macOS, whose `socket` has no such
+/// flag; every production spawn also marks descriptors from 3 up
+/// close-on-exec in the child, `shekyl_spawn::inherit`), bound, narrowed to
 /// [`OWNER_ONLY_SOCKET_MODE`], and only then listens. Until it listens a
 /// connect is refused, so no account but this one ever connects to it at a
 /// wider mode, whatever the umask. The directory stays mandatory: it is the

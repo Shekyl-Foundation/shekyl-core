@@ -103,8 +103,10 @@ daemon's owner socket, the daemon's console leg and the RPC tunnel — binds
 through one function, `shekyl_rpc_transport::listen::bind_owner_only_socket`.
 In order: the socket's directory must be this account's alone; what is at the
 path must be nothing, or a socket this account owns whose server is gone
-(the listeners' shared replace decision); then the socket is created
-close-on-exec, bound, narrowed to `0600`, and only then listens. Each
+(the listeners' shared replace decision); then the socket is created and
+close-on-exec before its bind (atomically on Linux and FreeBSD; just after
+creation on macOS, where every production spawn's `shekyl_spawn::inherit`
+closes it in the child), bound, narrowed to `0600`, and only then listens. Each
 listener keeps only its own wording of a refusal, and the post-bind chmod
 steps are deleted. This supersedes the 2026-11-21 ruling's acceptance
 (#1490) that a socket's own `0600` comes after its bind and its directory

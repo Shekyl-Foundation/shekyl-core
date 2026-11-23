@@ -79,7 +79,8 @@ tracing = "0.1"
 # The shared socket bind (`listen::bind_owner_only_socket`): bind, narrow to
 # 0600, then listen, which tokio's and std's one-call bind cannot order, and
 # the replace decision's bounded probe, without unsafe code. Close-on-exec
-# from creation. Already in the workspace lockfile (through tokio), and a
+# before the bind (atomic at creation on Linux and FreeBSD, just after it on
+# macOS). Already in the workspace lockfile (through tokio), and a
 # direct dependency of shekyl-levin.
 socket2 = "0.6"
 

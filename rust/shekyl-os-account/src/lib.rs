@@ -154,6 +154,26 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
 /// gives every directory it creates on Unix, whatever the umask.
 pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
 
+/// Brings a directory this process just made to [`OWNER_ONLY_DIR_MODE`],
+/// through a handle that refuses a symbolic link. Under a writable parent
+/// another account can swap the new name for a link before this runs, and a
+/// `chmod` by path would follow it and change a directory this account owns
+/// elsewhere. Under an ordinary umask `mkdir` already gave the mode and nothing
+/// is changed. A umask that removes the owner's own read bit makes the open
+/// fail, and the create reports it.
+#[cfg(unix)]
+fn settle_new_dir_mode(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let made = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(dir)?;
+    if made.metadata()?.permissions().mode() & directory::PERMISSION_BITS != OWNER_ONLY_DIR_MODE {
+        made.set_permissions(std::fs::Permissions::from_mode(OWNER_ONLY_DIR_MODE))?;
+    }
+    Ok(())
+}
+
 /// Creates `path` and every directory above it that is missing, the way
 /// the daemon creates its data directory (Rick, 2026-11-22).
 ///
@@ -176,7 +196,7 @@ pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
 pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        use std::os::unix::fs::DirBuilderExt;
         // The missing directories, innermost first.
         let mut missing = Vec::new();
         let mut at = Some(path);
@@ -195,10 +215,7 @@ pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
                 .mode(OWNER_ONLY_DIR_MODE)
                 .create(dir)
             {
-                Ok(()) => std::fs::set_permissions(
-                    dir,
-                    std::fs::Permissions::from_mode(OWNER_ONLY_DIR_MODE),
-                )?,
+                Ok(()) => settle_new_dir_mode(dir)?,
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
@@ -510,6 +527,38 @@ mod per_account_root_tests {
             "an existing directory is not this call's"
         );
         create_account_dir_all(&data).expect("an existing directory is left as it is");
+    }
+
+    /// The new directory's mode is settled through a handle that refuses a
+    /// link, so a name swapped for a link in the moment after `mkdir` cannot
+    /// redirect the change to a directory elsewhere. Red edit: `chmod` by path,
+    /// and the link's target becomes 0700.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_swapped_for_a_link_does_not_redirect_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |dir: &Path| {
+            std::fs::metadata(dir)
+                .expect("the directory's metadata")
+                .permissions()
+                .mode()
+                & directory::PERMISSION_BITS
+        };
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let elsewhere = base.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).expect("made");
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o750)).expect("set");
+        let swapped = base.path().join("swapped");
+        std::os::unix::fs::symlink(&elsewhere, &swapped).expect("a link");
+        settle_new_dir_mode(&swapped).expect_err("a link is refused");
+        assert_eq!(mode(&elsewhere), 0o750, "the link's target is untouched");
+
+        // A umask that narrowed the owner's bits is brought back to the mode.
+        let narrowed = base.path().join("narrowed");
+        std::fs::create_dir(&narrowed).expect("made");
+        std::fs::set_permissions(&narrowed, std::fs::Permissions::from_mode(0o600)).expect("set");
+        settle_new_dir_mode(&narrowed).expect("a directory of its own");
+        assert_eq!(mode(&narrowed), OWNER_ONLY_DIR_MODE);
     }
 
     /// A path that is a file, or a link to nothing, is not a directory, and
