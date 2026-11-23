@@ -172,6 +172,14 @@ jobs:
             python3 scripts/ci/nightly_red.py --selftest
           run_one "The nightly reporters need every job and report timeouts" \
             python3 scripts/ci/nightly_red.py --check
+          # A nightly leg whose key (commit, workflow file, toolchain pin,
+          # test-chain pins, runner image) matches a scheduled run in the
+          # last week where it passed is skipped; the never-skipped jobs
+          # each say why, and a failed planner runs every leg.
+          run_one "An unchanged nightly leg is skipped, at least weekly run (selftest)" \
+            python3 scripts/ci/nightly_skip.py --selftest
+          run_one "Every nightly job is planned or never skipped, with why" \
+            python3 scripts/ci/nightly_skip.py --check
           run_one "A merge re-tests the labelled pull requests it reaches (selftest)" \
             python3 scripts/ci/merge_ready_overlap.py --selftest
           run_one "merge-ready: an early label refused, a push clears it, the newest dev's re-test stands (selftest)" \
