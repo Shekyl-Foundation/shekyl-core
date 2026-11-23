@@ -1491,6 +1491,10 @@ pub use txid::{
 mod signing_preimage;
 pub use signing_preimage::{tx_signable, PqcSigningPreimage, FCMP_SPEND_SIGNING, TX_SIGNABLE};
 
+pub mod weight;
+#[cfg(test)]
+mod weight_tests;
+
 /// A transaction's bytes as the chain store's three segments.
 ///
 /// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s

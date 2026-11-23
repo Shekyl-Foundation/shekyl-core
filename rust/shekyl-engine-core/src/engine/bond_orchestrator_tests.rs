@@ -882,7 +882,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
 
 /// The P-lane weight ceiling covers every legal spend shape — including the
 /// one the retired `32 * 1024` constant missed: the depth-24 8-input drain,
-/// whose FCMP++ proof alone (33,600 bytes, `FCMP_PROOF_SIZE_KAT[8][24]`)
+/// whose FCMP++ proof alone (32,704 bytes, `fcmp_proof_len(8, 24)`)
 /// exceeded the old ceiling before a single input auth was counted. A fee
 /// quoted under a too-small ceiling undercut the daemon's per-byte floor, so
 /// a legal multi-input drain was refused at relay — and, until the drain

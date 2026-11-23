@@ -108,8 +108,8 @@ pub(crate) fn build_fee_directive(
 mod tests {
     use super::*;
     use shekyl_rpc_client::FeeRate;
-    // Weight model lives in shekyl-tx-weight; the KAT-validation tests below own
-    // the synthetic-tree measurement machinery and cross-check the hoisted table.
+    // The weight model lives in shekyl-wire; the validation tests below own the
+    // synthetic-tree measurement machinery and cross-check its closed form.
     use shekyl_tx_weight::fcmp_proof_size;
 
     #[test]
@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow: emit FCMP_PROOF_SIZE_KAT table; run with --ignored --nocapture"]
+    #[ignore = "slow: emit the measured proof lengths (shekyl-wire weight_tests); run with --ignored --nocapture"]
     fn kat_emit_fcmp_proof_size_table() {
         for n_in in 1..=8usize {
             print!("        [0");

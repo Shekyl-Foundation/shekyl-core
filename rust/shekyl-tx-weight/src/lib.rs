@@ -3,18 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Structural transaction-weight predictor + bounded input/output counts.
+//! Spend shapes, bounded input/output counts and the fee loop, on top of the
+//! weight model in `shekyl_wire::transaction::weight`.
 //!
-//! [`predict_weight`] mirrors `shekyl_wire::Transaction::write` byte-for-byte
-//! (and adds the same Bp+ clawback), so it equals the post-build
-//! `Transaction::weight()` **without constructing a transaction** — pinned by
-//! the `predict_weight_matches_wire_weight` test (the single-source
-//! guarantee). The `fcmp_proof_size` term reads the measured 2a-3 KAT table.
-//! [`predict_spend_weight`] is the same field model for any spend's
-//! [`SpendShape`]: its [`Signer`] (a single signer, or a multisig group
-//! whose inputs each carry the group's key blob and `m`-signature
-//! container, scheme 2) and the groups it pays, each output paying a group
-//! carrying its `0x0D` entry.
+//! [`predict_weight`] is that model at a solo spend's auth, so it equals the
+//! post-build `Transaction::weight()` **without constructing a transaction** —
+//! pinned by the `predict_weight_matches_wire_weight` test (the single-source
+//! guarantee). [`predict_spend_weight`] is the same model for any spend's
+//! [`SpendShape`]: its [`Signer`] (a single signer, or a multisig group whose
+//! inputs each carry the group's key blob and `m`-signature container, scheme
+//! 2) and the groups it pays, each output paying a group carrying its `0x0D`
+//! entry.
 //!
 //! **Two parity tests, different jobs.** The one named above builds a wire
 //! `Transaction` *by hand* at five shapes, so it pins the field model against a
@@ -23,26 +22,36 @@
 //! emits, across every `n_in x n_out x L` a spend can take and every `u64` fee
 //! varint length. Under FL-R23's zero relay slack a one-byte prediction error
 //! is a hard bounce, so that gate is what justifies deleting the inherited 2%
-//! admission cushion; edit this function and run it.
+//! admission cushion; edit the model and run it.
 //!
-//! Hoisted from `shekyl-engine-core` (§12.3 D-1) so the wallet fee path **and**
-//! `shekyl-economics-sim`'s W9 stuffer arm share one single-sourced weight model
-//! rather than a replicated byte formula. The fee loop is
+//! The wallet fee path **and** `shekyl-economics-sim`'s W9 stuffer arm read
+//! this crate (§12.3 D-1), so they share one weight model. The fee loop is
 //! [`converge_weight_fee_by`]: the caller supplies the pricer, so the lattice
 //! stays out of this crate. [`converge_weight_fee`] is that loop with the
-//! unrounded product. The dependency surface stays the wire layout + proof sizes
-//! ({`shekyl-wire`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-curve-io`}),
-//! no RPC or wallet types. The FCMP proof-size KAT's *validation* against real
+//! unrounded product. It stays apart from the wire crate because a fee loop and
+//! wallet shape types are wallet-side API, and the wire is the consensus
+//! transport (`ICD-R1`). The proof length's *validation* against real
 //! synthetic-tree measurements stays in engine-core (where the measurement
 //! machinery lives) and calls the `pub` [`fcmp_proof_size`] here.
 #![deny(unsafe_code)]
 
-use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_crypto_pq::multisig::{
     MultisigKeyBlob, MultisigSigContainer, MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD,
 };
 use shekyl_curve_io::varint_len;
-use shekyl_wire::tx_extra::{MultisigEntry, PQC_LEAF_ENTRY_LEN};
+use shekyl_wire::transaction::weight::{
+    self, bp_plus_clawback_weight, fcmp_proof_len, pqc_auth_weight, pqc_auth_weight_of,
+};
+use shekyl_wire::tx_extra::MultisigEntry;
+#[cfg(test)]
+use {
+    shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN,
+    shekyl_wire::transaction::weight::{
+        extra_kem_field_weight, extra_leaf_hashes_field_weight, EXTRA_PUBKEY_FIELD_WEIGHT,
+    },
+    shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN},
+    shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN,
+};
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
 // via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
 // and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
@@ -52,9 +61,6 @@ use shekyl_wire::tx_extra::{MultisigEntry, PQC_LEAF_ENTRY_LEN};
 use shekyl_fcmp::MAX_INPUTS;
 pub use shekyl_fcmp::MAX_TREE_DEPTH;
 pub use shekyl_wire::transaction::MAX_OUTPUTS;
-use shekyl_wire::transaction::{
-    bp_plus_weight_clawback, PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN, TX_VERSION,
-};
 
 // ── Bounded input/output counts ─────────────────────────────────────────────
 
@@ -151,165 +157,15 @@ pub struct SpendShape<'a> {
     pub group_payees: &'a [GroupSize],
 }
 
-// ── Wire-exact component sizes ──────────────────────────────────────────────
-// Each constant is one field of `shekyl_wire::Transaction::write`; `predict_weight`
-// sums them so it equals `Transaction::weight()` exactly. Sizes with a canonical
-// home are imported, not re-typed (the hybrid PQC pk/sig lengths come from
-// `shekyl_wire`).
+// ── The model at a shape ────────────────────────────────────────────────────
 
-/// `Input::ToKey`: tag + varint(amount=0) + varint(key_offsets=0) + key_image.
-const INPUT_TO_KEY_WEIGHT: usize = 1 + 1 + 1 + 32;
-/// `Output`: varint(amount=0) + tag + one-time key + view_tag.
-const OUTPUT_WEIGHT: usize = 1 + 1 + 32 + 1;
-/// `CtBase` per output: enc_amount + enc_label + commitment.
-const CT_BASE_PER_OUTPUT_WEIGHT: usize = 9 + 9 + 32;
-/// `reference_block` hash in the ct base.
-const REFERENCE_BLOCK_LEN: usize = 32;
-/// `pseudoOut` commitment per input in the prunable.
-const PSEUDO_OUT_LEN: usize = 32;
-/// `ExtraField::PublicKey`: tag + Edwards point.
-const EXTRA_PUBKEY_FIELD_WEIGHT: usize = 1 + 32;
-
-/// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
-/// `n_in ∈ 0..=8` and `tree_depth ∈ 0..=24` (row/col 0 are unused sentinels).
-///
-/// Emitted by `kat_emit_fcmp_proof_size_table` (in engine-core, where the
-/// synthetic-tree measurement machinery lives) from the depth-consistent
-/// single-path synthetic trees (PF7). The depth-1 column equals the
-/// independently-known depth-1 row, which cross-validates the measurement. The
-/// series is **non-monotonic** in depth (the FCMP++ inner-product argument
-/// rounds), so this is a lookup table, not a closed-form per-layer increment.
-/// engine-core's `kat_fcmp_proof_size_grid` validates every cell against
-/// re-measurement (`#[ignore]`; ~slow); `kat_fcmp_proof_size_depth1_row` guards
-/// the depth-1 column in CI. Both call the `pub` [`fcmp_proof_size`] below.
-///
-/// Re-measured 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
-/// in-circuit commitment-opening leg adds one claimed point and a discrete-log
-/// gadget per input and removes the per-input extra-scalar branch, so every
-/// cell moved (single-input proofs +128 B at depth 1; multi-input proofs
-/// smaller than before at most depths — census companion §8).
-const FCMP_PROOF_SIZE_KAT: [[usize; 25]; 9] = [
-    [0; 25],
-    [
-        0, 3872, 4512, 4896, 5536, 5920, 6560, 5984, 6624, 6880, 6304, 6560, 6944, 7200, 7584,
-        7840, 8224, 7648, 6944, 7200, 7456, 7584, 7840, 8096, 8352,
-    ],
-    [
-        0, 5760, 7040, 6208, 7488, 8000, 7808, 7360, 8128, 8512, 8064, 8448, 8960, 9344, 9856,
-        10240, 10752, 10304, 9728, 10112, 10496, 10752, 11136, 11520, 11904,
-    ],
-    [
-        0, 5664, 7584, 8352, 8800, 8224, 8288, 8800, 9568, 10208, 10976, 10528, 10208, 10720,
-        11360, 11872, 12384, 12896, 13536, 13920, 14432, 14944, 14624, 14432, 14816,
-    ],
-    [
-        0, 6784, 9344, 8768, 9344, 10112, 10176, 9984, 11008, 11648, 11456, 12096, 12864, 13504,
-        14272, 14912, 15680, 15488, 15168, 15808, 16448, 16960, 17600, 18240, 18880,
-    ],
-    [
-        0, 6304, 8288, 9312, 10016, 9824, 11104, 11872, 11936, 12704, 13728, 14624, 15520, 15456,
-        15392, 16032, 16800, 17568, 18464, 19232, 20000, 20640, 21408, 22176, 22944,
-    ],
-    [
-        0, 7168, 9536, 10688, 11520, 11328, 11776, 12672, 13824, 14848, 16000, 15936, 16000, 16896,
-        17920, 18816, 19712, 20608, 21632, 22400, 23296, 24192, 24256, 24448, 25216,
-    ],
-    [
-        0, 8032, 10784, 10720, 11680, 12832, 13408, 14432, 15712, 15904, 16224, 17248, 18400,
-        19424, 20576, 21472, 22496, 23520, 24672, 25696, 25760, 25952, 26976, 28000, 29024,
-    ],
-    [
-        0, 8768, 11904, 11840, 12928, 14208, 14784, 15104, 16640, 17792, 18112, 19264, 20544,
-        21696, 22976, 24128, 25408, 25728, 25920, 27072, 28224, 29248, 30400, 31552, 32704,
-    ],
-];
-
-/// Compile-time guard tying the table's dimensions to the canonical proof-system
-/// limits: the rows cover `n_in ∈ 0..=MAX_INPUTS` and the columns
-/// `tree_depth ∈ 0..=MAX_TREE_DEPTH` (index 0 unused). If either limit changes,
-/// this fails to compile — forcing a table regeneration — rather than silently
-/// falling back to `FCMP_PROOF_SIZE_MAX` for the newly-reachable cells (which
-/// could under-estimate fees if real proofs there exceed the current max).
-const _: () = {
-    assert!(FCMP_PROOF_SIZE_KAT.len() == MAX_INPUTS + 1);
-    assert!(FCMP_PROOF_SIZE_KAT[0].len() == MAX_TREE_DEPTH as usize + 1);
-};
-
-/// Largest cell of [`FCMP_PROOF_SIZE_KAT`]; the conservative fallback for an
-/// out-of-range cell that should be unreachable (`n_in ∈ 1..=MAX_INPUTS`,
-/// `tree_depth ∈ 1..=MAX_TREE_DEPTH`).
-///
-/// Derived from the table at compile time, not hardcoded, so regenerating the
-/// table can never leave the fallback stale — under-estimating fees (a
-/// non-conservative drift) or over-estimating them.
-const FCMP_PROOF_SIZE_MAX: usize = {
-    let mut max = 0;
-    let mut i = 0;
-    while i < FCMP_PROOF_SIZE_KAT.len() {
-        let row = &FCMP_PROOF_SIZE_KAT[i];
-        let mut j = 0;
-        while j < row.len() {
-            if row[j] > max {
-                max = row[j];
-            }
-            j += 1;
-        }
-        i += 1;
-    }
-    max
-};
-
-/// Measured FCMP++ proof size in bytes for `n_in` inputs at `tree_depth`. `pub`
-/// so engine-core's KAT-validation tests (which own the synthetic-tree
-/// measurement machinery) can cross-check the table without re-hosting it.
+/// FCMP++ proof size in bytes for `n_in` inputs at `tree_depth`: the closed form
+/// the weight model reads. `pub` so engine-core's validation tests (which own
+/// the synthetic-tree measurement machinery) can cross-check it against real
+/// proofs.
 #[must_use]
 pub fn fcmp_proof_size(n_in: InputCount, tree_depth: u8) -> usize {
-    // `n_in` is type-bounded to `1..=MAX_INPUTS`, so the row always hits a measured
-    // cell; an out-of-range `tree_depth` falls back to the largest measured size so
-    // the fee estimate stays conservative rather than panicking or under-paying.
-    FCMP_PROOF_SIZE_KAT
-        .get(n_in.get())
-        .and_then(|row| row.get(usize::from(tree_depth)).copied())
-        .filter(|&v| v != 0)
-        .unwrap_or(FCMP_PROOF_SIZE_MAX)
-}
-
-/// The **single** `ExtraField::PqcKemCiphertext` (`0x06`) field: tag +
-/// varint(len) + `n_out` concatenated per-output ciphertexts — the packing
-/// `Extra::for_hybrid_transfer` emits, which every reader slices at
-/// `o * HYBRID_KEM_CT_LEN`.
-///
-/// **Was one field PER OUTPUT** until the parallel `0x06` fix on `dev`
-/// (`5cd252883`); this crate carried the pre-fix shape through the D-1 hoist and
-/// is corrected here at the merge. The delta is only the 15 saved tag+varint
-/// pairs (~45 B on a 1-in/16-out tx, ~0.13 %), but the predictor must byte-mirror
-/// `Transaction::write` exactly — the traveling parity test is the arbiter.
-fn extra_kem_field_weight(n_out: usize) -> usize {
-    let blob = n_out * HYBRID_KEM_CT_LEN;
-    1 + varint_len(blob as u64) + blob
-}
-
-/// `ExtraField::PqcLeafEntries` (`0x07`): tag + varint(len) + `n_out × 64`
-/// leaf entries (`CM ‖ record`, `PL-D3` / `PL-D3a`) — a consensus-required
-/// field (CEN-I19: a transaction with outputs is refused without it); the
-/// transfer path appends it (sign_bridge.rs, PR-4b), so every predicted spend
-/// carries it.
-fn extra_leaf_hashes_field_weight(n_out: usize) -> usize {
-    let blob = n_out * PQC_LEAF_ENTRY_LEN;
-    1 + varint_len(blob as u64) + blob
-}
-
-/// One per-input `PqcAuth` carrying a `key_len`-byte key blob and a
-/// `sig_len`-byte signature blob: auth_version + scheme_id + flags(u16) +
-/// varint(key_len) ‖ key + varint(sig_len) ‖ sig.
-fn pqc_auth_weight_of(key_len: usize, sig_len: usize) -> usize {
-    1 + 1 + 2 + varint_len(key_len as u64) + key_len + varint_len(sig_len as u64) + sig_len
-}
-
-/// One per-input `PqcAuth` of a single signer: a solo hybrid key and
-/// signature.
-fn pqc_auth_weight() -> usize {
-    pqc_auth_weight_of(PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN)
+    fcmp_proof_len(n_in.get(), tree_depth)
 }
 
 /// One per-input `PqcAuth` of `signer`: a solo hybrid key and signature,
@@ -339,35 +195,19 @@ fn extra_multisig_field_weight(group_payees: &[GroupSize]) -> usize {
     1 + varint_len(blob as u64) + blob
 }
 
-/// Padded output count the Bp+ aggregates over — next power of two, ≥ 1.
-fn padded_outputs(n_out: OutputCount) -> usize {
-    // `n_out` is type-bounded to `1..=MAX_OUTPUTS`, so `next_power_of_two` is in
-    // range with no clamp needed.
-    n_out.get().next_power_of_two()
-}
-
-/// Serialized Bp+ size: 6 fixed points + varint(|L|)‖L + varint(|R|)‖R, where
-/// `|L| == |R| == 6 + log2(n_padded)` (the proof's L/R vector length).
-fn bp_plus_weight(n_out: OutputCount) -> usize {
-    let nlr = 6 + padded_outputs(n_out).trailing_zeros() as usize;
-    6 * 32 + 2 * (varint_len(nlr as u64) + nlr * 32)
-}
-
-/// Bp+ verification clawback for the predicted output count. Delegates to the
-/// canonical [`shekyl_wire::transaction::bp_plus_weight_clawback`] so the
-/// predictor and `weight()` share one formula; `padded_outputs` supplies the same
-/// `n_padded` a built tx's proof would yield (`n_out` is type-bounded to
-/// `1..=MAX_OUTPUTS` by [`OutputCount`], so no separate clamp is needed).
-fn bp_plus_clawback_weight(n_out: OutputCount) -> usize {
-    bp_plus_weight_clawback(padded_outputs(n_out))
-}
-
 /// Structural weight predictor (§3.10.1) — a byte-for-byte mirror of
 /// `shekyl_wire::Transaction::write` plus the Bp+ clawback, so it equals
 /// `Transaction::weight()` for the tx the builder will produce from these counts.
 #[must_use]
 pub fn predict_weight(n_in: InputCount, n_out: OutputCount, tree_depth: u8, fee: u64) -> usize {
-    spend_weight(n_in, n_out, tree_depth, fee, pqc_auth_weight(), 0)
+    weight::spend_weight(
+        n_in.get(),
+        n_out.get(),
+        tree_depth,
+        fee,
+        pqc_auth_weight(),
+        0,
+    )
 }
 
 /// [`predict_weight`] for any [`SpendShape`]: each input's auth is its
@@ -385,64 +225,14 @@ pub fn predict_spend_weight(shape: &SpendShape<'_>, fee: u64) -> Option<usize> {
     if shape.group_payees.len() > shape.n_out.get() {
         return None;
     }
-    Some(spend_weight(
-        shape.n_in,
-        shape.n_out,
+    Some(weight::spend_weight(
+        shape.n_in.get(),
+        shape.n_out.get(),
         shape.tree_depth,
         fee,
         signer_pqc_auth_weight(shape.signer),
         extra_multisig_field_weight(shape.group_payees),
     ))
-}
-
-/// The one field model: a spend of `n_in` inputs each authorized by
-/// `auth_weight` bytes, and `n_out` outputs whose `tx_extra` adds
-/// `multisig_extra` bytes of `0x0D` entries.
-fn spend_weight(
-    n_in: InputCount,
-    n_out: OutputCount,
-    tree_depth: u8,
-    fee: u64,
-    auth_weight: usize,
-    multisig_extra: usize,
-) -> usize {
-    // `n_in`/`n_out` are type-bounded (`1..=MAX_INPUTS` / `1..=MAX_OUTPUTS`), so every
-    // per-count product and the field sum stay far below `usize` overflow — plain
-    // arithmetic, no saturation. Each entry below is one field of
-    // `shekyl_wire::Transaction::write`, in wire order.
-    let fcmp = fcmp_proof_size(n_in, tree_depth);
-    let bp = bp_plus_weight(n_out);
-    let bp_clawback = bp_plus_clawback_weight(n_out);
-    let n_in = n_in.get();
-    let n_out = n_out.get();
-    let extra_len = EXTRA_PUBKEY_FIELD_WEIGHT
-        + extra_kem_field_weight(n_out)
-        + extra_leaf_hashes_field_weight(n_out)
-        + multisig_extra;
-    [
-        varint_len(TX_VERSION),            // version
-        varint_len(0u64),                  // unlock_time
-        varint_len(n_in as u64),           // vin count
-        n_in * INPUT_TO_KEY_WEIGHT,        // vin elements
-        varint_len(n_out as u64),          // vout count
-        n_out * OUTPUT_WEIGHT,             // vout elements
-        varint_len(extra_len as u64),      // tx_extra length prefix
-        extra_len,                         // tx_extra body
-        1,                   // ct type tag — one u8 (a byte width, not CT_TYPE_FCMP's value)
-        varint_len(fee),     // fee
-        REFERENCE_BLOCK_LEN, // reference_block
-        n_out * CT_BASE_PER_OUTPUT_WEIGHT, // ct base (per output)
-        n_in * auth_weight,  // per-input PQC auth
-        varint_len(1u64),    // prunable nbp
-        bp,                  // bulletproof+
-        varint_len(u64::from(tree_depth)), // tree_depth
-        varint_len(fcmp as u64), // fcmp_proof length prefix
-        fcmp,                // fcmp_proof body
-        n_in * PSEUDO_OUT_LEN, // pseudoOuts
-        bp_clawback,         // Bp+ verification clawback
-    ]
-    .into_iter()
-    .sum()
 }
 
 /// Bytes in the longest `u64` varint. [`varint_len`]`(u64::MAX)` is this;
@@ -556,20 +346,7 @@ pub fn converge_weight_fee(
 /// §D, the `SHARD_BYTES` row).
 #[must_use]
 pub fn predict_archival_len(n_in: InputCount, n_out: OutputCount, tree_depth: u8) -> usize {
-    let fcmp = fcmp_proof_size(n_in, tree_depth);
-    let bp = bp_plus_weight(n_out);
-    let n_in = n_in.get();
-    [
-        n_in * pqc_auth_weight(),          // the `pqc_auths` segment
-        varint_len(1u64),                  // prunable nbp
-        bp,                                // bulletproof+
-        varint_len(u64::from(tree_depth)), // tree_depth
-        varint_len(fcmp as u64),           // fcmp_proof length prefix
-        fcmp,                              // fcmp_proof body
-        n_in * PSEUDO_OUT_LEN,             // pseudoOuts
-    ]
-    .into_iter()
-    .sum()
+    weight::archival_len(n_in.get(), n_out.get(), tree_depth)
 }
 
 /// Serialized byte size **and** fee weight for the tx the builder would produce
@@ -589,7 +366,7 @@ pub fn predict_size_and_weight(
     fee: u64,
 ) -> (usize, usize) {
     let weight = predict_weight(n_in, n_out, tree_depth, fee);
-    let size = weight - bp_plus_clawback_weight(n_out);
+    let size = weight - bp_plus_clawback_weight(n_out.get());
     (size, weight)
 }
 
@@ -737,7 +514,7 @@ mod tests {
             (2, 3, 4, 50_000), // n_out=3 ⇒ 4 padded ⇒ non-zero clawback
             (3, 4, 12, 7),
         ] {
-            let nlr = 6 + padded_outputs(OutputCount::clamped(n_out)).trailing_zeros() as usize;
+            let nlr = 6 + weight::padded_outputs(n_out).trailing_zeros() as usize;
             let bp = BpPlus {
                 a: [0; 32],
                 a1: [0; 32],

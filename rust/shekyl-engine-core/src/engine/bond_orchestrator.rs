@@ -58,7 +58,7 @@ use super::pscan::start::{
 /// Until 2026-08-26 this was a hardcoded `32 * 1024`, sized for the
 /// single-input bond post — but the drain path spends up to `MAX_INPUTS`
 /// funding outputs, and the depth-24 8-input FCMP++ proof **alone** is
-/// 33,600 bytes, so a legal multi-input drain weighed more than the ceiling
+/// 32,704 bytes, so a legal multi-input drain weighed more than the ceiling
 /// and its quoted fee undercut the daemon's per-byte floor (a relay
 /// refusal, and — until the drain lifecycle driver lands — a sealed record
 /// bricking that persona's drain lane). The exit-fee reserve derivation

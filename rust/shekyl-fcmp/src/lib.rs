@@ -40,13 +40,7 @@ pub use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN;
 /// Maximum inputs per FCMP++ transaction (bounds proof gen time and tx size).
 pub const MAX_INPUTS: usize = 8;
 
-/// Maximum tree depth the protocol supports.
-///
-/// With Selene chunk width 38 and Helios chunk width 18, a depth-24 tree
-/// can index over 10^30 outputs -- far beyond any realistic anonymity set
-/// even at Bitcoin-scale adoption. This bound prevents unreasonable
-/// resource consumption during proving and caps proof size.
-pub const MAX_TREE_DEPTH: u8 = 24;
+pub use shekyl_curve_generators::MAX_TREE_DEPTH;
 
 /// The fewest FCMP++ layers a spend proves under: the leaf layer and one
 /// branch above it.

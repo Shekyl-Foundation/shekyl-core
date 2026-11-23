@@ -148,6 +148,12 @@ pub const MAX_FCMP_INPUTS: usize = 128;
 //  /blob/8bf178a3009ee066001189d05869445bdf4ed28c/src/cryptonote_config.h#L222
 pub const MAX_FCMP_LAYERS: usize = 12;
 
+/// Maximum tree depth the protocol supports.
+///
+/// Held here, below the wire crate, because the weight model, the prover and
+/// the generator tables all read it.
+pub const MAX_TREE_DEPTH: u8 = 24;
+
 /// The maximum amount of commitments provable for within a single Bulletproof(+).
 pub const MAX_BULLETPROOF_COMMITMENTS: usize = 16;
 /// The amount of bits a value within a commitment may use.

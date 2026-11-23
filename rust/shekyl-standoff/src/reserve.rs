@@ -31,7 +31,7 @@
 /// - **Worst-case `Release` weight.** A `Release` spends the typed `P` pool
 ///   (cover + earnings) and pays out; bound by `MAX_INPUTS = 8` inputs, two
 ///   outputs, `MAX_TREE_DEPTH = 24`. The dominant term is the FCMP++ proof
-///   (`FCMP_PROOF_SIZE_KAT[8][24] = 33_600` bytes); with the per-input
+///   (`fcmp_proof_len(8, 24) = 32_704` bytes); with the per-input
 ///   KEM/PQC-auth and per-output CT/KEM framing the full structural weight is
 ///   **80,456 bytes** — computed, not estimated, by engine-core's
 ///   `p_lane_weight_ceiling_bytes()` (the same bound the P-lane floor fee is
