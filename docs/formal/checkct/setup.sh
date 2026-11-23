@@ -42,7 +42,7 @@ CRYPTO_BIGINT_DRIVER_REV=f8d9dfcc06c9cc2b69890fed5d2cabad44d3d1d0
 # serves both: the tag is the control and FIPS204_FIX is held in rust/Cargo.toml.
 FIPS204_REPO=https://github.com/Shekyl-Foundation/fips204
 FIPS204_TAG=66129c49273f3daa1338f9634acdf84ee8d1faf8
-FIPS204_FIX=0663628b8d67a30c115fa2e37315dd7f1d24f447
+FIPS204_FIX=072a7d68bef14c2332d4b5ebd006189a3eedb2eb
 IMAGE=shekyl-checkct:85271e5
 
 HERE=$(cd "$(dirname "$0")" && pwd)

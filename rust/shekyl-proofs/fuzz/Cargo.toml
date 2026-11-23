@@ -42,4 +42,4 @@ bench = false
 # fuzz workspace with fips204 in its lock carries this same entry, and
 # scripts/ci/check_crypto_closure.py holds the revision in every lock.
 [patch.crates-io]
-fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "0663628b8d67a30c115fa2e37315dd7f1d24f447" }
+fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "072a7d68bef14c2332d4b5ebd006189a3eedb2eb" }
