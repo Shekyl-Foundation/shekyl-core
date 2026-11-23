@@ -176,6 +176,9 @@ script: |
     fi
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
+    # A zip stores each entry's time, and -X does not drop it. The tar
+    # archives get theirs from TAR_OPTIONS; this is the same reference time.
+    find ${DISTNAME}/ -exec touch -h -d "${REFERENCE_DATE}T${REFERENCE_TIME}" {} +
     find ${DISTNAME}/ | sort | zip -X@ ${OUTDIR}/${DISTNAME}.zip
     cd .. && rm -rf build
   done
