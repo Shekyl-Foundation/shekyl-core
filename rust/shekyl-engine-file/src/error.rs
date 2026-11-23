@@ -39,7 +39,6 @@
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
-use shekyl_engine_prefs::PrefsError;
 use shekyl_engine_state::WalletLedgerError;
 use shekyl_os_account::private_file::{HeldOpen, Step};
 use std::io;
@@ -200,21 +199,6 @@ pub enum WalletFileError {
     /// "file already exists at the target — pick a different name".
     #[error("save_as refusing to overwrite existing file at {path}")]
     SaveAsTargetExists { path: PathBuf },
-
-    /// A preferences-layer operation failed (HMAC mismatch on save,
-    /// Bucket-3 field slipped through a save path, oversize body,
-    /// TOML serialization failure, …). Surfaces
-    /// [`PrefsError`] verbatim so
-    /// the FFI can map each variant to an actionable user message
-    /// without this crate having to mirror the prefs taxonomy.
-    ///
-    /// Note: tamper events on **load** do not surface here; they are
-    /// signalled via [`shekyl_engine_prefs::LoadOutcome::Tampered`]
-    /// and folded into defaults per the advisory-failure-mode policy
-    /// in `docs/WALLET_PREFS.md §5`. This variant only fires on
-    /// paths that must refuse (save failures and hard errors).
-    #[error("preferences error: {0}")]
-    Prefs(#[from] PrefsError),
 }
 
 impl WalletFileError {

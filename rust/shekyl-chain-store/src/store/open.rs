@@ -34,7 +34,7 @@ use super::chain_reads::{self, ReadFault};
 use super::{header, ChainStore, EngineError, Horizons, StoreCannot, StoreError, CACHE_SIZE};
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::SettlementEpochBlocks;
-use crate::creation::CutShort;
+use crate::creation::{look, CutShort, Look, StoreCheck};
 use crate::provenance::Provenance;
 
 /// Whether this open admits the chain against a genesis pin.
@@ -147,13 +147,14 @@ fn open_existing(
     admission: GenesisAdmission<'_>,
     guard: &crate::creation::PathGuard,
 ) -> Result<(Database, Provenance, Option<CutShort>), StoreError> {
-    match builder.open_read_only(path) {
-        Ok(read_only) => filter_readable(&read_only, epoch, admission)?,
-        Err(redb::DatabaseError::RepairAborted) => {}
-        Err(refused) if crate::creation::open_is_foreign(&refused) => {
+    match look(builder, path).map_err(look_fault)? {
+        Look::Unfinished(refused) => {
             return finish_uninitialized(builder, path, policy, epoch, guard, refused);
         }
-        Err(refused) => return Err(EngineError::Open(refused).into()),
+        found => match judge_look(found, epoch, admission)? {
+            StoreCheck::Absent => return Err(vanished()),
+            StoreCheck::Admitted | StoreCheck::NeedsRepair | StoreCheck::Unfinished => {}
+        },
     }
     let db = builder.open(path).map_err(EngineError::Open)?;
     // `create_with_backend` commits an empty database before the seal's
@@ -165,6 +166,56 @@ fn open_existing(
         None => (seal_new(&db, policy, epoch)?, Some(CutShort::Unsealed)),
     };
     Ok((db, provenance, cut))
+}
+
+/// The read-only check of the chain file at `path`: [`judge_look`] over
+/// the one [`look`] the open also takes, then whether the open could claim
+/// the file. Writes nothing and holds no lock past its return.
+pub(super) fn check_at(
+    path: &Path,
+    horizons: Horizons,
+    admission: GenesisAdmission<'_>,
+) -> Result<StoreCheck, StoreError> {
+    let mut builder = redb::Builder::new();
+    builder.set_cache_size(CACHE_SIZE);
+    let judged = judge_look(
+        look(&builder, path).map_err(look_fault)?,
+        horizons.epoch(),
+        admission,
+    )?;
+    Ok(judged.claimable_at(path).map_err(EngineError::Open)?)
+}
+
+/// What a [`Look`] at the chain file decides: the refusals the file's
+/// header settles are the `Err` (a foreign file, the engine's own refusal,
+/// and [`filter_readable`]'s on a readable one), the rest the write the
+/// open makes. The one decision [`check_at`] and [`open_existing`] share.
+fn judge_look(
+    found: Look,
+    epoch: SettlementEpochBlocks,
+    admission: GenesisAdmission<'_>,
+) -> Result<StoreCheck, StoreError> {
+    match found {
+        Look::Absent => Ok(StoreCheck::Absent),
+        Look::Readable(read_only) => {
+            filter_readable(&read_only, epoch, admission)?;
+            Ok(StoreCheck::Admitted)
+        }
+        Look::NeedsRepair => Ok(StoreCheck::NeedsRepair),
+        Look::Unfinished(_) => Ok(StoreCheck::Unfinished),
+        Look::Foreign(refused) | Look::Refused(refused) => Err(EngineError::Open(refused).into()),
+    }
+}
+
+/// The look's own fault: the header of a foreign-looking file could not be
+/// read.
+fn look_fault(error: std::io::Error) -> EngineError {
+    EngineError::Open(redb::DatabaseError::Storage(error.into()))
+}
+
+/// The file `create_new` found was gone by the look.
+fn vanished() -> StoreError {
+    look_fault(std::io::Error::from(std::io::ErrorKind::NotFound)).into()
 }
 
 /// One read of a database the read-only open returned.

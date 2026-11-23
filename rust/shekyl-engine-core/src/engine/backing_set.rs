@@ -614,26 +614,25 @@ mod tests {
         );
     }
 
-    /// GF4b-3 survivor tripwire: a rung-3 at or below `last_sweep_height`
-    /// trips the `debug_assert!` in debug/test builds.
+    /// GF4b-3 survivor tripwire: a spendable rung-3 at or below `last_sweep_height`
+    /// panics in a debug build, and a release build keeps filter semantics and
+    /// drops it. Both profiles test the guard.
     #[test]
-    #[should_panic(expected = "rung-3 record at or below last_sweep_height")]
-    fn survivor_trips_the_debug_assert() {
-        // Far-future reference: the survivor is spendable, so it reaches the
-        // tripwire (the spendability filter does not mask a mature survivor).
-        let reference_height = BlockHeight::from_raw(1_000_000);
-        let last_sweep_height = BlockHeight::from_raw(100);
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "rung-3 record at or below last_sweep_height")
+    )]
+    fn a_survivor_trips_in_debug_and_is_dropped_in_release() {
+        // Far-future reference: the survivor is spendable, so it reaches the tripwire.
+        let (reference, swept) = (BlockHeight::from_raw(1_000_000), BlockHeight::from_raw(100));
         let records = vec![
             record(1, 90, 500, MintLineageOutput::BondPostChange),
             // Survivor: rung 3 that a sweep should have consumed.
             record(2, 80, 700, MintLineageOutput::ExternalTransfer),
         ];
-        let _ = BackingSet::from_spendable(
-            &records,
-            PSlot::from_raw(0),
-            reference_height,
-            last_sweep_height,
-        );
+        let set = BackingSet::from_spendable(&records, PSlot::from_raw(0), reference, swept);
+        let kept: Vec<u64> = set.records().iter().map(|r| r.gindex.to_raw()).collect();
+        assert_eq!(kept, vec![1], "release drops the survivor");
     }
 
     /// GF4b-6 enforcement: the constructor applies the spendability filter
@@ -641,7 +640,7 @@ mod tests {
     /// and (b) an immature rung-3 at or below `last_sweep_height` does **not**
     /// trip the survivor tripwire — the immature subset of false positives is
     /// removed before the assert, exactly as the type doc claims. Contrast
-    /// `survivor_trips_the_debug_assert`, whose survivor is *spendable*.
+    /// `a_survivor_trips_in_debug_and_is_dropped_in_release`, whose survivor is *spendable*.
     #[test]
     fn immature_records_are_excluded_before_the_tripwire() {
         // reference_height sits far below every record's spendable_height
@@ -688,7 +687,7 @@ mod tests {
     ///    injected into the same input set is **not** in the resulting set.
     ///
     /// (Assert 4 of the definition — the survivor tripwire — is
-    /// `survivor_trips_the_debug_assert` above.)
+    /// `a_survivor_trips_in_debug_and_is_dropped_in_release` above.)
     #[test]
     fn zero_pre_bond_output_survives_the_sweep() {
         let reference_height = BlockHeight::from_raw(1_000);

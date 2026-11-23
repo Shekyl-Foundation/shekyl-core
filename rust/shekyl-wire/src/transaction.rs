@@ -145,6 +145,26 @@ const MAX_BRANCH_SCALARS: usize = 256;
 pub const MAX_FCMP_INPUTS: usize = 8;
 /// Max outputs per tx (`BULLETPROOF_PLUS_MAX_OUTPUTS`).
 pub const MAX_OUTPUTS: usize = 16;
+/// The fewest outputs a non-coinbase transaction carries: consensus row
+/// CEN-I1, read by `shekyl-chain-rules`, by this file's two pre-checks, by
+/// the transaction builder, and by every model of the shapes a transaction
+/// can take.
+///
+/// **Which forms it covers.** Every transaction except the coinbase: a
+/// spend, a bond post and an emission claim alike, whatever its inputs.
+/// CEN-I1's scope is every non-coinbase transaction, so no admitted form
+/// has fewer. The coinbase's own count is CEN-F4's, not this.
+/// [`Transaction::validate`]'s no-prunable arm, which requires zero
+/// outputs, describes no admitted transaction: consensus refuses every
+/// non-coinbase transaction without a prunable region (a bond post on
+/// CEN-H21, the rest on CEN-I1). The arm is a refusal path only.
+///
+/// **Why two.** A transaction with one output pays all it spends to one
+/// place, which marks that output as the payment and leaves no change to
+/// hide it among (anti-deanonymization, `blockchain.cpp:3599-3602`).
+/// Privacy is the same for every network, so this is a named constant
+/// here, not a key in `config/consensus_constants.json`.
+pub const MIN_NON_COINBASE_OUTPUTS: usize = 2;
 /// Max Bp+ `|L|` / `|R|` — `6 + log2(MAX_OUTPUTS)`. A well-formed aggregated Bp+
 /// has `|L| == |R| == 6 + ceil(log2(n_padded))` with `n_padded ≤ MAX_OUTPUTS`, so
 /// this is the largest length any valid proof carries; the C++ deserializer
@@ -1654,6 +1674,16 @@ impl Transaction {
         counter.bytes
     }
 
+    /// The fee field. `Some` for an `Fcmp` ct, including `Some(0)`.
+    /// `None` for a `Null` ct, which has no fee field.
+    #[must_use]
+    pub const fn fee(&self) -> Option<u64> {
+        match &self.ct {
+            Ct::Fcmp { fee, .. } => Some(*fee),
+            Ct::Null(_) => None,
+        }
+    }
+
     /// The consensus **transaction weight** — the serialized size **plus** the
     /// bulletproof-plus clawback, mirroring the C++ `get_transaction_weight`
     /// (`blob_size + bp_clawback`, `cryptonote_format_utils.cpp` at `ac3836de90`
@@ -1811,8 +1841,9 @@ impl Transaction {
             return Err(io::Error::other("shekyl-wire: transaction has no inputs"));
         }
         let n_out = self.prefix.outputs.len();
-        // Upper bound is structural; the lower bound is shape-aware (a spend/coinbase
-        // has >=1 output, the fee-only serve-credit form has 0) — enforced per-ct below.
+        // Upper bound is structural; the lower bound is shape-aware, enforced per-ct
+        // below: `MIN_NON_COINBASE_OUTPUTS` for a spend here and a bond post in
+        // `validate`; the coinbase's count is CEN-F4's, in the consensus layer.
         if n_out > MAX_OUTPUTS {
             return Err(io::Error::other(format!(
                 "shekyl-wire: output count {n_out} exceeds {MAX_OUTPUTS}"
@@ -2046,15 +2077,15 @@ impl Transaction {
                 base.commitments.len()
             )));
         }
-        // §10 anti-deanonymization: a spend (a key-image-bearing tx) must have >= 2
-        // outputs (blockchain.cpp:3599-3602). Pruned-safe — outputs survive pruning and
+        // §10 anti-deanonymization: a spend (a key-image-bearing tx) must have at
+        // least `MIN_NON_COINBASE_OUTPUTS` outputs (blockchain.cpp:3599-3602). Pruned-safe — outputs survive pruning and
         // the spend is identified by its key-image inputs, not the dropped prunable proof
         // — so it is enforced at ingestion, not only in `validate`. Checked after the ct
         // shape so a malformed-ct error still surfaces first. Coinbase / fee-only forms
-        // carry no key image (exempt); a bond_post's >= 2 rule is prunable-coupled.
-        if !key_images.is_empty() && n_out < 2 {
+        // carry no key image (exempt); a bond_post's minimum is prunable-coupled.
+        if !key_images.is_empty() && n_out < MIN_NON_COINBASE_OUTPUTS {
             return Err(io::Error::other(format!(
-                "shekyl-wire: spend has {n_out} output(s), needs >= 2"
+                "shekyl-wire: spend has {n_out} output(s), needs >= {MIN_NON_COINBASE_OUTPUTS}"
             )));
         }
         Ok(())
@@ -2102,13 +2133,15 @@ impl Transaction {
             match prunable {
                 // Spend / bond-post: a prunable proof is present.
                 Some(prunable) => {
-                    // >= 2 outputs (anti-deanonymization; blockchain.cpp:3599-3602).
-                    // Spends are already gated in `validate_context_free_pruned` (keyed
-                    // on key-image inputs, pruned-safe); this guards a bond_post, whose
-                    // >= 2 rule is prunable-coupled (a fee-only bond_post is 0-output).
-                    if n_out < 2 {
+                    // At least `MIN_NON_COINBASE_OUTPUTS` outputs (anti-deanonymization;
+                    // blockchain.cpp:3599-3602). Spends are already gated in
+                    // `validate_context_free_pruned` (keyed on key-image inputs,
+                    // pruned-safe); this guards a bond_post, whose minimum is
+                    // prunable-coupled: a bond post without its region is refused
+                    // whole (the no-prunable arm below; CEN-H21).
+                    if n_out < MIN_NON_COINBASE_OUTPUTS {
                         return Err(io::Error::other(format!(
-                            "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= 2"
+                            "shekyl-wire: spend/bond_post has {n_out} output(s), needs >= {MIN_NON_COINBASE_OUTPUTS}"
                         )));
                     }
                     // pqc_auths are per-input (count == nvin): one slot per input,

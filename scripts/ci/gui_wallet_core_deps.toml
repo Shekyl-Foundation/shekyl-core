@@ -37,7 +37,6 @@ shekyl-spawn = {}
 shekyl-tor-status = {}
 shekyl-engine-core = {}
 shekyl-engine-file = {}
-shekyl-engine-prefs = {}
 shekyl-engine-state = {}
 shekyl-consensus = {}
 shekyl-difficulty = {}

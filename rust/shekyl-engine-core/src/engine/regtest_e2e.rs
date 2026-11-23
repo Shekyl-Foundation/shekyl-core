@@ -2459,7 +2459,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     use shekyl_crypto_pq::account::SEED_BYTES;
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
     use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_prefs::WalletPrefs;
 
     let seed = [0x11u8; SEED_BYTES];
     let mine_address = mine_address_from_seed(&seed, Network::Regtest);
@@ -2490,7 +2489,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
             p: 1,
         },
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
     let wallet = Engine::<SoloSigner>::create(params, daemon_client).expect("create wallet");
     let address = wallet
@@ -2631,7 +2629,6 @@ async fn e2e_refresh_scans_coinbase_balance() {
             p: 1,
         },
         overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
     };
     let wallet =
         Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
@@ -3072,7 +3069,6 @@ fn regtest_params<'a>(
             p: 1,
         },
         overrides: shekyl_engine_file::SafetyOverrides::none(),
-        prefs: shekyl_engine_prefs::WalletPrefs::default(),
     }
 }
 
@@ -5380,11 +5376,15 @@ async fn e2e_emission_claim_accepted_and_applied() {
     }
     // The persona serves its shard on its onion, through the same pinned
     // Tor, from the bond on: its endpoint is the bond record's.
-    fixture.arc.write().await.prefs_mut().device.tor_binary_path = tor.display().to_string();
-    let serving = super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target())
-        .await
-        .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
-        .expect("a staker with a confirmed bond starts a serving host");
+    // The binary reaches serving as the wallet server's does: the host's
+    // `tor-file` option, resolved once, handed to the start.
+    let tor_file =
+        crate::TorFile::from_option(Some(tor.clone())).expect("the pinned Tor is a file");
+    let serving =
+        super::Engine::start_serving_if_staker(fixture.arc.clone(), &daemon.target(), &tor_file)
+            .await
+            .unwrap_or_else(|e| daemon.panic_with_log("start_serving_if_staker", format!("{e:?}")))
+            .expect("a staker with a confirmed bond starts a serving host");
     let serving_up = Instant::now() + SERVING_PINNED;
     while serving.posture().is_none() {
         assert!(

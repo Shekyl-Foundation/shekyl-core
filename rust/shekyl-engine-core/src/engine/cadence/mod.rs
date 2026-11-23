@@ -381,6 +381,7 @@ where
 pub(crate) fn production_legs<S, D, L, E, R, P>(
     engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
     daemon: &shekyl_rpc_transport::DaemonTarget,
+    tor_file: &crate::TorFile,
     serving: &ServingSlot,
     alarms: &Arc<OperatorAlarms>,
     shard_alarms: &ShardAlarms,
@@ -401,6 +402,7 @@ where
         Box::new(ServingLivenessLeg {
             engine: Weak::clone(&engine),
             daemon: daemon.clone(),
+            tor_file: tor_file.clone(),
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
@@ -461,7 +463,8 @@ where
     /// `daemon_address` is the serving-liveness leg's (§3 leg 2): serving
     /// derives its shard set over the caller's daemon endpoint, and the
     /// address lives with the embedder rather than on the `Engine` — the
-    /// same shape `start_serving_if_staker` itself documents.
+    /// same shape `start_serving_if_staker` itself documents. `tor_file`, the
+    /// host's `tor-file` option, reaches that leg the same way.
     ///
     /// # Panics
     ///
@@ -473,13 +476,14 @@ where
     pub fn into_shared(
         self,
         daemon: &shekyl_rpc_transport::DaemonTarget,
+        tor_file: &crate::TorFile,
     ) -> (Arc<RwLock<Self>>, CadenceHandle) {
         drop(tokio::runtime::Handle::try_current().expect(
             "Engine::into_shared spawns the cadence driver task and must be \
              called from within a tokio runtime (ENGINE_CADENCE_DRIVER.md §1)",
         ));
         let shared = Arc::new(RwLock::new(self));
-        let handle = Self::start_cadence(&shared, daemon);
+        let handle = Self::start_cadence(&shared, daemon, tor_file);
         (shared, handle)
     }
 
@@ -497,6 +501,7 @@ where
     pub fn start_cadence(
         self_arc: &Arc<RwLock<Self>>,
         daemon: &shekyl_rpc_transport::DaemonTarget,
+        tor_file: &crate::TorFile,
     ) -> CadenceHandle {
         let serving = ServingSlot::default();
         let alarms = Arc::new(OperatorAlarms::new());
@@ -504,6 +509,7 @@ where
         let legs = production_legs(
             Arc::downgrade(self_arc),
             daemon,
+            tor_file,
             &serving,
             &alarms,
             &shard_alarms,

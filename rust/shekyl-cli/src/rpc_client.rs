@@ -287,6 +287,7 @@ impl RpcSession {
         wallet_dir: PathBuf,
         network: Network,
         daemon: shekyl_wallet_rpc::tenant::DaemonTarget,
+        tor_file: shekyl_wallet_rpc::server::TorFile,
         debug: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // What this process can know about an inherited ignore, read before
@@ -309,6 +310,7 @@ impl RpcSession {
                 wallet_dir.clone(),
                 network,
                 daemon,
+                tor_file,
             ))
             .map_err(|e| format!("failed to start in-process wallet RPC: {e}"))?;
         // A stop (SIGTERM, SIGINT, SIGHUP; every Windows console event)

@@ -6,7 +6,7 @@ pub(crate) use generalized_bulletproofs_ec_gadgets::*;
 
 use crate::*;
 
-impl<C: Ciphersuite> Circuit<C>
+impl<C: Ciphersuite, R: Role<C>> Circuit<C, R>
 where
     C::F: FromUniformBytes<64>,
 {

@@ -48,6 +48,21 @@ pub(crate) fn directory_creatable(dir: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Whether the account could create a file in `dir`, which need not exist
+/// yet.
+///
+/// # Errors
+/// As [`directory_creatable`], and the kernel's refusal for an existing
+/// directory the account may not write and search.
+pub(crate) fn files_creatable_in(dir: &Path) -> std::io::Result<()> {
+    match std::fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => may_create_in(dir),
+        Ok(_) => Err(Error::other("not a directory")),
+        Err(e) if e.kind() == ErrorKind::NotFound => creatable_below(dir),
+        Err(e) => Err(e),
+    }
+}
+
 /// Whether `file` is a regular file the account could open as `need`
 /// asks, or could be created in its directory.
 ///

@@ -16,10 +16,15 @@ use ciphersuite::{
 };
 use multiexp::{multiexp, multiexp_vartime};
 
+mod zip_exact;
+pub(crate) use zip_exact::zip_exact;
 mod scalar_vector;
 pub(crate) use scalar_vector::ScalarVector;
 mod point_vector;
 pub(crate) use point_vector::PointVector;
+
+mod openings;
+pub use openings::{NotEnoughGenerators, OpenedCommitments, Openings};
 
 /// The transcript formats.
 pub mod transcript;
@@ -305,16 +310,16 @@ impl<C: Ciphersuite> ProofGenerators<'_, C> {
     }
 }
 
-/// The opening of a Pedersen commitment.
+/// The opening of a Pedersen commitment: the value it commits to, and its mask.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct PedersenCommitment<C: Ciphersuite> {
+pub struct PedersenOpening<C: Ciphersuite> {
     /// The value committed to.
     pub value: C::F,
     /// The mask blinding the value committed to.
     pub mask: C::F,
 }
 
-impl<C: Ciphersuite> PedersenCommitment<C> {
+impl<C: Ciphersuite> PedersenOpening<C> {
     /// Commit to this value, yielding the Pedersen commitment.
     pub fn commit(&self, g: C::G, h: C::G) -> C::G
     where
@@ -324,16 +329,19 @@ impl<C: Ciphersuite> PedersenCommitment<C> {
     }
 }
 
-/// The opening of a Pedersen vector commitment.
+/// The opening of a Pedersen vector commitment: the values it commits to across the `g` (bold)
+/// generators, and its mask.
+///
+/// A value past the end of `g_values` is zero, so an opening need not hold trailing zero padding.
 #[derive(Clone, PartialEq, Eq, Debug, Zeroize, ZeroizeOnDrop)]
-pub struct PedersenVectorCommitment<C: Ciphersuite> {
+pub struct PedersenVectorOpening<C: Ciphersuite> {
     /// The values committed to across the `g` (bold) generators.
     pub g_values: Vec<C::F>,
     /// The mask blinding the values committed to.
     pub mask: C::F,
 }
 
-impl<C: Ciphersuite> PedersenVectorCommitment<C> {
+impl<C: Ciphersuite> PedersenVectorOpening<C> {
     /// Commit to the vectors of values.
     ///
     /// This function returns `None` if the amount of generators is less than the amount of values

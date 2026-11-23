@@ -353,7 +353,6 @@ Guards that compare a configured network with a recorded one (the marker, the mi
 | shekyl-output-multisig-key-hashes (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | the AEAD key for a multisig output's member key hashes | B | per-output secret |
 | shekyl/multisig-transport-v1 (info) | `rust/shekyl-crypto-pq/src/derivation.rs` | the group transport secret, from the dealer's group seed | A | salt = `salt_for(network)` |
 | shekyl/msg-sign-seed-slh-dsa-192s-v1 | `rust/shekyl-crypto-pq/src/message_signing.rs` | message-signing identity seed | A | salt = `salt_for(network)` |
-| shekyl-prefs-hmac-v1 | `rust/shekyl-engine-prefs/src/hmac_key.rs` | prefs HMAC key from file_kek | B | local file |
 | shekyl-region1-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 1 key | B | local |
 | shekyl-region2-aead-v2 | `rust/shekyl-crypto-pq/src/wallet_envelope.rs` | wallet-file region 2 key | B | local |
 | shekyl/multisig-blob-key-v1 (info) | `rust/shekyl-crypto-pq/src/multisig_blob.rs` | the ceremony blob key for one (intent, message type, sender) | A | ikm = the group transport secret, derived under `salt_for(network)` |
