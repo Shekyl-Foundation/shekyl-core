@@ -1321,6 +1321,25 @@ fn table(summary: &Summary) -> String {
     out
 }
 
+/// What the committed full table says above its header about the run it is
+/// derived from (Rick, 2026-11-22, §5.37.2): the recorded run priced its
+/// stuffers on one-output shapes, which consensus refuses (CEN-I1), so its
+/// stuffed figures are stale until the CEN-I4 cutover re-runs it. It is the
+/// recorded summary's note, not the table's: the nightly slice's table,
+/// derived from its own fold, carries none.
+#[cfg(test)]
+const RECORDED_RUN_NOTE: &str = "\
+# SUPERSEDED IN PART (Rick, 2026-11-22; ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.2). Derived from the
+# full run of 2026-11-21 (shekyl-core f8e6f1ec4b), whose stuffers were priced on transactions with one
+# output, which consensus refuses (CEN-I1, MIN_NON_COINBASE_OUTPUTS).
+#   - STALE: every row whose economy is A-stuffed (its miner stuffed with one-output bodies).
+#   - STALE, not in this file: the C arms' attack figures, the narration's 'adversaries' lines
+#     (the shard advance cost prices the stuffer). Read them from neither this run nor this table.
+#   - CURRENT: the A-honest, B and C rows, which carry no stuffer.
+# The bound on the stale figures is the nightly slice (economies_nightly_table.csv), regenerated
+# with two-output stuffers; §5.37.2 gives its stuffed deltas. The CEN-I4 cutover re-runs this table.
+";
+
 /// The derived table's columns, in order: the row's names, then security,
 /// release and burn, inclusion, bloat, distribution, archival, and the
 /// reward against the fees with the year the tail era begins.
@@ -1801,6 +1820,15 @@ mod tests {
     /// their recorded SHA-256, and the table derived from that summary
     /// against the committed copy. Set [`FULL_OUTPUT_DIR_ENV`] to keep the
     /// two files.
+    ///
+    /// **It does not pass until the CEN-I4 cutover re-runs the table**
+    /// (Rick, 2026-11-22, §5.37.2). The recorded run priced its stuffers on
+    /// one-output shapes, and this code prices them on two, so a fresh fold's
+    /// stuffed figures, and with them both digests, differ from the record.
+    /// The committed table also carries [`RECORDED_RUN_NOTE`], which a fresh
+    /// fold's table does not. The cutover's run regenerates the digests and
+    /// the table; until then this test is not run. No test compares the full
+    /// table with the nightly slice's.
     #[test]
     #[ignore = "--economies, the full table: 2 880 folds to y135 — on demand, not nightly; run with --release --ignored; digests and table generated and checked on Linux x86-64"]
     fn economies_full_run_matches_its_digests_and_table() {
@@ -1999,6 +2027,12 @@ mod tests {
         serde_json::from_str(&json).expect("the JSON summary parses")
     }
 
+    /// The committed full table: [`RECORDED_RUN_NOTE`] above the table
+    /// derived from the recorded JSON summary.
+    fn recorded_table() -> String {
+        format!("{RECORDED_RUN_NOTE}{}", table(&recorded_summary()))
+    }
+
     /// The derived table against the recorded full run, read from its JSON
     /// summary on disk: seconds, where the full pin above takes hours.
     #[test]
@@ -2007,7 +2041,7 @@ mod tests {
         committed_fixture::assert_matches(
             "--economies derived table",
             TABLE_FIXTURE,
-            &table(&recorded_summary()),
+            &recorded_table(),
         );
     }
 
@@ -2042,7 +2076,7 @@ mod tests {
             "the --economies derived table",
             &[Output {
                 path: TABLE_FIXTURE,
-                build: || table(&recorded_summary()),
+                build: recorded_table,
             }],
         );
     }
