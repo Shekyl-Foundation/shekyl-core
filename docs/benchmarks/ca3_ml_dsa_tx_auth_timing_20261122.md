@@ -1100,4 +1100,45 @@ relink. Its outputs are `floor_step2_verify_*`.
 
 **The timing runs** each copy their binary to one path of the same length as
 the registered run's, from the same working directory, with the same command.
-The stack's starting address therefore does not vary between them.
+The size of the arguments does not vary between them. Any address randomisation
+the kernel applies per process still applies to each run.
+
+### Step 2, result (2026-11-23): not reproduced; closes nothing
+
+**The runs.** On the floor device under a quiet claim, 15:20 to 16:57Z, in the
+order below, the registered pair and inputs at 50,000 samples. At 1.5 GHz, 53 to
+57 °C, throttled `0x0`, the apt timers enabled and none firing. All four are
+valid: every check held, every null is below 4.5, every control was detected,
+and the hint statistics reproduce the registered attempt's. These are
+diagnostics. Their result lines print `FAIL` or `PASS`, and neither is a verdict
+on the registered attempt, which stays inconclusive at 7.55.
+
+| Run | Build | Signing pair | A − B at that cut-off | A − B at the 1st, 5th, 10th percentile, ns | Null | Control | δ₁₀ |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Registered attempt 1 (earlier, for reference) | registered | 7.55 | −258 ns | −444, −407, −444 | 3.15 | 118.00 | 1,145 ns |
+| 1 | registered | **10.50** | −354 ns | −592, −519, −463 | 3.15 | 72.77 | 1,861 ns |
+| 2 | alignment | 2.75 | −123 ns | −130, +1, −37 | 3.58 | 68.43 | 1,970 ns |
+| 3 | moved | 1.90 | +326 ns | −18, +55, −20 | 2.77 | 74.49 | 1,801 ns |
+| 4 | registered | **4.05** | −139 ns | −259, −296, −240 | 3.20 | 117.63 | 1,144 ns |
+
+**The reading, as fixed before the runs: not reproduced.** The second run of the
+registered binary reads 4.05, below 4.5, so the baseline does not hold. The
+figure moves between runs of one identical binary. By the method, that is not a
+layout finding and it closes nothing.
+
+**What the figures do and do not show.** These are observations after the fact,
+not the committed reading:
+- The registered binary read 7.55, 10.50 and 4.05 across three runs, always with
+  key A faster, and by 0.24 to 0.59 µs at the low percentiles.
+- The two layout variants, one run each, read 2.75 and 1.90, and sit within
+  −0.13 to +0.06 µs at the same percentiles. That points towards layout.
+- It does not establish it. One identical binary spans 4.05 to 10.50, and each
+  variant has a single run, so the spread between runs is as large as the
+  difference between builds.
+- The composed call, which is the shipped path, read 2.72, 2.60, 2.00 and 1.29
+  in these runs (information).
+- Key generation alone read 10.84, 4.44, 5.94 and 5.33 (information). It moves
+  between runs of the registered binary too.
+
+**Captures:** `floor_step2_*` with `SHA256SUMS`. The raw files are in the
+estate's private captures.

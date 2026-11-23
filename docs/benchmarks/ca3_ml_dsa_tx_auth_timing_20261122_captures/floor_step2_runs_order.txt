@@ -1,0 +1,4 @@
+r1=registered
+r2=align
+r3=moved
+r4=registered

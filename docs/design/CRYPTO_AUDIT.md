@@ -667,8 +667,15 @@ maintainer's ruling of 2026-11-22).**
   single-attempt signatures, about 0.03 %.
 - **Observed, not established:** on all three floor pairs the key with
   more hints per signature is the slower. The hint count is public.
-- **The attempt is not made again.** It is with the maintainer, and no
-  option is chosen before that.
+- **The attempt is not made again.** Diagnostics follow it, and none of them
+  is a pass or a second attempt (2026-11-23):
+  - **The public hint count is not the carrier.** The slope is tens of ns per
+    hint (14 and 55), and adjusting for it moves the fastest signatures'
+    difference only from −277 to −266 ns.
+  - **Not yet attributed to layout.** The registered binary read 10.50 and then
+    4.05 on identical code, so the figure moves between runs of one binary.
+    Two verified layout-only builds read 2.75 and 1.90, one run each. This is
+    with the maintainer.
 
 The record is
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
