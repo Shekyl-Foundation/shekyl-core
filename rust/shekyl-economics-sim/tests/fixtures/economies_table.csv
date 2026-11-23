@@ -1,3 +1,12 @@
+# SUPERSEDED IN PART (Rick, 2026-11-23; ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.2). Derived from the
+# full run of 2026-11-21 (shekyl-core f8e6f1ec4b).
+#   - STALE from year 69: the C2 and C1+2+3 rows on sustained_growth (60 rows, role 'stress'). The
+#     run's lifetime fee-unit sum saturated a u64 there, so their burn fell to zero and their income,
+#     fees, supply and stops after it are artifacts. Their figures before year 69 stand.
+#   - CURRENT: every other row, A-stuffed included. The correction of the stuffers' searched shapes
+#     to two outputs (CEN-I1) does not reach this table: A-stuffed lists ordinary Economy-rung
+#     transactions, which already have two outputs, and the narration's adversaries price the same.
+# The next full run replaces this table and this note.
 # THREE ECONOMIES GRADED WHOLE, the derived table (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).
 # One line per economy, template rule, scenario, zone and w_ref; each figure is the median
 # across the row's seeds, '-' where no seed has it (past a stop, or never reached). SKL per

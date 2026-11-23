@@ -1329,25 +1329,22 @@ fn table(summary: &Summary) -> String {
 }
 
 /// What the committed full table says above its header about the run it is
-/// derived from (Rick, 2026-11-22, §5.37.2): the recorded run priced its
-/// stuffers on one-output shapes, which consensus refuses (CEN-I1), so its
-/// stuffed figures are stale until the CEN-I4 cutover re-runs it. It is the
+/// derived from (Rick, 2026-11-23, §5.37.2). That run's fee-unit window
+/// saturated on the growth folds, so the C2 and C-together rows there are
+/// stale from year 69 until the table's next full run. It is the
 /// recorded summary's note, not the table's: the nightly slice's table,
 /// derived from its own fold, carries none.
 #[cfg(test)]
 const RECORDED_RUN_NOTE: &str = "\
-# SUPERSEDED IN PART (Rick, 2026-11-22; ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.2). Derived from the
-# full run of 2026-11-21 (shekyl-core f8e6f1ec4b), whose stuffers were priced on transactions with one
-# output, which consensus refuses (CEN-I1, MIN_NON_COINBASE_OUTPUTS).
-#   - STALE: every row whose economy is A-stuffed (its miner stuffed with one-output bodies).
+# SUPERSEDED IN PART (Rick, 2026-11-23; ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.2). Derived from the
+# full run of 2026-11-21 (shekyl-core f8e6f1ec4b).
 #   - STALE from year 69: the C2 and C1+2+3 rows on sustained_growth (60 rows, role 'stress'). The
-#     run's fee-unit sum saturated a u64 there, so their burn fell to zero and their income, fees,
-#     supply and stops after it are artifacts. Their figures before year 69 stand.
-#   - STALE, not in this file: the C arms' attack figures, the narration's 'adversaries' lines
-#     (the shard advance cost prices the stuffer). Read them from neither this run nor this table.
-#   - CURRENT: the A-honest and B rows, and every other C row.
-# The bound on the stale figures is the nightly slice (economies_nightly_table.csv), regenerated
-# with two-output stuffers; §5.37.2 gives its stuffed deltas. The CEN-I4 cutover re-runs this table.
+#     run's lifetime fee-unit sum saturated a u64 there, so their burn fell to zero and their income,
+#     fees, supply and stops after it are artifacts. Their figures before year 69 stand.
+#   - CURRENT: every other row, A-stuffed included. The correction of the stuffers' searched shapes
+#     to two outputs (CEN-I1) does not reach this table: A-stuffed lists ordinary Economy-rung
+#     transactions, which already have two outputs, and the narration's adversaries price the same.
+# The next full run replaces this table and this note.
 ";
 
 /// The derived table's columns, in order: the row's names, then security,
@@ -1831,14 +1828,16 @@ mod tests {
     /// against the committed copy. Set [`FULL_OUTPUT_DIR_ENV`] to keep the
     /// two files.
     ///
-    /// **It does not pass until the CEN-I4 cutover re-runs the table**
-    /// (Rick, 2026-11-22, §5.37.2). The recorded run priced its stuffers on
-    /// one-output shapes, and this code prices them on two, so a fresh fold's
-    /// stuffed figures, and with them both digests, differ from the record.
-    /// The committed table also carries [`RECORDED_RUN_NOTE`], which a fresh
-    /// fold's table does not. The cutover's run regenerates the digests and
-    /// the table; until then this test is not run. No test compares the full
-    /// table with the nightly slice's.
+    /// **It does not pass until the table's next full run**
+    /// (Rick, 2026-11-23, §5.37.2). The recorded run's fee-unit window
+    /// saturated on the growth folds and this code's does not, so a fresh
+    /// fold's C2 and C-together rows on `sustained_growth` differ from the
+    /// record from year 69, and with them both digests. The committed table
+    /// also carries [`RECORDED_RUN_NOTE`], which a fresh fold's table does
+    /// not. That run regenerates the digests and the table; until then
+    /// this test is not run. No test compares the full table with the
+    /// nightly slice's, which is one seed where the full table is the median
+    /// of three.
     #[test]
     #[ignore = "--economies, the full table: 2 880 folds to y135 — on demand, not nightly; run with --release --ignored; digests and table generated and checked on Linux x86-64"]
     fn economies_full_run_matches_its_digests_and_table() {
