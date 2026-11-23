@@ -6,7 +6,7 @@
 #   - CURRENT: every other row, A-stuffed included. The correction of the stuffers' searched shapes
 #     to two outputs (CEN-I1) does not reach this table: A-stuffed lists ordinary Economy-rung
 #     transactions, which already have two outputs, and the narration's adversaries price the same.
-# The next full run replaces this table and this note.
+# Re-running those 180 folds replaces their rows and this note (docs/FOLLOWUPS.md).
 # THREE ECONOMIES GRADED WHOLE, the derived table (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.37.1).
 # One line per economy, template rule, scenario, zone and w_ref; each figure is the median
 # across the row's seeds, '-' where no seed has it (past a stop, or never reached). SKL per

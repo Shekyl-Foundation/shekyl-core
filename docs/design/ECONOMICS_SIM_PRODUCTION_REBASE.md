@@ -5686,11 +5686,27 @@ and both template rules that reach it.
 - **What it leaves stale.** Those 60 rows of the committed full table, from
   year 69, which its header names. They are `stress` rows, not read for the
   tail. The slice has no `sustained_growth` row, so its pin does not move.
-- **The on-demand full run does not pass** until the table's next full run
-  regenerates the digests and the table.
+- **The on-demand full run does not pass** until those cells are re-run and
+  the digests and the table regenerated.
+- **The re-run (Rick, 2026-11-23).** Only the affected cells, 180 of 2 880
+  folds, once the table's sharding follow-up lands. The trigger is before J
+  is ruled, if the paid-demand economy is still a candidate: these rows are
+  the stress test of its fee-keyed burn under sustained growth. If it drops
+  out first, they wait for the table's next full run.
 
 **What EUP-4 may read.** Every row of the full table but those 60, from their
-year 69, including A-stuffed and the C arms' adversaries.
+year 69. The stuffed rows and the C arms' adversaries read at face value.
+
+**How to read the stuffed rows' bloat.** A-stuffed lists, at every block, as
+many ordinary Economy-rung transactions as fit in the penalty-free room the
+pool leaves (`BlockSpace::fill_ruled`).
+- **For a stuffer holding the release clamp, it is an upper bound.** The
+  clamp reads the transaction count, so that stuffer wants the same smallest
+  bodies, and needs only enough of them to hold the clamp.
+- **For a stuffer maximising archival bytes, it is not.** An ordinary body is
+  about 0.81 archival bytes per byte of weight (the baseline's y1), and the
+  searched shapes reach 0.94 at the ceiling (depth 5, 845 500 of 900 000), so
+  the same room can write about 15 % more archive.
 
 **The slice and the full table.** They disagree on all 34 cells they share,
 before this change and after it, because the slice is seed 1 and the full

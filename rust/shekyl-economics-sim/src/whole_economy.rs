@@ -1331,7 +1331,7 @@ fn table(summary: &Summary) -> String {
 /// What the committed full table says above its header about the run it is
 /// derived from (Rick, 2026-11-23, §5.37.2). That run's fee-unit window
 /// saturated on the growth folds, so the C2 and C-together rows there are
-/// stale from year 69 until the table's next full run. It is the
+/// stale from year 69 until those cells are re-run (FOLLOWUPS). It is the
 /// recorded summary's note, not the table's: the nightly slice's table,
 /// derived from its own fold, carries none.
 #[cfg(test)]
@@ -1344,7 +1344,7 @@ const RECORDED_RUN_NOTE: &str = "\
 #   - CURRENT: every other row, A-stuffed included. The correction of the stuffers' searched shapes
 #     to two outputs (CEN-I1) does not reach this table: A-stuffed lists ordinary Economy-rung
 #     transactions, which already have two outputs, and the narration's adversaries price the same.
-# The next full run replaces this table and this note.
+# Re-running those 180 folds replaces their rows and this note (docs/FOLLOWUPS.md).
 ";
 
 /// The derived table's columns, in order: the row's names, then security,
@@ -1828,13 +1828,13 @@ mod tests {
     /// against the committed copy. Set [`FULL_OUTPUT_DIR_ENV`] to keep the
     /// two files.
     ///
-    /// **It does not pass until the table's next full run**
+    /// **It does not pass until the stale cells are re-run**
     /// (Rick, 2026-11-23, §5.37.2). The recorded run's fee-unit window
     /// saturated on the growth folds and this code's does not, so a fresh
     /// fold's C2 and C-together rows on `sustained_growth` differ from the
     /// record from year 69, and with them both digests. The committed table
     /// also carries [`RECORDED_RUN_NOTE`], which a fresh fold's table does
-    /// not. That run regenerates the digests and the table; until then
+    /// not. That re-run regenerates the digests and the table; until then
     /// this test is not run. No test compares the full table with the
     /// nightly slice's, which is one seed where the full table is the median
     /// of three.
