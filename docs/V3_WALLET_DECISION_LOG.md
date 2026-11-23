@@ -66,6 +66,8 @@ Consolidation: the single-event principle (2026-09-20, below: one event
 cannot be clustered) argues for consolidating in as few transactions as the
 cap allows; when they are sent is that round's question.
 
+## 2026-09-20 — A persona's bond is immutable for its life
+
 **Decision.** A persona's bond is **immutable for its life**. The holdings set
 is fixed at the bond post and never mutates. The only holdings-change
 mechanism is **persona rotation** under the two-active overlap: the new
