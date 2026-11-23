@@ -29,7 +29,7 @@
 # 2026-07-03) found the practical effect was an armed gate with no
 # automated trigger — "T6 runs nightly" lived in doc comments while
 # the only trigger was manual — and directed the verification-DoS
-# gate onto a cron. Weekly (Tuesday 06:00 UTC, staggered clear of
+# gate onto a cron. Weekly (Tuesday 06:47 UTC, staggered clear of
 # the Monday mutants/codeql/oxide cluster and the daily 05:00
 # structural cron); `workflow_dispatch` retained. Post-genesis the
 # release-gate trigger still lands per the §11 history row.
@@ -82,7 +82,7 @@ on:
   schedule:
     # Weekly T6 adversarial-ratio gate; see the cadence-amendment
     # citation above.
-    - cron: "0 6 * * 2"
+    - cron: "47 6 * * 2"
   workflow_dispatch:
     inputs:
       samples_per_recipe:
@@ -116,7 +116,7 @@ env:
 
 jobs:
   adversarial-ratio:
-    # Weekly Tuesday 06:00 UTC cron + `workflow_dispatch`, per the
+    # Weekly Tuesday 06:47 UTC cron + `workflow_dispatch`, per the
     # header's M3 cadence amendment (originally dispatch-only per
     # R1-D7 Sub-A close; post-genesis a release-gate trigger is
     # added). The cron fires on the default branch (main) only, so

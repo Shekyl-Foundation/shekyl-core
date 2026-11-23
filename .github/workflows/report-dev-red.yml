@@ -25,7 +25,8 @@
 # Called by the last job of `build.yml`, `rust-audit-test.yml`,
 # `benchmarks.yml` and `fuzz-harness.yml`, which needs every other job of
 # its workflow, on every push run on `dev`, red or green; and of
-# `gui-drift.yml` and `chain-forge.yml` on their scheduled runs.
+# `gui-drift.yml`, `chain-forge.yml` and `freebsd-nightly.yml` on their
+# scheduled runs.
 # scripts/ci/check_dev_red_reporter.py holds the list and the condition to
 # the file. A run cancelled as a whole, because a newer merge superseded
 # it, reports nothing. On a run with no red job it only closes issues, so
