@@ -440,6 +440,10 @@ fn our_socket(stat: &rustix::fs::Stat) -> bool {
 /// is refused, the name was just read as a socket in a directory only this
 /// account can write.
 fn narrow_name(dir: &File, name: &OsStr) -> io::Result<()> {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the mode is 0o600, and `mode_t` is 16 bits on the BSDs and macOS"
+    )]
     let mode = Mode::from_raw_mode(OWNER_ONLY_SOCKET_MODE as rustix::fs::RawMode);
     match chmodat(dir, name, mode, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(()) => Ok(()),
