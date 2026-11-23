@@ -2348,8 +2348,13 @@ cannot disagree; a check writes nothing and takes no lock, and the open looks
 again under its lock. `Node::open` checks both of its stores before it opens
 either, and the daemon checks all three, right after it takes the data
 directory's lock and before its marker, its RPC channel and any store is
-written. Outside the guarantee, because only a writable open can act on them
-and it writes: a file redb must repair first, an unfinished initialization
+written. A check also refuses a file the writable open could not write, a
+dangling link at a store's path, and an enrollment store whose table has
+another type. A refused start still writes two things, on purpose: the
+data-directory lock, which must be held for the check to mean anything, and
+its refusal, in the log file the configuration names, which may be inside the
+data directory. Outside the guarantee, because only a writable open can act on
+them and it writes: a file redb must repair first, an unfinished initialization
 (moved aside), the older chain layout the pre-genesis wipe replaces, and a
 refusal after the stores have opened (a genesis that does not connect, a
 service that does not answer).

@@ -251,8 +251,11 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
     // Every store is checked read-only before anything is written: the
     // marker, the RPC channel's files, and the stores themselves (a writable
     // redb open rewrites the file's header even when nothing else changes).
-    // A start a store refuses on its file leaves the directory as it found
-    // it. Each refusal ends as its open's would. The console key's reset
+    // A start a store refuses on its file leaves every store, the marker and
+    // the RPC channel's files as it found them. The two things it does write
+    // are this lock, which must be held for the check to mean anything, and
+    // the refusal itself, in the log the configuration names. Each refusal
+    // ends as its open's would. The console key's reset
     // opens no node store, so it is not held to theirs.
     if !config.session.console_key_reset {
         if let Err(error) = shekyl_node::Node::preflight(&config) {

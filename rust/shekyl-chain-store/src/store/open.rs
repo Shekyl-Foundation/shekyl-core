@@ -169,7 +169,8 @@ fn open_existing(
 }
 
 /// The read-only check of the chain file at `path`: [`judge_look`] over
-/// the one [`look`] the open also takes. Writes nothing and takes no lock.
+/// the one [`look`] the open also takes, then whether the open could write
+/// the file. Writes nothing and takes no lock.
 pub(super) fn check_at(
     path: &Path,
     horizons: Horizons,
@@ -177,11 +178,12 @@ pub(super) fn check_at(
 ) -> Result<StoreCheck, StoreError> {
     let mut builder = redb::Builder::new();
     builder.set_cache_size(CACHE_SIZE);
-    judge_look(
+    let judged = judge_look(
         look(&builder, path).map_err(look_fault)?,
         horizons.epoch(),
         admission,
-    )
+    )?;
+    Ok(judged.writable_at(path).map_err(look_fault)?)
 }
 
 /// What a [`Look`] at the chain file decides: the refusals the file's

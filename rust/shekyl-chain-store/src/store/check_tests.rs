@@ -170,3 +170,52 @@ fn the_pool_check_writes_nothing_and_refuses_what_the_open_refuses() {
         "the check and the open differ"
     );
 }
+
+/// A dangling link occupies the path: the writable open could not create a
+/// store there, so the check refuses it and leaves it. Red edit: test the
+/// path with `try_exists`, which follows the link and calls it absent.
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_at_a_store_path_is_refused_by_the_check() {
+    let dir = tempfile::tempdir().expect("temp");
+    let link = dir.path().join("store.db");
+    std::os::unix::fs::symlink(dir.path().join("nothing-here"), &link).expect("the link");
+    check_chain(&link).expect_err("the chain check admitted a dangling link");
+    PoolStore::check(&link).expect_err("the pool check admitted a dangling link");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .expect("the link")
+            .file_type()
+            .is_symlink(),
+        "the check replaced the link"
+    );
+    assert!(
+        !dir.path().join("nothing-here").exists(),
+        "the check created the link's target"
+    );
+}
+
+/// Each check refuses exactly the file its open could not write, and leaves
+/// it as it was. An account that may write anyway (root) is admitted. Red
+/// edit: drop `writable_at` from either check.
+#[cfg(unix)]
+#[test]
+fn a_store_the_open_cannot_write_is_refused_by_the_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let read_only = std::fs::Permissions::from_mode(0o400);
+
+    let chain = tmp("check-chain-read-only");
+    drop(ChainStore::create(&chain, EPOCH).expect("a sealed store"));
+    std::fs::set_permissions(&chain, read_only.clone()).expect("read-only");
+    let before = bytes_and_mtime(&chain);
+    let writable = std::fs::OpenOptions::new().write(true).open(&chain).is_ok();
+    assert_eq!(check_chain(chain.as_ref()).is_ok(), writable);
+    assert_eq!(bytes_and_mtime(&chain), before, "the chain check wrote");
+
+    let pool = tmp("check-pool-read-only");
+    drop(PoolStore::create(&pool).expect("a pool"));
+    std::fs::set_permissions(&pool, read_only).expect("read-only");
+    let before = bytes_and_mtime(&pool);
+    assert_eq!(PoolStore::check(pool.as_ref()).is_ok(), writable);
+    assert_eq!(bytes_and_mtime(&pool), before, "the pool check wrote");
+}

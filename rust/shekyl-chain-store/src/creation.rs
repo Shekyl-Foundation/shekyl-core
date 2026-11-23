@@ -261,6 +261,22 @@ pub enum StoreCheck {
     Unfinished,
 }
 
+impl StoreCheck {
+    /// This verdict, once a file the open will write is known to be
+    /// writable. A file the open only moves aside, or creates, needs no
+    /// write access of its own. The probe opens the file for writing without
+    /// creating, truncating or changing it.
+    pub(crate) fn writable_at(self, path: &Path) -> io::Result<Self> {
+        match self {
+            Self::Admitted | Self::NeedsRepair => {
+                OpenOptions::new().read(true).write(true).open(path)?;
+                Ok(self)
+            }
+            Self::Absent | Self::Unfinished => Ok(self),
+        }
+    }
+}
+
 /// What a store file is to a read-only look, before anything is written.
 ///
 /// The one look both stores take: their preflight ([`StoreCheck`]) and
@@ -298,8 +314,12 @@ pub(crate) enum Look {
 ///
 /// The header of a foreign-looking file could not be read.
 pub(crate) fn look(builder: &redb::Builder, path: &Path) -> io::Result<Look> {
-    if !path.try_exists()? {
-        return Ok(Look::Absent);
+    // The directory entry, not what it points at: a dangling link occupies
+    // the path, so the writable open could not create the store there.
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(absent) if absent.kind() == io::ErrorKind::NotFound => return Ok(Look::Absent),
+        Err(unreadable) => return Err(unreadable),
     }
     Ok(match builder.open_read_only(path) {
         Ok(read_only) => Look::Readable(read_only),

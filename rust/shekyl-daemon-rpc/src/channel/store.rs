@@ -137,13 +137,28 @@ impl std::error::Error for StoreError {}
 /// [`Store::check`] and [`Store::open`] share. An empty file is the one
 /// [`private_store`](super::files::private_store) makes and the writable
 /// open initializes; a file redb must repair first is the writable open's
-/// to repair. Anything else redb will not open is refused.
+/// to repair. Anything else redb will not open is refused, and so is a
+/// file holding either table under another type.
 fn judge_file(path: &Path) -> Result<(), StoreError> {
     if std::fs::metadata(path).map_err(db_err)?.len() == 0 {
         return Ok(());
     }
     match redb::Builder::new().open_read_only(path) {
-        Ok(_) | Err(redb::DatabaseError::RepairAborted) => Ok(()),
+        Ok(read_only) => {
+            let txn = read_only.begin_read().map_err(db_err)?;
+            table_fits(txn.open_table(ENROLLMENTS).map(drop))?;
+            table_fits(txn.open_table(SINGLES).map(drop))
+        }
+        Err(redb::DatabaseError::RepairAborted) => Ok(()),
+        Err(refused) => Err(db_err(refused)),
+    }
+}
+
+/// A table's read-only open, judged: an absent table is the writable open's
+/// to create, and any other refusal (a table of another type) is the store's.
+fn table_fits(opened: Result<(), redb::TableError>) -> Result<(), StoreError> {
+    match opened {
+        Ok(()) | Err(redb::TableError::TableDoesNotExist(_)) => Ok(()),
         Err(refused) => Err(db_err(refused)),
     }
 }
@@ -182,16 +197,23 @@ impl Store {
     /// (a writable open rewrites redb's header even when nothing else
     /// changes). A daemon checks every store this way before it opens any.
     /// An absent file passes (the open creates it), as does one redb must
-    /// repair first (only a writable open can).
+    /// repair first (only a writable open can). A file the open could not
+    /// write is refused; the probe opens it without creating, truncating or
+    /// changing it.
     ///
     /// # Errors
     ///
-    /// [`StoreError::File`] when the file is exposed or cannot be read;
-    /// [`StoreError::Db`] when redb refuses it.
+    /// [`StoreError::File`] when the file is exposed, or cannot be read or
+    /// written; [`StoreError::Db`] when redb refuses it.
     pub fn check(data_dir: &Path) -> Result<(), StoreError> {
         let path = data_dir.join(STORE_FILE);
         if super::files::existing_private_store(&path).map_err(StoreError::File)? {
             judge_file(&path)?;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .map_err(|e| StoreError::File(super::files::FileRefused::Io(path.clone(), e)))?;
         }
         Ok(())
     }
@@ -358,6 +380,64 @@ mod tests {
                 ..
             )))
         ));
+    }
+
+    /// A store whose table has another type is refused by the check and by
+    /// the open, before either writes. Red edit: drop `table_fits` from
+    /// `judge_file`, and the check admits it and the open rewrites its header.
+    #[cfg(unix)]
+    #[test]
+    fn a_table_of_another_type_is_refused_before_anything_is_written() {
+        const OTHER_TYPE: TableDefinition<'static, u64, u64> = TableDefinition::new("singles");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        super::super::files::private_store(&path).unwrap();
+        {
+            let db = Database::create(&path).unwrap();
+            let txn = db.begin_write().unwrap();
+            txn.open_table(OTHER_TYPE).unwrap();
+            txn.commit().unwrap();
+        }
+        let before = (
+            std::fs::read(&path).unwrap(),
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+        );
+        assert!(matches!(Store::check(dir.path()), Err(StoreError::Db(_))));
+        assert!(matches!(Store::open(dir.path()), Err(StoreError::Db(_))));
+        let after = (
+            std::fs::read(&path).unwrap(),
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+        );
+        assert_eq!(after, before, "a refused store was written");
+    }
+
+    /// The check refuses exactly the file the open could not write, and
+    /// leaves it as it was. An account that may write anyway (root) is
+    /// admitted by both. Red edit: drop the probe from `Store::check`.
+    #[cfg(unix)]
+    #[test]
+    fn a_store_the_open_cannot_write_is_refused_by_the_check() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE);
+        drop(Store::open(dir.path()).unwrap());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let before = (
+            std::fs::read(&path).unwrap(),
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+        );
+        let writable = std::fs::OpenOptions::new().write(true).open(&path).is_ok();
+        let checked = Store::check(dir.path());
+        assert_eq!(checked.is_ok(), writable, "{checked:?}");
+        assert_eq!(
+            (
+                std::fs::read(&path).unwrap(),
+                std::fs::metadata(&path).unwrap().modified().unwrap(),
+            ),
+            before,
+            "the check wrote the store"
+        );
+        assert_eq!(Store::open(dir.path()).is_ok(), writable);
     }
 
     /// The read-only check writes nothing, whatever it finds: an absent

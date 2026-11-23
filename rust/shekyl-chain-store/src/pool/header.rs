@@ -180,11 +180,13 @@ fn open_existing(
 }
 
 /// The read-only check of the pool file at `path`: [`judge_look`] over the
-/// one look the open also takes. Writes nothing and takes no lock.
+/// one look the open also takes, then whether the open could write the
+/// file. Writes nothing and takes no lock.
 pub(super) fn check(path: &Path) -> Result<StoreCheck, StoreError> {
     let mut builder = redb::Builder::new();
     builder.set_cache_size(POOL_CACHE_SIZE);
-    judge_look(crate::creation::look(&builder, path).map_err(io_open)?)
+    let judged = judge_look(crate::creation::look(&builder, path).map_err(io_open)?)?;
+    Ok(judged.writable_at(path).map_err(io_open)?)
 }
 
 /// What a look at the pool file decides: a file this store does not own
