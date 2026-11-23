@@ -626,7 +626,10 @@ where
 
         /*
           Use the Inner-Product argument to prove `<l, r> = t_caret` for these generators. The opening
-          point is not an input: the verifier rebuilds it from the transcript.
+          point is not an input to either side: the prover never forms it, and the verifier adds its
+          terms to the batch itself, from the commitments and challenges the transcript carries (the
+          `verifier.additional` terms and `ip_x * t_caret` on `g` in `verify`), passing
+          `IpStatement::verify` only the batch weight.
         */
 
         // Protocol 1, inlined, since our `IpStatement` is for Protocol 2

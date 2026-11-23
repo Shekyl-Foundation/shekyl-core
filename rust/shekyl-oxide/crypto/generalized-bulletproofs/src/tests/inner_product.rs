@@ -58,16 +58,15 @@ fn test_inner_product_rejects_a_generator_vector_of_a_different_length() {
     let long_witness =
         IpWitness::<Ristretto>::new(ScalarVector::new(2), ScalarVector::new(2)).unwrap();
 
-    let mut transcript = Transcript::new([0; 32]);
     let err = IpStatement::<Ristretto>::new(long_generators, ScalarVector(vec![one; 2]), one)
         .unwrap()
-        .prove(&mut transcript, short_witness)
+        .prove(&mut Transcript::new([0; 32]), short_witness)
         .unwrap_err();
     assert_eq!(err, IpProveError::IncorrectAmountOfGenerators);
 
     let err = IpStatement::<Ristretto>::new(short_generators, ScalarVector(vec![one; 1]), one)
         .unwrap()
-        .prove(&mut transcript, long_witness)
+        .prove(&mut Transcript::new([0; 32]), long_witness)
         .unwrap_err();
     assert_eq!(err, IpProveError::IncorrectAmountOfGenerators);
 }
