@@ -405,7 +405,7 @@ where
             assemble_tx_to_sign(
                 self.network,
                 &request,
-                &meta.selected.indices,
+                meta.selected.indices.as_slice(),
                 ledger.transfers(),
                 &paths,
                 fee_directive,

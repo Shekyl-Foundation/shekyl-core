@@ -28,7 +28,7 @@ use super::super::error::{
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
-use super::super::output_selector::{OutputSelector, SelectedOutputs};
+use super::super::output_selector::{OutputSelector, SelectedInputs, SelectedOutputs};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
@@ -443,6 +443,11 @@ where
                         selector_subset_violation(),
                         BuildErrorKind::SelectorContractViolation,
                     ),
+                    // Shortest cover past one transaction: the signer's fault, unreserved.
+                    OutputSelectorError::TooManyInputs { count } => (
+                        SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs { count }),
+                        BuildErrorKind::TransactionTooLarge,
+                    ),
                     OutputSelectorError::InsufficientFunds { .. }
                     | OutputSelectorError::NoEligibleOutputs => {
                         let mapped = resolve_insufficiency(needed_raw);
@@ -520,13 +525,6 @@ where
                     );
                     mapped
                 })?;
-        }
-        // Largest-first takes the fewest inputs, so past the cap no selection
-        // fits: refused as the signer refuses it, before anything is reserved.
-        let count = selected.indices.len();
-        if count > shekyl_tx_builder::MAX_INPUTS {
-            let err = SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs { count });
-            return Err(fail_build_after_attempted(self.sink.as_ref(), err));
         }
         let fee = estimate(selected.indices.len(), payment_count.saturating_add(1))
             .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
@@ -657,7 +655,7 @@ where
     /// (indistinguishable from any post-return spend).
     fn revalidate_selected_inputs(
         ledger: &LedgerBlock,
-        indices: &[usize],
+        indices: &SelectedInputs,
         assemble_inputs: &[AssembleInput],
     ) -> Result<(), SendError> {
         // Parallel arrays in transaction-input order, built in lockstep by

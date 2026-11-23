@@ -510,7 +510,8 @@ impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
         target: AtomicUnits,
     ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
         Ok(crate::engine::output_selector::SelectedOutputs {
-            indices: vec![usize::MAX],
+            indices: crate::engine::output_selector::SelectedInputs::within_cap(vec![usize::MAX])
+                .expect("one index fits in a transaction"),
             total_covered: target,
         })
     }
@@ -619,8 +620,9 @@ async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
 
 /// A send that takes exactly the cap's inputs clears selection: with no
 /// curve tree configured it is refused for the tree, the step after
-/// selection, never as too many inputs. Bites on an off-by-one that refuses
-/// the cap itself.
+/// selection, never as too many inputs. The cover's length is pinned on
+/// the selector (`wallet_greedy_accepts_a_cover_of_exactly_the_cap`); this
+/// bites on a build-layer check that refuses the cap itself.
 #[tokio::test]
 async fn a_send_of_exactly_the_input_cap_clears_selection() {
     use shekyl_tx_builder::MAX_INPUTS;

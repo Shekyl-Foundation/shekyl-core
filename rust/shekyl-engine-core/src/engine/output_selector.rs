@@ -22,8 +22,12 @@
 //!   record the caller passes after pre-filtering against
 //!   `output_locks` (per §5.6.6 P6 / γ three-collection lean
 //!   shape).
+//! - [`SelectedInputs`] — the indices of one spend, at most
+//!   [`shekyl_tx_builder::MAX_INPUTS`].
 //! - [`SelectedOutputs`] — the (indices, total_covered)
 //!   pair the selector returns.
+//! - `cover_largest_first` — the minimum-cardinality cover
+//!   the default selector and the drain selector both call.
 //! - [`WalletGreedyOutputSelector`] — the V3.0 default impl
 //!   (largest-first greedy; matches the pre-PR-5
 //!   `build_pending_tx_in_state` selection loop byte-for-byte).
@@ -91,6 +95,144 @@ pub struct OutputCandidate {
     pub amount: AtomicUnits,
 }
 
+/// The inputs of one spend. The length is at most
+/// [`shekyl_tx_builder::MAX_INPUTS`].
+///
+/// A cover that needs more inputs is
+/// [`OutputSelectorError::TooManyInputs`], never a value of
+/// this type. An empty set is representable: a zero target
+/// selects nothing, and the signer refuses an empty spend
+/// on its own path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedInputs {
+    indices: Vec<usize>,
+}
+
+impl SelectedInputs {
+    /// Accept `indices` when one transaction can spend them.
+    ///
+    /// `Err` is the length that did not fit.
+    pub fn within_cap(indices: Vec<usize>) -> Result<Self, usize> {
+        let count = indices.len();
+        if count > shekyl_tx_builder::MAX_INPUTS {
+            return Err(count);
+        }
+        Ok(Self { indices })
+    }
+
+    /// The indices, in the order the selector stored them.
+    #[must_use]
+    pub fn as_slice(&self) -> &[usize] {
+        &self.indices
+    }
+
+    /// How many inputs this spend carries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.indices.len()
+    }
+
+    /// No inputs. A zero target is the case that constructs one.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.indices.is_empty()
+    }
+
+    /// The indices, by reference.
+    pub fn iter(&self) -> std::slice::Iter<'_, usize> {
+        self.indices.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a SelectedInputs {
+    type Item = &'a usize;
+    type IntoIter = std::slice::Iter<'a, usize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// One largest-first cover of a target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LargestFirstCover<T> {
+    /// The prefix of the ranking that covers the target, in
+    /// the ranking's order.
+    pub(crate) chosen: Vec<T>,
+    /// The sum of [`Self::chosen`].
+    pub(crate) total: AtomicUnits,
+}
+
+/// Why [`cover_largest_first`] refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LargestFirstFault {
+    /// The whole ranking sums to less than the target.
+    ///
+    /// This wins over [`Self::TooManyInputs`]: a ranking that
+    /// cannot cover at any length is short, including when it
+    /// is longer than the cap.
+    Short {
+        /// The target the caller asked to cover.
+        needed: AtomicUnits,
+        /// The sum of the ranking.
+        available: AtomicUnits,
+    },
+    /// A cover exists and its length is greater than the cap.
+    ///
+    /// `count` is that length. Largest-first is a minimum-
+    /// cardinality cover: any other subset that covers the
+    /// target is at least as long, because any `k` amounts
+    /// sum to at most the `k` largest. A cover longer than
+    /// the cap means no legal selection exists.
+    TooManyInputs {
+        /// How many inputs the shortest cover needs.
+        count: usize,
+    },
+    /// Adding an amount overflowed `u64` atomic units.
+    Overflow,
+}
+
+/// The shortest prefix of `ranked_largest_first` whose amounts
+/// cover `target`.
+///
+/// `ranked_largest_first` is already ordered largest amount
+/// first. The caller owns the tiebreak. `cap` is how many
+/// inputs one transaction can spend; a cover longer than that
+/// is [`LargestFirstFault::TooManyInputs`].
+///
+/// A zero `target` covers with an empty prefix. An empty
+/// ranking covers only a zero target.
+pub(crate) fn cover_largest_first<T>(
+    ranked_largest_first: impl IntoIterator<Item = T>,
+    amount_of: impl Fn(&T) -> AtomicUnits,
+    target: AtomicUnits,
+    cap: usize,
+) -> Result<LargestFirstCover<T>, LargestFirstFault> {
+    let mut chosen = Vec::new();
+    let mut total = AtomicUnits::ZERO;
+    for item in ranked_largest_first {
+        if total >= target {
+            break;
+        }
+        let amount = amount_of(&item);
+        total = total
+            .checked_add(amount)
+            .ok_or(LargestFirstFault::Overflow)?;
+        chosen.push(item);
+    }
+    if total < target {
+        return Err(LargestFirstFault::Short {
+            needed: target,
+            available: total,
+        });
+    }
+    let count = chosen.len();
+    if count > cap {
+        return Err(LargestFirstFault::TooManyInputs { count });
+    }
+    Ok(LargestFirstCover { chosen, total })
+}
+
 /// Successful selection result.
 ///
 /// The caller (`LocalPendingTx::build`) consumes both
@@ -103,8 +245,10 @@ pub struct SelectedOutputs {
     /// Indices into the candidate slice the caller passed
     /// to [`OutputSelector::select_outputs`]. Per F4, the
     /// caller MUST verify each returned index is present in
-    /// the candidate slice before using it.
-    pub indices: Vec<usize>,
+    /// the candidate slice before using it. The length fits
+    /// in one transaction; [`SelectedInputs`] is what makes
+    /// a longer set unrepresentable.
+    pub indices: SelectedInputs,
 
     /// Sum of the selected outputs' amounts. The caller
     /// validates this is `>= target`; a selector returning a
@@ -173,15 +317,19 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// construction or silently corrupts; the caller-side
     /// check is the structural defense.
     ///
-    /// # Input cap
+    /// # Input bound
     ///
-    /// The selector is not told the cap: one transaction
-    /// spends at most `shekyl_tx_builder::MAX_INPUTS`, and the
-    /// caller refuses a selection longer than that as the
-    /// signer's `SignFault::TooManyInputs`, before reserving
-    /// anything. An implementor should return the fewest
-    /// inputs it can, since the refusal reads a longer
-    /// selection as "no selection fits".
+    /// A successful selection carries [`SelectedInputs`]: at
+    /// most [`shekyl_tx_builder::MAX_INPUTS`] indices. An
+    /// implementation returns
+    /// [`OutputSelectorError::TooManyInputs`] only when it
+    /// has established that the shortest cover exceeds that
+    /// bound. [`WalletGreedyOutputSelector`] has: its
+    /// largest-first cover is a minimum-cardinality cover.
+    /// A strategy that spends more inputs than the shortest
+    /// cover does not report that count as the number the
+    /// send needs. It returns a set the type can carry, or
+    /// a different error.
     ///
     /// # `target` semantics
     ///
@@ -198,9 +346,11 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// [`OutputSelectorError`]. The V3.0 default impl
     /// ([`WalletGreedyOutputSelector`]) returns
     /// [`OutputSelectorError::NoEligibleOutputs`] when
-    /// `candidates` is empty and
+    /// `candidates` is empty,
     /// [`OutputSelectorError::InsufficientFunds`] when
-    /// `sum(candidates) < target`.
+    /// `sum(candidates) < target`, and
+    /// [`OutputSelectorError::TooManyInputs`] when the
+    /// shortest cover is longer than one transaction.
     fn select_outputs(
         &self,
         candidates: &[OutputCandidate],
@@ -253,59 +403,56 @@ impl OutputSelector for WalletGreedyOutputSelector {
             return Err(OutputSelectorError::NoEligibleOutputs);
         }
 
-        // Sort largest-first; ties broken by index ascending.
-        // Matches `build_pending_tx_in_state` body at
-        // `engine/pending.rs:574` byte-for-byte.
-        //
-        // The clone of references (not owned candidates) is
-        // bounded by candidates.len() and dominated by the
-        // surrounding selection-pipeline allocations.
+        // Largest-first; ties broken by index ascending.
+        // `cover_largest_first` consumes that order and
+        // refuses a cover one transaction cannot spend.
         let mut sorted: Vec<&OutputCandidate> = candidates.iter().collect();
         sorted.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.index.cmp(&b.index)));
 
-        let mut indices = Vec::new();
-        let mut covered = AtomicUnits::ZERO;
-        for c in &sorted {
-            if covered >= target {
-                break;
+        let cover = cover_largest_first(
+            sorted,
+            |candidate| candidate.amount,
+            target,
+            shekyl_tx_builder::MAX_INPUTS,
+        )
+        .map_err(|fault| match fault {
+            // The error payload carries raw `u64`. Convert
+            // at the edge. `available` is the sum of the
+            // candidate set: a short cover took all of it.
+            LargestFirstFault::Short { needed, available } => {
+                OutputSelectorError::InsufficientFunds {
+                    needed: needed.to_raw(),
+                    available: available.to_raw(),
+                }
             }
-            indices.push(c.index);
-            // Accumulating owned-output amounts; the wallet's total
-            // balance is bounded by supply (< u64::MAX), so overflow is a
-            // corrupted-state invariant violation, not a recoverable error.
-            covered = covered
-                .checked_add(c.amount)
-                .expect("selected-output sum overflowed total supply bound");
-        }
+            LargestFirstFault::TooManyInputs { count } => {
+                OutputSelectorError::TooManyInputs { count }
+            }
+            // Owned-output amounts. The wallet's balance is
+            // bounded by supply, so overflow is corrupted
+            // state, not a request the user can repair.
+            LargestFirstFault::Overflow => {
+                panic!("selected-output sum overflowed total supply bound")
+            }
+        })?;
 
-        if covered < target {
-            // Per `OutputSelectorError::InsufficientFunds`'
-            // C2α doc: the selector's `available` projection
-            // is `sum(candidates)` (the selector's own view
-            // of the candidate set); the engine-wide
-            // `SendError::InsufficientFunds`'s `available`
-            // matches this for the V3.0 default selector
-            // (the engine doesn't re-aggregate). The error
-            // payload carries raw `u64` (per the design note's
-            // error-payload disposition), so convert at the edge.
-            let available = AtomicUnits::checked_sum(candidates.iter().map(|c| c.amount))
-                .expect("candidate sum overflowed total supply bound");
-            return Err(OutputSelectorError::InsufficientFunds {
-                needed: target.to_raw(),
-                available: available.to_raw(),
-            });
-        }
-
-        // Sort indices ascending for deterministic
-        // downstream consumption (the caller's
-        // `Reservation::selected_transfer_indices` carries
-        // sorted indices per the pre-PR-5 body's
-        // `selected.sort()` step).
+        // Ascending indices for deterministic downstream
+        // consumption (the caller's reservation carries
+        // sorted indices, as the pre-PR-5 body did).
+        let mut indices: Vec<usize> = cover
+            .chosen
+            .into_iter()
+            .map(|candidate| candidate.index)
+            .collect();
         indices.sort();
+        // The cover was bounded by the same cap. A miss here
+        // means the two checks drifted.
+        let indices = SelectedInputs::within_cap(indices)
+            .expect("cover_largest_first returned a cover within the cap");
 
         Ok(SelectedOutputs {
             indices,
-            total_covered: covered,
+            total_covered: cover.total,
         })
     }
 }
@@ -360,7 +507,7 @@ mod tests {
         // Largest-first: pick index 1 (5_000), then index 2
         // (3_000) → covered = 8_000 ≥ 6_000. `indices` is
         // sorted ascending for deterministic consumption.
-        assert_eq!(selected.indices, vec![1, 2]);
+        assert_eq!(selected.indices.as_slice(), &[1, 2]);
         assert_eq!(selected.total_covered, AtomicUnits::from_raw(8_000));
     }
 
@@ -407,7 +554,7 @@ mod tests {
             .expect("greedy selector covers target");
         // Only one candidate needed; ties broken by
         // ascending index → index 0.
-        assert_eq!(selected.indices, vec![0]);
+        assert_eq!(selected.indices.as_slice(), &[0]);
         assert_eq!(selected.total_covered, AtomicUnits::from_raw(1_000));
     }
 
@@ -427,6 +574,7 @@ mod tests {
         // candidate set.
         let recomputed: u64 = selected
             .indices
+            .as_slice()
             .iter()
             .map(|i| {
                 candidates
@@ -440,5 +588,78 @@ mod tests {
             })
             .sum();
         assert_eq!(selected.total_covered, AtomicUnits::from_raw(recomputed));
+    }
+
+    /// The shortest cover past the cap is `TooManyInputs` with
+    /// that cover's length, not the length of the whole set.
+    /// Bites if the selector hands the build an over-cap `Ok`,
+    /// or reports every candidate instead of the cover.
+    #[test]
+    fn wallet_greedy_names_the_shortest_cover_past_the_cap() {
+        let cap = shekyl_tx_builder::MAX_INPUTS;
+        let candidates: Vec<_> = (0..cap + 4).map(|index| candidate(index, 10)).collect();
+        let need = cap + 1;
+        let err = WalletGreedyOutputSelector
+            .select_outputs(&candidates, AtomicUnits::from_raw(10 * need as u64))
+            .expect_err("the cover is one past the cap");
+        assert!(
+            matches!(err, OutputSelectorError::TooManyInputs { count } if count == need),
+            "{err:?}"
+        );
+    }
+
+    /// A cover of exactly the cap is a selection. Bites on an
+    /// off-by-one that refuses the cap itself.
+    #[test]
+    fn wallet_greedy_accepts_a_cover_of_exactly_the_cap() {
+        let cap = shekyl_tx_builder::MAX_INPUTS;
+        let candidates: Vec<_> = (0..cap + 2).map(|index| candidate(index, 10)).collect();
+        let selected = WalletGreedyOutputSelector
+            .select_outputs(&candidates, AtomicUnits::from_raw(10 * cap as u64))
+            .expect("the cap's own count is a legal cover");
+        assert_eq!(selected.indices.len(), cap);
+        assert_eq!(
+            selected.total_covered,
+            AtomicUnits::from_raw(10 * cap as u64)
+        );
+    }
+
+    /// The success type rejects a length the transaction cannot
+    /// spend, and accepts the cap itself. Bites if the bound
+    /// moves off [`shekyl_tx_builder::MAX_INPUTS`].
+    #[test]
+    fn selected_inputs_refuse_a_length_past_the_cap() {
+        let cap = shekyl_tx_builder::MAX_INPUTS;
+        assert_eq!(
+            SelectedInputs::within_cap((0..cap).collect())
+                .expect("the cap fits")
+                .len(),
+            cap
+        );
+        assert_eq!(
+            SelectedInputs::within_cap((0..=cap).collect()),
+            Err(cap + 1)
+        );
+        assert!(SelectedInputs::within_cap(Vec::new())
+            .expect("empty fits")
+            .is_empty());
+    }
+
+    /// A ranking that cannot cover at any length is short, even
+    /// when it is longer than the cap. Bites if the cap check
+    /// runs before the shortfall and tells the user to consolidate
+    /// a balance that does not exist.
+    #[test]
+    fn a_short_ranking_is_not_an_input_cap_refusal() {
+        let cap = shekyl_tx_builder::MAX_INPUTS;
+        let ranked: Vec<u64> = vec![10; cap + 2];
+        let err = cover_largest_first(
+            ranked,
+            |amount| AtomicUnits::from_raw(*amount),
+            AtomicUnits::from_raw(10 * (cap as u64 + 3)),
+            cap,
+        )
+        .expect_err("the ranking does not cover");
+        assert!(matches!(err, LargestFirstFault::Short { .. }), "{err:?}");
     }
 }
