@@ -323,12 +323,6 @@ impl<F: PrimeField> LinComb<F> {
     pub fn evaluate<C: Ciphersuite<F = F>>(&self, assignment: &Assignment<'_, C>) -> F {
         let aL = |index| Assignment::<C>::row(assignment.aL, index);
         let aR = |index| Assignment::<C>::row(assignment.aR, index);
-        let weighted = |terms: &[(usize, F)], value: &dyn Fn(usize) -> F| {
-            terms
-                .iter()
-                .map(|(index, weight)| value(*index) * weight)
-                .sum::<F>()
-        };
         let vector_commitments = self.WCG.iter().map(|(commitment, terms)| {
             let g_values = assignment
                 .openings
@@ -336,7 +330,7 @@ impl<F: PrimeField> LinComb<F> {
                 .get(*commitment)
                 .map(|opening| opening.g_values.as_slice())
                 .unwrap_or_default();
-            weighted(terms, &|index| Assignment::<C>::row(g_values, index))
+            weighted(terms, |index| Assignment::<C>::row(g_values, index))
         });
         let commitments = |index: usize| {
             assignment
@@ -347,12 +341,20 @@ impl<F: PrimeField> LinComb<F> {
                 .unwrap_or(F::ZERO)
         };
         self.c
-            + weighted(&self.WL, &aL)
-            + weighted(&self.WR, &aR)
-            + weighted(&self.WO, &|index| aL(index) * aR(index))
+            + weighted(&self.WL, aL)
+            + weighted(&self.WR, aR)
+            + weighted(&self.WO, |index| aL(index) * aR(index))
             + vector_commitments.sum::<F>()
-            + weighted(&self.WV, &commitments)
+            + weighted(&self.WV, commitments)
     }
+}
+
+/// `sum(weight * value(index))` over a row's `(index, weight)` terms.
+fn weighted<F: PrimeField>(terms: &[(usize, F)], value: impl Fn(usize) -> F) -> F {
+    terms
+        .iter()
+        .map(|(index, weight)| value(*index) * weight)
+        .sum()
 }
 
 pub(crate) fn accumulate_vector<F: PrimeField>(

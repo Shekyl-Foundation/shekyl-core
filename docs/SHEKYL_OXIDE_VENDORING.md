@@ -27,7 +27,8 @@ Upstream tracking reference (the single source of truth for "where fixes go"):
 Vendored snapshot metadata + integrity:
 
 - `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT` — pinned commit
-  (`6bf40e51184f0d6bf0bfc2979d829c27f273a520` on `chore/crypto-resync-from-tip`, the merge of fork PR #9:
+  (`c753b3475fc98c3eb32f7036e2c392a6242585bc` on `chore/crypto-resync-from-tip`, the merge of fork PR #10,
+  `LinComb::evaluate`'s row sum statically dispatched, on top of the merge of fork PR #9 (`6bf40e5118`):
   `generalized-bulletproofs` correct in every build. Its inner-product prover
   takes no opening point; its vector lengths hold in every build; its prover is
   formed from commitments made from their openings and checks every length and
