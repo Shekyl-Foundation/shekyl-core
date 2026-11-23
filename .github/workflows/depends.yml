@@ -22,7 +22,7 @@ on:
       - 'cmake/**'
       - 'rust/**'
   schedule:
-    - cron: "0 4 * * *"   # daily 04:00 UTC — the rest of the matrix
+    - cron: "7 4 * * *"   # daily 04:07 UTC — the rest of the matrix
   workflow_dispatch:
 
 # Superseded-run cancellation (house pattern: build.yml).
