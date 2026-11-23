@@ -328,6 +328,10 @@ mod tests {
     #[test]
     fn a_0600_data_directory_is_unusable_not_exposed() {
         use std::os::unix::fs::PermissionsExt;
+        // Root searches a directory with no search bit, so nothing refuses.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
         let d = tempfile::tempdir().unwrap();
         let data = d.path().join("data");
         std::fs::create_dir(&data).unwrap();

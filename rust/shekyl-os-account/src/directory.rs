@@ -22,7 +22,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::OWNER_ONLY_DIR_MODE;
 
@@ -45,7 +45,11 @@ pub struct DirectoryFacts {
 }
 
 impl DirectoryFacts {
-    /// Read `path` without following a symbolic link.
+    /// Read `path` without following a symbolic link, however it is spelled.
+    /// `lstat` follows a link named with a trailing `/` or `/.`, so the path
+    /// is read through [`Path::components`], which drops repeated separators
+    /// and `.` without touching the file system, resolves no link, and keeps
+    /// `..`.
     ///
     /// # Errors
     ///
@@ -53,7 +57,8 @@ impl DirectoryFacts {
     /// describe.
     pub fn inspect(path: &Path) -> Result<Self, DirectoryFault> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let meta = match std::fs::symlink_metadata(path) {
+        let spelled: PathBuf = path.components().collect();
+        let meta = match std::fs::symlink_metadata(&spelled) {
             Ok(meta) => meta,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(DirectoryFault::Missing);
@@ -228,10 +233,24 @@ mod tests {
 
         let link = base.path().join("link");
         std::os::unix::fs::symlink(&dir, &link).expect("a link");
-        assert!(matches!(
-            DirectoryFacts::inspect(&link),
-            Err(DirectoryFault::SymbolicLink)
-        ));
+        // `lstat` follows a link spelled with a trailing `/` or `/.`. Red
+        // edit: pass `path` to `symlink_metadata` as given.
+        let shown = link.display();
+        for spelling in [
+            link.clone(),
+            PathBuf::from(format!("{shown}/")),
+            PathBuf::from(format!("{shown}/.")),
+            PathBuf::from(format!("{shown}//./")),
+        ] {
+            assert!(
+                matches!(
+                    DirectoryFacts::inspect(&spelling),
+                    Err(DirectoryFault::SymbolicLink)
+                ),
+                "{}",
+                spelling.display()
+            );
+        }
 
         let file = base.path().join("file");
         std::fs::write(&file, b"").expect("a file");
