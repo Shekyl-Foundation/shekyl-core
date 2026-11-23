@@ -98,18 +98,15 @@ impl<P: PendingTxEngine> Drop for FaultInjecting<P> {
         let build = self
             .queued_build_failures
             .get_mut()
-            .map(|q| q.len())
-            .unwrap_or(0);
+            .map_or_else(|poisoned| poisoned.into_inner().len(), |q| q.len());
         let submit = self
             .queued_submit_failures
             .get_mut()
-            .map(|q| q.len())
-            .unwrap_or(0);
+            .map_or_else(|poisoned| poisoned.into_inner().len(), |q| q.len());
         let discard = self
             .queued_discard_failures
             .get_mut()
-            .map(|q| q.len())
-            .unwrap_or(0);
+            .map_or_else(|poisoned| poisoned.into_inner().len(), |q| q.len());
         let remaining = build + submit + discard;
         // A test-discipline check, so it holds in a release-profile test run
         // too. Skipped while unwinding: a test that already failed must not

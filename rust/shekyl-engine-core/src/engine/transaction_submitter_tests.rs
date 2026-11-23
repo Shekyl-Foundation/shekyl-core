@@ -435,11 +435,15 @@ async fn per_p_arm_dispatches_matched_bytes_over_p_s_own_circuit() {
 async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
     use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
 
+    let (submitter_persona, bytes_persona) = (
+        PCanonicalId::from_bytes([19u8; 32]),
+        PCanonicalId::from_bytes([23u8; 32]),
+    );
     let submitter = BroadcastSubmitter::for_posture(
         BroadcastPosture::OwnRemote {
             base_url: "http://127.0.0.1:18081".to_string(),
         },
-        PCanonicalId::from_bytes([19u8; 32]),
+        submitter_persona,
         Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED)),
         &dead_proxy_socks(),
     )
@@ -450,7 +454,7 @@ async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
     // fail-closed refusal in a release build.
     let err = submitter
         .submit_bound(confirmed_for_test(PBoundBytes::bind_for_test(
-            PCanonicalId::from_bytes([23u8; 32]),
+            bytes_persona,
             wire_tx_bytes(),
         )))
         .await
@@ -458,9 +462,8 @@ async fn per_p_arm_refuses_cross_persona_bytes_before_any_transport() {
     assert!(
         matches!(
             err,
-            BroadcastSubmitError::PersonaMismatch { bytes_persona, submitter_persona }
-                if bytes_persona == PCanonicalId::from_bytes([23u8; 32])
-                    && submitter_persona == PCanonicalId::from_bytes([19u8; 32])
+            BroadcastSubmitError::PersonaMismatch { bytes_persona: bytes, submitter_persona: submitter }
+                if bytes == bytes_persona && submitter == submitter_persona
         ),
         "release refuses fail-closed, naming both personas: got {err:?}"
     );

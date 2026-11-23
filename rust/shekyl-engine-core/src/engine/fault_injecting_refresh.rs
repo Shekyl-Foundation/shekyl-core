@@ -195,12 +195,15 @@ impl<R: RefreshEngine> Drop for FaultInjecting<R> {
     /// needs it as much as a debug one.
     ///
     /// `Mutex::get_mut` bypasses the lock: `Drop` holds `&mut self`, so
-    /// the lock cannot be contested. A poisoned queue counts as empty,
-    /// and the check is skipped while the thread is already unwinding:
-    /// a test that failed must not be turned into an abort by a second
-    /// panic here.
+    /// the lock cannot be contested. A poisoned queue is read through its
+    /// poison, so an earlier caught panic cannot hide a leftover. The check
+    /// is skipped while the thread is already unwinding: a test that failed
+    /// must not be turned into an abort by a second panic here.
     fn drop(&mut self) {
-        let remaining = self.queue.get_mut().map(|q| q.len()).unwrap_or(0);
+        let remaining = self
+            .queue
+            .get_mut()
+            .map_or_else(|poisoned| poisoned.into_inner().len(), |q| q.len());
         if !std::thread::panicking() {
             assert!(
                 remaining == 0,
