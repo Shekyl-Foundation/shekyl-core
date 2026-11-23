@@ -408,6 +408,18 @@ pub fn unpadded_submission() -> RpcError {
     )
 }
 
+/// The read-only check of the channel's enrollment store in `data_dir`
+/// ([`Store::check`]): a daemon runs it with its other stores' checks,
+/// before it writes anything, so a start one of them refuses leaves the
+/// directory as it found it.
+///
+/// # Errors
+///
+/// The refusal, in the operator's words ([`StartFault::Refused`]).
+pub fn check_store(data_dir: &Path) -> Result<(), StartFault> {
+    Ok(Store::check(data_dir).map_err(|e| e.to_string())?)
+}
+
 /// Replace a service's console key. The new private half, the fingerprint
 /// and the reset note are one change ([`console::install`]): a crash leaves
 /// a journal the next start finishes, or the previous key. The caller holds
