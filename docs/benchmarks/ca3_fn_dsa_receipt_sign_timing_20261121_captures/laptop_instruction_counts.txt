@@ -1,0 +1,65 @@
+CA-3 FN-DSA: instruction counts of the signing path, harness beside shekyl-wallet-rpc, shekyl-core 3b4fd5dc2c264ad49c2f3822bb2fc5772e28e77d
+x86_64-pc-windows-msvc, rustc 1.94.0 (4a4ef493e 2026-03-02), LLVM 21.1.8, +crt-static on every rustc invocation, release profile, --locked.
+
+Binaries
+  harness_avx2       ca3_receipt_sign_timing.exe  sha256 809e06bf1682d8745688dbe657dbb5289e1388e990f004e5e7b3f61e7cfc9f21  (-p shekyl-p-serve --example ca3_receipt_sign_timing)
+  harness_sse2       ca3_receipt_sign_timing.exe  sha256 10dd021b5d9b6ecc336a042551a4e5889a55b4800b26e290c6c4f3650ed21383  (the same, --features fn-dsa-sign/no_avx2)
+  shekyl_wallet_rpc  shekyl-wallet-rpc.exe        sha256 bd665efaa8a27a8b5a5aa5ecf94ee7373faa28c4fbecf84829c5fdb86269be12  (-p shekyl-wallet-rpc, default features, built
+                     from the harness_avx2 clone into its own target directory; 381 of 381 rustc invocations with +crt-static;
+                     fn_dsa_sign built with features [default])
+
+Method
+  dumpbin /disasm of each binary (the release PDB beside it supplies the labels), and dumpbin /unwindinfo for the x64
+  function table. A function is one function-table entry [Begin, End); End is exclusive and excludes the int3 padding
+  after it. Leaf functions without an entry run from their label to the next label or entry, less trailing int3/nop.
+  Instructions are the listing's instruction rows (an address, bytes, and a mnemonic); the byte-continuation rows and
+  the padding rows dumpbin prints between functions are not counted.
+  Labels alone do not give boundaries here: a function with no public symbol (internal after LTO) runs on under the
+  previous label. In shekyl-wallet-rpc, sign_avx2_inner and both ffsamp_fft_inner instances have no symbol, and sit
+  under the label of fips205::wots::wots_sign, the preceding public symbol.
+  Functions without a symbol are identified by their instruction sequences: two functions are "identical" when every
+  instruction matches once these are masked: absolute code addresses, data addresses ([...h]), anonymous data-constant
+  names (anon.*), the 17h<hash>E / .llvm.<n> suffixes of symbol names, and a call to ffsamp_fft_inner shown by name
+  in one binary and by address in the other.
+
+Counts (instructions)
+  function                      harness_avx2          harness_sse2          shekyl_wallet_rpc
+  sign_inner                    775                   775                   no standalone copy: inlined into
+                                                                            <SigningKey1024 as SigningKey>::sign (876)
+  sign_avx2_inner               767                   (compiled out)        767 (no symbol, at RVA 0x9FB220)
+  ffsamp_fft_inner, SSE2 path   498 (no symbol)       498 (named)           498 (no symbol, at RVA 0x9F96A0)
+  ffsamp_fft_inner, AVX2 path   493 (no symbol)       (compiled out)        493 (no symbol, at RVA 0x9FA470)
+  poly::poly_LDL_fft            80                    80                    80
+  sign_avx2::poly_avx2::poly_LDL_fft  187             (compiled out)        187
+
+Comparisons, masked as above
+  sign_avx2_inner               harness_avx2 vs wallet-rpc: identical (767 of 767)
+  ffsamp_fft_inner, AVX2 path   harness_avx2 vs wallet-rpc: identical (493 of 493)
+  ffsamp_fft_inner, SSE2 path   harness_avx2 vs wallet-rpc: identical; harness_sse2 vs wallet-rpc: identical (498 of 498)
+  poly::poly_LDL_fft            harness_avx2, harness_sse2, wallet-rpc: identical (80)
+  poly_avx2::poly_LDL_fft       harness_avx2 vs wallet-rpc: identical (187)
+  sign_avx2::compute_basis_avx2_inner  harness_avx2 vs wallet-rpc: identical (345), same hash before masking
+  sign_inner                    harness_avx2 vs harness_sse2: identical (775)
+  sign_inner                    harness (775, standalone) vs wallet-rpc (inlined into sign, 876 together): not the same
+                                instruction sequence. The longest common subsequence of the masked sequences is 327 of
+                                775; the longest identical run is 35. The inlined body calls the same ffsamp_fft_inner
+                                (SSE2 path) the harness's sign_inner calls, and that function is identical.
+  <SigningKey1024 as SigningKey>::sign  harness_avx2 189, harness_sse2 160, wallet-rpc 876 (sign_inner inlined);
+                                wallet-rpc's calls the unnamed sign_avx2_inner (0x9FB220) and the unnamed SSE2
+                                ffsamp_fft_inner (0x9F96A0).
+
+Reading
+  On a CPU with AVX2 (this laptop; the harness prints cpu_avx2=yes) the signature goes through sign_avx2_inner, the
+  AVX2 ffsamp_fft_inner and poly_avx2::poly_LDL_fft. Each of these is the same instruction sequence in the harness and
+  in shekyl-wallet-rpc.
+  On the SSE2 path, ffsamp_fft_inner and poly::poly_LDL_fft are the same in harness_sse2 and in shekyl-wallet-rpc.
+  sign_inner itself is not: wallet-rpc's default-feature build inlines it into SigningKey1024::sign, and the
+  register allocation and layout differ. The no_avx2 harness measures the standalone sign_inner. A shipped binary on a
+  CPU without AVX2 runs the inlined one.
+
+Files
+  segments.txt          the segmenter's output: every function in the signing path, per binary, with calls
+  pairs.txt             the masked comparisons, position by position
+  fn.<binary>.<VA>.<symbol>.txt  each function's instruction rows, as dumpbin printed them
+  harness_avx2.disasm.txt.gz, harness_sse2.disasm.txt.gz  full listings of the harness binaries
+  shekyl-wallet-rpc's full listing (199,956,378 bytes) is not kept; the binary's hash and the function excerpts are.

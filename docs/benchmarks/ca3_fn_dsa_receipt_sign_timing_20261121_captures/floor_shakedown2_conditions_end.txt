@@ -1,0 +1,35 @@
+== conditions shakedown2-end at 2026-11-22T02:40:35Z
+model: Raspberry Pi 4 Model B Rev 1.2
+revision: c03112
+os: Ubuntu 26.04.1 LTS
+kernel: 7.0.0-1023-raspi
+governor: ondemand
+ntp: yes
+load: 1.01 1.00 0.94
+clock_khz: 1500000
+soc_temp_millic: 55017
+throttled: throttled=0x0
+undervoltage_alarm: 0
+total_trans: 62561
+time_in_state:
+  600000 1361880
+  700000 17351
+  800000 3029
+  900000 2778
+  1000000 3699
+  1100000 2884
+  1200000 2090
+  1300000 2208
+  1400000 1500
+  1500000 1001137
+mem_available_kb: 3359948
+top processes by cpu:
+      PID USER     %CPU     ELAPSED COMMAND
+    14458 root     45.8       00:00 systemd-timedat
+    14448 <agent>  3.2       00:00 bash
+    14441 root      0.1       01:00 kworker/1:1-events
+       59 root      0.0    06:39:46 kworker/u17:0-brcmf_wq/mmc1:0001:1
+    14437 root      0.0       06:14 kworker/1:0-events
+    14439 root      0.0       05:18 kworker/2:1-events
+    14422 root      0.0       16:05 kworker/2:0-events
+tmux: ca3sd2: 1 windows (created Sat Nov 21 21:20:50 2026);
