@@ -117,7 +117,8 @@ fn a_dial_to_a_plaintext_node_ends_once_and_proves_nothing() {
     assert!(!failure.proves_misbehaviour());
     assert_eq!(failure.evidence(), Evidence::Destination(Proof::ABSENT));
     assert_eq!(failure.retry(), Retry::Again);
-    assert_ne!(failure.reached(), Reached::NoStream, "the socket opened");
+    // Before the channel, as every handshake failure is.
+    assert_eq!(failure.reached(), Reached::NoStream);
     assert!(
         end_rx.recv_timeout(NO_SECOND_END).is_err(),
         "one end for one dial"
