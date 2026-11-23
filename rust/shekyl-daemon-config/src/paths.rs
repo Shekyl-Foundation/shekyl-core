@@ -122,7 +122,13 @@ fn check_service_data_home_as(
     };
     require_service_account(me).map_err(|found| refuse(&home, found))?;
     service_owned(&home, me).map_err(|found| refuse(&home, found))?;
-    if data_dir != home && std::fs::symlink_metadata(data_dir).is_ok() {
+    // Only a directory that is not there yet passes unjudged: the start makes
+    // it 0700. One that cannot be read is refused here, as the start would.
+    let absent = matches!(
+        DirectoryFacts::inspect(data_dir),
+        Err(shekyl_os_account::directory::DirectoryFault::Missing)
+    );
+    if data_dir != home && !absent {
         service_owned(data_dir, me).map_err(|found| refuse(data_dir, found))?;
     }
     Ok(())
@@ -251,6 +257,20 @@ mod tests {
         assert!(found(check(None, me)).contains("not 0700"));
         std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o700)).unwrap();
         check(None, me).expect("the service's own 0700 network directory");
+
+        // A network directory that cannot be read is refused, never taken
+        // for an absent one. Not as root, which reads through any mode. Red
+        // edit: `symlink_metadata(..).is_ok()` in place of the `Missing` arm.
+        if !rustix::process::geteuid().is_root() {
+            let sealed = home.join("sealed");
+            std::fs::create_dir(&sealed).unwrap();
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let unreadable = sealed.join("testnet");
+            let refused =
+                check_service_data_home_as(&platform, RunMode::Service, None, &unreadable, me);
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(found(refused).contains("cannot be read"));
+        }
     }
 
     use super::*;
