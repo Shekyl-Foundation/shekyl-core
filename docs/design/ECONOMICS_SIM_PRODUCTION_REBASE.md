@@ -5574,39 +5574,37 @@ rule, unless named.
     less the burn. A-stuffed's ratio therefore understates how far the tail
     exceeds the fees other users pay it.
 
-#### 5.37.2 The stuffers' shapes start at two outputs (2026-11-22), predicted before the re-run
+#### 5.37.2 The stuffers' shapes start at two outputs, and C2's window past `u64` (2026-11-22 and 23)
 
 **The finding** (the CEN-I4 lane, `ICD-F17`, verified on this branch).
 Consensus refuses a non-coinbase transaction with fewer than two outputs
 (CEN-I1). The sim's shape list, `calibration::all_shapes`, ran its outputs
 from one, and the one-shot stuffer's argmax was a one-output transaction.
-Every stuffer figure was therefore priced on a transaction no node admits.
-The builder refused only zero outputs, so nothing on the way said so.
+Every figure the shape searches produce was priced on a transaction no node
+admits. The builder refused only zero outputs, so nothing on the way said so.
 
-**Rick's ruling (2026-11-22).** The production half lands first, as its own
-PR: the minimum becomes one named constant at its owning type,
+**Rick's rulings (2026-11-22 and 23).** The production half landed first, as
+#1534: the minimum is one named constant,
 `shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS`, read by CEN-I1, the
-wire's two pre-checks and the builder, which now refuses fewer. This PR
-then rebases onto it. `all_shapes` starts its outputs at that constant, and
-the pins and the full table are regenerated on a head that carries it. The
-digests the re-run replaces are kept in this section, marked superseded,
-beside the new ones. The staker-share first look follows the table.
+wire's two pre-checks and the builder, which now refuses fewer. `all_shapes`
+starts its outputs at that constant. The full table is not re-run in this
+PR. The nightly slice, regenerated, is the proof of what moved.
 
-**What reads the shape list, and what each feeds.**
-- `calibration::all_shapes` feeds `stuffer_shape` (the one-shot W9
-  stuffer, the most archival bytes per fee), `max_archival_bytes_per_block`
-  (the physical ceiling on the fold's slew, read by `swing.rs`), the
-  sustained producer/consumer cycle (`sustained_stuffer_cost_per_shard_atomic`)
-  and the cost per shard (`stuffer_cost_per_shard_atomic`). `stage2.rs` reads
-  the costs into every narration's stuffer table.
-- `miner_stuffer.rs` searches `all_shapes()` twice for the miner's stuffing
-  body. Its rows feed `eup4.rs`, `window_stuffer.rs` and `stage2.rs`'s
-  envelope; the A-stuffed economy is this miner.
-- **Not readers.** The fee model prices ordinary traffic at the fixed
-  1-in/2-out shape (`burden::normal_tx_shape`), as do the honest folds'
-  bytes and the tree's depth. None of it reads the list, so the honest
-  economies are predicted not to move. That is shown by their pins
-  regenerating unchanged, not assumed.
+**What reads the shape list, measured.** The searches are `stuffer_shape`,
+the cost per shard, the sustained cycle, `max_archival_bytes_per_block` and
+the miner's stuffing body in `miner_stuffer.rs`. Their reports are stage2's
+W9 table, ESR-7's miner envelope, A6's slew and flood cost, the ROI tables
+built on them, and EUP-4's stuffing floors (`window_stuffer`).
+
+**The whole-economy table does not read it.** A-stuffed lists ordinary
+Economy-rung transactions (`OwnBodies`, 1-in/2-out), and the narration's
+adversaries price that same transaction. So the correction moves neither.
+Regenerated at the change, these are byte-identical:
+- the economies nightly narration and table, stuffed rows included;
+- all three ESR-10 narrations, the growth trace and the baseline.
+
+The J x G nightly pin passes unregenerated. Only the four stage2 narrations
+and EUP-4's three moved, and EUP-4's only on its stuffing-floor lines.
 
 **Predictions** (written before any code moves).
 - **Rick's.** The stuffed half-supply year stays y8.51: the release clamp
@@ -5632,6 +5630,72 @@ beside the new ones. The staker-share first look follows the table.
 - **Unchanged:** every honest row of the table, A-honest, B and the C
   arms' honest columns; the honest pins; the 50 % years outside the
   stuffed scenarios.
+
+**The grades.**
+
+| Prediction | Result |
+| --- | --- |
+| Rick: the stuffed 50 % year stays y8.51 | **Held.** The slice's A-stuffed row reads 8.51, byte-identical |
+| Rick: attack cost up a few percent | **Held.** One-shot cost per shard +2.0 % to +2.5 % at every depth and rate |
+| Rick: break-even burn up a few percent | **Missed.** J x G's stuffer does not read the shape list; its pin is unchanged |
+| One-shot shape 8-in/2-out at every depth, +1.5 % to 3 % | **Held** at every depth. The W9 table's first row, the first shard, reads +4.0 % (64.13 to 66.68 SKL); its other rows +2.2 % |
+| Sustained cycle +5 % to 15 % | **Missed.** +1.1 % to +2.7 % |
+| Physical ceiling about -2 % | **Held at the maximum,** 872 370 to 854 910 B. By depth it moves 0 % to -6.0 % |
+| A-stuffed's bytes a day about -2 % | **Missed.** Unchanged: A-stuffed does not read the shape list |
+| A-stuffed's tail ratio near 111 | **Held.** Unchanged |
+| The C arms' adversary columns up a few percent | **Missed.** Unchanged: they price the ordinary transaction |
+| Every honest row unchanged | **Held,** and the stuffed rows with them |
+
+**The ceiling's winning shape changes with depth.** It is a whole-transaction
+packing, so no one shape holds. Before, it ran across 4 to 8 inputs with one
+output (8-in/2-out at depth 4). With two outputs, at depths 1 to 13:
+
+| Depth | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Inputs/outputs | 8/2 | 7/2 | 7/2 | 8/2 | 6/2 | 7/2 | 7/2 | 8/2 | 7/3 | 6/2 | 7/2 | 7/2 | 8/2 |
+
+The winner beats its runner-up by 0.06 % to 2.7 %.
+`calibration::tests::stuffer_calibration_by_depth` prints this table, on
+demand, and is what the CEN-I4 cutover re-runs for its cap.
+
+**Why the miner's own stuffing rose 8 % to 10 % when the attacker's cost rose
+2 %.** A miner's cost is a small net, the honest fees it drops less the
+penalty it escapes by shrinking the block, so the second output's 1 334
+bytes, which only trim that escaped penalty at y20 and y45 (0.0690 to 0.0618
+SKL a block at y20) and force a different whole-transaction packing at y5,
+move the net by 8 % to 10 %, where they add about 2 % to the attacker's
+8-input transaction, whose whole fee is its cost.
+
+**A6's flood cost now reads across the chain sizes.** It priced the one size
+whose slew was largest. The slews are near-tied, so the shape change moved
+that size and the figure fell from ~322 000 to ~4 400 SKL an epoch with no
+change in the flood. It now prints the lowest and highest: 2 773 SKL at
+n = 10 000 000 to 367 722 at n = 0. The worst slew is 0.7326 points an epoch
+(0.7558 before).
+
+**C2's window past `u64`** (#1476's review, verified on the recorded run).
+The fold kept a lifetime `u64` prefix that saturated, and C2 feeds it scaled
+fee units. On `sustained_growth` the lifetime sum passes `u64` in year 69,
+both ends of the window pin at `u64::MAX`, and the window reads zero: the
+burn goes 0.90, 0.72, 0 and the miner's income 77, 229, 929 SKL a block. It
+hits 180 folds: 60 rows, C2 and the four C-together economies, on every zone
+and both template rules that reach it.
+- **The fix.** The prefix is `u128`. The window itself can also pass `u64`
+  late in those folds, and reads `u64::MAX` there. That is exact: the burn
+  reads it through `ratio_scaled_squared`, already saturated at that sum.
+- **What it leaves stale.** Those 60 rows of the committed full table, from
+  year 69, which its header names. They are `stress` rows, not read for the
+  tail. The slice has no `sustained_growth` row, so its pin does not move.
+- **The on-demand full run does not pass** until the table's next full run
+  regenerates the digests and the table.
+
+**What EUP-4 may read.** Every row of the full table but those 60, from their
+year 69, including A-stuffed and the C arms' adversaries.
+
+**The slice and the full table.** They disagree on all 34 cells they share,
+before this change and after it, because the slice is seed 1 and the full
+table is the median of three. The shape change adds no disagreement. No test
+compares them: each table's pin reads its own file.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 

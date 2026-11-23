@@ -8,4 +8,8 @@
 - **The sim's fill admits and trims a cohort in one step.** It matches production's `make_room` and `trim_to` on 400 random pools each. It replaces one call per arrival, which stalled the growth cells.
 - **The growth cells stop at an edge the narration names.** A cell stops at the reward's domain edge or at the supply's break, and the narration says which.
 - **The ESR-10 narrations moved in their last digit** with the eviction split (§5.37.1), and were regenerated under Rick's ruling.
-- **New FOLLOWUPS row:** the template's gross comparison is open for the fee design, citing the measured difference.
+- **The stuffers' searched shapes start at consensus's two outputs** (§5.37.2). One-shot attack cost rises 2.0 % to 2.5 %, the sustained cycle 1.1 % to 2.7 %, and a miner's own stuffing in full blocks 8 % to 10 %. The whole-economy table does not read the shape list, so its slice is byte-identical.
+- **C2's fee window survives a lifetime past `u64`.** A saturated sum read as an empty window, and C2's burn fell to zero from year 69 on the growth folds. The full table's header names the 60 stale rows until its next full run.
+- **A6's flood cost reads across the chain sizes,** lowest and highest, instead of at whichever near-tied size has the largest slew.
+- **`--economies` runs alone and its output is the digest's bytes.** It refuses every other mode, and a redirected run now passes its own digest check.
+- **New FOLLOWUPS rows:** the template's gross comparison is open for the fee design, citing the measured difference; the full table's next run, for its 60 stale growth rows.

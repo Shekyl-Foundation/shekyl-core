@@ -241,6 +241,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the measurement is [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.37.1 (WE-7)
   - Target: pre-genesis
 
+- **The full economies table's next run clears its 60 stale growth rows.** In the recorded run C2's lifetime fee-unit sum saturated a `u64` in year 69 of `sustained_growth`, so the C2 and C-together rows there read a zero burn from then on. The code is fixed and the table's header names the rows; every other row stands (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.2). Named blocker: Rick ruled the 14-hour run out of #1476 (2026-11-23), and the CEN-I4 cutover no longer calls for it. Falsify by: `economies_full_run_matches_its_digests_and_table` passing on regenerated digests and table, with the header's note gone.
+  - Owner: `WE-` — [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §5.37.2
+  - Target: pre-genesis (trigger: Rick names the run)
+
 - **The hashrate floor on emission is parked until the existing economics series is finished.** Below a threshold difficulty `D*` the block reward would scale with difficulty, so a quiet launch or a spike earns no more per hash than broad mining (Rick, 2026-11-19). Nothing is built and no `HF-` identifier is minted. Named blocker: EUP-4 prep, EUP-4 and the J, G, F and I rulings; then Rick reopens the note, and its §9 sets the order. Falsify by: Rick's ruling on the note's shape and §5's open questions, recorded in the note.
   - Owner: `HF-` — [`HASHRATE_FLOOR_EMISSION.md`](design/HASHRATE_FLOOR_EMISSION.md)
   - Target: pre-genesis (trigger: EUP-4 and the J, G, F and I rulings are done)
