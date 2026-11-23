@@ -115,9 +115,10 @@ fn refuse(reason: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Modes and modifiers that name a run `--growth-trace` does not perform.
-/// A mode added in `main` is added here: the trace returns before it.
-const GROWTH_TRACE_CONFLICTS: &[&str] = &[
+/// Every named mode and modifier but the instruments (`eup4::Instrument`).
+/// A run that names its own cells takes none of the others
+/// ([`sole_run_conflict`]). A mode added in `main` is added here.
+const NAMED_RUNS: &[&str] = &[
     "--stage2",
     "--esr10",
     "--eup4",
@@ -133,20 +134,25 @@ const GROWTH_TRACE_CONFLICTS: &[&str] = &[
     "--control-steady-traffic",
     "--economies",
     "--economies-slice",
+    "--growth-trace",
 ];
 
-/// The other flag `--growth-trace` refuses, when `args` asks for the trace
-/// and for another mode, a control flag, or `--seed-spread`. `None` when
-/// the trace is absent or is the only one.
-fn growth_trace_conflict<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+/// The other flag the run `own` refuses, when `args` asks for it and for
+/// another mode, a control flag, or `--seed-spread`. `None` when `own` is
+/// absent or is the only one. A run that names its own cells returns before
+/// the others, so a flag it let through would be printed and not run.
+fn sole_run_conflict<'a>(
+    own: &str,
+    args: impl IntoIterator<Item = &'a str>,
+) -> Option<&'static str> {
     let args: Vec<&str> = args.into_iter().collect();
-    if !args.contains(&"--growth-trace") {
+    if !args.contains(&own) {
         return None;
     }
-    if let Some(flag) = GROWTH_TRACE_CONFLICTS
+    if let Some(flag) = NAMED_RUNS
         .iter()
         .copied()
-        .find(|flag| args.contains(flag))
+        .find(|flag| *flag != own && args.contains(flag))
     {
         return Some(flag);
     }
@@ -201,7 +207,7 @@ fn main() {
     // four runs (both zones, on standard traffic and on steady), so it
     // takes no other mode, no control flag and no spread.
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(flag) = growth_trace_conflict(argv.iter().map(String::as_str)) {
+    if let Some(flag) = sole_run_conflict("--growth-trace", argv.iter().map(String::as_str)) {
         refuse(&format!(
             "--growth-trace runs its own four folds (both zones, on standard traffic and on \
              steady): it takes no other mode, no control flag and no --seed-spread; \
@@ -209,15 +215,21 @@ fn main() {
         ));
     }
     // §5.37: the three economies graded whole. It names its own cells
-    // (every economy, rule, scenario, zone and seed), so it takes no
-    // control flag and no spread; overrides are refused above.
+    // (every economy, rule, scenario, zone and seed), so it takes no other
+    // mode, no control flag and no spread. With no sweep mode beside it,
+    // the check above has refused any override.
     let economies_slice = argv.iter().any(|arg| arg == "--economies-slice");
     if economies_slice || argv.iter().any(|arg| arg == "--economies") {
-        if control || steady || argv.iter().any(|arg| arg == "--seed-spread") {
-            refuse(
-                "--economies runs its own cells on standard traffic at every declared seed: it \
-                 takes no control flag and no --seed-spread",
-            );
+        let mode = if economies_slice {
+            "--economies-slice"
+        } else {
+            "--economies"
+        };
+        if let Some(flag) = sole_run_conflict(mode, argv.iter().map(String::as_str)) {
+            refuse(&format!(
+                "{mode} runs its own cells on standard traffic at every declared seed: it takes \
+                 no other mode, no control flag and no --seed-spread; refusing {flag}"
+            ));
         }
         let started = std::time::Instant::now();
         let mut narration = String::new();
@@ -229,19 +241,13 @@ fn main() {
         let summary = whole_economy::run(&mut narration, &SimParams::default(), scope)
             .expect("String sink is infallible");
         eprint!("{narration}");
-        let json = serde_json::to_string(&summary).expect("JSON serialization failed");
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(json.as_bytes()).expect("write failed");
-        stdout.write_all(b"\n").expect("write failed");
-        eprintln!(
-            "{} wall time: {:.0} s",
-            if economies_slice {
-                "--economies-slice"
-            } else {
-                "--economies"
-            },
-            started.elapsed().as_secs_f64()
-        );
+        // The summary's canonical bytes and nothing after them: the recorded
+        // SHA-256 covers exactly these, so a redirected run reads back.
+        std::io::stdout()
+            .lock()
+            .write_all(whole_economy::summary_json(&summary).as_bytes())
+            .expect("write failed");
+        eprintln!("{mode} wall time: {:.0} s", started.elapsed().as_secs_f64());
         return;
     }
     if argv.iter().any(|arg| arg == "--growth-trace") {
@@ -613,7 +619,12 @@ fn run_fb1c_c2(params: &SimParams) {
 
 #[cfg(test)]
 mod tests {
-    use super::{growth_trace_conflict, GROWTH_TRACE_CONFLICTS};
+    use super::{sole_run_conflict, NAMED_RUNS};
+
+    /// The trace's own check, the one the tests below read.
+    fn growth_trace_conflict<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<&'static str> {
+        sole_run_conflict("--growth-trace", args)
+    }
 
     #[test]
     fn growth_trace_runs_alone() {
@@ -630,7 +641,7 @@ mod tests {
     #[test]
     fn growth_trace_refuses_every_other_named_mode() {
         assert_eq!(
-            GROWTH_TRACE_CONFLICTS,
+            NAMED_RUNS,
             [
                 "--stage2",
                 "--esr10",
@@ -647,9 +658,10 @@ mod tests {
                 "--control-steady-traffic",
                 "--economies",
                 "--economies-slice",
+                "--growth-trace",
             ]
         );
-        for flag in GROWTH_TRACE_CONFLICTS {
+        for flag in NAMED_RUNS.iter().filter(|flag| **flag != "--growth-trace") {
             assert_eq!(
                 growth_trace_conflict(["--growth-trace", flag]),
                 Some(*flag),
@@ -666,10 +678,32 @@ mod tests {
         }
     }
 
+    /// Each economies mode runs alone. A sweep mode beside one would have
+    /// let its `--set` past `main`'s override check and printed a parameter
+    /// the economies did not run on; the other economies mode would have
+    /// been silently dropped.
+    #[test]
+    fn each_economies_mode_refuses_every_other_named_run() {
+        for mode in ["--economies", "--economies-slice"] {
+            assert_eq!(sole_run_conflict(mode, [mode]), None);
+            assert_eq!(
+                sole_run_conflict(mode, [mode, "--stage2", "--set", "economic.x=1"]),
+                Some("--stage2")
+            );
+            for flag in NAMED_RUNS.iter().filter(|flag| **flag != mode) {
+                assert_eq!(sole_run_conflict(mode, [mode, flag]), Some(*flag), "{flag}");
+            }
+            for instrument in crate::eup4::Instrument::ALL {
+                let flag = instrument.flag();
+                assert_eq!(sole_run_conflict(mode, [mode, flag]), Some(flag), "{flag}");
+            }
+        }
+    }
+
     /// Every flag `main` reads is the trace's own, `--set` (whose overrides
     /// `main` refuses outside the sweep modes, before the trace), or one the
     /// trace refuses. Read from this file's source, so a mode added to
-    /// `main` and not to [`GROWTH_TRACE_CONFLICTS`] fails here. The
+    /// `main` and not to [`NAMED_RUNS`] fails here. The
     /// instruments' flags are `eup4`'s and are refused through
     /// `Instrument::ALL`.
     #[test]
@@ -697,8 +731,7 @@ mod tests {
         );
         for flag in flags {
             assert!(
-                matches!(flag, "--growth-trace" | "--set")
-                    || GROWTH_TRACE_CONFLICTS.contains(&flag),
+                flag == "--set" || NAMED_RUNS.contains(&flag),
                 "{flag} is read by main and not refused beside --growth-trace"
             );
         }

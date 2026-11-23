@@ -1308,6 +1308,13 @@ fn write_row(out: &mut impl Write, row: &Row, scope: Scope) -> fmt::Result {
     Ok(())
 }
 
+/// The summary's canonical bytes: what `--economies` writes to stdout and
+/// what the recorded SHA-256 covers, so a redirected run reads back through
+/// the digest check.
+pub(crate) fn summary_json(summary: &Summary) -> String {
+    serde_json::to_string(summary).expect("JSON serialization failed")
+}
+
 /// The derived table (§5.37.1, Rick 2026-11-21 and 2026-11-22): one CSV
 /// line per row, the figures the rulings read, each the median across the
 /// row's seeds as the narration prints it. The full run's narration and JSON
@@ -1333,9 +1340,12 @@ const RECORDED_RUN_NOTE: &str = "\
 # full run of 2026-11-21 (shekyl-core f8e6f1ec4b), whose stuffers were priced on transactions with one
 # output, which consensus refuses (CEN-I1, MIN_NON_COINBASE_OUTPUTS).
 #   - STALE: every row whose economy is A-stuffed (its miner stuffed with one-output bodies).
+#   - STALE from year 69: the C2 and C1+2+3 rows on sustained_growth (60 rows, role 'stress'). The
+#     run's fee-unit sum saturated a u64 there, so their burn fell to zero and their income, fees,
+#     supply and stops after it are artifacts. Their figures before year 69 stand.
 #   - STALE, not in this file: the C arms' attack figures, the narration's 'adversaries' lines
 #     (the shard advance cost prices the stuffer). Read them from neither this run nor this table.
-#   - CURRENT: the A-honest, B and C rows, which carry no stuffer.
+#   - CURRENT: the A-honest and B rows, and every other C row.
 # The bound on the stale figures is the nightly slice (economies_nightly_table.csv), regenerated
 # with two-output stuffers; §5.37.2 gives its stuffed deltas. The CEN-I4 cutover re-runs this table.
 ";
@@ -1564,7 +1574,7 @@ mod tests {
         let summary =
             run(&mut narration, &SimParams::default(), scope).expect("String sink is infallible");
         Outputs {
-            json: serde_json::to_string(&summary).expect("JSON serialization failed"),
+            json: summary_json(&summary),
             table: table(&summary),
             narration,
         }

@@ -232,6 +232,17 @@ impl EconomyArms {
 mod tests {
     use super::*;
 
+    /// C2's window can pass `u64` late in a growth fold, and reads as
+    /// `u64::MAX` there. The burn reads it through a ratio that has already
+    /// saturated at that sum, so every larger true sum burns the same.
+    #[test]
+    fn a_fee_window_past_u64_burns_as_its_true_sum() {
+        let params = EconomicParams::default();
+        let baseline = params.tx_volume_baseline * SCALE;
+        let clamped = TxVolume::window(u64::MAX, shekyl_economics::params::TX_VOLUME_WINDOW);
+        assert_eq!(clamped.ratio_scaled_squared(baseline), u64::MAX);
+    }
+
     #[test]
     fn production_is_the_default_on_every_arm() {
         assert_eq!(EconomyArms::default(), EconomyArms::PRODUCTION);
