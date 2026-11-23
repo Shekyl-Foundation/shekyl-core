@@ -13,6 +13,10 @@
 #     its SIMD cfgs through rustc_version), a derive recorded and its
 #     compiler toolchain not walked.
 #
+#   - a package with a `source` comes from exactly that source in every lock;
+#     one without comes from crates.io, so a `[patch]` of a held crate is a
+#     change to this record.
+#
 # Moving a version here is a review, not a refresh: read the change at
 # source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
 # and run the KATs, the pinned FCMP++ vectors and the checkct rows on it
@@ -290,7 +294,8 @@ reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, she
 [[package]]
 name = "fips204"
 version = "0.5.0"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=0663628b8d67a30c115fa2e37315dd7f1d24f447#0663628b8d67a30c115fa2e37315dd7f1d24f447"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true (CRYPTO_AUDIT.md section 3.2); every value they compute is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"

@@ -42,3 +42,12 @@ doc = false
 bench = false
 
 [workspace]
+
+# fips204 0.5.0 with no conditional branch on a secret coefficient under
+# `overflow-checks = true` (CRYPTO_AUDIT.md section 3.2). The fork is the tag
+# plus that fix, at the same version, so the arithmetic and every signature
+# are unchanged. `[patch]` applies only in the root manifest being built: each
+# fuzz workspace with fips204 in its lock carries this same entry, and
+# scripts/ci/check_crypto_closure.py holds the revision in every lock.
+[patch.crates-io]
+fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "0663628b8d67a30c115fa2e37315dd7f1d24f447" }
