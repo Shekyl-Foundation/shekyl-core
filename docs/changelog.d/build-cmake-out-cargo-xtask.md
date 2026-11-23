@@ -1,0 +1,5 @@
+- **The release build is `cargo xtask`; CMake and the Makefile are gone.** `cargo xtask dist --host <host>` builds a release host from `depends`, and `cargo xtask build` builds for the machine it runs on. Everything cargo is given is data in `rust/xtask/matrix.toml`, which the release gates read. The build refuses a build machine's `RUSTFLAGS`, profile overrides and any rustc other than the pinned channel.
+- **The macOS minimum is one value per host: 10.15 on x86_64, 11.0 on aarch64.** The x86_64 binaries had been built for 11.0 by accident.
+- **A native release build gives `ring`'s C the host's hardening flags,** as a cross build always has.
+- **Off a tag, a release archive is named with the version its binaries report** (`shekyl-<host>-3.1.0-<commit>`). Tagged releases keep their names.
+- **Removed:** `external/randomx` (the unused v1 submodule), the Dockerfile, the iOS CMake file and `utils/health`. The RandomX v2 C reference, used only by the differential harness, is built by `scripts/build_randomx_v2_ref.sh`.

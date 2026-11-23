@@ -95,7 +95,7 @@ dependency, not by topic:
 
 - `build_jobs`: `run` or `skip`, for build.yml's OS builds (`BUILD_JOBS`,
   the jobs its `work` output gates). They compile every crate through
-  CMake, so the Rust job's own placement decides it with their jobs and
+  `cargo xtask`, so the Rust job's own placement decides it with their jobs and
   workflow in place of the Rust job's: they run when a change reaches a
   package, is an input every crate shares or one nothing claims, is
   build.yml, or is a script or action one of them runs. A change owned by
@@ -710,7 +710,7 @@ def rust_scope(files, inputs, trees, workspace, owners, workflows, jobs=frozense
 
 def build_scope(files, inputs, trees, workspace, owners, workflows):
     """(build_jobs, reason): `run` when the OS builds read a changed file,
-    else `skip`. They compile every workspace crate through CMake and run
+    else `skip`. They compile every workspace crate through `cargo xtask` and run
     their own scripts and actions, so a change runs them when it reaches a
     package, is an input every crate shares or one nothing claims, is
     build.yml itself, or is a file one of BUILD_JOBS runs. A change owned
@@ -902,15 +902,15 @@ BUILD_SELFTEST = [
     ("docs/test_vectors/PQC_HYBRID_V2_KAT.json", "run"),        # read by crates' tests
     ("rust/Cargo.lock", "run"),
     ("config/anything.h", "run"),
-    ("CMakeLists.txt", "run"),                                  # claimed by nothing
-    ("cmake/BuildRust.cmake", "run"),
+    ("contrib/brew/Brewfile", "run"),                           # claimed by nothing
+    ("rust/xtask/matrix.toml", "run"),
     ("external/randomx-v2/src/x.c", "run"),
     (SELF, "run"),
     (JOB_OWNERS, "run"),
     (BUILD_WORKFLOW, "run"),                                    # their own workflow
     ("scripts/ci/check_binary_hardening.sh", "run"),            # a step of theirs runs it
     ("scripts/ci/run_live_daemon_gates.sh", "run"),             # the Ubuntu build's live-daemon gates
-    (".github/actions/set-make-job-count/action.yml", "run"),   # an action they use
+    (".github/actions/install-rust/action.yml", "run"),         # an action they use
     (".github/actions/install-rust/action.yml", "run"),
     (".github/workflows/merge-ready.yml", "skip"),              # owns its own jobs
     (".github/workflows/docs-gates.yml", "skip"),
