@@ -659,3 +659,76 @@ result=INCONCLUSIVE fixed_pair=7.12 worst_null=2.12 control=127.31 information_f
 
 **Captures:** `floor_oldbin_*` with `SHA256SUMS`, redacted as before. The
 raw files are in the estate's private captures.
+
+### Revision 2: the laptop's shake-down and registered attempt 1 (2026-11-23): attempt 1 VOID
+
+Both runs were made by the agent on the maintainer's Windows laptop (Intel
+Core i9-11950H).
+- **Build:** a fresh recursive clone of `84f9d24714`, `git status` clean.
+  Unelevated, no `RUSTFLAGS`, 279 of 279 rustc invocations with
+  `+crt-static`, `rustc` 1.94.0. The binary's SHA-256 is
+  `d5fc9dbc0c5e0b634330f60a6d898eac966962d92a49be9698b39c2e9769bf19`.
+- **AVX2:** reported, both by `IsProcessorFeaturePresent` and by .NET. So
+  Ed25519's SHA-512, in the composed information only, took its AVX2 path.
+- **Pinning:** logical processor 4 (affinity read back `0x10`), behind the
+  quiet gate.
+
+**The shake-down** (`ml-dsa-registered 20261126`, not an attempt;
+00:55:46 to 01:00:22Z): every check held. Logical processor 5 was at 0.01
+to 0.23 % in each one-minute sample.
+
+```text
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=2.26
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=1.75
+control=sign-planted-leak planted_ns=2239 max_abs_t=59.20 delta10_ns=378
+information=composed-fixed-a-vs-fixed-b max_abs_t=2.03
+information=keygen-fixed-a-vs-fixed-b max_abs_t=2.53
+result=PASS sign_pair=2.26 sign_null=1.75 sign_control=59.20 delta10_ns=378 information_composed_pair=2.03 information_keygen_pair=2.53
+```
+
+**Attempt 1** (`ml-dsa-registered`, `inputs=registered`; 01:03:03 to
+01:09:01Z, 358 s; exit 1): **VOID.** The control was not detected.
+
+```text
+matched-pair candidates_drawn=51 fixed-a expand_s_bytes=2511 expand_a_rejected=6 replicates=true fixed-b expand_s_bytes=2511 expand_a_rejected=6 replicates=true
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=1.61 median_ns=509600 raw_sd_ns=704163
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=2.83 median_ns=1071400 raw_sd_ns=1131832
+control=sign-planted-leak planted_ns=5357 max_abs_t=3.49 delta10_ns=15363
+information=composed-fixed-a-vs-fixed-b max_abs_t=1.85
+information=composed-planted-leak planted_ns=5438 max_abs_t=28.56 delta10_ns=1904
+information=keygen-fixed-a-vs-fixed-b max_abs_t=4.21
+information=keygen-planted-leak planted_ns=873 max_abs_t=66.38 delta10_ns=132
+result=VOID (the control was not detected, so a pass would mean nothing) sign_pair=1.61 sign_null=2.83 sign_control=3.49 delta10_ns=15363 information_composed_pair=1.85 information_keygen_pair=4.21
+```
+
+Read against the lines:
+- Line 1: every check held, in every comparison of the session (790 of
+  790 kept results verified each time, no malformed hint section, the
+  replica as intended).
+- Line 2: the control read 3.49, at or below 10, so the run is **void**.
+  The pair's figure is not read.
+
+**The cause, named:** load on the measured core's sibling during the run.
+- The gate passed just before the launch, with logical processor 5 at 1.5
+  to 4.8 %.
+- In the run's six one-minute samples it was at 55, 57, 42, 39, 64 and
+  64 % (mean 53.5 %), against at most 0.23 % in the shake-down minutes
+  earlier.
+- Logical processor 4's performance counter fell to 149 to 178 %, against
+  177 to 181 % in the shake-down. Signing's spread rose from about 0.46 ms
+  to 0.70 to 1.13 ms, enough to hide the 5.4 µs control.
+- A browser was running at the start (18 processes) and had exited by the
+  end. The desktop AI client used 86 s of CPU over the run. The gate
+  measured load before the launch, not during the run, and did not check
+  for a browser.
+
+**Next:** the registration allows a void to be made again once, after its
+cause is named and fixed. The fix, and whether to make attempt 2, are with
+the maintainer. The clone and binary are kept.
+
+**Captures** (public): `laptop_reg2_shakedown_50000.txt` and
+`laptop_reg2_registered_attempt1.txt`, the outputs byte for byte;
+`laptop_reg2_rustc_vV.txt`; `laptop_reg2_cpu_avx2.txt`. They are stored
+byte for byte (`.gitattributes`), with `SHA256SUMS`. The conditions,
+process snapshots and samples name the machine's user profile and
+processes, so they stay in the estate's private captures.

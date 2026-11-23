@@ -658,7 +658,10 @@ above. None is chosen before then.
 ### 3.2 ML-DSA-65, transaction authorisation
 
 **Status: registered, and revised 2026-11-23 before any attempt (the
-maintainer's ruling of 2026-11-22); no attempt yet.** The record is
+maintainer's ruling of 2026-11-22). The laptop's attempt 1 is void: its
+control was not detected, under load on the measured core's sibling, and a
+second attempt is with the maintainer. The floor device's attempt is
+running.** The record is
 [`ca3_ml_dsa_tx_auth_timing_20261122.md`](../benchmarks/ca3_ml_dsa_tx_auth_timing_20261122.md).
 - **The line:** signing alone from one working slot, with the key's
   decode timed as the shipped call decodes on every call
