@@ -7385,3 +7385,51 @@ gives every wallet the same shapes. The wallet's own reservations already
 keep built and staking-held outputs out of selection.
 
 **Reopens** only on a named user job those reservations do not cover.
+
+## 2026-11-21 — The wallet prefs file is deleted
+
+**Decision** (Rick: option (b), deleting the file rather than fixing its
+torn write).
+
+- **A wallet keeps no preferences file.** `<base>.prefs.toml`, its
+  `.prefs.toml.hmac` companion and the `shekyl-engine-prefs` crate are
+  deleted, with the prefs HMAC key, its derivation (the label
+  `shekyl-prefs-hmac-v1` leaves the domain registry with its code), the load at open, the
+  saves at create, close, shutdown and password change, and the
+  quarantine. A password change is the rotation alone.
+- **The one live field becomes an option of the process.** Which Tor
+  binary a serving wallet runs is the machine's, not the wallet's: it is
+  `tor-file` on `shekyl-wallet-rpc`, and on `shekyl-cli` for its
+  in-process server (`INPUT_GRAMMAR.md` §12.1, §12.4), with the daemon's
+  behaviour (IG-Q41): unset is discovery; a path naming no file on this
+  machine refuses the start with its remedy, never replaced by discovery;
+  a path naming a file must pass the pin. The deleted override fell back to
+  discovery only because a path stored beside the wallet travelled with
+  it; an option of the machine has no such residue.
+- **The coin-selection knobs are REJECTED:** `min_output_count`,
+  `min_output_value`, `ignore_outputs_above`, `ignore_outputs_below` and
+  `merge_destinations`, refused by name in the CLI's table with the reason
+  below. That table is the only record: the wallet contract never exposed
+  these names.
+- **Every other field is deleted** with a one-line reason each
+  (`WALLET_SETTINGS.md` §6.2): Monero's settings carried over with no
+  reader. Auto-lock (`inactivity_lock_timeout`) is required by no live
+  design; if the GUI builds it, it is a GUI setting.
+- **No migration and no compatibility code.** A pair an earlier build left
+  beside a wallet is not read, moved or deleted.
+- `WALLET_PREFS.md` is retired to `docs/completed/`; what still holds is
+  restated in `WALLET_SETTINGS.md`, and rule 42's placement order loses the
+  advisory tier.
+
+**Why.** Fixing the torn write (the body and its HMAC were two replaces,
+and a kill between them quarantined good settings as tampered) would have
+treated a symptom. One field had a production reader, and it was
+machine-scoped; the rest had none. The file promised hand editing while
+its HMAC made every hand edit a tamper event that reset all settings. For
+the coin-selection knobs, the reason given for the user freeze
+(2026-11-15): a human choice on a visible transaction parameter becomes a
+pattern, while deterministic selection gives every wallet the same shapes.
+
+**Reopens.** The coin-selection knobs, only on a named user job the
+wallet's own selection does not cover. A per-wallet setting, only as
+sealed state (rule 42), never as an advisory file.

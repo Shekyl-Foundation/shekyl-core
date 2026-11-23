@@ -478,8 +478,8 @@ def _numbered_runs(text: str) -> list[list[tuple[int, int]]]:
     for i, raw in enumerate(text.splitlines(), 1):
         # Block-quote prefixes are containers here too. Matching digits at the
         # start of the RAW line skipped every quoted ordered list, and this
-        # corpus uses them (docs/WALLET_PREFS.md:77-83 is a 1./2./3. list inside
-        # a quote) — so the leg promised to check numbered lists while a whole
+        # corpus uses them (the decision order in docs/completed/WALLET_PREFS.md
+        # is a 1./2./3. list inside a quote) — so the leg promised to check numbered lists while a whole
         # container class was invisible to it.
         qpre = re.match(r"(?:\s*>)+\s?", raw)
         qdepth = qpre.group(0).count(">") if qpre else 0

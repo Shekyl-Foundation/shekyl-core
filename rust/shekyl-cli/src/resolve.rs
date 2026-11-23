@@ -579,10 +579,38 @@ pub(crate) fn reject_removed_command(cmd: &str, args: &[&str]) -> Option<String>
              built and staking-held outputs out of selection. Rejected \
              (V3_WALLET_DECISION_LOG.md 2026-11-15).",
         ),
+        "set" => {
+            return args
+                .first()
+                .filter(|name| COIN_SELECTION_SETTINGS.contains(name))
+                .map(|name| format!("removed setting {name}: {COIN_SELECTION_REJECTED}"));
+        }
         _ => None,
     };
     removed.map(|reason| format!("removed command {cmd}: {reason}"))
 }
+
+/// The coin-selection settings a Monero user would `set`, in Monero's
+/// spelling and in the deleted prefs file's: REJECTED (Rick, 2026-11-21).
+pub(crate) const COIN_SELECTION_SETTINGS: &[&str] = &[
+    "min-outputs-count",
+    "min-outputs-value",
+    "ignore-outputs-above",
+    "ignore-outputs-below",
+    "merge-destinations",
+    "min_output_count",
+    "min_output_value",
+    "ignore_outputs_above",
+    "ignore_outputs_below",
+    "merge_destinations",
+];
+
+/// Why the coin-selection settings are refused (Rick, 2026-11-21, for the
+/// reason given for the user freeze, 2026-11-15).
+const COIN_SELECTION_REJECTED: &str = "the wallet selects coins the same way \
+     for every wallet: a human choice on a visible transaction parameter \
+     becomes a pattern, while deterministic selection gives every wallet the \
+     same shapes. Rejected (V3_WALLET_DECISION_LOG.md 2026-11-21).";
 
 // ---------------------------------------------------------------------------
 // Flag extraction helpers

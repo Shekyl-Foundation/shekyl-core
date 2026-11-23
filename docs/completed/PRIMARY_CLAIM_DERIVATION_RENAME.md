@@ -328,7 +328,7 @@ at this doc / `SUBADDRESS_UNDER_PQC.md`.
   to this doc as implementation hygiene post-R2-F2.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md) — close / annotate “subaddress vocabulary
   residue” when PR E lands.
-- [`WALLET_PREFS.md`](../WALLET_PREFS.md) — delete lookahead rows.
+- [`WALLET_PREFS.md`](WALLET_PREFS.md) — delete lookahead rows.
 - [`CHANGELOG.md`](../CHANGELOG.md) — user-visible: “removed subaddress
   settings and APIs; signing math unchanged.”
 - `local_keys.rs`, `engine/mod.rs` module docs — replace FA-2 placeholder

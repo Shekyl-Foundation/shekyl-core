@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
-use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
+use shekyl_crypto_pq::wallet_envelope::FILE_KEK_BYTES;
 use tempfile::TempDir;
 use zeroize::Zeroizing;
 
@@ -986,8 +986,14 @@ async fn persist_for_close_keeps_engine_on_outstanding_reservation() {
         .expect_err("still outstanding after failed persist");
 }
 
+/// A wallet carries no preferences file (Rick, 2026-11-21: the prefs file is
+/// deleted), so a `<base>.prefs.toml` / `.prefs.toml.hmac` pair an earlier
+/// build left beside it is no longer read: opening and closing the wallet
+/// leaves the pair byte for byte as it was and sets nothing aside. The pair
+/// here does not verify on purpose: the deleted loader quarantined such a
+/// pair as tampered, renaming both files.
 #[tokio::test(flavor = "multi_thread")]
-async fn tampered_prefs_are_recovered_and_warned_about() {
+async fn an_old_prefs_pair_beside_a_wallet_is_left_untouched_and_unread() {
     let fix = make_create_fixture();
     let password: &[u8] = b"correct horse";
     let creds = Credentials::password_only(password);
@@ -1001,50 +1007,62 @@ async fn tampered_prefs_are_recovered_and_warned_about() {
         .await
         .expect("close after create");
 
-    // Corrupt the prefs HMAC companion file. The wallet-file
-    // layer writes `<base>.prefs.toml` and
-    // `<base>.prefs.toml.hmac`; flipping bits in the HMAC
-    // triggers the tamper path on next load.
-    let hmac_path = {
-        let p = fix.base_path.with_extension("prefs.toml.hmac");
-        // Some platforms silently drop the secondary extension;
-        // tolerate either form.
-        if p.exists() {
-            p
-        } else {
-            let mut alt = fix.base_path.clone();
-            alt.set_file_name(format!(
-                "{}.prefs.toml.hmac",
-                fix.base_path
+    // The names the deleted crate gave the pair: the wallet's path with one
+    // trailing `.wallet` removed, then `.prefs.toml` and `.prefs.toml.hmac`.
+    let dir = fix.base_path.parent().expect("a directory");
+    let stem = fix
+        .base_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("a UTF-8 name")
+        .trim_end_matches(".wallet")
+        .to_owned();
+    let body_path = dir.join(format!("{stem}.prefs.toml"));
+    let tag_path = dir.join(format!("{stem}.prefs.toml.hmac"));
+    let body = b"schema_version = 5\n\n[device]\ntor_binary_path = \"/opt/tor/tor\"\n".to_vec();
+    let tag = vec![0xA5; 32];
+    std::fs::write(&body_path, &body).expect("write the old body");
+    std::fs::write(&tag_path, &tag).expect("write the old tag");
+    // Every name in the directory that belongs to the pair or to a
+    // quarantine of it (`….prefs.toml.tampered-<secs>`).
+    let listing = || {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("list the directory")
+            .map(|e| {
+                e.expect("an entry")
                     .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("wallet")
-            ));
-            alt
-        }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|n| n.contains(".prefs.toml"))
+            .collect();
+        names.sort();
+        names
     };
-    if hmac_path.exists() {
-        let mut bytes = std::fs::read(&hmac_path).expect("read hmac");
-        if let Some(b) = bytes.first_mut() {
-            *b ^= 0xFF;
-        }
-        std::fs::write(&hmac_path, &bytes).expect("write tampered hmac");
-    }
+    let before = listing();
 
-    // Reopen — must succeed even on the tampered branch (the
-    // policy is "warn + use defaults", not refuse-to-open). The
-    // warn is checked at the documentation layer; capturing
-    // `tracing` events in tests requires a subscriber setup we
-    // do not need here.
-    let opened = Engine::<SoloSigner>::open_full(
+    let wallet = Engine::<SoloSigner>::open_full(
         &fix.base_path,
         &creds,
         network,
         dummy_daemon(),
         SafetyOverrides::none(),
     )
-    .expect("reopen succeeds even when prefs are tampered");
-    let _wallet = opened.into_wallet();
+    .expect("the wallet opens beside an old prefs pair")
+    .into_wallet();
+    wallet.close(&creds).await.expect("close");
+
+    assert_eq!(std::fs::read(&body_path).expect("the body is there"), body);
+    assert_eq!(std::fs::read(&tag_path).expect("the tag is there"), tag);
+    assert_eq!(
+        listing(),
+        before,
+        "nothing of the pair was renamed, added or removed"
+    );
+    assert!(
+        !listing().iter().any(|n| n.contains("tampered")),
+        "nothing was set aside"
+    );
 }
 
 use super::super::traits::PersistenceEngine;
@@ -1082,37 +1100,6 @@ async fn persistence_trait_save_state_round_trip() {
     )
     .expect("reopen after trait save");
     assert!(matches!(opened, OpenedEngine::Loaded(_)));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn change_password_flushes_prefs() {
-    let fix = make_create_fixture();
-    let p_old: &[u8] = b"old password";
-    let p_new: &[u8] = b"new password";
-    let creds_old = Credentials::password_only(p_old);
-    let creds_new = Credentials::password_only(p_new);
-    let seed = fixed_seed();
-
-    let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
-    let network = params.network;
-    let mut wallet =
-        Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
-    wallet.prefs_mut().cosmetic.default_decimal_point = 9;
-    wallet
-        .change_password(&creds_old, &creds_new, None)
-        .expect("rotate password");
-    wallet.close(&creds_new).await.expect("close after rotate");
-
-    let reopened = Engine::<SoloSigner>::open_full(
-        &fix.base_path,
-        &creds_new,
-        network,
-        dummy_daemon(),
-        SafetyOverrides::none(),
-    )
-    .expect("reopen with new password")
-    .into_wallet();
-    assert_eq!(reopened.prefs().cosmetic.default_decimal_point, 9);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1329,7 +1316,7 @@ fn panic_hook_does_not_leak_state_wrap_key() {
     use std::sync::{Arc, Mutex};
 
     use super::super::sealing_keys::StateWrapKey;
-    use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
+    use shekyl_crypto_pq::wallet_envelope::FILE_KEK_BYTES;
     use zeroize::Zeroizing;
 
     let marker = [0x42u8; FILE_KEK_BYTES];

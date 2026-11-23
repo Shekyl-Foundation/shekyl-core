@@ -7,7 +7,6 @@
 //! [`shekyl_engine_file::WalletFile`].
 
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_prefs::{PrefsHmacKey, WalletPrefs};
 use shekyl_engine_state::WalletLedger;
 
 use super::error::PersistenceError;
@@ -27,17 +26,6 @@ impl PersistenceEngine for WalletFile {
         std::future::ready(
             self.save_state(state_key.as_bytes(), ledger)
                 .map_err(PersistenceError::WalletFile),
-        )
-    }
-
-    fn save_prefs(
-        &self,
-        prefs_key: &PrefsHmacKey,
-        prefs: &WalletPrefs,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
-        std::future::ready(
-            shekyl_engine_prefs::save_prefs(self.state_path(), prefs_key, prefs)
-                .map_err(PersistenceError::Prefs),
         )
     }
 
