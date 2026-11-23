@@ -21,7 +21,7 @@
 // Matching gates (defense-in-depth; all three must be defeated to ship a
 // 32-bit build):
 //   - rust/shekyl-tx-builder/src/lib.rs    (Tripwire C, direct fips204 consumer)
-//   - CMakeLists.txt (top)                 (Tripwire D, configure gate)
+//   - rust/xtask/matrix.toml               (Tripwire D, no 32-bit host)
 //
 // This is the primary ML-KEM-768 / ML-DSA-65 consumer. The `fips203` /
 // `fips204` constant-time guarantees are stated against native 64-bit
@@ -46,7 +46,7 @@ compile_error!(
      exploited by KyberSlash (Bernstein et al., 2024) against fielded \
      CT implementations. The hybrid X25519+ML-KEM construction does not \
      rescue the ML-KEM secret once it leaks via timing. Matching gates \
-     live in shekyl-tx-builder and the top-level CMakeLists.txt. \
+     live in shekyl-tx-builder and the release matrix (rust/xtask). \
      See docs/CHANGELOG.md entry 'Retired 32-bit build targets' before \
      attempting to revert this gate."
 );

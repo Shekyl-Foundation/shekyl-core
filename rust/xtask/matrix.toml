@@ -108,6 +108,11 @@ warning = "--measurement-spans: this daemon is a measurement build, not a releas
 
 # ── The hosts ──────────────────────────────────────────────────────────────
 #
+# Every host is 64-bit, and the xtask refuses one that is not listed: this is
+# Tripwire D of the 64-bit-only gate, beside the `compile_error!`s in
+# shekyl-crypto-pq and shekyl-tx-builder ("Retired 32-bit build targets",
+# docs/CHANGELOG.md).
+#
 # `binaries`: what is built and staged. Windows ships the daemon and the RPC
 # tunnel only: the wallet stack's skip stays until WP-W5 removes it with the
 # job that smoke-tests it (WINDOWS_WALLET_SUPPORT.md §8).
