@@ -25,6 +25,7 @@ use shekyl_types::{BlockHeight, GlobalOutputIndex};
 use shekyl_units::AtomicUnits;
 
 use super::drain_amount::DrainAmount;
+use super::output_selector::{cover_largest_first, LargestFirstFault};
 
 /// One spendable `P` funding output, reduced to exactly the fields drain
 /// selection needs: a stable identity, its value, and the maturity axis.
@@ -88,14 +89,15 @@ impl std::fmt::Debug for DrainSelection {
 pub(crate) enum DrainSelectError {
     /// The provable (mature) candidate set cannot cover the drain amount.
     Insufficient,
-    /// The amount is coverable by the pool, but not within the
+    /// The amount is coverable, but not within the
     /// [`shekyl_tx_builder::MAX_INPUTS`] inputs one FCMP++ transaction can
-    /// spend. Exact, not heuristic: selection is largest-first, so the capped
-    /// prefix is the maximum any legal input set can sum — if it cannot cover
-    /// the amount, no legal selection can. Refused here as a user-actionable
-    /// planner arm ("lower the amount") rather than assembling a selection
-    /// the curve-tree actor's own `MAX_INPUTS` boundary check would reject as
-    /// an internal fault after the proof work.
+    /// spend. [`cover_largest_first`] is largest-first, so a cover longer
+    /// than the cap means no legal selection sums to the amount. A pool that
+    /// cannot cover the amount at any length is [`Self::Insufficient`],
+    /// including when that pool is itself longer than the cap. Refused here
+    /// as a user-actionable planner arm ("lower the amount") rather than
+    /// assembling a selection the curve-tree actor's own `MAX_INPUTS`
+    /// boundary check would reject as an internal fault after the proof work.
     InputCapExceeded,
     /// Summing candidate amounts overflowed `u64` atomic units.
     Overflow,
@@ -129,43 +131,33 @@ fn ranked_mature(
 /// `amount`.
 ///
 /// Selection reads only `{amount, spendable_height, output_id}` off each
-/// candidate: the ranked mature prefix is taken until the running total
-/// reaches the drain amount. Ranking is [`ranked_mature`].
+/// candidate. Ranking is [`ranked_mature`]; the cover is
+/// [`cover_largest_first`], the same shortest-cover function the wallet's
+/// send selector uses, bounded by [`shekyl_tx_builder::MAX_INPUTS`].
 pub(crate) fn select_for_drain(
     candidates: &[DrainCandidate],
     amount: DrainAmount,
     reference_height: BlockHeight,
 ) -> Result<DrainSelection, DrainSelectError> {
-    let target = amount.get();
     let mature = ranked_mature(candidates, reference_height);
-
-    let mut chosen = Vec::new();
-    let mut input_total = AtomicUnits::ZERO;
-    for candidate in mature {
-        if input_total >= target {
-            break;
-        }
-        // One FCMP++ tx spends at most MAX_INPUTS inputs (the curve-tree
-        // actor refuses more at the proof boundary). Largest-first makes the
-        // capped prefix the maximum sum of any legal selection, so hitting
-        // the cap short of the target is an exact "cannot cover within one
-        // drain" refusal, not a selection-order artifact.
-        if chosen.len() == shekyl_tx_builder::MAX_INPUTS {
-            return Err(DrainSelectError::InputCapExceeded);
-        }
-        chosen.push(candidate.output_id);
-        input_total = input_total
-            .checked_add(candidate.amount)
-            .ok_or(DrainSelectError::Overflow)?;
-    }
-
-    if input_total < target {
-        return Err(DrainSelectError::Insufficient);
-    }
-
+    let cover = cover_largest_first(
+        mature,
+        |candidate| candidate.amount,
+        amount.get(),
+        shekyl_tx_builder::MAX_INPUTS,
+    )
+    .map_err(|fault| match fault {
+        LargestFirstFault::Short { .. } => DrainSelectError::Insufficient,
+        LargestFirstFault::TooManyInputs { .. } => DrainSelectError::InputCapExceeded,
+        LargestFirstFault::Overflow => DrainSelectError::Overflow,
+    })?;
     Ok(DrainSelection {
-        chosen,
-        input_total,
+        chosen: cover
+            .chosen
+            .into_iter()
+            .map(|candidate| candidate.output_id)
+            .collect(),
+        input_total: cover.total,
     })
 }
 
@@ -435,14 +427,12 @@ mod tests {
         assert_eq!(err, Err(DrainSelectError::Insufficient));
     }
 
-    /// Selection stops at `MAX_INPUTS` with an exact refusal: largest-first
-    /// makes the capped prefix the maximum sum of ANY legal input set, so an
-    /// amount only coverable past the cap is `InputCapExceeded` — the
-    /// user-actionable planner arm ("lower the amount") — never a selection
-    /// handed to the curve-tree actor for its `MAX_INPUTS` boundary check to
-    /// refuse as an internal fault after the proof work. The at-cap amount
-    /// still selects (negative control: the cap refuses the ninth input, not
-    /// the eighth).
+    /// The shortest cover past the cap is `InputCapExceeded`. Largest-first
+    /// is a minimum-cardinality cover, so a longer cover means no legal
+    /// selection sums to the amount. Refused here, as the planner's "lower
+    /// the amount" arm, rather than handed to the curve-tree actor. A pool
+    /// that cannot cover at any length is `Insufficient`. The at-cap amount
+    /// still selects: the cap refuses one past itself, not its own count.
     #[test]
     fn selection_caps_at_max_inputs_with_an_exact_refusal() {
         // Nine mature candidates of 10 each: the eight largest sum to 80.

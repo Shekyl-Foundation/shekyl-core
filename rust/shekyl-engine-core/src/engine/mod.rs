@@ -482,7 +482,7 @@ pub use shekyl_scanner::ScannableBlock;
 
 pub use held_sends::{HeldSend, HeldSends, ResendError};
 pub use output_selector::{
-    OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
+    OutputCandidate, OutputSelector, SelectedInputs, SelectedOutputs, WalletGreedyOutputSelector,
 };
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
