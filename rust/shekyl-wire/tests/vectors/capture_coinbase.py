@@ -20,7 +20,6 @@ import signal
 import socket
 import subprocess
 import sys
-import pwd
 import tempfile
 import time
 import urllib.request
@@ -68,6 +67,16 @@ def rpc(url, method, params=None):
     if "error" in res:
         raise RuntimeError(f"{method} -> {res['error']}")
     return res["result"]
+
+
+def account_home():
+    """The account's home from the operating system where it has one: in a CI
+    container `$HOME` is a directory another account owns."""
+    if os.name == "posix":
+        import pwd
+
+        return pwd.getpwuid(os.geteuid()).pw_dir
+    return os.path.expanduser("~")
 
 
 def start_daemon(workdir, addr, attempts=5):
@@ -156,7 +165,7 @@ def main():
         addr = json.load(f)["recipients"][0]["address"]
     # Under the account's home: the daemon refuses a data directory under a
     # directory another account can write, /tmp included.
-    root = os.path.join(pwd.getpwuid(os.geteuid()).pw_dir, ".shekyl-test")
+    root = os.path.join(account_home(), ".shekyl-test")
     os.makedirs(root, mode=0o700, exist_ok=True)
     workdir = tempfile.mkdtemp(prefix=f"{os.getpid()}-cbcap_", dir=root)
     daemon, url, log = start_daemon(workdir, addr)

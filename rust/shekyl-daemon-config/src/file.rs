@@ -357,6 +357,7 @@ fn link_target(link: &Path) -> Option<PathBuf> {
 #[cfg(unix)]
 pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
     let mut walked = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let mut pending: std::collections::VecDeque<PathBuf> = ancestors(path).into();
     let mut followed = 0;
     let mut last = path.to_path_buf();
@@ -369,7 +370,7 @@ pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
         last = resolved;
     }
     while let Some(dir) = pending.pop_front() {
-        if walked.contains(&dir) {
+        if !seen.insert(dir.clone()) {
             continue;
         }
         if followed < LINKS_FOLLOWED_AT_MOST {
@@ -384,13 +385,29 @@ pub(crate) fn directories_through(path: &Path) -> Vec<PathBuf> {
     walked
 }
 
+/// Whether the ancestor rule has a directory to judge at `path`. Not when
+/// nothing is there yet, or when a file is: that path is unusable, not
+/// writable. A link to a file is a file. A dangling link, or one that cannot
+/// be read, stays in, so the walk refuses it as unreadable.
+#[cfg(unix)]
+fn could_be_a_directory(path: &Path) -> bool {
+    use std::io::ErrorKind::{NotADirectory, NotFound};
+    match std::fs::symlink_metadata(path) {
+        Err(e) => !matches!(e.kind(), NotFound | NotADirectory),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            !matches!(std::fs::metadata(path), Ok(target) if !target.is_dir())
+        }
+        Ok(meta) => meta.is_dir(),
+    }
+}
+
 /// Refuses a data directory with a directory above it that an account other
 /// than root and the daemon's can write (`config.data-dir.ancestor-writable`;
 /// Rick, 2026-11-23): the configuration file's own rule, on the same function
 /// and with no exception for a sticky directory. Whoever can write one could
 /// swap it for a link and redirect the keys kept below it. A directory not
 /// made yet has nothing to judge; a path through a non-directory is
-/// [`crate::probe`]'s to refuse.
+/// [`crate::probe`]'s to refuse, as `config.data-dir.unusable`.
 ///
 /// # Errors
 /// `config.data-dir.ancestor-writable`, naming the directory and who can write it.
@@ -399,15 +416,7 @@ pub(crate) fn refuse_writable_ancestor(data_dir: &Path) -> Result<(), Diagnostic
     let me = rustix::process::geteuid().as_raw();
     let dirs: Vec<PathBuf> = directories_through(data_dir)
         .into_iter()
-        .filter(|dir| {
-            !matches!(
-                std::fs::symlink_metadata(dir),
-                Err(e) if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                )
-            )
-        })
+        .filter(|dir| could_be_a_directory(dir))
         .collect();
     let found = unix::directory_writer_outside_permitted(me, &dirs, &|dir| {
         std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)

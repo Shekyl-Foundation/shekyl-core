@@ -403,6 +403,21 @@ mod tests {
         assert_eq!(e.get("path"), writable.to_str());
     }
 
+    /// A file on the path is not a directory to judge, however writable: the
+    /// start calls the path unusable. Red edit: keep the file in the walk,
+    /// and this reads as a writable ancestor.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_on_the_path_is_unusable_not_a_writable_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
+        let file = d.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let e = Lock::creatable(&file.join("data")).unwrap_err();
+        assert_eq!(e.code, Code::DataDirUnusable, "{e}");
+    }
+
     /// A cycle of links ends the walk and refuses. Spelled through `..`,
     /// each turn is a longer path, so comparing paths alone would not end
     /// it. Red edit: drop the bound on links followed, and this never

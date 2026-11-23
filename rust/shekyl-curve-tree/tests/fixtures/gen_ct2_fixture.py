@@ -37,7 +37,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import pwd
 import tempfile
 import time
 import urllib.request
@@ -78,6 +77,16 @@ SHALLOW_POP = 5  # < COINBASE_LOCK+1: pops only pending coinbases (§6 no-mutati
 SHALLOW_REGEN = 7
 
 
+def account_home():
+    """The account's home from the operating system where it has one: in a CI
+    container `$HOME` is a directory another account owns."""
+    if os.name == "posix":
+        import pwd
+
+        return pwd.getpwuid(os.geteuid()).pw_dir
+    return os.path.expanduser("~")
+
+
 class Daemon:
     """A throwaway regtest daemon with a temp data-dir."""
 
@@ -87,7 +96,7 @@ class Daemon:
         self.url = f"http://127.0.0.1:{port}/json_rpc"
         # Under the account's home: the daemon refuses a data directory under
         # a directory another account can write, /tmp included.
-        root = os.path.join(pwd.getpwuid(os.geteuid()).pw_dir, ".shekyl-test")
+        root = os.path.join(account_home(), ".shekyl-test")
         os.makedirs(root, mode=0o700, exist_ok=True)
         self.workdir = tempfile.mkdtemp(prefix=f"{os.getpid()}-ct2_fixture_", dir=root)
         self.proc: subprocess.Popen | None = None
