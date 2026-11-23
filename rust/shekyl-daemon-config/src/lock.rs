@@ -109,6 +109,16 @@ impl Lock {
         Self::unusable(data_dir)(error)
     }
 
+    /// Whether the account could create a file in the data directory, as
+    /// the node must for a store that is not there yet. Answered without
+    /// creating anything.
+    ///
+    /// # Errors
+    /// The refusal: the kernel's, or the path is not a directory.
+    pub fn files_creatable(data_dir: &Path) -> std::io::Result<()> {
+        probe::files_creatable_in(data_dir)
+    }
+
     fn unusable(data_dir: &Path) -> impl Fn(std::io::Error) -> Diagnostic {
         let shown = data_dir.display().to_string();
         move |e: std::io::Error| {
