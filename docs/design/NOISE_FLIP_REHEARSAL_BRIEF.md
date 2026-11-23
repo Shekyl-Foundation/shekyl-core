@@ -1,5 +1,7 @@
 # Brief C: the rehearsal on the final wire (the Noise flip, phase C)
 
+**Status line, 2026-11-23 (Rick):** the Noise flip ships in alpha.13 on the interim framer and does not wait on cover traffic. Phase B (fixed-window framing) is withdrawn; the rehearsal (phase C) moves after the link layer (`WSZ-8` steps 6 and 7); the stale-node warning (A6) is dropped; A2 to A4 gate mainnet, not this cut. The text below is the plan as it stood.
+
 **Status: OPEN** — active plan, revision 2, ruled 2026-10-30 (Rick). Not started: it waits on its four prerequisites below (A1 ruled, B merged, the accept-rate bound merged, A6 shipped).
 **Revision 2, 2026-10-30.** It replaces revision 1. The accept-rate bound and the soak period are ruled (Rick, 2026-10-30).
 **For:** the transport lane, with the dialer lane for the refusal cells. (The K and S follow-up, C4, closed with the guard in #1235.)

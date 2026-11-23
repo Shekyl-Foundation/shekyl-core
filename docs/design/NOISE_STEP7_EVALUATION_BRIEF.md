@@ -1,5 +1,7 @@
 # Brief A1: the step 7 evaluation record (the Noise flip, phase A)
 
+**Status line, 2026-11-23 (Rick):** the Noise flip ships in alpha.13 on the interim framer and does not wait on cover traffic. Phase B (fixed-window framing) is withdrawn; the rehearsal (phase C) moves after the link layer (`WSZ-8` steps 6 and 7); the stale-node warning (A6) is dropped; A2 to A4 gate mainnet, not this cut. The text below is the plan as it stood.
+
 **Status: OPEN** — active plan, revision 2, ruled 2026-10-30 (Rick). Work started 2026-10-30: the message-size recorder (item 1) is built and its node is recording; the accept-rate bound's mechanism (item 6) is built, awaiting this record's ruled values. The decisions table is not written yet.
 **Revision 2, 2026-10-30.** It replaces revision 1. Item 6's bound is ruled as its own PR (Rick, 2026-10-30).
 **For:** the transport lane. This brief produces evidence and recommendations. It builds nothing that ships.

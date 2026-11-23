@@ -38,7 +38,7 @@ pub(crate) const HOLDING: &str = "This node is holding its own transactions.";
 pub(crate) const WAITING: &str = "This node is waiting for Tor and holding its own transactions.";
 
 /// Said while Tor is off and the node sends over clearnet.
-pub(crate) const OPEN_NETWORK: &str = "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.";
+pub(crate) const OPEN_NETWORK: &str = "This node is syncing and sending over the open network. The link is encrypted, but the peers it connects to can see its address.";
 
 /// Said in a held line while a connector is configured and none holds a
 /// session yet.
@@ -429,7 +429,7 @@ pub fn fix_sentence(fix: &Fix) -> Option<&'static str> {
         Fix::Operator => Some("Or use a Tor you run yourself."),
         Fix::ClearnetOn => Some("Or turn clearnet on and keep Tor managed."),
         Fix::ClearnetOnly => Some(
-            "Or turn Tor off and send over the open network. Until the encrypted link is in place, that network is unencrypted.",
+            "Or turn Tor off and send over the open network. The link is encrypted, but the peers this node connects to can see its address.",
         ),
         Fix::Unknown { .. } => None,
     }

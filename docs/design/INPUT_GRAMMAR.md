@@ -60,7 +60,7 @@ Out of scope: log category names (owned by `shekyl-logging`); they can be brough
 
 **IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each term is defined once, project-wide, and lists its parents; a term with no parent is a *subject*. A term reused under several parents keeps its one meaning (`listen` under `clearnet`, `onion`, `rpc` and `view`). Every segment of every name is a term in the tree, including plain words (`file`, `dir`, `max`, `help`): the gate has no exemption list. The glossary is acyclic: no term is its own ancestor through its parents, and the gate refuses a cycle. An edge expresses refinement only; a name that points at another subject does so by reference (IG-Q42).
 
-**IG-3 Structure.** A name is a path through the tree: it starts at a subject and each segment is a child of the one before (`tor-socks-password` is `tor` → `socks` → `password`). A subject alone is a name (`network`). The qualifiers `max` and `min` may end any path. A path-valued option ends in `file` or `dir`. A term may both carry a value and have children (`tor`, `tor-socks`). `dev` is a subject like any other (IG-8); its children may be other subjects (`dev-clearnet-encrypt`). The gate checks that a name is well formed; whether it is an option is the table's. A command is a path whose last term is a *verb* (the command acts) or a *view* (a noun whose command prints it); verbs and views are terms of that kind under their parent, a subject that is itself a verb or a view is a command alone (`send`, `balance`), and each command has exactly one spelling. A view changes no state; a command that changes state ends in a verb.
+**IG-3 Structure.** A name is a path through the tree: it starts at a subject and each segment is a child of the one before (`tor-socks-password` is `tor` → `socks` → `password`). A subject alone is a name (`network`). The qualifiers `max` and `min` may end any path. A path-valued option ends in `file` or `dir`. A term may both carry a value and have children (`tor`, `tor-socks`). `dev` is a subject like any other (IG-8); its children may be other subjects (`dev-relay-cover`). The gate checks that a name is well formed; whether it is an option is the table's. A command is a path whose last term is a *verb* (the command acts) or a *view* (a noun whose command prints it); verbs and views are terms of that kind under their parent, a subject that is itself a verb or a view is a command alone (`send`, `balance`), and each command has exactly one spelling. A view changes no state; a command that changes state ends in a verb.
 
 The gate walks every live and reserved name and every command in every binary's table (an X row is a refused spelling, exempt by kind; IG-10) and fails on: an undefined segment; an adjacent pair that is not a parent→child edge in the tree; a qualifier anywhere but last; a term defined twice. The edit that proves it can fail: add an option `socks-tor`.
 
@@ -174,7 +174,6 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | origin | cors | an allowed origin | |
 | connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
 | dev | — | a development lever (IG-8) | |
-| encrypt | clearnet | the pre-flip clearnet encryption switch | |
 | relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
 | cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) | |
 | sync | dev, — | chain synchronization | |
@@ -264,7 +263,6 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `tos-flag` | — | | | |  |  | X (a traffic-class marking is a label any on-path observer can classify Shekyl traffic by) |
 | `offline` | — | | | |  |  | R into `clearnet = off` and `tor = off` (IG-Q3) |
 | `pad-transactions` | — | | | |  |  | L relay |
-| `clearnet-transport-encrypt` | `dev-clearnet-encrypt` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); deleted at the Noise flip |
 | `no-sync` | `dev-sync` | one-of `on` `off` | `on` | both |  |  | R; regtest; the chain-sync lane owns it |
 | `carrier-development` | `dev-relay-cover` | switch | off | both |  |  | R; testnet, stagenet, regtest, a staging flag their rows stage (`NETWORK_IDENTITY.md` NI-R9; IG-8: never mainnet); `check_carrier_flag_hidden.sh` replaced by a table test |
 

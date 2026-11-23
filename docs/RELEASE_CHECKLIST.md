@@ -15,7 +15,7 @@
 - [ ] Security audit
 - [ ] Code audit
 - [ ] **The two staging flags in final form at mainnet launch** (`NETWORK_IDENTITY.md` NI-R9, amended 2026-11-04). Mainnet launches with each behaviour final; their deadline release is the genesis release (`Staging::deadline`), and `scripts/release/check_staging_deadlines.py` refuses that cut while either still exists.
-  - [ ] `dev-clearnet-encrypt` (owner: the Noise flip): deleted at the flip, the encrypted transport the default.
+  - [x] `dev-clearnet-encrypt` (owner: the Noise flip): deleted at the flip, the encrypted transport the only clearnet transport.
   - [ ] `dev-relay-cover` (owner: the cover-traffic lane, TRC-1): promoted or deleted by TRC-1's outcome.
 - [ ] **The clearnet reconnect throttle is built, with `N` and `T` measured** (`P2P_TRANSPORT_LAYER.md`, "Clearnet reconnect throttle", registered 2026-10-09 by D-S1; owner: the transport layer). Until it exists nothing prices a host's next session, and the past-cap evidence check's forced-rebuild bound is serial builds, not a rate (`RANDOMX_CACHE_ACTOR.md` §5.9, HA-F11; Rick, 2026-11-11).
 - [x] Genesis address format: PQ signing anchor (address v2) — **CLOSED 2026-08-16.** Fork (ii) SELECTED by SM-R-8 (2026-08-08); freeze-window signed 2026-08-13; layout + vectors landed 2026-08-15 (in-place `0x01`, `ADDRESS_DERIVATION_V2`); R6-a verify gate lifted. See child rows.
