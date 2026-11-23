@@ -314,7 +314,11 @@ async fn identity_locks(forge: &mut Forge) {
             }
             // Each of these rows has its leg above: a post is a bond post
             // like a join, an owned spend a spend like a coinbase's.
-            BuiltKind::Spend { .. } | BuiltKind::Post { .. } | BuiltKind::Owned { .. } => continue,
+            BuiltKind::Spend { .. }
+            | BuiltKind::Paying { .. }
+            | BuiltKind::Funding { .. }
+            | BuiltKind::Post { .. }
+            | BuiltKind::Owned { .. } => continue,
         };
         for other in OTHERS {
             let id = other.network_id();

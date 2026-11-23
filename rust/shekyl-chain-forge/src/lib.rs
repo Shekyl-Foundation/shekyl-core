@@ -33,7 +33,10 @@ pub use manifest::{
     sha256_hex, EventRecord, Manifest, ManifestFault, PlanRef, ScheduleRecord, SwitchRecord,
     MANIFEST_FORMAT_VERSION,
 };
-pub use plan::{close_event, is_close_event, Action, EpochBlocks, Plan, PlanFault, Schedule, Step};
+pub use plan::{
+    close_event, is_close_event, Action, Check, EpochBlocks, FillTo, Plan, PlanFault, Schedule,
+    Step,
+};
 pub use seed::{
     message_id, seed_for, seed_for_message, PlanSeed, Role, SeedFault, SEED_CUSTOMIZATION,
 };

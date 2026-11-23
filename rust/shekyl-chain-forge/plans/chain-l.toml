@@ -1,0 +1,290 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Chain L, the lifecycle chain (CHAIN_FORGE.md §3, §4, CF-4b): one chain on
+# the settled schedule carrying every catalogued event a regtest chain can
+# carry today. Every transaction pays the standard rung and passes the
+# daemon's pool (§11.4, CF-R29), and each `check` step holds the chain to
+# what its event promises.
+#
+# One persona holds shards 0 and 1, serves 1 and withholds 0: the settled
+# schedule guarantees two drawable pairs, so a second compact persona would
+# not fit. A complete tree serves beside it and adds no pair. Heights the
+# chain decides (the slash moves with every short epoch) are read off it and
+# recorded in the manifest, never written here.
+#
+# Reorgs sit in the plain stretches, before the join or after the release.
+# A reorg inside a drawn epoch is CF-E36, WAITING.
+#
+# Coinbases 1 to 9 stay unspent, for a consumer that starts from a snapshot.
+#
+# The seed is SHA-256("shekyl/chain-forge/chain-l-v1").
+
+chain = "chain-l"
+seed = "b183bc94ca3d5c3b28941a47fc51ce90db88ef643f04a26f13cdb4cf1da49cec"
+network = "regtest"
+fixed_difficulty = 1
+block_seconds = 1
+first_kept_coinbase = 10
+schedule = { settlement_epoch_blocks = "settled", reorg_cap_blocks = 10 }
+
+# Enough that the kept coinbases the first spends take have matured.
+[[step]]
+do = "mine"
+blocks = 100
+
+[[step]]
+event = "first-spend-1in-2out"
+do = "spend"
+inputs = 1
+
+# One funding, paid once: a bond post consumes every funding output.
+[[step]]
+event = "wallet-outputs"
+do = "fund-harness"
+
+[[step]]
+event = "first-spend-8in"
+do = "spend"
+inputs = 8
+
+[[step]]
+event = "first-spend-16out"
+do = "spend"
+inputs = 1
+outputs = 16
+
+# Across the first epoch boundary, which is not yet a pruning boundary.
+[[step]]
+do = "mine-to"
+epoch = 1
+offset = 2
+
+[[step]]
+event = "reorg-across-epoch"
+do = "reorg"
+depth = 5
+
+[[step]]
+do = "check"
+what = "reorg-crosses-epoch"
+
+# A spend the competing branch does not list, returned to the pool.
+[[step]]
+do = "spend"
+inputs = 1
+
+[[step]]
+do = "mine"
+blocks = 1
+
+[[step]]
+event = "reorg-shallow"
+do = "reorg"
+depth = 2
+
+[[step]]
+do = "mine"
+blocks = 12
+
+[[step]]
+event = "reorg-at-cap"
+do = "reorg"
+depth = 10
+
+[[step]]
+do = "mine-to"
+epoch = 2
+
+[[step]]
+event = "prune-boundary-2"
+do = "check"
+what = "prune-boundary"
+
+[[step]]
+do = "mine-to"
+epoch = 2
+offset = 4
+
+[[step]]
+event = "reorg-across-prune"
+do = "reorg"
+depth = 10
+
+[[step]]
+do = "check"
+what = "reorg-crosses-prune"
+
+[[step]]
+do = "fill-shards"
+count = 2
+
+# The CompleteTree walk's cut: shard 0 final, shard 1 just closed.
+[[step]]
+event = "body-fill-complete-tree"
+do = "check"
+what = "body-fill-complete-tree"
+
+[[step]]
+do = "spend"
+inputs = 1
+
+[[step]]
+event = "tree-depth-3"
+do = "check"
+what = "tree-depth-three"
+
+[[step]]
+event = "burn-positive"
+do = "check"
+what = "burn-positive"
+
+# The two filled blocks spend kept coinbases the fill left: let enough of
+# them mature, and leave the tip's block empty, its weight the coinbase's.
+[[step]]
+do = "mine"
+blocks = 60
+
+[[step]]
+event = "block-at-median"
+do = "fill-block"
+to = "median"
+
+[[step]]
+do = "mine"
+blocks = 1
+
+[[step]]
+event = "block-at-weight-bound"
+do = "fill-block"
+to = "bound"
+
+# The bound block's outputs drain ten blocks on; the branch pops that drain,
+# a leaf chunk's worth and more.
+[[step]]
+do = "mine"
+blocks = 12
+
+[[step]]
+event = "reorg-across-chunk"
+do = "reorg"
+depth = 4
+
+[[step]]
+do = "check"
+what = "reorg-crosses-chunk"
+
+# The Market walk's cut: the block before the first admissible join.
+[[step]]
+do = "mine-before-join"
+shards = [0, 1]
+
+[[step]]
+event = "body-fill-market"
+do = "check"
+what = "body-fill-market"
+
+[[step]]
+event = "first-compact-join"
+do = "join"
+persona = 0
+shards = [0, 1]
+
+[[step]]
+event = "first-complete-tree-join"
+do = "join-tree"
+persona = 1
+
+[[step]]
+do = "serve-epochs"
+persona = 0
+epochs = 1
+withhold = 0
+
+[[step]]
+event = "first-serve-credit"
+do = "check"
+what = "serve-credit"
+
+[[step]]
+event = "shard-0-discarded"
+do = "check"
+what = "discarded"
+shard = 0
+
+[[step]]
+event = "first-settled-epoch"
+do = "check"
+what = "settled-epoch"
+persona = 0
+
+[[step]]
+event = "settled-on-discarded"
+do = "check"
+what = "settled-on-discarded"
+persona = 0
+shard = 1
+
+[[step]]
+event = "first-claim"
+do = "claim"
+persona = 0
+
+[[step]]
+event = "spend-of-discarded"
+do = "spend-discarded"
+shard = 0
+
+# Through the RandomX seed's first change: block 2,113 is the first on it.
+[[step]]
+do = "serve-to"
+persona = 0
+epoch = 7
+offset = 12
+withhold = 0
+
+[[step]]
+do = "mine-to"
+epoch = 7
+offset = 12
+
+[[step]]
+do = "spend"
+inputs = 1
+
+[[step]]
+event = "seed-boundary"
+do = "check"
+what = "seed-boundary"
+
+[[step]]
+event = "first-slash"
+do = "slash"
+persona = 0
+shard = 0
+
+[[step]]
+event = "first-reinstate"
+do = "reinstate"
+persona = 0
+
+[[step]]
+event = "first-release"
+do = "release"
+persona = 0
+
+[[step]]
+event = "first-unstake"
+do = "check"
+what = "unstake"
+
+[[step]]
+event = "first-collect"
+do = "collect"
+persona = 0
+
+[[step]]
+do = "fill-shards"
+count = 3
