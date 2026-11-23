@@ -171,12 +171,28 @@ pub fn note_replaced(path: &Path, replaced: &private_file::Replaced) {
 /// [`FileRefused::Exposed`] when another account can read it, it is not
 /// this account's, or it is a link.
 pub fn private_store(path: &Path) -> Result<(), FileRefused> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => write_private(path, &[])?,
-        Err(e) => return Err(FileRefused::Io(path.to_path_buf(), e)),
+    if existing_private_store(path)? {
+        return Ok(());
     }
+    write_private(path, &[])?;
     Ok(private_file::check_private(path)?)
+}
+
+/// The store file at `path` judged without writing: `false` when there is
+/// none (a first start makes it), `true` when it is this account's alone.
+///
+/// # Errors
+///
+/// As [`private_store`], for a file that is there.
+pub fn existing_private_store(path: &Path) -> Result<bool, FileRefused> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            private_file::check_private(path)?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(FileRefused::Io(path.to_path_buf(), e)),
+    }
 }
 
 #[cfg(all(test, unix))]

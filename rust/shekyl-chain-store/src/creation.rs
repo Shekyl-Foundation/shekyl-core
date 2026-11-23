@@ -48,6 +48,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind, Read};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 
 use redb::ReadTransaction;
@@ -235,6 +236,212 @@ pub(crate) fn open_is_foreign(err: &redb::DatabaseError) -> bool {
         }
         _ => false,
     }
+}
+
+/// What a store's read-only check found, before anything is written
+/// ([`ChainStore::check_with_genesis`](crate::store::ChainStore::check_with_genesis),
+/// [`PoolStore::check`](crate::pool::PoolStore::check)).
+///
+/// Every refusal the file itself decides is the check's `Err`, the error
+/// the store's open would return. These are the files the open accepts,
+/// each with the write the open makes before it can serve: a check that
+/// passes every store of a node before any is opened writable is what lets
+/// a refused start leave every store as it found it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreCheck {
+    /// Nothing at the path. The open creates the store.
+    Absent,
+    /// The file was judged on a read-only open and admitted. The open
+    /// claims it (and, for the pool, recreates a file of another layout).
+    Admitted,
+    /// The engine must repair the file before anything can read it. Only a
+    /// writable open can, and it judges the file after the repair.
+    NeedsRepair,
+    /// An initialization the engine never finished. The open moves it
+    /// aside, never deleting it, and creates a fresh store.
+    Unfinished,
+}
+
+impl StoreCheck {
+    /// Whether the open will create a file in the store's directory: a new
+    /// store, or a fresh one beside an unfinished initialization it moves
+    /// aside. The directory is the caller's to judge.
+    #[must_use]
+    pub const fn creates(self) -> bool {
+        matches!(self, Self::Absent | Self::Unfinished)
+    }
+
+    /// This verdict, once the writable open could claim a file it will
+    /// write: the account may write it and no other handle holds it.
+    pub(crate) fn claimable_at(self, path: &Path) -> Result<Self, redb::DatabaseError> {
+        match self {
+            Self::Admitted | Self::NeedsRepair => {
+                probe_claim(path)?;
+                Ok(self)
+            }
+            Self::Absent | Self::Unfinished => Ok(self),
+        }
+    }
+}
+
+/// Ask the engine whether its writable open could claim `path`, with nothing
+/// written. The engine's lock layout is its own and changes between
+/// releases, so the engine takes the lock itself, through a [`ClaimProbe`]
+/// that refuses every write. Past the claim the open fails at its first
+/// write, or at a repair this aborts, and closing it releases the lock. Only
+/// [`redb::DatabaseError::DatabaseAlreadyOpen`] answers no: any other failure
+/// past the claim is the real open's to report.
+fn probe_claim(path: &Path) -> Result<(), redb::DatabaseError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| redb::DatabaseError::Storage(e.into()))?;
+    let backend = redb::backends::FileBackend::new(file)?;
+    let mut builder = redb::Builder::new();
+    builder.set_repair_callback(redb::RepairSession::abort);
+    match builder.create_with_backend(ClaimProbe(backend)) {
+        Err(redb::DatabaseError::DatabaseAlreadyOpen) => {
+            Err(redb::DatabaseError::DatabaseAlreadyOpen)
+        }
+        Ok(_) | Err(_) => Ok(()),
+    }
+}
+
+/// A store file as the engine sees it during [`probe_claim`]: reads and
+/// locks reach the file, and every write is refused.
+#[derive(Debug)]
+struct ClaimProbe(redb::backends::FileBackend);
+
+/// The refusal [`ClaimProbe`] answers a write with.
+fn write_refused() -> io::Error {
+    io::Error::new(ErrorKind::PermissionDenied, "a claim probe writes nothing")
+}
+
+impl redb::StorageBackend for ClaimProbe {
+    fn len(&self) -> io::Result<u64> {
+        self.0.len()
+    }
+
+    fn read(&self, offset: u64, out: &mut [u8]) -> io::Result<()> {
+        self.0.read(offset, out)
+    }
+
+    fn set_len(&self, _len: u64) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn sync_data(&self) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn write(&self, _offset: u64, _data: &[u8]) -> io::Result<()> {
+        Err(write_refused())
+    }
+
+    fn close(&self) -> io::Result<()> {
+        self.0.close()
+    }
+
+    fn try_lock_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.try_lock_range(start, end)
+    }
+
+    fn try_lock_shared_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.try_lock_shared_range(start, end)
+    }
+
+    fn lock_range(&self, start: Bound<u64>, end: Bound<u64>) -> Result<(), redb::BackendError> {
+        self.0.lock_range(start, end)
+    }
+
+    fn lock_shared_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<(), redb::BackendError> {
+        self.0.lock_shared_range(start, end)
+    }
+
+    fn unlock_range(&self, start: Bound<u64>, end: Bound<u64>) -> Result<(), redb::BackendError> {
+        self.0.unlock_range(start, end)
+    }
+
+    fn query_lock_range(
+        &self,
+        start: Bound<u64>,
+        end: Bound<u64>,
+    ) -> Result<bool, redb::BackendError> {
+        self.0.query_lock_range(start, end)
+    }
+}
+
+/// What a store file is to a read-only look, before anything is written.
+///
+/// The one look both stores take: their preflight ([`StoreCheck`]) and
+/// their writable open read the same answer, so a file a preflight passes
+/// is one the open would not refuse on its header. Taking it writes
+/// nothing: a read-only open neither creates an absent file nor touches
+/// the header of one it finds, and the unfinished-initialization test reads
+/// the header bytes alone. It takes no lock; the open looks again under
+/// its [`PathGuard`].
+///
+/// [`StoreCheck`]: crate::store::StoreCheck
+pub(crate) enum Look {
+    /// Nothing is at the path. The open creates the store.
+    Absent,
+    /// A database the store judges on this read-only handle.
+    Readable(redb::ReadOnlyDatabase),
+    /// The engine must repair the file before anything can read it
+    /// (`RepairAborted`). Only a writable open can, so only it judges.
+    NeedsRepair,
+    /// An initialization the engine never finished (empty, or the
+    /// pre-magic header), with the engine's refusal of it. The open moves
+    /// it aside and creates a fresh one.
+    Unfinished(redb::DatabaseError),
+    /// Bytes the engine will not open that are not an unfinished
+    /// initialization: the store refuses them, and the open would too.
+    Foreign(redb::DatabaseError),
+    /// The engine refused the open for another reason (permissions, a full
+    /// disk): the error itself.
+    Refused(redb::DatabaseError),
+}
+
+/// Take the read-only [`Look`] at `path` through `builder`.
+///
+/// # Errors
+///
+/// The header of a foreign-looking file could not be read.
+pub(crate) fn look(builder: &redb::Builder, path: &Path) -> io::Result<Look> {
+    // The directory entry, not what it points at: a dangling link occupies
+    // the path, so the writable open could not create the store there.
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(absent) if absent.kind() == io::ErrorKind::NotFound => return Ok(Look::Absent),
+        Err(unreadable) => return Err(unreadable),
+    }
+    Ok(match builder.open_read_only(path) {
+        Ok(read_only) => Look::Readable(read_only),
+        Err(redb::DatabaseError::RepairAborted) => Look::NeedsRepair,
+        Err(refused) if open_is_foreign(&refused) => {
+            let mut file = File::open(path)?;
+            let len = file.metadata()?.len();
+            if unfinished_init(&mut file, len)? {
+                Look::Unfinished(refused)
+            } else {
+                Look::Foreign(refused)
+            }
+        }
+        Err(refused) => Look::Refused(refused),
+    })
 }
 
 /// The sibling lock that excludes every other open of one store for the
