@@ -57,7 +57,7 @@ argument above does not depend on the answer.
 | --- | --- |
 | The fork's whole test suite in release, overflow checks on and off | 70 passed, 0 failed, 5 ignored |
 | The same suite in debug, overflow checks on and off | 83 passed, 0 failed, 1 ignored |
-| The exhaustive tests, in release with overflow checks on (`center_mod`, `decompose`, the norm's absolute value, `to_mont_coefficient`) | 4 passed; also a job in the fork's CI |
+| The exhaustive tests, in release with overflow checks on (`center_mod`, `decompose`, the norm's absolute value, `to_mont_coefficient`) | 4 passed |
 | Within that suite: the NIST vector tests and the Wycheproof tests | 4 and 3 passed |
 | Differential against the tag: keys and signatures | 11,000 byte-identical |
 | Differential against the tag: randomly changed keys and signatures | 65,999 with the same verdict, 0 different |
@@ -143,6 +143,9 @@ counted in the shipped profile. Inlining makes the two architectures differ.
 
 - BINSEC runs on x86_64 with checkct's toolchain and a freestanding target, not
   on the shipped binary. The branch counts cover the shipped profile.
+- The fork carries a CI job for the exhaustive tests, but Actions are not enabled
+  on the fork, so that job has not run. The result above is one recorded run at
+  the pinned revision.
 - Only the x86_64 count runs nightly. The aarch64 and Windows counts are one
   measurement each at this revision.
 - This record is about branches. Whether signing time depends on a secret is
