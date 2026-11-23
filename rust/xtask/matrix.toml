@@ -29,7 +29,10 @@
 #
 # A host's `dist` table is what `cargo xtask dist --host <host>` runs, from
 # depends' environment; its `native` table is what `cargo xtask build` runs
-# on a machine of that triple. A table that is absent is a refusal.
+# on a machine of that triple. A table that is absent is a refusal. A native
+# build gives ring's C the host's flags, without the cross compiler's paths.
+# MinGW's also names the stack protector's runtime for the link (rustc links
+# with -nodefaultlibs). A plain `cargo build` is a bare developer build.
 
 [build]
 # rustc's channel must be this file's (rust/rust-toolchain.toml). The xtask
@@ -140,7 +143,9 @@ files = [
 
 [host.native]
 target = false
-env = []
+env = [
+    ["CFLAGS_x86_64_unknown_linux_gnu", "-pthread -maes -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fno-extended-identifiers -fstack-reuse=none -fstack-protector -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
+]
 
 [[host]]
 name = "aarch64-linux-gnu"
@@ -165,7 +170,9 @@ files = [
 
 [host.native]
 target = false
-env = []
+env = [
+    ["CFLAGS_aarch64_unknown_linux_gnu", "-pthread -march=armv8-a+crypto -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fno-extended-identifiers -fstack-reuse=none -mbranch-protection=standard -fstack-protector -fstack-protector-strong -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type -mfix-cortex-a53-835769 -mfix-cortex-a53-843419"],
+]
 
 [[host]]
 name = "x86_64-w64-mingw32"
@@ -195,6 +202,8 @@ env = [
     ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER", "{which:gcc}"],
     ["CC_x86_64_pc_windows_gnu", "{which:gcc}"],
     ["AR_x86_64_pc_windows_gnu", "{which:ar}"],
+    ["CFLAGS_x86_64_pc_windows_gnu", "-maes -fno-strict-aliasing -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -fno-extended-identifiers -fstack-reuse=none -fstack-protector -fstack-protector-strong -fcf-protection=full -Werror=switch -Werror=return-type"],
+    ["CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS", "-C link-arg=-l:libssp.a -C link-arg=-lmsvcrt -C link-arg=-ladvapi32 -C link-arg=-lgcc"],
 ]
 
 [[host]]
@@ -227,6 +236,7 @@ env = [
     ["CC_x86_64_apple_darwin", "{which:clang}"],
     ["AR_x86_64_apple_darwin", "{which:ar}"],
     ["MACOSX_DEPLOYMENT_TARGET", "{macos_minimum}"],
+    ["CFLAGS_x86_64_apple_darwin", "-maes -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fstack-protector -fstack-protector-strong -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
 ]
 
 [[host]]
@@ -263,6 +273,7 @@ env = [
     ["CC_aarch64_apple_darwin", "{which:clang}"],
     ["AR_aarch64_apple_darwin", "{which:ar}"],
     ["MACOSX_DEPLOYMENT_TARGET", "{macos_minimum}"],
+    ["CFLAGS_aarch64_apple_darwin", "-march=armv8-a+crypto -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -mbranch-protection=bti -fstack-protector -fstack-protector-strong -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type -mfix-cortex-a53-835769"],
 ]
 
 [[host]]
@@ -293,6 +304,7 @@ target = true
 env = [
     ["CC_x86_64_unknown_freebsd", "{which:cc}"],
     ["AR_x86_64_unknown_freebsd", "{which:ar}"],
+    ["CFLAGS_x86_64_unknown_freebsd", "-pthread -maes -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fstack-protector -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
 ]
 
 # Windows' MSVC build is native only (no depends host). `--target` is named
