@@ -2335,6 +2335,25 @@ exception is a file redb must repair first, which a read-only open refuses
 state with nothing lost, and then refuses it. Judging a repaired copy instead
 would cost a second copy of the store at every start after a crash (PB-S3).
 
+**A start a store refuses on its file writes nothing (2026-11-23).** A writable
+redb open rewrites the file's header even when nothing else in it changes (the
+god byte's primary slot flips), so judging each store only as it is opened left
+a refusal by a later store after an earlier one was already rewritten: a
+refused start was not side-effect free (found by the structural cleanup lane,
+2026-11-22, on copies of a rollback data directory). Each store's file is now
+judged by one read-only decision, `creation::look` and the store's own
+`judge_look`, which its open and its check (`ChainStore::check_with_genesis`,
+`PoolStore::check`, the enrollment store's `Store::check`) both take, so the two
+cannot disagree; a check writes nothing and takes no lock, and the open looks
+again under its lock. `Node::open` checks both of its stores before it opens
+either, and the daemon checks all three, right after it takes the data
+directory's lock and before its marker, its RPC channel and any store is
+written. Outside the guarantee, because only a writable open can act on them
+and it writes: a file redb must repair first, an unfinished initialization
+(moved aside), the older chain layout the pre-genesis wipe replaces, and a
+refusal after the stores have opened (a genesis that does not connect, a
+service that does not answer).
+
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
 changing a value encoding, because under the accumulator design the redb value

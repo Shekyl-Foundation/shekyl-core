@@ -248,6 +248,20 @@ pub fn main_loading(args: &[OsString], platform: &Platform, load: LoadStep) -> i
         Ok(l) => l,
         Err(d) => return end.refuse(&[d]),
     };
+    // Every store is checked read-only before anything is written: the
+    // marker, the RPC channel's files, and the stores themselves (a writable
+    // redb open rewrites the file's header even when nothing else changes).
+    // A start a store refuses on its file leaves the directory as it found
+    // it. Each refusal ends as its open's would. The console key's reset
+    // opens no node store, so it is not held to theirs.
+    if !config.session.console_key_reset {
+        if let Err(error) = shekyl_node::Node::preflight(&config) {
+            return end.fail(format!("the node did not start: {error}"));
+        }
+        if let Err(e) = shekyl_daemon_rpc::channel::check_store(&config.data_dir) {
+            return end.rpc_fault(e, &config.data_dir, "the RPC channel cannot start");
+        }
+    }
     // A marker written on storage the daemon does not support is logged once
     // the logger runs, below (Rick, 2026-11-19).
     let marker_unconfirmed = match marker::check_or_write(&lock, network, network_id) {
