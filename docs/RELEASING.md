@@ -173,8 +173,8 @@ wire's reply, so the sweep checks only its human lines' words against
   `v3.1.0-alpha.9`, `v3.1.0-beta.1`, `v3.1.0-rc.1`
 - The release job marks a tag as a pre-release when it matches the pre-release
   grammar (`docs/RELEASE_PROMOTION.md` §3), the same test the fn-dsa genesis
-  gate uses. The older `-RC1` spelling is a release tag, but not a recognised
-  pre-release.
+  gate uses. New tags use `rc`; the older `-RC1` spelling stays recognised, in
+  exactly that case.
 
 ## Release Artifacts
 

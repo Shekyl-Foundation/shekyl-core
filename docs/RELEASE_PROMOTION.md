@@ -83,16 +83,15 @@ matches this in full, and two matching tags on one commit are refused:
 ```
 
 A pre-release is the same grammar with its suffix restricted to `alpha`, `beta`
-or `rc`, with no optional `v` and no ignored case:
+or `rc`, with no optional `v` and no ignored case. `RC` is listed as itself
+because 17 existing tags carry it; new tags use `rc`:
 
 ```text
-^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$
+^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$
 ```
 
 `RELEASE_TAG_GRAMMAR` in `rust/xtask/src/version.rs` is canonical, and
-`scripts/ci/check_release_tag_grammar.py` holds every other reader to it. The
-older `-RC1` tags are still releases under the grammar, but they are not
-recognised pre-releases.
+`scripts/ci/check_release_tag_grammar.py` holds every other reader to it.
 
 Three version axes stay distinct and live in one authority doc:
 - **Software semver** (`v3.x`) — MAJOR bumps only on consensus-incompatible

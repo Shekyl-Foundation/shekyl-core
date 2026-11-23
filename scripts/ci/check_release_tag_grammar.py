@@ -16,10 +16,12 @@ holds every other reader to it:
 - docs/RELEASE_PROMOTION.md states it verbatim;
 - scripts/release/check_staging_deadlines.py compiles it verbatim;
 - the pre-release expression is the same grammar with its suffix restricted
-  to `alpha`, `beta` or `rc`, in scripts/ci/check_fn_dsa_genesis_gate.py and
-  in both of .github/workflows/gitian.yml's tests, matched with case;
-- rust/xtask/release_tags.tsv's cases are decided the same way here as by the
-  xtask's std-only matcher, whose unit test reads the same file.
+  to `alpha`, `beta` or `rc` (and `RC`, the exact spelling 17 existing tags
+  carry), in scripts/ci/check_fn_dsa_genesis_gate.py and in both of
+  .github/workflows/gitian.yml's tests, matched with case;
+- rust/xtask/release_tags.tsv's cases, which include every `v*` tag cut so
+  far, are decided the same way here as by the xtask's std-only matcher,
+  whose unit test reads the same file.
 
 Usage: check_release_tag_grammar.py [--selftest]
 """
@@ -40,7 +42,7 @@ FILES = {
     "cases": "rust/xtask/release_tags.tsv",
 }
 SUFFIX = r"(-[0-9A-Za-z.]+)?$"
-PRERELEASE_SUFFIX = r"-(alpha|beta|rc)(\.?[0-9]+)?$"
+PRERELEASE_SUFFIX = r"-(alpha|beta|rc|RC)(\.?[0-9]+)?$"
 WORKFLOW_TESTS = 2
 # The tags the ruling names: no `v`, a capital `V`, a leading zero.
 MUST_REFUSE = ("3.1.0-alpha.1", "V3.1.0-alpha.1", "v03.1.0")

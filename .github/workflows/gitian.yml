@@ -65,7 +65,7 @@ jobs:
           # a recognised pre-release passes, and any other shape is refused,
           # not waved on. The tag reaches grep on a here-string, so the
           # verdict is grep's own exit status and not a pipeline's.
-          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
+          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$' <<<"$GITIAN_TAG"; then
             echo "::notice::$GITIAN_TAG predates the fn-dsa genesis gate and is a pre-release: nothing to refuse"
             exit 0
           fi
@@ -469,7 +469,7 @@ jobs:
         run: |
           # The pre-release grammar, the same text as the gate's fallback above
           # (scripts/ci/check_release_tag_grammar.py).
-          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$' <<<"$GITHUB_REF_NAME"; then
+          if grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$' <<<"$GITHUB_REF_NAME"; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"

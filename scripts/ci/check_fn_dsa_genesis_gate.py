@@ -50,9 +50,11 @@ MANIFEST = "rust/shekyl-crypto-pq/Cargo.toml"
 
 # The pre-release shapes this repository cuts (RELEASE_PROMOTION.md §3): the
 # release-tag grammar restricted to `alpha`, `beta` or `rc`, as in
-# `v3.1.0-alpha.9`, `v3.1.0-rc.1`, `v3.0.0-beta`. Every other tag is a genesis
+# `v3.1.0-alpha.9`, `v3.1.0-rc.1`, `v3.0.0-beta`. `RC` is listed as itself
+# because 17 tags already carry it; case is not ignored, so `Rc` is not it.
+# Every other tag is a genesis
 # release as far as this gate is concerned — `v3.0.0`, and equally `V3.0.0`,
-# `3.1.0-alpha.1`, `v03.1.0`, `v3.0.0-RC1`, `v3.0`, `v3.0.0+mainnet` or
+# `3.1.0-alpha.1`, `v03.1.0`, `v3.0.0-Rc1`, `v3.0`, `v3.0.0+mainnet` or
 # `mainnet-3.0.0`. An oddly named rehearsal tag
 # is refused until it is re-cut with a suffix; that is the direction a gate
 # whose job is to keep mainnet off a pre-standard crate has to fail in.
@@ -63,7 +65,7 @@ MANIFEST = "rust/shekyl-crypto-pq/Cargo.toml"
 # text to `grep -E`, for a tree that predates this script and for the release's
 # pre-release flag. This script fails if that workflow does not carry the
 # expression verbatim, so the two cannot drift.
-PRERELEASE_ERE = r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc)(\.?[0-9]+)?$"
+PRERELEASE_ERE = r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$"
 PRERELEASE_TAG = re.compile(PRERELEASE_ERE)
 FALLBACK_WORKFLOW = ".github/workflows/gitian.yml"
 
@@ -226,7 +228,8 @@ def selftest():
     ok &= case("pre-1.0, no tag", True, old, exact(old), None)
     ok &= case("pre-1.0, pre-release tag", True, old, exact(old), "v3.1.0-alpha.9")
     ok &= case("pre-1.0, rc tag", True, old, exact(old), "v3.0.0-rc.1")
-    ok &= case("pre-1.0, the older RC spelling", False, old, exact(old), "v3.0.0-RC1")
+    ok &= case("pre-1.0, the older RC spelling", True, old, exact(old), "v3.0.0-RC1")
+    ok &= case("pre-1.0, another case of it", False, old, exact(old), "v3.0.0-Rc1")
     ok &= case("pre-1.0, genesis tag", False, old, exact(old), "v3.0.0")
     ok &= case("1.0, genesis tag", True, new, exact(new), "v3.0.0")
     # A release candidate of 1.0 is not 1.0.
@@ -266,7 +269,8 @@ def selftest():
         ("v3.0.0-rc.1", False), ("v3.0.0-beta", False),
         # No optional `v`, no ignored case, no leading zero.
         ("3.1.0-alpha.1", True), ("V3.1.0-alpha.1", True), ("v03.1.0", True),
-        ("v03.1.0-alpha.1", True), ("v3.0.0-RC1", True), ("v3.0.0-ALPHA.1", True),
+        ("v03.1.0-alpha.1", True), ("v3.0.0-RC1", False), ("v3.0.0-Rc1", True),
+        ("v3.0.0-ALPHA.1", True),
         # Unrecognised shapes are genesis: the gate fails closed.
         ("V3.0.0", True), ("v3.0", True), ("v3.0.0+mainnet", True),
         ("mainnet-3.0.0", True), ("core-v3.1.0", True), ("v3.0.0-final", True),
