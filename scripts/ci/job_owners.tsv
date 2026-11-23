@@ -115,7 +115,7 @@ scripts/ci/check_vendored_crypto_manifest.sh	vendored-crypto-content:crypto-cont
 scripts/ci/check_wallet_rpc_liveness.sh	wallet-rpc-liveness:wallet-rpc-liveness
 scripts/ci/check_wire_raw_hash_surface.py	docs-gates:check-doc-links
 scripts/ci/check_workflow_fetch_guard.py	grep-gates:grep-gates
-scripts/ci/check_workflows_parse.py	grep-gates:grep-gates,nightly-live-daemon-slow:report-red,nightly:report-red,rust-audit-test:rust-audit-and-test
+scripts/ci/check_workflows_parse.py	grep-gates:grep-gates,nightly-live-daemon-slow:plan,nightly-live-daemon-slow:report-red,nightly:plan,nightly:report-red,rust-audit-test:rust-audit-and-test
 scripts/ci/check_zeroize.sh	grep-gates:grep-gates
 scripts/ci/count_engine_pub_methods.py	grep-gates:grep-gates
 scripts/ci/daemon_boot_stop_smoke.ps1	build:build-windows-msvc
@@ -143,6 +143,7 @@ scripts/ci/merge_ready_overlap.py	grep-gates:grep-gates,merge-ready-dev:merges,m
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
 scripts/ci/nextest_report.py	docs-gates:check-doc-links,rust-audit-test:rust-audit-and-test
 scripts/ci/nightly_red.py	grep-gates:grep-gates,nightly-live-daemon-slow:report-red,nightly:report-red
+scripts/ci/nightly_skip.py	grep-gates:grep-gates,nightly-live-daemon-slow:plan,nightly:plan
 scripts/ci/p17_remote_dial.ps1	none
 scripts/ci/producer_gate.sh	nightly:producer-gate,nightly:report-red
 scripts/ci/push_scope_base.sh	build:changes,rust-audit-test:changes

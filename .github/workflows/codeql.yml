@@ -7,7 +7,7 @@ on:
   push:
     branches: [dev]
   schedule:
-    - cron: "30 4 * * 1"   # Every Monday at 4:30 AM UTC
+    - cron: "29 4 * * 1"   # Every Monday at 04:29 UTC
   workflow_dispatch:
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):

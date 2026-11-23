@@ -88,7 +88,7 @@
 #
 # Runner pin: `ubuntu-latest` per R1-D12 + F5 (4 vCPU / 16 GB RAM
 # verified at Round 1 close; cron schedules staggered from existing
-# `nightly.yml` 03:00 UTC + `codeql.yml` Monday 04:30 UTC to avoid
+# `nightly.yml` 03:17 UTC + `codeql.yml` Monday 04:29 UTC to avoid
 # resource collisions).
 #
 # Cron offset: `0 5 * * *` for daily structural-validate runs;
@@ -142,12 +142,12 @@ on:
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
   schedule:
-    # Daily structural-validate at 05:00 UTC. Staggered from existing
-    # `nightly.yml` (03:00 UTC) + `shekyl-oxide-divergence.yml`
-    # (Mon 04:00 UTC) + `codeql.yml` (Mon 04:30 UTC).
-    - cron: "0 5 * * *"
-    # Weekly full-parity sweep on Monday at 06:00 UTC.
-    - cron: "0 6 * * 1"
+    # Daily structural-validate at 05:11 UTC. Staggered from existing
+    # `nightly.yml` (03:17 UTC) + `shekyl-oxide-divergence.yml`
+    # (Mon 04:41 UTC) + `codeql.yml` (Mon 04:29 UTC).
+    - cron: "11 5 * * *"
+    # Weekly full-parity sweep on Monday at 06:13 UTC.
+    - cron: "13 6 * * 1"
   workflow_dispatch:
     inputs:
       parity_scope:
@@ -245,7 +245,7 @@ jobs:
     # `if:` filter) because the structural gates are merge-blocking
     # and cadence-independent. The mutants job's `if:` filter
     # (below) keeps the weekly mutation run from triggering this
-    # job's full setup twice on Monday at 06:00 UTC.
+    # job's full setup twice on Monday at 06:13 UTC.
     name: 'structural: build + cargo test (T9-T15, T17) + 3-leg correctness'
     runs-on: ubuntu-latest
     # 120 sized for the cron path (the heaviest: debug suite + T2 +
