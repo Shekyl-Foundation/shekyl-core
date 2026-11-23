@@ -962,3 +962,55 @@ standard errors are heteroskedasticity-robust (HC1). Per window:
   there is no difference for the hint count to carry. That proves nothing about
   the carrier. It is recorded as a layout data point, and Step 2 follows.
 - **Not carried:** anything else. Step 2 follows.
+
+### Step 1, result (2026-11-23): valid; vacuous; the hint count is not the carrier
+
+**The run.** A fresh clone of `e2ebdc5ec3` (`git status` clean), built on the
+floor device from 14:24:46 to 14:43:43Z. **This is a new build:** SHA-256
+`961a293f49a4d8ffc783376f476e4aab2f3899f2a43b2af65722c1486aa21458`. At 1.5 GHz,
+56 to 58 °C, throttled `0x0`, 3.30 GB available, no swap.
+
+```text
+diagnostic=sign-fixed-a-vs-fixed-b max_abs_t=3.01 median_ns=2220009 raw_sd_ns=2225619 n0=25134 n1=24866
+  hints mean0=37.40 mean1=38.42 chi2=396.87 df=37 chi2_z=15.63 | within-equal-hints max_abs_t=1.37 at crop 4 at 1738019 ns (n=12724, strata need >= 100 per class) | raw_mean_diff_ns=-15352.0 raw_t=-0.77
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=3.82
+control=sign-planted-leak planted_ns=13453 max_abs_t=91.77 delta10_ns=1466
+diagnostic-result=PASS sign_pair=3.01 sign_null=3.82 sign_control=91.77 delta10_ns=1466
+```
+
+That `PASS` is the harness's line on a diagnostic. It is **not** a pass of the
+registered floor attempt, which stays inconclusive at 7.55.
+
+**Valid.** Every void condition is clear:
+- every check held (790 of 790 kept signatures verified per comparison);
+- the hint statistics reproduce the registered attempt's exactly, so the inputs
+  are the same;
+- the null's key term is below 4.5 in both windows (−1.14 and 2.14);
+- the control's key term recovers 12,689 ns of the 13,453 ns planted (5.7 % off).
+
+**The figures** (A − B). The lowest sub-mode's boundary, set from the null, is
+1,249,742 ns.
+
+| Window | Entries (A, B) | Slope A, ns per hint | Slope B | Shared slope (`t`) | Key term, ns (`t`) | Unadjusted, ns (Welch `t`) |
+| --- | --- | --- | --- | --- | --- | --- |
+| First-attempt | 4,978, 4,879 | 65.9 ± 50.3 | 44.5 ± 49.3 | 55.2 (1.57) | −463.8 (−1.03) | −524.9 (−1.17) |
+| Lowest sub-mode | 1,925, 1,820 | 23.1 ± 9.8 | 4.1 ± 10.3 | 13.9 (1.96) | −265.5 (−3.04) | −277.0 (−3.18) |
+
+**The reading, as fixed before the run: vacuous.** The unadjusted `|t|` is below
+4.5 in both windows, so this build shows no difference for the hint count to
+carry.
+
+**What it does show:**
+- **The hint slope is tens of ns per hint,** the size `hint_bit_pack` predicts,
+  not hundreds. Across the pair's gap of about one hint, that is about 14 to
+  56 ns. Adjusting for the hint count moves the lowest sub-mode's difference
+  only from −277 to −266 ns. So the hint count does not carry the difference,
+  and the earlier observation of 0.3 to 0.4 µs per hint, drawn from three
+  pairs' summaries, does not hold on per-signature data.
+- **The same pair, inputs and timed source read 3.01 on this build and 7.55 on
+  the registered one.** The direction is the same (key A faster). This is one
+  more build-to-build change, and the next step tests it directly.
+
+**Captures:** `floor_step1_*` with `SHA256SUMS`, including the analysis's output
+and the hashes of the three per-signature dumps. The dumps are in the estate's
+private captures.
