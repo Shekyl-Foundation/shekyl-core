@@ -8,6 +8,8 @@
 //! assembly file stays under the decomposition ratchet's `NEW_FILE_CAP`
 //! (`scripts/ci/engine_decomposition_ratchet.conf`).
 
+use crate::engine::error::{CarriedFailure, ClassifiedFailure, PipelineFailure};
+
 /// Failure surface of the bond-assembly path (`ARCHIVAL_BOND_WI2_ASSEMBLY.md`
 /// §3.6). Every arm names its operator-facing disposition: refusals are
 /// caller-recoverable states, defects are fail-closed build errors.
@@ -178,18 +180,41 @@ pub(crate) enum BondAssemblyError {
 }
 
 impl BondAssemblyError {
-    /// Shorthand for the pipeline-step failure arm.
-    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
-        Self::Build {
-            stage,
-            detail: err.to_string(),
+    /// The one constructor for a step that failed. A signer refusal keeps its
+    /// [`SignFault`](shekyl_tx_builder::SignFault); every other failure is the
+    /// [`Build`](Self::Build) arm. The type of `err` decides which
+    /// ([`PipelineFailure`](crate::engine::error::PipelineFailure)), so a
+    /// [`TxBuilderError`](shekyl_tx_builder::TxBuilderError) cannot be
+    /// stringified into an internal fault.
+    pub(crate) fn build(stage: &'static str, err: impl PipelineFailure) -> Self {
+        match err.carry().classify(stage, "bond") {
+            ClassifiedFailure::Signer(fault) => Self::Signer(fault),
+            ClassifiedFailure::Pipeline { stage, detail } => Self::Build { stage, detail },
         }
     }
+}
 
-    /// The signer's refusal at `stage`: its detail goes to the log, and its
-    /// typed fault travels on.
-    pub(crate) fn signer(stage: &'static str, err: &shekyl_tx_builder::TxBuilderError) -> Self {
-        tracing::debug!(stage, error = %err, "the signer refused a bond-family spend");
-        Self::Signer(err.fault())
+// Store and wire errors the bond pipeline renders. They are not signer
+// faults. Named here, beside the constructor, so the error module does not
+// depend on the stores that already depend on it.
+crate::engine::error::pipeline_detail!(
+    crate::engine::pscan::start::WalletFilePendingStoreError,
+    crate::engine::pscan::start::WalletFilePScanStoreError,
+    crate::engine::pscan::block_source::BlockSourceError,
+    shekyl_archival_retention::EmissionWireError,
+);
+
+impl PipelineFailure for BondAssemblyError {
+    fn carry(self) -> CarriedFailure {
+        match self {
+            Self::Signer(fault) => CarriedFailure {
+                fault: Some(fault),
+                detail: fault.to_string(),
+            },
+            other => CarriedFailure {
+                fault: None,
+                detail: other.to_string(),
+            },
+        }
     }
 }

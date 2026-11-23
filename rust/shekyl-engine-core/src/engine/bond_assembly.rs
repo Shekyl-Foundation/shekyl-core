@@ -493,8 +493,7 @@ pub(crate) fn finalize_bond_tx(
     persona: PCanonicalId,
     input: &WireEncodeInput,
 ) -> Result<PBoundBytes, BondAssemblyError> {
-    let bytes =
-        encode_final_tx(input).map_err(|e| BondAssemblyError::signer("wire encoding", &e))?;
+    let bytes = encode_final_tx(input).map_err(|e| BondAssemblyError::build("wire encoding", e))?;
     Ok(PBoundBytes::bind(persona, bytes))
 }
 

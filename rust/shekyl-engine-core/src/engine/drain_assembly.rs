@@ -94,6 +94,8 @@ use super::sign_bridge::assemble_transfer_wire;
 use super::stake_engine::{prepare_funding_inputs, PersonaHandle, StakeEngineError};
 use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient};
 
+use crate::engine::error::{ClassifiedFailure, PipelineFailure};
+
 /// Why an [`assemble_drain_tx`] pipeline step refused or failed.
 ///
 /// The value-out sibling of
@@ -175,31 +177,16 @@ pub(crate) enum DrainAssemblyError {
 }
 
 impl DrainAssemblyError {
-    /// Shorthand for the pipeline-step failure arm.
-    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
-        Self::Build {
-            stage,
-            detail: err.to_string(),
+    /// The one constructor for a step that failed. A signer refusal — a
+    /// builder error, a [`KeyEngineError::Sign`](crate::engine::error::KeyEngineError::Sign),
+    /// or a bond-path [`Signer`](super::bond_assembly::BondAssemblyError::Signer)
+    /// — keeps its fault. Every other failure is the [`Build`](Self::Build)
+    /// arm. See [`PipelineFailure`](crate::engine::error::PipelineFailure).
+    pub(crate) fn build(stage: &'static str, err: impl PipelineFailure) -> Self {
+        match err.carry().classify(stage, "drain") {
+            ClassifiedFailure::Signer(fault) => Self::Signer(fault),
+            ClassifiedFailure::Pipeline { stage, detail } => Self::Build { stage, detail },
         }
-    }
-
-    /// A refusal from a step the drain shares with the bond path, in the
-    /// drain's taxonomy. The signer's fault keeps its type.
-    pub(crate) fn from_bond(
-        stage: &'static str,
-        err: super::bond_assembly::BondAssemblyError,
-    ) -> Self {
-        match err {
-            super::bond_assembly::BondAssemblyError::Signer(fault) => Self::Signer(fault),
-            other => Self::build(stage, other),
-        }
-    }
-
-    /// The signer's refusal at `stage`: its detail goes to the log, and its
-    /// typed fault travels on.
-    fn signer(stage: &'static str, err: &shekyl_tx_builder::TxBuilderError) -> Self {
-        tracing::debug!(stage, error = %err, "the signer refused a drain");
-        Self::Signer(err.fault())
     }
 }
 
@@ -413,7 +400,7 @@ pub(super) async fn assemble_drain_tx(
     // never mis-reports as "bond assembly" (bare `?` would coerce via
     // `StakeEngineError::Assembly(#[from] BondAssemblyError)`). ──
     let prepared = prepare_funding_inputs(keys, funding)
-        .map_err(|e| DrainAssemblyError::from_bond("drain funding input preparation", e))?;
+        .map_err(|e| DrainAssemblyError::build("drain funding input preparation", e))?;
     let key_images: Vec<[u8; 32]> = prepared.iter().map(|p| p.key_image).collect();
     let funding_gindexes: Vec<GlobalOutputIndex> = prepared.iter().map(|p| p.gindex).collect();
 
@@ -450,7 +437,7 @@ pub(super) async fn assemble_drain_tx(
     })
     .await
     .map_err(|e| DrainAssemblyError::build("drain proving offload join", e))?
-    .map_err(|e| DrainAssemblyError::signer("drain proving", &e))?;
+    .map_err(|e| DrainAssemblyError::build("drain proving", e))?;
 
     // ── Step 7: assemble the wire input through the SHARED transfer-wire
     // constructor (`sign_bridge::assemble_transfer_wire`) — the exact same
@@ -472,16 +459,13 @@ pub(super) async fn assemble_drain_tx(
         signed,
         &pqc_pubkeys,
     )
-    .map_err(|e| match e {
-        super::error::KeyEngineError::Sign(fault) => DrainAssemblyError::Signer(fault),
-        other => DrainAssemblyError::build("drain wire assembly", other),
-    })?;
+    .map_err(|e| DrainAssemblyError::build("drain wire assembly", e))?;
 
     // ── Step 8: PQC auth completion (fast; inline). One payload hash per spend
     // slot — no `+1` bond slot (the byte-shape difference between a drain and a
     // bond is exactly this: a drain has no identity auth). ──
     let payload_hashes = phase1_payload_hashes(&wire, network)
-        .map_err(|e| DrainAssemblyError::signer("phase1 payload hash", &e))?;
+        .map_err(|e| DrainAssemblyError::build("phase1 payload hash", e))?;
     if payload_hashes.len() != spend_inputs.len() {
         return Err(DrainAssemblyError::build(
             "phase1 payload hash",
@@ -494,7 +478,7 @@ pub(super) async fn assemble_drain_tx(
         .into());
     }
     wire.pqc_auths = sign_pqc_auths(&payload_hashes, &spend_inputs)
-        .map_err(|e| DrainAssemblyError::signer("pqc auth signing", &e))?;
+        .map_err(|e| DrainAssemblyError::build("pqc auth signing", e))?;
     drop(spend_inputs); // secrets end here; nothing below needs them
 
     // ── Step 9: encode + mint at the P-1 site. The drain is a P-spend, so its
@@ -508,7 +492,7 @@ pub(super) async fn assemble_drain_tx(
     // too returns `BondAssemblyError`; remap into the drain taxonomy for the
     // same reason as Step 4.
     let bound_tx = finalize_bond_tx(persona, &wire)
-        .map_err(|e| DrainAssemblyError::from_bond("drain finalize", e))?;
+        .map_err(|e| DrainAssemblyError::build("drain finalize", e))?;
 
     Ok(AssembledDrain {
         bound_tx,

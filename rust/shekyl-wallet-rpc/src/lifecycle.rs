@@ -880,90 +880,7 @@ pub(crate) async fn stake(
     // tenant's daemon target (`WSS-Q4`).
     let outcome = StakeFacade::first_stake(shared, &daemon, slot, posture)
         .await
-        .map_err(|e| {
-            use shekyl_engine_core::FirstStakeError as E;
-            match e {
-                E::BondInFlight => WalletRpcError::StakeInFlight,
-                E::AlreadyStaked => WalletRpcError::AlreadyStaked,
-                E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
-                // Neither -29500 ("fund and retry" — funding more worsens
-                // fragmentation) nor an internal fault (the funding is
-                // intact): its own code, rule 82.
-                E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
-                // A failed fee query: the build path's mapping, so the same
-                // cause answers the same code — never the "fund and retry"
-                // misdiagnosis (rule 82).
-                E::FeeEstimate(e) => e.into(),
-                // The daemon ANSWERED and the wallet refused the answer. The
-                // same -29102/-29109 split the send path draws, for the same
-                // reason: "check the connection and retry" is the wrong
-                // remedy when the connection worked (rule 82). The bond fee
-                // is charged to persona working capital with no user-facing
-                // control, so this refusal is the only place the operator
-                // ever learns the daemon quoted an absurd rate — it has to
-                // say which check fired and what the bound was.
-                E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
-                    reason: v.reason(),
-                    rate: v.rate(),
-                    bound: v.bound(),
-                },
-                // W1-clean internal failures: state file / persona-id reads.
-                // Funding cannot fix these, so they are not `-29500`.
-                E::State(d) => WalletRpcError::InternalError(format!(
-                    "stake preflight failed ({d}); nothing durable was written"
-                )),
-                E::NoStakeEngine => {
-                    WalletRpcError::InternalError("stake: no stake engine after intent open".into())
-                }
-                E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
-                // NOT an internal fault: the slot above is read from the engine
-                // BEFORE the credentialed reopen, and that reopen runs the SP-R0
-                // open-time reconcile — which can GC the picked slot as a phantom
-                // (arm #3) or burn the cursor past it for a retired persona
-                // (arm #2), either of which moves the record out from under the
-                // read. The engine refuses fail-closed; the operator's remedy is to
-                // call `stake` again, which reads the reconciled record. Rule 82: a
-                // legitimate domain state gets a domain code, never `-32603`.
-                //
-                // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
-                // here: it re-arms `staking_enabled` with a slot that has a
-                // matching bond post, so `first_stake`'s already-staked scan wins
-                // the race to refuse — and it is the right answer.
-                E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
-                // W2: durable slot may exist without a post — a `stake` re-invoke
-                // resumes. Say so in the operator-facing text (rule 82).
-                // The post's seal was not confirmed on disk: nothing was
-                // sent, the seal was removed, and the save's cause answers
-                // (Rick, 2026-11-19).
-                E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
-                    &error,
-                    shekyl_wallet_contract::error::SaveOf::Staking,
-                ),
-                E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
-                    "stake failed mid-flow ({d}); call stake again to resume"
-                )),
-                // Nothing was sent and the durable slot stands, so a later
-                // `stake` resumes it: said in the log beside the fault's code.
-                E::Signer(fault) => {
-                    tracing::warn!(
-                        %fault,
-                        "the bond post's signer refused; call stake again to resume"
-                    );
-                    fault.into()
-                }
-                // A designed refusal with a named remedy, not an internal
-                // fault and not a funding problem: shard assignment is an
-                // unbuilt round, so market staking has nothing to bond over
-                // yet. Its own code rather than a reused one — `-29500`'s
-                // remedy is "fund and retry", which would send an operator to
-                // top up a wallet that is funded fine (rule 82).
-                E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
-                // Fill first (WSS-Q4, WSS-Q15): each refusal names its own
-                // remedy, so each has its own code (rule 82). All are
-                // W1-clean: the fill runs before the durable point.
-                E::Fill(fill) => stake_fill_error(fill),
-            }
-        })?;
+        .map_err(first_stake_rpc_error)?;
 
     Ok(json!({
         "slot": outcome.p_slot,
@@ -971,6 +888,94 @@ pub(crate) async fn stake(
         "resumed": outcome.resumed,
         "state": "pending_dispatch",
     }))
+}
+
+/// The wallet-RPC answer for a refused first stake. `stake` calls this, and
+/// the signer-fault test calls it, so the stake lane cannot drift from the
+/// other signing paths.
+fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRpcError {
+    use shekyl_engine_core::FirstStakeError as E;
+    match error {
+        E::BondInFlight => WalletRpcError::StakeInFlight,
+        E::AlreadyStaked => WalletRpcError::AlreadyStaked,
+        E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+        // Neither -29500 ("fund and retry" — funding more worsens
+        // fragmentation) nor an internal fault (the funding is
+        // intact): its own code, rule 82.
+        E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
+        // A failed fee query: the build path's mapping, so the same
+        // cause answers the same code — never the "fund and retry"
+        // misdiagnosis (rule 82).
+        E::FeeEstimate(e) => e.into(),
+        // The daemon ANSWERED and the wallet refused the answer. The
+        // same -29102/-29109 split the send path draws, for the same
+        // reason: "check the connection and retry" is the wrong
+        // remedy when the connection worked (rule 82). The bond fee
+        // is charged to persona working capital with no user-facing
+        // control, so this refusal is the only place the operator
+        // ever learns the daemon quoted an absurd rate — it has to
+        // say which check fired and what the bound was.
+        E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
+            reason: v.reason(),
+            rate: v.rate(),
+            bound: v.bound(),
+        },
+        // W1-clean internal failures: state file / persona-id reads.
+        // Funding cannot fix these, so they are not `-29500`.
+        E::State(d) => WalletRpcError::InternalError(format!(
+            "stake preflight failed ({d}); nothing durable was written"
+        )),
+        E::NoStakeEngine => {
+            WalletRpcError::InternalError("stake: no stake engine after intent open".into())
+        }
+        E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
+        // NOT an internal fault: the slot above is read from the engine
+        // BEFORE the credentialed reopen, and that reopen runs the SP-R0
+        // open-time reconcile — which can GC the picked slot as a phantom
+        // (arm #3) or burn the cursor past it for a retired persona
+        // (arm #2), either of which moves the record out from under the
+        // read. The engine refuses fail-closed; the operator's remedy is to
+        // call `stake` again, which reads the reconciled record. Rule 82: a
+        // legitimate domain state gets a domain code, never `-32603`.
+        //
+        // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
+        // here: it re-arms `staking_enabled` with a slot that has a
+        // matching bond post, so `first_stake`'s already-staked scan wins
+        // the race to refuse — and it is the right answer.
+        E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
+        // W2: durable slot may exist without a post — a `stake` re-invoke
+        // resumes. Say so in the operator-facing text (rule 82).
+        // The post's seal was not confirmed on disk: nothing was
+        // sent, the seal was removed, and the save's cause answers
+        // (Rick, 2026-11-19).
+        E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
+            &error,
+            shekyl_wallet_contract::error::SaveOf::Staking,
+        ),
+        E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
+            "stake failed mid-flow ({d}); call stake again to resume"
+        )),
+        // Nothing was sent and the durable slot stands, so a later
+        // `stake` resumes it: said in the log beside the fault's code.
+        E::Signer(fault) => {
+            tracing::warn!(
+                %fault,
+                "the bond post's signer refused; call stake again to resume"
+            );
+            fault.into()
+        }
+        // A designed refusal with a named remedy, not an internal
+        // fault and not a funding problem: shard assignment is an
+        // unbuilt round, so market staking has nothing to bond over
+        // yet. Its own code rather than a reused one — `-29500`'s
+        // remedy is "fund and retry", which would send an operator to
+        // top up a wallet that is funded fine (rule 82).
+        E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
+        // Fill first (WSS-Q4, WSS-Q15): each refusal names its own
+        // remedy, so each has its own code (rule 82). All are
+        // W1-clean: the fill runs before the durable point.
+        E::Fill(fill) => stake_fill_error(fill),
+    }
 }
 
 /// The contract code for a refused fill: each refusal its own remedy.
@@ -1875,5 +1880,32 @@ mod tests {
             .await
             .expect("wallet still open after the refusal");
         close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// Stake answers a signer fault the way every other signing path does.
+    /// Red edit: map `FirstStakeError::Signer` to an internal error.
+    #[test]
+    fn a_stake_signer_fault_answers_the_same_as_every_other_signing_path() {
+        use shekyl_engine_core::{FirstStakeError, InternalSignFault, SignFault};
+        use shekyl_wallet_contract::error::WalletRpcErrorCode;
+
+        let internal = SignFault::Internal(InternalSignFault::MembershipSelfCheck);
+        let err = super::first_stake_rpc_error(FirstStakeError::Signer(internal));
+        assert_eq!(err.code(), WalletRpcErrorCode::SignerFailed);
+        assert!(
+            matches!(
+                err,
+                crate::error::WalletRpcError::SignerFailed {
+                    fault: "membership-self-check"
+                }
+            ),
+            "{err:?}"
+        );
+
+        let err =
+            super::first_stake_rpc_error(FirstStakeError::Signer(SignFault::PqcLeafMismatch {
+                input: 1,
+            }));
+        assert_eq!(err.code(), WalletRpcErrorCode::InputUnspendable);
     }
 }

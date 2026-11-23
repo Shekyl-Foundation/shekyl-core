@@ -254,7 +254,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             &view_tags,
             &tx_extra,
         )
-        .map_err(|e| BondAssemblyError::signer("signable hash", &e))?;
+        .map_err(|e| BondAssemblyError::build("signable hash", e))?;
         // The transaction's one network-bound message (the signing envelope
         // §2.2): this prefix and the base the outputs commit, framed under
         // the engine's network id. The backing proof, both auths and every
@@ -303,7 +303,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         })
         .await
         .map_err(|e| BondAssemblyError::build("membership proving offload join", e))?
-        .map_err(|e| BondAssemblyError::signer("membership proving", &e))?;
+        .map_err(|e| BondAssemblyError::build("membership proving", e))?;
 
         // ── Step 12: the vin, with placeholder auths at canonical length
         // (the auth digest spans every vin byte but the auth legs, the
@@ -408,7 +408,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
                 &[],
                 &tree,
             )
-            .map_err(|e| StakeEngineError::from(BondAssemblyError::signer("proving", &e)))?;
+            .map_err(|e| StakeEngineError::from(BondAssemblyError::build("proving", e)))?;
             // Step-7 self-check, backing leg: the landed consensus verifier
             // over the assembled vin (cause-blind on refusal, CB-5).
             if let Err(e) =
@@ -462,7 +462,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             },
             &self.network,
         )
-        .map_err(|e| BondAssemblyError::signer("open spend", &e))?;
+        .map_err(|e| BondAssemblyError::build("open spend", e))?;
         drop(spend_inputs); // secrets end here; nothing below needs them
 
         // ── Step 18: remaining self-check legs (fast; inline). Claims leg:
@@ -482,7 +482,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         let emission_sig = {
             let emission_payload: &SigningPayloadHash = open
                 .sole_extra_payload()
-                .map_err(|e| BondAssemblyError::signer("emission slot payload", &e))?;
+                .map_err(|e| BondAssemblyError::build("emission slot payload", e))?;
             HybridEd25519MlDsa
                 .sign(
                     &keys.hybrid_sign_sk,
@@ -496,7 +496,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             .map_err(|e| BondAssemblyError::build("emission pqc auth encoding", e))?;
         let wire = open
             .seal(vec![emission_sig_bytes])
-            .map_err(|e| BondAssemblyError::signer("seal spend", &e))?;
+            .map_err(|e| BondAssemblyError::build("seal spend", e))?;
 
         // ── Step 19: encode + mint at the P-1 site. ──────────────────────
         let bound_tx = finalize_bond_tx(persona, &wire)?;

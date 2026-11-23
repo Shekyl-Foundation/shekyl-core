@@ -1044,8 +1044,7 @@ fn a_signer_fault_keeps_its_type_through_every_staking_lane() {
         ))),
         DrainToPrincipalError::Signer(f) if f == fault
     ));
-    let finalized =
-        DrainAssemblyError::from_bond("drain finalize", BondAssemblyError::Signer(fault));
+    let finalized = DrainAssemblyError::build("drain finalize", BondAssemblyError::Signer(fault));
     assert!(matches!(
         DrainToPrincipalError::from(DrainRequestError::Drain(DrainOrchestrationError::Stake(
             StakeEngineError::DrainAssembly(finalized)
@@ -1074,4 +1073,50 @@ fn a_signer_fault_keeps_its_type_through_every_staking_lane() {
         crate::engine::bond_orchestrator::post_assembly_failure(bond()),
         crate::engine::bond_orchestrator::FirstStakeError::Signer(f) if f == fault
     ));
+}
+
+/// The assembly constructor keeps a signer fault and stringifies everything
+/// else. Red edit: give `build` an `impl Display` parameter again.
+#[test]
+fn a_builder_error_cannot_be_stringified_at_the_assembly_boundary() {
+    use crate::engine::bond_assembly::BondAssemblyError;
+    use crate::engine::drain_assembly::DrainAssemblyError;
+    use crate::engine::error::KeyEngineError;
+    use shekyl_tx_builder::{SignFault, TxBuilderError};
+
+    let refused = TxBuilderError::PqcLeafMismatch { index: 2 };
+    assert!(matches!(
+        BondAssemblyError::build("proving", refused),
+        BondAssemblyError::Signer(SignFault::PqcLeafMismatch { input: 2 })
+    ));
+
+    let fault = SignFault::PqcLeafMismatch { input: 2 };
+    assert!(matches!(
+        DrainAssemblyError::build("drain wire assembly", KeyEngineError::Sign(fault)),
+        DrainAssemblyError::Signer(f) if f == fault
+    ));
+    assert!(matches!(
+        DrainAssemblyError::build("drain finalize", BondAssemblyError::Signer(fault)),
+        DrainAssemblyError::Signer(f) if f == fault
+    ));
+
+    match BondAssemblyError::build("transaction key", "os randomness failed") {
+        BondAssemblyError::Build { stage, detail } => {
+            assert_eq!(stage, "transaction key");
+            assert!(detail.contains("randomness"), "{detail}");
+        }
+        BondAssemblyError::Signer(_) => panic!("a pipeline detail is not a signer fault"),
+        other => panic!("a pipeline detail stays a pipeline detail: {other}"),
+    }
+    match DrainAssemblyError::build(
+        "drain wire assembly",
+        KeyEngineError::Primitive {
+            detail: "bulletproof",
+        },
+    ) {
+        DrainAssemblyError::Build { detail, .. } => {
+            assert!(detail.contains("bulletproof"), "{detail}");
+        }
+        other => panic!("a key-engine primitive failure is not a signer fault: {other:?}"),
+    }
 }
