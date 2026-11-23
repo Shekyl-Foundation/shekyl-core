@@ -844,17 +844,15 @@ impl axum::serve::Listener for PipeListener {
 /// `wallet_rpc.yaml`), which is sound only because nothing but this account
 /// can ever connect to it.
 ///
-/// A missing directory is made 0700 whatever the umask (Rick, 2026-11-21);
-/// an existing one is held to the shared rule, and the refusal names it.
+/// A missing directory is made owner-only whatever the umask
+/// (`shekyl_os_account::create_account_dir_all`); an existing one is held
+/// to the shared rule, and the refusal names what the directory is.
 ///
 /// Unix only, with no Windows counterpart: `CreateNamedPipe` takes the
 /// descriptor at creation (`WINDOWS_WALLET_SUPPORT.md` §8.1).
 #[cfg(unix)]
 fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListener, BoxErr> {
-    use shekyl_rpc_transport::listen::{
-        bind_owner_only_socket, OwnerSocketRefusal, SocketDirRefusal, SocketRefusal,
-    };
-    use std::os::unix::fs::DirBuilderExt;
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -863,10 +861,7 @@ fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListen
         if e.kind() != std::io::ErrorKind::NotFound {
             return Err(format!("{}: {e}", dir.display()).into());
         }
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
+        shekyl_os_account::create_account_dir_all(dir)?;
     }
     let refused = match bind_owner_only_socket(path) {
         Ok(bound) => return Ok(bound),
@@ -876,16 +871,10 @@ fn bind_uds(path: &Path) -> Result<shekyl_rpc_transport::listen::OwnerOnlyListen
         OwnerSocketRefusal::NoDirectory => {
             format!("{} names no directory to hold the socket", path.display())
         }
-        OwnerSocketRefusal::Directory(
-            SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly,
-        ) => format!(
-            "{} must be a directory only this account can enter (owned by this account, no \
-             group or other access); the wallet RPC's socket is not bound there",
-            dir.display()
+        OwnerSocketRefusal::Directory(why) => format!(
+            "{}; the wallet RPC's socket is not bound there",
+            why.clause(Some(&dir.display().to_string()))
         ),
-        OwnerSocketRefusal::Directory(SocketDirRefusal::Unreadable(why)) => {
-            format!("{}: {why}", dir.display())
-        }
         // A socket a server still answers on is not taken over; one a
         // stopped or killed server left was removed. Anything else at the
         // path is not this server's to remove.

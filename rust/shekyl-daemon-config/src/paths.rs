@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use shekyl_options::{Code, Diagnostic, Source};
 
 #[cfg(unix)]
-use crate::directory::{require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE};
+use crate::directory::{require_service_account, DirectoryFacts, OWNER_ONLY_DIR_MODE};
 use crate::network::Network;
 use shekyl_rpc_rendezvous::SERVICE_DATA_HOME;
 
@@ -133,15 +133,15 @@ fn check_service_data_home_as(
 #[cfg(unix)]
 fn service_owned(dir: &Path, me: u32) -> Result<(), String> {
     let shown = dir.display().to_string();
-    let account = DirectoryAccount::inspect(dir)
-        .and_then(|account| account.require_owner(me))
+    let facts = DirectoryFacts::inspect(dir)
+        .and_then(|facts| facts.require_owner(me))
         .map_err(|fault| fault.clause(Some(&shown)))?;
-    let mode = account.mode();
-    if mode == ACCOUNT_ONLY_MODE {
+    if facts.is_owner_only_mode() {
         Ok(())
     } else {
         Err(format!(
-            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
+            "{shown} has mode {:04o}, not {OWNER_ONLY_DIR_MODE:04o}",
+            facts.mode()
         ))
     }
 }

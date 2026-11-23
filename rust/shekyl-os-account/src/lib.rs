@@ -31,6 +31,8 @@
 //!   ([`OWNER_ONLY_DIR_MODE`]), whatever the umask.
 //!   The wallet directory in it is the wallet file crate's
 //!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
+//! - `directory` (Unix): what a path is, as a directory, for this account.
+//!   The one walk every caller reads; the mode rule stays with the caller.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is
@@ -46,6 +48,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub mod directory;
 pub mod key_file;
 pub mod private_file;
 

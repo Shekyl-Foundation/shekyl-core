@@ -3,51 +3,50 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Listen-address posture shared by every Shekyl RPC listener
-//! (`docs/design/RPC_TRANSPORT_POSTURE.md` RT-1, RT-2).
+//! The Unix socket every Shekyl listener binds (Rick, 2026-11-22).
 //!
-//! One classifier and one parser, so the wallet RPC and the daemon RPC cannot
-//! disagree on what "wildcard" or "loopback" means — the IPv4-mapped
-//! spellings included (`[::ffff:0.0.0.0]` *is* the wildcard;
-//! `[::ffff:127.0.0.1]` *is* loopback) — nor on what a listen string may say.
-//! The refusals themselves stay with each listener, because each names a
-//! different remedy: the wallet can take `--rpc-login`; the daemon has no
-//! authentication at all and points at the onion service or the pinned-TLS
-//! leg instead. The *reason* a wildcard is refused is the same everywhere and
-//! lives here once ([`WILDCARD_REASON`]).
-//!
-//! Parsing is strict: a listen address names an interface, and resolving a
-//! hostname at bind time would make the bind depend on a resolver's answer,
-//! so `localhost:29500` is refused with the spelling to use rather than left
-//! to a syntax error. One pair of brackets around an IPv6 literal is
-//! notation (`[::1]` and `::1` name the same interface); anything else is not
-//! a literal.
+//! One order, so the wallet RPC, the daemon's owner socket, the daemon's
+//! console leg and the tunnel cannot disagree: the directory is this
+//! account's alone, what is at the path is replaceable and is removed, the
+//! socket is created close-on-exec, bound, narrowed to
+//! [`OWNER_ONLY_SOCKET_MODE`], and only then listens. The directory check
+//! and the replace decision are this module's; a caller reaches them
+//! through [`bind_owner_only_socket`], which holds the directory from the
+//! decision through the listen. Each listener keeps only its own wording
+//! of a refusal. [`SocketDirRefusal::clause`] is the directory's fact, said
+//! once.
 
+use std::ffi::c_int;
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
+use std::io::{self, ErrorKind};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
-/// How long a start waits for the server at a socket file to accept its
-/// probe ([`may_replace_socket`]).
-#[cfg(unix)]
-pub const SOCKET_PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+use shekyl_os_account::directory::{DirectoryFacts, DirectoryFault};
+
+use super::SOCKET_PROBE_BOUND;
 
 /// The mode of every listener's socket from the first moment anything can
 /// connect to it: this account's alone ([`bind_owner_only_socket`]).
-#[cfg(unix)]
 pub const OWNER_ONLY_SOCKET_MODE: u32 = 0o600;
 
 /// The listen backlog: the system's maximum, what tokio's own Unix bind
 /// asks for (through mio) on Linux, FreeBSD and macOS, so a listener queues
 /// as it did before it bound through [`bind_owner_only_socket`].
-#[cfg(unix)]
-const SOCKET_BACKLOG: std::ffi::c_int = -1;
+const SOCKET_BACKLOG: c_int = -1;
 
-/// Whether a listener may replace what is at its socket path: the one
-/// decision every socket listener shares, through
-/// [`bind_owner_only_socket`]. Each keeps only its own wording of a refusal.
-#[cfg(unix)]
+/// How often a start polls for another start's hold on the directory.
+const START_POLL: Duration = Duration::from_millis(10);
+
+/// Whether a listener may replace what is at its socket path. The one
+/// decision every socket listener shares, and only through
+/// [`bind_owner_only_socket`]: that bind holds the directory, and a caller
+/// of the decision alone would see a socket that is bound and not yet
+/// listening as a stopped server's.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SocketPath {
+enum SocketPath {
     /// Nothing is there, or a socket whose server is proven gone: remove
     /// it, if it is there, and bind.
     Replace,
@@ -56,7 +55,6 @@ pub enum SocketPath {
 }
 
 /// Why a listener may not bind at a socket path.
-#[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketRefusal {
     /// A server accepted the probe: it is live.
@@ -69,17 +67,14 @@ pub enum SocketRefusal {
     NotThisAccounts(u32),
     /// The probe proved nothing: another account's socket (permission
     /// denied), a server whose accept queue is full, no answer within
-    /// [`SOCKET_PROBE_BOUND`], or the path could not be read.
+    /// [`super::SOCKET_PROBE_BOUND`], or the path could not be read.
     Unknown(String),
-    /// The path may be replaced, and removing the file failed
-    /// ([`clear_replaceable_socket`]). The path is left as it is.
+    /// The path may be replaced, and removing the file failed. The path is
+    /// left as it is.
     NotRemoved(String),
 }
 
 /// May the listener replace what is at `path`?
-///
-/// [`clear_replaceable_socket`] is the bind step: it removes the path when
-/// this returns [`SocketPath::Replace`], and leaves it when this refuses.
 ///
 /// The path is read without following a symbolic link, and only a socket
 /// this account owns is ever probed. The type check is part of the
@@ -88,14 +83,13 @@ pub enum SocketRefusal {
 /// socket gives, so a probe alone would replace a regular file, or a link
 /// to a dead socket elsewhere. A socket is replaced only when its
 /// connection is refused, the one answer that proves its server gone. The
-/// probe is bounded by [`SOCKET_PROBE_BOUND`]; it is synchronous, so a
+/// probe is bounded by [`super::SOCKET_PROBE_BOUND`]; it is synchronous, so a
 /// start that binds before its runtime serves (the daemon's owner socket)
 /// takes the same decision as one that binds inside it.
-#[cfg(unix)]
-pub fn may_replace_socket(path: &std::path::Path) -> SocketPath {
+fn may_replace_socket(path: &Path) -> SocketPath {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     let found = match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SocketPath::Replace,
+        Err(e) if e.kind() == ErrorKind::NotFound => return SocketPath::Replace,
         Err(e) => return SocketPath::Refuse(SocketRefusal::Unknown(e.to_string())),
         Ok(found) => found,
     };
@@ -111,19 +105,15 @@ pub fn may_replace_socket(path: &std::path::Path) -> SocketPath {
     });
     match probe {
         Ok(()) => SocketPath::Refuse(SocketRefusal::Answers),
-        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => SocketPath::Replace,
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-            SocketPath::Refuse(SocketRefusal::Unknown(format!(
-                "no answer within {} s",
-                SOCKET_PROBE_BOUND.as_secs()
-            )))
-        }
+        Err(e) if e.kind() == ErrorKind::ConnectionRefused => SocketPath::Replace,
+        Err(e) if e.kind() == ErrorKind::TimedOut => SocketPath::Refuse(SocketRefusal::Unknown(
+            format!("no answer within {} s", SOCKET_PROBE_BOUND.as_secs()),
+        )),
         Err(e) => SocketPath::Refuse(SocketRefusal::Unknown(e.to_string())),
     }
 }
 
-/// What [`clear_replaceable_socket`] found at a path it may bind.
-#[cfg(unix)]
+/// What the bind found at a path it may replace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cleared {
     /// Nothing was there.
@@ -135,15 +125,11 @@ pub enum Cleared {
 /// Remove `path` when [`may_replace_socket`] would replace it, so a listener
 /// can bind. A refusal leaves the path as it is, and so does a removal that
 /// fails ([`SocketRefusal::NotRemoved`]).
-///
-/// # Errors
-/// Why the path may not be bound.
-#[cfg(unix)]
-pub fn clear_replaceable_socket(path: &std::path::Path) -> Result<Cleared, SocketRefusal> {
+fn clear_replaceable_socket(path: &Path) -> Result<Cleared, SocketRefusal> {
     match may_replace_socket(path) {
         SocketPath::Replace => match std::fs::remove_file(path) {
             Ok(()) => Ok(Cleared::ReplacedStale),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Cleared::Empty),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(Cleared::Empty),
             Err(error) => Err(SocketRefusal::NotRemoved(format!(
                 "the socket could not be removed: {error}"
             ))),
@@ -152,51 +138,65 @@ pub fn clear_replaceable_socket(path: &std::path::Path) -> Result<Cleared, Socke
     }
 }
 
-/// Why a directory may not hold a listener's socket.
-#[cfg(unix)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a directory may not hold a listener's socket. The fact is
+/// [`Self::clause`]; each listener adds only its own frame.
+#[derive(Debug)]
 pub enum SocketDirRefusal {
-    /// Nothing is at the path.
-    Missing,
-    /// It is not a directory (a symbolic link to one included), it is not
-    /// this account's, or its group or others have any access. The
-    /// directory is the containment: a socket is 0600 from before it
-    /// listens ([`bind_owner_only_socket`]), but BSD-derived systems may not
-    /// enforce a socket's mode on connect.
-    NotOwnerOnly,
-    /// It could not be read.
-    Unreadable(String),
+    /// The shared directory walk refused the path: it is missing, unreadable,
+    /// a symbolic link, not a directory, or another account's.
+    Facts(DirectoryFault),
+    /// Group or other has a permission bit, so another account can enter.
+    GroupOrOtherCanEnter {
+        /// The directory's mode, permission bits only.
+        mode: u32,
+    },
 }
 
-/// Is `dir` a directory only this account can enter: owned by the
-/// effective user, no group or other access, not a symbolic link? The
-/// check both socket listeners hold their directory to (the tunnel's R0
-/// §1.1 construction).
-///
-/// # Errors
-/// Why it is not.
-#[cfg(unix)]
-pub fn owner_only_socket_dir(dir: &std::path::Path) -> Result<(), SocketDirRefusal> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    let meta = match std::fs::symlink_metadata(dir) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(SocketDirRefusal::Missing);
+impl SocketDirRefusal {
+    /// The directory's fact. `shown` is the path, when the sentence names
+    /// it; without it the sentence is the form a diagnostic already names
+    /// the path around ("its mode is …").
+    #[must_use]
+    pub fn clause(&self, shown: Option<&str>) -> String {
+        match self {
+            Self::Facts(fault) => fault.clause(shown),
+            Self::GroupOrOtherCanEnter { mode } => match shown {
+                Some(path) => {
+                    format!("{path} has mode {mode:04o}, so other accounts can enter it")
+                }
+                None => format!("its mode is {mode:04o}, so other accounts can enter it"),
+            },
         }
-        Err(e) => return Err(SocketDirRefusal::Unreadable(e.to_string())),
+    }
+}
+
+impl fmt::Display for SocketDirRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.clause(None))
+    }
+}
+
+/// Is `dir` a directory only this account can enter: owned by the effective
+/// user, no group or other access, not a symbolic link? The check both
+/// socket listeners hold their directory to. The mode rule is this check's;
+/// the facts are [`DirectoryFacts`].
+fn owner_only_socket_dir(dir: &Path) -> Result<(), SocketDirRefusal> {
+    let facts = match DirectoryFacts::inspect(dir) {
+        Ok(facts) => facts,
+        Err(fault) => return Err(SocketDirRefusal::Facts(fault)),
     };
-    if meta.is_dir()
-        && meta.uid() == shekyl_os_account::effective_uid()
-        && meta.permissions().mode() & 0o077 == 0
-    {
-        Ok(())
+    let facts = match facts.require_owner(shekyl_os_account::effective_uid()) {
+        Ok(facts) => facts,
+        Err(fault) => return Err(SocketDirRefusal::Facts(fault)),
+    };
+    if facts.group_or_other_can_enter() {
+        Err(SocketDirRefusal::GroupOrOtherCanEnter { mode: facts.mode() })
     } else {
-        Err(SocketDirRefusal::NotOwnerOnly)
+        Ok(())
     }
 }
 
 /// Why [`bind_owner_only_socket`] bound nothing. Each listener words it.
-#[cfg(unix)]
 #[derive(Debug)]
 pub enum OwnerSocketRefusal {
     /// The path has no directory to check (`/`). A bare name's is the
@@ -210,19 +210,17 @@ pub enum OwnerSocketRefusal {
     /// the bind made has been removed; if that failed too, the error says
     /// so. The kind is the failing step's: `AddrInUse` is another server
     /// that bound between the decision and this bind.
-    Socket(std::io::Error),
+    Socket(io::Error),
 }
 
 /// A listening socket at its path, this account's alone from before it
 /// listened, not yet handed to a runtime.
-#[cfg(unix)]
 #[derive(Debug)]
 pub struct OwnerOnlyListener {
-    listener: std::os::unix::net::UnixListener,
+    listener: UnixListener,
     cleared: Cleared,
 }
 
-#[cfg(unix)]
 impl OwnerOnlyListener {
     /// What was at the path before the bind.
     #[must_use]
@@ -234,7 +232,7 @@ impl OwnerOnlyListener {
     /// runtime later (the daemon's owner socket, served once its node is
     /// open).
     #[must_use]
-    pub fn into_std(self) -> std::os::unix::net::UnixListener {
+    pub fn into_std(self) -> UnixListener {
         self.listener
     }
 
@@ -245,7 +243,7 @@ impl OwnerOnlyListener {
     ///
     /// # Panics
     /// Outside a tokio runtime with I/O enabled, as `from_std` does.
-    pub fn into_tokio(self) -> std::io::Result<tokio::net::UnixListener> {
+    pub fn into_tokio(self) -> io::Result<tokio::net::UnixListener> {
         tokio::net::UnixListener::from_std(self.listener)
     }
 }
@@ -254,27 +252,26 @@ impl OwnerOnlyListener {
 /// 2026-11-22): the wallet server, the daemon's owner socket, the daemon's
 /// console leg and the tunnel.
 ///
-/// In order: `path`'s directory must be this account's alone
-/// ([`owner_only_socket_dir`]); what is at `path` must be replaceable, and
-/// is removed ([`clear_replaceable_socket`]); then the socket is created
-/// (close-on-exec from creation), bound, narrowed to
+/// In order: `path`'s directory must be this account's alone (not a link,
+/// owned by this account, and not enterable by its group or by others);
+/// what is at `path` must be replaceable, and is removed; then the socket
+/// is created (close-on-exec from creation), bound, narrowed to
 /// [`OWNER_ONLY_SOCKET_MODE`], and only then listens. Until it listens a
 /// connect is refused, so no account but this one ever connects to it at a
 /// wider mode, whatever the umask. The directory stays mandatory: it is the
 /// containment, since BSD-derived systems may not enforce a socket's mode
 /// on connect. A failure after the bind removes the path it made.
 ///
-/// The decision and the bind are synchronous, so a start that binds before
-/// its runtime serves takes the same steps; the listener reaches tokio
-/// through [`OwnerOnlyListener::into_tokio`], or [`OwnerOnlyListener::into_std`]
-/// for a start that hands it over later.
+/// The directory is held from the decision through the listen, so a second
+/// start cannot see a socket that refuses connects (not yet listening) and
+/// replace it. The decision and the bind are synchronous, so a start that
+/// binds before its runtime serves takes the same steps; the listener
+/// reaches tokio through [`OwnerOnlyListener::into_tokio`], or
+/// [`OwnerOnlyListener::into_std`] for a start that hands it over later.
 ///
 /// # Errors
 /// Why nothing was bound.
-#[cfg(unix)]
-pub fn bind_owner_only_socket(
-    path: &std::path::Path,
-) -> Result<OwnerOnlyListener, OwnerSocketRefusal> {
+pub fn bind_owner_only_socket(path: &Path) -> Result<OwnerOnlyListener, OwnerSocketRefusal> {
     bind_owner_only_socket_observed(path, |_| {})
 }
 
@@ -282,15 +279,13 @@ pub fn bind_owner_only_socket(
 /// narrowing and the listen: the one point the order test observes. The
 /// public function is this with nothing observed, so the test reads the
 /// path every listener binds through.
-#[cfg(unix)]
 fn bind_owner_only_socket_observed(
-    path: &std::path::Path,
-    bound: impl FnOnce(&std::path::Path),
+    path: &Path,
+    bound: impl FnOnce(&Path),
 ) -> Result<OwnerOnlyListener, OwnerSocketRefusal> {
-    use std::os::unix::fs::PermissionsExt;
     // A bare name is in the current directory, which is checked like any.
     let dir = match path.parent() {
-        Some(dir) if dir.as_os_str().is_empty() => std::path::Path::new("."),
+        Some(dir) if dir.as_os_str().is_empty() => Path::new("."),
         Some(dir) => dir,
         None => return Err(OwnerSocketRefusal::NoDirectory),
     };
@@ -322,7 +317,7 @@ fn bind_owner_only_socket_observed(
         Err(error) => Err(OwnerSocketRefusal::Socket(
             match std::fs::remove_file(path) {
                 Ok(()) => error,
-                Err(left) => std::io::Error::new(
+                Err(left) => io::Error::new(
                     error.kind(),
                     format!(
                         "{error}; the socket it bound at {} could not be removed: {left}",
@@ -334,29 +329,29 @@ fn bind_owner_only_socket_observed(
     }
 }
 
-/// How often a start polls for another start's hold on the directory.
-#[cfg(unix)]
-const START_POLL: std::time::Duration = std::time::Duration::from_millis(10);
-
 /// Take the socket directory's exclusive lock (`flock` on the directory
 /// itself, so nothing is added to a directory its owner may remove), waiting
-/// up to [`SOCKET_PROBE_BOUND`] for another start, which holds it only from
+/// up to [`super::SOCKET_PROBE_BOUND`] for another start, which holds it only from
 /// its decision to its listen. Starts on one directory therefore never
 /// interleave, and every socket a start observes is live or a stopped
 /// server's. Released when the returned file drops.
-#[cfg(unix)]
-fn hold_the_directory(dir: &std::path::Path) -> Result<std::fs::File, OwnerSocketRefusal> {
+///
+/// The race this closes is another process. `flock` on Linux is per open
+/// file, so a second open in this process waits; on FreeBSD and macOS a
+/// lock is per process, so a second start in this process is granted the
+/// lock this one already holds. Another process waits on every one of them.
+fn hold_the_directory(dir: &Path) -> Result<std::fs::File, OwnerSocketRefusal> {
     let held = std::fs::File::open(dir).map_err(OwnerSocketRefusal::Socket)?;
-    let deadline = std::time::Instant::now() + SOCKET_PROBE_BOUND;
+    let deadline = Instant::now() + SOCKET_PROBE_BOUND;
     loop {
         match held.try_lock() {
             Ok(()) => return Ok(held),
-            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
                 std::thread::sleep(START_POLL);
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(OwnerSocketRefusal::Socket(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
+                return Err(OwnerSocketRefusal::Socket(io::Error::new(
+                    ErrorKind::WouldBlock,
                     format!(
                         "another start held {} for longer than {SOCKET_PROBE_BOUND:?}",
                         dir.display()
@@ -370,147 +365,22 @@ fn hold_the_directory(dir: &std::path::Path) -> Result<std::fs::File, OwnerSocke
     }
 }
 
-/// What a TCP listen address is, under RT-1/RT-2.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListenClass {
-    /// `127.0.0.1`, `::1`, or the IPv4-mapped loopback: this machine only.
-    Loopback,
-    /// `0.0.0.0`, `::`, or the IPv4-mapped wildcard: every interface,
-    /// including ones that do not exist yet — refused by every listener.
-    Wildcard,
-    /// A specific non-loopback address: reachable from the network, so it
-    /// needs an authentication story the listener must supply or refuse.
-    Addressed,
-}
-
-/// `true` for a loopback address after folding IPv4-mapped IPv6 to IPv4
-/// (`::ffff:127.0.0.1` is `127.0.0.1`), so every spelling of the same
-/// address answers the same way. The one loopback predicate, for listen
-/// addresses here and for outbound endpoints in
-/// [`crate::network_posture`] — the two sides cannot disagree about what
-/// loopback is.
-#[must_use]
-pub fn is_loopback_ip(ip: IpAddr) -> bool {
-    ip.to_canonical().is_loopback()
-}
-
-/// Classify `addr` after folding IPv4-mapped IPv6 to IPv4, so every
-/// spelling of the same address classifies the same way.
-#[must_use]
-pub fn classify_listen(addr: SocketAddr) -> ListenClass {
-    let ip = addr.ip().to_canonical();
-    if ip.is_unspecified() {
-        ListenClass::Wildcard
-    } else if is_loopback_ip(ip) {
-        ListenClass::Loopback
-    } else {
-        ListenClass::Addressed
-    }
-}
-
-/// Why a wildcard bind is refused — one sentence, the same in every
-/// listener's refusal; the remedy that follows it is the listener's own.
-pub const WILDCARD_REASON: &str = "0.0.0.0 and :: bind every interface, including ones that do \
-                                   not exist yet (a VPN that comes up later, a hotspot, a \
-                                   container bridge)";
-
-/// A listen string that does not name a numeric interface and port.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ListenParseError {
-    /// Nothing was given.
-    Empty,
-    /// The host part is not an IP literal — a hostname, or broken brackets.
-    NotAnIp(String),
-    /// An address form without a port (a bare IPv6 literal is this too: its
-    /// port would be ambiguous without brackets).
-    NoPort(String),
-    /// The port is not a number in `0..=65535` (0 asks the OS for a free
-    /// port; a listener that cannot report what it got refuses it itself).
-    BadPort(String),
-}
-
-impl fmt::Display for ListenParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Empty => write!(
-                f,
-                "listen address is empty: give a numeric IP (127.0.0.1 or ::1)"
-            ),
-            Self::NotAnIp(given) => write!(
-                f,
-                "'{given}' is not a numeric IP address (hostnames are not resolved): use \
-                 127.0.0.1 or ::1 — with a port, 127.0.0.1:29500 or [::1]:29500"
-            ),
-            Self::NoPort(given) => write!(
-                f,
-                "'{given}' has no port: use IP:PORT such as 127.0.0.1:29500 or [::1]:29500"
-            ),
-            Self::BadPort(given) => write!(f, "'{given}' is not a port in 0..=65535"),
-        }
-    }
-}
-
-impl std::error::Error for ListenParseError {}
-
-/// Parse a host as a numeric IP literal: IPv4, IPv6, or IPv6 in one pair of
-/// brackets. Surrounding whitespace is ignored; a hostname is refused by
-/// name, never resolved.
-pub fn parse_listen_host(host: &str) -> Result<IpAddr, ListenParseError> {
-    let host = host.trim();
-    if host.is_empty() {
-        return Err(ListenParseError::Empty);
-    }
-    let literal = host
-        .strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-        .unwrap_or(host);
-    literal
-        .parse::<IpAddr>()
-        .map_err(|_| ListenParseError::NotAnIp(host.to_owned()))
-}
-
-/// Parse a port: a number in `0..=65535`. Port 0 means "any free port" —
-/// legitimate for an in-process listener that reads back what it got; a
-/// listener fed from a flag refuses it itself.
-pub fn parse_listen_port(port: &str) -> Result<u16, ListenParseError> {
-    let port = port.trim();
-    port.parse::<u16>()
-        .map_err(|_| ListenParseError::BadPort(port.to_owned()))
-}
-
-/// Parse a listen string as a numeric `IP:PORT` — `127.0.0.1:29500`,
-/// `[::1]:29500` — and nothing else.
-pub fn parse_listen_addr(s: &str) -> Result<SocketAddr, ListenParseError> {
-    let s = s.trim();
-    if s.is_empty() {
-        return Err(ListenParseError::Empty);
-    }
-    let (host, port) = if let Some(rest) = s.strip_prefix('[') {
-        let Some((inner, after)) = rest.split_once(']') else {
-            return Err(ListenParseError::NotAnIp(s.to_owned()));
-        };
-        let Some(port) = after.strip_prefix(':') else {
-            return Err(ListenParseError::NoPort(s.to_owned()));
-        };
-        (format!("[{inner}]"), port)
-    } else if s.matches(':').count() > 1 {
-        // A bare IPv6 literal: which colon starts the port is ambiguous.
-        return Err(ListenParseError::NoPort(s.to_owned()));
-    } else {
-        let Some((host, port)) = s.rsplit_once(':') else {
-            return Err(ListenParseError::NoPort(s.to_owned()));
-        };
-        (host.to_owned(), port)
-    };
-    Ok(SocketAddr::new(
-        parse_listen_host(&host)?,
-        parse_listen_port(port)?,
-    ))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::io::ErrorKind;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use shekyl_os_account::directory::DirectoryFault;
+
+    use super::{
+        bind_owner_only_socket, bind_owner_only_socket_observed, clear_replaceable_socket,
+        may_replace_socket, owner_only_socket_dir, Cleared, OwnerSocketRefusal, SocketDirRefusal,
+        SocketPath, SocketRefusal, OWNER_ONLY_SOCKET_MODE, START_POLL,
+    };
+    use crate::listen::SOCKET_PROBE_BOUND;
 
     /// **Only a socket whose connection is refused may be replaced**: a
     /// socket a closed listener left is `Replace`, and so is an empty path;
@@ -519,10 +389,8 @@ mod tests {
     /// does not take another account's live socket (Copilot's review of
     /// #1490). Red edit: replace on any connect error. The permission arm
     /// is skipped under root, which connects to a mode-000 socket.
-    #[cfg(unix)]
     #[test]
     fn only_a_socket_whose_connection_is_refused_may_be_replaced() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("a directory");
         assert_eq!(
             may_replace_socket(&dir.path().join("none")),
@@ -530,7 +398,7 @@ mod tests {
         );
 
         let left = dir.path().join("left");
-        drop(std::os::unix::net::UnixListener::bind(&left).expect("bind"));
+        drop(UnixListener::bind(&left).expect("bind"));
         assert!(
             left.exists(),
             "the control: a closed listener leaves its file"
@@ -538,7 +406,7 @@ mod tests {
         assert_eq!(may_replace_socket(&left), SocketPath::Replace);
 
         let live = dir.path().join("live");
-        let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
+        let _listener = UnixListener::bind(&live).expect("bind");
         assert_eq!(
             may_replace_socket(&live),
             SocketPath::Refuse(SocketRefusal::Answers)
@@ -562,22 +430,20 @@ mod tests {
     /// stay, so a start cannot take them over by unlinking. The permission
     /// arm is skipped under root, which connects to a mode-000 socket.
     /// Red edit: unlink on any probe error.
-    #[cfg(unix)]
     #[test]
     fn a_replaceable_socket_is_removed_and_every_other_path_is_left() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("a directory");
         let missing = dir.path().join("none");
         assert_eq!(clear_replaceable_socket(&missing), Ok(Cleared::Empty));
         assert!(!missing.exists(), "nothing was created");
 
         let left = dir.path().join("left");
-        drop(std::os::unix::net::UnixListener::bind(&left).expect("bind"));
+        drop(UnixListener::bind(&left).expect("bind"));
         assert_eq!(clear_replaceable_socket(&left), Ok(Cleared::ReplacedStale));
         assert!(!left.exists(), "a socket whose server is gone is removed");
 
         let live = dir.path().join("live");
-        let _listener = std::os::unix::net::UnixListener::bind(&live).expect("bind");
+        let _listener = UnixListener::bind(&live).expect("bind");
         assert_eq!(clear_replaceable_socket(&live), Err(SocketRefusal::Answers));
         assert!(live.exists(), "a live socket is left in place");
 
@@ -612,7 +478,6 @@ mod tests {
     /// the case a decision that followed links would replace. Red edits:
     /// read the path with `metadata` (the link is followed and replaced),
     /// or drop the type check (the file is replaced).
-    #[cfg(unix)]
     #[test]
     fn a_regular_file_and_a_symlink_at_a_socket_path_are_refused_and_kept() {
         let dir = tempfile::tempdir().expect("a directory");
@@ -623,7 +488,7 @@ mod tests {
             let probed = std::os::unix::net::UnixStream::connect(&file).expect_err("not a socket");
             assert_eq!(
                 probed.kind(),
-                std::io::ErrorKind::ConnectionRefused,
+                ErrorKind::ConnectionRefused,
                 "the control: Linux answers a connect to a regular file as refused"
             );
         }
@@ -634,7 +499,7 @@ mod tests {
         assert_eq!(std::fs::read(&file).expect("kept"), b"not a socket");
 
         let dead = dir.path().join("dead");
-        drop(std::os::unix::net::UnixListener::bind(&dead).expect("bind"));
+        drop(UnixListener::bind(&dead).expect("bind"));
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&dead, &link).expect("a symbolic link");
         assert_eq!(
@@ -653,14 +518,22 @@ mod tests {
     /// **A socket directory is this account's alone**: owned by it, with no
     /// group or other access, and not a link. A group-writable directory, a
     /// group-readable one and a link to an owner-only one are refused; a
-    /// missing one is named missing. Red edit: accept group access.
-    #[cfg(unix)]
+    /// missing one is named missing. The refusal is the walk's clause, so a
+    /// link is a link and a wider mode names its mode. Red edit: accept
+    /// group access, or follow the link.
     #[test]
     fn a_socket_directory_is_this_accounts_alone() {
-        use std::os::unix::fs::PermissionsExt;
         let base = tempfile::tempdir().expect("a directory");
         let dir = base.path().join("d");
-        assert_eq!(owner_only_socket_dir(&dir), Err(SocketDirRefusal::Missing));
+        let missing = owner_only_socket_dir(&dir).expect_err("missing");
+        assert!(matches!(
+            missing,
+            SocketDirRefusal::Facts(DirectoryFault::Missing)
+        ));
+        assert_eq!(
+            missing.clause(Some(&dir.display().to_string())),
+            format!("{} does not exist", dir.display())
+        );
         std::fs::create_dir(&dir).expect("a directory");
         for (mode, ok) in [
             (0o700, true),
@@ -669,21 +542,32 @@ mod tests {
             (0o701, false),
         ] {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).expect("chmod");
-            assert_eq!(owner_only_socket_dir(&dir).is_ok(), ok, "mode {mode:o}");
+            let found = owner_only_socket_dir(&dir);
+            assert_eq!(found.is_ok(), ok, "mode {mode:o}");
+            if !ok {
+                let refused = found.expect_err("wider");
+                assert_eq!(
+                    refused.clause(None),
+                    format!("its mode is {mode:04o}, so other accounts can enter it")
+                );
+            }
         }
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         let link = base.path().join("l");
         std::os::unix::fs::symlink(&dir, &link).expect("a symbolic link");
+        let linked = owner_only_socket_dir(&link).expect_err("a link");
+        assert!(matches!(
+            linked,
+            SocketDirRefusal::Facts(DirectoryFault::SymbolicLink)
+        ));
         assert_eq!(
-            owner_only_socket_dir(&link),
-            Err(SocketDirRefusal::NotOwnerOnly)
+            linked.clause(Some(&link.display().to_string())),
+            format!("{} is a symbolic link", link.display())
         );
     }
 
     /// An owner-only directory under a fresh temporary one.
-    #[cfg(unix)]
     fn owner_only_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("a directory");
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
             .expect("chmod 700");
@@ -698,10 +582,8 @@ mod tests {
     /// Red edits: listen before the narrowing (the connect in `bound`
     /// succeeds and the mode is the umask's), or narrow after the listen
     /// (the mode is the umask's).
-    #[cfg(unix)]
     #[test]
     fn a_socket_is_the_owners_before_it_listens() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = owner_only_dir();
         let path = dir.path().join("s");
         let mut observed = false;
@@ -720,7 +602,7 @@ mod tests {
                 .expect_err("nothing connects before the listen");
             assert_eq!(
                 early.kind(),
-                std::io::ErrorKind::ConnectionRefused,
+                ErrorKind::ConnectionRefused,
                 "a connect before the listen is refused: {early}"
             );
         })
@@ -733,67 +615,149 @@ mod tests {
     /// **A directory that is not this account's alone is refused and
     /// nothing is bound in it**, and a path with no directory is refused by
     /// name. Red edit: skip the directory check.
-    #[cfg(unix)]
     #[test]
     fn a_socket_is_never_bound_in_a_directory_others_can_enter() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = owner_only_dir();
         for mode in [0o750, 0o770, 0o701] {
             std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode))
                 .expect("chmod");
             let path = dir.path().join("s");
-            assert!(
-                matches!(
-                    bind_owner_only_socket(&path),
-                    Err(OwnerSocketRefusal::Directory(
-                        SocketDirRefusal::NotOwnerOnly
-                    ))
-                ),
-                "mode {mode:o}"
-            );
+            let refused = bind_owner_only_socket(&path).expect_err("wider");
+            match refused {
+                OwnerSocketRefusal::Directory(why) => {
+                    assert_eq!(
+                        why.clause(None),
+                        format!("its mode is {mode:04o}, so other accounts can enter it"),
+                        "mode {mode:o}"
+                    );
+                }
+                other => panic!("mode {mode:o}: {other:?}"),
+            }
             assert!(!path.exists(), "nothing was bound under mode {mode:o}");
         }
         assert!(matches!(
-            bind_owner_only_socket(std::path::Path::new("/")),
+            bind_owner_only_socket(Path::new("/")),
             Err(OwnerSocketRefusal::NoDirectory)
         ));
     }
 
-    /// A start waits while another start holds the socket's directory, and
-    /// past [`SOCKET_PROBE_BOUND`] refuses with nothing bound, so a socket
-    /// bound and not yet listening is never probed as a stopped server's
-    /// (review finding). Once the other start is done, the bind goes ahead.
-    /// Red edit: drop the hold, and the bind succeeds at once.
+    /// The other process reads this and holds that directory. A test reads
+    /// it; the listeners do not.
+    const OTHER_START_DIR: &str = "SHEKYL_TEST_HOLD_SOCKET_DIRECTORY";
+
+    /// How long the other process holds the directory: well past the probe,
+    /// so the parent observes the wait rather than a release.
+    const OTHER_START_HOLD: Duration = Duration::from_secs(30);
+
+    /// How long the parent waits for that process to take the lock.
+    const OTHER_START_READY: Duration = Duration::from_secs(5);
+
+    /// The file the other process writes once it holds the directory.
+    const HELD: &str = "held";
+
+    /// Stops the other start when this test ends, however it ends.
+    struct StopTheOtherStart(Option<std::process::Child>);
+
+    impl Drop for StopTheOtherStart {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                if child.kill().is_ok() {
+                    let _status = child.wait();
+                }
+            }
+        }
+    }
+
+    /// This test's libtest filter: the harness names a test without the
+    /// crate.
+    fn this_test(name: &str) -> String {
+        let within = module_path!().split_once("::").expect("a crate path").1;
+        format!("{within}::{name}")
+    }
+
+    /// Hold `dir` and say so, then wait. The parent is another process: on
+    /// FreeBSD and macOS a second lock in this process would be granted.
+    fn hold_for_the_parent(dir: &str) {
+        let held = std::fs::File::open(dir).expect("the directory");
+        held.lock().expect("the other start's hold");
+        std::fs::write(Path::new(dir).join(HELD), b"1").expect("ready");
+        std::thread::sleep(OTHER_START_HOLD);
+    }
+
+    /// A start waits while another process holds the socket's directory, and
+    /// past [`crate::listen::SOCKET_PROBE_BOUND`] refuses with nothing bound, so a socket
+    /// bound and not yet listening is never probed as a stopped server's.
+    /// Once that process is gone, the bind goes ahead. Red edit: drop the
+    /// hold, or take it in this process (FreeBSD and macOS grant it).
     #[test]
     fn a_start_waits_for_another_start_on_the_same_directory() {
+        if let Ok(dir) = std::env::var(OTHER_START_DIR) {
+            hold_for_the_parent(&dir);
+            return;
+        }
         let dir = owner_only_dir();
         let path = dir.path().join("s.sock");
-        let other = std::fs::File::open(dir.path()).expect("the directory");
-        other.lock().expect("the other start's hold");
-        let started = std::time::Instant::now();
+        let child = std::process::Command::new(std::env::current_exe().expect("this test"))
+            .arg("--exact")
+            .arg(this_test(
+                "a_start_waits_for_another_start_on_the_same_directory",
+            ))
+            .arg("--test-threads")
+            .arg("1")
+            .env(OTHER_START_DIR, dir.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the other start");
+        let mut other = StopTheOtherStart(Some(child));
+        let ready = dir.path().join(HELD);
+        let deadline = Instant::now() + OTHER_START_READY;
+        while !ready.exists() {
+            let child = other.0.as_mut().expect("the other start");
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    let output = other
+                        .0
+                        .take()
+                        .expect("the other start")
+                        .wait_with_output()
+                        .expect("the other start's output");
+                    panic!(
+                        "the other start exited before holding the directory\n{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(START_POLL),
+                Ok(None) => panic!("the other start never took the directory"),
+                Err(error) => panic!("the other start: {error}"),
+            }
+        }
+        let started = Instant::now();
         let refused = bind_owner_only_socket(&path).expect_err("another start holds it");
         assert!(
             started.elapsed() >= SOCKET_PROBE_BOUND,
             "it waited out the bound"
         );
         assert!(
-            matches!(&refused, OwnerSocketRefusal::Socket(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            matches!(&refused, OwnerSocketRefusal::Socket(e) if e.kind() == ErrorKind::WouldBlock),
             "{refused:?}"
         );
         assert!(!path.exists(), "nothing was bound");
-        other.unlock().expect("released");
+        let child = other.0.as_mut().expect("the other start");
+        child.kill().expect("stop the other start");
+        child.wait().expect("the other start ended");
         bind_owner_only_socket(&path).expect("bound once the other start is done");
     }
 
     /// **The bind replaces a socket whose server is gone and refuses a live
     /// one**, through the shared decision. Red edit: bind without clearing
     /// (the stale socket's path is in use).
-    #[cfg(unix)]
     #[test]
     fn the_bind_replaces_a_stale_socket_and_refuses_a_live_one() {
         let dir = owner_only_dir();
         let path = dir.path().join("s");
-        drop(std::os::unix::net::UnixListener::bind(&path).expect("bind"));
+        drop(UnixListener::bind(&path).expect("bind"));
         let replacing = bind_owner_only_socket(&path).expect("the stale socket is replaced");
         assert_eq!(replacing.cleared(), Cleared::ReplacedStale);
         assert!(matches!(
@@ -808,7 +772,6 @@ mod tests {
     /// can give a socket to another account, so the arm runs as root and is
     /// skipped otherwise. Red edit: drop the owner check (the dead socket
     /// is replaced).
-    #[cfg(unix)]
     #[test]
     fn another_accounts_socket_is_never_replaced() {
         if shekyl_os_account::effective_uid() != 0 {
@@ -817,111 +780,15 @@ mod tests {
         }
         let dir = owner_only_dir();
         let path = dir.path().join("s");
-        drop(std::os::unix::net::UnixListener::bind(&path).expect("bind"));
+        drop(UnixListener::bind(&path).expect("bind"));
         /// An account other than root that exists on Linux, FreeBSD and
         /// macOS (`daemon`).
         const ANOTHER_ACCOUNT: u32 = 1;
-        let other = ANOTHER_ACCOUNT;
-        std::os::unix::fs::chown(&path, Some(other), None).expect("chown");
+        std::os::unix::fs::chown(&path, Some(ANOTHER_ACCOUNT), None).expect("chown");
         assert_eq!(
             may_replace_socket(&path),
-            SocketPath::Refuse(SocketRefusal::NotThisAccounts(other))
+            SocketPath::Refuse(SocketRefusal::NotThisAccounts(ANOTHER_ACCOUNT))
         );
         assert!(path.exists(), "the other account's socket is left");
-    }
-
-    /// Every spelling of the wildcard and of loopback classifies the same
-    /// way, IPv4-mapped forms included; an addressed bind is neither.
-    #[test]
-    fn spellings_classify_by_what_they_name() {
-        for wildcard in ["0.0.0.0:1", "[::]:1", "[::ffff:0.0.0.0]:1"] {
-            assert_eq!(
-                classify_listen(parse_listen_addr(wildcard).unwrap()),
-                ListenClass::Wildcard,
-                "{wildcard}"
-            );
-        }
-        for loopback in [
-            "127.0.0.1:1",
-            "127.0.0.2:1",
-            "[::1]:1",
-            "[::ffff:127.0.0.1]:1",
-        ] {
-            assert_eq!(
-                classify_listen(parse_listen_addr(loopback).unwrap()),
-                ListenClass::Loopback,
-                "{loopback}"
-            );
-        }
-        for addressed in ["192.0.2.1:1", "[2001:db8::1]:1", "[::ffff:192.0.2.1]:1"] {
-            assert_eq!(
-                classify_listen(parse_listen_addr(addressed).unwrap()),
-                ListenClass::Addressed,
-                "{addressed}"
-            );
-        }
-    }
-
-    /// A hostname is refused by name, with the spelling to use — never
-    /// resolved, never a bare syntax error; a bare IPv6 literal has no
-    /// unambiguous port; a missing or bad port is named as such.
-    #[test]
-    fn listen_strings_are_refused_with_the_remedy() {
-        for bad in ["localhost:29500", "wallet.lan:29500"] {
-            let err = parse_listen_addr(bad).expect_err(bad).to_string();
-            assert!(err.contains("hostnames are not resolved"), "{bad}: {err}");
-            assert!(err.contains("127.0.0.1:29500"), "{bad}: {err}");
-        }
-        assert_eq!(parse_listen_addr(""), Err(ListenParseError::Empty));
-        assert_eq!(
-            parse_listen_addr("::1"),
-            Err(ListenParseError::NoPort("::1".into())),
-            "a bare IPv6 literal has no unambiguous port"
-        );
-        assert_eq!(
-            parse_listen_addr("127.0.0.1"),
-            Err(ListenParseError::NoPort("127.0.0.1".into()))
-        );
-        assert_eq!(
-            parse_listen_addr("[::1]evil"),
-            Err(ListenParseError::NoPort("[::1]evil".into()))
-        );
-        assert_eq!(
-            parse_listen_addr("127.0.0.1:0").map(|a| a.port()),
-            Ok(0),
-            "port 0 is any free port; refusing it is a listener's own call"
-        );
-        assert_eq!(
-            parse_listen_addr("[::1]:http"),
-            Err(ListenParseError::BadPort("http".into()))
-        );
-    }
-
-    /// The host parser alone: one bracket pair is notation; broken or
-    /// doubled brackets are not a literal; whitespace is ignored.
-    #[test]
-    fn hosts_parse_strictly() {
-        let v6: IpAddr = "::1".parse().unwrap();
-        assert_eq!(parse_listen_host("[::1]"), Ok(v6));
-        assert_eq!(parse_listen_host(" ::1 "), Ok(v6));
-        assert_eq!(
-            parse_listen_host("127.0.0.1"),
-            Ok("127.0.0.1".parse().unwrap())
-        );
-        for bad in ["[::1", "::1]", "[[::1]]", "localhost"] {
-            assert!(
-                matches!(parse_listen_host(bad), Err(ListenParseError::NotAnIp(_))),
-                "{bad}"
-            );
-        }
-        assert_eq!(parse_listen_host("  "), Err(ListenParseError::Empty));
-        assert_eq!(parse_listen_port("65535"), Ok(65535));
-        assert_eq!(parse_listen_port("0"), Ok(0));
-        for bad in ["65536", "http", "", "-1"] {
-            assert!(
-                matches!(parse_listen_port(bad), Err(ListenParseError::BadPort(_))),
-                "{bad}"
-            );
-        }
     }
 }

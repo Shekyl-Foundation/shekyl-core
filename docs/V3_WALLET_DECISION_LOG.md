@@ -39,6 +39,29 @@ the original reasoning and assume it was arbitrary.
 
 ---
 
+## 2026-11-22 — The data directory's account check is the shared directory walk
+
+**Decision.** `Lock::owner_only` reads
+`shekyl_os_account::directory::DirectoryFacts`, the same walk the service
+home and the socket listeners read. A missing directory still passes: the
+start creates it owner-only. An existing directory the group or others can
+enter is still `config.data-dir.exposed`. A symbolic link, a non-directory,
+an unreadable path, or another account's directory is
+`config.data-dir.unusable`, in the walk's own clause. The daemon still does
+not change a mode it did not create. A socket listener's directory refusal
+is that same clause; each listener adds only its own frame.
+
+**Rationale.** The mode had been re-read with `metadata`, which follows a
+symbolic link and does not ask who owns the directory. The service check
+and the console leg already refused a link and another account's directory,
+so a user-mode configuration check could accept a path the start's socket
+bind refused. The three mode policies stay with their callers: a service
+home and the owner's socket directory are mode `0700` exactly, a data
+directory and a socket directory are refused when another account can enter,
+and a service rendezvous is refused when the group or others can write. The
+fact of the directory is spoken once. This does not change the `0700`
+creation or the exposed refusal in the entry below.
+
 ## 2026-11-22 — The daemon's data directory is its account's alone; the daemon makes it 0700 and refuses a wider one
 
 **Decision (Rick, 2026-11-22).** Every directory the daemon creates on its

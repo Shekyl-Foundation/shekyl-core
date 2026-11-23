@@ -60,9 +60,7 @@ pub fn bind(dir: &Path) -> Result<ConsoleListener, crate::run::StartFault> {
 
 #[cfg(unix)]
 fn bind_socket(dir: &Path) -> Result<ConsoleListener, String> {
-    use shekyl_rpc_transport::listen::{
-        bind_owner_only_socket, OwnerSocketRefusal, SocketDirRefusal, SocketRefusal,
-    };
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
     let path = place(dir);
     match bind_owner_only_socket(&path) {
         Ok(bound) => bound
@@ -71,16 +69,10 @@ fn bind_socket(dir: &Path) -> Result<ConsoleListener, String> {
         Err(OwnerSocketRefusal::NoDirectory) => {
             Err(format!("{} names no directory", path.display()))
         }
-        Err(OwnerSocketRefusal::Directory(
-            SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly,
-        )) => Err(format!(
-            "{} must be a directory only the service account can enter (owned by it, mode \
-             0700); the console's leg is not bound there",
-            dir.display()
+        Err(OwnerSocketRefusal::Directory(why)) => Err(format!(
+            "{}; the console's leg is not bound there",
+            why.clause(Some(&dir.display().to_string()))
         )),
-        Err(OwnerSocketRefusal::Directory(SocketDirRefusal::Unreadable(why))) => {
-            Err(format!("{}: {why}", dir.display()))
-        }
         Err(OwnerSocketRefusal::Path(SocketRefusal::Answers)) => Err(format!(
             "something answers on {} while this daemon holds the data directory's lock; it is \
              not replaced",
@@ -167,7 +159,8 @@ mod tests {
             let refused = bind_socket(dir.path()).expect_err("refused");
             assert!(
                 refused.contains(&dir.path().display().to_string())
-                    && refused.contains("only the service account can enter"),
+                    && refused.contains("other accounts can enter")
+                    && refused.contains("the console's leg is not bound there"),
                 "mode {mode:o}: {refused}"
             );
             assert!(!path.exists(), "nothing was bound under mode {mode:o}");

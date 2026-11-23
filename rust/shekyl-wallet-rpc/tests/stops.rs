@@ -531,10 +531,9 @@ fn a_group_writable_socket_directory_is_refused_naming_it() {
     assert!(!status.success(), "a group-writable directory was used");
     let said = server.said();
     assert!(
-        said.contains(&format!(
-            "{} must be a directory only this account can enter",
-            shared.display()
-        )),
+        said.contains(&shared.display().to_string())
+            && said.contains("other accounts can enter")
+            && said.contains("the wallet RPC's socket is not bound there"),
         "the refusal names the directory: {said}"
     );
     assert!(

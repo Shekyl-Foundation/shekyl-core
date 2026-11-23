@@ -59,22 +59,42 @@ impl Lock {
     /// account: a directory above it is not counted. The mode is the
     /// operator's to change; the daemon never changes a mode it did not
     /// create. A missing directory passes: [`Lock::take`] creates it
-    /// owner-only. Unix only: on Windows the keys and the console's pipe
-    /// carry owner-only descriptors of their own.
+    /// owner-only.
+    ///
+    /// The facts are [`crate::directory::DirectoryFacts`]: the same walk the
+    /// service home and the socket listeners read, which does not follow a
+    /// link. A symbolic link, a non-directory, an unreadable path, or
+    /// another account's directory is `config.data-dir.unusable`, in that
+    /// walk's own clause. Group or other permission is
+    /// `config.data-dir.exposed`. Unix only: on Windows the keys and the
+    /// console's pipe carry owner-only descriptors of their own.
     #[cfg(unix)]
     fn owner_only(data_dir: &Path) -> Result<(), Diagnostic> {
-        use std::os::unix::fs::PermissionsExt;
-        let Ok(meta) = std::fs::metadata(data_dir) else {
-            return Ok(());
+        use crate::directory::{DirectoryFacts, DirectoryFault};
+        let facts = match DirectoryFacts::inspect(data_dir) {
+            Ok(facts) => facts,
+            Err(DirectoryFault::Missing) => return Ok(()),
+            Err(fault) => return Err(Self::unusable_fact(data_dir, &fault)),
         };
-        let mode = meta.permissions().mode() & crate::directory::PERMISSION_BITS;
-        if meta.is_dir() && mode & crate::directory::GROUP_OR_OTHER_ANY != 0 {
+        let facts = match facts.require_owner(shekyl_os_account::effective_uid()) {
+            Ok(facts) => facts,
+            Err(fault) => return Err(Self::unusable_fact(data_dir, &fault)),
+        };
+        if facts.group_or_other_can_enter() {
+            let mode = facts.mode();
             return Err(Diagnostic::new(Code::DataDirExposed, Source::Machine)
                 .option("data-dir")
                 .param("path", data_dir.display().to_string())
                 .param("mode", format!("{mode:04o}")));
         }
         Ok(())
+    }
+
+    /// `config.data-dir.unusable` for a fact the shared walk refused. The
+    /// clause does not repeat the path: the diagnostic already names it.
+    #[cfg(unix)]
+    fn unusable_fact(data_dir: &Path, fault: &crate::directory::DirectoryFault) -> Diagnostic {
+        Self::unusable(data_dir)(std::io::Error::other(fault.clause(None)))
     }
 
     fn unusable(data_dir: &Path) -> impl Fn(std::io::Error) -> Diagnostic {
@@ -206,7 +226,8 @@ mod tests {
     #[cfg(unix)]
     fn mode_of(dir: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(dir).unwrap().permissions().mode() & crate::directory::PERMISSION_BITS
+        std::fs::metadata(dir).unwrap().permissions().mode()
+            & shekyl_os_account::directory::PERMISSION_BITS
     }
 
     /// A fresh data directory, and the data home above it, are made
@@ -226,7 +247,7 @@ mod tests {
         for dir in [&home, &data] {
             assert_eq!(
                 mode_of(dir),
-                crate::directory::ACCOUNT_ONLY_MODE,
+                crate::directory::OWNER_ONLY_DIR_MODE,
                 "{}",
                 dir.display()
             );
@@ -263,10 +284,62 @@ mod tests {
         assert!(!data.join(LOCK_FILE).exists(), "nothing is made in it");
         std::fs::set_permissions(
             &data,
-            std::fs::Permissions::from_mode(crate::directory::ACCOUNT_ONLY_MODE),
+            std::fs::Permissions::from_mode(crate::directory::OWNER_ONLY_DIR_MODE),
         )
         .unwrap();
         Lock::take(&data).unwrap();
+    }
+
+    /// A symbolic link is not a data directory, even when it names one this
+    /// account owns at mode 0700. `metadata` would follow it and accept it.
+    /// Red edit: follow the link, and the start proceeds in the target.
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_data_directory_is_unusable() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let real = d.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::set_permissions(
+            &real,
+            std::fs::Permissions::from_mode(crate::directory::OWNER_ONLY_DIR_MODE),
+        )
+        .unwrap();
+        let link = d.path().join("data");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        for e in [
+            Lock::creatable(&link).unwrap_err(),
+            Lock::take(&link).unwrap_err(),
+        ] {
+            assert_eq!(e.code, Code::DataDirUnusable);
+            assert_eq!(e.option.as_deref(), Some("data-dir"));
+            let shown = e.render();
+            assert!(shown.contains("symbolic link"), "{shown}");
+            assert!(!shown.contains("chmod 700"), "{shown}");
+        }
+        assert!(!link.join(LOCK_FILE).exists());
+        assert!(!real.join(LOCK_FILE).exists());
+    }
+
+    /// Mode 0600 is this account's alone, so it is not exposed, and it is
+    /// still unusable: the account cannot enter a directory with no search
+    /// bit. Red edit: treat every mode other than 0700 as exposed.
+    #[cfg(unix)]
+    #[test]
+    fn a_0600_data_directory_is_unusable_not_exposed() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o600)).unwrap();
+        for e in [
+            Lock::creatable(&data).unwrap_err(),
+            Lock::take(&data).unwrap_err(),
+        ] {
+            assert_eq!(e.code, Code::DataDirUnusable, "{}", e.render());
+        }
+        assert_eq!(mode_of(&data), 0o600, "the daemon does not change it");
+        assert!(!data.join(LOCK_FILE).exists());
     }
 
     #[test]

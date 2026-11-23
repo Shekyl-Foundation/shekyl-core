@@ -281,9 +281,7 @@ fn answer(status: StatusCode, text: &str) -> Response<Full<Bytes>> {
 /// tunnel (the connection refused) is replaced.
 #[cfg(unix)]
 fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, String> {
-    use shekyl_rpc_transport::listen::{
-        bind_owner_only_socket, OwnerSocketRefusal, SocketDirRefusal, SocketRefusal,
-    };
+    use shekyl_rpc_transport::listen::{bind_owner_only_socket, OwnerSocketRefusal, SocketRefusal};
     let dir = || {
         path.parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -297,16 +295,10 @@ fn bind_socket(path: &std::path::Path) -> Result<tokio::net::UnixListener, Strin
         Err(OwnerSocketRefusal::NoDirectory) => {
             Err(format!("{} names no directory", path.display()))
         }
-        Err(OwnerSocketRefusal::Directory(
-            SocketDirRefusal::Missing | SocketDirRefusal::NotOwnerOnly,
-        )) => Err(format!(
-            "{} must be a directory only this account can enter (owned by uid {}, mode 0700)",
-            dir(),
-            shekyl_os_account::effective_uid()
+        Err(OwnerSocketRefusal::Directory(why)) => Err(format!(
+            "{}; the tunnel's socket is not bound there",
+            why.clause(Some(&dir().to_string()))
         )),
-        Err(OwnerSocketRefusal::Directory(SocketDirRefusal::Unreadable(why))) => {
-            Err(format!("{}: {why}", dir()))
-        }
         Err(OwnerSocketRefusal::Path(SocketRefusal::Answers)) => {
             Err(format!("another tunnel answers on {}", path.display()))
         }
@@ -489,7 +481,8 @@ mod tests {
             let refused = bind_socket(&path).expect_err("refused");
             assert!(
                 refused.contains(&dir.path().display().to_string())
-                    && refused.contains("only this account can enter"),
+                    && refused.contains("other accounts can enter")
+                    && refused.contains("the tunnel's socket is not bound there"),
                 "mode {mode:o}: {refused}"
             );
             assert!(!path.exists(), "nothing was bound under mode {mode:o}");

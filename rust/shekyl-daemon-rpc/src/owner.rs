@@ -741,9 +741,7 @@ mod unix {
         };
         match refusal {
             OwnerSocketRefusal::NoDirectory => unusable("it names no directory".to_owned()),
-            OwnerSocketRefusal::Directory(why) => {
-                unusable(format!("it is no longer this account's alone ({why:?})"))
-            }
+            OwnerSocketRefusal::Directory(why) => unusable(why.clause(None)),
             OwnerSocketRefusal::Path(SocketRefusal::Answers) => running(plan, network),
             OwnerSocketRefusal::Path(SocketRefusal::NotASocket) => {
                 impostor("a file that is not a socket".to_owned())
