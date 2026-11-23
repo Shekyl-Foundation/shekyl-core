@@ -43,7 +43,7 @@ use shekyl_chain_ingest::archival_driver::ENDPOINT;
 use shekyl_chain_ingest::chain_drive::spender_owning_before;
 use shekyl_chain_ingest::emission_assembly::claim_signed_under;
 use shekyl_chain_ingest::scenario::{FreeHash, Mined, Scenario, StepOutcome};
-use shekyl_chain_ingest::scenario_archival::shard_set;
+use shekyl_chain_ingest::scenario_archival::{complete_tree, shard_set};
 use shekyl_chain_ingest::schedule::{ChainRules, LeverRefused};
 use shekyl_chain_rules::{
     judge_lone_stateless, Candidate, CappedEpoch, CenRow, ReferenceClaim, ReferenceClaims,
@@ -237,7 +237,12 @@ async fn identity_locks(forge: &mut Forge) {
                 shards,
             } => {
                 let persona = forge.persona(*slot).expect("the plan joined it");
-                let join = persona.join(shard_set(shards.clone()), ENDPOINT);
+                let holdings = if shards.is_empty() {
+                    complete_tree()
+                } else {
+                    shard_set(shards.clone())
+                };
+                let join = persona.join(holdings, ENDPOINT);
                 let bodies: Vec<(NetworkId, Transaction)> = OTHERS
                     .iter()
                     .map(|other| {
@@ -307,7 +312,9 @@ async fn identity_locks(forge: &mut Forge) {
                     }),
                 )
             }
-            BuiltKind::Spend { .. } => continue,
+            // Each of these rows has its leg above: a post is a bond post
+            // like a join, an owned spend a spend like a coinbase's.
+            BuiltKind::Spend { .. } | BuiltKind::Post { .. } | BuiltKind::Owned { .. } => continue,
         };
         for other in OTHERS {
             let id = other.network_id();

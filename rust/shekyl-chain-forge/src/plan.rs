@@ -155,6 +155,63 @@ pub enum Action {
         /// Blocks popped; at most the schedule's reorg cap.
         depth: u64,
     },
+    /// Persona `persona` joins as a complete tree, funded by a kept
+    /// coinbase spend that carries the join (S5 for its bond slot). It
+    /// holds no shard, so it adds no pair to the drawable set.
+    JoinTree {
+        /// The persona's slot in the plan.
+        persona: u32,
+    },
+    /// Mine through the slash pass of the `epochs`-th epoch after persona
+    /// `persona`'s join, each block's draws committed and filed. Every
+    /// joined persona passes its draws, except `persona`'s on the shard
+    /// `withhold` names, which are filed as misses. The pass's block is
+    /// mined plain, so a claim of that epoch can follow it.
+    ServeEpochs {
+        /// The persona whose join the epochs count from.
+        persona: u32,
+        /// Epochs after the join.
+        epochs: u64,
+        /// A held shard whose draws the persona withholds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        withhold: Option<u64>,
+    },
+    /// Keep serving, persona `persona` withholding its draws on `shard`,
+    /// through the slash pass of that pair's last counted miss. The height
+    /// is read off the chain: an epoch that leaves the pair short of its
+    /// counted draws is no observation and moves the slash an epoch later.
+    Slash {
+        /// The persona.
+        persona: u32,
+        /// The held shard it never serves.
+        shard: u64,
+    },
+    /// Persona `persona` closes its open bad interval, riding a kept
+    /// coinbase's spend, in the next block.
+    Reinstate {
+        /// The persona.
+        persona: u32,
+    },
+    /// Persona `persona` releases its whole bond at the first epoch the
+    /// cooldown from its last served epoch allows, the release riding a
+    /// kept coinbase's spend whose outputs pay the persona.
+    Release {
+        /// The persona.
+        persona: u32,
+    },
+    /// Persona `persona` spends the output its release paid it, once that
+    /// output is spendable: the wallet's collect, an ordinary spend.
+    Collect {
+        /// The persona.
+        persona: u32,
+    },
+    /// The miner spends an output paid inside closed shard `shard`, after
+    /// the boundary that discarded that shard's bodies. Consensus reads no
+    /// discarded body to admit it.
+    SpendDiscarded {
+        /// The discarded shard.
+        shard: u64,
+    },
 }
 
 /// Why a plan was refused.
