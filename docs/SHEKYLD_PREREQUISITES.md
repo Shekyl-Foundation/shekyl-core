@@ -177,8 +177,7 @@ per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./completed/ELECTRUM_WORDS_REMOVAL_PLAN.m
 Phase 2 work item 9 (reassessed). The harness invoked binaries
 named `monerod` and `monero-wallet-rpc` (which do not exist in the
 Shekyl tree — the renamed binaries are `shekyld` and
-`shekyl-wallet-rpc` per `src/daemon/CMakeLists.txt:74` and
-`src/wallet/CMakeLists.txt:98`), embedded Monero-format addresses
+`shekyl-wallet-rpc`), embedded Monero-format addresses
 (`42ey...`), and was already silently skipped in CI for the
 lifetime of the Shekyl tree. The Shekyl-native end-to-end harness
 (proposed placement `tests/integration/wallet_e2e/` per the

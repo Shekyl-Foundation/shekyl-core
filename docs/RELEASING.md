@@ -15,11 +15,9 @@ This document describes how to create a new Shekyl release.
 
 The CI workflows install all dependencies automatically. For local builds:
 
-- **C++ toolchain**: GCC or Clang with C++17 support
-- **Rust toolchain**: stable Rust via [rustup](https://rustup.rs/) (builds `libshekyl_ffi.a`)
-- **CMake** >= 3.14 (required for `FetchContent`)
-- **Google Test**: system `libgtest-dev` is preferred; if absent, CMake fetches GoogleTest v1.16.0 at configure time
-- **Boost, OpenSSL, libsodium** and other standard Monero-derived dependencies
+- **Rust toolchain**: the channel `rust/rust-toolchain.toml` pins, via [rustup](https://rustup.rs/)
+- **C compiler**: GCC or Clang, for the crates whose build scripts compile C (`ring`)
+- **`contrib/depends`** for a release host; `README.md`, "Cross Compiling", lists each host's packages
 
 ## Branch Strategy
 
@@ -82,18 +80,15 @@ wire's reply, so the sweep checks only its human lines' words against
 
 3. **Tag the release** on `main` with the Foundation institutional
    signing key, following the ceremony in `docs/SIGNING.md`
-   (§"Release-tag signing ceremony"). The version is derived
-   automatically from the tag name by CMake (see
-   `cmake/GitVersion.cmake`), so there is no need to manually edit
-   `src/version.cpp.in`.
+   (§"Release-tag signing ceremony"). `cargo xtask`
+   derives the version from the tag (`rust/xtask/src/version.rs`), so
+   no file is edited. A commit is a release only when one tag matches
+   `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$`
+   in full, and two matching tags on one commit are refused.
 
-   > **Version symbols:** The canonical C++ identifiers are
-   > `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`, `SHEKYL_RELEASE_NAME`,
-   > `SHEKYL_VERSION_FULL`, and `SHEKYL_VERSION_IS_RELEASE` (declared
-   > in `src/version.h`, defined in the generated `version.cpp`).
-   > Legacy `MONERO_*` macro aliases exist for backward compatibility
-   > with upstream cherry-picks and will be removed after v4 RingPQC
-   > stabilisation.
+   > **Version symbols:** `cargo xtask` sets `SHEKYL_VERSION_FULL`,
+   > `SHEKYL_RELEASE_NAME` and `SHEKYL_VERSION_IS_RELEASE`, and
+   > `rust/shekyl-version` reads them at compile time.
 
    Summary of the ceremony (see SIGNING.md for full checks and
    failure modes — this is a *summary*, not a substitute):
@@ -134,9 +129,9 @@ wire's reply, so the sweep checks only its human lines' words against
    > the remote's `main` branch.
 
 5. **(Optional) Bump the dev default** -- after tagging, update
-   `SHEKYL_VERSION_DEFAULT` in `cmake/Version.cmake` to the next
-   planned version so that un-tagged development builds show the
-   correct series.
+   `[version] default` in `rust/xtask/matrix.toml` and
+   `[workspace.package] version` in `rust/Cargo.toml` to the next
+   planned version so that development builds show the correct series.
 
 6. **`dev` is not synced with `main`.** The promotion is a
    non-fast-forward merge, so `dev`'s history is unchanged and work
@@ -275,12 +270,10 @@ Each Gitian build descriptor installs the Rust toolchain via `rustup`,
 pinned to the workspace toolchain (`--default-toolchain 1.94.0`, kept in
 lockstep with `rust/rust-toolchain.toml`) with the minimal profile and the
 appropriate cross-compilation targets (aarch64 for Linux; 64-bit
-MinGW for Windows; Darwin targets for macOS). The pin is serial and
-up-front by design: the parallel `make` build invokes many `cargo`
-processes at once, and letting them auto-install the toolchain concurrently
-races `~/.rustup/downloads` and aborts the build (`component download
-failed … could not rename`). The minimal profile omits clippy/rustfmt —
-a release build compiles the Rust FFI, it never lints. 32-bit targets were
+MinGW for Windows; Darwin targets for macOS). The pin is
+installed once, up front, so no build step installs a toolchain of its own.
+The minimal profile omits clippy and rustfmt: a release build compiles, it
+never lints. 32-bit targets were
 permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
 
@@ -320,11 +313,11 @@ Or trigger manually from the Actions tab without retagging.
   2026-10-24): the constant-time record (`docs/design/CRYPTO_AUDIT.md` §1)
   cannot cover a target with no BINSEC decoder and no board, so it is not
   shipped until a user asks for it and there is a way to measure it.
-  Restoration is two edits: put `riscv64-linux-gnu` back on `HOSTS` in
-  `contrib/gitian/gitian-linux.yml`, and drop `"switched_off"` from its
-  row in `config/tor_pins.json`. The apt toolchain, the CMake arch
-  mapping, the descriptor's back-compat branch, and the host-to-rust-triple
-  map stay, so the host's triple is already recorded. A source build is
-  still possible while it is off. 32-bit platforms are
+  Restoration is three edits: put `riscv64-linux-gnu` back on `HOSTS` in
+  `contrib/gitian/gitian-linux.yml`, add its row to
+  `rust/xtask/matrix.toml`, and drop `"switched_off"` from its row in
+  `config/tor_pins.json`. The apt toolchain stays. A plain `cargo build`
+  is still possible while it is off; `cargo xtask` refuses a host the
+  matrix does not list. 32-bit platforms are
   permanently out of scope on security grounds — see `docs/CHANGELOG.md`
   entry "Retired 32-bit build targets".

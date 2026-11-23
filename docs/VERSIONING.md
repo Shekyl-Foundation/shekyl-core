@@ -171,10 +171,8 @@ RPC changes, schema migrations) will diverge from the protocol version.
 
 | File | Field | Example |
 |------|-------|---------|
-| `cmake/Version.cmake` | `SHEKYL_VERSION_DEFAULT` | `"3.1.0"` |
-| `cmake/GitVersion.cmake` | Tag-derived at build time | `"3.1.0-alpha.1"` |
-| `cmake/Version.cmake` | `SHEKYL_VERSION_FULL` | `"3.1.0-release"` |
-| `src/version.cpp.in` | Configured by CMake | `SHEKYL_VERSION`, `SHEKYL_VERSION_TAG`, `SHEKYL_VERSION_FULL` |
+| `rust/xtask/matrix.toml` | `[version] default` | `"3.1.0"` |
+| `cargo xtask` (`rust/xtask/src/version.rs`) | `SHEKYL_VERSION_FULL`, computed at build time | `"3.1.0-alpha.1-release"` |
 | `rust/shekyl-version/src/lib.rs` | `PROTOCOL_VERSION` | `3` |
 | `rust/Cargo.toml` | `[workspace.package] version` | `"3.1.0"` |
 
@@ -193,15 +191,20 @@ assert this.
 
 ### Development builds between tags
 
-For shekyl-core, `cmake/GitVersion.cmake` determines the build version:
+For shekyl-core, `cargo xtask` computes the build version once
+(`rust/xtask/src/version.rs`):
 
-- **Tagged commit:** version is extracted from the tag (e.g., tag
-  `v3.1.0-alpha.1` produces version `3.1.0-alpha.1`).
-- **Untagged commit:** version falls back to `SHEKYL_VERSION_DEFAULT`
-  from `cmake/Version.cmake`, with the version tag set to the 9-char
-  commit hash (e.g., `3.1.0-1a2b3c4d5`).
-- **No git available:** version is `SHEKYL_VERSION_DEFAULT` with tag
-  `unknown`.
+- **One release tag:** the version is the tag without its `v` (tag
+  `v3.1.0-alpha.1` produces `3.1.0-alpha.1-release`). A release tag
+  matches, in full,
+  `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$`.
+- **Two release tags on one commit:** the build is refused.
+- **Any other commit,** whatever other tags it carries (`archive/...`,
+  `core-v3.1.0`): `[version] default` from `rust/xtask/matrix.toml`,
+  with the 9-char commit hash (e.g., `3.1.0-1a2b3c4d5`).
+- **No git available:** `cargo xtask` refuses, and a source archive is
+  built with `--version-override <version>`.
+- **A plain `cargo build`:** `3.1.0-unknown`, not a release.
 
 For shekyl-gui-wallet, the `package.json` version is the source of
 truth for development builds. Between tags, it reflects the next

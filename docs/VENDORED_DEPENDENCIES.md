@@ -75,10 +75,8 @@ No other CVEs have been filed against LMDB core (`mdb.c`, `lmdb.h`) as of April 
 
 Shekyl is 64-bit only as of v3.1.0-alpha.5 (Chore #3). The LMDB
 `MDB_VL32` variable-length-32-bit paged-mmap mode is never enabled by
-Shekyl's build system — the `-DMDB_VL32` define site in
-`external/db_drivers/liblmdb/CMakeLists.txt` was removed in that chore,
-and the top-level `CMakeLists.txt` Tripwire D refuses any
-`CMAKE_SIZEOF_VOID_P != 8` configure. The `MDB_VL32` code paths in
+Shekyl's build: the `-DMDB_VL32` define site was removed in that chore,
+and the release matrix (`rust/xtask/matrix.toml`) lists only 64-bit hosts. The `MDB_VL32` code paths in
 vendored `mdb.c` are therefore **unreachable in Shekyl builds** and are
 deliberately left unpatched in-tree (patching vendored code to remove
 them would be worse than the dead-code problem).
@@ -96,4 +94,4 @@ not to re-enable 32-bit builds.
 
 ### Compilation
 
-No build compiles LMDB. `external/CMakeLists.txt` does not add `db_drivers`, no target links `lmdb` (DEL-004), and the sources are deleted.
+No build compiles LMDB: nothing links `lmdb` (DEL-004), and the sources are deleted.

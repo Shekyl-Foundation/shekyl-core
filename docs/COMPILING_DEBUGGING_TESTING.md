@@ -4,10 +4,9 @@ This document describes ways of compiling and testing Shekyl efficiently. The
 intended audience is developers. Before reading it, consult "Compiling Shekyl
 from source" in the main README.md.
 
-Everything Shekyl ships is Rust: the workspace under `rust/`. CMake and the
-top-level `Makefile` drive one cargo invocation (`cmake/BuildRust.cmake`)
-that builds `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` and stages them
-in the build directory's `bin/`. The tree holds no first-party C or C++
+Everything Shekyl ships is Rust: the workspace under `rust/`. `cargo xtask
+build`, run from `rust/`, runs the one cargo invocation that builds this
+host's binaries (`rust/xtask/matrix.toml`) and stages them in `build/bin/`. The tree holds no first-party C or C++
 (`scripts/ci/check_no_first_party_c.py`). The canonical PQC format is
 documented in `docs/POST_QUANTUM_CRYPTOGRAPHY.md`.
 
@@ -23,7 +22,7 @@ verification.
   to pin dependency versions, and vendored `shekyl-oxide` crates under
   `rust/shekyl-oxide/` are tracked via
   `rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`. All `cargo build`
-  invocations in CI and CMake pass `--locked` to enforce reproducibility.
+  invocations in CI and `cargo xtask` pass `--locked` to enforce reproducibility.
 - **Stable Rust.** The workspace targets stable Rust (currently 1.94.0+). Nightly features are not used.
 
 ### Verifying determinism locally
@@ -47,17 +46,13 @@ Guix gained improved Rust packaging support in 2025 with Cargo.lock lockfile imp
 
 ## Basic compilation
 
-Shekyl can be compiled via the main `Makefile`, using one of several targets
-listed there. The targets are presets for `CMake` calls with various options.
-It is possible to extract these `CMake` calls and modify them for your
-specific needs. For example, a minimal cmake command run from a new build
-directory:
+`cargo xtask build`, run from `rust/`, is the release build for this machine.
+It stages the binaries in `build/bin/`; `--out <dir>` names another directory.
+`cargo xtask plan --native` prints what it would run and builds nothing.
 
-`cmake -S "$DIR_SRC" -DCMAKE_BUILD_TYPE=Release && make`
-
-where the variable `DIR_SRC` is expected to store the path to the Shekyl
-source code. When iterating on one crate, `cargo build -p <crate>` and
-`cargo test -p <crate>` from `rust/` are faster than a full CMake build.
+When iterating on one crate, `cargo build -p <crate>` and `cargo test -p
+<crate>` from `rust/` are faster. A plain `cargo build` carries no release
+identity, so its binaries report `3.1.0-unknown`.
 
 ## Testing
 
@@ -72,7 +67,7 @@ reference and needs the reference built first; its own workflow
 (`.github/workflows/randomx-v2-differential.yml`) is the gate. The tests
 that run against a live regtest daemon are `#[ignore]`d and armed by
 `scripts/ci/run_live_daemon_gates.sh`. `tests/` at the top of the tree holds
-only the CMake gate tests and the stressnet harness (`tests/README.md`).
+only the build-target refusal test and the stressnet harness (`tests/README.md`).
 
 PQC changes should come with: Rust unit tests in `rust/shekyl-crypto-pq`;
 transaction serialization tests for the PQ transaction format; wallet sign
@@ -129,28 +124,14 @@ so at start. Run your own Tor and set `tor = operator` with `tor-socks`, and
 
 ## Seed node build (lean daemon)
 
-`make release-seed` builds the binaries with `ARCH=x86-64` (portable
-x86_64), so they run on any x86_64 host regardless of CPU generation (no
-AVX/SSE4.x required).
+`cargo xtask build` passes no `-march`, so what it builds runs on any x86_64
+host regardless of CPU generation (no AVX/SSE4.x required).
 
 ```bash
-make release-seed
+cd rust && cargo xtask build
 ```
 
-The resulting binary is at `build/<platform>/release/bin/shekyld`.
-
-Equivalent manual cmake invocation:
-
-```bash
-cmake -S . -B build/seed-release \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DARCH="x86-64"
-cmake --build build/seed-release --target shekyl_rust_bins -- -j"$(nproc)"
-```
-
-If you previously configured the same build directory with a different `ARCH`
-(for example `native`), delete that build directory before rebuilding so stale
-CMake cache values cannot leak architecture-specific flags.
+The resulting binary is at `build/bin/shekyld`.
 
 The binary needs no shared library beyond the C runtime.
 
@@ -158,34 +139,27 @@ See `shekyl-dev/docs/SEED_NODE_DEPLOYMENT.md` for full deployment instructions.
 
 ## Testnet build command cookbook
 
-Use out-of-source builds and keep a dedicated release directory for testnet.
+Keep a dedicated output directory for testnet.
 
-### 1) Configure once (fresh testnet release build dir)
-
-```bash
-cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release
-```
-
-### 2) Build the binaries
+### 1) Build and stage the binaries
 
 ```bash
-cmake --build build/testnet-release -- -j"$(nproc)"
+cd rust && cargo xtask build --out ../build/testnet-release/bin
 ```
 
-`shekyl_rust_bins` is the one target that builds and stages all three
-binaries; `cmake --build build/testnet-release --target help` lists the
-targets. Straight from cargo, without the CMake staging copy:
+### 2) Straight from cargo, without the staging copy
 
 ```bash
 cd rust && cargo build --release -p shekyld -p shekyl-cli -p shekyl-wallet-rpc
 ```
 
-### 3) Fast recovery from a stale build directory
+The binaries are in `rust/target/release/`, and report `3.1.0-unknown`.
+
+### 3) Fast recovery from a stale build
 
 ```bash
 rm -rf build/testnet-release
-cmake -S . -B build/testnet-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build/testnet-release --target shekyl_rust_bins -- -j"$(nproc)"
+cd rust && cargo clean && cargo xtask build --out ../build/testnet-release/bin
 ```
 
 ### 4) Testnet launch sanity command (runtime, not build)
