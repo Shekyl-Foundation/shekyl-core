@@ -14,7 +14,7 @@ use shekyl_engine_core::engine::{ResendError, SubmitError};
 use shekyl_engine_core::{
     ChangePasswordError, CurveTreeIngestFault, DrainToPrincipalError, IoError, KeyError, OpenError,
     PScanStartError, PendingTxError, PersistenceError, RefreshError, SendError, ServingStartError,
-    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_INPUTS, MAX_OUTPUTS,
+    SetTxNoteError, SignFault, StakeInError, StoreOpenFault, MAX_OUTPUTS,
 };
 use shekyl_engine_file::{PayloadError, WalletEnvelopeError, WalletFileError};
 use shekyl_engine_prefs::PrefsError;
@@ -861,7 +861,8 @@ pub enum WalletRpcError {
     TooManyInputs {
         /// The inputs the build needed.
         count: usize,
-        /// [`MAX_INPUTS`].
+        /// The most this transaction's shape can spend: at most
+        /// the consensus cap, fewer in a deep tree.
         limit: usize,
     },
     /// `-29124`: more recipients than one transaction carries.
@@ -2106,10 +2107,7 @@ impl From<SendError> for WalletRpcError {
 /// invariant is `-29119`, named by its keyword (A16).
 fn from_sign_fault(fault: SignFault) -> WalletRpcError {
     match fault {
-        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
-            count,
-            limit: MAX_INPUTS,
-        },
+        SignFault::TooManyInputs { count, limit } => WalletRpcError::TooManyInputs { count, limit },
         SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
             count,
             limit: MAX_OUTPUTS,
@@ -3124,6 +3122,7 @@ fn internal_detail(category: &'static str, detail: impl std::fmt::Display) -> Wa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_engine_core::MAX_INPUTS;
 
     #[test]
     fn maps_incorrect_password() {
@@ -4205,7 +4204,10 @@ mod tests {
                 WalletRpcErrorCode::SignerFailed,
             ),
             (
-                SendError::Sign(SignFault::TooManyInputs { count: 9 }),
+                SendError::Sign(SignFault::TooManyInputs {
+                    count: MAX_INPUTS + 1,
+                    limit: MAX_INPUTS,
+                }),
                 WalletRpcErrorCode::TooManyInputs,
             ),
             (

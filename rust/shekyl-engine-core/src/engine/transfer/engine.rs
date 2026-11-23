@@ -28,7 +28,9 @@ use super::super::error::{
 use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
-use super::super::output_selector::{OutputSelector, SelectedInputs, SelectedOutputs};
+use super::super::output_selector::{
+    input_limit_at, OutputSelector, SelectedInputs, SelectedOutputs,
+};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
     TxRecipient, TxRecipientSummary, TxRequest,
@@ -436,6 +438,9 @@ where
         // candidate set is a selector-contract violation.
         let resolve_insufficiency =
             |needed_raw: u64| -> SendError { partition.refusal(needed_raw, horizon) };
+        // The with-change shape is the heavier one, and the one this build
+        // makes. Its limit falls with the reference tree's depth.
+        let max_inputs = input_limit_at(request.recipients.len().saturating_add(1), tree_depth);
         let map_select_err =
             |err: OutputSelectorError, needed_raw: u64| -> (SendError, BuildErrorKind) {
                 match err {
@@ -445,7 +450,10 @@ where
                     ),
                     // Shortest cover past one transaction: the signer's fault, unreserved.
                     OutputSelectorError::TooManyInputs { count } => (
-                        SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs { count }),
+                        SendError::Sign(shekyl_tx_builder::SignFault::TooManyInputs {
+                            count,
+                            limit: max_inputs,
+                        }),
                         BuildErrorKind::TransactionTooLarge,
                     ),
                     OutputSelectorError::InsufficientFunds { .. }
@@ -499,7 +507,7 @@ where
 
         let mut selected: SelectedOutputs = self
             .output_selector
-            .select_outputs(candidates, needed)
+            .select_outputs(candidates, needed, max_inputs)
             .map_err(|err| {
                 let (mapped, kind) = map_select_err(err.into(), needed.to_raw());
                 emit_pending_tx_diagnostic(
@@ -516,7 +524,7 @@ where
                 .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
             selected = self
                 .output_selector
-                .select_outputs(candidates, needed_b)
+                .select_outputs(candidates, needed_b, max_inputs)
                 .map_err(|err| {
                     let (mapped, kind) = map_select_err(err.into(), needed_b.to_raw());
                     emit_pending_tx_diagnostic(

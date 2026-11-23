@@ -502,19 +502,20 @@ where
         // bounded at the vin headroom by the sweep's own overflow policy.
         // `required` is what the sources must cover beyond the released
         // collateral: the debit is a SOURCE on the exit (`sum(funding) +
-        // debit == outputs + fee`), and the payout splits across TWO
-        // outputs the tx builder refuses at zero, so the sources owe
-        // `fee + 2` (one atomic unit per mandatory vout), not `fee` alone —
-        // without the `+ 2`, a record within two units of the fee passes
+        // debit == outputs + fee`), and the payout splits across the
+        // consensus minimum of outputs, which the tx builder refuses at zero,
+        // so the sources owe the fee plus one atomic unit per mandatory vout —
+        // without that, a record within those units of the fee passes
         // every named check and then fails in the builder as a zero-amount
         // vout, an unnamed refusal on the one path rule 82 most cares about.
-        let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
-            .await
-            .map_err(StakeEngineError::from)?;
+        let (reference, _tree_depth) =
+            anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
+                .await
+                .map_err(StakeEngineError::from)?;
         let reference_height = reference.height;
         let required = AtomicUnits::from_raw(
             fee.to_raw()
-                .saturating_add(2)
+                .saturating_add(shekyl_tx_weight::MIN_NON_COINBASE_OUTPUTS as u64)
                 .saturating_sub(record.bonded_total_atomic()),
         );
         // CapLargest: the exit owes no consume-everything invariant, so a

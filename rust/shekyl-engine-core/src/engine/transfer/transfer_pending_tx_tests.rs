@@ -508,6 +508,7 @@ impl crate::engine::output_selector::OutputSelector for OutOfSetSelector {
         &self,
         _candidates: &[crate::engine::output_selector::OutputCandidate],
         target: AtomicUnits,
+        _max_inputs: usize,
     ) -> Result<crate::engine::output_selector::SelectedOutputs, Self::Error> {
         Ok(crate::engine::output_selector::SelectedOutputs {
             indices: crate::engine::output_selector::SelectedInputs::within_cap(vec![usize::MAX])
@@ -603,7 +604,8 @@ async fn a_send_past_the_input_cap_is_refused_with_the_cap_named() {
     assert!(
         matches!(
             err,
-            SendError::Sign(SignFault::TooManyInputs { count }) if count == MAX_INPUTS + 1
+            SendError::Sign(SignFault::TooManyInputs { count, limit })
+                if count == MAX_INPUTS + 1 && limit == MAX_INPUTS
         ),
         "the send needs one input past the cap: {err:?}"
     );

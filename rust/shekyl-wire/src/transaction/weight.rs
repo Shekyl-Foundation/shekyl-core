@@ -348,6 +348,21 @@ pub const fn is_legal_shape(n_in: usize, n_out: usize, tree_depth: u8) -> bool {
     n_in >= 1 && n_in <= max_inputs_at(n_out, tree_depth)
 }
 
+/// The most inputs a wallet can build into a solo spend of `n_out` outputs at
+/// `tree_depth`, whatever fee it ends up paying: [`max_inputs_at`] with the
+/// widest fee varint counted, so a selection within this count cannot be pushed
+/// over CEN-H3's limit by its own fee. 0 when no transaction has that shape.
+#[must_use]
+pub const fn max_buildable_inputs(n_out: usize, tree_depth: u8) -> usize {
+    let mut n_in = max_inputs_at(n_out, tree_depth);
+    while n_in > 0
+        && spend_weight(n_in, n_out, tree_depth, u64::MAX, pqc_auth_weight(), 0) > TX_WEIGHT_LIMIT
+    {
+        n_in -= 1;
+    }
+    n_in
+}
+
 /// The weight of the heaviest mineable solo spend of `n_out` outputs, over
 /// every legal depth and fee width: at each depth the most inputs that fit,
 /// with the widest fee varint the weight limit still admits. 0 when no

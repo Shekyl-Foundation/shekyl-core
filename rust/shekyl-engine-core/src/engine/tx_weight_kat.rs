@@ -55,8 +55,8 @@ pub(crate) mod support {
     }
 
     pub(crate) fn kat_cell(n_in: usize, tree_depth: u8) -> Result<KatCell, String> {
-        if n_in == 0 || n_in > 8 || tree_depth == 0 || tree_depth > 24 {
-            return Err("grid cell out of bounds".into());
+        if !shekyl_curve_generators::fcmp_fits_generators(n_in, usize::from(tree_depth)) {
+            return Err("grid cell past the shipped generators".into());
         }
 
         let keys = LocalKeys::from_test_seed(TEST_SEED);

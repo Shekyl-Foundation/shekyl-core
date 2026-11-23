@@ -23,8 +23,10 @@ use super::traits::key::FeeDirective;
 // Re-export the hoisted weight surface so `super::tx_fee_model::{predict_weight,
 // predict_size_and_weight}` and the `kat_*` tests below resolve unchanged — the
 // move is invisible to every caller (§12.3 D-1 constraint).
+#[cfg(test)]
+pub(crate) use shekyl_tx_weight::predict_weight;
 pub(crate) use shekyl_tx_weight::{
-    converge_weight_fee_by, predict_size_and_weight, predict_weight, InputCount, OutputCount,
+    converge_weight_fee_by, predict_size_and_weight, InputCount, OutputCount,
 };
 
 // ── FEE-RATE LAYER (weight model lives in shekyl-tx-weight) ──────────────────
@@ -135,35 +137,41 @@ mod tests {
         }
     }
 
+    /// Every `(inputs, depth)` the shipped generators can prove, which is the
+    /// whole domain a real proof can be measured on.
+    fn provable_cells() -> impl Iterator<Item = (usize, u8)> {
+        (1..=shekyl_tx_builder::MAX_TREE_DEPTH).flat_map(|depth| {
+            (1..=shekyl_tx_builder::MAX_INPUTS)
+                .filter(move |&n_in| {
+                    shekyl_curve_generators::fcmp_fits_generators(n_in, usize::from(depth))
+                })
+                .map(move |n_in| (n_in, depth))
+        })
+    }
+
     #[test]
-    #[ignore = "slow: emit the measured proof lengths (shekyl-wire weight_tests); run with --ignored --nocapture"]
+    #[ignore = "slow: emit measured proof lengths over the provable domain; run with --ignored --nocapture"]
     fn kat_emit_fcmp_proof_size_table() {
-        for n_in in 1..=8usize {
-            print!("        [0");
-            for tree_depth in 1..=24u8 {
-                let measured =
-                    crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
-                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
-                print!(", {measured}");
-            }
-            println!("],");
+        for (n_in, tree_depth) in provable_cells() {
+            let measured =
+                crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
+                    .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+            println!("{n_in},{tree_depth},{measured}");
         }
     }
 
     #[test]
-    #[ignore = "slow: full [1,8]×[1,24] fcmp_proof_size KAT; run with --ignored"]
+    #[ignore = "slow: fcmp_proof_size against a real proof at every provable cell; run with --ignored"]
     fn kat_fcmp_proof_size_grid() {
-        for tree_depth in 1..=24u8 {
-            for n_in in 1..=8usize {
-                let measured =
-                    crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
-                        .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
-                assert_eq!(
-                    fcmp_proof_size(InputCount::clamped(n_in), tree_depth),
-                    measured,
-                    "KAT mismatch at n_in={n_in} depth={tree_depth}"
-                );
-            }
+        for (n_in, tree_depth) in provable_cells() {
+            let measured =
+                crate::engine::tx_weight_kat::support::measure_fcmp_proof_len(n_in, tree_depth)
+                    .unwrap_or_else(|e| panic!("({n_in},{tree_depth}): {e}"));
+            assert_eq!(
+                fcmp_proof_size(InputCount::clamped(n_in), tree_depth),
+                measured,
+                "KAT mismatch at n_in={n_in} depth={tree_depth}"
+            );
         }
     }
 

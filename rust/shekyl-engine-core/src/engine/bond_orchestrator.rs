@@ -418,7 +418,7 @@ pub(crate) async fn anchored_reference_block(
     curve_tree: &CurveTreeHandle,
     chain_tip: shekyl_types::BlockHeight,
     block_hash_at: impl FnOnce(shekyl_types::BlockHeight) -> Option<BlockHash>,
-) -> Result<ReferenceBlock, BondAssemblyError> {
+) -> Result<(ReferenceBlock, u8), BondAssemblyError> {
     let covered_through = curve_tree
         .ingested_tip_height()
         .await
@@ -438,7 +438,7 @@ pub(crate) async fn anchored_reference_block(
             detail: "tree too far behind to anchor a submittable reference; resync",
         });
     }
-    let (curve_tree_root, _depth) = curve_tree
+    let (curve_tree_root, tree_depth) = curve_tree
         .reference_root_and_depth(reference_height)
         .await
         .map_err(|err| BondAssemblyError::build("reference root and depth", format!("{err:?}")))?;
@@ -446,11 +446,14 @@ pub(crate) async fn anchored_reference_block(
         block_hash_at(reference_height).ok_or(BondAssemblyError::ReferenceResyncing {
             detail: "reference-height block hash missing from ledger",
         })?;
-    Ok(ReferenceBlock {
-        height: reference_height,
-        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
-        block_hash,
-    })
+    Ok((
+        ReferenceBlock {
+            height: reference_height,
+            curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+            block_hash,
+        },
+        tree_depth,
+    ))
 }
 
 #[allow(private_bounds)] // same Engine-trait privacy posture as start_pscan_with
@@ -713,7 +716,8 @@ where
         pruning_landed: &SpentRecordsDurablyPruned,
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
-        let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
+        let (reference, _tree_depth) =
+            anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
         let reference_height = reference.height;
 
         // The seal basis is ONE ordered read — pending block, then pscan seal.

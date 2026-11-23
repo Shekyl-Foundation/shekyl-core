@@ -59,7 +59,9 @@ use {
 // this crate — the sanctioned window into the weight model — instead of depping
 // shekyl-wire directly; the cap stays crate-internal under this crate's name.
 pub use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
-pub use shekyl_wire::transaction::weight::{heaviest_legal_weight, is_legal_shape, max_inputs_at};
+pub use shekyl_wire::transaction::weight::{
+    heaviest_legal_weight, is_legal_shape, max_buildable_inputs, max_inputs_at,
+};
 use shekyl_wire::transaction::MAX_FCMP_INPUTS as MAX_INPUTS;
 pub use shekyl_wire::transaction::{MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS};
 

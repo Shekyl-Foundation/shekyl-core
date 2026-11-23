@@ -8,8 +8,8 @@
 use shekyl_fcmp_proofs::FcmpPlusPlus;
 
 use super::weight::{
-    fcmp_proof_len, heaviest_legal_weight, is_legal_shape, max_inputs_at, pqc_auth_weight,
-    spend_weight, FCMP_PROOF_LEN_MAX, TREE_DEPTH_FLOOR,
+    fcmp_proof_len, heaviest_legal_weight, is_legal_shape, max_buildable_inputs, max_inputs_at,
+    pqc_auth_weight, spend_weight, FCMP_PROOF_LEN_MAX, TREE_DEPTH_FLOOR,
 };
 use super::{MAX_FCMP_INPUTS, MAX_OUTPUTS, MIN_NON_COINBASE_OUTPUTS, TX_WEIGHT_LIMIT};
 use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
@@ -17,9 +17,9 @@ use shekyl_curve_generators::{MAX_TREE_DEPTH, MIN_SPEND_LAYERS};
 /// Measured FCMP++ proof sizes in bytes, indexed `[n_in][tree_depth]` over
 /// `n_in ∈ 0..=8` and `tree_depth ∈ 0..=24` (row and column 0 are unused).
 ///
-/// Emitted by `kat_emit_fcmp_proof_size_table` (in engine-core, where the
-/// synthetic-tree measurement machinery lives) from the depth-consistent
-/// single-path synthetic trees (PF7), and re-measured 2026-09-14 with `PL-D3`
+/// Measured from real proofs over the depth-consistent single-path synthetic
+/// trees (PF7) with generators long enough for every cell, on 2026-09-14 with
+/// `PL-D3`
 /// (`FCMP_SPEND_LINKABILITY.md` §6.2). The series is **non-monotonic** in depth,
 /// because the inner-product argument rounds. These are real proofs' lengths,
 /// so they are the closed form's test vectors, and the closed form is the
@@ -193,4 +193,36 @@ fn the_heaviest_legal_spend() {
     );
     assert!(heaviest <= TX_WEIGHT_LIMIT);
     assert_eq!(heaviest_legal_weight(1), 0, "no transaction has one output");
+}
+
+/// A wallet's limit holds at any fee, is the largest count that does, and never
+/// exceeds what consensus can mine.
+#[test]
+fn the_buildable_limit_fits_at_the_widest_fee() {
+    let widest =
+        |n_in, n_out, depth| spend_weight(n_in, n_out, depth, u64::MAX, pqc_auth_weight(), 0);
+    for depth in MIN_SPEND_LAYERS..=MAX_TREE_DEPTH {
+        for n_out in MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS {
+            let limit = max_buildable_inputs(n_out, depth);
+            let mineable = max_inputs_at(n_out, depth);
+            assert!(limit <= mineable, "{n_out} outputs at depth {depth}");
+            if limit > 0 {
+                assert!(widest(limit, n_out, depth) <= TX_WEIGHT_LIMIT);
+            }
+            if limit < mineable {
+                assert!(widest(limit + 1, n_out, depth) > TX_WEIGHT_LIMIT);
+            }
+        }
+    }
+    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, 4), 22);
+    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, 5), 21);
+    assert_eq!(
+        max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH),
+        18
+    );
+    assert_eq!(max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS - 1, 4), 0);
+    assert_eq!(
+        max_buildable_inputs(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH + 1),
+        0
+    );
 }

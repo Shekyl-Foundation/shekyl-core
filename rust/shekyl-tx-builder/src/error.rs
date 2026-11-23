@@ -180,11 +180,14 @@ pub enum TxBuilderError {
 /// [`InternalSignFault::keyword`] so a report says which one failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SignFault {
-    /// More inputs than one transaction may spend ([`MAX_INPUTS`]).
-    #[error("{count} inputs exceed the limit of {MAX_INPUTS} per transaction")]
+    /// More inputs than one transaction of this shape may spend: at most
+    /// [`MAX_INPUTS`], and fewer in a deep tree, where the weight limit binds.
+    #[error("{count} inputs exceed the limit of {limit} per transaction")]
     TooManyInputs {
         /// How many inputs the build carried.
         count: usize,
+        /// The most this transaction's shape can spend.
+        limit: usize,
     },
     /// More outputs than one transaction may carry ([`MAX_OUTPUTS`],
     /// the change output included).
@@ -301,7 +304,12 @@ impl TxBuilderError {
     pub const fn fault(&self) -> SignFault {
         use InternalSignFault as I;
         let internal = match self {
-            Self::TooManyInputs(count) => return SignFault::TooManyInputs { count: *count },
+            Self::TooManyInputs(count) => {
+                return SignFault::TooManyInputs {
+                    count: *count,
+                    limit: MAX_INPUTS,
+                }
+            }
             Self::TooManyOutputs(count) => return SignFault::TooManyOutputs { count: *count },
             Self::SpentOutputNotInLeafChunk { index } => {
                 return SignFault::SpentOutputNotInLeafChunk { input: *index }

@@ -60,6 +60,9 @@
 //! [`OutputSelector::select_outputs`] doc-comment for the
 //! caller-side discipline pin.
 
+use shekyl_tx_weight::{
+    max_buildable_inputs, MAX_OUTPUTS, MAX_TREE_DEPTH, MIN_NON_COINBASE_OUTPUTS, MIN_SPEND_LAYERS,
+};
 use shekyl_units::AtomicUnits;
 
 use super::error::OutputSelectorError;
@@ -347,6 +350,12 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// amounts plus the fee estimate; the selector treats
     /// it as opaque coverage threshold.
     ///
+    /// # `max_inputs` semantics
+    ///
+    /// The most inputs this spend's shape can carry at the reference tree's
+    /// depth. A cover needing more is
+    /// [`OutputSelectorError::TooManyInputs`].
+    ///
     /// # Errors
     ///
     /// Returns the implementor's local `Error` type. The
@@ -363,7 +372,24 @@ pub trait OutputSelector: Send + Sync + 'static {
         &self,
         candidates: &[OutputCandidate],
         target: AtomicUnits,
+        max_inputs: usize,
     ) -> Result<SelectedOutputs, Self::Error>;
+}
+
+/// The most inputs a spend of `n_out` outputs can carry at `tree_depth`: the
+/// weight limit's per-depth answer (`ICD-R1`), which is below
+/// [`shekyl_tx_builder::MAX_INPUTS`] from depth 5.
+///
+/// The arguments are clamped into the legal shape space because this bounds a
+/// *selection*: an unresolved reference reads as depth 1 and is classified by
+/// the caller, a recipient list past [`MAX_OUTPUTS`] is refused by name at
+/// signing, and neither should surface here as "too many inputs".
+#[must_use]
+pub(crate) fn input_limit_at(n_out: usize, tree_depth: u8) -> usize {
+    max_buildable_inputs(
+        n_out.clamp(MIN_NON_COINBASE_OUTPUTS, MAX_OUTPUTS),
+        tree_depth.clamp(MIN_SPEND_LAYERS, MAX_TREE_DEPTH),
+    )
 }
 
 /// V3.0 default [`OutputSelector`] implementor.
@@ -402,6 +428,7 @@ impl OutputSelector for WalletGreedyOutputSelector {
         &self,
         candidates: &[OutputCandidate],
         target: AtomicUnits,
+        max_inputs: usize,
     ) -> Result<SelectedOutputs, OutputSelectorError> {
         // Empty candidate set: distinct from "candidates sum
         // < target". The build routes both through
@@ -417,13 +444,8 @@ impl OutputSelector for WalletGreedyOutputSelector {
         let mut sorted: Vec<&OutputCandidate> = candidates.iter().collect();
         sorted.sort_by(|a, b| b.amount.cmp(&a.amount).then(a.index.cmp(&b.index)));
 
-        let cover = cover_largest_first(
-            sorted,
-            |candidate| candidate.amount,
-            target,
-            shekyl_tx_builder::MAX_INPUTS,
-        )
-        .map_err(|fault| match fault {
+        let cover = cover_largest_first(sorted, |candidate| candidate.amount, target, max_inputs)
+            .map_err(|fault| match fault {
             // The error payload carries raw `u64`. Convert
             // at the edge. `available` is the sum of the
             // candidate set: a short cover took all of it.
@@ -510,7 +532,7 @@ mod tests {
         ];
         let target = AtomicUnits::from_raw(6_000);
         let selected = WalletGreedyOutputSelector
-            .select_outputs(&candidates, target)
+            .select_outputs(&candidates, target, shekyl_tx_builder::MAX_INPUTS)
             .expect("greedy selector covers target");
         // Largest-first: pick index 1 (5_000), then index 2
         // (3_000) → covered = 8_000 ≥ 6_000. `indices` is
@@ -524,7 +546,7 @@ mod tests {
         let candidates = vec![candidate(0, 1_000), candidate(1, 2_000)];
         let target = AtomicUnits::from_raw(10_000);
         let err = WalletGreedyOutputSelector
-            .select_outputs(&candidates, target)
+            .select_outputs(&candidates, target, shekyl_tx_builder::MAX_INPUTS)
             .expect_err("under-coverage fires InsufficientFunds");
         match err {
             OutputSelectorError::InsufficientFunds { needed, available } => {
@@ -540,7 +562,7 @@ mod tests {
         let candidates: Vec<OutputCandidate> = Vec::new();
         let target = AtomicUnits::from_raw(1_000);
         let err = WalletGreedyOutputSelector
-            .select_outputs(&candidates, target)
+            .select_outputs(&candidates, target, shekyl_tx_builder::MAX_INPUTS)
             .expect_err("empty candidate set fires NoEligibleOutputs");
         assert!(matches!(err, OutputSelectorError::NoEligibleOutputs));
     }
@@ -558,7 +580,7 @@ mod tests {
         ];
         let target = AtomicUnits::from_raw(1_000);
         let selected = WalletGreedyOutputSelector
-            .select_outputs(&candidates, target)
+            .select_outputs(&candidates, target, shekyl_tx_builder::MAX_INPUTS)
             .expect("greedy selector covers target");
         // Only one candidate needed; ties broken by
         // ascending index → index 0.
@@ -575,7 +597,7 @@ mod tests {
         ];
         let target = AtomicUnits::from_raw(10_000);
         let selected = WalletGreedyOutputSelector
-            .select_outputs(&candidates, target)
+            .select_outputs(&candidates, target, shekyl_tx_builder::MAX_INPUTS)
             .expect("greedy selector covers target");
         // Verify total_covered is internally consistent with
         // the sum of selected indices' amounts in the
@@ -608,7 +630,11 @@ mod tests {
         let candidates: Vec<_> = (0..cap + 4).map(|index| candidate(index, 10)).collect();
         let need = cap + 1;
         let err = WalletGreedyOutputSelector
-            .select_outputs(&candidates, AtomicUnits::from_raw(10 * need as u64))
+            .select_outputs(
+                &candidates,
+                AtomicUnits::from_raw(10 * need as u64),
+                shekyl_tx_builder::MAX_INPUTS,
+            )
             .expect_err("the cover is one past the cap");
         assert!(
             matches!(err, OutputSelectorError::TooManyInputs { count } if count == need),
@@ -623,7 +649,11 @@ mod tests {
         let cap = shekyl_tx_builder::MAX_INPUTS;
         let candidates: Vec<_> = (0..cap + 2).map(|index| candidate(index, 10)).collect();
         let selected = WalletGreedyOutputSelector
-            .select_outputs(&candidates, AtomicUnits::from_raw(10 * cap as u64))
+            .select_outputs(
+                &candidates,
+                AtomicUnits::from_raw(10 * cap as u64),
+                shekyl_tx_builder::MAX_INPUTS,
+            )
             .expect("the cap's own count is a legal cover");
         assert_eq!(selected.indices.len(), cap);
         assert_eq!(
@@ -635,6 +665,52 @@ mod tests {
     /// The success type rejects a length the transaction cannot
     /// spend, and accepts the cap itself. Bites if the bound
     /// moves off [`shekyl_tx_builder::MAX_INPUTS`].
+    /// The selector stops at the limit it is handed, which is what makes the
+    /// per-depth limit real: a cover that fits the global cap but not this
+    /// tree's depth is refused here, before any proof work.
+    #[test]
+    fn a_cover_past_the_per_depth_limit_is_refused() {
+        let at_depth_14 = input_limit_at(MIN_NON_COINBASE_OUTPUTS, MAX_TREE_DEPTH);
+        assert!(at_depth_14 < shekyl_tx_builder::MAX_INPUTS);
+        let candidates: Vec<OutputCandidate> = (0..=at_depth_14)
+            .map(|index| OutputCandidate {
+                index,
+                amount: AtomicUnits::from_raw(10),
+            })
+            .collect();
+        let needs_one_more = u64::try_from(at_depth_14).expect("fits") * 10 + 1;
+        let err = WalletGreedyOutputSelector
+            .select_outputs(
+                &candidates,
+                AtomicUnits::from_raw(needs_one_more),
+                at_depth_14,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, OutputSelectorError::TooManyInputs { count } if count == at_depth_14 + 1),
+            "{err:?}"
+        );
+    }
+
+    /// An unresolved reference (depth 1) and an over-long recipient list are
+    /// classified elsewhere, so neither reads as a zero input limit.
+    #[test]
+    fn the_input_limit_clamps_into_the_legal_shape_space() {
+        assert_eq!(input_limit_at(2, 1), input_limit_at(2, MIN_SPEND_LAYERS));
+        assert_eq!(
+            input_limit_at(1, 2),
+            input_limit_at(MIN_NON_COINBASE_OUTPUTS, 2)
+        );
+        assert_eq!(
+            input_limit_at(MAX_OUTPUTS + 1, 2),
+            input_limit_at(MAX_OUTPUTS, 2)
+        );
+        assert_eq!(
+            input_limit_at(2, u8::MAX),
+            input_limit_at(2, MAX_TREE_DEPTH)
+        );
+    }
+
     #[test]
     fn selected_inputs_refuse_a_length_past_the_cap() {
         let cap = shekyl_tx_builder::MAX_INPUTS;
