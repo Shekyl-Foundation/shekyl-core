@@ -247,9 +247,12 @@ impl From<BuildSpendError> for KeyEngineError {
             BuildSpendError::NoOutputs => Self::Primitive {
                 detail: "no outputs after fee variant selection",
             },
-            BuildSpendError::TooFewOutputs { .. } => Self::Primitive {
-                detail: "fewer outputs than consensus admits after fee variant selection",
-            },
+            // The builder's own fault, the same keyword `sign_transaction`'s
+            // refusal reports (`too-few-outputs`): no send path builds fewer
+            // outputs than consensus admits, so reaching it is a bug.
+            BuildSpendError::TooFewOutputs { .. } => {
+                Self::Sign(SignFault::Internal(InternalSignFault::TooFewOutputs))
+            }
             BuildSpendError::TooManyOutputs { count } => {
                 Self::Sign(SignFault::TooManyOutputs { count })
             }

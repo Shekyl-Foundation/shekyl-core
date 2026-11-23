@@ -91,6 +91,7 @@ fn dummy_output(amount: u64) -> OutputInfo {
 /// between them, so a fixture balances as one output of `total` would.
 fn dummy_outputs(total: u64) -> Vec<OutputInfo> {
     let n = MIN_NON_COINBASE_OUTPUTS as u64;
+    assert!(total >= n, "{total} cannot pay {n} nonzero outputs");
     (0..n)
         .map(|i| dummy_output(total / n + u64::from(i < total % n)))
         .collect()

@@ -2865,6 +2865,10 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     assert_eq!(built.vin().bond_debit, 0);
 
     let change: u64 = input_amount - fee - floor;
+    assert!(
+        change >= 2,
+        "fixture invariant violated: change ({change}) must pay two nonzero outputs"
+    );
     // Split as production's bond post splits it (`[change_lo, change_hi]`;
     // CEN-I1 admits no fewer than two outputs). Offset the change indices so
     // (combined_ss, output_index) never collides with the input (a collision

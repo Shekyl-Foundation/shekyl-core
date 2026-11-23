@@ -153,11 +153,11 @@ pub const MAX_OUTPUTS: usize = 16;
 /// **Which forms it covers.** Every transaction except the coinbase: a
 /// spend, a bond post and an emission claim alike, whatever its inputs.
 /// CEN-I1's scope is every non-coinbase transaction, so no admitted form
-/// has fewer. The coinbase's own count is CEN-F4's, not this. The
-/// no-prunable shape [`Transaction::validate`] refuses with outputs
-/// present is a refusal path, not a form: consensus refuses a non-coinbase
-/// transaction without a prunable region (a bond post on CEN-H21, the
-/// rest here).
+/// has fewer. The coinbase's own count is CEN-F4's, not this.
+/// [`Transaction::validate`]'s no-prunable arm, which requires zero
+/// outputs, describes no admitted transaction: consensus refuses every
+/// non-coinbase transaction without a prunable region (a bond post on
+/// CEN-H21, the rest on CEN-I1). The arm is a refusal path only.
 ///
 /// **Why two.** A transaction with one output pays all it spends to one
 /// place, which marks that output as the payment and leaves no change to

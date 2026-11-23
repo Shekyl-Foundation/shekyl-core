@@ -1048,6 +1048,10 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
         // Two outputs, the fewest a transaction carries (CEN-I1), paying
         // `output_total` between them.
         let recipient_output_index: u64 = (n_in as u64) + 100;
+        assert!(
+            output_total >= 2,
+            "fixture invariant violated: output_total ({output_total}) must pay two nonzero outputs ({context})"
+        );
         let first = output_total / 2;
         let outputs = vec![
             make_recipient_output_info(&keys, first, recipient_output_index),
@@ -1292,6 +1296,11 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
     // with the input index (a matching (combined_ss, output_index) collapses
     // the FCMP++ rerandomization scalar to zero — see the M3c fixture note).
     let change: u64 = input_amount - fee - floor;
+    assert!(
+        change >= 3,
+        "fixture invariant violated: change ({change}) must pay two nonzero outputs, the second \
+         still nonzero one unit short (the self-check below)"
+    );
     let change_lo = change / 2;
     let change_hi = change - change_lo;
     let change_output_index: u64 = input_index + 100;

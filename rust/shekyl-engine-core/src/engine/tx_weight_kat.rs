@@ -144,6 +144,11 @@ pub(crate) mod support {
         // `(combined_ss, output_index)` collapses pseudo-out blinding to zero.
         let recipient_output_index = (n_in as u64) + 100;
         let n_out = shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS as u64;
+        if payment < n_out {
+            return Err(format!(
+                "payment {payment} cannot pay {n_out} nonzero outputs"
+            ));
+        }
         let mut outputs = Vec::new();
         let mut kem_blobs = Vec::new();
         let mut output_keys = Vec::new();
