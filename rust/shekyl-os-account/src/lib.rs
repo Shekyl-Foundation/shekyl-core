@@ -158,8 +158,9 @@ pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
 /// through a handle that refuses a symbolic link. Under a writable parent
 /// another account can swap the new name for a link before this runs, and a
 /// `chmod` by path would follow it and change a directory this account owns
-/// elsewhere. Under an ordinary umask `mkdir` already gave the mode and nothing
-/// is changed. A umask that removes the owner's own read bit makes the open
+/// elsewhere. The handle is opened on [`directory::no_follow_spelling`], since
+/// `O_NOFOLLOW` follows a link named with a trailing `/` or `/.`. Under an
+/// ordinary umask `mkdir` already gave the mode and nothing is changed. A umask that removes the owner's own read bit makes the open
 /// fail, and the create reports it.
 #[cfg(unix)]
 fn settle_new_dir_mode(dir: &Path) -> std::io::Result<()> {
@@ -167,7 +168,7 @@ fn settle_new_dir_mode(dir: &Path) -> std::io::Result<()> {
     let made = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(dir)?;
+        .open(directory::no_follow_spelling(dir))?;
     if made.metadata()?.permissions().mode() & directory::PERMISSION_BITS != OWNER_ONLY_DIR_MODE {
         made.set_permissions(std::fs::Permissions::from_mode(OWNER_ONLY_DIR_MODE))?;
     }
@@ -197,6 +198,10 @@ pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
+        // One spelling for every call below: `lstat` must see a link for what
+        // it is, and `mkdir` of `new/.` fails where `new` would be made.
+        let path = directory::no_follow_spelling(path);
+        let path = path.as_path();
         // The missing directories, innermost first.
         let mut missing = Vec::new();
         let mut at = Some(path);
@@ -550,8 +555,23 @@ mod per_account_root_tests {
         std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o750)).expect("set");
         let swapped = base.path().join("swapped");
         std::os::unix::fs::symlink(&elsewhere, &swapped).expect("a link");
-        settle_new_dir_mode(&swapped).expect_err("a link is refused");
-        assert_eq!(mode(&elsewhere), 0o750, "the link's target is untouched");
+        // `O_NOFOLLOW` follows a link spelled with a trailing `/` or `/.`. Red
+        // edit: open `dir` as given.
+        let shown = swapped.display();
+        for spelling in [
+            swapped.clone(),
+            PathBuf::from(format!("{shown}/")),
+            PathBuf::from(format!("{shown}/.")),
+            PathBuf::from(format!("{shown}//./")),
+        ] {
+            settle_new_dir_mode(&spelling).expect_err("a link is refused");
+            assert_eq!(
+                mode(&elsewhere),
+                0o750,
+                "the link's target is untouched through {}",
+                spelling.display()
+            );
+        }
 
         // A umask that narrowed the owner's bits is brought back to the mode.
         let narrowed = base.path().join("narrowed");
@@ -559,6 +579,28 @@ mod per_account_root_tests {
         std::fs::set_permissions(&narrowed, std::fs::Permissions::from_mode(0o600)).expect("set");
         settle_new_dir_mode(&narrowed).expect("a directory of its own");
         assert_eq!(mode(&narrowed), OWNER_ONLY_DIR_MODE);
+    }
+
+    /// A new directory is made owner-only however its path is spelled. Red
+    /// edit: walk `path` as given, and `new/.` is not made.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_is_made_under_every_spelling_of_its_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().expect("a scratch directory");
+        for (index, tail) in ["", "/", "/.", "//./"].into_iter().enumerate() {
+            let new = base.path().join(format!("above{index}")).join("new");
+            let spelled = PathBuf::from(format!("{}{tail}", new.display()));
+            create_account_dir_all(&spelled).expect("made");
+            let made = std::fs::symlink_metadata(&new).expect("the directory");
+            assert!(made.is_dir(), "{}", spelled.display());
+            assert_eq!(
+                made.permissions().mode() & directory::PERMISSION_BITS,
+                OWNER_ONLY_DIR_MODE,
+                "{}",
+                spelled.display()
+            );
+        }
     }
 
     /// A path that is a file, or a link to nothing, is not a directory, and

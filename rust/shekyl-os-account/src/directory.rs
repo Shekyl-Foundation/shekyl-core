@@ -36,6 +36,16 @@ pub const GROUP_OR_OTHER_ANY: u32 = 0o077;
 /// Write permission for the group or for others.
 pub const GROUP_OR_OTHER_WRITE: u32 = 0o022;
 
+/// `path` as a call that must not follow a link has to name it. `lstat` and
+/// `O_NOFOLLOW` both follow a final link named with a trailing `/` or `/.`,
+/// so a no-follow call on a directory takes this spelling:
+/// [`Path::components`] drops repeated separators and `.` without touching
+/// the file system, resolves no link, and keeps `..`.
+#[must_use]
+pub fn no_follow_spelling(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
 /// A directory the walk could describe: it exists, it is not a link, and
 /// it is a directory. The mode and the owner are for the caller to judge.
 #[derive(Clone, Copy, Debug)]
@@ -45,11 +55,8 @@ pub struct DirectoryFacts {
 }
 
 impl DirectoryFacts {
-    /// Read `path` without following a symbolic link, however it is spelled.
-    /// `lstat` follows a link named with a trailing `/` or `/.`, so the path
-    /// is read through [`Path::components`], which drops repeated separators
-    /// and `.` without touching the file system, resolves no link, and keeps
-    /// `..`.
+    /// Read `path` without following a symbolic link, however it is spelled
+    /// ([`no_follow_spelling`]).
     ///
     /// # Errors
     ///
@@ -57,8 +64,7 @@ impl DirectoryFacts {
     /// describe.
     pub fn inspect(path: &Path) -> Result<Self, DirectoryFault> {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let spelled: PathBuf = path.components().collect();
-        let meta = match std::fs::symlink_metadata(&spelled) {
+        let meta = match std::fs::symlink_metadata(no_follow_spelling(path)) {
             Ok(meta) => meta,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(DirectoryFault::Missing);
