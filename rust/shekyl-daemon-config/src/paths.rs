@@ -253,6 +253,9 @@ mod tests {
         assert!(found(Err(refused)).contains("symbolic link"));
         std::fs::remove_file(&network).unwrap();
         std::fs::create_dir(&network).unwrap();
+        // The home's account owns it, as the home was given above when the
+        // tests run as root, so the mode is what this case judges.
+        std::os::unix::fs::chown(&network, Some(me), None).unwrap();
         std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(found(check(None, me)).contains("not 0700"));
         std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o700)).unwrap();
