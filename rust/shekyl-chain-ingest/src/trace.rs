@@ -592,6 +592,25 @@ fn successor(last: u64) -> Result<u64, TraceFault> {
 }
 
 impl Trace {
+    /// This trace narrowed to the indexed event at `record`, `None` when it
+    /// names no event there: what a replay stopped at that record is held
+    /// to (`CHAIN_FORGE.md` §8). The event's tables digest covers every
+    /// table. The per-height facts are the finished chain's, and a later
+    /// reorg can replace a block at or below this record, so they do not
+    /// apply to a chain stopped here.
+    #[must_use]
+    pub fn through_event(&self, record: crate::source::SequenceNo) -> Option<Self> {
+        let raw = record.to_raw();
+        let digest = *self.events.get(&raw)?;
+        Some(Self {
+            facts: BTreeMap::new(),
+            checkpoint: None,
+            snapshot: None,
+            events: BTreeMap::from([(raw, digest)]),
+            capture: std::collections::BTreeSet::from([raw]),
+        })
+    }
+
     /// A trace that carries nothing to compare: no facts, no checkpoint.
     /// A run over it connects and records, and every oracle reads
     /// *not compared* — the run [`crate::rebaseline::trace_of`] writes a

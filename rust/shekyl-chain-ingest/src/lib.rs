@@ -255,6 +255,8 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+#[cfg(all(feature = "pipeline", any(test, feature = "bench-internals")))]
+pub mod snapshot;
 // The live arrival path: one door, the router, the connector.
 #[cfg(feature = "pipeline")]
 pub mod service;

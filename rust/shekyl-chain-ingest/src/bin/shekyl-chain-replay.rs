@@ -57,6 +57,7 @@ use shekyl_chain_ingest::metrics::Metrics;
 use shekyl_chain_ingest::pipeline::{Disagreement, PipelineConfig, RunReport};
 use shekyl_chain_ingest::rebaseline::{self, ReplayFault};
 use shekyl_chain_ingest::schedule::ChainRules;
+use shekyl_chain_ingest::source::SequenceNo;
 use shekyl_chain_ingest::trace::Trace;
 use shekyl_chain_ingest::ProductionPow;
 use shekyl_chain_rules::{CappedEpoch, SettlementEpochBlocks};
@@ -118,6 +119,11 @@ enum Command {
         /// The trace `baseline` wrote.
         #[arg(long)]
         trace: PathBuf,
+        /// Stop after this corpus record, an indexed event of the trace,
+        /// and hold the store to the tables digest the trace carries there
+        /// (`CHAIN_FORGE.md` §8): how a snapshot is built.
+        #[arg(long)]
+        through_record: Option<u64>,
     },
     /// Replay a corpus against a fresh store with nothing to compare, then
     /// write the store's chain as the trace a replay must reproduce.
@@ -224,7 +230,11 @@ async fn real_main(cli: Cli) -> Result<(), Failure> {
             batch,
             out,
         } => fetch(daemon, chain, from..to, batch, &out).await,
-        Command::Replay { flags, trace } => replay(flags, trace).await,
+        Command::Replay {
+            flags,
+            trace,
+            through_record,
+        } => replay(flags, trace, through_record).await,
         Command::Baseline {
             flags,
             out,
@@ -444,7 +454,11 @@ async fn fetch(
 }
 
 /// Hold the corpus to `trace`. Any disagreement fails the run.
-async fn replay(flags: RunFlags, trace: PathBuf) -> Result<(), Failure> {
+async fn replay(
+    flags: RunFlags,
+    trace: PathBuf,
+    through_record: Option<u64>,
+) -> Result<(), Failure> {
     // The store runs the `(SEB, cap)` pair of the rule set that judges the
     // chain — the production pair, or the regtest daemon's levers — read
     // off that set, not off a second copy (`Horizons::under`). A store
@@ -452,17 +466,26 @@ async fn replay(flags: RunFlags, trace: PathBuf) -> Result<(), Failure> {
     // the first block (SCW-2, `ARW-15`), and an existing file pinned to a
     // different epoch is refused at open.
     let prepared = prepare(&flags)?;
-    let trace = Arc::new(Trace::read(BufReader::new(File::open(&trace)?))?);
-    let report = drive(&flags, &prepared, |pow, metrics| {
-        rebaseline::replay_corpus(
-            &flags.corpus,
-            &flags.store,
-            prepared.rules,
-            prepared.cfg,
-            pow,
-            metrics,
-            trace,
-        )
+    let trace = Trace::read(BufReader::new(File::open(&trace)?))?;
+    let through = through_record.map(SequenceNo::from_raw);
+    let trace = Arc::new(match through {
+        None => trace,
+        Some(record) => trace
+            .through_event(record)
+            .ok_or_else(|| format!("the trace names no event at record {}", record.to_raw()))?,
+    });
+    let (corpus, store) = (&flags.corpus, &flags.store);
+    let (rules, cfg) = (prepared.rules, prepared.cfg);
+    let report = drive(&flags, &prepared, |pow, metrics| async move {
+        match through {
+            None => rebaseline::replay_corpus(corpus, store, rules, cfg, pow, metrics, trace).await,
+            Some(last) => {
+                rebaseline::replay_corpus_through(
+                    corpus, store, last, rules, cfg, pow, metrics, trace,
+                )
+                .await
+            }
+        }
     })
     .await?;
     for disagreement in report.disagreements() {
