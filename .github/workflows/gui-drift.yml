@@ -51,7 +51,7 @@ on:
   # The GUI pin's nightly (gui-pin-nightly below). A schedule runs main's
   # copy of this file, so it starts once this reaches main.
   schedule:
-    - cron: "15 4 * * *"
+    - cron: "23 4 * * *"
 
 # A push run on `dev` is never cancelled once it runs (ruled 2026-11-19):
 # one runs and one waits, and a newer push replaces the waiting one, so the
