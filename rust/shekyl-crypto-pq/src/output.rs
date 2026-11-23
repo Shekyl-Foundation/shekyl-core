@@ -34,6 +34,7 @@
 //! `O = ho·G + B + y·T`. The amount, the commitment and the ML-DSA key
 //! belong to the scan, not to the image.
 
+use crate::secret_scalar::canonical_secret_scalar;
 use curve25519_dalek::{
     constants::{ED25519_BASEPOINT_POINT as G, X25519_BASEPOINT},
     edwards::{CompressedEdwardsY, EdwardsPoint},
@@ -471,18 +472,12 @@ pub(crate) fn construct_output_core(
     // `ho`, `y`, `z` are per-output secret scalars derived from the combined
     // shared secret; `Zeroizing` wipes their limbs on drop (`Scalar` is
     // `Zeroize` but not `ZeroizeOnDrop`).
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.y))
-            .expect("y from wide_reduce is always canonical"),
-    );
-    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.z))
-            .expect("z from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.ho).expect("ho from wide_reduce is always canonical");
+    let y_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.y).expect("y from wide_reduce is always canonical");
+    let z_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.z).expect("z from wide_reduce is always canonical");
 
     // --- Output key: O = ho*G + B + y*T ---
 
@@ -776,14 +771,10 @@ pub(crate) fn output_key_holds(
     let spend_public = CompressedEdwardsY(*spend_public)
         .decompress()
         .ok_or(CryptoError::InvalidKeyMaterial)?;
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*y))
-            .expect("y from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(ho).expect("ho from wide_reduce is always canonical");
+    let y: Zeroizing<Scalar> =
+        canonical_secret_scalar(y).expect("y from wide_reduce is always canonical");
     let expected: EdwardsPoint = (G * *ho) + spend_public + (*T * *y);
     Ok(expected.compress().to_bytes() == *output_key)
 }
@@ -905,10 +896,8 @@ pub fn scan_output_with_ml_kem_dk(
 
     // `z` is the commitment mask, a per-output secret scalar. `Zeroizing`
     // wipes its limbs on drop (`Scalar` is `Zeroize` but not `ZeroizeOnDrop`).
-    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.z))
-            .expect("z from wide_reduce is always canonical"),
-    );
+    let z_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.z).expect("z from wide_reduce is always canonical");
 
     // --- Commitment verification: C == z*G + amount*H ---
 
@@ -1101,18 +1090,12 @@ pub fn scan_output_recover_with_ml_kem_dk(
     // shared secret; `Zeroizing` wipes their limbs on drop. `curve25519-dalek`'s
     // `Scalar` is `Zeroize` but not `ZeroizeOnDrop`, so the bare locals would
     // otherwise be left resident on the stack on every exit path.
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.y))
-            .expect("y from wide_reduce is always canonical"),
-    );
-    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.z))
-            .expect("z from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.ho).expect("ho from wide_reduce is always canonical");
+    let y_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.y).expect("y from wide_reduce is always canonical");
+    let z_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.z).expect("z from wide_reduce is always canonical");
 
     let recovered_b = o_point - (G * *ho) - (*T * *y_scalar);
     let recovered_spend_key = recovered_b.compress().to_bytes();
@@ -1408,14 +1391,10 @@ pub fn derive_output_key(
     let secrets = derive_output_secrets(combined_ss, output_index);
 
     // Per-output secret scalars; `Zeroizing` wipes their limbs on drop.
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.y))
-            .expect("y from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.ho).expect("ho from wide_reduce is always canonical");
+    let y_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.y).expect("y from wide_reduce is always canonical");
 
     let output_point = (G * *ho) + b_point + (*T * *y_scalar);
     Ok(output_point.compress().to_bytes())
@@ -1437,14 +1416,10 @@ pub fn recover_recipient_spend_pubkey(
     let secrets = derive_output_secrets(combined_ss, output_index);
 
     // Per-output secret scalars; `Zeroizing` wipes their limbs on drop.
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(secrets.y))
-            .expect("y from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.ho).expect("ho from wide_reduce is always canonical");
+    let y_scalar: Zeroizing<Scalar> =
+        canonical_secret_scalar(&secrets.y).expect("y from wide_reduce is always canonical");
 
     let recovered_b = o_point - (G * *ho) - (*T * *y_scalar);
 
@@ -1533,14 +1508,10 @@ pub fn compute_output_key_image(
     // `ZeroizeOnDrop`). `x`'s bytes are the signing secret this function
     // returns; [`image_from_spend_scalar`] does not encode them.
     let opening = derive_output_opening(combined_ss, output_index);
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(opening.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
-    let spend_secret: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*spend_secret))
-            .ok_or(CryptoError::InvalidKeyMaterial)?,
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&opening.ho).expect("ho from wide_reduce is always canonical");
+    let spend_secret: Zeroizing<Scalar> =
+        canonical_secret_scalar(spend_secret).ok_or(CryptoError::InvalidKeyMaterial)?;
     let x: Zeroizing<Scalar> = Zeroizing::new(*ho + *spend_secret);
     let key_image = image_from_spend_scalar(&x, &hp_point);
     Ok(KeyImageResult {
@@ -1567,10 +1538,7 @@ pub fn spend_key_image(
     hp_of_output: &[u8; 32],
 ) -> Result<crate::key_image::KeyImage, CryptoError> {
     let hp_point = decompress_hp(hp_of_output)?;
-    let x: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*spend_secret_x))
-            .ok_or(CryptoError::InvalidKeyMaterial)?,
-    );
+    let x = canonical_secret_scalar(spend_secret_x).ok_or(CryptoError::InvalidKeyMaterial)?;
     Ok(image_from_spend_scalar(&x, &hp_point))
 }
 
