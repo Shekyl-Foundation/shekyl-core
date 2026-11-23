@@ -1116,12 +1116,20 @@ outputs. Not done.
   tree's depth.
 - **The economics sim's calibration domain** reads the landed constants and
   the legal-shape function, so the sim tests the built structure.
-- **`ICD-F17`, for the sim lane:** one calibration run with the shape search
-  starting at two outputs, ahead of the full table. Rick's estimate is a shift
-  of about 2.5 % in the stuffer's archival-bytes-per-weight ratio at 8 inputs
-  and about 1 % at 22, enough to flip the 3 % margin between the 6-input and
-  8-input shapes, and a change in the sustained campaign's cycle. The 2 880-run
-  table stays with the cutover.
+- **`ICD-F17`, the sim lane's calibration run — done 2026-11-22.** The shape
+  search started at two outputs on #1534's constant, at cap 8, depths 1 to 13
+  and three rates (20, 300 and 34 133 atomic per byte), which agree. The
+  one-shot W9 stuffer costs 2.0 to 2.5 % more per shard and stays at 8 inputs,
+  now 8-in / 2-out at every depth (its runner-up, 7-in / 2-out, is 0.44 to
+  0.62 % dearer); the sustained cycle costs 1.1 to 2.7 % more; at the surge
+  ceiling the archival bytes per block fall by up to 6.0 % by depth, and A6's
+  worst slew goes from 0.7558 to 0.7326 points an epoch; the miner's own
+  stuffing in full blocks (ESR-7) moved most, 8 to 10 % per shard. The
+  ceiling's winning shape was never a stable 6-in versus 8-in pair, so the
+  "≈3 % margin" was one depth's reading. No honest narration line moved. The
+  instrument, `calibration::tests::stuffer_calibration_by_depth` (on demand,
+  on #1476 at `85803a140c`), reruns unchanged at the cutover for the 22-input
+  figures; the 2 880-run table stays with the cutover.
 
 ## 11. Still open
 
