@@ -1422,6 +1422,7 @@ dependencies = [
  "ciphersuite",
  "generalized-bulletproofs",
  "std-shims",
+ "subtle",
  "zeroize",
 ]
 

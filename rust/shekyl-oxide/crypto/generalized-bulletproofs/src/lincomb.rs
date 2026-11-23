@@ -3,9 +3,12 @@ use std_shims::{collections::BTreeMap, vec, vec::Vec};
 
 use zeroize::Zeroize;
 
-use ciphersuite::group::ff::PrimeField;
+use ciphersuite::{
+    group::ff::{Field as _, PrimeField},
+    Ciphersuite,
+};
 
-use crate::ScalarVector;
+use crate::{Openings, ScalarVector};
 
 /// A reference to a variable usable within linear combinations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -292,6 +295,66 @@ impl<F: PrimeField> LinComb<F> {
 /// This is equivalent to `accumulator += values * weight`, if `values` was a normal vector.
 ///
 /// Returns the highest index written to during accumulation.
+/// The prover's value for every term a [`LinComb`] can name.
+///
+/// The arithmetic-circuit relation pads every row with zeros, so a term past the end of its row
+/// reads zero: a multiplication not yet assigned, or a vector commitment's padding, which its
+/// opening need not hold.
+pub struct Assignment<'a, C: Ciphersuite> {
+    /// The left inputs of the multiplications.
+    pub aL: &'a [C::F],
+    /// The right inputs of the multiplications.
+    pub aR: &'a [C::F],
+    /// The commitments' openings.
+    pub openings: &'a Openings<C>,
+}
+
+impl<C: Ciphersuite> Assignment<'_, C> {
+    fn row(row: &[C::F], index: usize) -> C::F {
+        row.get(index).copied().unwrap_or(C::F::ZERO)
+    }
+}
+
+impl<F: PrimeField> LinComb<F> {
+    /// Evaluate this linear combination under `assignment`:
+    /// `WL aL + WR aR + WO aO + WCG C_G + WV V + c`, where `aO = aL * aR`.
+    ///
+    /// A constraint holds when this evaluates to zero.
+    pub fn evaluate<C: Ciphersuite<F = F>>(&self, assignment: &Assignment<'_, C>) -> F {
+        let aL = |index| Assignment::<C>::row(assignment.aL, index);
+        let aR = |index| Assignment::<C>::row(assignment.aR, index);
+        let weighted = |terms: &[(usize, F)], value: &dyn Fn(usize) -> F| {
+            terms
+                .iter()
+                .map(|(index, weight)| value(*index) * weight)
+                .sum::<F>()
+        };
+        let vector_commitments = self.WCG.iter().map(|(commitment, terms)| {
+            let g_values = assignment
+                .openings
+                .vector
+                .get(*commitment)
+                .map(|opening| opening.g_values.as_slice())
+                .unwrap_or_default();
+            weighted(terms, &|index| Assignment::<C>::row(g_values, index))
+        });
+        let commitments = |index: usize| {
+            assignment
+                .openings
+                .scalar
+                .get(index)
+                .map(|opening| opening.value)
+                .unwrap_or(F::ZERO)
+        };
+        self.c
+            + weighted(&self.WL, &aL)
+            + weighted(&self.WR, &aR)
+            + weighted(&self.WO, &|index| aL(index) * aR(index))
+            + vector_commitments.sum::<F>()
+            + weighted(&self.WV, &commitments)
+    }
+}
+
 pub(crate) fn accumulate_vector<F: PrimeField>(
     accumulator: &mut ScalarVector<F>,
     values: &[(usize, F)],

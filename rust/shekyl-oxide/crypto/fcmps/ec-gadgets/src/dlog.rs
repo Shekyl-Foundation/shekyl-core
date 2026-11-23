@@ -232,8 +232,8 @@ impl<F: PrimeField, Parameters: DiscreteLogParameters> ChallengePoint<F, Paramet
 }
 
 // `DivisorChallenge` from the section `Discrete Log Proof`
-fn divisor_challenge_eval<C: Ciphersuite, Parameters: DiscreteLogParameters>(
-    circuit: &mut Circuit<C>,
+fn divisor_challenge_eval<C: Ciphersuite, R: Role<C>, Parameters: DiscreteLogParameters>(
+    circuit: &mut Circuit<C, R>,
     divisor: &Divisor<Parameters>,
     challenge: &ChallengePoint<C::F, Parameters>,
 ) -> Variable {
@@ -386,7 +386,7 @@ pub trait EcDlogGadgets<C: Ciphersuite> {
     ) -> OnCurve;
 }
 
-impl<C: Ciphersuite> EcDlogGadgets<C> for Circuit<C>
+impl<C: Ciphersuite, R: Role<C>> EcDlogGadgets<C> for Circuit<C, R>
 where
     C::F: FromUniformBytes<64>,
 {

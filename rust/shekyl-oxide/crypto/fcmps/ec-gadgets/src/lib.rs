@@ -69,7 +69,7 @@ pub trait EcGadgets<C: Ciphersuite> {
     fn incomplete_add_fixed(&mut self, a: (C::F, C::F), b: OnCurve, c: OnCurve) -> OnCurve;
 }
 
-impl<C: Ciphersuite> EcGadgets<C> for Circuit<C> {
+impl<C: Ciphersuite, R: Role<C>> EcGadgets<C> for Circuit<C, R> {
     fn on_curve(&mut self, curve: &CurveSpec<C::F>, (x, y): (Variable, Variable)) -> OnCurve {
         let x_eval = self.eval(&LinComb::from(x));
         let (_x, _x_2, x2) = self.mul(
