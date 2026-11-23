@@ -3,7 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-// CA-3 (CRYPTO_AUDIT.md section 3.2): fips204's coefficient helpers, built with
+// CA-3 (docs/benchmarks/ca3_pq_branch_sweep_20261123.md):
+// fips204's coefficient helpers, built with
 // overflow checks on, on secret inputs.
 //
 // The helpers are `pub(crate)`, so setup.sh compiles fips204's own `helpers.rs`

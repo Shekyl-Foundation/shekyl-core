@@ -939,10 +939,11 @@ unused_self = "deny"
 zero_sized_map_values = "deny"
 
 # fips204 0.5.0 with no conditional branch on a secret coefficient under
-# `overflow-checks = true` (CRYPTO_AUDIT.md section 3.2). The fork is the tag
-# plus that fix, at the same version, so the arithmetic and every signature
-# are unchanged. `[patch]` applies only in the root manifest being built: each
-# fuzz workspace with fips204 in its lock carries this same entry, and
+# `overflow-checks = true`, and with the NTT path's range hardened (the record
+# is docs/benchmarks/ca3_pq_branch_sweep_20261123.md). The fork is the tag plus
+# that fix, at the same version: every value the tag returned is unchanged.
+# `[patch]` applies only in the root manifest being built: each fuzz workspace
+# with fips204 in its lock carries this same entry, and
 # scripts/ci/check_crypto_closure.py holds the revision in every lock.
 [patch.crates-io]
 fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "072a7d68bef14c2332d4b5ebd006189a3eedb2eb" }

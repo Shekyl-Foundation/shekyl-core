@@ -368,7 +368,7 @@ regenerate it after any run.
 
 ## CA-3: fips204's coefficient helpers (record table 2026-11-23)
 
-The guard for `CRYPTO_AUDIT.md` section 3.2. With `overflow-checks = true`, as the
+The guard recorded in [`ca3_pq_branch_sweep_20261123.md`](../../benchmarks/ca3_pq_branch_sweep_20261123.md). With `overflow-checks = true`, as the
 wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
 `decompose` and `make_hint`. The Shekyl fork removes those branches.
 
@@ -385,7 +385,9 @@ wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
 - **What it does not cover.** It runs on x86_64 with checkct's toolchain
   (`nightly-2025-12-04`, the closest to the shipped LLVM) and its freestanding
   target, not the shipped binary. The shipped-profile aarch64 and x86_64 builds are
-  checked by the fork's `shekyl/check_branch_counts.py`.
+  checked by `scripts/ci/check_fips204_branch_counts.py`, which runs the fork's
+  `shekyl/check_branch_counts.py`; the nightly `fips204-branch-count` job runs it on
+  x86_64.
 
 ```bash
 CHECKCT_NIGHTLY=nightly-2025-12-04 CHECKCT_ONLY="fips204-tag fips204-fix" docs/formal/checkct/setup.sh
