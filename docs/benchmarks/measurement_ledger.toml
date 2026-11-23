@@ -129,6 +129,10 @@ note = "Comment only: the gitian bump-policy line drops the deleted Android desc
 commit = "144f81fc1fd2660b36dd39b4362e8df1d56f01b4"
 note = "CA-1 (#1178): a comment-only change to rust-toolchain.toml; the bump policy gains the line that a bump re-runs docs/formal/checkct and updates results/measured.toml in the same PR. The channel stays 1.94.0; no figure moves."
 
+[[toolchain]]
+commit = "240041ee2db6030a32281630d61436c246d65296"
+note = "Comment only (structural PR 3): the file's header stops naming the deleted CMake build. The channel does not move."
+
 # --- consensus: block weight ------------------------------------------
 
 [[path_set]]
@@ -735,6 +739,7 @@ spec = [
   "rust/shekyl-transport-layer/src",
 ]
 stale_through = [
+  { through = "240041ee2db6030a32281630d61436c246d65296", note = "Structural PR 3: two doc comments in sizes.rs name `cargo xtask` for the deleted CMake option, on the same lines. No code changes, so the cost does not move." },
   { through = "765d6991bad2219dd5510d2ab083c7e531b775a6", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5ecbcc69ed954151c481cb9d6a54253", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "5838269c20e83b19134d45d26c8bc9a9a439a842", note = "A mismatched dial and a clearnet proxy failure are LocalClose instead of DialFailed, and the write half logs its stall after the copy. TCP connect, SOCKS, and the handshake do the same I/O, so the span waits are unchanged. Not re-measured." },
