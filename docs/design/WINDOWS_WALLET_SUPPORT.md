@@ -186,7 +186,7 @@ reader looking), so it is corrected rather than left standing.
 - **The DACL is applied atomically at creation** via `SECURITY_ATTRIBUTES` in
   `CreateNamedPipe`. The UDS path reaches the same property by order: the
   listeners' shared bind
-  ([`listen.rs`](../../rust/shekyl-rpc-transport/src/listen.rs)
+  ([`listen/socket.rs`](../../rust/shekyl-rpc-transport/src/listen/socket.rs)
   `bind_owner_only_socket`) binds, narrows the socket to 0600, and only then
   listens, so a connect before the narrowing is refused (Rick, 2026-11-22).
   Its 0700 directory stays the containment, since BSD-derived systems may not

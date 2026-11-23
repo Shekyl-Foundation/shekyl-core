@@ -2333,7 +2333,7 @@ A small Shekyl binary on the consumer's host:
 - listens on the host's **loopback only** — it is plaintext on that side,
   so RT-14 applies: specific address, never a wildcard — through the same
   listen classifier
-  ([`listen.rs`](../../rust/shekyl-rpc-transport/src/listen.rs));
+  ([`listen/mod.rs`](../../rust/shekyl-rpc-transport/src/listen/mod.rs));
 - **pools channel sessions.** A consumer that does not keep HTTP
   connections alive would otherwise pay §4.1's two round trips and three
   KEM pairs per request. The tunnel keeps a bounded pool of live sessions
