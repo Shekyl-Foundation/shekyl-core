@@ -145,6 +145,12 @@ pub enum SpendIntentError {
     #[error("{0} recipients; an intent pays at most {MAX_RECIPIENTS}")]
     RecipientCount(usize),
 
+    #[error(
+        "{0} recipients; a transaction carries at least {min} outputs, and change is a recipient",
+        min = shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS
+    )]
+    TooFewRecipients(usize),
+
     #[error("a recipient address of {0} bytes exceeds {MAX_ADDRESS_LEN}")]
     AddressTooLong(usize),
 
@@ -398,7 +404,10 @@ impl SpendIntent {
     /// of §9.2) for an `m_required`-of-`n_total` group: the version, the
     /// group shape (R-11), the proposer, the signer set and the responder
     /// (R-5), the size bounds [`MAX_INPUTS`], [`MAX_RECIPIENTS`] and
-    /// [`MAX_ADDRESS_LEN`], no input listed twice, and the recipients'
+    /// [`MAX_ADDRESS_LEN`], the consensus minimum of outputs
+    /// ([`shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS`], CEN-I1: an
+    /// intent lists every output, so one with fewer is refused before anyone
+    /// signs), no input listed twice, and the recipients'
     /// order. Nothing here reads a clock (R-13). Returns the intent's input
     /// count, which it has checked is at least one.
     pub fn validate_structural(
@@ -453,6 +462,9 @@ impl SpendIntent {
         }
         if self.recipients.len() > MAX_RECIPIENTS as usize {
             return Err(SpendIntentError::RecipientCount(self.recipients.len()));
+        }
+        if self.recipients.len() < shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS {
+            return Err(SpendIntentError::TooFewRecipients(self.recipients.len()));
         }
         if let Some(long) = self
             .recipients
