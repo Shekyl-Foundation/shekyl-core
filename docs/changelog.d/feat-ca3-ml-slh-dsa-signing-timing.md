@@ -10,3 +10,4 @@
   | The maintainer's laptop, x86_64 | 2.43 | 2.15 | 66.60 | 9.61 ms (1.66 %) |
 
   Each device's δ comes from its own measured noise, so the laptop's bound is the coarser one.
+- **ML-DSA's registration is revised before any attempt (`CA-3`; the maintainer's ruling of 2026-11-22).** The pass line is now signing alone, from one working slot, with the key's decode timed as the shipped call does it. The composed call and key generation alone are information, run in the same session. The size is 50,000 samples per comparison on each device, set from the threat model (an output key signs about once), the rule ruled for SLH-DSA. Each attempt states its sensitivity as δ₁₀. The record discloses that the line and the size were set after the localisations. Those showed that the composed call's per-key effect follows the build: the shake-down's own binary reproduced its crossing, and a later build did not.

@@ -1,8 +1,11 @@
 # `CA-3`, ML-DSA-65: the transaction authorisation's signing time, registered 2026-11-22
 
-**State of this record: registered; no run has been made.** Results are
-added below "Registered before the run", and that section is not edited
-afterwards.
+**State of this record: registered, and revised on 2026-11-23 before any
+attempt (the maintainer's ruling of 2026-11-22). No attempt has been made.**
+The revision is "Registered before the run: revision 2". It replaces the
+first registration's pass line, size and seed, and is the one the attempts
+are read against. Results are added below both, and neither registration
+section is edited afterwards.
 
 ## Why this run
 
@@ -201,6 +204,187 @@ workstation, shared, with seeds that are not the registered one:
     rejected ExpandA triples each;
   - every replica check and signature check held;
   - the control was not reached at that size.
+
+## Registered before the run: revision 2 (2026-11-23)
+
+The maintainer's ruling of 2026-11-22, after the two localisations and the
+old-binary diagnostic below. **The size and the line were set after those
+runs had been seen**, for the reasons in "Why the line and the size
+changed". This section is complete in itself: where it and the first
+registration differ, this one holds.
+
+**The question.** Does the time ML-DSA-65 signing takes depend on the value
+of the output's key, in the build that ships, counting the key's decode
+that every signature performs?
+
+**The line: signing alone, from one working slot, the key decode timed.**
+- Each key is held as its encoded secret-key bytes. Before each entry,
+  untimed, the entry's bytes are copied into one working slot, allocated
+  once and used by every entry of both classes.
+- Timed: `PrivateKey::try_from_bytes` on the slot, then fips204's
+  `try_sign_with_seed` on a 64-byte message with an empty context. That is
+  the shipped call's: it decodes the key on every call
+  (`rust/shekyl-crypto-pq/src/signature.rs:354`) and signs the nested
+  combiner's 64-byte inner message with an empty context (`:439`, the
+  seeded twin of the production `try_sign` at `:458`).
+- The harness is `rust/shekyl-crypto-pq/examples/ca3_pq_sign_timing.rs`,
+  mode `ml-dsa-registered` (`ml_dsa_registered`, `sign_comparisons`).
+
+**The classes and the pair.** Key A and key B, generated from shared
+secrets drawn from the registered seed. The pair is matched by the existing
+rule, equal ExpandS bytes and equal ExpandA rejections, with the replica
+checks as in the first registration.
+
+**The comparisons on the line.**
+- **Pass line:** the matched pair, `sign-fixed-a-vs-fixed-b`.
+- **Null, which voids:** `sign-fixed-a-vs-fixed-a-again`. Key A's bytes are
+  held as two separate copies, one per class, through the same slot.
+- **Control:** 0.5 % of the null's median time, planted inside the timed
+  region for one class of that null.
+
+**Information: the same size, in the same session, after the line.** Each
+comparison is printed and recorded, and never read against the lines.
+- **The composed call:** `sign_pqc_auth_for_output` through its seeded
+  twin, as in the first registration, with its pair, its null
+  (`fixed-a-vs-fixed-a`) and its control.
+- **Key generation alone:** the output's seed derivation and
+  `keygen_from_seed`, from one working slot, with its pair, its null (key
+  A's two copies) and its control.
+
+**The checks. Each can fail, and a failure in any comparison of the
+session, information included, voids the run.**
+1. The replica, for key A and key B, as in the first registration.
+2. In every comparison:
+   - every timed call returned;
+   - every signature's hint section is well formed by fips204 0.5.0's own
+     rules (`hint_bit_unpack`, `conversion.rs:340-400`);
+   - one result in 64 is kept, and each kept one is checked after the loop.
+     A signature must verify under its key; a generated public key must
+     equal the one generated for that key before the loop.
+
+**The lines, read in this order.**
+1. A check fails: **void**.
+2. The control is not detected (`|t|` ≤ 10): **void**.
+3. The null's `|t|` is ≥ 4.5: **void**.
+4. The pass line's `|t|` is > 10: **fail**.
+5. The pass line's `|t|` is from 4.5 to 10: **inconclusive**.
+6. The pass line's `|t|` is below 4.5: **pass**.
+
+**Reported beside the verdict, as information,** for each comparison with
+signatures:
+- each class's mean hint count;
+- the hint-count chi-square with its `z`;
+- the figure within equal hint counts;
+- the raw-mean difference, with its `t`.
+
+**Stated sensitivity: δ₁₀.** For each attempt, δ₁₀ = planted ns × 10 /
+the control's `|t|`. It is the per-key difference that would read 10 at
+this size on that device. A pass excludes a dependence of δ₁₀ or more, and
+nothing smaller. The harness prints it (`delta10_ns`).
+
+**Size: 50,000 samples per comparison, on each device.**
+- **Assumption, the basis:** an ML-DSA output key signs about once, so an
+  observer gets about one sample per key (CRYPTO_AUDIT.md §3.2).
+- At this size, the localisations' controls (0.5 % planted) read 141 to
+  211 on the floor device. A pass therefore excludes a per-key dependence
+  of a few µs, about 0.04 % of the call. An observer would need several
+  hundred thousand signatures from one key to see a dependence of that
+  size.
+- This is the rule ruled for SLH-DSA on 2026-11-21: the size comes from the
+  signer's threat model, not from FN-DSA's long-lived, unboundedly sampled
+  receipt key. It replaces the inherited 500,000.
+
+**The inputs.** The harness's ML-DSA registered seed,
+`ML_DSA_REGISTERED_SEED` (`0x4341_335f_4d4c_3233`), with no seed argument;
+the run prints `inputs=registered`. It is new with this revision, and no
+run before it drew from it. The matched pair is drawn first, so both
+devices hold the same keys. The diagnostic modes now require an explicit
+seed, so none of them can draw the registered pair by default.
+
+**One registered run per device**, each with its own verdict, from a fresh
+recursive clone of the commit that carries this revision.
+- **The floor device:** the 4 GB Raspberry Pi 4 (rule 76's floor), target
+  `aarch64-unknown-linux-gnu`, built on the device at `-j 2` and not timed,
+  under a quiet claim.
+- **The maintainer's Windows laptop** (Intel Core i9-11950H), through the
+  agent on that machine: target `x86_64-pc-windows-msvc` with `+crt-static`
+  and no `RUSTFLAGS`, pinned to one logical processor, behind the same
+  quiet gate as FN-DSA's laptop runs.
+- **One build path on x86_64.** fips204 0.5.0 has no architecture-specific
+  code: no `target_arch`, `target_feature`, `cpufeatures` or
+  `is_x86_feature_detected` in its source. Its hashing, sha3 0.10.9 over
+  keccak 0.1.6, has a run-time dispatch only on aarch64 behind keccak's
+  `asm` feature (`keccak` `src/lib.rs:66-70`). Nothing in the workspace
+  enables that feature, so keccak has one path on both devices.
+- **Outside the line:** the composed call also runs Ed25519, whose SHA-512
+  (sha2 0.10.9) picks an AVX2 path at run time on x86_64
+  (`sha512/x86.rs:14-21`). That covers information only, and the record
+  says which path the laptop took.
+
+**Conditions recorded for each run** are as the first registration records
+them (by reference to FN-DSA's): the binary's SHA-256, `rustc -vV`, the
+times and the exit code.
+
+**A shake-down on each device first.** Before each registered run, its own
+binary runs once on its device: `ml-dsa-registered 20261126`, a seed that is
+not the registered one, at the registered size. It shows that the binary
+builds, runs, holds its checks and detects its control there. It is not an
+attempt, and it is kept with the captures. If its control is not detected,
+or a null crosses, the gap goes to the maintainer before an attempt is
+spent.
+
+**Attempts.**
+- One registered attempt per device.
+- A fail or an inconclusive is not re-run.
+- A void may be made again once, and only after its cause is named and
+  fixed.
+- Every attempt is recorded with its full output under
+  `ca3_ml_dsa_tx_auth_timing_20261122_captures/`, with a `SHA256SUMS`.
+
+**What closes it.** ML-DSA's row of `CA-3` closes on a pass on both devices
+together with the recorded source read (CRYPTO_AUDIT.md §3.2). `CA-3` then
+closes with all three signers in. A void, a fail or an inconclusive goes to
+the maintainer with its figures and options, and no option is chosen
+before that.
+
+**Why the line and the size changed.**
+- **The composed call cannot be a reliable line.** The old-binary
+  diagnostic reproduced the shake-down's crossing with the shake-down's own
+  build (7.12). The second localisation's build read 3.52 on the same mode,
+  pair, seed and device and the same timed path. The composed call
+  therefore carries a per-key effect whose size follows the code layout.
+  Its likely carrier is the test repeating each key: the branch predictor
+  learning each key's rejection pattern under a given layout. Production
+  signs with each output key about once.
+- **The pair figures sat above their nulls in every mode at 50,000.** The
+  localisations read 2.6 to 3.7, against nulls of 1.2 to 2.2. That is
+  probably a per-key difference of about 0.3 µs, about 0.01 % of the call.
+  Its likely carrier is the same repetition, but it is not identified. A
+  run at 500,000 might cross on it, which is why the size is stated with
+  its basis rather than inherited.
+- **No retry-count stratification**, and no counted copy of fips204's
+  signing loop:
+  - By design, the key reaches the retry rate only through the hint bound,
+    ω = 55. The z and r0 checks accept or reject independently of the key,
+    or essentially so, and the ct0 bound is far out of reach.
+  - The localisations' matching raw-mean differences came from one draw of
+    attempt counts timed twice, because the seed was the same, not from a
+    replicated key effect. Signing alone read −45.33 µs and −45.48 µs; the
+    composed call read −11.35, −11.60 and −12.10 µs. The composed call's
+    same-key null repeats its difference too: +19.48, +20.27 and
+    +19.26 µs. The registered run uses a fresh seed.
+- **The second localisation's signing-alone mode read each hint count
+  inside its timed call:** a scan of at most 61 public bytes, about tens
+  of nanoseconds, against the 0.49 µs that comparison showed. Its method,
+  fixed before the run, said untimed. The registered harness reads it
+  after the timer stops, in every mode.
+
+**Development trial (not a result).** On the maintainer's x86_64 Linux
+workstation, with seed `20261125`, at the registered size:
+- the pair matched after 56 candidates;
+- every check held, with 790 of 790 kept results verified per comparison;
+- sign pair 1.39, null 2.37, control 40.16 (δ₁₀ 688 ns);
+- composed pair 1.75, key generation pair 1.45.
 
 ## Results
 
