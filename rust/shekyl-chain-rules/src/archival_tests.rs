@@ -30,7 +30,7 @@
 //! driver's chain in `scenario_archival_tests`; the store's own
 //! `archival_write_tests` for the claim, whose emission body the driver
 //! does not produce; a settled claim that pays has a corpus witness again
-//! when SO-D12 4b captures `emission-claim`, `docs/FOLLOWUPS.md`).
+//! on Chain L, `CHAIN_FORGE.md` §12.2).
 
 use super::*;
 use crate::harness::assert_refused;
