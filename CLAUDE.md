@@ -2,8 +2,8 @@
 
 **Repo:** https://github.com/Shekyl-Foundation/shekyl-core
 **Org:** https://github.com/Shekyl-Foundation
-**Copyright:** © 2025–2026, The Shekyl Foundation (some inherited files, such
-as the top-level `CMakeLists.txt`, additionally carry Monero/CryptoNote
+**Copyright:** © 2025–2026, The Shekyl Foundation (some inherited files
+additionally carry Monero/CryptoNote
 copyright — see [`92-copyright-header`](.cursor/rules/92-copyright-header.mdc))
 
 Shekyl is privacy-preserving, quantum-resistant money designed to last:
@@ -126,12 +126,10 @@ crypto primitives; the rest of that tree's application/protocol code is ours
 ```text
 shekyl-core/
 ├── rust/       # Rust workspace: daemon, wallet stack, crypto/consensus crates
-├── cmake/      # CMake modules and the Rust build bridge (BuildRust.cmake)
 ├── config/     # Economics/consensus parameters (build-script source of truth)
 ├── docs/       # Design docs, decision log, FOLLOWUPS, test vectors
-├── external/   # Vendored third-party C/C++ (the RandomX submodules)
-├── tests/      # CMake gate tests and the stressnet harness (Rust tests live in rust/)
-├── CMakeLists.txt / Makefile   # build entry points: CMake runs cargo for the binaries
+├── external/   # Vendored third-party C/C++ (the RandomX v2 reference)
+├── tests/      # the depends refusal test and the stressnet harness (Rust tests live in rust/)
 └── CLAUDE.md   # this file
 ```
 
@@ -156,30 +154,30 @@ Open residue: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 non-recursive clone or a new worktree, run
 `git submodule update --init --recursive` — never `--exclude`
 `shekyl-randomx-differential` / `external/randomx-v2`. Worktrees inherit
-gitlinks, not submodule working trees. Default daemon CMake does not
+gitlinks, not submodule working trees. The release build does not
 need `external/randomx-v2`; the C library is opt-in:
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
-# RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+scripts/build_randomx_v2_ref.sh "$PWD/build/randomx-v2" "$PWD/build/randomx-v2-install"
+export RANDOMX_V2_INSTALL_DIR="$PWD/build/randomx-v2-install"
 ```
 
-That flag (and `-DBUILD_RANDOMX_V2_MINER_LIB=ON`) builds the C library
+That script builds the C library
 for the differential harness and the out-of-process miner reference only;
 it never links into `shekyld`, whose PoW is the Rust verifier
 (`RANDOMX_V2_RUST.md` §2; gate: `scripts/ci/check_randomx_symbol_isolation.sh`).
-`-DMANUAL_SUBMODULES=1` is an escape hatch (Guix/gitian), not the happy
-path. The workspace `cargo test` lane **unconditionally** excludes
+The workspace `cargo test` lane **unconditionally** excludes
 `shekyl-randomx-differential` (`.github/workflows/rust-audit-test.yml`);
 setting `RANDOMX_V2_INSTALL_DIR` does not re-include it. The dedicated
 `randomx-v2-differential` workflow is the gate for T13/T14/T15.
 
-The release binaries through CMake (it runs cargo and stages `shekyld`,
-`shekyl-cli` and `shekyl-wallet-rpc` in `build/bin/`):
+The release binaries through `cargo xtask` (it runs cargo from
+`rust/xtask/matrix.toml` and stages `shekyld`, `shekyl-cli`,
+`shekyl-wallet-rpc` and `shekyl-rpc-tunnel` in `build/bin/`; a release
+host's cross build is `cargo xtask dist --host <host>`):
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
+cd rust && cargo xtask build
 ```
 
 Rust (workspace under `rust/`; gates per [`45`](.cursor/rules/45-rust-lint-checks.mdc), tests per [`50`](.cursor/rules/50-testing.mdc)):

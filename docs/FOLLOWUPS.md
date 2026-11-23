@@ -1020,9 +1020,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Daemon atomic activity snapshot RPC (conditional on RPC upstream).** Same G4 [`docs/WALLET_RPC_RUST.md`](WALLET_RPC_RUST.md)
   - Target: pre-genesis
 
-- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.** in [`external/CMakeLists.txt`](../external/CMakeLists.txt) (multi-config generators; harness/miner-lib opt-in only — the default daemon never builds the C library, so this does not gate `shekyld`)
-  - Target: pre-genesis
-
 - **The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.**
   - Target: pre-genesis
 

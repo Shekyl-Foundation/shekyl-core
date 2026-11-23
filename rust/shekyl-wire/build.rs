@@ -6,7 +6,7 @@
 //! `MIN_BLOCK_WEIGHT` from `config/consensus_constants.json`.
 //!
 //! The key `block_weight_full_reward_zone_bytes` is the penalty-free zone.
-//! `shekyl-economics` and `cmake/generate_consensus_constants.py` read the
+//! `shekyl-economics` reads the
 //! same key. This crate cannot depend on economics (the wire format is
 //! below it), so it reads the JSON itself — the same per-crate build
 //! pattern as `shekyl-difficulty`.

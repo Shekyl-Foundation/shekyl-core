@@ -22,7 +22,7 @@ AND nothing the skipped jobs compile or run reads it. "Reads it" is computed fro
   one does the gate fails instead of narrowing silently) in the consumer files
   (below) that contains a `docs/` path names that path, or the directory under it, as an input:
   `include_str!("../../../docs/test_vectors/X.json")`, a runtime
-  `join("../../docs/test_vectors")`, a CMake define pointing at a vector;
+  `join("../../docs/test_vectors")`;
 - a prose file outside `docs/` is an input when a consumer literal resolves
   to it, relative to the consumer's own directory or to its crate's root
   (`CARGO_MANIFEST_DIR`): a crate's `#![doc = include_str!("../README.md")]`
@@ -34,7 +34,7 @@ AND nothing the skipped jobs compile or run reads it. "Reads it" is computed fro
   records beside the crate.
 
 Consumers are the files the skipped jobs build or run: everything under
-`rust/`, `src/`, `tests/`, `cmake/` and `contrib/`, every `CMakeLists.txt`,
+`rust/`, `src/`, `tests/` and `contrib/`,
 each `scripts/` file the consuming workflows invoke by path, and every
 non-prose file of a consumer tree under `docs/`, a directory a consuming
 workflow builds in (a step's `working-directory:` there); both read from
@@ -167,7 +167,7 @@ ALL_PREFIXES = ("rust/.cargo/", "rust/.config/", "config/")
 # list follows.
 NEXTEST_EXCLUDED = ("shekyl-randomx-differential",)
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
-CONSUMER_DIRS = ("rust/", "src/", "tests/", "cmake/", "contrib/")
+CONSUMER_DIRS = ("rust/", "src/", "tests/", "contrib/")
 # A step that builds in a directory under docs/ makes it a consumer tree.
 DOCS_WORKING_DIRECTORY = re.compile(r"working-directory:\s*(docs/[A-Za-z0-9_./-]+)")
 CONSUMING_WORKFLOWS = (
@@ -225,7 +225,7 @@ def consumer_files():
             continue
         if p == SELF:
             continue
-        if p.startswith(CONSUMER_DIRS + trees) or p == "CMakeLists.txt" or p.endswith("/CMakeLists.txt") or p in scripts:
+        if p.startswith(CONSUMER_DIRS + trees) or p in scripts:
             out.append(p)
     if not out:
         raise RuntimeError("no consumer files found; refusing to classify")
@@ -243,7 +243,7 @@ RUST_COMMENT = re.compile(r"^\s*//(?![/!])")
 C_LIKE = re.compile(r"^\s*(?://|/\*|\*)")
 HASH = re.compile(r"^\s*#")
 C_LIKE_SUFFIXES = (".c", ".cc", ".cpp", ".h", ".hpp", ".inl", ".ipp")
-HASH_SUFFIXES = (".cmake", ".txt", ".sh", ".py", ".ps1", ".yml", ".yaml", ".toml", ".mk")
+HASH_SUFFIXES = (".txt", ".sh", ".py", ".ps1", ".yml", ".yaml", ".toml", ".mk")
 
 
 def code_text(path):
@@ -251,7 +251,7 @@ def code_text(path):
         comment = RUST_COMMENT
     elif path.endswith(C_LIKE_SUFFIXES):
         comment = C_LIKE
-    elif path.endswith(HASH_SUFFIXES) or os.path.basename(path) in ("Makefile", "CMakeLists.txt"):
+    elif path.endswith(HASH_SUFFIXES) or os.path.basename(path) == "Makefile":
         comment = HASH
     else:
         return read_text(path)
@@ -740,9 +740,9 @@ SELFTEST = [
     ("rust/shekyl-bulletproofs/README.md", False),        # #![doc = include_str!("../README.md")]
     ("rust/shekyl-scanner/README.md", True),              # a README no code reads
     ("tests/README.md", True),
-    ("README.md", True),                                  # quoted only in a cmake comment
+    ("README.md", True),                                  # no consumer reads it
     ("rust/shekyl-tor/src/lib.rs", False),                # any .rs, doc comment or not
-    ("CMakeLists.txt", False),
+    ("rust/xtask/matrix.toml", False),
     ("src/cryptonote_basic/account.cpp", False),
     (".github/workflows/build.yml", False),
     ("scripts/ci/change_scope.py", False),
@@ -777,8 +777,8 @@ def selftest():
     if spaced:
         print(f"WRONG: prose paths contain whitespace, so a read of one would be missed: {spaced[:5]}")
         bad += 1
-    # A sentence that mentions a document reads nothing (external/CMakeLists.txt
-    # and the staking sim name docs/FOLLOWUPS.md in messages).
+    # A sentence that mentions a document reads nothing (the staking
+    # sim names docs/FOLLOWUPS.md in messages).
     if inputs.reads("docs/FOLLOWUPS.md"):
         print("WRONG: a prose mention of docs/FOLLOWUPS.md counted as a read")
         bad += 1
@@ -826,7 +826,7 @@ RUST_SELFTEST = [
     ("rust/.config/nextest.toml", "run", "all"),
     ("rust/.cargo/config.toml", "run", "all"),
     ("config/anything.h", "run", "all"),                                   # read by build scripts
-    ("CMakeLists.txt", "run", "all"),                                      # claimed by nothing
+    ("contrib/brew/Brewfile", "run", "all"),                               # claimed by nothing
     ("external/randomx-v2/src/x.c", "run", "all"),
     (SELF, "run", "all"),
     (JOB_OWNERS, "run", "all"),

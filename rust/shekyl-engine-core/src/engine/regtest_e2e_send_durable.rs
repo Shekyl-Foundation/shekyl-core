@@ -15,7 +15,7 @@
 //! process, not the engine, dies.
 //!
 //! Requires `SHEKYLD_BIN` and `SHEKYL_WALLET_RPC_BIN` (both staged in
-//! `build/bin` by the CMake build). Each gate funds a wallet created here
+//! `build/bin` by `cargo xtask build`). Each gate funds a wallet created here
 //! from a known seed (the daemon mines to its address), closes it, and
 //! hands its directory to the wallet server.
 

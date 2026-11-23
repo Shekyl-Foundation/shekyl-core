@@ -45,7 +45,7 @@ getrandom = "0.2"
 # fetch through it was the identical 404 once (a) landed. This crate is the one
 # place both halves of the `SF-D4` dep cut are linked on purpose — it is a rig,
 # not a shipped root, and `check_p_fetch_dep_cut.py` reads its roots from
-# `BuildRust.cmake`, which never names this crate.
+# `rust/xtask/matrix.toml`, which never names this crate.
 shekyl-p-fetch = { path = "../shekyl-p-fetch" }
 # `PASS_ANCHOR_DEPTH_BLOCKS` — the one burial depth both sides of the apparatus
 # anchor against, read from the same constant the verifier reads.

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license = "BSD-3-Clause"
 description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
 # Build script reads `config/consensus_constants.json` (the same JSON
-# the C++ generator at `cmake/generate_consensus_constants.py` reads)
+# every crate's generated constants come from)
 # and emits a Rust constants module. Closes the C++/Rust drift class
 # that produced Bug 3 of the 2026-05-05 FFI constant-drift audit;
 # see `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.

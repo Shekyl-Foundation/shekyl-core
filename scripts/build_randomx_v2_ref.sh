@@ -43,6 +43,13 @@ if [ ! -f "$src/CMakeLists.txt" ]; then
   exit 1
 fi
 
+for tool in cmake ninja; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "$tool is not on PATH: external/randomx-v2's own build needs it" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "$install_dir/lib" "$install_dir/include"
 cmake -G Ninja \
   -S "$src" \

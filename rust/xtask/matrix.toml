@@ -42,9 +42,9 @@ cargo_args = ["build", "--locked", "--release"]
 target_dir = "rust/target"
 profile_dir = "release"
 
-# Set on every build, before the host's own. The first eight are the
-# variables CMake emptied so that build scripts and proc macros compile for
-# the build machine, not the target: emptied, not removed, as CMake did.
+# Set on every build, before the host's own. The first eight are emptied, not
+# removed, so that build scripts and proc macros compile for the build
+# machine, not the target.
 env = [
     ["CC", ""],
     ["CXX", ""],
@@ -312,8 +312,8 @@ env = [
     ["CFLAGS_x86_64_unknown_freebsd", "-pthread -maes -fno-strict-aliasing -D_GNU_SOURCE -fPIC -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=1 -Wformat -Wformat-security -fstack-protector -fstack-protector-strong -fcf-protection=full -fstack-clash-protection -ffunction-sections -fdata-sections -Werror=switch -Werror=return-type"],
 ]
 
-# Windows' MSVC build is native only (no depends host). `--target` is named
-# as CMake named it, so the binaries land under rust/target/<triple>/.
+# Windows' MSVC build is native only (no depends host). `--target` is named,
+# so the binaries land under rust/target/<triple>/.
 [[host]]
 name = "x86_64-pc-windows-msvc"
 triple = "x86_64-pc-windows-msvc"

@@ -170,7 +170,7 @@ KNOWN_RUSTUP_INIT = frozenset({"-y", "--profile", "minimal", "--default-toolchai
 # rustc command, a rustup/cargo/rustc environment variable, or a `+`
 # toolchain selector would reach the compiler another way. `.cargo` is the
 # toolchain directory on PATH; make's `-C` changes directory. Neither is a
-# compiler invocation, so neither is a signal here. The cmake scan holds
+# compiler invocation, so neither is a signal here. The matrix scan holds
 # every rustc `-C` to `link-arg=`.
 GITIAN_FORBIDDEN = re.compile(
     r"\b(?:RUSTFLAGS|RUSTDOCFLAGS|RUSTUP_[A-Z0-9_]+|CARGO_[A-Z0-9_]+|RUSTC[A-Z_]*)\b"

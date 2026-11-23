@@ -69,9 +69,8 @@ impl GitHead {
         Ok(Self { commit, tags })
     }
 
-    /// Whether a tag points at HEAD, as CMake's `if(TAG)` judged it: the
-    /// output is false when empty or when it spells one of CMake's false
-    /// constants (`0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `NOTFOUND`, or
+    /// Whether a tag points at HEAD: the output is false when empty or when
+    /// it spells one of the false constants (`0`, `OFF`, `NO`, `FALSE`, `N`, `IGNORE`, `NOTFOUND`, or
     /// `…-NOTFOUND`, any case), so a lone tag named `no` is not a release.
     pub fn is_tagged(&self) -> bool {
         let upper = self.tags.to_ascii_uppercase();
@@ -122,7 +121,7 @@ pub fn from_override(version: &str, release_name: &str) -> Result<Identity, Stri
 }
 
 /// The first `v` followed by non-space characters, without the `v`, as
-/// CMake's `REGEX MATCH "v[^ \t\r\n]+"` found it: anywhere in the text, so a
+/// the release rule has always read it: anywhere in the text, so a
 /// tag `x-v1` yields `1`.
 fn first_v_token(tags: &str) -> Option<&str> {
     let bytes = tags.as_bytes();
@@ -190,7 +189,7 @@ mod tests {
 
     #[test]
     fn the_first_v_token_wins_wherever_it_is() {
-        // The `v` inside `archive` comes first, as it did for CMake.
+        // The `v` inside `archive` comes first.
         assert_eq!(first_v_token("archive/x-v2\nv3.1.0"), Some("e/x-v2"));
         assert_eq!(first_v_token("candidate\nv3.1.0"), Some("3.1.0"));
     }
@@ -203,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_tag_spelling_a_cmake_false_constant_is_not_a_release() {
+    fn a_lone_tag_spelling_a_false_constant_is_not_a_release() {
         for tag in ["no", "OFF", "0", "x-NOTFOUND"] {
             assert!(!head(tag).is_tagged(), "{tag}");
         }

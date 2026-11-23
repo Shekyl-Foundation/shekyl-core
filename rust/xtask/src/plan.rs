@@ -189,7 +189,7 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
     };
     Ok(match key {
         "prefix" => depends()?.prefix.clone(),
-        // CMake's compiler variable: the first word, found on PATH. A
+        // The compiler: the first word, found on PATH. A
         // depends CC of `gcc -m64` gave cargo `/usr/bin/gcc`.
         "cc" => which(first_word(&depends()?.cc), path_var)?,
         "ar" => which(first_word(&depends()?.ar), path_var)?,

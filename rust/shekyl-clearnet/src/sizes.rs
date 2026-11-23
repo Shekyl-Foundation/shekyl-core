@@ -28,7 +28,7 @@
 //! A release build's [`SizeTap`] is zero-sized. [`SizeTap::feed`] is empty,
 //! and a session future carries no walker. The measurement build is
 //! `shekyl-clearnet`'s `measurement-spans` feature, turned on with
-//! `shekyl-transport-layer`'s by CMake's `SHEKYL_MEASUREMENT_SPANS`. The
+//! `shekyl-transport-layer`'s by `cargo xtask --measurement-spans`. The
 //! clearnet feature enables nothing: a Cargo edge onto the transport-layer
 //! feature would fail `check_measurement_spans.py`.
 
@@ -378,7 +378,7 @@ pub(crate) use absent::SizeTap;
 #[cfg(any(test, feature = "measurement-spans"))]
 pub(crate) use present::SizeTap;
 
-/// CMake turns this crate's feature and the transport-layer feature on
+/// The xtask turns this crate's feature and the transport-layer feature on
 /// together. A build that splits them does not compile: the array length
 /// is 1 only when the two switches agree, so the tap cannot be present
 /// where the measurement const is off, or absent where it is on.

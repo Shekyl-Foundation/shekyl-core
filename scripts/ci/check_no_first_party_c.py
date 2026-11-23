@@ -208,7 +208,7 @@ def check_binary(libs, syms):
 
 def selftest():
     links = ["external/randomx-v2"]
-    tree = ["rust/a/src/lib.rs", "external/randomx-v2/src/vm.cpp", "CMakeLists.txt"]
+    tree = ["rust/a/src/lib.rs", "external/randomx-v2/src/vm.cpp", "README.md"]
     assert check_tracked(tree, links, {"ncurses"}, ["external/randomx-v2"]) == []
     assert check_tracked(tree + ["src/crypto/keccak.c"], links, set(), []), "first-party C is red"
     assert check_tracked(tree + ["tools/x.HPP"], links, set(), []), "the extension check ignores case"

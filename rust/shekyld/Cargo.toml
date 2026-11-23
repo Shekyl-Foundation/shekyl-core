@@ -24,7 +24,7 @@ doctest = false
 # the one signal owner, the RPC and the managed Tor.
 shekyl-daemon = { path = "../shekyl-daemon" }
 # Direct edges with no features of their own, so the measurement build
-# (cmake/BuildRust.cmake, `SHEKYL_MEASUREMENT_SPANS`) can name
+# (`cargo xtask --measurement-spans`) can name
 # `shekyl-transport-layer/measurement-spans`,
 # `shekyl-clearnet/measurement-spans` and `shekyl-relay/measurement-spans`
 # on `cargo rustc -p shekyld`'s command line: cargo lets a command line name

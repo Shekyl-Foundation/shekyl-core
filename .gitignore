@@ -1,10 +1,9 @@
 .DS_Store
 /doc
-# Root-anchored CMake build trees, generalized (third accidental-tracking
+# Root-anchored build trees, generalized (third accidental-tracking
 # occurrence: build-deb/build-portable via 7a8d14b2e, then build-aarch64 on
 # bench/gap7-block-verify-shape) - directories only (spares */build.rs),
-# root-anchored (spares contrib/depends/builders/, utils/health/
-# build-scripts/). Nested trees stay covered by **/build/ below.
+# root-anchored (spares contrib/depends/builders/). Nested trees stay covered by **/build/ below.
 /build*/
 /tags
 log/
@@ -63,13 +62,6 @@ contrib/gitian/sigs/
 *.out
 *.app
 
-
-### CMake ###
-CMakeCache.txt
-CMakeFiles
-cmake_install.cmake
-install_manifest.txt
-cmake-build-debug/
 
 ### Linux ###
 *~
@@ -151,15 +143,6 @@ __pycache__/
 # diffs and JSON. 65 such files reached a PR before review caught them.
 **/mutants.out/
 **/mutants.out.old/
-
-# Additional CMake/Ninja generated files
-cmake-build-*/
-compile_commands.json
-.ninja_deps
-.ninja_log
-build.ninja
-Testing/
-CTestTestfile.cmake
 
 # Common editor/office lock artifacts
 .~lock.*#
