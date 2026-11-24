@@ -59,6 +59,20 @@ pub enum WalletLedgerError {
     #[error("postcard decode failed: {0}")]
     Postcard(#[from] postcard::Error),
 
+    /// A [`GroupWalletLedger`]'s outputs are not a set: two of them share an
+    /// output key or a key image. The scan skips a duplicate as it arrives;
+    /// a file that already holds one is refused, because dropping it on open
+    /// would change the balance the file claimed.
+    ///
+    /// [`GroupWalletLedger`]: crate::group_ledger::GroupWalletLedger
+    #[error("group ledger invariant failed ({invariant}): {detail}")]
+    GroupInvariantFailed {
+        /// Stable name. `group-outputs-unique`.
+        invariant: &'static str,
+        /// Which identity was repeated.
+        detail: String,
+    },
+
     /// An aggregator-level invariant on the [`WalletLedger`] bundle
     /// failed. Unlike a version mismatch or a postcard decode error,
     /// this fires *after* every block decoded individually — the bytes

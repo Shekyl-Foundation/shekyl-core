@@ -27,7 +27,7 @@ use shekyl_curve_tree::{
 use shekyl_engine_state::{ChainPlace, GroupCoin, GroupOutput, GroupWalletLedger};
 use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
-use shekyl_multisig::ceremony::nonce::InputInUse;
+use shekyl_multisig::ceremony::nonce::{InputInUse, ReservationDiffers, ReserveFault};
 use shekyl_multisig::intent::{
     ChainStateFingerprint, IntentPayee, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION,
 };
@@ -51,14 +51,29 @@ use shekyl_wire::{Ct, Input, PqcAuth, Transaction};
 pub struct Live(pub HashMap<u64, [u8; 32]>);
 
 impl LiveCeremonies for Live {
-    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), InputInUse> {
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), ReserveFault> {
         let intent_hash = intent.hash();
         let inputs = &intent.intent().input_global_indices;
         if let Some(&input) = inputs
             .iter()
             .find(|i| self.0.get(i).is_some_and(|h| h != intent_hash))
         {
-            return Err(InputInUse { input });
+            return Err(InputInUse { input }.into());
+        }
+        let mut held: Vec<u64> = self
+            .0
+            .iter()
+            .filter(|(_, held_hash)| *held_hash == intent_hash)
+            .map(|(&input, _)| input)
+            .collect();
+        if !held.is_empty() {
+            held.sort_unstable();
+            let mut wanted = inputs.clone();
+            wanted.sort_unstable();
+            if held != wanted {
+                return Err(ReservationDiffers.into());
+            }
+            return Ok(());
         }
         for &input in inputs {
             self.0.insert(input, *intent_hash);

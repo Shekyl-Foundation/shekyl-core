@@ -171,9 +171,8 @@ impl TxKey {
     }
 
     /// Place a transaction's outputs by this key's order (R-24, R-34):
-    /// output `i` of `outputs` goes to position `π(i)`. Returns them in
-    /// position order (the transaction's output 0 first), each paired with
-    /// its position.
+    /// output `i` of `outputs` goes to position `π(i)`. The returned order
+    /// is the one that placed them, so a caller does not derive it again.
     ///
     /// The one way production code gets an [`OutputPosition`] from a key:
     /// it takes the whole set, so no caller names a position. A caller that
@@ -181,10 +180,10 @@ impl TxKey {
     /// suit; it holds the key, and no type can stop that. What this stops is
     /// the accident: an output built by hand at an index nobody drew.
     #[must_use]
-    pub fn place<T>(&self, outputs: Vec<T>) -> Vec<(OutputPosition<'_>, T)> {
+    pub fn place<T>(&self, outputs: Vec<T>) -> Placed<'_, T> {
         let order = self.output_order(outputs.len());
         let mut unplaced: Vec<Option<T>> = outputs.into_iter().map(Some).collect();
-        order
+        let placed = order
             .recipients()
             .enumerate()
             .map(|(position, recipient)| {
@@ -199,7 +198,8 @@ impl TxKey {
                     output,
                 )
             })
-            .collect()
+            .collect();
+        Placed { order, placed }
     }
 
     /// The positions of this transaction's `count` outputs, to read one at a
@@ -272,6 +272,47 @@ impl<'k> OutputPosition<'k> {
 impl fmt::Debug for OutputPosition<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "OutputPosition({})", self.index)
+    }
+}
+
+/// The outputs [`TxKey::place`] put in position order, and the order that
+/// put them there. The order is that derivation, not a second one.
+pub struct Placed<'k, T> {
+    order: OutputOrder,
+    placed: Vec<(OutputPosition<'k>, T)>,
+}
+
+impl<'k, T> Placed<'k, T> {
+    /// The order that placed the outputs.
+    #[must_use]
+    pub fn order(&self) -> &OutputOrder {
+        &self.order
+    }
+
+    /// The number of outputs placed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.placed.len()
+    }
+
+    /// Whether nothing was placed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.placed.is_empty()
+    }
+
+    /// The placed outputs, in position order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &(OutputPosition<'k>, T)> + '_ {
+        self.placed.iter()
+    }
+}
+
+impl<'k, T> IntoIterator for Placed<'k, T> {
+    type Item = (OutputPosition<'k>, T);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.placed.into_iter()
     }
 }
 
@@ -466,6 +507,7 @@ mod tests {
         let tx_key = key(9);
         let order = tx_key.output_order(OUTPUTS);
         let placed = tx_key.place((0..OUTPUTS).collect());
+        assert_eq!(placed.order(), &order);
         assert_eq!(placed.len(), OUTPUTS);
         for (expected, (position, output)) in placed.iter().enumerate() {
             assert_eq!(usize::try_from(position.index()).unwrap(), expected);

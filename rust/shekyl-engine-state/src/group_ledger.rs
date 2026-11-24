@@ -38,6 +38,8 @@
 //!
 //! Version 1 of each is this layout.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::key_image::KeyImage;
@@ -64,6 +66,10 @@ pub const GROUP_LEDGER_BLOCK_VERSION: u32 = 1;
 /// Version of [`GroupWalletLedger`]'s layout. Bumps with
 /// `schemas/group_wallet_ledger.snap`.
 pub const GROUP_WALLET_LEDGER_FORMAT_VERSION: u32 = 1;
+
+/// Stable name of the load-time check that a group ledger's outputs are a
+/// set: one output key, and one key image, each.
+pub const INV_GROUP_OUTPUTS_UNIQUE: &str = "group-outputs-unique";
 
 /// Where an output sits on the chain: what the scanner adds to a receipt,
 /// which `shekyl-crypto-pq` cannot see.
@@ -500,13 +506,11 @@ impl GroupLedgerBlock {
     ) -> Range<usize> {
         let start = self.outputs.len();
         for output in outputs {
-            if self
-                .outputs
-                .iter()
-                .any(|held| held.output_key() == output.output_key())
-            {
+            if self.outputs.iter().any(|held| {
+                held.output_key() == output.output_key() || held.key_image() == output.key_image()
+            }) {
                 tracing::warn!(
-                    "duplicate group output key detected (potential burning bug) -- skipping"
+                    "duplicate group output detected (potential burning bug) -- skipping"
                 );
                 continue;
             }
@@ -563,6 +567,31 @@ impl GroupLedgerBlock {
             GroupOutput::Refused(refused) => Some(refused),
             GroupOutput::Coin(_) => None,
         })
+    }
+
+    /// The outputs are a set. A repeated output key is the burning bug,
+    /// and a repeated key image is the same spend recorded twice. The scan
+    /// skips either as it arrives ([`Self::ingest_block`]); a file that
+    /// already holds one is refused here, on open and on save.
+    pub fn check_unique_outputs(&self) -> Result<(), WalletLedgerError> {
+        let mut output_keys = HashSet::with_capacity(self.outputs.len());
+        let mut key_images = HashSet::with_capacity(self.outputs.len());
+        for output in &self.outputs {
+            if !output_keys.insert(*output.output_key()) {
+                return Err(duplicate_output("two group outputs share an output key"));
+            }
+            if !key_images.insert(*output.key_image()) {
+                return Err(duplicate_output("two group outputs share a key image"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn duplicate_output(detail: &str) -> WalletLedgerError {
+    WalletLedgerError::GroupInvariantFailed {
+        invariant: INV_GROUP_OUTPUTS_UNIQUE,
+        detail: detail.to_owned(),
     }
 }
 
@@ -624,6 +653,7 @@ impl GroupWalletLedger {
         Self::gate_format_version(file_version)?;
         let ledger: Self = postcard::from_bytes(bytes)?;
         ledger.check_all_block_versions()?;
+        ledger.check_invariants()?;
         Ok(ledger)
     }
 
@@ -635,6 +665,11 @@ impl GroupWalletLedger {
             });
         }
         Ok(())
+    }
+
+    /// The outputs are a set ([`GroupLedgerBlock::check_unique_outputs`]).
+    pub fn check_invariants(&self) -> Result<(), WalletLedgerError> {
+        self.ledger.check_unique_outputs()
     }
 
     /// Every block's version gate, in declaration order.

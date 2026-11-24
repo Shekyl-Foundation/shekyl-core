@@ -32,10 +32,9 @@ pub(super) struct DispatchFacts {
     pub(super) tx_bytes: Vec<u8>,
     pub(super) selected: Vec<OutputId>,
     pub(super) retained: shekyl_engine_state::TxSecretKey,
-    pub(super) recipients: Vec<shekyl_engine_state::SendRecipient>,
-    /// The addresses of the groups the send pays, stored with its row
-    /// (R-37).
-    pub(super) group_payees: Vec<shekyl_address::MultisigAddressPayload>,
+    /// The recipients the journal records. A group still carries its
+    /// address; the journal stores it with the row.
+    pub(super) recipients: Vec<shekyl_engine_state::JournalRecipient>,
 }
 
 #[allow(private_bounds)]
@@ -89,7 +88,6 @@ where
             selected,
             retained,
             recipients,
-            group_payees,
         } = dispatch;
         let saved = self.ledger.with_wallet_ledger_mut(|wallet| {
             // The input set is resolved here, under the write guard the
@@ -114,7 +112,6 @@ where
                     retained,
                     fee: realized_fee,
                     recipients,
-                    group_payees,
                     inputs,
                     tx_bytes,
                 },

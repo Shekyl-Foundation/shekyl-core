@@ -10,9 +10,10 @@
 A wallet that chose its outputs' positions could put its change last, or
 its payees in the order it was handed them, and an observer would learn
 which output came back to it (R-24). So the `shekyl-crypto-pq` output
-constructors take an `OutputPosition`, and a wallet gets one only from its
-transaction key's order (`TxKey::output_positions`). The one other way to
-make a position is `OutputPosition::for_block_producer(tx_key, index)`:
+constructors take an `OutputPosition`, and production code gets one only
+from `TxKey::place`, which places the whole set by the key's order.
+`TxKey::output_positions` is test-only. The one other way to make a
+position is `OutputPosition::for_block_producer(tx_key, index)`:
 block producers place their outputs themselves, because their outputs are
 public by construction and their bytes are pinned. That constructor is
 public, so the type alone cannot keep a wallet from calling it. This gate

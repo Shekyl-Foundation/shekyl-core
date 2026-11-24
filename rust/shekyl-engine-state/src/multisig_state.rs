@@ -65,12 +65,21 @@ impl Reservation {
     }
 }
 
-/// Another of this member's live ceremonies already spends this input.
+/// Why an intent's inputs were not reserved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("input {input} is spent by another live ceremony at this member")]
-pub struct ReservedElsewhere {
-    /// The input's global output index.
-    pub input: GlobalOutputIndex,
+pub enum ReserveError {
+    /// Another of this member's live ceremonies already spends `input`.
+    #[error("input {input} is spent by another live ceremony at this member")]
+    ReservedElsewhere {
+        /// The input's global output index.
+        input: GlobalOutputIndex,
+    },
+    /// This intent is already reserved, and the call names different inputs
+    /// or a different reference height. The stored reservation is unchanged.
+    #[error(
+        "this intent is already reserved with different inputs or a different reference height"
+    )]
+    ReservationDiffers,
 }
 
 /// The body of `.wallet.multisig` (module docs).
@@ -115,38 +124,42 @@ impl MultisigState {
     }
 
     /// Reserve `inputs` for the intent `intent_hash`, whose reference block
-    /// is at `reference_height`. Reserving an intent again is a no-op for
-    /// the inputs it already holds.
+    /// is at `reference_height`. The input list is the intent's own order.
+    /// Reserving that same intent again, with the same list and the same
+    /// height, changes nothing.
     ///
     /// # Errors
     ///
-    /// [`ReservedElsewhere`] when another intent holds one of the inputs;
-    /// nothing is reserved then.
+    /// [`ReserveError::ReservedElsewhere`] when another intent holds one of
+    /// the inputs, and [`ReserveError::ReservationDiffers`] when this intent
+    /// is already reserved with a different list or height. Nothing is
+    /// reserved in either case.
     pub fn reserve(
         &mut self,
         intent_hash: &[u8; 32],
         inputs: &[GlobalOutputIndex],
         reference_height: BlockHeight,
-    ) -> Result<(), ReservedElsewhere> {
-        for reservation in &self.reservations {
-            if &reservation.intent_hash == intent_hash {
-                continue;
-            }
-            if let Some(&input) = inputs.iter().find(|i| reservation.inputs.contains(i)) {
-                return Err(ReservedElsewhere { input });
-            }
-        }
-        if !self
+    ) -> Result<(), ReserveError> {
+        if let Some(held) = self
             .reservations
             .iter()
-            .any(|reservation| &reservation.intent_hash == intent_hash)
+            .find(|reservation| &reservation.intent_hash == intent_hash)
         {
-            self.reservations.push(Reservation {
-                intent_hash: *intent_hash,
-                inputs: inputs.to_vec(),
-                reference_height,
-            });
+            if held.inputs.as_slice() == inputs && held.reference_height == reference_height {
+                return Ok(());
+            }
+            return Err(ReserveError::ReservationDiffers);
         }
+        for reservation in &self.reservations {
+            if let Some(&input) = inputs.iter().find(|i| reservation.inputs.contains(i)) {
+                return Err(ReserveError::ReservedElsewhere { input });
+            }
+        }
+        self.reservations.push(Reservation {
+            intent_hash: *intent_hash,
+            inputs: inputs.to_vec(),
+            reference_height,
+        });
         Ok(())
     }
 

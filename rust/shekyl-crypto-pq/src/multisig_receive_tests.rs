@@ -99,7 +99,7 @@ struct Paid {
 
 fn pay(g: &Group) -> Paid {
     let tx_key = TxKey::random().expect("the OS draws a key");
-    let (position, ()) = tx_key.place(vec![()]).pop().unwrap();
+    let (position, ()) = tx_key.place(vec![()]).into_iter().next().unwrap();
     let out = construct_multisig_output(position, &g.address, AMOUNT, &NET).unwrap();
     Paid {
         leaf: out.pqc_leaf.entry_bytes(),

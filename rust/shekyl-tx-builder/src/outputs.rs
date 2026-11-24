@@ -390,16 +390,15 @@ impl BuiltSpend {
         // Allocated once, at its size: each output holds its mask, and a
         // vector that grew would free its earlier buffers, masks in them,
         // without wiping them.
+        let placed = tx_key.place(recipients.iter().enumerate().collect());
+        let order = placed.order().clone();
         let mut outputs = Vec::with_capacity(count);
-        for (position, (recipient, &Recipient { payee, amount })) in
-            tx_key.place(recipients.iter().enumerate().collect())
-        {
+        for (position, (recipient, &Recipient { payee, amount })) in placed {
             outputs.push(
                 build_output(position, payee, amount)
                     .map_err(|source| BuildSpendError::Output { recipient, source })?,
             );
         }
-        let order = tx_key.output_order(count);
         let wire = SpendOutputs::of(tx_key, &outputs).map_err(BuildSpendError::Extra)?;
         Ok(Self {
             outputs,

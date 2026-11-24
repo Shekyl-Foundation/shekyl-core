@@ -100,12 +100,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use shekyl_address::{AddressError, MultisigAddressPayload, Network, PaymentAddress};
+use shekyl_address::{AddressError, Network, PaymentAddress};
 use shekyl_crypto_pq::archival_p::PersonaDestination;
 use shekyl_encoding::EncodingError;
+use shekyl_engine_state::{JournalPayee, JournalRecipient, PaymentRequestId, SendDestination};
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, SendJournalBlock, WalletSafetyConstants};
-use shekyl_engine_state::{PaymentRequestId, SendDestination, SendRecipient};
 use shekyl_tx_weight::GroupSize;
 
 pub use super::group_destination::GroupDestination;
@@ -388,28 +388,21 @@ pub struct TxRequest {
 }
 
 impl TxRequest {
-    /// The recipients as the send journal records them, in request order.
+    /// The recipients as dispatch hands them to the journal, in request
+    /// order. A group keeps its address; the journal stores it and writes
+    /// the fingerprint.
     #[must_use]
-    pub fn recorded_recipients(&self) -> Vec<SendRecipient> {
+    pub fn journal_recipients(&self) -> Vec<JournalRecipient> {
         self.recipients
             .iter()
-            .map(|r| SendRecipient {
-                destination: r.destination.recorded(),
-                amount: r.amount_atomic_units.to_raw(),
-                rid: r.rid,
-            })
-            .collect()
-    }
-
-    /// The address of each group the request pays, for the journal to
-    /// store with the row (R-37).
-    #[must_use]
-    pub fn group_payee_addresses(&self) -> Vec<MultisigAddressPayload> {
-        self.recipients
-            .iter()
-            .filter_map(|r| match &r.destination {
-                TxDestination::Group(group) => Some(group.address().clone()),
-                TxDestination::Address(_) | TxDestination::OwnPersona(_) => None,
+            .map(|recipient| JournalRecipient {
+                payee: match &recipient.destination {
+                    TxDestination::Address(address) => JournalPayee::Address(address.clone()),
+                    TxDestination::OwnPersona(_) => JournalPayee::OwnPersonaFunding,
+                    TxDestination::Group(group) => JournalPayee::Group(group.address().clone()),
+                },
+                amount: recipient.amount_atomic_units.to_raw(),
+                rid: recipient.rid,
             })
             .collect()
     }

@@ -313,7 +313,9 @@ pub enum WalletEnvelopeError {
     #[error("cap_content_len {len} does not match capability mode {mode:#x}")]
     CapContentLenMismatch { mode: u8, len: u16 },
 
-    #[error("unsupported capability mode {0:#x} (this build supports 0x01 only)")]
+    #[error(
+        "unsupported capability mode {0:#x} (this build supports full and group-member wallets)"
+    )]
     UnknownCapabilityMode(u8),
 
     #[error("invalid password or corrupted wallet file")]

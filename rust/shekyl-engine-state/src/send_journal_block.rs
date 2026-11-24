@@ -190,6 +190,51 @@ pub struct SendRecipient {
     pub rid: Option<crate::PaymentRequestId>,
 }
 
+/// A destination as dispatch hands it to the journal. A group still carries
+/// its address; [`SendJournalBlock::record_dispatched_payees`] stores that
+/// address once and writes the fingerprint on the row. The row's
+/// [`SendDestination`] is that stored form, and a caller cannot hand the
+/// journal a fingerprint whose address it did not also hand over.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JournalPayee {
+    /// The Shekyl-encoded address the user sent to.
+    Address(String),
+    /// This wallet funding its own active staking persona.
+    OwnPersonaFunding,
+    /// A multisig group, by the address the send paid.
+    Group(MultisigAddressPayload),
+}
+
+/// One recipient as dispatch hands it to the journal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JournalRecipient {
+    /// Where this output went, address included when it is a group.
+    pub payee: JournalPayee,
+    /// Amount sent to this recipient, in atomic units.
+    pub amount: u64,
+    /// The payment request this output answered, or `None` for a sentinel.
+    pub rid: Option<crate::PaymentRequestId>,
+}
+
+impl JournalRecipient {
+    /// The row's recipient. A group address is stored on `journal` under
+    /// the fingerprint the row names.
+    fn store(self, journal: &mut SendJournalBlock) -> SendRecipient {
+        let destination = match self.payee {
+            JournalPayee::Address(address) => SendDestination::Address(address),
+            JournalPayee::OwnPersonaFunding => SendDestination::OwnPersonaFunding,
+            JournalPayee::Group(address) => {
+                SendDestination::Group(journal.store_group_payee(&address))
+            }
+        };
+        SendRecipient {
+            destination,
+            amount: self.amount,
+            rid: self.rid,
+        }
+    }
+}
+
 /// One carried input of a recorded send — the wipe-stable identifier the
 /// rescan re-derivation joins on (SJ-DQ-4 / P3-1: `global_output_index`
 /// survives a `LedgerBlock` reconstruction; row indices do not).
@@ -492,12 +537,46 @@ impl SendJournalBlock {
         )
     }
 
+    /// Birth a dispatch-authored row from the payees the send paid. Each
+    /// group's address is stored once, and the row names that address's
+    /// fingerprint. This is the production write: the fingerprint and the
+    /// address come from the same payee, so a row cannot name a group the
+    /// journal does not hold.
+    pub fn record_dispatched_payees(
+        &mut self,
+        txid: [u8; 32],
+        dispatched_at_height: BlockHeight,
+        fee: u64,
+        recipients: Vec<JournalRecipient>,
+        inputs: Vec<SendInputRef>,
+        tx_bytes: Vec<u8>,
+    ) {
+        let recipients = recipients
+            .into_iter()
+            .map(|recipient| recipient.store(self))
+            .collect();
+        self.record_dispatched(
+            txid,
+            dispatched_at_height,
+            fee,
+            recipients,
+            inputs,
+            tx_bytes,
+        );
+    }
+
     /// Birth a dispatch-authored row (pin-1 form: before the bytes can
     /// leave for the daemon). `change_amount` is the exact remainder
     /// `Σ inputs − Σ recipients − fee`; a wallet-built send that does
     /// not balance is a build-path defect, not a runtime condition.
     /// `tx_bytes` are the signed bytes about to leave
     /// ([`SendRecord::tx_bytes`]).
+    ///
+    /// A group on `recipients` is a fingerprint. Production dispatch uses
+    /// [`Self::record_dispatched_payees`], which stores the address as it
+    /// writes the fingerprint. This writer is the row itself: a test builds
+    /// a row the load check must refuse, and the payee writer calls it
+    /// after the addresses are stored.
     pub fn record_dispatched(
         &mut self,
         txid: [u8; 32],

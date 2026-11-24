@@ -244,6 +244,7 @@ impl GroupWalletFile {
     /// The ledger's version gate, or the seal's or write's refusal.
     pub fn save_state(&self, ledger: &GroupWalletLedger) -> Result<Durability, WalletFileError> {
         ledger.check_all_block_versions()?;
+        ledger.check_invariants()?;
         let body = Zeroizing::new(ledger.to_postcard_bytes()?);
         let framed = encode_payload(PayloadKind::GroupWalletLedgerPostcard, &body)?;
         self.write_sealed(&self.state_path, &framed)

@@ -104,6 +104,7 @@ fn assert_typed_or_ok(result: &Result<WalletLedger, WalletLedgerError>) {
         Err(WalletLedgerError::UnsupportedGroupFormatVersion { .. }) => "group-format-version",
         Err(WalletLedgerError::UnsupportedBlockVersion { .. }) => "block-version",
         Err(WalletLedgerError::Postcard(_)) => "postcard",
+        Err(WalletLedgerError::GroupInvariantFailed { .. }) => "group-invariant",
         Err(WalletLedgerError::InvariantFailed { .. }) => "invariant",
     };
 }

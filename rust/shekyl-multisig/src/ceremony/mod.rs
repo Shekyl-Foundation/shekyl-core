@@ -72,6 +72,7 @@ pub use derivation::{DeriveError, DerivedSpend, GroupOutputs, InputContext, Unsi
 pub use files::{import, Authenticated, BodyError, ImportError, Incoming};
 pub use nonce::{
     AlreadyHeld, ConsumedNonce, HeldNonce, HeldNonceStore, InputInUse, LiveCeremonies, NotHeld,
+    ReservationDiffers, ReserveFault,
 };
 pub use proofs::{CommittedMemberKey, SignableTransaction};
 pub use roles::{
@@ -241,5 +242,19 @@ pub enum CeremonyError {
     NotHeld(#[from] nonce::NotHeld),
     /// Another live ceremony spends one of the intent's inputs.
     #[error(transparent)]
-    InputInUse(#[from] nonce::InputInUse),
+    InputInUse(nonce::InputInUse),
+    /// The member's records reserve this intent's hash with different
+    /// inputs or a different reference height. The hash commits to both,
+    /// so the records disagree with the intent.
+    #[error(transparent)]
+    ReservationDiffers(nonce::ReservationDiffers),
+}
+
+impl From<nonce::ReserveFault> for CeremonyError {
+    fn from(fault: nonce::ReserveFault) -> Self {
+        match fault {
+            nonce::ReserveFault::InputInUse(err) => Self::InputInUse(err),
+            nonce::ReserveFault::ReservationDiffers(err) => Self::ReservationDiffers(err),
+        }
+    }
 }

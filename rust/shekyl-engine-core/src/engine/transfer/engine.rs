@@ -1298,8 +1298,7 @@ where
                 tx_bytes: held.tx_bytes.clone(),
                 selected,
                 retained: shekyl_engine_state::TxSecretKey::new(held.tx_key.store()),
-                recipients: held.request.recorded_recipients(),
-                group_payees: held.request.group_payee_addresses(),
+                recipients: held.request.journal_recipients(),
             };
             state.in_flight.insert(
                 id,

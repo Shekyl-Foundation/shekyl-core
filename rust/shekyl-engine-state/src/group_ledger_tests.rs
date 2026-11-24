@@ -84,7 +84,7 @@ fn receive_as(
     damage: impl FnOnce(&mut MultisigOutputData, &mut [u8; PQC_LEAF_ENTRY_LEN]),
 ) -> GroupReceived {
     let tx_key = TxKey::random().expect("the OS draws a key");
-    let (position, ()) = tx_key.place(vec![()]).pop().unwrap();
+    let (position, ()) = tx_key.place(vec![()]).into_iter().next().unwrap();
     let mut out = construct_multisig_output(position, &g.address, AMOUNT, &NET).unwrap();
     let mut leaf = out.pqc_leaf.entry_bytes();
     damage(&mut out, &mut leaf);
@@ -380,4 +380,75 @@ fn a_committed_form_that_does_not_parse_is_refused() {
         GroupWalletLedger::from_postcard_bytes(&bytes),
         Err(WalletLedgerError::Postcard(_))
     ));
+}
+
+fn ledger_holding(outputs: Vec<GroupOutput>) -> GroupWalletLedger {
+    let mut ledger = GroupWalletLedger::empty();
+    ledger.ledger.outputs = outputs;
+    ledger
+}
+
+fn assert_duplicate_refused(ledger: &GroupWalletLedger) {
+    let bytes = ledger.to_postcard_bytes().unwrap();
+    assert!(matches!(
+        GroupWalletLedger::from_postcard_bytes(&bytes),
+        Err(WalletLedgerError::GroupInvariantFailed {
+            invariant: INV_GROUP_OUTPUTS_UNIQUE,
+            ..
+        })
+    ));
+    assert!(matches!(
+        ledger.check_invariants(),
+        Err(WalletLedgerError::GroupInvariantFailed {
+            invariant: INV_GROUP_OUTPUTS_UNIQUE,
+            ..
+        })
+    ));
+}
+
+/// One output key, recorded at two places, is the burning bug. The scan
+/// skips the second as it arrives; a file that already holds both is
+/// refused, rather than opened with one of them dropped.
+#[test]
+fn a_file_with_one_output_key_twice_is_refused() {
+    let g = group();
+    let received = receive_as(&g, 0, |_, _| {});
+    let GroupReceived::Coin(receipt) = &received else {
+        panic!("expected a coin");
+    };
+    let ledger = ledger_holding(vec![
+        GroupOutput::Coin(GroupCoin::received(receipt, place(1))),
+        GroupOutput::Coin(GroupCoin::received(receipt, place(2))),
+    ]);
+    assert_duplicate_refused(&ledger);
+
+    let mut block = GroupLedgerBlock::empty();
+    let appended = block.ingest_block(
+        BlockHeight::from_raw(40),
+        BlockHash::from_bytes([0x11; 32]),
+        ledger.ledger.outputs,
+    );
+    assert_eq!(appended, 0..1);
+    assert_eq!(block.outputs.len(), 1);
+    GroupWalletLedger {
+        ledger: block,
+        ..GroupWalletLedger::empty()
+    }
+    .check_invariants()
+    .expect("the scan kept one of the two");
+}
+
+/// Two outputs with one key image are one spend recorded twice, even when
+/// their output keys differ. Open refuses the file.
+#[test]
+fn a_file_with_one_key_image_twice_is_refused() {
+    let g = group();
+    let first = coin(receive_as(&g, 0, |_, _| {}), place(1));
+    let mut second = coin(receive_as(&g, 0, |_, _| {}), place(2));
+    assert_ne!(first.output_key(), second.output_key());
+    second.key_image = *first.key_image();
+    assert_duplicate_refused(&ledger_holding(vec![
+        GroupOutput::Coin(first),
+        GroupOutput::Coin(second),
+    ]));
 }

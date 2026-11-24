@@ -20,21 +20,41 @@ fn inputs(raw: &[u64]) -> Vec<GlobalOutputIndex> {
 const A: [u8; 32] = [0xA1; 32];
 const B: [u8; 32] = [0xB2; 32];
 
-/// An input is reserved for one intent at a time; the same intent may
-/// reserve again; a refused reservation reserves nothing.
+/// An input is reserved for one intent at a time. The same intent may
+/// reserve again when the list and the height are the ones already held.
+/// A different list, a different height, or another intent's input reserves
+/// nothing.
 #[test]
 fn an_input_is_reserved_for_one_intent() {
     let mut state = MultisigState::empty();
-    state
-        .reserve(&A, &inputs(&[10, 11]), BlockHeight::from_raw(100))
-        .unwrap();
-    state
-        .reserve(&A, &inputs(&[10, 11]), BlockHeight::from_raw(100))
-        .unwrap();
+    let height = BlockHeight::from_raw(100);
+    state.reserve(&A, &inputs(&[10, 11]), height).unwrap();
+    state.reserve(&A, &inputs(&[10, 11]), height).unwrap();
     assert_eq!(state.reservations().len(), 1);
     assert_eq!(
+        state.reservations()[0].inputs(),
+        inputs(&[10, 11]).as_slice()
+    );
+    assert_eq!(state.reservations()[0].reference_height(), height);
+
+    assert_eq!(
+        state.reserve(&A, &inputs(&[10, 12]), height),
+        Err(ReserveError::ReservationDiffers)
+    );
+    assert_eq!(
+        state.reserve(&A, &inputs(&[10, 11]), BlockHeight::from_raw(140)),
+        Err(ReserveError::ReservationDiffers)
+    );
+    assert_eq!(state.reservations().len(), 1);
+    assert_eq!(
+        state.reservations()[0].inputs(),
+        inputs(&[10, 11]).as_slice()
+    );
+    assert_eq!(state.reservations()[0].reference_height(), height);
+
+    assert_eq!(
         state.reserve(&B, &inputs(&[12, 11]), BlockHeight::from_raw(101)),
-        Err(ReservedElsewhere {
+        Err(ReserveError::ReservedElsewhere {
             input: GlobalOutputIndex::from_raw(11)
         })
     );

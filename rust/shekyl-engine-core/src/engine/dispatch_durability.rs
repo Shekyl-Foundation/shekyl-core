@@ -54,7 +54,7 @@
 use std::collections::HashSet;
 
 use shekyl_engine_file::Durability;
-use shekyl_engine_state::{SendInputRef, SendRecipient, SendRecord, TxSecretKey, WalletLedger};
+use shekyl_engine_state::{JournalRecipient, SendInputRef, SendRecord, TxSecretKey, WalletLedger};
 use shekyl_types::TxHash;
 
 use super::bond_assembly::{LoadedSeal, PBoundBytes};
@@ -439,11 +439,9 @@ pub(crate) struct DispatchRecord {
     pub retained: TxSecretKey,
     /// Realized fee of the built transaction, in atomic units.
     pub fee: u64,
-    /// Realized recipients, in transaction order.
-    pub recipients: Vec<SendRecipient>,
-    /// The addresses of the groups the recipients pay, stored with the
-    /// row (R-37).
-    pub group_payees: Vec<shekyl_address::MultisigAddressPayload>,
+    /// Realized recipients, in transaction order. A group carries its
+    /// address; the journal stores it and writes the fingerprint.
+    pub recipients: Vec<JournalRecipient>,
     /// Dispatched input set the F14 lock re-derives from.
     pub inputs: Vec<SendInputRef>,
     /// Signed transaction bytes about to leave.
@@ -475,7 +473,6 @@ pub(crate) fn commit_dispatch<C: LedgerCommit + ?Sized>(
         retained,
         fee,
         recipients,
-        group_payees,
         inputs,
         tx_bytes,
     } = record;
@@ -484,7 +481,7 @@ pub(crate) fn commit_dispatch<C: LedgerCommit + ?Sized>(
         commit,
         |wallet| {
             wallet.record_retained_tx_key(txid, retained);
-            wallet.record_dispatched_send(txid, fee, recipients, &group_payees, inputs, tx_bytes);
+            wallet.record_dispatched_send(txid, fee, recipients, inputs, tx_bytes);
         },
         |wallet| wallet.undo_unsaved_dispatch(&txid),
     )?;
@@ -542,7 +539,6 @@ mod tests {
             retained: TxSecretKey::new(shekyl_crypto_pq::TxKey::seeded([7; 32]).store()),
             fee: 0,
             recipients: Vec::new(),
-            group_payees: Vec::new(),
             inputs: Vec::new(),
             tx_bytes: bytes,
         }

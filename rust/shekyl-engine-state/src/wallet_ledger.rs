@@ -52,15 +52,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use shekyl_address::MultisigAddressPayload;
-
 use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
-    group_payee::GroupFingerprint,
     ledger_block::LedgerBlock,
     send_journal_block::{
-        AbandonEdge, SendDestination, SendInputRef, SendJournalBlock, SendRecipient, SendState,
+        AbandonEdge, JournalRecipient, SendInputRef, SendJournalBlock, SendState,
     },
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
@@ -431,40 +428,20 @@ impl WalletLedger {
     }
 
     /// Birth the send-journal row for a dispatch (same guard as
-    /// [`Self::record_retained_tx_key`] — pin-1 form). See
-    /// [`SendJournalBlock::record_dispatched`]. `group_payees` are the
-    /// addresses of the groups the send pays, stored with the row (R-37).
-    ///
-    /// # Panics
-    ///
-    /// When a recipient names a group whose address is not among
-    /// `group_payees`: the dispatch path builds both from one request, so
-    /// that is a build-path defect.
+    /// [`Self::record_retained_tx_key`] — pin-1 form). A group's address
+    /// rides on its [`JournalRecipient`]; the journal stores the address
+    /// and writes the fingerprint ([`SendJournalBlock::record_dispatched_payees`]).
     pub fn record_dispatched_send(
         &mut self,
         txid: [u8; 32],
         fee: u64,
-        recipients: Vec<SendRecipient>,
-        group_payees: &[MultisigAddressPayload],
+        recipients: Vec<JournalRecipient>,
         inputs: Vec<SendInputRef>,
         tx_bytes: Vec<u8>,
     ) {
-        let stored: Vec<GroupFingerprint> = group_payees
-            .iter()
-            .map(|address| self.send_journal.store_group_payee(address))
-            .collect();
-        assert!(
-            recipients
-                .iter()
-                .all(|recipient| match &recipient.destination {
-                    SendDestination::Group(fingerprint) => stored.contains(fingerprint),
-                    SendDestination::Address(_) | SendDestination::OwnPersonaFunding => true,
-                }),
-            "every group a send pays has its address recorded with the row"
-        );
         let height = self.ledger.height();
         self.send_journal
-            .record_dispatched(txid, height, fee, recipients, inputs, tx_bytes);
+            .record_dispatched_payees(txid, height, fee, recipients, inputs, tx_bytes);
     }
 
     /// Undo a dispatch whose save failed, before its bytes left: the
@@ -1517,7 +1494,7 @@ mod tests {
                 shekyl_crypto_pq::TxKey::seeded([0x5C; 32]).store(),
             ),
         );
-        w.record_dispatched_send(txid, 0, Vec::new(), &[], Vec::new(), vec![0xAA]);
+        w.record_dispatched_send(txid, 0, Vec::new(), Vec::new(), vec![0xAA]);
         assert!(w.send_journal.rows.contains_key(&txid));
         assert!(w.tx_meta.tx_keys.contains_key(&txid));
         assert!(w.sync_state.pending_tx_hashes.contains(&txid));
@@ -1533,7 +1510,7 @@ mod tests {
 
     #[test]
     fn stamp_send_lock_baseline_arms_the_derived_view() {
-        use crate::send_journal_block::{SendInputRef, SendRecipient};
+        use crate::send_journal_block::{JournalPayee, JournalRecipient, SendInputRef};
 
         let txid = [0x44; 32];
         let mut w = WalletLedger::empty();
@@ -1544,14 +1521,11 @@ mod tests {
         w.record_dispatched_send(
             txid,
             5,
-            vec![SendRecipient {
-                destination: crate::send_journal_block::SendDestination::Address(
-                    "shekyl1example".to_owned(),
-                ),
+            vec![JournalRecipient {
+                payee: JournalPayee::Address("shekyl1example".to_owned()),
                 amount: 1,
                 rid: None,
             }],
-            &[],
             vec![SendInputRef {
                 gindex: 300,
                 amount: 10,
