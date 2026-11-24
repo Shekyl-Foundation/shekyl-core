@@ -99,14 +99,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import check_fuzz_inventory as fuzz_inventory  # noqa: E402
 
 LABEL = "merge-ready"
 CONTEXT = "merge-ready"
@@ -443,6 +442,18 @@ def open_threads(pr: int) -> int:
     return sum(1 for x in out.split() if x == "false")
 
 
+def fuzz_on_merge(url: str, base: str, head: str) -> list[str]:
+    """`check_fuzz_inventory.on_merge`, imported here and not at the top: a
+    workflow that does not ask for this check out `merge_ready.py` alone (the
+    GUI's, and a merge commit from before the check). One that asks and has
+    no script is refused with why, as any check that cannot run is."""
+    try:
+        import check_fuzz_inventory
+    except ImportError as error:
+        return [f"the fuzz inventory could not be checked against `{base}`: {error}"]
+    return check_fuzz_inventory.on_merge(url, base, head)
+
+
 def run() -> int:
     event, pr, head = os.environ["EVENT"], int(os.environ["PR"]), os.environ["HEAD"]
     draft = os.environ.get("DRAFT") == "true"
@@ -477,7 +488,7 @@ def run() -> int:
         time.sleep(POLL_SECONDS)
     why = [w for w, _ in found]
     if not why and os.environ.get("FUZZ_INVENTORY") == "true":
-        why = fuzz_inventory.on_merge(f"https://github.com/{repo()}.git", os.environ["BASE"], head)
+        why = fuzz_on_merge(f"https://github.com/{repo()}.git", os.environ["BASE"], head)
     if not why:
         print(f"#{pr} {head[:10]}: every check concluded green, no review thread open")
         if current_head(pr) != head or not has_label(pr):
@@ -503,8 +514,29 @@ def run() -> int:
     return 0
 
 
+def alone_selftest() -> list[str]:
+    """This script with no file beside it, as a workflow that checks out
+    only it runs it: it loads, and a request for the fuzz check is a refusal
+    with its reason, not a crash."""
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="merge-ready-alone-") as held:
+        alone = os.path.join(held, "merge_ready.py")
+        shutil.copyfile(os.path.abspath(__file__), alone)
+        loaded = subprocess.run([sys.executable, "-I", alone], cwd=held, capture_output=True, text=True)
+        if loaded.returncode != 2 or "Traceback" in loaded.stderr:
+            problems.append(f"alone: it does not load without its neighbours: {loaded.stderr.strip()[-160:]}")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import merge_ready as m; "
+                "print(m.fuzz_on_merge('file:///absent', 'dev', 'f' * 40)[0])")
+        asked = subprocess.run([sys.executable, "-I", "-c", code, held], cwd=held, capture_output=True, text=True)
+        if asked.returncode != 0 or "could not be checked" not in asked.stdout:
+            problems.append(f"alone: a request for the fuzz check is not a refusal: {asked.stderr.strip()[-160:]}")
+    return problems
+
+
 def selftest() -> int:
-    problems = fuzz_inventory.merge_selftest()
+    import check_fuzz_inventory
+
+    problems = check_fuzz_inventory.merge_selftest() + alone_selftest()
     done = lambda name, conclusion="success": {"name": name, "status": "completed", "conclusion": conclusion}  # noqa: E731
     going = lambda name, status="in_progress": {"name": name, "status": status, "conclusion": None}  # noqa: E731
     ok = [done("rust-pass"), done("cli-pass"), done("Economics sim", "skipped")]
