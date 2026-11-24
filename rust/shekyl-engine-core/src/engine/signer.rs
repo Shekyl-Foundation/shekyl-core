@@ -443,16 +443,22 @@ impl Signer for LocalSigner {
             fcmp_layers: signatures.tree_depth,
         };
 
-        let tx_bytes =
-            shekyl_tx_builder::encode_final_tx(&wire_input).map_err(|_| SignerError::Internal {
-                fault: SignerFault::WireEncode,
-            })?;
-
         Ok(SignedTransfer {
-            tx_bytes,
+            tx_bytes: encode_signed(&wire_input)?,
             tx_key: signatures.tx_key,
         })
     }
+}
+
+/// The signed transaction's bytes. A refusal is the builder's own fault, as
+/// it is on every other path that encodes a spend.
+pub(super) fn encode_signed(
+    wire: &shekyl_tx_builder::WireEncodeInput,
+) -> Result<Vec<u8>, SignerError> {
+    shekyl_tx_builder::encode_final_tx(wire).map_err(|e| {
+        tracing::debug!(error = %e, "the transaction builder refused the final encoding");
+        SignerError::Sign(e.fault())
+    })
 }
 
 #[cfg(test)]

@@ -91,8 +91,8 @@
 //! decodable address carries the fourth field, so extraction cannot
 //! fail and cannot be unbound.
 
+use crate::secret_scalar::canonical_secret_scalar;
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
-use curve25519_dalek::scalar::Scalar;
 use fips205::slh_dsa_sha2_192s;
 use fips205::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
 use hkdf::Hkdf;
@@ -342,9 +342,8 @@ pub fn sign_outer_with_spend_scalar(
     preimage: &Framed64,
     sig_pq: &[u8; SLH_192S_SIG_LEN],
 ) -> Result<[u8; CLASSICAL_SIG_LEN], MessageSigError> {
-    let secret: Scalar =
-        Option::from(Scalar::from_canonical_bytes(*spend_sk)).ok_or(MessageSigError::InvalidKey)?;
-    let public = ED25519_BASEPOINT_TABLE * &secret;
+    let secret = canonical_secret_scalar(spend_sk).ok_or(MessageSigError::InvalidKey)?;
+    let public = ED25519_BASEPOINT_TABLE * &*secret;
     Ok(schnorr::sign(
         MSG_SIGN_OUTER_DOMAIN,
         &secret,

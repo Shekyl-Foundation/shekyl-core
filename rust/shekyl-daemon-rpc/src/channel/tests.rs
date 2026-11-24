@@ -60,6 +60,14 @@ struct Served {
 impl Served {
     async fn start(service: bool) -> Self {
         let dir = tempfile::tempdir().expect("a directory");
+        // The service's data directory is the service account's alone, as
+        // the console's leg requires; tempfile leaves it to the umask.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                .expect("the data directory's mode");
+        }
         let data_dir = dir.path().to_path_buf();
         let channel = Channel::open(&ChannelSetup {
             data_dir: data_dir.clone(),
