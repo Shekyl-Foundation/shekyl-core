@@ -11,7 +11,7 @@
 //! spellings included (`[::ffff:0.0.0.0]` *is* the wildcard;
 //! `[::ffff:127.0.0.1]` *is* loopback) — nor on what a listen string may say.
 //! The refusals themselves stay with each listener, because each names a
-//! different remedy: the wallet can take `--rpc-login`; the daemon has no
+//! different remedy: the wallet can take `rpc-username` and `rpc-password`; the daemon has no
 //! authentication at all and points at the onion service or the pinned-TLS
 //! leg instead. The *reason* a wildcard is refused is the same everywhere and
 //! lives here once ([`WILDCARD_REASON`]).

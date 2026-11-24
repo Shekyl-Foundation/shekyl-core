@@ -33,7 +33,7 @@ const HELP_NOTE: &str = "Shekyl wallet. Options come before the command; `shekyl
                          configuration file, then the defaults.";
 
 /// The daemon connection this invocation opens: where it dials, and how the
-/// transport that dials it resolves a hostname under `--proxy` — which is
+/// transport that dials it resolves a hostname under `daemon-socks` — which is
 /// what decides whether the DNS-leak half of the disclosure is true of it.
 /// Named for the endpoint, not the daemon: the `daemon` module beside it
 /// holds the client that dials this.

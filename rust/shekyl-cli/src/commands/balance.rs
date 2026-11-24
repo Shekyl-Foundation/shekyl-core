@@ -93,7 +93,7 @@ pub(crate) fn show_balance(val: &Value) {
 /// ~2,030 characters; the default is a short **display-only** form so the
 /// terminal stays usable, with the full string behind `--full` (print) or
 /// `--out <path>` (written to a new 0600 file, never overwriting — the same
-/// file-creation shape as `--seed-out`; an address is public, the uniform
+/// file-creation shape as `--mnemonic-file`; an address is public, the uniform
 /// handling is for consistency, not secrecy).
 pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) -> CommandResult {
     require_open(rpc)?;

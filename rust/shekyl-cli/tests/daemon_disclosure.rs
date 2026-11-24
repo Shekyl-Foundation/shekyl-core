@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The CLI half of RT-W7 on the built binary: a `--daemon-address` that is
+//! The CLI half of RT-W7 on the built binary: a `daemon-endpoint` that is
 //! not loopback puts the §1 operator statement on stderr before the command
 //! runs; the loopback default says nothing. The edit that turns the first
 //! test red is deleting the `disclose_network_posture` call in
