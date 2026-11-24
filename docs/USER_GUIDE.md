@@ -1320,7 +1320,7 @@ variable:
 ```bash
 shekyl-cli --log-level info --log-category wallet=debug balance
 shekyl-wallet-rpc --log-level info --log-category rpc=debug \
-    --log-file /home/me/logs/wallet-rpc.log
+    --log-file /srv/shekyl/logs/wallet-rpc.log
 ```
 
 `log-category` takes the daemon's subsystems and `wallet`, which covers the
