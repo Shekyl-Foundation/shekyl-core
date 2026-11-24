@@ -404,7 +404,9 @@ Rendered by `python3 docs/formal/checkct/summarize.py docs/formal/checkct/result
 | `fips204-fix.nightly-2025-12-04.txt` | fips204-fix | nightly-2025-12-04 | `--timeout 500` | x86_64-unknown-linux-gnu | 5 / 0 / 0 | — |
 | `fips204-tag.nightly-2025-12-04.txt` | fips204-tag | nightly-2025-12-04 | `--timeout 600` | x86_64-unknown-linux-gnu | 0 / 5 / 0 | insecure: fips204_decompose_44, fips204_decompose_65, fips204_infinity_norm, fips204_make_hint_44, fips204_make_hint_65 |
 
-The 2026-11-24 rows are the same driver compiling each revision's own `helpers.rs`, `high_low.rs` and `types.rs`.
+The 2026-11-23 rows above compile a rewritten slice of the helpers. The
+2026-11-24 rows compile each revision's own `helpers.rs`, `high_low.rs` and
+`types.rs`.
 
 | record | workspace | toolchain | options | target | secure / insecure / unknown | not secure |
 | --- | --- | --- | --- | --- | --- | --- |
