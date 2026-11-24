@@ -5,10 +5,12 @@
 what that does to the post-quantum crates, what the fork of fips204 changes,
 and why validation cannot change.
 
-The analysis of the previous code's range is held privately until upstream
-responds to the advisory or its 90 days run out. This record describes the
-public change as range hardening of the NTT path, matching the reference
-implementation's reduction.
+This record describes the public change as range hardening of the NTT path,
+matching the reference implementation's reduction. Upstream's `main` reduces
+the same input at its call sites (`492ad87`, 2026-11-20), in no release yet. The
+fork reduces inside `inv_ntt`, so every caller is covered, and the two run
+together. When upstream releases, the fork rebases onto that release and keeps
+only the patches still needed; its README records the steps.
 
 ## What the fork changes
 
@@ -48,10 +50,10 @@ The argument, at the pinned revision:
    decoded hint and the decoded `z`. `infinity_norm` returns the same maximum,
    tested against the iterator maximum.
 
-Whether any verifier input reaches the old panic range is not stated here. The
-argument above does not depend on the answer.
+Whether a decoded public key and signature can reach the old panic range has not
+been established. The argument above does not depend on the answer.
 
-**Evidence**, at the pinned revision:
+**Evidence**, at the pinned revision, on rustc 1.94.0:
 
 | Check | Result |
 | --- | --- |
@@ -61,6 +63,7 @@ argument above does not depend on the answer.
 | Within that suite: the NIST vector tests and the Wycheproof tests | 4 and 3 passed |
 | Differential against the tag: keys and signatures | 11,000 byte-identical |
 | Differential against the tag: randomly changed keys and signatures | 65,999 with the same verdict, 0 different |
+| The fork's source on upstream's `main` (`a465e122b2`), both reductions present, overflow checks on | release 70 passed, debug 83 passed, exhaustive 4 passed; 0 failed |
 
 ## The guards
 
@@ -118,10 +121,11 @@ counted in the shipped profile. Inlining makes the two architectures differ.
 
 - **Indices, lengths, bit positions, in every crate.** These come from public
   parameters and array sizes, and do not depend on a secret.
-- **fips204 forward NTT.** Every input is below `Q` in magnitude: decoded `z` and
-  the mask are at most `2^19`, `s1`, `s2` and `c` are small, `t0` is below `2^12`,
-  and `t1 · 2^13` is below `2^23`. Eight layers add less than `Q` each, so values
-  stay below `9Q < 2^27`.
+- **fips204 forward NTT.** Every input is at most `2^19` in magnitude: decoded `z`
+  and the mask are at most `2^19`, `s1`, `s2` and `c` are small, `t0` is at most
+  `2^12`, and `t1` is below `2^10` (its shift by `2^13` comes after the NTT, in
+  Montgomery form). Eight layers add less than `Q` each, so values stay below
+  `2^19 + 8Q < 2^27`.
 - **fips204 inverse NTT.** The input is below `Q`. After layer `k` values are
   below `2^k · Q`, so at most `256Q = 2,145,386,752 < 2^31`.
 - **fips204 reductions and sums.** `to_mont_coefficient` is tested over all of
