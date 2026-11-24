@@ -2077,7 +2077,7 @@ impl From<SendError> for WalletRpcError {
             SendError::Fee(e) => e.into(),
             SendError::InsufficientFunds { .. } => Self::InsufficientFunds,
             SendError::Io(io) => from_io_error(io),
-            SendError::Sign(fault) => from_sign_fault(fault),
+            SendError::Sign(fault) => fault.into(),
             SendError::NotSynced => Self::WalletNotSynced,
             // No spend-key material in scope: the session's signer is gone,
             // which is what `-29006` names — reopen the wallet.
@@ -2110,22 +2110,26 @@ impl From<SendError> for WalletRpcError {
 
 /// The signing pass's fault to its code: the four the user acts on each
 /// get their own, with the limit or the input named; every internal
-/// invariant is `-29119`, named by its keyword (A16).
-fn from_sign_fault(fault: SignFault) -> WalletRpcError {
-    match fault {
-        SignFault::TooManyInputs { count } => WalletRpcError::TooManyInputs {
-            count,
-            limit: MAX_INPUTS,
-        },
-        SignFault::TooManyOutputs { count } => WalletRpcError::TooManyOutputs {
-            count,
-            limit: MAX_OUTPUTS,
-        },
-        SignFault::SpentOutputNotInLeafChunk { input } => WalletRpcError::InputNotInTree { input },
-        SignFault::PqcLeafMismatch { input } => WalletRpcError::InputUnspendable { input },
-        SignFault::Internal(internal) => WalletRpcError::SignerFailed {
-            fault: internal.keyword(),
-        },
+/// invariant is `-29119`, named by its keyword (A16). The one mapping for
+/// every path that signs: a transfer, a stake, a drain, an unstake and a
+/// collect.
+impl From<SignFault> for WalletRpcError {
+    fn from(fault: SignFault) -> Self {
+        match fault {
+            SignFault::TooManyInputs { count } => Self::TooManyInputs {
+                count,
+                limit: MAX_INPUTS,
+            },
+            SignFault::TooManyOutputs { count } => Self::TooManyOutputs {
+                count,
+                limit: MAX_OUTPUTS,
+            },
+            SignFault::SpentOutputNotInLeafChunk { input } => Self::InputNotInTree { input },
+            SignFault::PqcLeafMismatch { input } => Self::InputUnspendable { input },
+            SignFault::Internal(internal) => Self::SignerFailed {
+                fault: internal.keyword(),
+            },
+        }
     }
 }
 
@@ -2814,6 +2818,7 @@ impl From<DrainToPrincipalError> for WalletRpcError {
                 rate,
                 bound,
             },
+            DrainToPrincipalError::Signer(fault) => fault.into(),
             DrainToPrincipalError::State { context, detail } => internal_detail(context, detail),
             DrainToPrincipalError::Submit { detail } => {
                 tracing::warn!(detail = %detail, "drain dispatch failed at the choke point");
@@ -2887,6 +2892,7 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
             // a remote daemon, so "internal error" on exactly this one is the
             // hard-to-diagnose shape rule 82 forbids. Named code + remedy.
             E::Transport { detail } => Self::UnstakeLocalNodeRequired { detail },
+            E::Signer(fault) => fault.into(),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -2931,6 +2937,7 @@ impl From<shekyl_engine_core::CollectUnstakedError> for WalletRpcError {
             // The seal's save was not confirmed: nothing was sent and the
             // seal was removed. The save's cause answers (Rick, 2026-11-19).
             E::SealNotSaved(error) => from_unsaved_send(&error, SaveOf::Staking),
+            E::Signer(fault) => fault.into(),
             E::Engine { context, detail } => internal_detail(context, detail),
         }
     }
@@ -4855,6 +4862,45 @@ mod tests {
                 FirstStakeError::FeeEstimate(fee),
                 FirstStakeError::FeeEstimate(FeeEstimatorError::Daemon(f)) if f == fault
             ));
+        }
+    }
+
+    /// A signer fault answers the same on every path that signs: an internal
+    /// one is `-29119` with its keyword, and one the user can act on keeps
+    /// its own code. Red edit: map a lane's `Signer` arm to an internal error.
+    #[test]
+    fn a_signer_fault_answers_the_same_on_every_signing_path() {
+        use shekyl_engine_core::{
+            CollectUnstakedError, DrainToPrincipalError, InternalSignFault, UnstakeError,
+        };
+        let internal = SignFault::Internal(InternalSignFault::MembershipSelfCheck);
+        for (fault, code) in [
+            (internal, WalletRpcErrorCode::SignerFailed),
+            (
+                SignFault::PqcLeafMismatch { input: 1 },
+                WalletRpcErrorCode::InputUnspendable,
+            ),
+        ] {
+            let lanes: [(&str, WalletRpcError); 4] = [
+                ("send", SendError::Sign(fault).into()),
+                ("drain", DrainToPrincipalError::Signer(fault).into()),
+                ("unstake", UnstakeError::Signer(fault).into()),
+                ("collect", CollectUnstakedError::Signer(fault).into()),
+            ];
+            for (lane, err) in lanes {
+                assert_eq!(err.code(), code, "{lane}: {fault:?}");
+                if fault == internal {
+                    assert!(
+                        matches!(
+                            err,
+                            WalletRpcError::SignerFailed {
+                                fault: "membership-self-check"
+                            }
+                        ),
+                        "{lane}: {err:?}"
+                    );
+                }
+            }
         }
     }
 

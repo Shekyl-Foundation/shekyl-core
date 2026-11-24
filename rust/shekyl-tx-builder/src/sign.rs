@@ -22,18 +22,23 @@ use std::num::NonZeroUsize;
 use rand_core::{CryptoRng, OsRng, RngCore};
 use zeroize::Zeroizing;
 
-use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
+use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf_with_key;
+use shekyl_crypto_pq::output::spend_key_image;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm, PseudoOutBlinds};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveError, ProveInput, ProveResult};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::{PqcKeyScalar, PqcLeafScalar};
 use shekyl_network::NetworkId;
-use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash, SigningPayloadHash, TxSignableHash};
+use shekyl_types::{
+    BlockHash, CurveTreeRoot, KeyImage, PrefixHash, SigningPayloadHash, TxSignableHash,
+};
 use shekyl_wire::CtBase;
 
 use crate::error::TxBuilderError;
-use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION};
+use crate::types::{
+    OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext, PQC_AUTH_VERSION, SPEND_SLOT_SCHEME,
+};
 use crate::validate::validate_inputs;
 
 /// Construct the proof portion of an FCMP++ transaction.
@@ -278,12 +283,16 @@ fn sign_with<R: RngCore + CryptoRng>(
     let enc_labels: Vec<EncryptedOutputField> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Build ProveInput for FCMP++ ───────────────────────────────
-    let prove_inputs: Vec<ProveInput> = inputs
-        .iter()
-        .zip(&pseudo_out_blinds)
-        .enumerate()
-        .map(|(i, (inp, blind))| prove_input_from_spend(i, inp, **blind))
-        .collect::<Result<_, _>>()?;
+    // The spend-slot scalar is produced with the leaf: one ML-DSA keygen,
+    // then the consensus `k` over that public key. A second keygen here
+    // would be a different `k` than the leaf the proof opens.
+    let mut prove_inputs = Vec::with_capacity(input_count.get());
+    let mut pqc_keys = Vec::with_capacity(input_count.get());
+    for (i, (inp, blind)) in inputs.iter().zip(&pseudo_out_blinds).enumerate() {
+        let opened = prove_input_from_spend(i, inp, **blind)?;
+        prove_inputs.push(opened.for_prover);
+        pqc_keys.push(opened.pqc_key);
+    }
 
     // ── 6. FCMP++ prove ──────────────────────────────────────────────
     // Over `tx_signable`: the prefix and the base just built (the outputs'
@@ -324,7 +333,20 @@ fn sign_with<R: RngCore + CryptoRng>(
         extra_outputs,
     )?;
 
-    // ── 8. Assemble SignedProofs ──────────────────────────────────────
+    // ── 8. Construct-side membership self-verify ─────────────────────
+    // The FCMP++ prover checks almost none of its own work in a release
+    // build, and it takes the tree root without reading it: a proof over a
+    // path that does not reach `tree.tree_root`, or any prover fault, would
+    // otherwise surface only as the daemon's CEN-I15 refusal after the
+    // spend is on the wire. Verify it here with the daemon's verifier, over
+    // the operands the daemon will use: each input's key image `x·Hp(O)`
+    // (what the prefix carries, held to it in `open_spend`), the PQC key
+    // scalar taken from the leaf's public key in step 5, the root and the
+    // layer count the proof was made for, and `tx_signable`.
+    let key_images = own_key_images(inputs)?;
+    verify_own_membership(&prove_result, &key_images, &pqc_keys, tree, tx_signable)?;
+
+    // ── 9. Assemble SignedProofs ──────────────────────────────────────
     Ok(SignedProofs {
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
@@ -336,7 +358,58 @@ fn sign_with<R: RngCore + CryptoRng>(
         reference_block: tree.reference_block,
         tree_depth: tree.tree_depth,
         tx_signable,
+        key_images,
+        pqc_keys,
     })
+}
+
+/// Each input's key image `I = x·Hp(O)`, in input order: the images the
+/// membership proof's linkability binds and the spend's prefix must carry.
+fn own_key_images(inputs: &[SpendInput]) -> Result<Vec<KeyImage>, TxBuilderError> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            spend_key_image(
+                &input.spend_key_x,
+                &compute_key_image_gen(&input.output_key),
+            )
+            .map_err(|e| {
+                TxBuilderError::MembershipSelfCheck(format!("input {index}: key image: {e}"))
+            })
+        })
+        .collect()
+}
+
+/// Step 8 of [`sign_with`]: `proved` verifies under
+/// [`shekyl_fcmp::proof::verify`], the function CEN-I15 and the submit
+/// verifier call, against `key_images`, the spend slots' `pqc_keys`, `tree`'s
+/// root and layer count, and `tx_signable`.
+fn verify_own_membership(
+    proved: &ProveResult,
+    key_images: &[KeyImage],
+    pqc_keys: &[PqcKeyScalar],
+    tree: &TreeContext,
+    tx_signable: TxSignableHash,
+) -> Result<(), TxBuilderError> {
+    match proof::verify(
+        &proved.proof,
+        key_images,
+        &proved.pseudo_outs,
+        pqc_keys,
+        &tree.tree_root,
+        tree.tree_depth,
+        tx_signable,
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(TxBuilderError::MembershipSelfCheck(
+            "the proof does not verify against the root, key images and message it was made for"
+                .into(),
+        )),
+        Err(e) => Err(TxBuilderError::MembershipSelfCheck(format!(
+            "the verifier refused the proof: {e}"
+        ))),
+    }
 }
 
 /// An output's real commitment, `C = mask*G + amount*H` (compressed, no
@@ -510,7 +583,7 @@ fn sign_pqc_auths_with(
 
         auths.push(PqcAuth {
             auth_version: PQC_AUTH_VERSION,
-            scheme: crate::types::PqcScheme::Single,
+            scheme: SPEND_SLOT_SCHEME,
             signature: auth_sig.signature,
             public_key: auth_sig.hybrid_public_key,
         });
@@ -606,7 +679,12 @@ fn prove_backing_membership_with(
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
     // comes from the context-bound rerandomization inside the prover.
-    let prove_input = prove_input_from_spend(0, input, [0u8; 32])?;
+    // Membership-only: the scalar is the spend slot's `k`, derived with the
+    // leaf. This path does not verify a spend slot, so it does not use it.
+    let SpendProofInput {
+        for_prover: prove_input,
+        pqc_key: _,
+    } = prove_input_from_spend(0, input, [0u8; 32])?;
 
     let result = prove(
         &[prove_input],
@@ -634,6 +712,15 @@ fn prove_backing_membership_with(
     })
 }
 
+/// What [`prove_input_from_spend`] opens: the prover's input, and the spend
+/// slot's PQC scalar from the same keygen that built the leaf.
+pub(crate) struct SpendProofInput {
+    /// The prover's input, including the leaf this wallet opened.
+    pub for_prover: ProveInput,
+    /// `k` over the public key that leaf commits to, under [`SPEND_SLOT_SCHEME`].
+    pub pqc_key: PqcKeyScalar,
+}
+
 /// The `SpendInput → ProveInput` field conversion — one definition for the
 /// full-path signer (step 6, per-input balanced blind) and the
 /// membership-only backing leg (zero blind), so the leaf-chunk/branch-layer
@@ -645,11 +732,15 @@ fn prove_backing_membership_with(
 /// [`TxBuilderError::PqcLeafMismatch`] when the chain's leaf (this output's
 /// entry in `leaf_chunk`) is not that derivation: a proof over an unopenable
 /// leaf would only fail later, at the verifier, with no diagnosis.
+///
+/// The returned scalar is that same derivation's public key under
+/// [`SPEND_SLOT_SCHEME`], via [`PqcKeyScalar::from_pqc_auth`]. The full-path
+/// signer verifies the proof against it; nothing derives the key again.
 pub(crate) fn prove_input_from_spend(
     index: usize,
     input: &SpendInput,
     pseudo_out_blind: [u8; 32],
-) -> Result<ProveInput, TxBuilderError> {
+) -> Result<SpendProofInput, TxBuilderError> {
     let combined64: Zeroizing<[u8; 64]> = Zeroizing::new(
         input
             .combined_ss
@@ -663,12 +754,19 @@ pub(crate) fn prove_input_from_spend(
                 ),
             })?,
     );
-    let pqc_leaf = derive_pqc_leaf(&combined64, input.output_index).map_err(|e| {
+    let derived = derive_pqc_leaf_with_key(&combined64, input.output_index).map_err(|e| {
         TxBuilderError::PqcLeafDerivation {
             index,
             detail: e.to_string(),
         }
     })?;
+    let pqc_key = PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), &derived.public_key)
+        .ok_or_else(|| {
+            TxBuilderError::MembershipSelfCheck(format!(
+                "input {index}: the PQC public key is not well formed for a spend slot"
+            ))
+        })?;
+    let pqc_leaf = derived.commitment;
     let derived_x = PqcLeafScalar::from_commitment_point(&pqc_leaf.point).ok_or_else(|| {
         TxBuilderError::PqcLeafDerivation {
             index,
@@ -718,20 +816,23 @@ pub(crate) fn prove_input_from_spend(
         })
         .collect();
 
-    Ok(ProveInput {
-        output_key: input.output_key,
-        key_image_gen: compute_key_image_gen(&input.output_key),
-        commitment: input.commitment,
-        pqc_leaf_commitment: pqc_leaf.point,
-        pqc_leaf_blind: pqc_leaf.blind,
-        spend_key_x: input.spend_key_x,
-        spend_key_y: input.spend_key_y,
-        commitment_mask: input.commitment_mask,
-        pseudo_out_blind,
-        leaf_chunk_outputs: leaf_outputs,
-        leaf_chunk_cm_x: leaf_cm_x,
-        c1_branch_layers,
-        c2_branch_layers,
+    Ok(SpendProofInput {
+        for_prover: ProveInput {
+            output_key: input.output_key,
+            key_image_gen: compute_key_image_gen(&input.output_key),
+            commitment: input.commitment,
+            pqc_leaf_commitment: pqc_leaf.point,
+            pqc_leaf_blind: pqc_leaf.blind,
+            spend_key_x: input.spend_key_x,
+            spend_key_y: input.spend_key_y,
+            commitment_mask: input.commitment_mask,
+            pseudo_out_blind,
+            leaf_chunk_outputs: leaf_outputs,
+            leaf_chunk_cm_x: leaf_cm_x,
+            c1_branch_layers,
+            c2_branch_layers,
+        },
+        pqc_key,
     })
 }
 

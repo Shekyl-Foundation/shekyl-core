@@ -62,6 +62,7 @@ mod economics;
 mod io;
 mod key;
 mod lifecycle;
+mod pipeline_failure;
 mod refresh;
 mod send;
 mod submit;
@@ -73,6 +74,9 @@ pub use key::KeyError;
 #[cfg(feature = "conformance")]
 pub(crate) use lifecycle::StakeSelfCertFailure;
 pub use lifecycle::{OpenError, PersistenceError};
+pub(crate) use pipeline_failure::{
+    pipeline_detail, CarriedFailure, ClassifiedFailure, PipelineFailure,
+};
 pub(crate) use refresh::LedgerError;
 pub use refresh::{CurveTreeIngestFault, FinalityBreach, FinalityStop, RefreshError};
 pub use send::{PendingTxError, SendError};

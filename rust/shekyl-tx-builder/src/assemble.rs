@@ -29,7 +29,7 @@ use shekyl_wire::Input;
 
 use crate::error::TxBuilderError;
 use crate::sign::sign_pqc_auths;
-use crate::types::{PqcAuth, SignedProofs, SpendInput, PQC_AUTH_VERSION};
+use crate::types::{PqcAuth, SignedProofs, SpendInput, PQC_AUTH_VERSION, SPEND_SLOT_SCHEME};
 use crate::wire::{build_wire_tx, encode_final_tx, phase1_payload_hashes, WireEncodeInput};
 
 /// Hybrid public keys that occupy `pqc_auths`, split by who signs them.
@@ -95,7 +95,7 @@ pub struct OpenSpend {
 fn placeholder_auth(public_key: Vec<u8>) -> PqcAuth {
     PqcAuth {
         auth_version: PQC_AUTH_VERSION,
-        scheme: crate::types::PqcScheme::Single,
+        scheme: SPEND_SLOT_SCHEME,
         signature: Vec::new(),
         public_key,
     }
@@ -184,6 +184,7 @@ fn open_spend_with(
             layout.extra_inputs.len()
         )));
     }
+    signed.hold_spend_layout(&layout.key_images, &layout.slots.spend)?;
 
     let bulletproof = Bulletproof::read_plus(&mut signed.bulletproof_plus.as_slice())
         .map_err(|e| TxBuilderError::WireError(format!("bulletproof parse: {e}")))?;
@@ -360,7 +361,8 @@ impl OpenSpend {
 mod tests {
     use super::*;
     use crate::types::SignedProofs;
-    use shekyl_types::BlockHash;
+    use shekyl_fcmp::PqcKeyScalar;
+    use shekyl_types::{BlockHash, KeyImage};
     use shekyl_units::AtomicUnits;
 
     fn blank_signed() -> SignedProofs {
@@ -375,8 +377,28 @@ mod tests {
             reference_block: BlockHash::from_bytes([0; 32]),
             tree_depth: 2,
             tx_signable: shekyl_types::TxSignableHash::from_bytes([0; 32]),
+            key_images: vec![KeyImage::from_canonical_bytes(LAID_IMAGE)],
+            pqc_keys: vec![slot_scalar(&laid_slot_key())],
         }
     }
+
+    /// A well-formed spend-slot key: the hybrid public key of a fixed output.
+    fn slot_key(seed: u8) -> Vec<u8> {
+        shekyl_crypto_pq::derivation::derive_pqc_public_key(&[seed; 64], 0).expect("a hybrid key")
+    }
+
+    /// The key [`layout_with`] lays in every spend slot.
+    fn laid_slot_key() -> Vec<u8> {
+        slot_key(5)
+    }
+
+    fn slot_scalar(key: &[u8]) -> PqcKeyScalar {
+        PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), key).expect("a spend-slot key")
+    }
+
+    /// The key image [`layout_with`] lays for every spend, and the one
+    /// [`blank_signed`]'s proof was verified against.
+    const LAID_IMAGE: [u8; 32] = [1; 32];
 
     fn blank_spend() -> SpendInput {
         SpendInput {
@@ -396,7 +418,7 @@ mod tests {
 
     fn layout_with(spend_keys: usize, extra_inputs: usize, extra_keys: usize) -> SpendLayout {
         SpendLayout {
-            key_images: vec![[1; 32]; spend_keys],
+            key_images: vec![LAID_IMAGE; spend_keys],
             extra_inputs: vec![Input::Gen(0); extra_inputs],
             output_keys: vec![[2; 32]],
             output_amounts: vec![0],
@@ -404,7 +426,7 @@ mod tests {
             tx_extra: Vec::new(),
             fee: 0,
             slots: AuthSlots {
-                spend: vec![vec![3]; spend_keys],
+                spend: vec![laid_slot_key(); spend_keys],
                 extra: vec![vec![4]; extra_keys],
             },
         }
@@ -426,6 +448,54 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, TxBuilderError::WireError(_)));
+    }
+
+    #[test]
+    fn open_spend_refuses_a_key_image_the_proof_was_not_verified_against() {
+        let mut layout = layout_with(1, 0, 0);
+        layout.key_images[0][0] ^= 1;
+        let err = open_spend(blank_signed(), &[blank_spend()], layout, &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("not the image the membership proof was verified against")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn open_spend_refuses_a_proof_key_image_count_mismatch() {
+        let mut signed = blank_signed();
+        signed.key_images.clear();
+        let err = open_spend(signed, &[blank_spend()], layout_with(1, 0, 0), &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("key images (1) and the proof's (0) disagree")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn open_spend_refuses_a_slot_key_the_proof_was_not_verified_against() {
+        let mut layout = layout_with(1, 0, 0);
+        layout.slots.spend[0] = slot_key(6);
+        let err = open_spend(blank_signed(), &[blank_spend()], layout, &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("spend slot 0's key is not the key the membership proof")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn open_spend_refuses_a_proof_pqc_key_count_mismatch() {
+        let mut signed = blank_signed();
+        signed.pqc_keys.clear();
+        let err = open_spend(signed, &[blank_spend()], layout_with(1, 0, 0), &[0; 16]).unwrap_err();
+        assert!(
+            matches!(&err, TxBuilderError::MembershipSelfCheck(reason)
+                if reason.contains("spend slots (1) and the proof's PQC keys (0) disagree")),
+            "{err:?}"
+        );
     }
 
     #[test]

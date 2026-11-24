@@ -63,9 +63,6 @@ const SCHEDULE: RegtestSchedule = RegtestSchedule {
 };
 /// Persona funding above `floor + bond fee`.
 const FUNDING_CUSHION: u64 = 12_000_000_000;
-/// A P-scan over some fifteen hundred blocks in a debug build, with room:
-/// it bounds a hang, it does not time the scan.
-const LONG_SCAN: Duration = Duration::from_secs(3600);
 
 fn shard(n: u64) -> ShardId {
     ShardId::from_raw(n)
@@ -155,13 +152,9 @@ async fn holds(arc: &Shared, target: ShardId) -> bool {
 async fn scan_to_the_horizon(daemon: &RegtestDaemon, arc: &Shared, pscan_seal: &std::path::Path) {
     let needed = daemon.height().await.saturating_sub(REORG_CAP);
     refresh(arc).await;
-    pscan_until_within(
-        arc,
-        pscan_seal,
-        "the finality horizon",
-        |s| s.synced_height().to_raw() >= needed,
-        LONG_SCAN,
-    )
+    pscan_until(arc, pscan_seal, "the finality horizon", |s| {
+        s.synced_height().to_raw() >= needed
+    })
     .await;
 }
 
