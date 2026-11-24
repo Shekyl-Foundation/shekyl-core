@@ -48,7 +48,7 @@ Guix gained improved Rust packaging support in 2025 with Cargo.lock lockfile imp
 
 `cargo xtask build`, run from `rust/`, is the release build for this machine.
 It stages the binaries in `build/bin/`; `--out <dir>` names another directory.
-`cargo xtask plan --native` prints what it would run and builds nothing.
+`cargo xtask plan --native` prints the command and builds nothing. The version placeholders stay written out, because a plan does not read the tag.
 
 When iterating on one crate, `cargo build -p <crate>` and `cargo test -p
 <crate>` from `rust/` are faster. A plain `cargo build` carries no release

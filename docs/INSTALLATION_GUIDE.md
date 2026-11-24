@@ -141,7 +141,7 @@ for each host is data in `rust/xtask/matrix.toml`.
 Run from `rust/`:
 
 ```bash
-cargo xtask plan --native   # print what a build would run, and build nothing
+cargo xtask plan --native   # print the command; the version placeholders stay unfilled
 cargo build -p <crate>      # a debug build of one crate
 cargo test --workspace --exclude shekyl-randomx-differential
 ```

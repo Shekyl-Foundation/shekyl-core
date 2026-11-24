@@ -181,31 +181,30 @@ def member_dirs() -> dict[str, Path]:
 
 
 def release_features(text: str) -> list[str]:
-    """The `--features` a release invocation of the matrix passes.
+    """The `--features` `[build] cargo_args` passes.
 
-    Each host's invocations are `[build] cargo_args`, `--target`, and the
-    `-p` binaries; a `--features` among them is the release's. The
-    measurement build's features are `[measurement]`'s, which no invocation
-    holds, so they are never read here.
+    `--target` and `-p` are `PlanFlag`, not data in the file, and the
+    measurement build's features are `[measurement]`'s. Neither is a
+    release's, so neither is read here.
     """
     try:
         matrix = release_matrix.parse(text)
     except release_matrix.MatrixError as why:
         raise GraphError(f"{BUILD_RUST.name}: {why}") from None
+    cargo_args = matrix.raw["build"]["cargo_args"]
+    if not isinstance(cargo_args, list) or not all(isinstance(arg, str) for arg in cargo_args):
+        raise GraphError(f"{BUILD_RUST.name}: cargo_args is not a list of strings")
     found: list[str] = []
-    for invocation in matrix.invocations:
-        it = iter(invocation.args)
-        for arg in it:
-            if arg == "--features":
-                value = next(it, "")
-                if not value or value.startswith("-"):
-                    raise GraphError(
-                        f"{BUILD_RUST.name}: host {invocation.host} passes --features with no value"
-                    )
-                found += value.split(",")
-            elif arg.startswith("--features="):
-                found += arg.split("=", 1)[1].split(",")
-    return sorted({f for f in found if f})
+    arguments = iter(cargo_args)
+    for arg in arguments:
+        if arg == "--features":
+            value = next(arguments, "")
+            if not value or value.startswith("-"):
+                raise GraphError(f"{BUILD_RUST.name}: cargo_args passes --features with no value")
+            found += value.split(",")
+        elif arg.startswith("--features="):
+            found += arg.split("=", 1)[1].split(",")
+    return sorted({feature for feature in found if feature})
 
 
 def load_gui_pin(path: Path = GUI_PIN) -> dict:

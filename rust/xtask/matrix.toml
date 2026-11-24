@@ -4,8 +4,10 @@
 # BSD-3-Clause
 
 # The release matrix: everything the one cargo build of the shipped binaries
-# is given, per host, as data. `cargo xtask` (rust/xtask) reads it and adds
-# nothing of its own: it substitutes the placeholders below and runs cargo.
+# is given, per host, as data. `cargo xtask` (rust/xtask) reads it,
+# substitutes the placeholders below, and appends only `--target`, `-p`
+# and, for a measurement build, `--features` (`PlanFlag` in
+# rust/xtask/src/plan.rs).
 # The gates read the same file: scripts/ci/check_rt_p4_standing.py (every
 # variable and every `-C`), scripts/ci/shipped_graph.py and
 # scripts/ci/check_measurement_spans.py (the features),

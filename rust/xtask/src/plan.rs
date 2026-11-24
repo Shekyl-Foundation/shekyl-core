@@ -4,8 +4,9 @@
 // BSD-3-Clause
 
 //! The cargo invocation for one host: the matrix's values with their
-//! placeholders filled, and nothing else. Every variable and argument the
-//! build is given comes from `matrix.toml`; this module only substitutes.
+//! placeholders filled, then the flags in [`PlanFlag`] and nothing else.
+//! A measurement build appends [`PlanFlag::Features`]. Every variable comes
+//! from `matrix.toml`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,49 @@ pub struct Plan {
     pub outputs: Vec<PathBuf>,
 }
 
+/// Where `{version_full}`, `{release_name}` and `{is_release}` come from.
+///
+/// A bool cannot stand in for a version the plan has not read: [`Shown`]
+/// leaves the three placeholders as written.
+#[derive(Debug, Default)]
+pub enum VersionFill {
+    /// The build's identity.
+    Resolved(Identity),
+    /// Leave the three placeholders as written.
+    Shown,
+    /// A placeholder that needs an identity is an error.
+    #[default]
+    Absent,
+}
+
+/// A cargo flag appended after `[build] cargo_args`.
+///
+/// The word is the flag. The value that follows is the host's triple, one
+/// package name, or the measurement features joined by commas. A new flag
+/// is a new variant, and the release gate names the same words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanFlag {
+    /// `--target`, then the host's triple. Omitted when the invocation
+    /// builds for the compiler's default target.
+    Target,
+    /// `-p`, then one binary's package.
+    Package,
+    /// `--features`, then the measurement features. Only a measurement
+    /// build appends it.
+    Features,
+}
+
+impl PlanFlag {
+    /// The flag cargo sees.
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Target => "--target",
+            Self::Package => "-p",
+            Self::Features => "--features",
+        }
+    }
+}
+
 /// The values a placeholder can take.
 #[derive(Debug, Default)]
 pub struct Fill {
@@ -33,7 +77,8 @@ pub struct Fill {
     pub depends: Option<DependsEnv>,
     /// `{target_dir}` as an absolute path.
     pub target_dir: PathBuf,
-    pub identity: Option<Identity>,
+    /// `{version_full}`, `{release_name}`, `{is_release}`.
+    pub version: VersionFill,
     /// `{macos_minimum}`, `{macos_minimum_depends}`: the host's.
     pub macos: Option<MacosMinimum>,
 }
@@ -109,15 +154,15 @@ pub fn plan(
     let mut args = vec!["cargo".to_owned()];
     args.extend(build.cargo_args.iter().cloned());
     if invocation.target {
-        args.push("--target".to_owned());
+        args.push(PlanFlag::Target.word().to_owned());
         args.push(host.triple.clone());
     }
     for bin in &host.binaries {
-        args.push("-p".to_owned());
+        args.push(PlanFlag::Package.word().to_owned());
         args.push(bin.clone());
     }
     if measurement {
-        args.push("--features".to_owned());
+        args.push(PlanFlag::Features.word().to_owned());
         args.push(matrix.measurement.features.join(","));
     }
 
@@ -126,7 +171,7 @@ pub fn plan(
         dir.push(&host.triple);
     }
     dir.push(&build.profile_dir);
-    let suffix = if host.triple.contains("-windows-") {
+    let suffix = if host.triple.contains("windows") {
         ".exe"
     } else {
         ""
@@ -177,11 +222,6 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
             format!("{{{key}}} needs depends' environment file, and this build has none")
         })
     };
-    let identity = || {
-        fill.identity
-            .as_ref()
-            .ok_or_else(|| format!("{{{key}}} needs the build identity"))
-    };
     let macos = || {
         fill.macos
             .as_ref()
@@ -199,14 +239,9 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
                 .ok_or("the target directory is not UTF-8")?,
             cfg!(windows),
         ),
-        "version_full" => identity()?.full.clone(),
-        "release_name" => identity()?.release_name.clone(),
-        "is_release" => if identity()?.is_release {
-            "true"
-        } else {
-            "false"
-        }
-        .to_owned(),
+        "version_full" => version_value(VersionKey::Full, fill)?,
+        "release_name" => version_value(VersionKey::ReleaseName, fill)?,
+        "is_release" => version_value(VersionKey::IsRelease, fill)?,
         "macos_minimum" => macos()?.value.clone(),
         "macos_minimum_depends" => macos()?.depends_spelling.clone(),
         other => match other.strip_prefix("which:") {
@@ -214,6 +249,43 @@ fn resolve(key: &str, fill: &Fill, path_var: Option<&std::ffi::OsStr>) -> Result
             None => return Err(format!("{{{other}}} is not a placeholder the xtask fills")),
         },
     })
+}
+
+/// One of the three version placeholders.
+#[derive(Clone, Copy)]
+enum VersionKey {
+    Full,
+    ReleaseName,
+    IsRelease,
+}
+
+/// The text a version placeholder becomes. [`VersionFill::Shown`] returns
+/// the placeholder itself, so a plan does not invent an identity.
+fn version_value(key: VersionKey, fill: &Fill) -> Result<String, String> {
+    let placeholder = match key {
+        VersionKey::Full => "{version_full}",
+        VersionKey::ReleaseName => "{release_name}",
+        VersionKey::IsRelease => "{is_release}",
+    };
+    match &fill.version {
+        VersionFill::Shown => Ok(placeholder.to_owned()),
+        VersionFill::Absent => Err(format!("{placeholder} needs the build identity")),
+        VersionFill::Resolved(identity) => Ok(match key {
+            VersionKey::Full => identity.full.clone(),
+            VersionKey::ReleaseName => identity.release_name.clone(),
+            VersionKey::IsRelease => if identity.is_release { "true" } else { "false" }.to_owned(),
+        }),
+    }
+}
+
+/// `pattern` with at most one `*`, which matches any run of characters.
+pub(crate) fn matches_pattern(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == name,
+        Some((head, tail)) => {
+            name.len() >= head.len() + tail.len() && name.starts_with(head) && name.ends_with(tail)
+        }
+    }
 }
 
 /// The target directory as cargo is given it. On Windows it is written with
@@ -286,7 +358,7 @@ mod tests {
                 ar: TOOL.to_owned(),
             }),
             target_dir: PathBuf::from("/r/rust/target"),
-            identity: Some(Identity {
+            version: VersionFill::Resolved(Identity {
                 full: "3.1.0-842d36361".to_owned(),
                 release_name: "Shekyl NG".to_owned(),
                 is_release: false,
@@ -388,6 +460,52 @@ mod tests {
             "C:/Users/s/src/rust/target"
         );
         assert_eq!(target_dir_value(r"/r/a\b/target", false), r"/r/a\b/target");
+    }
+
+    #[test]
+    fn a_shown_version_leaves_the_three_placeholders() {
+        let mut values = fill();
+        values.version = VersionFill::Shown;
+        let m = matrix();
+        let (host, dist) = m.dist_host("x86_64-linux-gnu").expect("host");
+        let path = tool_path();
+        let planned = plan(&m, host, &dist.invocation, &values, false, Some(&path)).expect("plan");
+        let get = |name: &str| {
+            planned
+                .env
+                .iter()
+                .find(|(key, _)| key == name)
+                .expect(name)
+                .1
+                .clone()
+        };
+        assert_eq!(get("SHEKYL_VERSION_FULL"), "{version_full}");
+        assert_eq!(get("SHEKYL_RELEASE_NAME"), "{release_name}");
+        assert_eq!(get("SHEKYL_VERSION_IS_RELEASE"), "{is_release}");
+    }
+
+    #[test]
+    fn an_absent_version_is_an_error() {
+        let err = substitute("{is_release}", &Fill::default(), None).expect_err("no identity");
+        assert!(err.contains("is_release"), "{err}");
+    }
+
+    #[test]
+    fn a_pattern_matches_an_exact_name_or_one_star() {
+        assert!(matches_pattern("RUSTFLAGS", "RUSTFLAGS"));
+        assert!(!matches_pattern("RUSTFLAGS", "RUSTFLAGS_X"));
+        assert!(matches_pattern(
+            "CARGO_PROFILE_*",
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL"
+        ));
+        assert!(matches_pattern(
+            "CARGO_TARGET_*_RUSTFLAGS",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"
+        ));
+        assert!(!matches_pattern(
+            "CARGO_TARGET_*_RUSTFLAGS",
+            "CARGO_TARGET_DIR"
+        ));
     }
 
     #[test]

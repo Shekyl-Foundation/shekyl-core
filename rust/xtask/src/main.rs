@@ -17,21 +17,24 @@
 //! (`contrib/depends/<host>/share/toolchain.env`) and stages the binaries and
 //! the files the archive carries; gitian then adds Tor and packs. `build` is
 //! a native release build of this machine's triple. `plan` prints what
-//! either would run, and runs nothing. `triple` prints a host's Rust triple,
-//! for the toolchain's `rustup target add`, and `archive-version` the version
-//! a release archive is named with. Every variable and argument comes from
-//! `rust/xtask/matrix.toml`.
+//! either would run, and runs nothing; the three version placeholders stay
+//! written out, because a plan does not read the tag. `triple` prints a
+//! host's Rust triple, for the toolchain's `rustup target add`, and
+//! `archive-version` the version a release archive is named with. Every
+//! variable comes from `rust/xtask/matrix.toml`. The arguments a plan appends
+//! are [`plan::PlanFlag`].
 
 mod matrix;
 mod plan;
+mod spawn;
 mod version;
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
 use matrix::Matrix;
-use plan::{DependsEnv, Fill, Plan};
+use plan::{DependsEnv, Fill, Plan, VersionFill};
+use spawn::RustcProbe;
 use version::{GitHead, Identity};
 
 fn main() -> ExitCode {
@@ -45,15 +48,47 @@ fn main() -> ExitCode {
     }
 }
 
-/// The parsed command line.
-#[derive(Debug, Default)]
-struct Options {
-    command: String,
-    host: Option<String>,
-    native: bool,
-    out: Option<PathBuf>,
-    measurement: bool,
-    version_override: Option<String>,
+/// What `cargo xtask` was asked to do. A variant carries only the options
+/// that command accepts.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    /// `dist --host <host>`: a release host, from depends.
+    Dist {
+        host: String,
+        out: Option<PathBuf>,
+        measurement: bool,
+        version_override: Option<String>,
+    },
+    /// `build`: this machine's triple.
+    Build {
+        out: Option<PathBuf>,
+        measurement: bool,
+        version_override: Option<String>,
+    },
+    /// `plan`: print the command. One subject, and no other option.
+    Plan(Subject),
+    /// `triple --host <host>`: the host's Rust triple.
+    Triple { host: String },
+    /// `archive-version`: the version a release archive is named with.
+    ArchiveVersion { version_override: Option<String> },
+}
+
+/// Whose build a command describes.
+#[derive(Debug, PartialEq, Eq)]
+enum Subject {
+    /// A release host, built from depends.
+    Host(String),
+    /// This machine's triple.
+    Native,
+}
+
+/// One option, before a command decides whether it accepts it.
+enum Flag {
+    Host(String),
+    Out(PathBuf),
+    VersionOverride(String),
+    Measurement,
+    Native,
 }
 
 /// A subdirectory of the staged tree.
@@ -66,149 +101,297 @@ const USAGE: &str = "usage:\n  \
     cargo xtask triple --host <depends host>\n  \
     cargo xtask archive-version [--version-override V]";
 
-fn parse(args: &[String]) -> Result<Options, String> {
+fn parse(args: &[String]) -> Result<Command, String> {
     let mut it = args.iter();
-    let command = it.next().ok_or(USAGE)?.clone();
-    if !matches!(
-        command.as_str(),
-        "dist" | "build" | "plan" | "triple" | "archive-version"
-    ) {
-        return Err(format!("{command:?} is not a command\n{USAGE}"));
+    match it.next().ok_or(USAGE)?.as_str() {
+        "dist" => parse_dist(&mut it),
+        "build" => parse_build(&mut it),
+        "plan" => parse_plan(&mut it),
+        "triple" => parse_triple(&mut it),
+        "archive-version" => parse_archive_version(&mut it),
+        other => Err(format!("{other:?} is not a command\n{USAGE}")),
     }
-    let mut o = Options {
-        command,
-        ..Options::default()
+}
+
+fn next_flag(it: &mut std::slice::Iter<'_, String>) -> Result<Option<Flag>, String> {
+    let Some(arg) = it.next() else {
+        return Ok(None);
     };
-    while let Some(arg) = it.next() {
-        let mut value = || {
-            it.next()
-                .cloned()
-                .ok_or_else(|| format!("{arg} needs a value\n{USAGE}"))
-        };
-        match arg.as_str() {
-            "--host" => o.host = Some(value()?),
-            "--out" => o.out = Some(PathBuf::from(value()?)),
-            "--version-override" => o.version_override = Some(value()?),
-            "--measurement-spans" => o.measurement = true,
-            "--native" => o.native = true,
-            other => return Err(format!("{other:?} is not an option\n{USAGE}")),
-        }
-    }
-    let fits = match o.command.as_str() {
-        "dist" => o.host.is_some() && !o.native,
-        "build" => o.host.is_none() && !o.native,
-        "triple" => {
-            o.host.is_some()
-                && !o.native
-                && o.out.is_none()
-                && !o.measurement
-                && o.version_override.is_none()
-        }
-        "archive-version" => o.host.is_none() && !o.native && o.out.is_none() && !o.measurement,
-        _ => {
-            (o.host.is_some() != o.native)
-                && o.out.is_none()
-                && !o.measurement
-                && o.version_override.is_none()
-        }
+    let mut value = || {
+        it.next()
+            .cloned()
+            .ok_or_else(|| format!("{arg} needs a value\n{USAGE}"))
     };
-    if !fits {
-        return Err(format!("these options do not fit `{}`\n{USAGE}", o.command));
+    Ok(Some(match arg.as_str() {
+        "--host" => Flag::Host(value()?),
+        "--out" => Flag::Out(PathBuf::from(value()?)),
+        "--version-override" => Flag::VersionOverride(value()?),
+        "--measurement-spans" => Flag::Measurement,
+        "--native" => Flag::Native,
+        other => return Err(format!("{other:?} is not an option\n{USAGE}")),
+    }))
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("`{name}` is given twice\n{USAGE}"));
     }
-    Ok(o)
+    *slot = Some(value);
+    Ok(())
+}
+
+fn set_switch(slot: &mut bool, name: &str) -> Result<(), String> {
+    if *slot {
+        return Err(format!("`{name}` is given twice\n{USAGE}"));
+    }
+    *slot = true;
+    Ok(())
+}
+
+fn reject(command: &str) -> Result<Command, String> {
+    Err(format!("these options do not fit `{command}`\n{USAGE}"))
+}
+
+fn parse_dist(it: &mut std::slice::Iter<'_, String>) -> Result<Command, String> {
+    let mut host = None;
+    let mut out = None;
+    let mut measurement = false;
+    let mut version_override = None;
+    while let Some(flag) = next_flag(it)? {
+        match flag {
+            Flag::Host(value) => set_once(&mut host, value, "--host")?,
+            Flag::Out(value) => set_once(&mut out, value, "--out")?,
+            Flag::VersionOverride(value) => {
+                set_once(&mut version_override, value, "--version-override")?;
+            }
+            Flag::Measurement => set_switch(&mut measurement, "--measurement-spans")?,
+            Flag::Native => return reject("dist"),
+        }
+    }
+    let host = host.ok_or_else(|| format!("`dist` needs `--host`\n{USAGE}"))?;
+    Ok(Command::Dist {
+        host,
+        out,
+        measurement,
+        version_override,
+    })
+}
+
+fn parse_build(it: &mut std::slice::Iter<'_, String>) -> Result<Command, String> {
+    let mut out = None;
+    let mut measurement = false;
+    let mut version_override = None;
+    while let Some(flag) = next_flag(it)? {
+        match flag {
+            Flag::Out(value) => set_once(&mut out, value, "--out")?,
+            Flag::VersionOverride(value) => {
+                set_once(&mut version_override, value, "--version-override")?;
+            }
+            Flag::Measurement => set_switch(&mut measurement, "--measurement-spans")?,
+            Flag::Host(_) | Flag::Native => return reject("build"),
+        }
+    }
+    Ok(Command::Build {
+        out,
+        measurement,
+        version_override,
+    })
+}
+
+fn parse_plan(it: &mut std::slice::Iter<'_, String>) -> Result<Command, String> {
+    let mut host = None;
+    let mut native = false;
+    while let Some(flag) = next_flag(it)? {
+        match flag {
+            Flag::Host(value) => set_once(&mut host, value, "--host")?,
+            Flag::Native => set_switch(&mut native, "--native")?,
+            Flag::Out(_) | Flag::VersionOverride(_) | Flag::Measurement => return reject("plan"),
+        }
+    }
+    match (host, native) {
+        (Some(host), false) => Ok(Command::Plan(Subject::Host(host))),
+        (None, true) => Ok(Command::Plan(Subject::Native)),
+        _ => Err(format!("`plan` needs `--host` or `--native`\n{USAGE}")),
+    }
+}
+
+fn parse_triple(it: &mut std::slice::Iter<'_, String>) -> Result<Command, String> {
+    let mut host = None;
+    while let Some(flag) = next_flag(it)? {
+        match flag {
+            Flag::Host(value) => set_once(&mut host, value, "--host")?,
+            Flag::Out(_) | Flag::VersionOverride(_) | Flag::Measurement | Flag::Native => {
+                return reject("triple");
+            }
+        }
+    }
+    let host = host.ok_or_else(|| format!("`triple` needs `--host`\n{USAGE}"))?;
+    Ok(Command::Triple { host })
+}
+
+fn parse_archive_version(it: &mut std::slice::Iter<'_, String>) -> Result<Command, String> {
+    let mut version_override = None;
+    while let Some(flag) = next_flag(it)? {
+        match flag {
+            Flag::VersionOverride(value) => {
+                set_once(&mut version_override, value, "--version-override")?;
+            }
+            Flag::Host(_) | Flag::Out(_) | Flag::Measurement | Flag::Native => {
+                return reject("archive-version");
+            }
+        }
+    }
+    Ok(Command::ArchiveVersion { version_override })
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let options = parse(args)?;
+    let command = parse(args)?;
     let root = repository_root()?;
     let matrix = Matrix::load(&root.join("rust/xtask/matrix.toml"))?;
-    let target_dir = root.join(&matrix.build.target_dir);
-
-    match options.command.as_str() {
-        "triple" => {
-            let name = options.host.as_deref().ok_or(USAGE)?;
-            println!("{}", matrix.dist_host(name)?.0.triple);
-            return Ok(());
+    match command {
+        Command::Triple { host } => {
+            println!("{}", matrix.dist_host(&host)?.0.triple);
+            Ok(())
         }
-        "archive-version" => {
-            println!("{}", identity(&root, &matrix, &options)?.archive_version()?);
-            return Ok(());
+        Command::ArchiveVersion { version_override } => {
+            let identity = identity(&root, &matrix, version_override.as_deref())?;
+            println!("{}", identity.archive_version()?);
+            Ok(())
         }
-        _ => {}
-    }
-
-    // `--host` is a release host built from depends; without it, this
-    // machine's own triple.
-    let (host, invocation, depends, binary_mode, files) = if let Some(name) = &options.host {
-        let (host, dist) = matrix.dist_host(name)?;
-        let env_file = root
-            .join("contrib/depends")
-            .join(name)
-            .join("share/toolchain.env");
-        let depends = DependsEnv::read(&env_file)?;
-        (
+        Command::Plan(subject) => {
+            let resolved = resolve(&root, &matrix, &subject)?;
+            let plan = make_plan(&root, &matrix, &resolved, VersionFill::Shown, false)?;
+            print_plan(&plan, &mut std::io::stdout());
+            Ok(())
+        }
+        Command::Dist {
             host,
-            &dist.invocation,
-            Some(depends),
-            dist.binary_mode,
-            &dist.files[..],
-        )
-    } else {
-        let triple = host_triple(&root)?;
-        let (host, invocation) = matrix.native_host(&triple)?;
-        (host, invocation, None, None, &[][..])
-    };
-
-    if options.command == "plan" {
-        let fill = Fill {
-            depends,
-            target_dir,
-            identity: Some(Identity {
-                full: "{version_full}".to_owned(),
-                release_name: "{release_name}".to_owned(),
-                is_release: false,
-            }),
-            macos: host.macos.clone(),
-        };
-        let plan = plan::plan(
+            out,
+            measurement,
+            version_override,
+        } => release(
+            &root,
             &matrix,
-            host,
-            invocation,
-            &fill,
-            false,
-            std::env::var_os("PATH").as_deref(),
-        )?;
-        print_plan(&plan, &mut std::io::stdout());
-        return Ok(());
+            &Subject::Host(host),
+            out,
+            measurement,
+            version_override.as_deref(),
+        ),
+        Command::Build {
+            out,
+            measurement,
+            version_override,
+        } => release(
+            &root,
+            &matrix,
+            &Subject::Native,
+            out,
+            measurement,
+            version_override.as_deref(),
+        ),
     }
+}
 
-    refuse_build_machine_settings(&matrix)?;
-    check_toolchain(&root, &matrix)?;
-    let identity = identity(&root, &matrix, &options)?;
-    if options.measurement {
+/// A host and the invocation the matrix gives it, with the files a dist
+/// stages. A native build has no depends file and stages nothing of its own.
+struct Resolved<'a> {
+    host: &'a matrix::Host,
+    invocation: &'a matrix::Invocation,
+    depends: Option<DependsEnv>,
+    binary_mode: Option<u32>,
+    files: &'a [matrix::StagedFile],
+}
+
+fn resolve<'a>(root: &Path, matrix: &'a Matrix, subject: &Subject) -> Result<Resolved<'a>, String> {
+    match subject {
+        Subject::Host(name) => {
+            let (host, dist) = matrix.dist_host(name)?;
+            let env_file = root
+                .join("contrib/depends")
+                .join(name)
+                .join("share/toolchain.env");
+            Ok(Resolved {
+                host,
+                invocation: &dist.invocation,
+                depends: Some(DependsEnv::read(&env_file)?),
+                binary_mode: dist.binary_mode,
+                files: &dist.files,
+            })
+        }
+        Subject::Native => {
+            let triple = host_triple(root)?;
+            let (host, invocation) = matrix.native_host(&triple)?;
+            Ok(Resolved {
+                host,
+                invocation,
+                depends: None,
+                binary_mode: None,
+                files: &[],
+            })
+        }
+    }
+}
+
+fn make_plan(
+    root: &Path,
+    matrix: &Matrix,
+    resolved: &Resolved<'_>,
+    version: VersionFill,
+    measurement: bool,
+) -> Result<Plan, String> {
+    let fill = Fill {
+        depends: resolved.depends.clone(),
+        target_dir: root.join(&matrix.build.target_dir),
+        version,
+        macos: resolved.host.macos.clone(),
+    };
+    plan::plan(
+        matrix,
+        resolved.host,
+        resolved.invocation,
+        &fill,
+        measurement,
+        std::env::var_os("PATH").as_deref(),
+    )
+}
+
+/// Builds `subject` and stages what the matrix says the archive carries.
+fn release(
+    root: &Path,
+    matrix: &Matrix,
+    subject: &Subject,
+    out: Option<PathBuf>,
+    measurement: bool,
+    version_override: Option<&str>,
+) -> Result<(), String> {
+    refuse_build_machine_settings(matrix)?;
+    check_toolchain(root, matrix)?;
+    let identity = identity(root, matrix, version_override)?;
+    if measurement && matches!(subject, Subject::Host(_)) && identity.is_release {
+        return Err(format!(
+            "--measurement-spans at a release ({}): a measurement build is never a release archive",
+            identity.full
+        ));
+    }
+    if measurement {
         eprintln!("xtask: warning: {}", matrix.measurement.warning);
     }
-
-    let fill = Fill {
-        depends,
-        target_dir,
-        identity: Some(identity.clone()),
-        macos: host.macos.clone(),
-    };
-    let plan = plan::plan(
-        &matrix,
-        host,
-        invocation,
-        &fill,
-        options.measurement,
-        std::env::var_os("PATH").as_deref(),
+    let resolved = resolve(root, matrix, subject)?;
+    let plan = make_plan(
+        root,
+        matrix,
+        &resolved,
+        VersionFill::Resolved(identity.clone()),
+        measurement,
     )?;
-    eprintln!("xtask: {} ({}), {}", host.name, host.triple, identity.full);
+    eprintln!(
+        "xtask: {} ({}), {}",
+        resolved.host.name, resolved.host.triple, identity.full
+    );
     print_plan(&plan, &mut std::io::stderr());
-    execute(&root, &plan)?;
-
-    let out = options.out.unwrap_or_else(|| root.join("build/bin"));
-    stage(&root, &plan, binary_mode, files, &out)?;
+    spawn::cargo(root, &plan)?;
+    let out = out.unwrap_or_else(|| root.join("build/bin"));
+    stage(root, &plan, resolved.binary_mode, resolved.files, &out)?;
     eprintln!("xtask: staged in {}", out.display());
     Ok(())
 }
@@ -228,13 +411,9 @@ fn repository_root() -> Result<PathBuf, String> {
 
 /// This machine's triple, as rustc reports it.
 fn host_triple(root: &Path) -> Result<String, String> {
-    let text = output(
-        Command::new("rustc")
-            .arg("-vV")
-            .current_dir(root.join("rust")),
-    )?;
+    let text = spawn::rustc(root, RustcProbe::Verbose)?;
     text.lines()
-        .find_map(|l| l.strip_prefix("host: "))
+        .find_map(|line| line.strip_prefix("host: "))
         .map(str::to_owned)
         .ok_or_else(|| "rustc -vV printed no host line".to_owned())
 }
@@ -246,7 +425,12 @@ fn refuse_build_machine_settings(matrix: &Matrix) -> Result<(), String> {
     let mut found = Vec::new();
     for (name, value) in std::env::vars_os() {
         let Some(name) = name.to_str() else { continue };
-        if matrix.build.refused.iter().any(|p| matches_name(p, name)) {
+        if matrix
+            .build
+            .refused
+            .iter()
+            .any(|pattern| plan::matches_pattern(pattern, name))
+        {
             found.push(name.to_owned());
         }
         for (refused, at) in &matrix.build.refused_values {
@@ -267,16 +451,6 @@ fn refuse_build_machine_settings(matrix: &Matrix) -> Result<(), String> {
     }
 }
 
-/// `pattern` with at most one `*`, which matches any run of characters.
-fn matches_name(pattern: &str, name: &str) -> bool {
-    match pattern.split_once('*') {
-        None => pattern == name,
-        Some((head, tail)) => {
-            name.len() >= head.len() + tail.len() && name.starts_with(head) && name.ends_with(tail)
-        }
-    }
-}
-
 /// rustc must be the channel `rust/rust-toolchain.toml` pins.
 fn check_toolchain(root: &Path, matrix: &Matrix) -> Result<(), String> {
     let file = root.join(&matrix.build.toolchain_file);
@@ -289,11 +463,7 @@ fn check_toolchain(root: &Path, matrix: &Matrix) -> Result<(), String> {
         .and_then(|t| t.get("channel"))
         .and_then(toml::Value::as_str)
         .ok_or_else(|| format!("{} has no [toolchain] channel", file.display()))?;
-    let reported = output(
-        Command::new("rustc")
-            .arg("--version")
-            .current_dir(root.join("rust")),
-    )?;
+    let reported = spawn::rustc(root, RustcProbe::Version)?;
     let version = reported.split_whitespace().nth(1).unwrap_or("");
     if version == channel {
         Ok(())
@@ -306,23 +476,20 @@ fn check_toolchain(root: &Path, matrix: &Matrix) -> Result<(), String> {
     }
 }
 
-fn identity(root: &Path, matrix: &Matrix, options: &Options) -> Result<Identity, String> {
+fn identity(
+    root: &Path,
+    matrix: &Matrix,
+    version_override: Option<&str>,
+) -> Result<Identity, String> {
     let defaults = &matrix.version;
-    let identity = match &options.version_override {
-        Some(v) => version::from_override_at(root, v, &defaults.release_name)?,
+    match version_override {
+        Some(version) => version::from_override_at(root, version, &defaults.release_name),
         None => version::from_git(
             &GitHead::read(root)?,
             &defaults.default,
             &defaults.release_name,
-        )?,
-    };
-    if options.measurement && options.command == "dist" && identity.is_release {
-        return Err(format!(
-            "--measurement-spans at a release ({}): a measurement build is never a release archive",
-            identity.full
-        ));
+        ),
     }
-    Ok(identity)
 }
 
 fn print_plan(plan: &Plan, w: &mut impl std::io::Write) {
@@ -337,67 +504,6 @@ fn print_plan(plan: &Plan, w: &mut impl std::io::Write) {
         line(format!("  {name}={value}"));
     }
     line(format!("  {}", plan.args.join(" ")));
-}
-
-/// Runs the plan from `rust/`, the directory cargo reads its config from.
-fn execute(root: &Path, plan: &Plan) -> Result<(), String> {
-    let (program, args) = plan.args.split_first().ok_or("an empty command")?;
-    let mut command = Command::new(program);
-    command.args(args).current_dir(root.join("rust"));
-    for (name, _) in std::env::vars_os() {
-        if let Some(n) = name.to_str() {
-            if plan.unset.iter().any(|p| matches_name(p, n)) {
-                command.env_remove(&name);
-            }
-        }
-    }
-    if let Some(cleaned) = library_path_without_cargo_run(root) {
-        if cleaned.is_empty() {
-            command.env_remove(LIBRARY_PATH);
-        } else {
-            command.env(LIBRARY_PATH, cleaned);
-        }
-    }
-    for (name, value) in &plan.env {
-        command.env(name, value);
-    }
-    let status = command
-        .status()
-        .map_err(|e| format!("cannot run {program}: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("cargo failed ({status})"))
-    }
-}
-
-/// The variable `cargo run` puts library directories in for the program it
-/// runs: the xtask's own, which a direct cargo build never had.
-#[cfg(target_os = "macos")]
-const LIBRARY_PATH: &str = "DYLD_FALLBACK_LIBRARY_PATH";
-#[cfg(windows)]
-const LIBRARY_PATH: &str = "PATH";
-#[cfg(not(any(target_os = "macos", windows)))]
-const LIBRARY_PATH: &str = "LD_LIBRARY_PATH";
-
-/// [`LIBRARY_PATH`] without the directories `cargo run` added for the
-/// xtask: those under the workspace's target directory and, except on
-/// Windows where the toolchain's directory is how rustup runs cargo at all,
-/// under rustup's toolchains. What the caller set is kept. `None` when the
-/// variable is unset; an empty value when nothing of the caller's is left,
-/// and the caller then removes it, as a direct cargo build never had it.
-fn library_path_without_cargo_run(root: &Path) -> Option<OsString> {
-    let current = std::env::var_os(LIBRARY_PATH)?;
-    let target = root.join("rust/target");
-    let rustup = if cfg!(windows) {
-        None
-    } else {
-        std::env::var_os("RUSTUP_HOME").map(|r| PathBuf::from(r).join("toolchains"))
-    };
-    let kept: Vec<PathBuf> = std::env::split_paths(&current)
-        .filter(|p| !p.starts_with(&target) && !rustup.as_ref().is_some_and(|r| p.starts_with(r)))
-        .collect();
-    std::env::join_paths(kept).ok()
 }
 
 /// Copies the binaries and the host's files into `out`. A directory the
@@ -458,45 +564,12 @@ fn set_mode(_path: &Path, _mode: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn output(command: &mut Command) -> Result<String, String> {
-    let out = command
-        .output()
-        .map_err(|e| format!("cannot run {:?}: {e}", command.get_program()))?;
-    if !out.status.success() {
-        return Err(format!(
-            "{:?} failed ({}): {}",
-            command.get_program(),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    String::from_utf8(out.stdout).map_err(|_| "a tool printed bytes that are not UTF-8".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn args(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_owned).collect()
-    }
-
-    #[test]
-    fn patterns_match_exact_prefix_and_infix_names() {
-        assert!(matches_name("RUSTFLAGS", "RUSTFLAGS"));
-        assert!(!matches_name("RUSTFLAGS", "RUSTFLAGS_X"));
-        assert!(matches_name(
-            "CARGO_PROFILE_*",
-            "CARGO_PROFILE_RELEASE_OPT_LEVEL"
-        ));
-        assert!(matches_name(
-            "CARGO_TARGET_*_RUSTFLAGS",
-            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"
-        ));
-        assert!(!matches_name(
-            "CARGO_TARGET_*_RUSTFLAGS",
-            "CARGO_TARGET_DIR"
-        ));
     }
 
     #[test]
@@ -512,7 +585,10 @@ mod tests {
             "CARGO_BUILD_TARGET",
         ] {
             assert!(
-                m.build.refused.iter().any(|p| matches_name(p, name)),
+                m.build
+                    .refused
+                    .iter()
+                    .any(|pattern| plan::matches_pattern(pattern, name)),
                 "{name}"
             );
         }

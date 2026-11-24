@@ -5,17 +5,17 @@
 # BSD-3-Clause
 """The release matrix, `rust/xtask/matrix.toml`, read once for every gate.
 
-`cargo xtask` builds the shipped binaries from that file and adds nothing of
-its own: every variable and argument a release cargo build is given is a
-value in it (rust/xtask/src/plan.rs substitutes the placeholders and runs
-cargo). So a gate that holds what a release build is given reads it here:
+`cargo xtask` builds the shipped binaries from that file. It substitutes
+the placeholders and appends only the three words of `PlanFlag`
+(`--target`, `-p`, and `--features` for a measurement build). This reader
+does not assemble that command. A gate that holds what a release build is
+given reads the data:
 
 - the shipped roots: every host's `binaries`;
-- the features a release passes: none (`cargo_args` and the hosts name
-  none; `--features` comes only from `[measurement]`, under the xtask's
-  measurement flag);
-- each host's invocations: the `[build]` variables, then the host's, and
-  the cargo arguments.
+- the features a release passes: none (`cargo_args` names none;
+  `--features` is `PlanFlag::Features`, fed from `[measurement]`, and only
+  under the xtask's measurement flag);
+- each host's environment: the `[build]` variables, then the host's.
 
 The reading is strict: a table or key this file has no account of is an
 error, as the xtask's own reading is (`matrix.rs`), so a setting cannot sit
@@ -57,13 +57,16 @@ class MatrixError(ValueError):
 
 @dataclass(frozen=True)
 class Invocation:
-    """One cargo run: the host, its mode, the variables and the arguments."""
+    """One cargo run's data: the host, its mode and the variables it is given.
+
+    The cargo arguments are `[build] cargo_args` plus `PlanFlag`. This reader
+    does not rebuild them.
+    """
 
     host: str
     triple: str
     mode: str  # "dist" or "native"
     env: tuple[tuple[str, str], ...]
-    args: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -105,7 +108,9 @@ def parse(text: str) -> Matrix:
     build = raw["build"]
     _keys("[build]", build, BUILD_KEYS)
     base_env = _pairs("[build] env", build["env"])
-    cargo_args = tuple(build["cargo_args"])
+    cargo_args = build["cargo_args"]
+    if not isinstance(cargo_args, list) or not all(isinstance(arg, str) for arg in cargo_args):
+        raise MatrixError("[build] cargo_args is not a list of strings")
     measurement = raw["measurement"]
     _keys("[measurement]", measurement, {"features", "warning"})
 
@@ -120,13 +125,10 @@ def parse(text: str) -> Matrix:
                 continue
             table = host[mode]
             _keys(f"host {name}.{mode}", table, allowed)
+            if not isinstance(table["target"], bool):
+                raise MatrixError(f"host {name}.{mode}: target is not true or false")
             env = base_env + _pairs(f"host {name}.{mode} env", table["env"])
-            args = ["cargo", *cargo_args]
-            if table["target"]:
-                args += ["--target", triple]
-            for b in binaries:
-                args += ["-p", b]
-            invocations.append(Invocation(name, triple, mode, env, tuple(args)))
+            invocations.append(Invocation(name, triple, mode, env))
         if "dist" not in host and "native" not in host:
             raise MatrixError(f"host {name}: neither dist nor native")
     return Matrix(
@@ -163,7 +165,11 @@ def selftest() -> int:
     m = parse(text)
     expect("the committed matrix reads", bool(m.invocations))
     expect("shekyld is a root", "shekyld" in m.roots)
-    expect("no release invocation names --features", all("--features" not in i.args for i in m.invocations))
+    cargo_args = m.raw["build"]["cargo_args"]
+    expect(
+        "no release cargo_args names --features",
+        all(isinstance(arg, str) and not arg.startswith("--features") for arg in cargo_args),
+    )
     expect("an unknown key in [build] is refused", refused(text.replace("[build]\n", "[build]\nopt_level = 3\n", 1)))
     expect(
         "an unknown placeholder is refused",

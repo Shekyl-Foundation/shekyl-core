@@ -25,12 +25,12 @@ does.
   1. **Subject** — each owner in `OWNERS` declares the feature and its
      named source file switches on it. `rust/xtask/matrix.toml`'s
      `[measurement] features` names every owner's feature and nothing else,
-     no release invocation of the matrix passes a `--features` that names
-     one (`release_matrix.py` reads the invocations), and the xtask adds
-     the table's features only under its `--measurement-spans` flag: the
-     flag is parsed in `main.rs`, and `plan.rs` is the one source that
-     reads `measurement.features`. Without this limb the others pass
-     vacuously (rule 47).
+     no release `cargo_args` passes a `--features` that names one, no
+     host environment carries the name (`release_matrix.py` reads both),
+     and the xtask adds the table's features only under its
+     `--measurement-spans` flag: the flag is parsed in `main.rs`, and
+     `plan.rs` is the one source that reads `measurement.features`.
+     Without this limb the others pass vacuously (rule 47).
   2. **No Cargo edge** — no dependency edge of any kind, and no feature of
      any workspace package (`default` included), enables any owner's. The
      only way in is the xtask's flag, on the command line of a measurement
@@ -108,12 +108,10 @@ def matrix_problems(text):
         problems.append(
             f"[measurement] features are {sorted(matrix.measurement_features)}, not {wanted}"
         )
+    for arg in matrix.raw["build"]["cargo_args"]:
+        if isinstance(arg, str) and FEATURE in arg:
+            problems.append(f"[build] cargo_args passes {arg}")
     for invocation in matrix.invocations:
-        for arg in invocation.args:
-            if FEATURE in arg:
-                problems.append(
-                    f"host {invocation.host} ({invocation.mode}) passes {arg} in a release invocation"
-                )
         for name, value in invocation.env:
             if FEATURE in value:
                 problems.append(f"host {invocation.host} ({invocation.mode}) sets {name}={value}")

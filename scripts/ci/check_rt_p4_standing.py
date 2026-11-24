@@ -17,12 +17,13 @@ Sources:
 5. `rust/xtask/matrix.toml`: every cargo invocation of a release build,
    its arguments, its environment and every `-C` in it. `cargo xtask`
    builds every binary, the daemon included, as one `cargo build
-   --locked` per host from this file and adds nothing of its own; the
-   xtask's source (`rust/xtask/src`) is held to the process calls it has
-   (`KNOWN_XTASK_CALLS`), so a variable or argument cannot reach cargo
-   from code instead of the file. The file's refused list must keep
-   every build-machine codegen variable: the xtask refuses to build while
-   one is set, which a build machine's RUSTFLAGS was outside of before.
+   --locked` per host from this file. What the xtask appends is
+   `PlanFlag::word` in `plan.rs` (`--target`, `-p`, `--features`), and
+   every process it runs is in `spawn.rs`. A flag literal anywhere else,
+   a `Command` outside `spawn.rs`, or an environment name written as a
+   literal is unrecognised. The file's refused list must keep every
+   build-machine codegen variable: the xtask refuses to build while one
+   is set, which a build machine's RUSTFLAGS was outside of before.
 6. `contrib/gitian/gitian-*.yml`: the toolchain each release build
    installs. A descriptor builds through `cargo xtask dist`, on the lines
    `GITIAN_XTASK` spells. Any other cargo or rustc command, a
@@ -117,28 +118,35 @@ REQUIRED_REFUSALS = (
     "CARGO_PROFILE_*",
     "CARGO_BUILD_TARGET",
 )
-# Every process call in the xtask's own source, outside its tests: the two
-# rustc probes, the git reads of the version, and the one cargo run, whose
-# arguments and environment are the plan's (the matrix's) and the
-# library-path cleanup of what `cargo run` added for the xtask. A new call
-# site is unrecognised until it is accounted for here.
-KNOWN_XTASK_CALLS = frozenset({
-    'Command::new("rustc")',
-    '.arg("-vV")',
-    '.arg("--version")',
-    'let mut command = Command::new(program);',
-    'command.args(args).current_dir(root.join("rust"));',
-    "command.env_remove(&name);",
-    "command.env(LIBRARY_PATH, cleaned);",
-    "command.env_remove(LIBRARY_PATH);",
-    "command.env(name, value);",
-    'let out = Command::new("git")',
-    ".args(args)",
-    # Whether the tree has git history: `--version-override` is refused if so.
-    'let mut git = Command::new("git");',
-    'git.args(["rev-parse", "--git-dir"]).current_dir(root);',
-})
-XTASK_CALL = re.compile(r"\.(?:env|envs|env_remove|env_clear|arg|args)\s*\(|Command::new")
+# The words `PlanFlag::word` returns. A new variant is named here in the
+# same change that adds it.
+PLAN_FLAGS = frozenset({"--target", "-p", "--features"})
+# Arguments of the rustc and git probes in spawn.rs. Not cargo flags.
+PROBE_FLAGS = frozenset({"-vV", "--version", "--short=9", "--git-dir", "-l", "--points-at"})
+# `cargo xtask`'s own command line, parsed in main.rs.
+XTASK_FLAGS = frozenset({"--host", "--out", "--version-override", "--measurement-spans", "--native"})
+# The release suffix version.rs strips and appends. Not a flag cargo sees.
+VERSION_MARKS = frozenset({"-release"})
+# Flag-shaped string literals each xtask source may contain, outside tests.
+# A file with none is an empty set. A source this table does not name is
+# unrecognised the moment it carries a flag or a process.
+XTASK_FLAG_FAMILIES = {
+    "plan.rs": PLAN_FLAGS,
+    "spawn.rs": PROBE_FLAGS,
+    "main.rs": XTASK_FLAGS,
+    "version.rs": VERSION_MARKS,
+    "matrix.rs": frozenset(),
+}
+XTASK_REQUIRED = ("plan.rs", "spawn.rs", "main.rs", "version.rs")
+# `Command::new(...)` in spawn.rs. `program` is the plan's cargo, once.
+SPAWN_PROGRAMS = {'"rustc"', '"git"', "program"}
+CARGO_HANDOFF = "fn cargo(root: &Path, plan: &Plan)"
+# A string literal that is one flag: it starts with `-` and contains no
+# space, so a sentence that mentions a flag is not one.
+FLAG_LITERAL = re.compile(r'"(-[^"\\\s]+)"')
+PLAN_WORD = re.compile(r"fn word\(self\)[^{]*\{([\s\S]*?)\n    \}")
+ENV_LITERAL = re.compile(r'\.env(?:s|_remove|_clear)?\(\s*"')
+ARGS_MUTATION = re.compile(r"\bargs\s*\.\s*(?:push|extend|insert)\b")
 # The lines a descriptor runs the xtask on: the build, the host's Rust
 # target and the archive's version. Neither of the last two compiles the
 # shipped code.
@@ -448,23 +456,76 @@ def read_matrix(text: str) -> list[str]:
     return sorted(set(problems))
 
 
+def _production_source(text: str) -> str:
+    """The file above its tests. A `#[cfg(test)]` module is not the build."""
+    return re.split(r"#\[cfg\(test\)\]", text, maxsplit=1)[0]
+
+
+def _flag_literals(text: str) -> set[str]:
+    return set(FLAG_LITERAL.findall(text))
+
+
 def read_xtask(sources: dict[str, str]) -> list[str]:
-    """Process calls in the xtask's own source that are not accounted for.
-    No cargo run at all is unreadable."""
+    """Flags and processes in the xtask that this file has no account of.
+
+    The plan's cargo flags live in `PlanFlag::word`. The probes live in
+    `spawn.rs`. `cargo` is handed the plan and nothing else, exactly once.
+    A missing plan, a missing spawn, or no cargo handoff is unreadable
+    (rule 47): the check would otherwise pass because it found nothing.
+    """
+    files = {
+        Path(path).name: (path, _production_source(text))
+        for path, text in sources.items()
+    }
+    missing = [name for name in XTASK_REQUIRED if name not in files]
+    if missing:
+        raise Unreadable(f"{XTASK_SRC} is missing {', '.join(missing)}")
+    plan_path, plan = files["plan.rs"]
+    spawn_path, spawn = files["spawn.rs"]
+    word = PLAN_WORD.search(plan)
+    if word is None:
+        raise Unreadable(f"{plan_path}: no PlanFlag::word")
+    if CARGO_HANDOFF not in spawn:
+        raise Unreadable(f"{spawn_path}: cargo() does not take exactly the plan")
+    spawns = re.findall(r"Command::new\(([^)]*)\)", spawn)
+    cargo_runs = spawns.count("program")
+    if cargo_runs != 1:
+        raise Unreadable(f"{XTASK_SRC} runs cargo {cargo_runs} times, not once")
+    if '"rustc"' not in spawns or '"git"' not in spawns:
+        raise Unreadable(f"{spawn_path}: the rustc and git probes are missing")
+
     problems = []
-    spawns = 0
-    for path, text in sorted(sources.items()):
-        code = re.split(r"#\[cfg\(test\)\]", text, maxsplit=1)[0]
-        for line in code.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("//") or not XTASK_CALL.search(stripped):
-                continue
-            if stripped == "let mut command = Command::new(program);":
-                spawns += 1
-            if stripped not in KNOWN_XTASK_CALLS:
-                problems.append(f"{path}: process call `{stripped}`")
-    if spawns != 1:
-        raise Unreadable(f"{XTASK_SRC} runs cargo {spawns} times, not once")
+    words = _flag_literals(word.group(1))
+    if words != PLAN_FLAGS:
+        problems.append(
+            f"{plan_path}: PlanFlag::word has {sorted(words)}, not {sorted(PLAN_FLAGS)}"
+        )
+    outside = _flag_literals(plan[: word.start()] + plan[word.end() :])
+    problems += [
+        f"{plan_path}: flag {flag} outside PlanFlag::word" for flag in sorted(outside)
+    ]
+    for name, (path, code) in sorted(files.items()):
+        if name != "plan.rs":
+            found = _flag_literals(code)
+            expected = XTASK_FLAG_FAMILIES.get(name)
+            if expected is None:
+                if found or "Command::new" in code:
+                    problems.append(f"{path}: not a source the xtask gate knows")
+            elif found != expected:
+                problems.append(
+                    f"{path}: flags {sorted(found)} are not {sorted(expected)}"
+                )
+        if name != "spawn.rs" and "Command::new" in code:
+            problems.append(f"{path}: Command::new outside spawn.rs")
+        if name != "plan.rs" and ARGS_MUTATION.search(code):
+            problems.append(f"{path}: changes the plan's arguments")
+        if ENV_LITERAL.search(code):
+            problems.append(f"{path}: an environment name is a literal")
+    problems += [
+        f"{spawn_path}: process Command::new({arg})"
+        for arg in spawns
+        if arg not in SPAWN_PROGRAMS
+    ]
     return problems
 
 
@@ -931,22 +992,55 @@ env = [
 binary_mode = "inherit"
 files = []
 """
-SELFTEST_XTASK = """
-fn host_triple() {
-    let text = output(
-        Command::new("rustc")
-            .arg("-vV")
-            .current_dir(root.join("rust")),
-    );
+SELFTEST_PLAN = """
+impl PlanFlag {
+    pub const fn word(self) -> &'static str {
+        match self {
+            Self::Target => "--target",
+            Self::Package => "-p",
+            Self::Features => "--features",
+        }
+    }
 }
-fn execute() {
+fn plan() {
+    args.push(PlanFlag::Target.word().to_owned());
+}
+"""
+SELFTEST_SPAWN = """
+pub fn cargo(root: &Path, plan: &Plan) -> Result<(), String> {
     let mut command = Command::new(program);
     command.args(args).current_dir(root.join("rust"));
     command.env_remove(&name);
+    command.env(LIBRARY_PATH, cleaned);
+    command.env_remove(LIBRARY_PATH);
     command.env(name, value);
+}
+fn rustc_verbose() {
+    Command::new("rustc")
+        .arg("-vV");
+}
+fn rustc_version() {
+    Command::new("rustc")
+        .arg("--version");
+}
+fn git_command() {
+    let mut git = Command::new("git");
+    let _ = ["rev-parse", "--short=9", "HEAD"];
+    let _ = ["tag", "-l", "--points-at", "HEAD"];
+    let _ = ["rev-parse", "--git-dir"];
 }
 #[cfg(test)]
 mod tests { fn t() { Command::new("anything").arg("-C"); } }
+"""
+SELFTEST_MAIN = """
+"--host"
+"--out"
+"--version-override"
+"--measurement-spans"
+"--native"
+"""
+SELFTEST_VERSION = """
+fn mark(tag: &str) { tag.strip_suffix("-release"); }
 """
 SELFTEST_GITIAN = (
     "  sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.94.0\n"
@@ -1043,7 +1137,10 @@ def selftest() -> int:
         MANIFEST: SELFTEST_MANIFEST,
         CARGO_CONFIG: SELFTEST_CONFIG,
         MATRIX: SELFTEST_MATRIX,
-        f"{XTASK_SRC}/main.rs": SELFTEST_XTASK,
+        f"{XTASK_SRC}/plan.rs": SELFTEST_PLAN,
+        f"{XTASK_SRC}/spawn.rs": SELFTEST_SPAWN,
+        f"{XTASK_SRC}/main.rs": SELFTEST_MAIN,
+        f"{XTASK_SRC}/version.rs": SELFTEST_VERSION,
     }
     gitian = {"gitian-win.yml": SELFTEST_GITIAN}
     files = {"r.md": b"", "r2.md": b"", "cmp.txt": b"the comparison\n"}
@@ -1092,8 +1189,12 @@ def selftest() -> int:
         ("matrix toolchain selector", (MATRIX, '["build", "--locked"', '["+1.95.0", "build", "--locked"'), "unrecognised", "toolchain selector +1.95.0"),
         ("matrix subcommand", (MATRIX, '["build", "--locked"', '["rustc", "--locked"'), "unrecognised", "not build --locked"),
         ("matrix refusal dropped", (MATRIX, '"RUSTFLAGS", "CARGO_ENCODED', '"CARGO_ENCODED'), "unrecognised", "no longer holds RUSTFLAGS"),
-        ("xtask sets a variable", (f"{XTASK_SRC}/main.rs", "command.env(name, value);", 'command.env(name, value);\n    command.env("RUSTFLAGS", "-C opt-level=3");'), "unrecognised", "process call"),
-        ("xtask adds an argument", (f"{XTASK_SRC}/main.rs", '.current_dir(root.join("rust"));', '.current_dir(root.join("rust")).arg("--config");'), "unrecognised", "process call"),
+        ("xtask sets a variable", (f"{XTASK_SRC}/spawn.rs", "command.env(name, value);", 'command.env(name, value);\n    command.env("RUSTFLAGS", "-C opt-level=3");'), "unrecognised", "environment name is a literal"),
+        ("xtask adds an argument", (f"{XTASK_SRC}/spawn.rs", 'command.args(args).current_dir(root.join("rust"));', 'command.args(args).current_dir(root.join("rust")).arg("--config");'), "unrecognised", "--config"),
+        ("plan flag outside its enum", (f"{XTASK_SRC}/plan.rs", "args.push(PlanFlag::Target.word().to_owned());", 'args.push("--config".to_owned());'), "unrecognised", "outside PlanFlag::word"),
+        ("plan flag vocabulary changes", (f"{XTASK_SRC}/plan.rs", 'Self::Features => "--features",', 'Self::Features => "--features",\n            Self::Config => "--config",'), "unrecognised", "--config"),
+        ("a command outside spawn", (f"{XTASK_SRC}/main.rs", '"--native"\n', '"--native"\nCommand::new("make");\n'), "unrecognised", "Command::new outside spawn.rs"),
+        ("a test spawn counted as production", (f"{XTASK_SRC}/spawn.rs", "#[cfg(test)]\n", ""), "unrecognised", "anything"),
         ("unknown basis", (ATTESTATION, 'basis = "timing"', 'basis = "vibes"'), "invalid", "unknown basis 'vibes'"),
         ("timing entry, no basis", (ATTESTATION, 'basis = "timing"\n', ""), "invalid", "unknown basis None"),
         ("unknown run key", (ATTESTATION, 'device = "floor"\n', 'device = "floor"\nlto = true\n'), "invalid", "unknown key lto"),
@@ -1189,7 +1290,8 @@ def selftest() -> int:
             failures += 1
     for name, edit_path, old, new, phrase in [
         ("a matrix key nothing reads", MATRIX, "[build]\n", "[build]\nlto = true\n", "not a key"),
-        ("an xtask that runs no cargo", f"{XTASK_SRC}/main.rs", "let mut command = Command::new(program);", "", "runs cargo 0 times"),
+        ("an xtask that runs no cargo", f"{XTASK_SRC}/spawn.rs", "let mut command = Command::new(program);", "", "runs cargo 0 times"),
+        ("an xtask with no plan flags", f"{XTASK_SRC}/plan.rs", "fn word", "fn spell", "no PlanFlag::word"),
     ]:
         try:
             run(edit_path, old, new)
@@ -1235,7 +1337,7 @@ def selftest() -> int:
         + 1  # a missing target does not abort the other run
         + 2  # a missing evidence file
         + 1  # an empty crate closure is unreadable
-        + 2  # an unread matrix key, and an xtask with no cargo run, are unreadable
+        + 3  # an unread matrix key, no cargo run, and no PlanFlag::word are unreadable
         + 1  # replacing a known rustflag is unrecognised and drift
         + 1  # a drift says what to run
     )

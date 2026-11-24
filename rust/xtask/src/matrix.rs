@@ -246,7 +246,7 @@ impl Host {
             }
             None => None,
         };
-        if macos.is_some() != triple.contains("-apple-") {
+        if macos.is_some() != triple.contains("apple") {
             return Err(format!(
                 "host {name}: macos_minimum is for the macOS hosts, and each must have one"
             ));
@@ -519,7 +519,7 @@ mod tests {
         assert!(m
             .hosts
             .iter()
-            .filter(|h| !h.triple.contains("-apple-"))
+            .filter(|h| !h.triple.contains("apple"))
             .all(|h| h.macos.is_none()));
     }
 
@@ -551,6 +551,80 @@ mod tests {
                      [host.dist]\ntarget = true\nenv = []\nbinary_mode = \"755\"\nfiles = []\n";
         let err = Matrix::parse(&format!("{text}{extra}")).expect_err("a second row is refused");
         assert!(err.contains("listed twice"), "{err}");
+    }
+
+    /// Link arguments a dist rustflags value carries after that host's C
+    /// flags. MinGW needs the stack protector's libraries because rustc
+    /// links with `-nodefaultlibs`. The aarch64 macOS cross compiler takes
+    /// the deployment floor as a link argument; `MACOSX_DEPLOYMENT_TARGET`
+    /// alone is not enough for it. Every other host's rustflags are the C
+    /// flags and nothing more.
+    fn dist_link_extras(host: &str) -> &'static [&'static str] {
+        match host {
+            "x86_64-w64-mingw32" => &["-l:libssp.a", "-lmsvcrt", "-ladvapi32", "-lgcc"],
+            "aarch64-apple-darwin11" => &["-mmacosx-version-min={macos_minimum_depends}"],
+            _ => &[],
+        }
+    }
+
+    /// `-C link-arg=<flag>` tokens, in order. Any other rustflag is an error:
+    /// a dist rustflags value is the C flags restated for the link.
+    fn link_arguments(value: &str) -> Result<Vec<&str>, String> {
+        let mut args = Vec::new();
+        let mut tokens = value.split_whitespace();
+        while let Some(token) = tokens.next() {
+            let argument = if token == "-C" {
+                tokens
+                    .next()
+                    .ok_or_else(|| "a `-C` with no argument".to_owned())?
+            } else if let Some(joined) = token.strip_prefix("-C") {
+                joined
+            } else {
+                return Err(format!("{token} is not a `-C` flag"));
+            };
+            args.push(
+                argument
+                    .strip_prefix("link-arg=")
+                    .ok_or_else(|| format!("{argument} is not a link-arg"))?,
+            );
+        }
+        Ok(args)
+    }
+
+    fn one_env(env: &[(String, String)], keep: impl Fn(&str) -> bool) -> Option<&str> {
+        let mut found = env.iter().filter(|(name, _)| keep(name));
+        let value = found.next().map(|(_, value)| value.as_str());
+        assert!(found.next().is_none(), "two variables matched");
+        value
+    }
+
+    #[test]
+    fn dist_rustflags_are_the_cflags_as_link_arguments() {
+        let matrix = committed();
+        for host in &matrix.hosts {
+            let Some(dist) = &host.dist else {
+                continue;
+            };
+            let env = &dist.invocation.env;
+            let cflags = one_env(env, |name| name.starts_with("CFLAGS_"));
+            let rustflags = one_env(env, |name| name.ends_with("_RUSTFLAGS"));
+            let (Some(cflags), Some(rustflags)) = (cflags, rustflags) else {
+                panic!("{}: cflags and rustflags come together", host.name);
+            };
+            let cflag_tokens: Vec<&str> = cflags.split_whitespace().collect();
+            let link_args = link_arguments(rustflags).expect(&host.name);
+            let extras = dist_link_extras(&host.name);
+            assert_eq!(
+                link_args,
+                cflag_tokens
+                    .iter()
+                    .copied()
+                    .chain(extras.iter().copied())
+                    .collect::<Vec<_>>(),
+                "{}",
+                host.name
+            );
+        }
     }
 
     #[test]

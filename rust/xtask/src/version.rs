@@ -20,7 +20,8 @@
 //!   decides.
 
 use std::path::Path;
-use std::process::Command;
+
+use crate::spawn::{self, GitQuery};
 
 /// The one release-tag grammar. `docs/RELEASE_PROMOTION.md` §3 and
 /// `scripts/release/check_staging_deadlines.py` carry this text verbatim
@@ -72,12 +73,12 @@ pub struct GitHead {
 impl GitHead {
     /// Reads HEAD of the work tree at `root`.
     pub fn read(root: &Path) -> Result<Self, String> {
-        let commit = git(root, &["rev-parse", "--short=9", "HEAD"])?;
+        let commit = spawn::git(root, GitQuery::Commit)?;
         let commit: String = commit.chars().take(9).collect();
         if commit.len() != 9 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("git rev-parse printed {commit:?}, not a commit"));
         }
-        let tags = git(root, &["tag", "-l", "--points-at", "HEAD"])?;
+        let tags = spawn::git(root, GitQuery::Tags)?;
         Ok(Self { commit, tags })
     }
 }
@@ -92,7 +93,10 @@ pub fn from_git(head: &GitHead, default: &str, release_name: &str) -> Result<Ide
         .collect();
     let full = match releases.as_slice() {
         [] => format!("{default}-{}", head.commit),
-        [tag] => format!("{}-release", release_version(tag).unwrap_or(default)),
+        [tag] => {
+            let version = release_version(tag).expect("the tag was kept as a release");
+            format!("{version}-release")
+        }
         many => {
             return Err(format!(
                 "commit {} carries {} release tags ({}): a release has one",
@@ -123,7 +127,7 @@ fn override_identity(
     root: &Path,
     version: &str,
     release_name: &str,
-    configure: impl FnOnce(&mut Command),
+    configure: impl FnOnce(&mut std::process::Command),
 ) -> Result<Identity, String> {
     if let Some(found) = git_history(root, configure) {
         return Err(format!(
@@ -137,18 +141,12 @@ fn override_identity(
 /// Where this tree's git history is, if it has any: a `.git` at its root,
 /// or anything `git rev-parse --git-dir` finds from there. The first test
 /// holds where git cannot answer, as on a checkout another user owns.
-fn git_history(root: &Path, configure: impl FnOnce(&mut Command)) -> Option<String> {
+fn git_history(root: &Path, configure: impl FnOnce(&mut std::process::Command)) -> Option<String> {
     let dot_git = root.join(".git");
     if dot_git.exists() {
         return Some(dot_git.display().to_string());
     }
-    let mut git = Command::new("git");
-    git.args(["rev-parse", "--git-dir"]).current_dir(root);
-    configure(&mut git);
-    let out = git.output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    spawn::git_dir(root, configure)
 }
 
 /// The identity a caller names, once the tree is known to have no history.
@@ -188,31 +186,10 @@ fn is_release_number(text: &str) -> bool {
         && (text == "0" || !text.starts_with('0'))
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| {
-            format!(
-                "cannot run git ({e}); a source archive is built with --version-override <version>"
-            )
-        })?;
-    if !out.status.success() {
-        return Err(format!(
-            "`git {}` failed ({}): {}; a source archive is built with --version-override <version>",
-            args.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    String::from_utf8(out.stdout)
-        .map(|s| s.trim().to_owned())
-        .map_err(|_| format!("`git {}` printed bytes that are not UTF-8", args.join(" ")))
-}
-
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     fn head(tags: &str) -> GitHead {
