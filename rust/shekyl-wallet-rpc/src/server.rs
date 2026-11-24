@@ -68,8 +68,8 @@ pub enum ListenAddr {
     Uds(PathBuf),
     /// The in-process host's named pipe (Windows).
     ///
-    /// Not a `--rpc-bind` form: [`ListenAddr::parse`] never produces it, and
-    /// [`SelfHostedPipe`] has no public constructor, so no string and no
+    /// Not a form of `rpc-listen` or `rpc-socket-file`, and
+    /// [`SelfHostedPipe`] has no public constructor, so no option and no
     /// embedder can stand up a pipe server by hand. Windows ships **no**
     /// external local form (`WINDOWS_WALLET_SUPPORT.md` §8.1 ruling); the
     /// absence is structural rather than a parse-time refusal.
@@ -94,47 +94,6 @@ impl std::fmt::Debug for SelfHostedPipe {
     }
 }
 
-impl ListenAddr {
-    /// Parse a listen string: `uds:///path` (Unix) or a numeric `IP:PORT`
-    /// (`127.0.0.1:29500`, `[::1]:29500`). Hostnames are not resolved —
-    /// a listen address names an interface, and resolving one at bind time
-    /// would make the bind depend on a resolver answer — so the refusal
-    /// says so rather than leaving `localhost:29500` to a syntax error.
-    pub fn parse(s: &str) -> Result<Self, String> {
-        if let Some(path) = s.strip_prefix("uds://") {
-            return Self::uds(path);
-        }
-        shekyl_rpc_transport::listen::parse_listen_addr(s)
-            .map(Self::Tcp)
-            .map_err(|e| e.to_string())
-    }
-
-    /// The `uds://` form on Unix: a non-empty path.
-    #[cfg(unix)]
-    fn uds(path: &str) -> Result<Self, String> {
-        if path.is_empty() {
-            return Err("uds:// path must not be empty".into());
-        }
-        Ok(Self::Uds(PathBuf::from(path)))
-    }
-
-    /// The `uds://` form on Windows: refused, naming the platform.
-    ///
-    /// Same parse-surface class as the CLI's `--rpc-url`: a string match that
-    /// compiles everywhere and offers a transport the platform lacks. With no
-    /// `Uds` variant here, this arm cannot return one. The standalone server
-    /// on Windows listens on TCP (the external `http://` form, unchanged).
-    #[cfg(windows)]
-    fn uds(_path: &str) -> Result<Self, String> {
-        Err(
-            "uds:// listen addresses are not available on Windows: a Unix domain socket has \
-             no Windows form. The Windows wallet is self-hosted (run shekyl-cli without \
-             --rpc-url); a standalone shekyl-wallet-rpc listens on IP:PORT with --rpc-login."
-                .into(),
-        )
-    }
-}
-
 /// The option naming the Tor binary a serving wallet runs, on both wallet
 /// binaries (`INPUT_GRAMMAR.md` §12.1, §12.4). Unset is discovery; a path
 /// that is relative or names no file refuses the start
@@ -156,7 +115,7 @@ pub struct ServerConfig {
     /// Network every create/open binds to.
     pub network: Network,
     /// The daemon every wallet connects to: "this computer" with no
-    /// `--daemon-address`, otherwise that address and its `--proxy`.
+    /// `daemon-endpoint`, otherwise that endpoint and its `daemon-socks`.
     pub daemon: DaemonTarget,
     /// HTTP basic auth (disabled for UDS-by-default deployments).
     pub auth: AuthConfig,
@@ -431,36 +390,7 @@ impl Drop for UdsCleanup {
     }
 }
 
-/// The daemon a wallet on `network` connects to, from its two flags
-/// (`RPC_CHANNEL.md` RT-15; RT-W10 step 5): no `--daemon-address` is "this
-/// computer", the node this account runs, whose service record is read only
-/// to say that it is a service; an address is that address, through
-/// `--proxy` when given. A proxy without an address is refused: this
-/// computer's node is reached on its owner's leg, never through a proxy.
-///
-/// # Errors
-///
-/// `--proxy` without `--daemon-address`.
-pub fn daemon_target(
-    network: Network,
-    address: Option<String>,
-    proxy: Option<String>,
-) -> Result<DaemonTarget, String> {
-    match (address, proxy) {
-        (Some(url), proxy) => Ok(DaemonTarget::Address {
-            url: shekyl_rpc_transport::daemon_address_url(&url),
-            proxy,
-        }),
-        (None, None) => Ok(DaemonTarget::ThisComputer { network }),
-        (None, Some(_)) => Err(
-            "--proxy needs --daemon-address: without one the wallet's daemon is this \
-             computer's node, reached on its owner's socket, never through a proxy"
-                .to_owned(),
-        ),
-    }
-}
-
-/// Refuse a malformed `--daemon-address` / `--proxy` at startup (offline
+/// Refuse a malformed `daemon-endpoint` / `daemon-socks` at startup (offline
 /// shape check only — an unreachable daemon stays fine for offline
 /// commands). Deferred to first use, a bad flag would surface on
 /// `open_wallet` as "daemon unreachable": the wrong remedy pointer
@@ -474,16 +404,17 @@ fn validate_daemon_endpoint(config: &ServerConfig) -> Result<(), BoxErr> {
     };
     shekyl_rpc_transport::validate_endpoint(url, proxy.as_deref()).map_err(|e| {
         // Both flags are named here; the inner cause identifies the half
-        // ("daemon URL ..." / "--proxy ..." / "TLS connector ...").
+        // ("daemon URL ..." / "proxy ..." / "TLS connector ...").
         // Attributing one flag per failure would need either a second
         // validation pass (mislabeling a TLS-root failure as
-        // --daemon-address) or matching on error text — both worse than
+        // daemon-endpoint) or matching on error text — both worse than
         // naming the pair.
-        format!("invalid daemon endpoint configuration (--daemon-address / --proxy): {e}").into()
+        format!("invalid daemon endpoint configuration (daemon-endpoint / daemon-socks): {e}")
+            .into()
     })
 }
 
-/// What `--daemon-address` discloses at startup: the network-path warning
+/// What `daemon-endpoint` discloses at startup: the network-path warning
 /// and, for a daemon that is not loopback, the §1 operator statement
 /// (`RPC_TRANSPORT_POSTURE.md`, RT-W7) — discouragement at the point of
 /// configuration, which for this binary is the moment it starts. Pure; the
@@ -499,7 +430,7 @@ fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
         DaemonTarget::ThisComputer { .. } => DaemonDisclosures::default(),
         DaemonTarget::Address { url, proxy } => {
             shekyl_rpc_transport::network_posture::daemon_disclosures(
-                "--daemon-address",
+                "daemon-endpoint",
                 url,
                 proxy.as_deref(),
                 ProxyResolution::AlwaysRemote,
@@ -509,10 +440,10 @@ fn daemon_disclosures(config: &ServerConfig) -> DaemonDisclosures {
 }
 
 /// The local alternative the listen refusals point at, per platform: a
-/// `uds://` socket exists on Unix only, so the hint must not name it
+/// socket file exists on Unix only, so the hint must not name it
 /// elsewhere. One definition, defined on every target.
 const LOCAL_ENDPOINT_HINT: &str = if cfg!(unix) {
-    " (or a uds:///path socket)"
+    " (or rpc-socket-file)"
 } else {
     ""
 };
@@ -556,7 +487,7 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
             "refusing to bind the wallet RPC to the wildcard address {addr}: {WILDCARD_REASON}. \
              Bind a specific IP address instead: 127.0.0.1 or [::1] for this machine \
              only{LOCAL_ENDPOINT_HINT}, or the address of the one interface your clients are \
-             on (which also requires --rpc-login NAME:PASSWORD)."
+             on (which also requires rpc-username and rpc-password in the configuration file)."
         )
         .into()),
         ListenClass::Loopback => Ok(()),
@@ -567,10 +498,10 @@ fn validate_listen(config: &ServerConfig) -> Result<(), BoxErr> {
             // to reach this arm is to have asked for no authentication.
             if matches!(config.auth, AuthConfig::Disabled) {
                 return Err(format!(
-                    "refusing to serve the wallet RPC on {addr} without authentication (--rpc-login \
-                     not set, or --disable-rpc-login given): the address is reachable from the \
-                     network and every request, spends included, would be honoured. Bind 127.0.0.1 \
-                     or [::1]{LOCAL_ENDPOINT_HINT}, or set --rpc-login NAME:PASSWORD."
+                    "refusing to serve the wallet RPC on {addr} without authentication: the \
+                     address is reachable from the network and every request, spends included, \
+                     would be honoured. Bind 127.0.0.1 or [::1]{LOCAL_ENDPOINT_HINT}, or set \
+                     rpc-username and rpc-password in the configuration file."
                 )
                 .into());
             }
@@ -600,6 +531,17 @@ pub struct ArmedServer {
     notice: Option<String>,
 }
 
+/// The checks a start makes before it binds, with nothing bound or created:
+/// the daemon endpoint and the listen posture. `config-verify` runs exactly
+/// these (`INPUT_GRAMMAR.md` IG-Q63).
+///
+/// # Errors
+/// The configuration is refused.
+pub fn check_server_config(config: &ServerConfig) -> Result<(), BoxErr> {
+    validate_daemon_endpoint(config)?;
+    validate_listen(config)
+}
+
 /// Check `config` and arm the stops: the first of the server's two start
 /// steps, then [`ArmedServer::serve`].
 ///
@@ -615,9 +557,8 @@ pub struct ArmedServer {
 /// The configuration is refused, or the stops could not be armed.
 pub fn arm_server(config: ServerConfig) -> Result<ArmedServer, BoxErr> {
     let inherited = Inherited::at_start();
-    validate_daemon_endpoint(&config)?;
-    validate_listen(&config)?;
-    // The binary's own `--daemon-address`, said once at startup. The
+    check_server_config(&config)?;
+    // The binary's own `daemon-endpoint`, said once at startup. The
     // in-process server (`spawn_in_process_with`) does not repeat it: its
     // host, shekyl-cli, discloses the same address on its own stderr first.
     for warning in daemon_disclosures(&config) {
@@ -651,7 +592,8 @@ impl ArmedServer {
         let state = AppState::new(config);
         let app = build_router(state.clone());
         watch_stops(stops, Arc::clone(&state), AfterClose::Return);
-        bound.log_ready("shekyl-wallet-rpc listening")?;
+        let ready = bound.ready_line("shekyl-wallet-rpc listening")?;
+        shekyl_logging::announce(&ready, &ready);
         serve_then_close(bound, app, state).await?;
         Ok(())
     }
@@ -681,7 +623,15 @@ fn watch_stops(mut stops: Stops, state: Arc<AppState>, after: AfterClose) {
             // A later arm replaced this one. That start has its own watcher.
             return;
         };
-        info!("stop requested by {first}: closing the open wallet; a second stop exits at once");
+        let line = format!(
+            "stop requested by {first}: closing the open wallet; a second stop exits at once"
+        );
+        match after {
+            // A server's stop the operator asked for is announced (IG-14).
+            AfterClose::Return => shekyl_logging::announce(&format!("{PROGRAM}: {line}"), &line),
+            // A hosted server's is its host's to say.
+            AfterClose::Exit => info!("{line}"),
+        }
         state.shutdown.notify_one();
         if let AfterClose::Exit = after {
             state.closed.notified().await;
@@ -762,23 +712,23 @@ impl BoundListener {
         }
     }
 
-    /// One `info!` line per transport. The pipe's name is deliberately not
-    /// logged: it carries the user's SID (see `SelfHostedPipe`).
-    fn log_ready(&self, what: &str) -> std::io::Result<()> {
-        match self {
-            Self::Tcp(listener) => {
-                let local = listener.local_addr()?;
-                info!(%local, "{what} (TCP)");
-            }
+    /// The line that says where this listener is. The pipe's name is
+    /// deliberately left out: it carries the user's SID (see
+    /// `SelfHostedPipe`).
+    fn ready_line(&self, what: &str) -> std::io::Result<String> {
+        Ok(match self {
+            Self::Tcp(listener) => format!("{what} (TCP) on {}", listener.local_addr()?),
             #[cfg(unix)]
-            Self::Uds(_, cleanup) => {
-                info!(path = %cleanup.0.display(), "{what} (UDS)");
-            }
+            Self::Uds(_, cleanup) => format!("{what} (UDS) at {}", cleanup.0.display()),
             #[cfg(windows)]
-            Self::Pipe(_) => {
-                info!("{what} (named pipe)");
-            }
-        }
+            Self::Pipe(_) => format!("{what} (named pipe)"),
+        })
+    }
+
+    /// The hosted server's line, an `info!` event: its host is the program
+    /// the operator ran.
+    fn log_ready(&self, what: &str) -> std::io::Result<()> {
+        info!("{}", self.ready_line(what)?);
         Ok(())
     }
 
@@ -1183,61 +1133,10 @@ mod tests {
 
     use tracing::instrument::WithSubscriber as _;
 
-    /// With no `--daemon-address` the daemon is "this computer" on the
-    /// wallet's network (RT-W10 step 5); an address is that address through
-    /// its proxy; a proxy with no address is refused, naming both flags.
-    /// The edit that turns this red is defaulting to the plaintext port.
-    #[test]
-    fn the_daemon_is_this_computer_unless_an_address_is_named() {
-        assert!(matches!(
-            daemon_target(Network::Testnet, None, None).unwrap(),
-            DaemonTarget::ThisComputer {
-                network: Network::Testnet,
-                ..
-            }
-        ));
-        assert!(matches!(
-            daemon_target(
-                Network::Testnet,
-                Some("http://127.0.0.1:12030".into()),
-                Some("socks5h://127.0.0.1:9050".into())
-            )
-            .unwrap(),
-            DaemonTarget::Address { url, proxy: Some(_) } if url == "http://127.0.0.1:12030"
-        ));
-        let refused = daemon_target(
-            Network::Testnet,
-            None,
-            Some("socks5h://127.0.0.1:9050".into()),
-        )
-        .unwrap_err();
-        assert!(
-            refused.contains("--proxy needs --daemon-address"),
-            "{refused}"
-        );
-        // The service refusal names a bare endpoint. It has to be the URL
-        // startup validation accepts. Red edit: store the text unchanged,
-        // and `127.0.0.1:11030` is not an http URL.
-        for (given, url) in [
-            ("127.0.0.1:11030", "http://127.0.0.1:11030"),
-            ("[::1]:11030", "http://[::1]:11030"),
-        ] {
-            let DaemonTarget::Address {
-                url: got,
-                proxy: None,
-            } = daemon_target(Network::Mainnet, Some(given.into()), None).unwrap()
-            else {
-                panic!("{given} must be an address")
-            };
-            assert_eq!(got, url);
-            shekyl_rpc_transport::validate_endpoint(&got, None).expect(given);
-        }
-    }
-
     /// The credential-redaction pin: no `Debug` of server configuration —
     /// the shapes that reach logs and panic output — renders the digest
     /// credentials a daemon address may carry, a proxy userinfo, or the
-    /// `--rpc-login` password (rules 30/35).
+    /// `rpc-password` value (rules 30/35).
     #[test]
     fn debug_of_server_state_never_renders_credentials() {
         let endpoint = DaemonTarget::Address {
@@ -1249,7 +1148,9 @@ mod tests {
             wallet_dir: std::path::PathBuf::from("."),
             network: Network::Stagenet,
             daemon: endpoint.clone(),
-            auth: AuthConfig::from_rpc_login("rpcuser:opensesame").expect("login parses"),
+            auth: AuthConfig::Basic(
+                crate::auth::BasicCredential::new("rpcuser", "opensesame").expect("a credential"),
+            ),
             kdf: KdfParams::default(),
             tor_file: TorFile::discover(),
         };
@@ -1277,7 +1178,7 @@ mod tests {
     /// inert for the listen refusals.
     fn listen_config(listen: &str, auth: AuthConfig) -> ServerConfig {
         ServerConfig {
-            listen: ListenAddr::parse(listen).expect("listen parses"),
+            listen: ListenAddr::Tcp(listen.parse().expect("listen parses")),
             wallet_dir: std::path::PathBuf::from("."),
             network: Network::Stagenet,
             daemon: DaemonTarget::address("http://127.0.0.1:1"),
@@ -1288,7 +1189,7 @@ mod tests {
     }
 
     fn basic() -> AuthConfig {
-        AuthConfig::from_rpc_login("user:pass").expect("login parses")
+        AuthConfig::Basic(crate::auth::BasicCredential::new("user", "pass").expect("a credential"))
     }
 
     /// RT-1: every wildcard spelling is refused, with auth *enabled* so the
@@ -1322,7 +1223,7 @@ mod tests {
                 .to_string();
             assert!(err.contains("without authentication"), "{addr}: {err}");
             assert!(
-                err.contains("--rpc-login"),
+                err.contains("rpc-username"),
                 "{addr}: must say what to do: {err}"
             );
         }
@@ -1390,7 +1291,7 @@ mod tests {
         config.daemon = DaemonTarget::address("http://node.example.com:11029");
         let direct = daemon_disclosures(&config);
         let path = direct.path.as_deref().expect("path warning");
-        assert!(path.contains("--daemon-address"), "{path}");
+        assert!(path.contains("daemon-endpoint"), "{path}");
         assert!(direct.operator.is_some(), "{direct:?}");
 
         config.daemon = DaemonTarget::Address {
@@ -1516,38 +1417,5 @@ mod tests {
         ] {
             assert!(!host_is_unrebindable(bad), "{bad:?}");
         }
-    }
-
-    /// `localhost:29500` is the spelling the retired server's docs taught;
-    /// the refusal must say what to use instead, not just "syntax".
-    #[test]
-    fn hostname_listen_is_refused_with_the_remedy() {
-        let err = ListenAddr::parse("localhost:29500").expect_err("hostnames do not parse");
-        assert!(err.contains("hostnames are not resolved"), "{err}");
-        assert!(err.contains("127.0.0.1:29500"), "{err}");
-    }
-
-    /// `uds://` is a Unix form. On Windows it must be refused at parse, naming
-    /// the platform — not accepted and failed later at bind
-    /// (`WINDOWS_WALLET_SUPPORT.md` §8.1, the parse surface).
-    #[test]
-    fn uds_listen_form_is_unix_only() {
-        #[cfg(unix)]
-        assert!(matches!(
-            ListenAddr::parse("uds:///tmp/x.sock"),
-            Ok(ListenAddr::Uds(_))
-        ));
-        #[cfg(windows)]
-        {
-            let err = ListenAddr::parse("uds:///tmp/x.sock")
-                .expect_err("uds:// must be refused on Windows");
-            assert!(err.contains("Windows"), "{err}");
-        }
-        // Empty path is refused everywhere; the TCP form parses everywhere.
-        assert!(ListenAddr::parse("uds://").is_err());
-        assert!(matches!(
-            ListenAddr::parse("127.0.0.1:29500"),
-            Ok(ListenAddr::Tcp(_))
-        ));
     }
 }

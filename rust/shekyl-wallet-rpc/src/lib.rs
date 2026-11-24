@@ -19,6 +19,7 @@
 #![warn(missing_docs)]
 
 pub mod auth;
+pub mod config;
 /// The contract's error vocabulary and the engine-error mapping onto it,
 /// owned by `shekyl-wallet-contract` so embedders answer with the same codes.
 pub use shekyl_wallet_contract::error;
@@ -38,14 +39,15 @@ pub mod shard_view;
 pub mod staking;
 pub mod staking_actions;
 pub mod sync;
+pub mod table;
 pub mod tenant;
 pub mod types;
 
 pub use auth::AuthConfig;
 pub use error::{WalletRpcError, WalletRpcErrorCode, FOUNDATION_POSTURE_WARNING};
 pub use server::{
-    arm_server, build_router, spawn_in_process, spawn_in_process_with, AppState, InProcessHandle,
-    InProcessListen, ListenAddr, ServerConfig,
+    arm_server, build_router, check_server_config, spawn_in_process, spawn_in_process_with,
+    AppState, InProcessHandle, InProcessListen, ListenAddr, ServerConfig,
 };
 #[cfg(unix)]
 pub use server::{DIR_PREFIX, LOCK_FILE, SOCKET_FILE};

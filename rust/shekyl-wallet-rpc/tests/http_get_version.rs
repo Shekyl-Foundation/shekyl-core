@@ -876,7 +876,7 @@ async fn create_wallet_file_exists() {
     assert_eq!(second["error"]["code"], -29002);
 }
 
-/// Startup refuses a malformed daemon endpoint (here: a port-less --proxy)
+/// Startup refuses a malformed daemon endpoint (here: a port-less daemon-socks)
 /// with an error naming the flag — deferred to first use it would surface on
 /// `open_wallet` as a misdiagnosed "daemon unreachable" (rule 82).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -899,7 +899,7 @@ async fn spawn_refuses_a_malformed_proxy_at_startup() {
     .expect("a port-less proxy must refuse at startup");
     let rendered = format!("{err}");
     assert!(
-        rendered.contains("--proxy"),
+        rendered.contains("daemon-socks"),
         "the startup error names the flag to fix: {rendered}"
     );
 }
@@ -927,7 +927,7 @@ async fn spawn_refuses_a_malformed_daemon_address_at_startup() {
     .expect("a non-http(s) daemon URL must refuse at startup");
     let rendered = format!("{err}");
     assert!(
-        rendered.contains("--daemon-address"),
+        rendered.contains("daemon-endpoint"),
         "the startup error names the flag to fix: {rendered}"
     );
     assert!(

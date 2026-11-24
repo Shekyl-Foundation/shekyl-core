@@ -22,7 +22,7 @@
 //! never was the barrier between them. Ordering that matters lives in
 //! the Engine, on the state the operation touches.
 //!
-//! Multi-tenant `--wallet-dir` exchanges extend this seam later
+//! Multi-tenant `wallet-dir` exchanges extend this seam later
 //! (`WALLET_REWRITE_PLAN.md`).
 
 use shekyl_engine_core::{CadenceHandle, Engine, PScanHandle, ServingStatus, SoloSigner};
@@ -342,7 +342,7 @@ pub(crate) async fn require_open_engine(
 }
 
 /// The daemon every wallet on this server connects to (`RPC_CHANNEL.md`
-/// RT-15): "this computer" when no `--daemon-address` is given, otherwise
+/// RT-15): "this computer" when no `daemon-endpoint` is given, otherwise
 /// the address named and its proxy, which travel as one value.
 pub use shekyl_rpc_transport::DaemonTarget;
 
