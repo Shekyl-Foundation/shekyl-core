@@ -11,6 +11,7 @@
 //! signing ([`crate::output::compute_output_key_image`]), not to this
 //! answer.
 
+use crate::secret_scalar::canonical_secret_scalar;
 use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
 use zeroize::Zeroizing;
 
@@ -114,18 +115,14 @@ pub fn held_key_image(
     }
 
     // The equation used `B`. The image uses `b`. They are one key.
-    let spend_secret: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(*holder.spend_secret))
-            .ok_or(CryptoError::InvalidKeyMaterial)?,
-    );
+    let spend_secret: Zeroizing<Scalar> =
+        canonical_secret_scalar(holder.spend_secret).ok_or(CryptoError::InvalidKeyMaterial)?;
     if EdwardsPoint::mul_base(&spend_secret).compress().to_bytes() != *holder.spend_public {
         return Err(CryptoError::InvalidKeyMaterial);
     }
 
-    let ho: Zeroizing<Scalar> = Zeroizing::new(
-        Option::from(Scalar::from_canonical_bytes(opening.ho))
-            .expect("ho from wide_reduce is always canonical"),
-    );
+    let ho: Zeroizing<Scalar> =
+        canonical_secret_scalar(&opening.ho).expect("ho from wide_reduce is always canonical");
     let hp_of_output = prime_order_point(shekyl_curve_generators::biased_hash_to_point(
         *output.output_key,
     ))?;

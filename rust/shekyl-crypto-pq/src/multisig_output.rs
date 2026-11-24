@@ -29,10 +29,10 @@
 //! The hashes are encrypted because in the clear they would equal the
 //! committed form a spend reveals, and link the spend to its output.
 
+use crate::secret_scalar::canonical_secret_scalar;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
-use curve25519_dalek::Scalar;
 use hkdf::Hkdf;
 use sha2::Sha512;
 use shekyl_address::multisig_address::{MultisigAddressPayload, HYBRID_KEM_PUBKEY_LEN};
@@ -682,15 +682,13 @@ impl GroupSpendSecrets {
     /// `C = z·G + amount·H` (R-27).
     #[must_use]
     pub fn commitment_opens(&self, commitment: &[u8; 32], amount: u64) -> bool {
-        Option::<Scalar>::from(Scalar::from_canonical_bytes(*self.commitment_mask))
-            .map(Zeroizing::new)
-            .is_some_and(|mask| {
-                Commitment::new(*mask, amount)
-                    .calculate()
-                    .compress()
-                    .to_bytes()
-                    == *commitment
-            })
+        canonical_secret_scalar(&self.commitment_mask).is_some_and(|mask| {
+            Commitment::new(*mask, amount)
+                .calculate()
+                .compress()
+                .to_bytes()
+                == *commitment
+        })
     }
 
     /// The leaf commitment's blind `r`, the prover's witness.

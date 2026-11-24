@@ -99,12 +99,14 @@ shekyld \
   --network regtest \
   --clearnet off --tor off \
   --dev-difficulty 1 \
-  --data-dir /tmp/shekyl-regtest-XXXX \
-  --log-file /tmp/shekyl-regtest-XXXX/shekyld.log \
+  --data-dir ~/shekyl-regtest \
+  --log-file ~/shekyl-regtest/shekyld.log \
   --rpc-admin-listen 127.0.0.1:28081
 ```
 
-The chain persists across daemon restarts in the data directory.
+The chain persists across daemon restarts in the data directory. It
+cannot sit under a directory another account can write, `/tmp` included:
+the daemon refuses it (`config.data-dir.ancestor-writable`).
 
 ### V3-specific caveats
 
