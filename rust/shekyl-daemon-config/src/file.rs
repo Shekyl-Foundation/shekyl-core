@@ -86,6 +86,15 @@ const READ_PERMITTED: &str = "root, the daemon's account and the daemon's group 
 #[cfg(windows)]
 const READ_PERMITTED: &str = PERMITTED;
 
+/// Who outside the permitted set can read an open secret file, by the rule
+/// a configuration file holding a secret is judged by. The wallet binaries
+/// hold their password and recovery-words files to it (`INPUT_GRAMMAR.md`
+/// §12.1, §12.2).
+#[must_use]
+pub fn secret_file_reader(file: &File, path: &Path) -> Option<String> {
+    reader_outside_permitted(file, path)
+}
+
 /// Opens and checks the file at `path`.
 ///
 /// A missing file at the default path is `Ok(None)`: the defaults apply,

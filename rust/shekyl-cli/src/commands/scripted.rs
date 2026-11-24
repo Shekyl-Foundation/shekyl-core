@@ -19,12 +19,11 @@
 use std::fs::File;
 #[cfg(unix)]
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use shekyl_options::{Code, Diagnostic, Source};
-use shekyl_os_account::private_file::{read_private, PrivateFileError};
 use zeroize::Zeroizing;
 
 use crate::outcome::{refusal, CommandFailed, CommandResult, Presentation};
@@ -32,8 +31,17 @@ use crate::rpc_client::{params, RpcSession};
 
 type BoxErr = Box<dyn std::error::Error>;
 
-/// Who may read a password or recovery-words file, as a refusal names them.
-const SECRET_FILE_READERS: &str = "this account alone";
+/// Who may read a password or recovery-words file, as a refusal names them:
+/// the configuration file's rule for a file holding a secret.
+#[cfg(unix)]
+const SECRET_FILE_READERS: &str =
+    "this account and root (0600, or 0640 with a group only this account is in)";
+#[cfg(windows)]
+const SECRET_FILE_READERS: &str = "this account, SYSTEM and Administrators";
+
+/// The longest password or recovery-words file read. Recovery words are
+/// a few hundred bytes, and a file past this is not one of these.
+const SECRET_FILE_BYTES_MAX: u64 = 64 * 1024;
 
 /// What `wallet create --mnemonic-file` tells a script. The words stay in
 /// the file.
@@ -89,12 +97,22 @@ impl PasswordSource {
 }
 
 /// The text of a secret file, refused with a typed code when anyone but
-/// this account can read it.
+/// this account can read it. Checked and read through one handle, so the
+/// file judged is the file read.
 fn read_secret_text(path: &Path, option: &str) -> Result<Zeroizing<String>, CommandFailed> {
     let shown = path.display().to_string();
-    let bytes = match read_private(path) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => {
+    let unreadable = |error: String| {
+        refusal(
+            Diagnostic::new(Code::FileUnreadable, Source::Machine)
+                .option(option)
+                .param("path", shown.clone())
+                .param("error", error)
+                .render(),
+        )
+    };
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(refusal(
                 Diagnostic::new(Code::FileMissing, Source::Cli)
                     .option(option)
@@ -102,37 +120,34 @@ fn read_secret_text(path: &Path, option: &str) -> Result<Zeroizing<String>, Comm
                     .render(),
             ));
         }
-        Err(PrivateFileError::Exposed(_, why)) => {
-            return Err(refusal(
-                Diagnostic::new(Code::FileSecretReadable, Source::Machine)
-                    .option(option)
-                    .param("path", shown)
-                    .param("principal", why)
-                    .param("permitted", SECRET_FILE_READERS)
-                    .render(),
-            ));
-        }
-        Err(error) => {
-            return Err(refusal(
-                Diagnostic::new(Code::FileUnreadable, Source::Machine)
-                    .option(option)
-                    .param("path", shown)
-                    .param("error", error.to_string())
-                    .render(),
-            ));
-        }
+        Err(e) => return Err(unreadable(e.to_string())),
     };
-    match std::str::from_utf8(&bytes) {
-        Ok(text) => Ok(Zeroizing::new(text.to_owned())),
-        // The error says where the bytes stopped being text, never what
-        // they were.
-        Err(_) => Err(refusal(
-            Diagnostic::new(Code::FileUnreadable, Source::Machine)
+    if let Some(principal) = shekyl_daemon_config::file::secret_file_reader(&file, path) {
+        return Err(refusal(
+            Diagnostic::new(Code::FileSecretReadable, Source::Machine)
                 .option(option)
                 .param("path", shown)
-                .param("error", "it is not UTF-8 text")
+                .param("principal", principal)
+                .param("permitted", SECRET_FILE_READERS)
                 .render(),
-        )),
+        ));
+    }
+    // Sized up front: a buffer that grew would leave a copy of the secret in
+    // the allocation it left, which `Zeroizing` never sees.
+    let capacity = usize::try_from(SECRET_FILE_BYTES_MAX).map_or(usize::MAX, |max| max + 1);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+    file.take(SECRET_FILE_BYTES_MAX + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| unreadable(e.to_string()))?;
+    if bytes.len() as u64 > SECRET_FILE_BYTES_MAX {
+        return Err(unreadable(format!(
+            "it is longer than {SECRET_FILE_BYTES_MAX} bytes"
+        )));
+    }
+    match std::str::from_utf8(&bytes) {
+        Ok(text) => Ok(Zeroizing::new(text.to_owned())),
+        // Never what the bytes were.
+        Err(_) => Err(unreadable("it is not UTF-8 text".to_owned())),
     }
 }
 
@@ -355,7 +370,60 @@ fn write_seed(file: &mut File, seed: &str) -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_one_trailing_newline;
+    use super::{read_secret_text, strip_one_trailing_newline, PasswordSource};
+
+    /// A password or recovery-words file another account can read is
+    /// refused with the typed code, naming the file and not its contents;
+    /// a private one is read with one trailing newline off. Red edit: drop
+    /// the `secret_file_reader` check, and the 0644 file is read.
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_file_another_account_can_read_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("pw");
+        std::fs::write(&path, "hunter2\n").expect("write");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        let refused = format!(
+            "{:?}",
+            PasswordSource::File(path.clone())
+                .read()
+                .expect_err("a world-readable file")
+        );
+        assert!(refused.contains("config.file.secret-readable"), "{refused}");
+        assert!(refused.contains("pw"), "{refused}");
+        assert!(!refused.contains("hunter2"), "{refused}");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let password = PasswordSource::File(path).read().expect("a private file");
+        assert_eq!(password.as_str(), "hunter2");
+    }
+
+    /// A missing file and an oversized one are refused by name, and neither
+    /// is taken for an empty password.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_or_oversized_secret_file_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = format!(
+            "{:?}",
+            read_secret_text(&dir.path().join("none"), "wallet-password-file")
+                .expect_err("a missing file")
+        );
+        assert!(missing.contains("config.file.missing"), "{missing}");
+
+        let long = dir.path().join("long");
+        let size = usize::try_from(super::SECRET_FILE_BYTES_MAX).expect("fits") + 1;
+        std::fs::write(&long, vec![b'a'; size]).expect("write");
+        std::fs::set_permissions(&long, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let oversized = format!(
+            "{:?}",
+            read_secret_text(&long, "wallet-password-file").expect_err("an oversized file")
+        );
+        assert!(oversized.contains("longer than"), "{oversized}");
+    }
 
     #[test]
     fn strips_exactly_one_trailing_newline() {

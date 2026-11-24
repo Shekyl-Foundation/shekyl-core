@@ -460,7 +460,8 @@ shows the CLI version, the local time, and wallet sync: synced, a block
 count behind, no wallet, daemon unreachable, or wallet RPC unreachable.
 A failed wallet-RPC read is not reported as a dead daemon.
 A pipe runs the same commands and stops at the first failure; pass
-`--password-file` with `--wallet`.
+`--wallet-password-file` with `--wallet-file`. Options come before the
+command: `shekyl-cli --network testnet balance`, not the other way round.
 
 Wallet files live under `~/.shekyl/wallets/<network>/` by default
 (`%LOCALAPPDATA%\Shekyl\wallets\<network>\` on Windows), one directory
@@ -492,14 +493,15 @@ phrase (English wordlist) is shown **once** — **write it down on paper
 immediately**. This seed is the only way to recover your funds if your
 wallet file is lost. To keep the seed out of logs and scrollback, `wallet create`
 refuses to print it when output is piped or redirected. A script uses
-the `create` subcommand below, not a `wallet create` line.
+`--mnemonic-file` below.
 
-For scripts there is a non-interactive subcommand that writes the seed to a
-file instead of the terminal (created `0600`, refusing to overwrite):
+For scripts, `--mnemonic-file` writes the seed to a new file instead of the
+terminal (created `0600`, refusing to overwrite). The password comes from
+`--wallet-password-file`, a file only your account can read, or `stdin`:
 
 ```bash
-./shekyl-cli create mywallet --seed-out /safe/path/seed.txt \
-    [--password-file <path> | --password-stdin]
+./shekyl-cli --wallet-password-file /safe/path/password \
+    wallet create mywallet --mnemonic-file /safe/path/seed.txt
 ```
 
 Your wallet is automatically a V3 wallet with full post-quantum key material
@@ -510,14 +512,17 @@ Your wallet is automatically a V3 wallet with full post-quantum key material
 At the prompt:
 
 ```
-mainnet> wallet restore mywallet word1 word2 ... word24
+mainnet> wallet restore mywallet
 ```
 
-or non-interactively, reading the seed from a file:
+The wallet asks for the seed without showing it, so it never reaches a
+command line or your shell history. To restore from a file only your account
+can read, with an optional block to start scanning from:
 
 ```bash
-./shekyl-cli restore mywallet --seed-file /safe/path/seed.txt \
-    [--password-file <path> | --password-stdin]
+./shekyl-cli --wallet-password-file /safe/path/password \
+    wallet restore mywallet --mnemonic-file /safe/path/seed.txt \
+    --wallet-restore-height 120000
 ```
 
 If you opted in to a BIP-39 passphrase at creation, you will need it here
@@ -538,14 +543,17 @@ mainnet> wallet open mywallet
 or open at startup:
 
 ```bash
-./shekyl-cli --wallet mywallet
+./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet
 ```
+
+The path is absolute and ends in `<name>.wallet`; its folder is the wallet
+directory.
 
 ### Connecting to a daemon
 
 By default the wallet connects to a daemon on this machine, at the RPC
-port for the selected network (`127.0.0.1:11029` on mainnet; `--testnet`
-and `--stagenet` pick the matching port automatically). If no daemon is
+port for the selected network (`127.0.0.1:11029` on mainnet; `--network`
+picks the matching port automatically). If no daemon is
 answering there, the wallet says so when it starts and names the command
 that would fix it (`shekyld --network testnet`, and the port it answers on).
 
@@ -554,19 +562,19 @@ machine is reached through a Tor onion service you run in front of its
 loopback RPC (see "Wallet through Tor" below), over a SOCKS proxy:
 
 ```bash
-./shekyl-cli --wallet mywallet \
-    --proxy socks5h://127.0.0.1:9050 \
-    --daemon-address <onion-address>:11029
+./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
+    --daemon-socks 127.0.0.1:9050 \
+    --daemon-endpoint <onion-address>:11029
 ```
 
 Shekyl RPC is operator-to-operator: there is no recommended configuration
 in which the wallet talks to a daemon someone else controls, and `shekyld`
-does not advertise itself as a public node. A `--daemon-address` that is
+does not advertise itself as a public node. A `--daemon-endpoint` that is
 not loopback is said out loud when the wallet starts — whoever operates
 that daemon sees which blocks the wallet requests and what it broadcasts,
 and no proxy or encryption changes that. The warning reads the same for
 your own node: it states what a daemon is told, not who you are talking
-to. Without `--proxy`, a non-loopback address additionally warns that the
+to. Without `--daemon-socks`, a non-loopback address additionally warns that the
 connection itself is visible on the network path.
 
 ### Understanding Bech32m addresses
@@ -776,8 +784,8 @@ The full staking surface is live in interactive `shekyl-cli` (type
 - **Read:** `stake` shows this wallet's posture and what can move back.
   `stake balance` and `stake outputs` are the breakdowns. `stake join`
   names shard ids and does not post until the wallet can send a shard set.
-- **Foundation nodes** are not a prompt command. The hidden startup flag
-  `--complete-tree-foundation` (with `--wallet`) states the terms and
+- **Foundation nodes** are not a prompt command. The startup option
+  `--archival-complete-tree` (with `--wallet-file`) states the terms and
   requires the phrase. Unbounded disk, no reward.
 - **Principal movement:** `stake add <amount>` adds funds to the staking
   balance; `stake available` shows what can move back; `stake return <amount>`
@@ -855,7 +863,7 @@ the thread count; you do not pass an address.
 `mine` does not require an open wallet. It does require a leg that holds
 the mining grant and a daemon on the same network as the CLI. The silent
 default is this computer's node, reached on its own socket (or, for a node
-run as a service, its console leg, an administrator's). A remote `--daemon-address` is
+run as a service, its console leg, an administrator's). A remote `--daemon-endpoint` is
 allowed: `mine start` reminds you that mining will run on that machine's
 CPU, then continues.
 If the daemon is still syncing, `mine start` refuses — the daemon will not
@@ -1007,9 +1015,9 @@ endpoint it forwards to:
 ### Wallet through Tor
 
 ```bash
-./shekyl-cli --wallet mywallet \
-    --proxy socks5h://127.0.0.1:9050 \
-    --daemon-address <onion-address>:11029
+./shekyl-cli --wallet-file ~/.shekyl/wallets/mainnet/mywallet.wallet \
+    --daemon-socks 127.0.0.1:9050 \
+    --daemon-endpoint <onion-address>:11029
 ```
 
 The daemon must expose a hidden service for RPC (separate from the P2P
@@ -1105,22 +1113,27 @@ process. The contract is `docs/api/wallet_rpc.yaml`; the flag reference is
 ```bash
 ./shekyl-wallet-rpc \
     --wallet-dir /path/to/wallets \
-    --rpc-bind 127.0.0.1:29500 \
-    --rpc-login user:password \
-    --daemon-address http://127.0.0.1:11029
+    --rpc-listen 127.0.0.1:29500 \
+    --daemon-endpoint 127.0.0.1:11029
 ```
 
-### Key flags
+Login names and passwords live in the configuration file
+(`rpc-username`, `rpc-password`), never on a command line.
 
-| Flag | Description |
-|------|-------------|
+### Key options
+
+The full list is [`docs/generated/shekyl-wallet-rpc_options.md`](generated/shekyl-wallet-rpc_options.md).
+
+| Option | Description |
+|--------|-------------|
 | `--wallet-dir <path>` | Directory of wallet files; `create_wallet` / `open_wallet` work here |
-| `--rpc-bind <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved) or `uds:///path/to.sock` (Unix; the socket's directory must be yours alone: it is made 0700 if missing, and one that group or others can enter is refused). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused** — bind a specific IP address; a non-loopback address **requires** `--rpc-login` |
-| `--rpc-login <user:pass>` | HTTP basic auth, both halves non-empty (anything else is refused at startup). Mandatory off loopback; on loopback or a UDS socket it may be omitted |
-| `--disable-rpc-login` | Run without auth — refused off loopback, and refused together with `--rpc-login` (pass one) |
-| `--daemon-address <url>` | Your node's RPC URL. Default: this machine's daemon at the RPC port for `--network`. A daemon that is not loopback is disclosed in the log at startup, `--proxy` or not (see "Connecting to a daemon" above) |
-| `--proxy <socks5h://…>` | Route the daemon connection through a SOCKS5h proxy |
-| `--network <name>` | `mainnet` (default), `testnet`, or `stagenet` |
+| `--rpc-listen <addr>` | A numeric `IP:PORT` (default `127.0.0.1:29500`; IPv6 as `[::1]:29500`; hostnames are not resolved). Wildcard addresses (`0.0.0.0`, `::`, `[::]`) are **refused**. An address off this machine needs a login |
+| `--rpc-socket-file <path>` | A Unix socket in place of `rpc-listen`. Its directory must be yours alone: it is made 0700 if missing, and one that group or others can enter is refused |
+| `rpc-username`, `rpc-password` | HTTP basic auth, set together in the configuration file only. Mandatory off loopback; on loopback or a socket they may be left out |
+| `--daemon-endpoint <ip:port or onion:port>` | Your node's RPC address. Unset, this computer's node on `--network`. A daemon that is not loopback is disclosed at startup, through a proxy or not (see "Connecting to a daemon" above) |
+| `--daemon-socks <ip:port>` | Route the daemon connection through a SOCKS5 proxy, which resolves names |
+| `--network <name>` | `mainnet` (default), `testnet`, `stagenet` or `regtest` |
+| `--config-verify` | Check the configuration as a start would, print the effective configuration, and exit |
 
 **Three things the server will refuse, on purpose.** Binding `0.0.0.0` or
 `::` binds every interface your machine has *and every one it gains later*
@@ -1132,7 +1145,7 @@ provides the security** — the TV, the smart plug and a guest's phone are on
 your home network too. And it answers only requests whose `Content-Type` is
 `application/json` (anything else gets HTTP 415): that is what stops a web
 page in your browser from driving the wallet on `127.0.0.1` — every real
-client sends it anyway — and, when you run without `--rpc-login`, it answers
+client sends it anyway — and, when you run without a login, it answers
 only to its IP address or `localhost`, not to a hostname a web page could
 have pointed at your machine.
 
@@ -1265,8 +1278,8 @@ option set log-level debug
 ```
 
 `shekyl-cli` logs to stderr only (warnings and up by default; tune with
-`SHEKYL_LOG`, see "Logging" below) — it writes no log file, so nothing
-about your wallet activity lands on disk beside the wallet.
+`--log-level`, see "Logging" below). It writes no log file unless you name
+one, so nothing about your wallet activity lands on disk beside the wallet.
 
 ---
 
@@ -1300,28 +1313,24 @@ environment:
 bounds the disk the live file and its archives use together. The file and
 every archive are created with POSIX mode `0600`.
 
-**`shekyl-cli` and `shekyl-wallet-rpc`** read `SHEKYL_LOG`, in
-[`tracing-subscriber` `EnvFilter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
-syntax:
+**`shekyl-cli` and `shekyl-wallet-rpc`** take the same four options, on
+the command line or in their configuration files, and read no environment
+variable:
 
+```bash
+shekyl-cli --log-level info --log-category wallet=debug balance
+shekyl-wallet-rpc --log-level info --log-category rpc=debug \
+    --log-file /home/me/logs/wallet-rpc.log
 ```
-SHEKYL_LOG=warn                                  # bare level: all targets at WARN
-SHEKYL_LOG=info,shekyl_wallet_rpc=debug          # level per target
-SHEKYL_LOG=shekyl_wallet_rpc::scanner=trace      # nested module target
-```
 
-A target is a Rust module path. A log category of the old C++ daemon
-(`net.p2p:DEBUG`, `blockchain`, `*:WARNING`) names nothing, and
-`SHEKYL_LOG` refuses it by name at start rather than filtering in silence.
-`RUST_LOG` and the `MONERO_LOGS` / `MONERO_LOG_FORMAT` variables are not
-read.
+`log-category` takes the daemon's subsystems and `wallet`, which covers the
+wallet's own crates. The default level is `warn`.
 
-Unset, `shekyl-cli` logs warnings and up and `shekyl-wallet-rpc` info and
-up. `shekyl-cli` writes standard error only; redirect with `2> path` if
-you want a file. `shekyl-wallet-rpc` writes standard error, and a file too
-when you pass `--log-file <PATH>`: the parent directory is created with
-mode `0700` and the file with `0600` on POSIX, and the file is not
-rotated.
+**Neither wallet binary writes a log file unless you name one with
+`--log-file`.** A wallet's log can say which wallet ran and when, so it is
+not written to disk by default. A named file is created `0600` in a
+directory made `0700`, and `log-size-max` bounds the file and its archives
+together.
 
 Lines are `tracing-subscriber`'s format: an RFC 3339 UTC timestamp, the
 level as a full word, and the target.
