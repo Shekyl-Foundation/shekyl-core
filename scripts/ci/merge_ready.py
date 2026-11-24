@@ -4,60 +4,45 @@
 # All rights reserved.
 # BSD-3-Clause
 """The `merge-ready` commit status: the owning lane's "done", as a mark
-GitHub enforces, and a re-test of the head against the newest `dev`
-(ruled 2026-11-19).
+GitHub enforces (ruled 2026-11-19). It is a signal to the merger, not a
+second test run (ruled 2026-11-23): nothing here runs a test.
 
 # Why
 
 Pull requests were merged when the required checks went green while other
 workflows and fleet runs on the same head were still going. A draft is the
-wrong tool, since rule 06 skips the expensive jobs on a draft. The owning
-lane applies the `merge-ready` label when every check on the current head
-has concluded, its fleet and local runs for that head are done, and its
-review threads are resolved; `merge-ready` is the required status that holds
-the pull request to that.
+wrong tool, since rule 06 skips the expensive jobs on a draft. A pull
+request is a draft while its lane works on it, comes out of draft for
+review, and takes the `merge-ready` label when review and validation are
+complete: every check on the current head has concluded, the lane's fleet
+and local runs for that head are done, and its review threads are resolved.
+`merge-ready` is the required status that holds the pull request to that.
 
-A pull request is also tested on its head merged onto the `dev` of its last
-push. When another pull request merges first, the one still open was never
-tested against it, and each green alone can be red together (#1404 and
-#1409, #1425 and #1426, #1440 and #1447). So the label re-tests the head
-merged with the newest `dev`, on the tests both changes reach
-(merge_ready_overlap.py), and every later merge that shares a test with a
-labelled pull request re-tests it again (merge-ready-dev.yml). Nothing
-marks or re-tests a pull request without the label: a mark on every pull
-request a merge reaches made each merge a wait for the ones behind it, a
-merge queue by another name.
+A pull request's CI runs on its head merged onto the `dev` of its last
+push, so two pull requests each green alone can still be red together. The
+run on `dev` after the merge is what tests that combination, and a red there
+opens its own issue (report-dev-red.yml).
 
 # The status
 
 `merge-ready` is a commit status on the pull request's head. Its
-description carries its kind first (`describe`, read back by `parse`):
+description carries its kind first (`describe`):
 
-  kind        state    meaning
-  waiting     pending  no label: the owner has not labelled this head, or
-                       a push took the label off
-  checking    pending  the label went on; every check on the head is read
-  refused     pending  a check ran or was red, a review thread was open or
-                       the pull request was a draft: the label came off,
-                       with a comment naming each
-  re-testing  pending  the head merged with `dev` runs the tests both
-                       changes reach
-  ready       success  the label stands and the re-test passed (or nothing
-                       both changes test changed)
-  red         pending  the re-test failed: the label came off, with a
-                       comment naming the merges and the failing tests
-
-The last three also carry `dev <12 hex> since <12 hex or unknown>`: the
-`dev` the status speaks for, and the `dev` the head was last ready against.
-A re-test runs the tests the pull request shares with everything merged
-since `since`, so a re-test that a newer one cancelled loses nothing: the
-newer one covers its merges too.
+  kind      state    meaning
+  waiting   pending  no label: the owner has not labelled this head, or a
+                     push took the label off
+  checking  pending  the label went on; every check on the head is read
+  refused   pending  a check ran or was red, a review thread was open or the
+                     pull request was a draft: the label came off, with a
+                     comment naming each
+  ready     success  the label stands on this head
 
 Without the label the status is pending, never red: the reason is in the
 comment. A status is never skipped: a head with no `merge-ready` status at
 all is also blocked by the ruleset ("expected"), and the job that posts it
 is not named `merge-ready`, since a ruleset matches a check run and a status
-by name alike.
+by name alike. A push to `dev` changes nothing here: the label vouches for
+the head.
 
 # What each event does
 
@@ -65,25 +50,19 @@ by name alike.
                      vouches for a head its owner did not see, and the new
                      head's checks have only just started
   labeled            `checking`, then every check run and status on the
-                     head, this flow's own, `EXCLUDED` by name and
+                     head, this run's own, `EXCLUDED` by name and
                      `EXCLUDED_APPS` by app aside, must have concluded,
-                     none red (of a workflow's `pull_request` runs on the
-                     head, its newest one's only, `SUPERSEDING_EVENTS`; a
-                     review bot's job is judged by its review instead,
-                     `REVIEW_JOBS`); no review thread may be open; the
-                     pull request may not be a draft. Anything else:
-                     `refused`. Then the plan: the tests the head
-                     shares with the merges since its merge base, `ready`
-                     at once when there are none, else `re-testing` and a
-                     re-test (merge-ready-retest.yml)
+                     none red. Of a workflow's `pull_request` runs on the
+                     head only the newest is judged (`SUPERSEDING_EVENTS`);
+                     a job another run replaced through their concurrency
+                     group is not (`replaced_cancels`); a review bot's job
+                     is judged by its review instead (`REVIEW_JOBS`). No
+                     review thread may be open; the pull request may not be
+                     a draft. All of that holds: `ready`. Anything else:
+                     `refused`
   unlabeled          waiting
   opened, reopened   waiting, or the label check when it is on
   ready_for_review   the label comes off, as for a push
-  a push to `dev`    for each labelled pull request whose tests the push
-                     reaches: `re-testing` naming the merge, and a re-test
-                     (merge_ready_overlap.py --plan); the rest untouched
-  the re-test ends   `ready`; or `red` with the label taken off; or
-                     nothing, when a newer re-test cancelled it
 
 A label or an unlabel of any other label runs nothing (merge-ready.yml's
 condition, `decide`'s "ignore").
@@ -95,32 +74,15 @@ before it counts as running. One that started before the label went on
 not waited for: the label is refused at once. A check run's own start time
 cannot tell: it is when a runner picked the job up.
 
-# Who may post
-
-A newer `dev`'s status is never overwritten by an older one's, whatever
-order the runs finish in (`may_post`). A run posts over its own status; over
-a `re-testing`, `ready` or `red` speaking for an older `dev`, or for the
-same `dev` from an older run. Over `waiting` or `refused` from another run
-it never posts: the label came off after it started. Over another run's
-`checking` only a push's plan posts (the label run fetched `dev` before the
-push and would miss it). A report also posts `ready` only while the label is
-on and the head has not moved.
-
 Removing the label with the workflow's token starts no `unlabeled` run, so
 the step that removes it posts the status itself.
 
   merge_ready.py run        merge-ready.yml's label check; reads EVENT, PR,
                             HEAD, DRAFT, LABEL (the event's label),
-                            HAS_LABEL, LABELLED_AT; writes `judged`
-  merge_ready.py plan       merge-ready.yml's plan after a label passed;
-                            reads PR, HEAD, BASE; writes `leg`
-  merge_ready.py report PR HEAD RESULT
-                            merge-ready-retest.yml's report; RESULT is the
-                            re-test job's result; reads DEV, SINCE, MERGED,
-                            CRATES, CONFLICT, TESTS_FAILED, TIMED_OUT
+                            HAS_LABEL, LABELLED_AT and GITHUB_RUN_ID
   merge_ready.py --selftest
 
-Each reads RUN_URL (the run's link), GITHUB_REPOSITORY and GH_TOKEN.
+`run` also reads RUN_URL (the run's link), GITHUB_REPOSITORY and GH_TOKEN.
 """
 
 from __future__ import annotations
@@ -131,21 +93,15 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 LABEL = "merge-ready"
 CONTEXT = "merge-ready"
-# This flow's own jobs: running while they read the head, or left behind on
-# it by an earlier labelling (a re-test a newer one cancelled). Not named
-# CONTEXT: a ruleset's required check matches a check run and a commit
-# status by name alike, and these jobs end green.
-SELF_JOBS = ("merge-ready label check", "merge-ready re-test plan")
-# The re-test's jobs as a caller names them: `#<pr> / re-test`, `#<pr> / report`.
-RETEST_JOB = "re-test"
-REPORT_JOB = "report"
-SELF_LEG = re.compile(rf"^#\d+ / ({RETEST_JOB}|{REPORT_JOB})$")
+# Names a job of merge-ready.yml, held to the file by the selftest. A run
+# knows its own jobs by their check suite (`own_suite`), not by this name,
+# which any workflow's job can take.
+LABEL_JOB = "merge-ready label check"
 # Checks that never conclude on this repository, each with why. A check
 # left out of a judgment is named here, never dropped silently.
 EXCLUDED: dict[str, str] = {}
@@ -183,6 +139,10 @@ REVIEW_JOBS: dict[str, tuple[str, str]] = {
 # from the branch's previous tip, not the head alone. Each such run's reds
 # stay judged until a re-run attempt clears them.
 SUPERSEDING_EVENTS = frozenset({"pull_request"})
+# GitHub's annotation on a job a newer run of the same concurrency group
+# replaced, read from the check run. A timeout or a hand cancel carries
+# another line, so neither reads as replaced.
+GROUP_CANCEL = re.compile(r"^Canceling since a higher priority waiting request for .+ exists$")
 # A check run the labelling itself started (a workflow listening for
 # labels, its jobs skipped at once) concludes within seconds.
 SETTLE_SECONDS = 90
@@ -193,30 +153,8 @@ GRACE_SECONDS = 5
 GREEN = {"success", "neutral", "skipped"}
 WAITING = "the owner's merge-ready label"
 
-# The status grammar. `dev` and `since` are short SHAs; `since` may be
-# UNKNOWN, a range the planner could not establish (the re-test then runs
-# the pull request's whole scope).
-UNKNOWN = "unknown"
-SHA_CHARS = 12
-DEV_KINDS = {"re-testing": "pending", "ready": "success", "red": "pending"}
-LIFE_KINDS = {"waiting": "pending", "checking": "pending", "refused": "pending"}
-KINDS = {**LIFE_KINDS, **DEV_KINDS}
-GRAMMAR = re.compile(
-    rf"^({'|'.join(KINDS)})(?:: dev ([0-9a-f]{{{SHA_CHARS}}}) since ([0-9a-f]{{{SHA_CHARS}}}|{UNKNOWN}))?(?:; |: |$)"
-)
-# The kinds a push to `dev` re-tests: a head whose label passed its check.
-PUSH_ACTS = ("checking", "re-testing", "ready")
-
-# merge-ready-retest.yml's names, held to the file by the selftest: the
-# report finds its re-test job by name and reads the verdict from the job's
-# outputs. The merge, the inventory and the tests steps end green whatever
-# they find, so a red re-test is the pull request's and never fails a push
-# run on `dev`.
-RETEST_WORKFLOW = ".github/workflows/merge-ready-retest.yml"
-RETEST_OUTPUTS = ("conflict", "inventory_failed", "tests_failed", "timed_out")
-MERGE_STEP = "merge the newest dev into the head"
-INVENTORY_STEP = "the fuzz inventory against the newest dev"
-TESTS_STEP = "the shared tests against the newest dev"
+# The status kinds and the state each posts.
+KINDS = {"waiting": "pending", "checking": "pending", "refused": "pending", "ready": "success"}
 
 
 def gh(*args: str) -> str:
@@ -227,29 +165,11 @@ def repo() -> str:
     return os.environ["GITHUB_REPOSITORY"]
 
 
-def short(sha: str) -> str:
-    return sha if sha == UNKNOWN else sha[:SHA_CHARS]
-
-
-def describe(kind: str, words: str, dev: str | None = None, since: str | None = None) -> str:
-    """A status description in the grammar, cut to GitHub's 140 characters."""
-    if kind in DEV_KINDS:
-        return f"{kind}: dev {short(dev)} since {short(since)}; {words}"[:140]
-    if kind in LIFE_KINDS:
-        return f"{kind}: {words}"[:140]
-    raise ValueError(f"unknown kind {kind!r}")
-
-
-def parse(status: dict | None) -> dict | None:
-    """A status of this context: its kind, `dev` and `since` (None for the
-    kinds without them); None for no status. One outside the grammar is
-    kind '?'."""
-    if status is None:
-        return None
-    m = GRAMMAR.match(status.get("description") or "")
-    if not m or (m.group(1) in DEV_KINDS) != (m.group(2) is not None):
-        return {"kind": "?", "dev": None, "since": UNKNOWN, "url": status.get("target_url") or ""}
-    return {"kind": m.group(1), "dev": m.group(2), "since": m.group(3), "url": status.get("target_url") or ""}
+def describe(kind: str, words: str) -> str:
+    """A status description, its kind first, cut to GitHub's 140 characters."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind {kind!r}")
+    return f"{kind}: {words}"[:140]
 
 
 def statuses(sha: str) -> list[dict]:
@@ -260,44 +180,6 @@ def statuses(sha: str) -> list[dict]:
     return [json.loads(x) for x in out.splitlines() if x]
 
 
-def newest(sts: list[dict]) -> dict | None:
-    return next((s for s in sts if s.get("context") == CONTEXT), None)
-
-
-RUN_ID = re.compile(r"/actions/runs/(\d+)")
-
-
-def may_post(current: dict | None, run_url: str, dev: str, role: str, dev_is_newer) -> bool:
-    """Whether this run, speaking for `dev`, may post over the head's newest
-    status (`parse`d). `role` is 'plan' (the label's plan), 'mark' (a push's
-    plan) or 'report' (a re-test's). `dev_is_newer(theirs)` answers whether
-    `dev` descends from, and is not, the commit `theirs` (a short SHA)
-    names."""
-    if role not in ("plan", "mark", "report"):
-        raise ValueError(role)
-    if current is None:
-        return False
-    if current["url"] == run_url:
-        return True
-    kind = current["kind"]
-    if kind in ("waiting", "refused", "?"):
-        return False
-    if kind == "checking":
-        return role == "mark"
-    if current["dev"] == short(dev):
-        mine, other = RUN_ID.search(run_url), RUN_ID.search(current["url"])
-        return bool(mine and other) and int(mine.group(1)) > int(other.group(1))
-    return dev_is_newer(current["dev"]) is True
-
-
-def dev_is_newer_than(theirs: str, dev: str) -> bool:
-    """Whether `dev` descends from, and is not, the commit `theirs` names."""
-    full = json.loads(gh(f"repos/{repo()}/commits/{theirs}"))["sha"]
-    if full == dev:
-        return False
-    return json.loads(gh(f"repos/{repo()}/compare/{full}...{dev}"))["status"] == "ahead"
-
-
 def post(sha: str, state: str, description: str) -> None:
     assert state in ("pending", "success"), state
     gh(f"repos/{repo()}/statuses/{sha}", "--method", "POST", "-f", f"state={state}", "-f", f"context={CONTEXT}",
@@ -305,8 +187,8 @@ def post(sha: str, state: str, description: str) -> None:
     print(f"{CONTEXT} on {sha[:10]}: {state}: {description[:140]}")
 
 
-def post_kind(sha: str, kind: str, words: str, dev: str | None = None, since: str | None = None) -> None:
-    post(sha, KINDS[kind], describe(kind, words, dev, since))
+def post_kind(sha: str, kind: str, words: str) -> None:
+    post(sha, KINDS[kind], describe(kind, words))
 
 
 def comment(pr: int, lines: list[str]) -> None:
@@ -345,25 +227,23 @@ def settling(check: dict, labelled_at: str | None) -> bool:
     return at is None or created is None or created >= at - timedelta(seconds=GRACE_SECONDS)
 
 
-def is_self(name: str) -> bool:
-    return name in SELF_JOBS or bool(SELF_LEG.match(name))
-
-
 def judge(check_runs: list[dict], sts: list[dict], open_threads: int, draft: bool,
           labelled_at: str | None = None,
-          review_suites: tuple[set[int], set[int]] = (set(), set())) -> list[tuple[str, bool]]:
+          review_suites: tuple[set[int], set[int]] = (set(), set()),
+          own: int | None = None) -> list[tuple[str, bool]]:
     """Why the label cannot stand on this head, each with whether it may
     still settle: each check still running (settling when the labelling may
     have started it) or red, by name, an open review thread, a draft. Empty
     means it stands. `review_suites` is `review_job_suites`' pair: the
     review jobs whose review is on the head, not judged, and those whose
-    review is not, a red one saying so."""
+    review is not, a red one saying so. `own` is this run's check suite,
+    whose jobs are this judgment and what waits on it."""
     reviewed, unreviewed = review_suites
     out = []
     for c in check_runs:
         name = c.get("name", "")
         suite = (c.get("check_suite") or {}).get("id")
-        if is_self(name) or name in EXCLUDED or suite in reviewed:
+        if (own is not None and suite == own) or name in EXCLUDED or suite in reviewed:
             continue
         if (c.get("app") or {}).get("slug") in EXCLUDED_APPS:
             continue
@@ -447,9 +327,62 @@ def review_job_suites(workflow_runs: list[dict], reviewers: set[str]) -> tuple[s
     return reviewed, unreviewed
 
 
-def current_runs(check_runs: list[dict], superseded: set[int]) -> list[dict]:
-    """The check runs not in a superseded suite."""
-    return [c for c in check_runs if (c.get("check_suite") or {}).get("id") not in superseded]
+def replaced_cancels(workflow_runs: list[dict], check_runs: list[dict],
+                     annotations: Callable[[int], list[str]]) -> set[int]:
+    """The cancelled check runs a newer run replaced through their
+    concurrency group, by id, for a run `superseded_suites` never replaces.
+
+    A dispatch that a newer dispatch of its group cancels stays on the head
+    as a red with nothing wrong in it (GUI #93 at 0e9275ef54, 2026-11-24).
+    GitHub's line for that (`GROUP_CANCEL`) sits on one job of the run, the
+    one running when the cancel came, so the run is known by any of its
+    jobs. It counts only with a run of the same workflow and event on the
+    head, created between this run's start and that job's end: the run that
+    replaced it, which is judged in full. Only the run's cancelled jobs are
+    dropped: a job that failed before the cancel stays a red.
+    """
+    out: set[int] = set()
+    for run in workflow_runs:
+        if run.get("event") in SUPERSEDING_EVENTS:
+            continue
+        started = run.get("run_started_at") or run.get("created_at") or ""
+        newer = [r.get("created_at") or "" for r in workflow_runs
+                 if r.get("id") != run.get("id") and r.get("workflow_id") == run.get("workflow_id")
+                 and r.get("event") == run.get("event") and (r.get("created_at") or "") >= started]
+        if not newer:
+            continue
+        cancelled = [c for c in check_runs if (c.get("check_suite") or {}).get("id") == run.get("check_suite_id")
+                     and c.get("conclusion") == "cancelled"]
+        replaced = any(
+            any(GROUP_CANCEL.match(line) for line in annotations(c["id"]))
+            and any(at <= (c.get("completed_at") or "") for at in newer)
+            for c in cancelled)
+        if replaced:
+            out |= {c["id"] for c in cancelled}
+    return out
+
+
+def current_runs(check_runs: list[dict], superseded: set[int], replaced: frozenset[int] | set[int] = frozenset()
+                 ) -> list[dict]:
+    """The check runs not in a superseded suite and not replaced."""
+    return [c for c in check_runs
+            if (c.get("check_suite") or {}).get("id") not in superseded and c.get("id") not in replaced]
+
+
+def own_suite(workflow_runs: list[dict], run_id: str) -> int:
+    """This run's check suite. A run that cannot find itself would read its
+    own running job as a check still going, so it stops."""
+    for run in workflow_runs:
+        if str(run.get("id")) == run_id:
+            return run["check_suite_id"]
+    raise RuntimeError(f"run {run_id} is not among the head's workflow runs")
+
+
+def annotation_lines(check_id: int) -> list[str]:
+    out = subprocess.run(
+        ["gh", "api", "--paginate", f"repos/{repo()}/check-runs/{check_id}/annotations?per_page=100",
+         "--jq", ".[].message"], check=True, capture_output=True, text=True).stdout
+    return out.splitlines()
 
 
 def workflow_runs(sha: str) -> list[dict]:
@@ -498,11 +431,6 @@ def open_threads(pr: int) -> int:
     return sum(1 for x in out.split() if x == "false")
 
 
-def output(key: str, value: str) -> None:
-    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
-        f.write(f"{key}={value}\n")
-
-
 def run() -> int:
     event, pr, head = os.environ["EVENT"], int(os.environ["PR"]), os.environ["HEAD"]
     draft = os.environ.get("DRAFT") == "true"
@@ -522,21 +450,30 @@ def run() -> int:
             "checks have only just started. Label it again when every check on it and your own runs are done.",
         ])
         return 0
-    post_kind(head, "checking", "every check on the head, then a re-test against dev")
+    post_kind(head, "checking", "every check on the head")
     deadline = time.monotonic() + SETTLE_SECONDS
     labelled_at = os.environ.get("LABELLED_AT")
     while True:
         wf = workflow_runs(head)
-        runs = current_runs(check_runs(head), superseded_suites(wf))
+        checks = check_runs(head)
+        runs = current_runs(checks, superseded_suites(wf), replaced_cancels(wf, checks, annotation_lines))
         bots = review_job_suites(wf, reviewers_on(reviews(pr), head))
-        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at, bots)
+        found = judge(with_suite_times(runs), statuses(head), open_threads(pr), draft, labelled_at, bots,
+                      own_suite(wf, os.environ["GITHUB_RUN_ID"]))
         if not found or not all(may_settle for _, may_settle in found) or time.monotonic() >= deadline:
             break
         time.sleep(POLL_SECONDS)
     why = [w for w, _ in found]
     if not why:
         print(f"#{pr} {head[:10]}: every check concluded green, no review thread open")
-        output("judged", "ok")
+        if current_head(pr) != head or not has_label(pr):
+            print(f"#{pr}: the head moved past {head[:10]} or the label came off; that event's run decides")
+            return 0
+        post_kind(head, "ready", "the owner's label stands on this head")
+        # A label taken off while that posted: its own run may have posted
+        # `waiting` first, and this `ready` must not outlive the label.
+        if not has_label(pr):
+            post_kind(head, "waiting", WAITING)
         return 0
     remove_label(pr)
     post_kind(head, "refused", f"{len(why)} reason(s); see the comment")
@@ -552,152 +489,11 @@ def run() -> int:
     return 0
 
 
-# The label's plan.
-
-
-def plan() -> int:
-    """After the label passed: the tests the head shares with the merges
-    since it was last ready, against `dev` fetched now (after the label
-    check, so a push before this is in it, and one after it sees
-    `checking` and re-tests this head itself)."""
-    import merge_ready_overlap as mo
-
-    pr, head, base = int(os.environ["PR"]), os.environ["HEAD"], os.environ["BASE"]
-    run_url = os.environ["RUN_URL"]
-    if current_head(pr) != head or not has_label(pr):
-        print(f"#{pr}: the head moved past {head[:10]} or the label came off; that event's run decides")
-        return 0
-    subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin", base], check=True)
-    dev = subprocess.run(["git", "rev-parse", "FETCH_HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-    current = parse(newest(statuses(head)))
-    if not may_post(current, run_url, dev, "plan", lambda t: dev_is_newer_than(t, dev)):
-        print(f"#{pr}: {CONTEXT} is held by a newer run ({current}); it decides")
-        return 0
-    try:
-        row = mo.label_row(pr, head, dev, mo.Context())
-    except Exception as e:  # fail closed: the pull request's whole scope
-        row = mo.fail_closed(pr, head, e, UNKNOWN)
-        print(f"::warning::#{pr}: {row['why']}; re-testing its whole scope")
-    print(f"#{pr} {head[:10]} against dev {dev[:10]}: {row['action']}, {row['why']}")
-    if row["action"] == "ready":
-        post_kind(head, "ready", f"nothing both changes test changed since {short(row['since'])}", dev, dev)
-        return 0
-    post_kind(head, "re-testing", f"after {row['merged']}", dev, row["since"])
-    output("leg", json.dumps({"dev": dev, **{k: row[k] for k in ("pr", "head", "since", "merged")}}))
-    return 0
-
-
-# The re-test's report.
-
-
-def verdict_of(result: str, conflict: bool, tests_failed: bool, timed_out: bool,
-               inventory_failed: bool = False) -> str:
-    """The re-test's result as the pull request sees it: the job's own
-    result, except that a job which ended green with a conflict, a failing
-    fuzz inventory, failing tests or the time budget in its outputs is a
-    failure."""
-    if result == "success" and (conflict or inventory_failed or tests_failed or timed_out):
-        return "failure"
-    return result
-
-
-def red_steps(info: dict, conflict: bool, tests_failed: bool, timed_out: bool,
-              inventory_failed: bool = False) -> dict:
-    """The job's failed steps with the step that carried the verdict added:
-    that step ended green, so the API does not list it."""
-    carried = ([MERGE_STEP] if conflict else [INVENTORY_STEP] if inventory_failed
-               else [TESTS_STEP] if (tests_failed or timed_out) else [])
-    return {**info, "failed_steps": info["failed_steps"] + [x for x in carried if x not in info["failed_steps"]]}
-
-
-def red_words(result: str, conflict: bool, timed_out: bool, info: dict | None, merged: str,
-              inventory_failed: bool = False) -> str:
-    """Why a re-test that did not pass is red. `result` is not 'success'
-    or 'cancelled'."""
-    after = f"after {merged}"
-    if result != "failure":
-        return f"re-test did not run ({result}, {after})"
-    if conflict:
-        return f"does not merge with dev {after}"
-    if inventory_failed:
-        return (f"the fuzz inventory fails against dev {after} "
-                "(scripts/ci/check_fuzz_inventory.py; a lockfile: --regenerate)")
-    if timed_out:
-        return f"timed out {after}"
-    if info is None:
-        return f"{after}: see the run"
-    if info["builds"]:
-        return f"does not build {after}: {', '.join(info['builds'])}"
-    if info["tests"]:
-        return f"{len(info['tests'])} failing test(s) {after}"
-    return f"{after}: {', '.join(info['failed_steps']) or 'see the run'}"
-
-
-def report_step(result: str, moved: bool, postable: bool, labelled: bool) -> str:
-    """What a report does: 'none', 'ready' or 'red'. A cancelled re-test
-    was replaced by a newer one, which reports; a moved head is the push's;
-    a status held by a newer run or a label taken off is theirs."""
-    if result == "cancelled" or moved or not postable or not labelled:
-        return "none"
-    return "ready" if result == "success" else "red"
-
-
-def report(pr: int, head: str, result: str) -> int:
-    run_url, dev, since = os.environ["RUN_URL"], os.environ["DEV"], os.environ["SINCE"]
-    merged, crates = os.environ.get("MERGED", ""), os.environ.get("CRATES", "")
-    conflict = os.environ.get("CONFLICT") == "true"
-    # Read with get, as the others: a re-test workflow from a merge made
-    # before this output existed passes no INVENTORY_FAILED.
-    inventory_failed = os.environ.get("INVENTORY_FAILED") == "true"
-    tests_failed = os.environ.get("TESTS_FAILED") == "true"
-    timed_out = os.environ.get("TIMED_OUT") == "true"
-    result = verdict_of(result, conflict, tests_failed, timed_out, inventory_failed)
-    moved = current_head(pr) != head
-    current = parse(newest(statuses(head)))
-    postable = not moved and may_post(current, run_url, dev, "report", lambda t: dev_is_newer_than(t, dev))
-    step = report_step(result, moved, postable, not moved and has_label(pr))
-    if step == "none":
-        print(f"#{pr} {head[:10]}: {result}; posts nothing (cancelled={result == 'cancelled'}, moved={moved}, "
-              f"status={current and current['kind']}, may post={postable})")
-        return 0
-    if step == "ready":
-        post_kind(head, "ready", f"re-tested after {merged}", dev, since)
-        return 0
-    jobs = json.loads(gh(f"repos/{repo()}/actions/runs/{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100")).get("jobs", [])
-    job = next((j for j in jobs if j["name"] == f"#{pr} / {RETEST_JOB}"), None)
-    import failed_tests
-
-    info = failed_tests.describe(job) if job and result == "failure" else None
-    if info is not None:
-        info = red_steps(info, conflict, tests_failed, timed_out, inventory_failed)
-    if result == "failure" and job is None:
-        print(f"::warning::no job named '#{pr} / {RETEST_JOB}' in this run; the description cannot name the failure")
-    words = red_words(result, conflict, timed_out, info, merged, inventory_failed)
-    remove_label(pr)
-    post_kind(head, "red", words, dev, since)
-    lines = [
-        f"**`{LABEL}` taken off: red against `dev`.** Head {head[:10]}, merged with `dev` {dev[:10]}, is red "
-        f"on the tests it shares with {merged}: {words}.",
-        "",
-        f"The merges changed crates this pull request's tests reach: {crates or 'see the run'}.",
-    ]
-    if info and info["builds"]:
-        lines += ["", "Did not compile:", *[f"- `{b}`" for b in info["builds"]]]
-    if info and info["tests"]:
-        lines += ["", "Failing tests:", *[f"- `{t}`" for t in info["tests"]]]
-    if info and info["failed_steps"]:
-        lines += ["", "Failed steps:", *[f"- {s}" for s in info["failed_steps"]]]
-    lines += ["", f"Re-test: {info['url'] if info else run_url}", "",
-              f"Merge `dev` into this branch and fix it, then label `{LABEL}` again."]
-    comment(pr, lines)
-    return 0
-
-
 def selftest() -> int:
     problems = []
     done = lambda name, conclusion="success": {"name": name, "status": "completed", "conclusion": conclusion}  # noqa: E731
     going = lambda name, status="in_progress": {"name": name, "status": status, "conclusion": None}  # noqa: E731
-    ok = [done("rust-pass"), done("cli-pass"), done("Economics sim", "skipped"), going(SELF_JOBS[0])]
+    ok = [done("rust-pass"), done("cli-pass"), done("Economics sim", "skipped")]
     for label, runs, sts, threads, draft, want in [
         ("every check concluded green", ok, [{"context": "ci/x", "state": "success"}], 0, False, 0),
         # Negative controls: an early label is refused.
@@ -710,12 +506,6 @@ def selftest() -> int:
         ("an open review thread", ok, [], 2, False, 1),
         ("a draft", ok, [], 0, True, 1),
         ("this check's own status is not judged", ok, [{"context": CONTEXT, "state": "pending"}], 0, False, 0),
-        # An earlier labelling's re-test, cancelled by a newer one or still
-        # running, is this flow's own, not the head's.
-        ("an earlier re-test cancelled", ok + [done("#7 / re-test", "cancelled"), done("#7 / report")], [], 0,
-         False, 0),
-        ("a re-test running", ok + [going("#7 / re-test"), going(SELF_JOBS[1])], [], 0, False, 0),
-        ("a job merely named like one", ok + [going("#7 / re-test-other")], [], 0, False, 1),
     ]:
         got = len(judge(runs, sts, threads, draft))
         if got != want:
@@ -729,6 +519,23 @@ def selftest() -> int:
         return {"id": rid, "workflow_id": wid, "created_at": f"2026-11-22T{created}:00Z",
                 "check_suite_id": sid, "event": event}
 
+    # This run's own jobs are known by its check suite, never by a name.
+    mine = [suite(going(LABEL_JOB), 900), suite(going("what waits on the label check", "queued"), 900)]
+    for label, runs, want in [
+        ("this run's own jobs are not judged", ok + mine, 0),
+        # Negative control.
+        ("a job of another run taking the label check's name is judged", ok + mine + [suite(going(LABEL_JOB), 901)], 1),
+    ]:
+        got = len(judge(runs, [], 0, False, own=900))
+        if got != want:
+            problems.append(f"own suite, {label}: {got} reason(s), want {want}")
+    if own_suite([wf_run(77, 1, "01:00", 900)], "77") != 900:
+        problems.append("own_suite: a run did not find its own check suite")
+    try:
+        own_suite([wf_run(77, 1, "01:00", 900)], "78")
+        problems.append("own_suite: a run not on the head was given a suite")
+    except RuntimeError:
+        pass
     wf = [wf_run(1, 10, "01:32", 101), wf_run(2, 10, "05:00", 102), wf_run(3, 20, "01:32", 201)]
     stale = [suite(done("Rust: audit, test, determinism", "cancelled"), 101),
              suite(done("rust-pass (draft)", "failure"), 101), suite(done("matrix.name", "cancelled"), 101)]
@@ -775,6 +582,47 @@ def selftest() -> int:
         got = len(judge(current_runs(runs, superseded_suites(runs_wf)), [], 0, False))
         if got != want:
             problems.append(f"superseded runs, {label}: {got} reason(s), want {want}")
+    # A dispatch a newer one replaced through their concurrency group leaves
+    # no red; a timeout, a hand cancel or a real failure does (GUI #93).
+    group = "Canceling since a higher priority waiting request for core-drift-abc-a/branch exists"
+    timeout = "The job has exceeded the maximum execution time of 1m0s"
+    by_hand = "The run was canceled by @someone."
+
+    def job(cid, conclusion, ended, sid=601):
+        return {**suite(done(f"job {cid}", conclusion), sid), "id": cid, "completed_at": f"2026-11-24T{ended}:00Z"}
+
+    def dispatch(rid, created, sid, wid=60, event="workflow_dispatch", started=None):
+        run_ = wf_run(rid, wid, created, sid, event)
+        return {**run_, "run_started_at": f"2026-11-24T{started or created}:00Z",
+                "created_at": f"2026-11-24T{created}:00Z"}
+
+    first, second = dispatch(1, "01:00", 601), dispatch(2, "01:30", 602)
+    both = [job(11, "cancelled", "01:31"), job(12, "cancelled", "01:31"), job(21, "success", "02:00", 602)]
+    for label, runs_wf, checks, said, want in [
+        ("the annotated job and the run's other cancelled job", [first, second], both, {11: [group]}, {11, 12}),
+        # Negative controls.
+        ("a job that failed before the cancel stays", [first, second], both + [job(13, "failure", "01:20")],
+         {11: [group], 13: ["exit 1"]}, {11, 12}),
+        ("a timeout", [first, second], both, {11: [timeout]}, set()),
+        ("a hand cancel", [first, second], both, {11: [by_hand]}, set()),
+        ("another line that starts the same way", [first, second], both, {11: ["Canceling the step"]}, set()),
+        ("a pull_request run, which `superseded_suites` judges",
+         [dispatch(1, "01:00", 601, 60, "pull_request"), dispatch(2, "01:30", 602, 60, "pull_request")], both,
+         {11: [group]}, set()),
+        ("no annotation", [first, second], both, {}, set()),
+        ("no newer run on the head", [first], both[:2], {11: [group]}, set()),
+        ("a newer run of another workflow", [first, dispatch(2, "01:30", 602, 61)], both, {11: [group]}, set()),
+        ("a newer run of another event", [first, dispatch(2, "01:30", 602, 60, "push")], both, {11: [group]}, set()),
+        ("a run created after the job ended", [first, dispatch(2, "01:45", 602)], both, {11: [group]}, set()),
+        ("a run created before this attempt started",
+         [dispatch(1, "01:00", 601, started="01:40"), second], [job(11, "cancelled", "01:50")], {11: [group]}, set()),
+    ]:
+        got = replaced_cancels(runs_wf, checks, lambda cid: said.get(cid, []))
+        if got != want:
+            problems.append(f"replaced cancels, {label}: {sorted(got)}, want {sorted(want)}")
+    kept = current_runs(both + [job(13, "failure", "01:20")], set(), {11, 12})
+    if len(judge(kept, [], 0, False)) != 1:
+        problems.append("replaced cancels: dropping the cancelled jobs did not leave the failed one judged")
     # A review bot's job is judged by its review on the head (#1497).
     bot_path, (bot, _) = next(iter(REVIEW_JOBS.items()))
     head, older_head = "f" * 40, "b" * 40
@@ -853,150 +701,47 @@ def selftest() -> int:
         problems.append("decide: an event the workflow does not list was accepted")
     except ValueError:
         pass
-    # The grammar round-trips every kind, a `since` the planner could not
-    # establish, and a long description; one outside it reads '?'.
-    dev, older, newer = "d" * 40, "a" * 40, "e" * 40
-    for kind in KINDS:
-        for since in ("c" * 40, UNKNOWN):
-            d = describe(kind, "x" * 300, dev, since)
-            p = parse({"description": d})
-            want = (kind, short(dev), short(since)) if kind in DEV_KINDS else (kind, None, None)
-            if len(d) > 140 or (p["kind"], p["dev"], p["since"]) != want:
-                problems.append(f"grammar, {kind} since {since[:4]}: {d!r} -> {p}")
-        if KINDS[kind] == "success" and kind != "ready":
-            problems.append(f"{kind} posts success: only a passed re-test does")
-    for text in ("waiting for the owner's merge-ready label", "ready: no dev here", "waiting: dev " + "d" * 12
-                 + " since " + "c" * 12 + "; x"):
-        if parse({"description": text})["kind"] != "?":
-            problems.append(f"parse: {text!r} outside the grammar was read as a state")
-    # Who may post. `dev` descends from `older`; `newer` descends from `dev`.
-    run = "https://example/actions/runs/5"
-    order = {short(older): True, short(newer): False}
-
-    def S(kind, at=dev, url=run):
-        return parse({"description": describe(kind, "w", at, "b" * 40), "target_url": url})
-
-    other_old, other_new = "https://example/actions/runs/4", "https://example/actions/runs/6"
-    for label, cur, role, want in [
-        ("no status", None, "report", False),
-        ("its own status", S("re-testing"), "report", True),
-        ("its own checking, the label's plan", S("checking"), "plan", True),
-        ("an older dev's re-testing", S("re-testing", older, other_new), "report", True),
-        ("a newer dev's re-testing", S("re-testing", newer, other_old), "mark", False),
-        ("an older dev's ready, a push's plan", S("ready", older, other_old), "mark", True),
-        ("the same dev from an older run", S("re-testing", dev, other_old), "report", True),
-        ("the same dev from a newer run", S("re-testing", dev, other_new), "report", False),
-        ("another run's checking: a push's plan re-tests it", S("checking", url=other_old), "mark", True),
-        ("another run's checking: a relabel the report leaves alone", S("checking", url=other_old), "report",
-         False),
-        ("another run's checking: a newer label's plan decides", S("checking", url=other_new), "plan", False),
-        ("waiting after it: the label came off", S("waiting", url=other_new), "report", False),
-        ("refused after it", S("refused", url=other_new), "mark", False),
-        ("outside the grammar", {"kind": "?", "dev": None, "since": UNKNOWN, "url": other_old}, "report", False),
-    ]:
-        if may_post(cur, run, dev, role, order.get) != want:
-            problems.append(f"may_post, {label}: {not want}")
-    # What a report does.
-    for label, args, want in [
-        ("green", ("success", False, True, True), "ready"),
-        ("red", ("failure", False, True, True), "red"),
-        ("never ran", ("skipped", False, True, True), "red"),
-        ("cancelled by a newer re-test: nothing, the label stays", ("cancelled", False, True, True), "none"),
-        ("the head moved", ("failure", True, True, True), "none"),
-        ("a newer run holds the status", ("success", False, False, True), "none"),
-        ("the label came off", ("success", False, True, False), "none"),
-    ]:
-        if report_step(*args) != want:
-            problems.append(f"report_step, {label}: {report_step(*args)} != {want}")
-    info = {"failed_steps": [], "tests": [], "builds": [], "url": "u"}
-    if "fuzz inventory fails" not in red_words("failure", False, False, info, "#1", True):
-        problems.append("red_words: a failing fuzz inventory is not named")
-    if "does not merge" not in red_words("failure", True, False, info, "#1", True):
-        problems.append("red_words: a conflict is not named first")
-    for label, result, conflict, timed_out, inf, want in [
-        ("never started", "skipped", False, False, None, "did not run"),
-        ("timed out", "failure", False, True, {**info, "failed_steps": ["tests"]}, "timed out"),
-        ("a conflict", "failure", True, False, {**info, "failed_steps": ["merge"]}, "does not merge"),
-        ("failing tests", "failure", False, False, {**info, "tests": ["a b", "c d"]}, "2 failing test(s)"),
-        ("a target that did not compile", "failure", False, False, {**info, "builds": ["x (test \"y\")"]},
-         "does not build"),
-        ("no test named", "failure", False, False, {**info, "failed_steps": ["install Rust"]}, "install Rust"),
-    ]:
-        if want not in red_words(result, conflict, timed_out, inf, "#1"):
-            problems.append(f"red_words, {label}: lacks {want!r}")
-    for label, args, want in [
-        ("green, nothing in the outputs", ("success", False, False, False), "success"),
-        ("green with failing tests", ("success", False, True, False), "failure"),
-        ("green with a conflict", ("success", True, False, False), "failure"),
-        ("green with a failing fuzz inventory", ("success", False, False, False, True), "failure"),
-        ("green past the time budget", ("success", False, False, True), "failure"),
-        ("a setup step failed", ("failure", False, False, False), "failure"),
-        ("cancelled", ("cancelled", False, False, False), "cancelled"),
-    ]:
-        if verdict_of(*args) != want:
-            problems.append(f"verdict_of, {label}: {verdict_of(*args)} != {want}")
-    base = {"failed_steps": [], "tests": ["a b"], "builds": [], "url": "u"}
-    if red_steps(base, False, True, False)["failed_steps"] != [TESTS_STEP]:
-        problems.append("red_steps: failing tests do not name the tests step")
-    if red_steps(base, True, False, False)["failed_steps"] != [MERGE_STEP]:
-        problems.append("red_steps: a conflict does not name the merge step")
-    if red_steps(base, False, False, False, True)["failed_steps"] != [INVENTORY_STEP]:
-        problems.append("red_steps: a failing fuzz inventory does not name the inventory step")
+    # Every kind names itself first and fits GitHub's limit, and only
+    # `ready` posts success.
+    for kind, state in KINDS.items():
+        d = describe(kind, "x" * 300)
+        if len(d) > 140 or not d.startswith(f"{kind}: "):
+            problems.append(f"describe, {kind}: {d!r}")
+        if (state == "success") != (kind == "ready"):
+            problems.append(f"{kind} posts {state}: only `ready` posts success")
+    try:
+        describe("not-a-kind", "x")
+        problems.append("describe: a kind outside KINDS was accepted")
+    except ValueError:
+        pass
     # The workflows carry the names this reads (rule 47).
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     label_cond = (f"(github.event.action != 'labeled' && github.event.action != 'unlabeled')\n"
                   f"      || github.event.label.name == '{LABEL}'")
-    for path, needles in [
-        (".github/workflows/merge-ready.yml", [
-            ("types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]", "the six events"),
-            (f"    name: {SELF_JOBS[0]}\n", "the label check named as SELF_JOBS"),
-            (f"    name: {SELF_JOBS[1]}\n", "the plan named as SELF_JOBS"),
-            ("python3 scripts/ci/merge_ready.py run", "the label check's step"),
-            ("python3 scripts/ci/merge_ready.py plan", "the plan's step"),
-            ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
-            (label_cond, "the condition that runs nothing for another label"),
-            ("name: '#${{ github.event.pull_request.number }}'", "the re-test caller named by the pull request"),
-            ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
-             "the label check's script from the base branch"),
-            ('git checkout "origin/${BASE}" --\n          scripts/ci/merge_ready.py scripts/ci/merge_ready_overlap.py '
-             'scripts/ci/change_scope.py\n          scripts/ci/check_fuzz_inventory.py\n',
-             "the plan's scripts from the base branch, the overlap's imports among them"),
-        ]),
-        (".github/workflows/merge-ready-dev.yml", [
-            ("name: '#${{ matrix.pr }}'", "the re-test caller named by the pull request"),
-            ("python3 scripts/ci/merge_ready_overlap.py --plan", "the push's plan"),
-        ]),
-        (RETEST_WORKFLOW, [
-            (f"    name: {RETEST_JOB}\n", "the re-test job's name"),
-            (f"    name: {REPORT_JOB}\n", "the report job's name"),
-            (f"- name: {MERGE_STEP}\n", "the merge step's name"),
-            (f"- name: {TESTS_STEP}\n", "the tests step's name"),
-            (f"- name: {INVENTORY_STEP}\n", "the inventory step's name"),
-            ("python3 scripts/ci/check_fuzz_inventory.py || rc=$?", "the inventory step's check"),
-            (f"- name: {TESTS_STEP}\n        if: steps.merge.outputs.conflict != 'true' && "
-             "steps.inventory.outputs.inventory_failed != 'true'\n", "the tests a failing inventory skips"),
-            ("if: steps.merge.outputs.conflict != 'true'\n", "the steps a conflict skips"),
-            ("python3 scripts/ci/merge_ready_overlap.py --scope", "the re-test's own scope"),
-            ("group: merge-ready-retest-${{ inputs.pr }}", "one re-test per pull request"),
-            ("          ref: ${{ inputs.base }}\n          sparse-checkout: |\n            scripts/ci/merge_ready.py\n",
-             "the report's scripts from the base branch"),
-        ] + [n for out in RETEST_OUTPUTS for n in [
-            (f"{out}: ${{{{ steps.", f"the job output {out}"),
-            (f'echo "{out}=true" >> "$GITHUB_OUTPUT"', f"a step setting {out}"),
-            (f"{out.upper()}: ${{{{ needs.retest.outputs.{out} }}}}", f"the report's {out.upper()}")]]),
+    path = ".github/workflows/merge-ready.yml"
+    with open(os.path.join(root, path), encoding="utf-8") as f:
+        text = f.read()
+    for needle, what in [
+        ("types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]", "the six events"),
+        (f"    name: {LABEL_JOB}\n", "the label check's name"),
+        ("python3 scripts/ci/merge_ready.py run", "the label check's step"),
+        ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
+        (label_cond, "the condition that runs nothing for another label"),
+        ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
+         "the label check's script from the base branch"),
     ]:
-        with open(os.path.join(root, path), encoding="utf-8") as f:
-            text = f.read()
-        for needle, what in needles:
-            if needle not in text:
-                problems.append(f"{path} lacks {what} ({needle.strip()!r})")
-        if CONTEXT in re.findall(r"^    name: (.*)$", text, re.M):
-            problems.append(f"{path}: a job is named {CONTEXT!r}: its green check run would satisfy the required status")
+        if needle not in text:
+            problems.append(f"{path} lacks {what} ({needle.strip()!r})")
+    if CONTEXT in re.findall(r"^    name: (.*)$", text, re.M):
+        problems.append(f"{path}: a job is named {CONTEXT!r}: its green check run would satisfy the required status")
+    jobs = re.findall(r"^  ([A-Za-z0-9_-]+):\n", text[text.index("\njobs:"):], re.M)
+    if jobs != ["label-check"]:
+        problems.append(f"{path}: its jobs are {jobs}: the label check is the only one, and nothing runs a test")
     for p in problems:
         print(f"selftest FAIL: {p}")
     if not problems:
-        print("selftest: an early, red or draft label is refused, a push clears it, the status grammar, the newest "
-              "dev's run holds the status, a superseded re-test posts nothing, and the workflows carry these names")
+        print("selftest: an early, red or draft label is refused, a push clears it, a run's own jobs, superseded runs, "
+              "a replaced dispatch, review jobs, the status kinds, and the workflow carries these names")
     return 1 if problems else 0
 
 
@@ -1005,10 +750,6 @@ def main(argv: list[str]) -> int:
         return selftest()
     if argv == ["run"]:
         return run()
-    if argv == ["plan"]:
-        return plan()
-    if len(argv) == 4 and argv[0] == "report":
-        return report(int(argv[1]), argv[2], argv[3])
     print(__doc__)
     return 2
 
