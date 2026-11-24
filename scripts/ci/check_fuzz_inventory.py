@@ -60,6 +60,11 @@
 #                 so a package the two share keeps the workspace's version.
 #   --selftest    the check on planted trees.
 #
+# The merge-ready label calls `on_merge`: the head merged with the newest
+# base, then this check on that tree. `merge_selftest` plants the trial,
+# and `merge_ready.py --selftest` runs it. This module does not import
+# the label, and neither call is a mode of this script.
+#
 # --matrix reads `RUST_TESTS` (change_scope.py's `rust_tests`: `all`, `none`
 # or the members a change reaches through the reverse closure) and the file
 # `CHANGED_FILE` names (the changed paths, one per line; unset, none). A
@@ -80,6 +85,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +121,18 @@ WEEKLY = (
     "shekyl-wire/fuzz_tx_parse",
 )
 WORKSPACE_LOCK = "rust/Cargo.lock"
+# What `on_merge` checks out of the trial merge: this check's subjects, and
+# nothing else. `merge_selftest` holds the three named files in this tuple,
+# so a hand-listed path cannot drift away from what the check reads (rule 47).
+MERGE_PATHS = (
+    f"/{WORKSPACE_LOCK}",
+    "/rust/*/fuzz/Cargo.toml",
+    "/rust/*/fuzz/Cargo.lock",
+    f"/{WORKFLOW}",
+    f"/{FUZZ_WORKFLOW}",
+)
+# Each git step of the trial. The whole of it took 5.9 s on #1489 and #1497.
+MERGE_STEP_SECONDS = 90
 # Each target's coverage floor (ruled 2026-11-15): the final `cov:` of one
 # seeded nightly run, which `fuzz_run.py` holds every later run to. The
 # file's own header says how a floor is set and moved.
@@ -587,6 +605,245 @@ def changed_paths(path: str | None) -> list[str]:
     except OSError as exc:
         raise GateError(f"{CHANGED_FILE}={path} cannot be read: {exc}") from exc
     return [line for line in text.splitlines() if line]
+
+
+def merge_reasons(returncode: int, output: str, base: str, dev: str) -> list[str]:
+    """Why this check's exit refuses the label: its findings, each its own
+    reason. Any exit but 0 or 1 is a check that could not run."""
+    if returncode == 0:
+        return []
+    where = f"this head merged with `{base}` at {dev[:10]}"
+    if returncode != 1:
+        return [f"the fuzz inventory could not be checked on {where} (exit {returncode})"]
+    findings = [line.strip() for line in output.splitlines() if line.startswith("  ")]
+    return [f"the fuzz inventory fails on {where}: {finding}" for finding in findings] or [
+        f"the fuzz inventory fails on {where}"
+    ]
+
+
+def on_merge(url: str, base: str, head: str) -> list[str]:
+    """Why the label cannot stand once `head` is merged with the newest
+    `base`: it does not merge, or this check fails there. Empty when both
+    hold. A check that cannot run refuses, with why: a skipped gate reads
+    as a passed one.
+
+    A fresh partial clone with no file contents, a merge of trees alone, and
+    a checkout of `MERGE_PATHS`. This file is copied into the trial, because
+    the check reads the tree it sits in, so a pull request cannot change the
+    check either."""
+    script = str(Path(__file__).resolve())
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        with tempfile.TemporaryDirectory(prefix="fuzz-inventory-merge-") as held:
+            tree = os.path.join(held, "tree")
+
+            def git(*args: str) -> str:
+                return subprocess.run(
+                    ["git", *args],
+                    cwd=tree,
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=MERGE_STEP_SECONDS,
+                ).stdout.strip()
+
+            os.mkdir(tree)
+            git("init", "-q")
+            git("remote", "add", "origin", url)
+            git("config", "extensions.partialClone", "origin")
+            git("config", "remote.origin.promisor", "true")
+            git("config", "remote.origin.partialclonefilter", "blob:none")
+            git(
+                "fetch", "-q", "--filter=blob:none", "--no-tags", "origin",
+                f"+refs/heads/{base}:refs/trial/base", head,
+            )
+            dev = git("rev-parse", "refs/trial/base")
+            merged = subprocess.run(
+                ["git", "merge-tree", "--write-tree", dev, head],
+                cwd=tree, env=env, capture_output=True, text=True, timeout=MERGE_STEP_SECONDS,
+            )
+            if merged.returncode == 1:
+                return [f"this head does not merge with `{base}` at {dev[:10]}"]
+            if merged.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    merged.returncode, "git merge-tree", stderr=merged.stderr
+                )
+            commit = git(
+                "-c", "user.name=fuzz-inventory", "-c", "user.email=fuzz-inventory@invalid",
+                "commit-tree", merged.stdout.split()[0], "-p", dev, "-p", head,
+                "-m", "the trial merge",
+            )
+            git("sparse-checkout", "set", "--no-cone", *MERGE_PATHS)
+            git("checkout", "-q", "--detach", commit)
+            placed = os.path.join(tree, "scripts", "ci", Path(__file__).name)
+            os.makedirs(os.path.dirname(placed), exist_ok=True)
+            shutil.copyfile(script, placed)
+            checked = subprocess.run(
+                [sys.executable, placed],
+                cwd=tree, env=env, capture_output=True, text=True, timeout=MERGE_STEP_SECONDS,
+            )
+            return merge_reasons(checked.returncode, checked.stdout, base, dev)
+    except (OSError, subprocess.SubprocessError) as error:
+        said = (getattr(error, "stderr", "") or str(error)).strip().splitlines()
+        detail = said[-1][:160] if said else error
+        return [f"the fuzz inventory could not be checked against `{base}`: {detail}"]
+
+
+# The planted trial's lock versions. The workspace and every fuzz lock that
+# already exists move together; a lock left behind is the finding.
+_MERGE_V1 = "1.0.0"
+_MERGE_V2 = "1.0.1"
+_MERGE_STALE = "9.9.9"
+
+
+def _merge_lock(version: str) -> str:
+    """A lockfile whose one sourced package is `serde` at `version`."""
+    return (
+        "version = 4\n\n[[package]]\n"
+        'name = "serde"\n'
+        f'version = "{version}"\n'
+        'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+    )
+
+
+def _merge_manifest(crate: str, bins: tuple[str, ...]) -> str:
+    body = "".join(
+        f'[[bin]]\nname = "{name}"\npath = "fuzz_targets/{name}.rs"\n\n' for name in bins
+    )
+    return f'[package]\nname = "{crate}-fuzz"\nversion = "0.0.0"\nedition = "2021"\n\n{body}[workspace]\n'
+
+
+def _merge_workflows() -> tuple[tuple[str, str], ...]:
+    """The two workflows, saying what this check requires them to say."""
+    harness = (
+        "jobs:\n  scope:\n    steps:\n"
+        f'      - run: {CHANGED_FILE}="$changed_file" '
+        "python3 scripts/ci/check_fuzz_inventory.py --matrix\n"
+        "      - run: python3 scripts/ci/check_fuzz_inventory.py --floors\n"
+    )
+    nightly = (
+        "on:\n  schedule:\n"
+        f'    - cron: "{NIGHTLY_CRON}"\n'
+        f'    - cron: "{WEEKLY_CRON}"\n'
+        "jobs:\n  fuzz-targets:\n    steps:\n"
+        "      - run: python3 scripts/ci/check_fuzz_inventory.py --plan\n"
+    )
+    return ((WORKFLOW, harness), (FUZZ_WORKFLOW, nightly))
+
+
+def _weekly_by_crate() -> dict[str, tuple[str, ...]]:
+    grouped: dict[str, list[str]] = {}
+    for name in WEEKLY:
+        crate, target = name.split("/", 1)
+        grouped.setdefault(crate, []).append(target)
+    return {crate: tuple(names) for crate, names in grouped.items()}
+
+
+def _crate_files(crate: str, bins: tuple[str, ...], version: str) -> list[tuple[str, str]]:
+    base = f"rust/{crate}/fuzz"
+    files = [
+        (f"{base}/Cargo.toml", _merge_manifest(crate, bins)),
+        (f"{base}/Cargo.lock", _merge_lock(version)),
+    ]
+    files.extend((f"{base}/fuzz_targets/{name}.rs", "fn main() {}\n") for name in bins)
+    return files
+
+
+def merge_selftest() -> list[str]:
+    """The trial merge on throwaway repositories, in the shape of #1489 and
+    #1497: a pull request adds a fuzz lockfile while `dev` moves the
+    workspace lock under it, and each is green alone. The trial runs this
+    script."""
+    problems: list[str] = []
+    for path in (WORKSPACE_LOCK, WORKFLOW, FUZZ_WORKFLOW):
+        if f"/{path}" not in MERGE_PATHS:
+            problems.append(f"MERGE_PATHS lacks {path}, which the inventory reads")
+    with tempfile.TemporaryDirectory(prefix="fuzz-inventory-merge-selftest-") as held:
+        origin = os.path.join(held, "origin")
+        os.mkdir(origin)
+        identity = (
+            "-c", "user.name=t", "-c", "user.email=t@invalid",
+            "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+        )
+
+        def g(*args: str) -> str:
+            return subprocess.run(
+                ["git", *identity, *args], cwd=origin, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+        def put(path: str, text: str) -> None:
+            full = os.path.join(origin, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as handle:
+                handle.write(text)
+
+        def commit(*files: tuple[str, str]) -> str:
+            for path, text in files:
+                put(path, text)
+            g("add", "-A")
+            g("commit", "-q", "-m", "x")
+            return g("rev-parse", "HEAD")
+
+        g("init", "-q", "-b", "dev")
+        g("config", "uploadpack.allowFilter", "true")
+        g("config", "uploadpack.allowAnySHA1InWant", "true")
+        root_files = [("rust/Cargo.lock", _merge_lock(_MERGE_V1)), *_merge_workflows()]
+        for crate, bins in _weekly_by_crate().items():
+            root_files.extend(_crate_files(crate, bins, _MERGE_V1))
+        root = commit(*root_files)
+        branches: dict[str, str] = {}
+        planted = {
+            "adds-a-lock": _crate_files("shekyl-stale", ("fuzz_stale",), _MERGE_STALE),
+            "adds-it-right": _crate_files("shekyl-extra", ("fuzz_extra",), _MERGE_V2),
+            "no-fuzz": [("docs.md", "text\n")],
+            "conflicts": [("rust/Cargo.lock", _merge_lock("9.0.0"))],
+        }
+        for name, files in planted.items():
+            g("checkout", "-q", "-b", name, root)
+            branches[name] = commit(*files)
+        g("checkout", "-q", "dev")
+        moved = [("rust/Cargo.lock", _merge_lock(_MERGE_V2))]
+        moved.extend(
+            (f"rust/{crate}/fuzz/Cargo.lock", _merge_lock(_MERGE_V2))
+            for crate in _weekly_by_crate()
+        )
+        commit(*moved)
+        url = f"file://{origin}"
+        got = on_merge(url, "dev", branches["adds-a-lock"])
+        stale = f"serde {_MERGE_STALE}"
+        agreed = f"locks {_MERGE_V2}"
+        if len(got) != 1 or stale not in got[0] or agreed not in got[0]:
+            problems.append(f"inventory on the merge, a lock the base moved under: {got}")
+        got = on_merge(url, "dev", branches["conflicts"])
+        if len(got) != 1 or "does not merge" not in got[0]:
+            problems.append(f"inventory on the merge, a head that does not merge: {got}")
+        for label, name in (
+            ("a lockfile at the merged version", "adds-it-right"),
+            ("no fuzz change", "no-fuzz"),
+        ):
+            got = on_merge(url, "dev", branches[name])
+            if got:
+                problems.append(f"inventory on the merge, {label}: {got}")
+        for label, args in (
+            ("a head the remote does not have", (url, "dev", "0" * 39 + "1")),
+            ("a base the remote does not have", (url, "no-such-branch", branches["no-fuzz"])),
+        ):
+            got = on_merge(*args)
+            if len(got) != 1 or "could not be checked" not in got[0]:
+                problems.append(f"inventory on the merge, {label}: {got}")
+    for label, args, want in (
+        ("a clean exit", (0, "", "dev", "d" * 40), 0),
+        ("two findings", (1, "FAIL: x\n  a: stale\n  b: stale\n", "dev", "d" * 40), 2),
+        ("a failure with no finding named", (1, "FAIL: x\n", "dev", "d" * 40), 1),
+        ("a check that could not run", (2, "FAIL: x\n", "dev", "d" * 40), 1),
+    ):
+        got_reasons = merge_reasons(*args)
+        if len(got_reasons) != want:
+            problems.append(f"merge_reasons, {label}: {got_reasons}")
+    if "could not be checked" not in merge_reasons(2, "", "dev", "d" * 40)[0]:
+        problems.append("merge_reasons: an exit of 2 is not named as a check that could not run")
+    return problems
 
 
 def main() -> int:

@@ -102,11 +102,30 @@ impl PeerLabel for () {
 /// wait for every connection to end. `router` is the one router, not yet
 /// stamped: each connection stamps its own authority.
 pub(crate) async fn serve<L>(
+    listener: crate::conn_limit::LimitedListener<L>,
+    leg: Leg,
+    channel: Arc<Channel>,
+    router: Router,
+    signal: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()>
+where
+    L: crate::conn_limit::AdmitAs,
+    L::Addr: PeerLabel + std::fmt::Debug,
+    L::Io: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    serve_within(listener, leg, channel, router, signal, HANDSHAKE_DEADLINE).await
+}
+
+/// [`serve`], each handshake bounded by `handshake_deadline`. A test gives
+/// a deadline far past its own limit, so that only the stop can end a
+/// handshake inside that limit, however slow the host.
+pub(super) async fn serve_within<L>(
     mut listener: crate::conn_limit::LimitedListener<L>,
     leg: Leg,
     channel: Arc<Channel>,
     router: Router,
     signal: impl std::future::Future<Output = ()> + Send + 'static,
+    handshake_deadline: std::time::Duration,
 ) -> std::io::Result<()>
 where
     L: crate::conn_limit::AdmitAs,
@@ -120,13 +139,17 @@ where
             accepted = axum::serve::Listener::accept(&mut listener) => accepted,
             () = &mut signal => break,
         };
-        let accepted_at = Instant::now();
+        let at = Instant::now();
+        let accepted = Accepted {
+            at,
+            handshake_by: tokio::time::Instant::from_std(at + handshake_deadline),
+        };
         tokio::spawn(connection(
             stop_rx.clone(),
             io,
             peer.label(),
             leg,
-            accepted_at,
+            accepted,
             Arc::clone(&channel),
             router.clone(),
         ));
@@ -138,6 +161,12 @@ where
     Ok(())
 }
 
+/// When a connection was accepted, and when its handshake must be done.
+struct Accepted {
+    at: Instant,
+    handshake_by: tokio::time::Instant,
+}
+
 /// One connection, from `accept` to its close. `stop` is the first
 /// parameter so it is the last value dropped: parameters drop in reverse
 /// order, and [`serve`] counts this connection as ended only when its
@@ -147,17 +176,16 @@ async fn connection<S>(
     mut io: S,
     peer: String,
     leg: Leg,
-    accepted_at: Instant,
+    accepted: Accepted,
     channel: Arc<Channel>,
     router: Router,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let deadline = tokio::time::Instant::from_std(accepted_at + HANDSHAKE_DEADLINE);
     let handshaken = tokio::select! {
         result = tokio::time::timeout_at(
-            deadline,
-            handshake(&mut io, &channel, accepted_at, &peer, leg),
+            accepted.handshake_by,
+            handshake(&mut io, &channel, accepted.at, &peer, leg),
         ) => result,
         _stopped = stop.wait_for(|&stopped| stopped) => return,
     };

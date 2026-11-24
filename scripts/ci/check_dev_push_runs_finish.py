@@ -25,8 +25,7 @@ refused too, because it would cancel the job the workflow keeps.
 Every workflow, not only the long ones (ruled 2026-11-19): the post-merge
 run on `dev` is never cancelled once it runs, so each run that starts
 gives `dev` a verdict and a red issue names the whole range since the last
-green. `UNGROUPED` names the workflows that take no group at all, each
-with its reason: there every push gets a run of its own.
+green.
 
 Rule 47: the four long workflows (`LONG`) must be among those read as
 pushing on `dev`, a file that does not parse fails by name, and fewer than
@@ -60,15 +59,6 @@ LONG = (
     "fuzz-harness.yml",  # 22, but 60 wall-minutes behind the queue
     "rust-audit-test.yml",  # 123
 )
-# Workflows that push on `dev` with no concurrency group: no run of theirs
-# is ever cancelled or replaced.
-UNGROUPED = {
-    # Each push's run judges that push's own diff against the labelled pull
-    # requests; a replaced run would leave its merge unjudged. Seconds each,
-    # plus the re-tests it calls, one per pull request at a time
-    # (merge-ready-retest.yml, a called workflow that pushes on nothing).
-    "merge-ready-dev.yml",
-}
 # Workflows read as pushing on `dev`, 2026-11-19: 20.
 MIN_SUBJECTS = 15
 
@@ -126,10 +116,7 @@ def problems_in(filename: str, doc: object) -> list[str]:
         ]
     problems: list[str] = []
     concurrency = doc.get("concurrency")
-    if filename in UNGROUPED:
-        if concurrency is not None:
-            problems.append(f"{filename}: is in UNGROUPED but has a concurrency group")
-    elif not isinstance(concurrency, dict):
+    if not isinstance(concurrency, dict):
         problems.append(
             f"{filename}: no concurrency mapping, so a pull request's "
             "superseded runs stack behind each other"
@@ -182,9 +169,6 @@ def check_tree() -> int:
         problems.append(f"{', '.join(missing)}: not read as pushing on dev; the gate's subjects are gone")
     if len(subjects) < MIN_SUBJECTS:
         problems.append(f"only {len(subjects)} workflows read as pushing on dev (fewer than {MIN_SUBJECTS})")
-    stray = sorted(UNGROUPED - set(subjects))
-    if stray:
-        problems.append(f"UNGROUPED names {', '.join(stray)}, which does not push on dev")
     for problem in problems:
         print(f"::error::{problem}")
     if problems:
@@ -230,13 +214,11 @@ def selftest() -> int:
             1,
         ),
         ("not a mapping", ["a"], 1),
-        ("an ungrouped workflow", {k: v for k, v in doc(CANCEL_ONLY_PRS).items() if k != "concurrency"}, 0,
-         "merge-ready-dev.yml"),
-        ("an ungrouped workflow that takes a group", doc(CANCEL_ONLY_PRS), 1, "merge-ready-dev.yml"),
+        ("no concurrency group", {k: v for k, v in doc(CANCEL_ONLY_PRS).items() if k != "concurrency"}, 1),
     ]
     failed = 0
-    for label, fixture, want, *name in cases:
-        problems = problems_in(name[0] if name else "fixture.yml", fixture)
+    for label, fixture, want in cases:
+        problems = problems_in("fixture.yml", fixture)
         if len(problems) != want:
             print(f"selftest FAIL: {label}: {len(problems)} problem(s), want {want}: {problems}")
             failed = 1

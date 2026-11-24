@@ -117,6 +117,12 @@ dependency, not by topic:
   and not the block path's; the push to `dev` captures every row whatever
   this says.
 
+A pull request is scoped from its merge commit's first parent, the `dev`
+the commit under test was built on (`--pr-base`). The event's
+`pull_request.base.sha` can be an older or a newer `dev`, and its diff then
+counts what `dev` gained in between as the pull request's own: docs-only
+#1528 read 64 files and ran every suite.
+
 The ownership table is the truth for `scripts/ci/**` and `.github/**`
 outside the workflow files, which own the jobs they define; the selftest
 holds the table to the tree (every tracked path claimed, no missing path or
@@ -132,6 +138,10 @@ Usage:
                                               # bench_rows=…
                                               # to $GITHUB_OUTPUT
   change_scope.py --files a b c               # classify the given paths
+  change_scope.py --pr-base MERGE PR_HEAD     # prints the `dev` a pull request's
+                                              # merge commit was built on, its
+                                              # first parent; nothing, exit 0,
+                                              # for any other commit shape
   change_scope.py --selftest                  # pinned cases against this tree
 """
 
@@ -392,6 +402,25 @@ def classify(files, inputs, trees):
             reasons.append(f"{f}: {why}")
             return False, reasons
     return True, [f"{len(files)} file(s), all prose and read by no consumer"]
+
+
+def pr_merge_parent(commit_text, pr_head):
+    """The `dev` a pull request's merge commit was built on: the first parent
+    of a two-parent commit whose second parent is the pull request's head,
+    read from `git cat-file -p` (a shallow checkout has the header too).
+    Anything else answers "", which every caller treats as no base."""
+    header = commit_text.split("\n\n", 1)[0]
+    parents = [line.split()[1] for line in header.splitlines() if line.startswith("parent ")]
+    return parents[0] if len(parents) == 2 and pr_head and parents[1] == pr_head else ""
+
+
+def pr_base(merge, pr_head):
+    """`pr_merge_parent` of the commit `merge`; "" when it cannot be read."""
+    try:
+        return pr_merge_parent(git("cat-file", "-p", merge), pr_head)
+    except Exception as e:
+        print(f"scope: cannot read {merge!r} ({e})", file=sys.stderr)
+        return ""
 
 
 def changed_files(base, head):
@@ -890,6 +919,7 @@ def selftest():
     bad += rust_selftest(inputs, trees)
     bad += build_selftest(inputs, trees)
     bad += fuzz_selftest()
+    bad += pr_base_selftest()
     print(f"selftest: {'FAILED' if bad else 'ok'} ({bad} wrong)")
     return 1 if bad else 0
 
@@ -956,6 +986,47 @@ def build_selftest(inputs, trees):
         if needle not in text:
             print(f"WRONG: {BUILD_WORKFLOW}'s `work` step lacks {needle!r}")
             bad += 1
+    return bad
+
+
+# The workflows whose scope reads a pull request's base: from `--pr-base`,
+# never the event's `pull_request.base.sha`.
+PR_BASE_WORKFLOWS = tuple(f".github/workflows/{w}.yml" for w in (
+    "benchmarks", "build", "chain-forge", "codeql", "depends", "doc-claims", "fuzz-harness", "rust-audit-test"))
+
+
+def pr_base_selftest():
+    bad = 0
+    dev, head, other = "d" * 40, "e" * 40, "f" * 40
+    commit = lambda *parents: "tree 1\n" + "".join(f"parent {p}\n" for p in parents) + "author a\n\nparent " + other
+    for label, text, pr_head, want in [
+        ("a pull request's merge commit", commit(dev, head), head, dev),
+        # Negative controls: each is no base, which runs everything.
+        ("another pull request's merge", commit(dev, other), head, ""),
+        ("parents the wrong way round", commit(head, dev), head, ""),
+        ("a commit with one parent", commit(dev), head, ""),
+        ("a root commit", commit(), head, ""),
+        ("an octopus merge", commit(dev, head, other), head, ""),
+        ("no pull request head", commit(dev, head), "", ""),
+    ]:
+        got = pr_merge_parent(text, pr_head)
+        if got != want:
+            print(f"WRONG: pr_merge_parent, {label}: {got!r}, want {want!r}")
+            bad += 1
+    for path in PR_BASE_WORKFLOWS:
+        text = read_text(path)
+        if "change_scope.py --pr-base" not in text or "pull_request.base.sha" in text:
+            print(f"WRONG: {path} does not take a pull request's base from --pr-base alone")
+            bad += 1
+    # The audit reads the step output. A local run exits at the fetch guard,
+    # so the base has to be published before that exit.
+    claims = read_text(".github/workflows/doc-claims.yml")
+    published = claims.find('echo "base=$base" >> "$GITHUB_OUTPUT"')
+    guard = claims.find('if [ "${GITHUB_ACTIONS:-}" != "true" ]; then')
+    fetch = claims.find("git fetch --no-tags --depth=1 origin")
+    if not (0 <= published < guard < fetch):
+        print("WRONG: doc-claims.yml publishes the base after its fetch guard or its fetch")
+        bad += 1
     return bad
 
 
@@ -1275,10 +1346,17 @@ def main():
     ap.add_argument("--base")
     ap.add_argument("--head")
     ap.add_argument("--files", nargs="+")
+    ap.add_argument("--pr-base", nargs=2, metavar=("MERGE", "PR_HEAD"))
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    if args.pr_base:
+        base = pr_base(*args.pr_base)
+        if not base:
+            print(f"scope: {args.pr_base[0]} is not this pull request's merge commit", file=sys.stderr)
+        print(base)
+        return 0
     try:
         files = args.files or changed_files(args.base, args.head)
         trees = docs_consumer_trees(consuming_workflow_text())
