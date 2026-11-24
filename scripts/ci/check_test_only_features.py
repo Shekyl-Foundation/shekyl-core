@@ -173,6 +173,12 @@ from pathlib import Path
 # feature without a row leaves it ungated, so add both in the same commit.
 TEST_ONLY: dict[tuple[str, str], str] = {
     (
+        "shekyl-os-account",
+        "test-fixture",
+    ): "where a test keeps a daemon's data directory: ~/.shekyl-test/<pid>-<name>, "
+    "which passes the daemon's real ancestor check (Rick, 2026-11-23). Enabled "
+    "from the dev edges of the crates whose tests start or lock a daemon",
+    (
         "shekyl-win-sec",
         "test-utils",
     ): "the probe helpers (SID readers, the label reader) and the scratch "
@@ -596,6 +602,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # `shekyl-p-store` joined 2026-11-20, the commit that declared `test-tamper`
 # for shekyl-engine-core's serve-fault walk. That is its only feature, and
 # it is test-only.
+# `shekyl-os-account` joined 2026-11-23, the commit that declared `test-fixture`
+# for the tests that start or lock a daemon. That is its only feature, and it
+# is test-only.
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -636,6 +645,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-harness-wallet",
         "shekyl-ct-balance",
         "shekyl-p-store",
+        "shekyl-os-account",
     }
 )
 

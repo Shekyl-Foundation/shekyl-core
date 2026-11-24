@@ -26,8 +26,17 @@
 //!   configuration, the rendezvous and the wallets read it here.
 //!   [`ensure_per_account_root`] makes it as the daemon does, which a
 //!   wallet binary does at its start, before it makes anything in it.
+//! - [`create_account_dir_all`]: a directory and the missing ones above it,
+//!   made as the daemon makes its data directory: owner-only on Unix
+//!   ([`OWNER_ONLY_DIR_MODE`]), or refused under a umask that strips the
+//!   owner's own bits. No mode is ever changed.
 //!   The wallet directory in it is the wallet file crate's
 //!   (`shekyl_engine_file::paths::wallet_dir_in`), which knows networks.
+//! - `directory` (Unix): what a path is, as a directory, for this account.
+//!   The one walk every caller reads. [`directory::account_alone`] is the
+//!   judgment that no other account can enter; an exact mode and a
+//!   group-or-other write bit stay with the callers that ask for those.
+//!   [`directory::directories_entered`] is the directories one open searches.
 //! - [`peer_uid`] (Unix): the account of the process at the other end of a
 //!   connected Unix socket (`SO_PEERCRED` on Linux, `getpeereid`
 //!   elsewhere). On Windows the pipe's peer check is
@@ -43,8 +52,12 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+pub mod directory;
 pub mod key_file;
 pub mod private_file;
+#[cfg(feature = "test-fixture")]
+pub mod test_fixture;
 
 /// This process's effective user id.
 #[cfg(unix)]
@@ -123,9 +136,10 @@ pub fn per_account_root() -> Option<PathBuf> {
 /// spelling of the root's path (Windows matches names without regard to
 /// case), then finds the root already made with its protections. On Windows it is owner-only with the
 /// no-read-up label, made in the creating call
-/// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it has this
-/// process's mode, as the daemon's data directory does. An existing root is
-/// the operator's and is left as it is.
+/// (`shekyl_win_sec::rendezvous::ensure_data_home`); on Unix it is
+/// [`OWNER_ONLY_DIR_MODE`], made by [`create_account_dir_all`] as the
+/// daemon's data directory is. An existing root is the operator's and is
+/// left as it is.
 ///
 /// # Errors
 /// The create failed, or on Windows the owner or the descriptor could not
@@ -138,7 +152,79 @@ pub fn ensure_per_account_root(root: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        std::fs::create_dir_all(root)
+        create_account_dir_all(root)
+    }
+}
+
+/// The mode of a directory this account alone may enter: what the daemon
+/// creates every directory with on Unix.
+pub const OWNER_ONLY_DIR_MODE: u32 = 0o700;
+
+/// Creates `path` and every directory above it that is missing, the way
+/// the daemon creates its data directory (Rick, 2026-11-22, 2026-11-23).
+///
+/// On Unix each directory this call creates is made with
+/// [`OWNER_ONLY_DIR_MODE`], and no mode is ever changed, by path or by handle.
+/// A umask can only narrow that mode: under one that strips the owner's own
+/// bits the new directory is removed and the call refuses
+/// ([`directory::UmaskStripsOwner`]). A directory that already exists, or that
+/// another process creates first, is not this call's and keeps its mode.
+/// The data directory holds the service's console key, the host
+/// administrator's credential, and its console socket, so it is the
+/// account's alone on its own account, not only through a directory above
+/// it.
+///
+/// On Windows it is `create_dir_all`: each directory inherits its parent's
+/// access list. The files and the pipe the daemon keeps there carry their
+/// own owner-only descriptors from their creating calls, which Windows
+/// enforces on every open, so the directory is not their containment.
+///
+/// # Errors
+/// A directory could not be created, or the umask stripped the owner's bits.
+pub fn create_account_dir_all(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        // One spelling for every call below: `lstat` must see a link for what
+        // it is, and `mkdir` of `new/.` fails where `new` would be made.
+        let path = directory::no_follow_spelling(path);
+        let path = path.as_path();
+        // The missing directories, innermost first.
+        let mut missing = Vec::new();
+        let mut at = Some(path);
+        while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
+            match std::fs::symlink_metadata(dir) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.push(dir);
+                    at = dir.parent();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        for dir in missing.into_iter().rev() {
+            match std::fs::DirBuilder::new()
+                .mode(OWNER_ONLY_DIR_MODE)
+                .create(dir)
+            {
+                Ok(()) => directory::check_made_dir(dir)?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        // What is at the path now, whoever made it, must be a directory: a
+        // file, or a link to nothing, is not one.
+        if !path.as_os_str().is_empty() && !path.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                format!("{} is not a directory", path.display()),
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
     }
 }
 
@@ -401,6 +487,148 @@ mod per_account_root_tests {
         assert!(root.join("wallets").is_dir(), "the same root");
         shekyl_win_sec::rendezvous::check_owner_only_labelled(&root)
             .expect("the root keeps its protections");
+    }
+
+    /// On Unix every directory the creator makes is owner-only, the data
+    /// home and the network directory alike, and a directory that was
+    /// already there keeps its mode. Red edit: `create_dir_all`, whose
+    /// directories take the umask's mode (`0755` under the common `022`).
+    #[cfg(unix)]
+    #[test]
+    fn every_directory_made_is_owner_only_and_an_existing_one_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |dir: &Path| {
+            std::fs::metadata(dir)
+                .expect("the directory's metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let shared = base.path().join("shared");
+        std::fs::create_dir(&shared).expect("made");
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).expect("set");
+        let home = shared.join("home");
+        let data = home.join("testnet");
+        create_account_dir_all(&data).expect("made");
+        assert_eq!(mode(&home), OWNER_ONLY_DIR_MODE, "the data home");
+        assert_eq!(mode(&data), OWNER_ONLY_DIR_MODE, "the network directory");
+        assert_eq!(
+            mode(&shared),
+            0o755,
+            "an existing directory is not this call's"
+        );
+        create_account_dir_all(&data).expect("an existing directory is left as it is");
+    }
+
+    /// The check after `mkdir` changes nothing. A name swapped for a link is
+    /// refused, whatever its spelling, and the race Copilot found on #1533,
+    /// an ancestor swapped for a link so the path lands on a directory
+    /// elsewhere, leaves that directory's mode alone. Red edit: bring the
+    /// mode to 0700 here, and `elsewhere/child` becomes 0700.
+    #[cfg(unix)]
+    #[test]
+    fn the_check_after_mkdir_changes_no_mode_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |dir: &Path| {
+            std::fs::metadata(dir)
+                .expect("the directory's metadata")
+                .permissions()
+                .mode()
+                & directory::PERMISSION_BITS
+        };
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let elsewhere = base.path().join("elsewhere");
+        let child = elsewhere.join("child");
+        std::fs::create_dir_all(&child).expect("made");
+        std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o750)).expect("set");
+
+        let ancestor = base.path().join("ancestor");
+        std::os::unix::fs::symlink(&elsewhere, &ancestor).expect("a link");
+        directory::check_made_dir(&ancestor.join("child")).expect("nothing to refuse");
+        assert_eq!(mode(&child), 0o750, "through an ancestor link");
+
+        let swapped = base.path().join("swapped");
+        std::os::unix::fs::symlink(&child, &swapped).expect("a link");
+        let shown = swapped.display();
+        for spelling in [
+            swapped.clone(),
+            PathBuf::from(format!("{shown}/")),
+            PathBuf::from(format!("{shown}/.")),
+            PathBuf::from(format!("{shown}//./")),
+        ] {
+            let error = directory::check_made_dir(&spelling).expect_err("a link is refused");
+            assert_eq!(error.kind(), std::io::ErrorKind::NotADirectory);
+            assert_eq!(mode(&child), 0o750, "through {}", spelling.display());
+        }
+    }
+
+    /// A directory the umask left without an owner's bit is refused, naming
+    /// the mode, and removed, with no mode changed to rescue it. Red edit:
+    /// drop the owner-bits test, and the short directory is accepted.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_without_the_owners_bits_is_refused_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().expect("a scratch directory");
+        for short in [0o500, 0o300, 0o600] {
+            let made = base.path().join(format!("short{short:o}"));
+            std::fs::create_dir(&made).expect("made");
+            std::fs::set_permissions(&made, std::fs::Permissions::from_mode(short)).expect("set");
+            let error = directory::check_made_dir(&made).expect_err("short of the owner's bits");
+            let refused = directory::umask_strips_owner(&error).expect("typed");
+            assert_eq!(refused.dir, made);
+            assert_eq!(refused.mode, short);
+            assert_eq!(
+                refused.umask_shown(),
+                format!("0{:o}xx", (OWNER_ONLY_DIR_MODE & !short) >> 6)
+            );
+            assert!(!made.exists(), "the empty directory is removed");
+        }
+    }
+
+    /// A new directory is made owner-only however its path is spelled. Red
+    /// edit: walk `path` as given, and `new/.` is not made.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_directory_is_made_under_every_spelling_of_its_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().expect("a scratch directory");
+        for (index, tail) in ["", "/", "/.", "//./"].into_iter().enumerate() {
+            let new = base.path().join(format!("above{index}")).join("new");
+            let spelled = PathBuf::from(format!("{}{tail}", new.display()));
+            create_account_dir_all(&spelled).expect("made");
+            let made = std::fs::symlink_metadata(&new).expect("the directory");
+            assert!(made.is_dir(), "{}", spelled.display());
+            assert_eq!(
+                made.permissions().mode() & directory::PERMISSION_BITS,
+                OWNER_ONLY_DIR_MODE,
+                "{}",
+                spelled.display()
+            );
+        }
+    }
+
+    /// A path that is a file, or a link to nothing, is not a directory, and
+    /// the creator says so rather than succeeding. Red edit: drop the final
+    /// check, and both return `Ok`.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_or_a_dangling_link_at_the_path_is_refused() {
+        let base = tempfile::tempdir().expect("a scratch directory");
+        let file = base.path().join("file");
+        std::fs::write(&file, b"").expect("a file");
+        let dangling = base.path().join("dangling");
+        std::os::unix::fs::symlink(base.path().join("nowhere"), &dangling).expect("a link");
+        for path in [&file, &dangling] {
+            let error = create_account_dir_all(path).expect_err("not a directory");
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotADirectory,
+                "{}",
+                path.display()
+            );
+        }
     }
 
     /// The root this account resolves is its home's, on every platform the

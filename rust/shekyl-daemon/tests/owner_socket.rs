@@ -117,8 +117,8 @@ struct Node {
 /// makes it. Named `s`: under macOS's per-user temporary directory a
 /// longer name leaves the socket's path over the 104-byte limit. On Windows
 /// the daemon makes the directory itself, labelled.
-fn workdir() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("a directory");
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     owner_only(dir.path());
     #[cfg(unix)]
     {

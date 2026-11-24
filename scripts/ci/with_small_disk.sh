@@ -42,7 +42,7 @@ SIZE="${SHEKYL_SMALL_DISK_SIZE:-1m}"
 unshare -Urm true 2>/dev/null || {
   echo "FATAL: this host does not allow an unprivileged user namespace (unshare -Urm)." >&2
   echo "Mount a small tmpfs as root instead and name it:" >&2
-  echo "  mount -t tmpfs -o size=$SIZE tmpfs /mnt/shekyl-small-disk" >&2
+  echo "  mount -t tmpfs -o size=$SIZE,mode=700 tmpfs /mnt/shekyl-small-disk" >&2
   echo "  SHEKYL_SMALL_DISK=/mnt/shekyl-small-disk $*" >&2
   exit 1
 }
@@ -67,7 +67,9 @@ done
 mkdir -p "$root/tmp" "$root/run/user/0" "$root/small-disk"
 chmod 700 "$root/run/user/0"
 mount -t tmpfs -o size=1g,mode=1777 tmpfs "$root/tmp"
-mount -t tmpfs -o "size=$size" tmpfs "$root/small-disk"
+# Mode 700: the daemon refuses a data directory under a directory another
+# account can write, and a tmpfs defaults to a sticky 1777.
+mount -t tmpfs -o "size=$size,mode=700" tmpfs "$root/small-disk"
 # HOME stays, so cargo and rustup find their directories. The harness
 # takes its private configuration directory from XDG_RUNTIME_DIR first.
 export TMPDIR=/tmp XDG_RUNTIME_DIR=/run/user/0

@@ -52,7 +52,12 @@
 #
 #   /var/run/shekyl  the service's rendezvous directory: the account's,
 #                    readable by every user, writable by no one else
-#   /var/db/shekyl   the service's data home: the account's alone (0700)
+#   /var/db/shekyl   the service's data home: the account's alone (0700).
+#                    The daemon makes the network's data directory inside
+#                    it, also 0700, and refuses one other accounts can
+#                    enter: it holds the console's key and socket. A node
+#                    whose directory an earlier release made 0755 needs
+#                    `chmod 700 /var/db/shekyl/<network>` once.
 #   /var/log/shekyl  the daemon's log directory
 
 # The supervised command (`service` runs this file with `start`; daemon(8)
