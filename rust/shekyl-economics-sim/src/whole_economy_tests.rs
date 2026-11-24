@@ -5,6 +5,8 @@
 
 //! Tests for the whole-economy fold, its narration and its derived table.
 
+#![cfg(test)]
+
 use super::report::{table, write_report, TABLE_COLUMNS};
 use super::*;
 use crate::committed_fixture::{self, regenerate, Output};
