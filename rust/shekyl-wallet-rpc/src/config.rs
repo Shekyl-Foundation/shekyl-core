@@ -105,7 +105,7 @@ fn build(
     let mut faults = Vec::new();
     let listen = listen_of(resolved, &mut faults);
     let auth = auth_of(resolved, &mut faults);
-    let daemon = daemon_of(resolved, network, &mut faults);
+    let daemon = daemon_of(resolved, network, false, &mut faults);
     let (wallet_dir, default_wallet_dir) = match path_of(resolved, "wallet-dir") {
         Some(dir) => (Some(dir), None),
         None => match paths::root(platform, RunMode::User, "wallet-dir") {
@@ -243,21 +243,29 @@ fn auth_of(resolved: &Resolved, faults: &mut Vec<Diagnostic>) -> Option<AuthConf
     }
 }
 
-/// `daemon-endpoint` through `daemon-socks`, or "this computer" when unset
-/// (`RPC_CHANNEL.md` RT-15). This computer's node is reached on its owner's
-/// leg, never through a proxy, so a proxy without an endpoint is refused;
-/// an onion needs the proxy.
-fn daemon_of(
-    resolved: &Resolved,
-    network: Network,
-    faults: &mut Vec<Diagnostic>,
-) -> Option<DaemonTarget> {
-    let proxy = match resolved.get("daemon-socks") {
+/// `daemon-socks`, as a transport takes it: the proxy resolves names.
+#[must_use]
+pub fn socks_of(resolved: &Resolved) -> Option<String> {
+    match resolved.get("daemon-socks") {
         Some(Value::Endpoint(addr)) => Some(format!("socks5h://{addr}")),
         _ => None,
-    };
+    }
+}
+
+/// `daemon-endpoint` through `daemon-socks`, or "this computer" when unset
+/// (`RPC_CHANNEL.md` RT-15). This computer's node is reached on its owner's
+/// leg, never through a proxy, so a proxy without an endpoint is refused,
+/// unless `proxy_has_another_use`: a client of an external wallet server
+/// sends that connection through it. An onion needs the proxy.
+pub fn daemon_of(
+    resolved: &Resolved,
+    network: Network,
+    proxy_has_another_use: bool,
+    faults: &mut Vec<Diagnostic>,
+) -> Option<DaemonTarget> {
+    let proxy = socks_of(resolved);
     let url = match resolved.get("daemon-endpoint") {
-        None if proxy.is_some() => {
+        None if proxy.is_some() && !proxy_has_another_use => {
             faults.push(requires(
                 "daemon-socks",
                 "daemon-endpoint: this computer's node is reached on its owner's socket, never \

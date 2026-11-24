@@ -9,6 +9,7 @@
 
 pub mod catalog;
 pub mod commands;
+pub mod config;
 /// The daemon's words (`INPUT_GRAMMAR.md` §13) render here.
 pub(crate) mod console;
 pub mod daemon;
@@ -22,6 +23,7 @@ pub mod resolve;
 pub mod rpc_client;
 pub mod session;
 pub mod status;
+pub mod table;
 pub(crate) mod tx_show;
 pub mod validate;
 

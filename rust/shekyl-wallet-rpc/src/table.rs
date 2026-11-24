@@ -48,7 +48,7 @@ const fn rejected(name: &'static str, reason: &'static str) -> Row {
 }
 
 /// Why a client names no socket of the daemon's.
-pub(crate) const NO_DAEMON_SOCKET: &str = "a client names \"this computer\" by its network alone, so it cannot name a wrong socket (RPC_CHANNEL.md RT-15; Rick, 2026-11-18): leave daemon-endpoint unset to reach this account's node";
+pub const NO_DAEMON_SOCKET: &str = "a client names \"this computer\" by its network alone, so it cannot name a wrong socket (RPC_CHANNEL.md RT-15; Rick, 2026-11-18): leave daemon-endpoint unset to reach this account's node";
 
 const ROWS: &[Row] = &[
     row("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),

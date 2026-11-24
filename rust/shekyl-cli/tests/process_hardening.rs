@@ -23,6 +23,8 @@ mod from_outside;
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 
+mod common;
+
 const NAME: &str = "a_running_cli_is_hardened";
 
 /// A running `shekyl-cli`, observed from outside. The child answers
@@ -35,11 +37,14 @@ fn a_running_cli_is_hardened() {
     from_outside::assert_the_control_shows_the_subject(NAME);
 
     let dir = tempfile::tempdir().expect("tempdir");
+    let config = common::empty_config();
     let wallets = dir.path().join("wallets");
     let stderr_path = dir.path().join("stderr");
     let mut child = from_outside::Started::new(
         from_outside::raised(env!("CARGO_BIN_EXE_shekyl-cli"))
-            .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
+            .arg("--config-file")
+            .arg(config.path())
+            .args(["--network", "stagenet", "--daemon-endpoint", "127.0.0.1:1"])
             .arg("--wallet-dir")
             .arg(&wallets)
             .stdin(Stdio::piped())

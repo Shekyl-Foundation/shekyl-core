@@ -1,9 +1,9 @@
-# Pattern for a daemon-backed CLI session. Open is `--wallet` on the
+# Pattern for a daemon-backed CLI session. Open is `--wallet-file` on the
 # invocation, so the password never sits in this file.
 #
-#   shekyl-cli --json --script tests/scripts/daemon_session.txt \
-#     --network testnet --daemon-address 127.0.0.1:<rpc> \
-#     --wallet-dir <dir> --wallet <name> --password-file <path>
+#   shekyl-cli --json --script-file tests/scripts/daemon_session.txt \
+#     --network testnet --daemon-endpoint 127.0.0.1:<rpc> \
+#     --wallet-file <dir>/<name>.wallet --wallet-password-file <path>
 #
 # The daemon is on the wallet's own network; a daemon on any other network,
 # regtest included, is refused on identity.

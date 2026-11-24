@@ -235,6 +235,8 @@ pub enum ResolvedCommand {
     // -- Lifecycle --
     Create {
         filename: String,
+        /// `--mnemonic-file`: the words go to this new file, not the screen.
+        mnemonic_file: Option<std::path::PathBuf>,
     },
     Open {
         filename: String,
@@ -242,7 +244,10 @@ pub enum ResolvedCommand {
     Close,
     Restore {
         filename: String,
-        seed_words: Vec<String>,
+        /// `--mnemonic-file`: the words come from this file, not the prompt.
+        mnemonic_file: Option<std::path::PathBuf>,
+        /// `--wallet-restore-height`.
+        restore_height: Option<u64>,
     },
     Refresh,
     Status,

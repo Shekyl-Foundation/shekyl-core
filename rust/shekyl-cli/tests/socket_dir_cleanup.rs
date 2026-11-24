@@ -16,15 +16,15 @@
 //! The tests after the first: a CLI whose output is closed mid-session ends
 //! through that same shutdown (before, `println!` panicked and the abort
 //! skipped it), and a server's start removes directories this account owns
-//! that no server still holds. A directory whose lock is held stays. The
-//! derivation check has no wallet; a closed output there exits 1 and does
-//! not claim one was saved (Rick, 2026-11-21).
+//! that no server still holds. A directory whose lock is held stays. A run
+//! with no session has no wallet; a closed output there exits 1 and does not
+//! claim one was saved (Rick, 2026-11-21).
 //!
 //! **What turns these red.** `InProcessHandle::shutdown` not removing the
 //! directory, or the CLI ending without calling it; a write that panics on
 //! a closed output; a start without the sweep; a sweep that decides by pid
 //! instead of the lock; a sweep that removes a directory whose lock is held;
-//! the derivation check returning before the closed-output exit.
+//! a run with no session returning before the closed-output exit.
 
 #![cfg(unix)]
 
@@ -33,6 +33,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use shekyl_wallet_rpc::{DIR_PREFIX, LOCK_FILE, SOCKET_FILE};
+
+mod common;
 
 #[test]
 fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
@@ -54,8 +56,11 @@ fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
             .collect()
     };
 
+    let config = common::empty_config();
     let mut child = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"))
-        .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
+        .arg("--config-file")
+        .arg(config.path())
+        .args(["--network", "stagenet", "--daemon-endpoint", "127.0.0.1:1"])
         .arg("--wallet-dir")
         .arg(&wallets)
         .env("XDG_RUNTIME_DIR", &runtime)
@@ -102,11 +107,14 @@ fn a_cli_that_ends_at_its_input_leaves_no_socket_directory() {
 }
 
 /// The CLI's arguments for a session in `scratch`, its server's directory
-/// under `runtime`.
-fn cli(scratch: &Path, runtime: &Path) -> Command {
+/// under `runtime`. The configuration file outlives the command: `config`
+/// is the caller's to hold.
+fn cli(scratch: &Path, runtime: &Path, config: &common::EmptyConfig) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"));
     command
-        .args(["--network", "stagenet", "--daemon-address", "127.0.0.1:1"])
+        .arg("--config-file")
+        .arg(config.path())
+        .args(["--network", "stagenet", "--daemon-endpoint", "127.0.0.1:1"])
         .arg("--wallet-dir")
         .arg(scratch.join("wallets"))
         .env("XDG_RUNTIME_DIR", runtime)
@@ -132,11 +140,8 @@ fn socket_dirs(runtime: &Path) -> Vec<String> {
 
 /// A password file this account alone reads, as the CLI requires.
 fn password_file(scratch: &Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
     let path = scratch.join("pw");
-    std::fs::write(&path, "s3cret\n").expect("write the password file");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .expect("owner-only password file");
+    common::write_secret_file(&path, "s3cret\n");
     path
 }
 
@@ -151,15 +156,16 @@ fn a_cli_whose_output_is_closed_closes_its_wallet_and_leaves_no_socket_directory
     use std::os::unix::fs::MetadataExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
+    let config = common::empty_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     let password = password_file(scratch.path());
 
-    let created = cli(scratch.path(), &runtime)
-        .args(["create", "w", "--seed-out"])
-        .arg(scratch.path().join("seed"))
-        .arg("--password-file")
+    let created = cli(scratch.path(), &runtime, &config)
+        .arg("--wallet-password-file")
         .arg(&password)
+        .args(["wallet", "create", "w", "--mnemonic-file"])
+        .arg(scratch.path().join("seed"))
         .stdin(Stdio::null())
         .output()
         .expect("run shekyl-cli create");
@@ -176,10 +182,10 @@ fn a_cli_whose_output_is_closed_closes_its_wallet_and_leaves_no_socket_directory
         .expect("the created wallet's state file");
 
     let stderr_path = scratch.path().join("stderr");
-    let mut child = cli(scratch.path(), &runtime)
-        .arg("--wallet")
-        .arg("w")
-        .arg("--password-file")
+    let mut child = cli(scratch.path(), &runtime, &config)
+        .arg("--wallet-file")
+        .arg(scratch.path().join("wallets").join("w.wallet"))
+        .arg("--wallet-password-file")
         .arg(&password)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -261,6 +267,7 @@ fn a_directory_without_a_held_lock_is_removed_at_the_next_start() {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
+    let config = common::empty_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     // Spawn 1 and 3, not 0: the CLI's own server is `<its pid>-0`, and the
@@ -279,7 +286,7 @@ fn a_directory_without_a_held_lock_is_removed_at_the_next_start() {
             .expect("a lock file nobody holds"),
     );
 
-    let out = cli(scratch.path(), &runtime)
+    let out = cli(scratch.path(), &runtime, &config)
         .arg("version")
         .stdin(Stdio::null())
         .output()
@@ -309,6 +316,7 @@ fn a_directory_whose_lock_is_held_is_left_in_place() {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     let scratch = tempfile::tempdir().expect("tempdir");
+    let config = common::empty_config();
     let runtime = scratch.path().join("runtime");
     std::fs::create_dir(&runtime).expect("runtime dir");
     let mut ended = Command::new("true").spawn().expect("run true");
@@ -326,7 +334,7 @@ fn a_directory_whose_lock_is_held_is_left_in_place() {
         .expect("lock file");
     lock.lock().expect("hold the lock");
 
-    let mut child = cli(scratch.path(), &runtime)
+    let mut child = cli(scratch.path(), &runtime, &config)
         .arg("version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -364,17 +372,16 @@ fn a_directory_whose_lock_is_held_is_left_in_place() {
     );
 }
 
-/// The derivation check writes one line and returns from the command before
-/// any session. Its output is a pipe whose read end is already closed, so
-/// the write fails. The process exits 1 and does not claim a wallet was
-/// saved: there was none. Red edit: return from `main` before the
-/// closed-output exit.
+/// `--version` writes one line and returns with no session. Its output is a
+/// pipe whose read end is already closed, so the write fails. The process
+/// exits 1 and does not claim a wallet was saved: there was none. Red edit:
+/// return from `main` before the closed-output exit.
 #[test]
-fn a_closed_output_on_the_derivation_check_does_not_claim_a_saved_wallet() {
+fn a_closed_output_with_no_session_does_not_claim_a_saved_wallet() {
     let (reader, writer) = std::io::pipe().expect("pipe");
     drop(reader);
     let mut child = Command::new(env!("CARGO_BIN_EXE_shekyl-cli"))
-        .arg("derivation-freeze-self-check")
+        .arg("--version")
         .stdin(Stdio::null())
         .stdout(writer)
         .stderr(Stdio::piped())

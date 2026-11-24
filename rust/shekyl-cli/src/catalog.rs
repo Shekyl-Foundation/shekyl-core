@@ -294,6 +294,11 @@ const SEND_FLAGS: &[Flag] = &[
     Flag::one_of("--priority", &FeePriority::NAMES),
     Flag::switch("--yes"),
 ];
+const WALLET_CREATE_FLAGS: &[Flag] = &[Flag::value("--mnemonic-file")];
+const WALLET_RESTORE_FLAGS: &[Flag] = &[
+    Flag::value("--mnemonic-file"),
+    Flag::value("--wallet-restore-height"),
+];
 const ADDRESS_FLAGS: &[Flag] = &[Flag::switch("--full"), Flag::value("--out")];
 const FEE_FLAGS: &[Flag] = &[Flag::value("--inputs"), Flag::value("--outputs")];
 const TX_SHOW_FLAGS: &[Flag] = &[Flag::switch("--body")];
@@ -348,17 +353,27 @@ fn meta(id: CommandId) -> Meta {
             omit_history: false,
             flags: NO_FLAGS,
         },
-        WalletCreate => child("create", "wallet create <name>", Wallet),
+        WalletCreate => Meta {
+            word: "create",
+            synonyms: &[],
+            usage: "wallet create <name> [--mnemonic-file <path>]",
+            parent: Some(Wallet),
+            bare: false,
+            omit_history: false,
+            flags: WALLET_CREATE_FLAGS,
+        },
         WalletOpen => child("open", "wallet open <name>", Wallet),
         WalletClose => child("close", "wallet close", Wallet),
         WalletRestore => Meta {
             word: "restore",
             synonyms: &[],
-            usage: "wallet restore <name> <seed...>",
+            usage: "wallet restore <name> [--mnemonic-file <path>] [--wallet-restore-height <n>]",
             parent: Some(Wallet),
             bare: false,
+            // The words are never on the line, but someone will paste them
+            // there; the refusal must not archive what they pasted.
             omit_history: true,
-            flags: NO_FLAGS,
+            flags: WALLET_RESTORE_FLAGS,
         },
         WalletPassword => child("password", "wallet password", Wallet),
         WalletRefresh => child("refresh", "wallet refresh", Wallet),
@@ -848,7 +863,18 @@ fn known_flag<'a>(flags: &'a [Flag], name: &str) -> Result<&'a Flag, String> {
     flags
         .iter()
         .find(|flag| flag.name == name)
-        .ok_or_else(|| format!("unexpected flag {name}"))
+        .ok_or_else(|| misplaced_or_unknown_flag(name))
+}
+
+/// A flag this command does not take. One of the program's own options
+/// belongs before the command, because options end at the first word.
+fn misplaced_or_unknown_flag(name: &str) -> String {
+    let bare = name.trim_start_matches("--");
+    if crate::table::TABLE.row(bare).is_some() {
+        format!("{name} is an option of shekyl-cli: put it before the command")
+    } else {
+        format!("unexpected flag {name}")
+    }
 }
 
 fn missing_flag_value(flag: &Flag) -> String {
@@ -1063,13 +1089,13 @@ const RETIRED: &[Retired] = &[
         tokens: &["stake", "foundation"],
         redirect: Redirect::Say(
             "stake foundation → not a prompt command. CompleteTree is a startup flag \
-             (--complete-tree-foundation): unbounded disk, no reward.",
+             (--archival-complete-tree): unbounded disk, no reward.",
         ),
     },
 ];
 
 const COMPLETE_TREE_FLAG: &str =
-    "--complete-tree-foundation → startup flag, not a command word. Unbounded disk, no reward.";
+    "--archival-complete-tree → startup option, not a command word. Unbounded disk, no reward.";
 
 fn longest_retired(tokens: &[&str]) -> Option<&'static Retired> {
     RETIRED
@@ -1095,7 +1121,7 @@ fn retired_omits_history(retired: &Retired) -> bool {
 /// Diagnostic for a retired line, if `tokens` begins with one.
 pub fn retired_message(tokens: &[&str]) -> Option<String> {
     if tokens.iter().any(|token| {
-        *token == "--complete-tree-foundation" || token.starts_with("--complete-tree-foundation=")
+        *token == "--archival-complete-tree" || token.starts_with("--archival-complete-tree=")
     }) {
         return Some(COMPLETE_TREE_FLAG.to_owned());
     }

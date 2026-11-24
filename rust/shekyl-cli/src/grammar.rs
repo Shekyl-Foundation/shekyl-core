@@ -160,9 +160,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         Version => bare(id, args, ResolvedCommand::Version),
         Wallet => bare(id, args, ResolvedCommand::Wallet),
         Stake => bare(id, args, ResolvedCommand::Stake),
-        WalletCreate => one_word(id, args, |name| ResolvedCommand::Create {
-            filename: name.to_string(),
-        }),
+        WalletCreate => parse_create(args),
         WalletOpen => one_word(id, args, |name| ResolvedCommand::Open {
             filename: name.to_string(),
         }),
@@ -513,14 +511,66 @@ fn parse_help(args: &[&str]) -> ResolvedCommand {
     }
 }
 
+/// `--mnemonic-file`: an absolute path (IG-6), like every path option.
+fn mnemonic_file_of(split: &Split<'_>) -> Result<Option<std::path::PathBuf>, ResolvedCommand> {
+    let Some(raw) = split.value("--mnemonic-file") else {
+        return Ok(None);
+    };
+    match shekyl_options::Kind::PATH.parse_text(raw) {
+        Ok(shekyl_options::Value::Path(path)) => Ok(Some(path)),
+        _ => Err(diag(format!(
+            "--mnemonic-file expects an absolute path, got {raw:?}"
+        ))),
+    }
+}
+
+fn parse_create(args: &[&str]) -> ResolvedCommand {
+    let split = match flags(CommandId::WalletCreate, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [name] = split.positional.as_slice() else {
+        return diag(usage(CommandId::WalletCreate));
+    };
+    match mnemonic_file_of(&split) {
+        Ok(mnemonic_file) => ResolvedCommand::Create {
+            filename: (*name).to_string(),
+            mnemonic_file,
+        },
+        Err(command) => command,
+    }
+}
+
+/// `wallet restore <name>`. The words come from `--mnemonic-file` or the
+/// hidden prompt, never this line (IG-Q24), so a line with more positionals
+/// is refused with the usage, which does not repeat them.
 fn parse_restore(args: &[&str]) -> ResolvedCommand {
-    if args.len() >= 2 {
-        ResolvedCommand::Restore {
-            filename: args[0].to_string(),
-            seed_words: args[1..].iter().map(|word| (*word).to_string()).collect(),
-        }
-    } else {
-        diag(usage(CommandId::WalletRestore))
+    let split = match flags(CommandId::WalletRestore, args) {
+        Ok(split) => split,
+        Err(command) => return command,
+    };
+    let [name] = split.positional.as_slice() else {
+        return diag(usage(CommandId::WalletRestore));
+    };
+    let mnemonic_file = match mnemonic_file_of(&split) {
+        Ok(path) => path,
+        Err(command) => return command,
+    };
+    let restore_height = match split.value("--wallet-restore-height") {
+        None => None,
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(height) => Some(height),
+            Err(_) => {
+                return diag(format!(
+                    "--wallet-restore-height expects a block number, got {raw:?}"
+                ));
+            }
+        },
+    };
+    ResolvedCommand::Restore {
+        filename: (*name).to_string(),
+        mnemonic_file,
+        restore_height,
     }
 }
 

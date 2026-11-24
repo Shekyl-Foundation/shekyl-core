@@ -41,14 +41,14 @@ pub const FOUNDATION_PHRASE: &str = "serve without reward";
 /// The operator has accepted the Foundation terms.
 ///
 /// A terminal run types [`FOUNDATION_PHRASE`] after the warning. A script
-/// passes the same phrase as `--acknowledge`. Either way this returns before
+/// passes the same phrase as `--archival-acknowledge`. Either way this returns before
 /// the wallet is opened, so a refusal writes nothing.
 pub fn accept_foundation_terms(
     presentation: &Presentation,
     acknowledge: Option<&str>,
 ) -> Result<(), CommandFailed> {
     // The terms print before either check, and before the wallet opens.
-    // A script that already passed `--acknowledge` still has to say them.
+    // A script that already passed `--archival-acknowledge` still has to say them.
     // JSON stdout is the command transcript, so the disclosure is not an
     // envelope line.
     presentation.disclose(shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING);
@@ -57,8 +57,8 @@ pub fn accept_foundation_terms(
             Ok(())
         } else {
             Err(refusal(format!(
-                "A script must pass --acknowledge \"{FOUNDATION_PHRASE}\" with \
-                 --complete-tree-foundation. Nothing was written."
+                "A script must pass --archival-acknowledge \"{FOUNDATION_PHRASE}\" with \
+                 --archival-complete-tree. Nothing was written."
             )))
         };
     }

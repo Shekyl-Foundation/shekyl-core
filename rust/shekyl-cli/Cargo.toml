@@ -51,7 +51,6 @@ shekyl-os-account = { path = "../shekyl-os-account" }
 # (`paths::wallet_dir_in`), named once beside the wallet files it holds.
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-rpc-rendezvous = { path = "../shekyl-rpc-rendezvous" }
-clap = { version = "4", features = ["derive"] }
 rustyline = "15"
 tokio = { version = "1", features = ["full"] }
 # Derives the request shapes in `rpc_client::params`, whose borrowed `&str`

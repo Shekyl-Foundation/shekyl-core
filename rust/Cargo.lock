@@ -3544,7 +3544,6 @@ name = "shekyl-cli"
 version = "3.1.0"
 dependencies = [
  "base64 0.22.1",
- "clap",
  "hex",
  "proptest",
  "rpassword",
