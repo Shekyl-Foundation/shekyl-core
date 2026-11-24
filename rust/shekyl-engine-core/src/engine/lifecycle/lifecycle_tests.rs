@@ -110,8 +110,8 @@ async fn create_full_then_open_full_round_trips_state() {
 /// the refusal names its platform and the wallet's directory stays empty.
 /// Red edit: move `check_address_derivation` below `WalletFile::create`, and
 /// the directory holds the new wallet.
-#[test]
-fn a_failed_derivation_check_refuses_create_before_any_file() {
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_derivation_check_refuses_create_before_any_file() {
     let fix = make_create_fixture();
     let creds = Credentials::password_only(b"correct horse battery staple");
     let seed = fixed_seed();

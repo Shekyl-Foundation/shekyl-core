@@ -1242,8 +1242,11 @@ mod tests {
         validate_listen(&listen_config("192.0.2.1:29500", basic()))
             .expect("an addressed bind with auth passes validation");
         #[cfg(unix)]
-        validate_listen(&listen_config("uds:///tmp/x.sock", AuthConfig::Disabled))
-            .expect("the socket carries its own authorization");
+        {
+            let mut socket = listen_config("127.0.0.1:0", AuthConfig::Disabled);
+            socket.listen = ListenAddr::Uds("/tmp/x.sock".into());
+            validate_listen(&socket).expect("the socket carries its own authorization");
+        }
     }
 
     /// The wiring, not the predicate: both bind paths must consult

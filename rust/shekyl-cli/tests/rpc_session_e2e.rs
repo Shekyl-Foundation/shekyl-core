@@ -278,6 +278,7 @@ fn scripted_create_writes_seed_file_and_restore_round_trips() {
     );
 
     rpc.call("close_wallet", json!({})).expect("close");
+    rpc.set_closed();
     assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 
@@ -323,6 +324,7 @@ fn the_wallet_dir_is_made_only_to_make_a_wallet() {
     assert!(wallets.is_dir(), "a create makes the wallet folder");
 
     rpc.call("close_wallet", json!({})).expect("close");
+    rpc.set_closed();
     assert_eq!(rpc.shutdown(), WalletClose::NotOpen);
 }
 

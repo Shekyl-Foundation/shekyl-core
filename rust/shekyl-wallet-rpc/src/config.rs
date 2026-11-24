@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn the_retired_spellings_are_unknown_names() {
         for old in ["--rpc-bind", "--rpc-login", "--daemon-address", "--proxy"] {
-            assert_eq!(refused(&[old, "x"]), [Code::NameUnknown], "{old}");
+            assert_eq!(refused(&[old]), [Code::NameUnknown], "{old}");
         }
         assert_eq!(refused(&["--disable-rpc-login"]), [Code::NameUnknown]);
         assert_eq!(refused(&["serve"]), [Code::CliSyntax]);
@@ -368,10 +368,7 @@ mod tests {
     /// reason (`RPC_CHANNEL.md` RT-15; Rick, 2026-11-18).
     #[test]
     fn a_daemon_socket_file_is_refused_with_its_reason() {
-        assert_eq!(
-            refused(&["--daemon-socket-file", "/x"]),
-            [Code::NameRejected]
-        );
+        assert_eq!(refused(&["--daemon-socket-file"]), [Code::NameRejected]);
     }
 
     /// A proxy is the daemon-endpoint's. An onion needs the proxy; an IP

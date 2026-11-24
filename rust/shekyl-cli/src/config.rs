@@ -192,25 +192,7 @@ fn build(
         Some(Value::Word(phrase)) => Some(*phrase),
         _ => None,
     };
-    let tor_path = path_of(resolved, TOR_FILE_OPTION);
-    if external && tor_path.is_some() {
-        faults.push(conflict(
-            TOR_FILE_OPTION,
-            "an external wallet server is set: that server runs its own Tor, so set it there",
-        ));
-    }
-    let tor_file = match TorFile::from_option(tor_path) {
-        Ok(tor_file) => Some(tor_file),
-        Err(refused) => {
-            faults.push(
-                Diagnostic::new(Code::ValueSyntax, Source::Cli)
-                    .option(TOR_FILE_OPTION)
-                    .param("value", refused.to_string())
-                    .param("expected", "an absolute path to a file"),
-            );
-            None
-        }
-    };
+    let tor_file = tor_file_of(resolved, external, faults);
     Some(Options {
         network,
         wallet_dir,
@@ -229,6 +211,37 @@ fn build(
         tor_file: tor_file?,
         effective,
     })
+}
+
+/// The Tor binary the hosted server runs. With an external server none is
+/// hosted, so naming one is refused before the path is looked for.
+fn tor_file_of(
+    resolved: &Resolved,
+    external: bool,
+    faults: &mut Vec<Diagnostic>,
+) -> Option<TorFile> {
+    let path = path_of(resolved, TOR_FILE_OPTION);
+    if external {
+        if path.is_some() {
+            faults.push(conflict(
+                TOR_FILE_OPTION,
+                "an external wallet server is set: that server runs its own Tor, so set it there",
+            ));
+        }
+        return Some(TorFile::discover());
+    }
+    match TorFile::from_option(path) {
+        Ok(tor_file) => Some(tor_file),
+        Err(refused) => {
+            faults.push(
+                Diagnostic::new(Code::ValueSyntax, Source::Cli)
+                    .option(TOR_FILE_OPTION)
+                    .param("value", refused.to_string())
+                    .param("expected", "an absolute path to a file"),
+            );
+            None
+        }
+    }
 }
 
 /// `wallet-rpc-endpoint`, or `wallet-rpc-socket-file` in its place, as the
