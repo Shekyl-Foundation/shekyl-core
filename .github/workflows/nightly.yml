@@ -17,6 +17,7 @@ on:
           - chain-ingest-ignored
           - hasher-ignored
           - wire-ignored
+          - fips204-branch-count
           - trybuild-ignored
           - bench-full
           - producer-gate
@@ -67,6 +68,7 @@ jobs:
       chain-ingest-ignored: ${{ steps.plan.outputs['chain-ingest-ignored'] }}
       hasher-ignored: ${{ steps.plan.outputs['hasher-ignored'] }}
       wire-ignored: ${{ steps.plan.outputs['wire-ignored'] }}
+      fips204-branch-count: ${{ steps.plan.outputs['fips204-branch-count'] }}
       trybuild-ignored: ${{ steps.plan.outputs['trybuild-ignored'] }}
       bench-full: ${{ steps.plan.outputs['bench-full'] }}
     steps:
@@ -581,6 +583,69 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: bash scripts/ci/ignored_set_wire.sh
 
+  fips204-branch-count:
+    name: fips204-branch-count (${{ matrix.branch }})
+    needs: [plan]
+    if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'fips204-branch-count') && needs.plan.outputs['fips204-branch-count'] != '{"include":[]}' }}
+    # fips204's coefficient helpers stay free of conditional branches in the
+    # shipped profile: one build of `fips204_branch_subject` with line tables,
+    # then the count. The checker is the fork's, from the pinned revision, and
+    # the pair it is given is the one recorded for this binary.
+    #
+    # Same matrix as above. Each leg asks its own tree:
+    #   - it has the script: the leg runs;
+    #   - it has no script, but its own copy of this file names it: RED;
+    #   - neither: the revision predates the guard, and the leg ends green
+    #     with a notice and builds nothing. That ends when the guard reaches
+    #     the other branch.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs['fips204-branch-count'] || '{"include":[{"branch":"main"},{"branch":"dev"}]}') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha || matrix.branch }}
+          submodules: recursive
+          # The steps below run the checked-out ref's code. It gets no
+          # credential to find in .git/config.
+          persist-credentials: false
+
+      - name: does this revision have the guard
+        id: guard
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          script=scripts/ci/check_fips204_branch_counts.py
+          workflow=.github/workflows/nightly.yml
+          if [ -f "$script" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -f "$workflow" ] && grep -Fq "$script" "$workflow"; then
+            echo "::error::$BRANCH names $script in $workflow, but the script is missing"
+            exit 1
+          fi
+          echo "::notice title=fips204 guard not on $BRANCH::$BRANCH predates the fips204 branch-count guard. This leg ran nothing. It runs once the guard reaches $BRANCH."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        if: steps.guard.outputs.run == 'true'
+        uses: ./.github/actions/install-rust
+
+      - name: Build the subject in the shipped profile, with line tables
+        if: steps.guard.outputs.run == 'true'
+        working-directory: rust
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        run: cargo build --locked --release -p shekyl-crypto-pq --example fips204_branch_subject
+
+      - name: Count the helpers' conditional branches
+        if: steps.guard.outputs.run == 'true'
+        run: python3 scripts/ci/check_fips204_branch_counts.py rust/target/release/examples/fips204_branch_subject x86_64
+
   trybuild-ignored:
     name: trybuild-ignored (${{ matrix.branch }})
     needs: [plan]
@@ -787,7 +852,7 @@ jobs:
     # by someone who already knows (ruled 2026-11-22). A job timeout leaves
     # `!cancelled()` true here (scratch probe, 2026-11-22). nightly_red.py
     # --check holds `needs` and this condition.
-    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
+    needs: [plan, proptest-exhaustive, store-ignored, economics-sim-ignored, staking-sim-ignored, chain-ingest-ignored, hasher-ignored, wire-ignored, fips204-branch-count, trybuild-ignored, bench-full, bench-full-drift, producer-gate]
     if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.report) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10  # p90 0.1 min over 22 runs; the floor
@@ -861,6 +926,13 @@ jobs:
                 lines: [
                   'The `producer-gate` job failed. It runs `bundle_producer_gate_tests::a_produced_bundle_is_admitted_and_connects` and its support-stream twin `a_produced_support_bundle_is_admitted_and_connects` in `shekyl-chain-ingest` (SO-D12 increments 4c and 4b item 3): a produced bundle admitted by the queue and by the bundle verifier, and connected, on a driven chain.',
                   'If the job stopped before running anything, the test was renamed or un-ignored: point `scripts/ci/producer_gate.sh` at it.',
+                ],
+              },
+              'fips204-branch-count': {
+                title: 'nightly fips204 branch count RED',
+                lines: [
+                  'The `fips204-branch-count` job failed. It builds `fips204_branch_subject` in the shipped profile with line tables and runs `scripts/ci/check_fips204_branch_counts.py`: every conditional branch inlined from fips204\'s coefficient helpers must be a loop back-edge or the public `gamma2` test, in the recorded number.',
+                  'A branch outside those two is a finding: read it before changing anything. A toolchain bump moves the counts, and re-pins them on x86_64 and on the floor device.',
                 ],
               },
               'wire-ignored': {
