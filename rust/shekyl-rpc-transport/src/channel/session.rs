@@ -5,6 +5,8 @@
 
 //! One HTTP connection over one record stream.
 
+use std::future::Future;
+use std::task::Poll;
 use std::time::Duration;
 
 use http_body_util::{BodyExt, Full};
@@ -14,6 +16,7 @@ use shekyl_rpc_grants::GrantSet;
 use shekyl_rpc_stream::SubmissionMark;
 use shekyl_rpc_types::method::RpcMethod;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::watch;
 
 use super::handshake::Opened;
 use super::ChannelFault;
@@ -22,6 +25,9 @@ use super::ChannelFault;
 /// contracts): hyper's `client::conn::http1`, never a pooled client.
 pub struct Session {
     sender: hyper::client::conn::http1::SendRequest<Full<Bytes>>,
+    /// Closed once the task driving the connection has ended
+    /// ([`unless_ended`]).
+    driving: watch::Sender<()>,
     mark: SubmissionMark,
     ceiling: GrantSet,
     granted: GrantSet,
@@ -29,6 +35,23 @@ pub struct Session {
     /// will sit idle must send one (`version`) before it is parked; a
     /// session whose caller sends at once uses that request as the record.
     confirmed: bool,
+}
+
+/// `response`, or `None` once the task driving the connection has ended,
+/// when no response can come. hyper can report a connection ready as it
+/// shuts down, and a request sent in that moment is then never answered: on
+/// a session idle for up to an hour, the call would wait that long. A
+/// response already here is taken first.
+async fn unless_ended<F: Future>(response: F, driving: &watch::Sender<()>) -> Option<F::Output> {
+    let mut response = std::pin::pin!(response);
+    let mut ended = std::pin::pin!(driving.closed());
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(output) = response.as_mut().poll(cx) {
+            return Poll::Ready(Some(output));
+        }
+        ended.as_mut().poll(cx).map(|()| None)
+    })
+    .await
 }
 
 /// Whether a JSON-RPC body calls `tx_submit`: the one method whose message
@@ -76,13 +99,18 @@ impl Session {
         let (sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
             .await
             .map_err(|_| ChannelFault::Closed)?;
+        let (driving, held) = watch::channel(());
         tokio::spawn(async move {
+            // Dropped last: the connection has gone by the time this closes
+            // `driving`, so a response it delivered is already there.
+            let _held = held;
             if let Err(error) = connection.await {
                 tracing::debug!("channel session ended: {error}");
             }
         });
         Ok(Self {
             sender,
+            driving,
             mark,
             ceiling,
             granted,
@@ -160,11 +188,13 @@ impl Session {
         if request.method() == hyper::Method::POST && is_submission(request.body()) {
             self.mark.arm();
         }
-        let response = self
-            .sender
-            .send_request(request.map(Full::new))
-            .await
-            .map_err(|_| ChannelFault::Closed)?;
+        let response = unless_ended(
+            self.sender.send_request(request.map(Full::new)),
+            &self.driving,
+        )
+        .await
+        .ok_or(ChannelFault::Closed)?
+        .map_err(|_| ChannelFault::Closed)?;
         let (parts, body) = response.into_parts();
         let body = body
             .collect()
@@ -226,6 +256,36 @@ fn admission(body: &[u8]) -> Result<(), ChannelFault> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request ends when its connection does, rather than waiting for a
+    /// response nothing will send. Red edit: return `Poll::Pending` in place
+    /// of `ended`'s poll in `unless_ended`, and this waits out its limit.
+    #[tokio::test]
+    async fn a_request_ends_when_its_connection_does() {
+        let (driving, held) = watch::channel(());
+        let waiting = unless_ended(std::future::pending::<u8>(), &driving);
+        let ending = async move {
+            tokio::task::yield_now().await;
+            drop(held);
+        };
+        let (got, ()) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(60), waiting),
+            ending
+        );
+        assert_eq!(got.expect("the request ended with its connection"), None);
+    }
+
+    /// A response that has arrived is kept when the connection has ended
+    /// too. Red edit: poll `ended` first in `unless_ended`, and it is lost.
+    #[tokio::test]
+    async fn a_response_already_here_outlives_its_connection() {
+        let (driving, held) = watch::channel(());
+        drop(held);
+        assert_eq!(
+            unless_ended(std::future::ready(7_u8), &driving).await,
+            Some(7)
+        );
+    }
 
     /// A `tx_submit` body is a submission; another method, or a body that
     /// is not JSON-RPC, is not. Red edit: compare against `"tx_relay"` in
