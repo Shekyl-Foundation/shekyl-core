@@ -30,6 +30,11 @@ libc = "0.2"
 # file's owner-only, labelled descriptor.
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 
+[features]
+# Where a test keeps a daemon's data directory (`test_fixture`). Enabled on
+# dev-dependency edges only (scripts/ci/check_test_only_features.py).
+test-fixture = []
+
 [dev-dependencies]
 tempfile = "3"
 

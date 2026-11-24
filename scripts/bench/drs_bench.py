@@ -49,6 +49,10 @@ import owner_socket  # noqa: E402
 
 ROOT = A.ROOT
 HERE = os.path.dirname(os.path.abspath(__file__))
+# A daemon's data directory is its account's alone: the daemon makes its own
+# that way and refuses an existing one others can enter
+# (`config.data-dir.exposed`; shekyl_os_account::OWNER_ONLY_DIR_MODE).
+DATA_DIR_MODE = 0o700
 
 
 def _fail(msg):
@@ -435,7 +439,11 @@ def measure(args):
     work = os.path.abspath(args.work_dir)
     os.makedirs(work, exist_ok=True)
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
-    os.makedirs(seed_dir, exist_ok=True)
+    # Owner-only: the daemon refuses an existing data directory others can
+    # enter (`config.data-dir.exposed`). A seed kept from an earlier run is
+    # this script's own directory, so it is set here.
+    os.makedirs(seed_dir, mode=DATA_DIR_MODE, exist_ok=True)
+    os.chmod(seed_dir, DATA_DIR_MODE)
     daemon = daemon_executable(args.daemon)
     pre = A.measurement_preflight(daemon=daemon, work_dir=work,
         seed_dir=seed_dir, disk_class=args.disk_class)
@@ -445,10 +453,10 @@ def measure(args):
 
     subj_dir = os.path.join(work, "subject")
     shutil.rmtree(subj_dir, ignore_errors=True)
-    os.makedirs(subj_dir)
+    os.makedirs(subj_dir, mode=DATA_DIR_MODE)
     if args.fresh_seed:
         shutil.rmtree(seed_dir, ignore_errors=True)
-        os.makedirs(seed_dir)
+        os.makedirs(seed_dir, mode=DATA_DIR_MODE)
 
     # The control channel (§1.3a rule 2): the fsync probe on the subject's
     # filesystem from before the seed starts to after the sync ends, so the

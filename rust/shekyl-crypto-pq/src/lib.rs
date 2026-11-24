@@ -82,6 +82,7 @@ pub mod output_mask;
 pub mod output_order;
 pub mod rng;
 pub mod schnorr;
+mod secret_scalar;
 pub mod seeded_rng;
 pub mod signature;
 pub mod tx_key;

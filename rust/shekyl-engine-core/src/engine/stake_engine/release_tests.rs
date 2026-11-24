@@ -267,9 +267,8 @@ async fn a_record_read_for_another_persona_is_refused_at_the_actor() {
 /// compares `funding_total + bond_debit` against the fee and released
 /// collateral alone clears it, and `verify_debit_funding` closes
 /// tautologically because the outputs are derived from that same `sources`
-/// term. Before the guard the refusal arrived from inside the prover as
-/// `Build { stage: "proving" }` wrapping `TxBuilderError::NoInputs` —
-/// naming the pipeline stage where a condition belongs.
+/// term. Without the guard the refusal arrives from inside the prover as the
+/// signer's `no-inputs` fault, a bug report for a state the wallet can name.
 ///
 /// The positive control is the sibling actor tests: both assemble an
 /// equivalently ready record with two real funding inputs from the same
