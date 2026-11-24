@@ -236,7 +236,9 @@ if fips204_wanted; then
         exit 1
     fi
     for rev in "$FIPS204_TAG" "$FIPS204_FIX"; do
-        git -C "$BUILD/fips204" cat-file -e "$rev^{commit}" || git -C "$BUILD/fips204" fetch -q origin "$rev"
+        if ! git -C "$BUILD/fips204" cat-file -e "$rev^{commit}" 2>/dev/null; then
+            git -C "$BUILD/fips204" fetch -q origin "$rev"
+        fi
     done
 fi
 fips204_ws() {

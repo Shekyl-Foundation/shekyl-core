@@ -1,0 +1,16 @@
+workspace: fips204-fix
+cargo-checkct: shekyl-checkct:85271e5   options: --timeout 500
+toolchain: nightly-2025-12-04
+profile.release: panic = "abort" overflow-checks = true 
+targets + rustflags: target = ["x86_64-unknown-linux-gnu"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
+run window (UTC): Tue Nov 24 01:41:50 AM UTC 2026 -> Tue Nov 24 01:42:00 AM UTC 2026
+
+Summary:
+  driver     target                    entrypoint                                status
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_decompose_44   secure
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_decompose_65   secure
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_infinity_norm  secure
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_make_hint_44   secure
+  fips204ct  x86_64-unknown-linux-gnu  fips204ct::driver::fips204_make_hint_65   secure
+SECURE
+Tue Nov 24 01:42:00 AM UTC 2026
