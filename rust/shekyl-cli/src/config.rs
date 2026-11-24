@@ -128,6 +128,9 @@ where
         return Ok(Action::Version);
     }
     let verify = given("config-verify");
+    if verify && !words.is_empty() {
+        return Err(vec![conflict("config-verify", "a command is given")]);
+    }
     let loaded = load_table(&TABLE, TABLE.binary, cli, platform)?;
     let effective = effective_configuration(&TABLE, &loaded.resolved, &loaded.config_file);
     let mut faults = Vec::new();
@@ -142,6 +145,7 @@ where
         &loaded.resolved,
         loaded.network,
         &words,
+        verify,
         stdin_is_terminal,
         effective,
         &mut faults,
@@ -164,6 +168,7 @@ fn build(
     resolved: &Resolved,
     network: Network,
     words: &[String],
+    verify: bool,
     stdin_is_terminal: bool,
     effective: String,
     faults: &mut Vec<Diagnostic>,
@@ -180,7 +185,8 @@ fn build(
     }
     let password = password_of(
         resolved,
-        words.is_empty() && script_file.is_none(),
+        // A check runs no commands, so standard input carries none.
+        !verify && words.is_empty() && script_file.is_none(),
         stdin_is_terminal,
         faults,
     );
@@ -616,6 +622,24 @@ mod tests {
             refused(&["--archival-complete-tree"]),
             [Code::ValueRequires]
         );
+    }
+
+    /// `config-verify` runs no command, so one beside it is refused rather
+    /// than ignored, and standard input is free for a password it names.
+    /// Red edit: drop the words check, and `balance` is silently not run.
+    #[test]
+    fn config_verify_takes_no_command() {
+        assert_eq!(
+            refused(&["--config-verify", "balance"]),
+            [Code::ValueConflict]
+        );
+        assert!(matches!(
+            load_args(
+                &["--config-verify", "--wallet-password-file", "stdin"],
+                false
+            ),
+            Ok(Action::Verify(_))
+        ));
     }
 
     /// The enrollment words' remote leg needs the channel's address.
