@@ -146,7 +146,9 @@ class Session:
         self.prefix = prefix
         for directory in (seed_dir, fork_dir):
             shutil.rmtree(directory, ignore_errors=True)
-            os.makedirs(directory)
+            # Owner-only: the daemon refuses an existing data directory
+            # others can enter (`config.data-dir.exposed`).
+            os.makedirs(directory, mode=B.DATA_DIR_MODE)
         self.generate(seed_dir, prefix, address)
         shutil.rmtree(fork_dir)
         shutil.copytree(seed_dir, fork_dir)

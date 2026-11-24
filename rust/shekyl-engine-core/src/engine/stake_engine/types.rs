@@ -810,6 +810,19 @@ pub(crate) enum StakeEngineError {
     ReceiptKeyUndecodable,
 }
 
+impl StakeEngineError {
+    /// The signer's own fault, when the signer is what refused an assembly.
+    /// Each public staking error carries it unflattened, so the wallet RPC
+    /// answers it as it answers a transfer's.
+    pub(crate) const fn sign_fault(&self) -> Option<shekyl_tx_builder::SignFault> {
+        match self {
+            Self::Assembly(BondAssemblyError::Signer(fault))
+            | Self::DrainAssembly(DrainAssemblyError::Signer(fault)) => Some(*fault),
+            _ => None,
+        }
+    }
+}
+
 /// The bonded union's transient scan inputs (SP-3 dual extractor): one
 /// slot-tagged [`GuaranteedScanner`] per bonded persona plus their cleartext
 /// `p_canonical_id` → slot map (the id half drives the bond-post match; the
