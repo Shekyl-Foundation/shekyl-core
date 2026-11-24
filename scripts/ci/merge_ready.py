@@ -21,7 +21,11 @@ and local runs for that head are done, and its review threads are resolved.
 A pull request's CI runs on its head merged onto the `dev` of its last
 push, so two pull requests each green alone can still be red together. The
 run on `dev` after the merge is what tests that combination, and a red there
-opens its own issue (report-dev-red.yml).
+opens its own issue (report-dev-red.yml). One such break costs every lane
+its pushes until it is fixed and takes seconds to see, so the label checks
+it first: the fuzz crates' lockfiles against the workspace lock, on the head
+merged with the newest `dev` (`inventory_on_merge`; #1489 and #1497). That
+reads files and runs no test. A merge after the label is `dev`'s run's.
 
 # The status
 
@@ -58,8 +62,10 @@ the head.
                      group is not (`replaced_cancels`); a review bot's job
                      is judged by its review instead (`REVIEW_JOBS`). No
                      review thread may be open; the pull request may not be
-                     a draft. All of that holds: `ready`. Anything else:
-                     `refused`
+                     a draft. With those clear and `FUZZ_INVENTORY` set, the
+                     head must merge with the newest base and pass the fuzz
+                     inventory there. All of that holds: `ready`. Anything
+                     else: `refused`
   unlabeled          waiting
   opened, reopened   waiting, or the label check when it is on
   ready_for_review   the label comes off, as for a push
@@ -79,7 +85,9 @@ the step that removes it posts the status itself.
 
   merge_ready.py run        merge-ready.yml's label check; reads EVENT, PR,
                             HEAD, DRAFT, LABEL (the event's label),
-                            HAS_LABEL, LABELLED_AT and GITHUB_RUN_ID
+                            HAS_LABEL, LABELLED_AT, GITHUB_RUN_ID, BASE and
+                            FUZZ_INVENTORY (`true` where the repository has
+                            fuzz crates)
   merge_ready.py --selftest
 
 `run` also reads RUN_URL (the run's link), GITHUB_REPOSITORY and GH_TOKEN.
@@ -90,8 +98,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -153,6 +163,19 @@ GRACE_SECONDS = 5
 GREEN = {"success", "neutral", "skipped"}
 WAITING = "the owner's merge-ready label"
 
+# The fuzz inventory on the head merged with the newest base: the script,
+# beside this one, and the only files it reads, so the trial merge checks
+# out those alone (the selftest holds them to the script's own names).
+INVENTORY_SCRIPT = "check_fuzz_inventory.py"
+INVENTORY_PATHS = (
+    "/rust/Cargo.lock",
+    "/rust/*/fuzz/Cargo.toml",
+    "/rust/*/fuzz/Cargo.lock",
+    "/.github/workflows/fuzz-harness.yml",
+    "/.github/workflows/fuzz-nightly.yml",
+)
+# Each git step. The whole of it took 5.9 s on the real #1489 and #1497.
+INVENTORY_STEP_SECONDS = 90
 # The status kinds and the state each posts.
 KINDS = {"waiting": "pending", "checking": "pending", "refused": "pending", "ready": "success"}
 
@@ -431,6 +454,67 @@ def open_threads(pr: int) -> int:
     return sum(1 for x in out.split() if x == "false")
 
 
+def inventory_reasons(returncode: int, output: str, base: str, dev: str) -> list[str]:
+    """Why the inventory's exit refuses the label: its findings, each its own
+    reason; any exit but 0 or 1 is a check that could not run."""
+    if returncode == 0:
+        return []
+    where = f"this head merged with `{base}` at {dev[:10]}"
+    if returncode != 1:
+        return [f"the fuzz inventory could not be checked on {where} (exit {returncode})"]
+    findings = [line.strip() for line in output.splitlines() if line.startswith("  ")]
+    return [f"the fuzz inventory fails on {where}: {finding}" for finding in findings] or [
+        f"the fuzz inventory fails on {where}"]
+
+
+def inventory_on_merge(url: str, base: str, head: str, script: str) -> list[str]:
+    """Why the label cannot stand once `head` is merged with the newest
+    `base`: it does not merge, or the fuzz inventory fails there. Empty when
+    both hold. A check that cannot run refuses, with why: a skipped gate
+    reads as a passed one.
+
+    A fresh partial clone with no file contents, a merge of trees alone, and
+    a checkout of `INVENTORY_PATHS`. `script` is the base's copy, placed in
+    the trial tree because the inventory reads the tree it sits in, so a
+    pull request cannot change this check either."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    try:
+        with tempfile.TemporaryDirectory(prefix="merge-ready-") as held:
+            tree = os.path.join(held, "tree")
+
+            def git(*args: str) -> str:
+                return subprocess.run(["git", *args], cwd=tree, env=env, check=True, capture_output=True, text=True,
+                                      timeout=INVENTORY_STEP_SECONDS).stdout.strip()
+
+            os.mkdir(tree)
+            git("init", "-q")
+            git("remote", "add", "origin", url)
+            git("config", "extensions.partialClone", "origin")
+            git("config", "remote.origin.promisor", "true")
+            git("config", "remote.origin.partialclonefilter", "blob:none")
+            git("fetch", "-q", "--filter=blob:none", "--no-tags", "origin", f"+refs/heads/{base}:refs/trial/base", head)
+            dev = git("rev-parse", "refs/trial/base")
+            merged = subprocess.run(["git", "merge-tree", "--write-tree", dev, head], cwd=tree, env=env,
+                                    capture_output=True, text=True, timeout=INVENTORY_STEP_SECONDS)
+            if merged.returncode == 1:
+                return [f"this head does not merge with `{base}` at {dev[:10]}"]
+            if merged.returncode != 0:
+                raise subprocess.CalledProcessError(merged.returncode, "git merge-tree", stderr=merged.stderr)
+            commit = git("-c", "user.name=merge-ready", "-c", "user.email=merge-ready@invalid", "commit-tree",
+                         merged.stdout.split()[0], "-p", dev, "-p", head, "-m", "the trial merge")
+            git("sparse-checkout", "set", "--no-cone", *INVENTORY_PATHS)
+            git("checkout", "-q", "--detach", commit)
+            placed = os.path.join(tree, "scripts", "ci", INVENTORY_SCRIPT)
+            os.makedirs(os.path.dirname(placed))
+            shutil.copyfile(script, placed)
+            checked = subprocess.run([sys.executable, placed], cwd=tree, env=env, capture_output=True, text=True,
+                                     timeout=INVENTORY_STEP_SECONDS)
+            return inventory_reasons(checked.returncode, checked.stdout, base, dev)
+    except (OSError, subprocess.SubprocessError) as error:
+        said = (getattr(error, "stderr", "") or str(error)).strip().splitlines()
+        return [f"the fuzz inventory could not be checked against `{base}`: {said[-1][:160] if said else error}"]
+
+
 def run() -> int:
     event, pr, head = os.environ["EVENT"], int(os.environ["PR"]), os.environ["HEAD"]
     draft = os.environ.get("DRAFT") == "true"
@@ -464,6 +548,9 @@ def run() -> int:
             break
         time.sleep(POLL_SECONDS)
     why = [w for w, _ in found]
+    if not why and os.environ.get("FUZZ_INVENTORY") == "true":
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), INVENTORY_SCRIPT)
+        why = inventory_on_merge(f"https://github.com/{repo()}.git", os.environ["BASE"], head, script)
     if not why:
         print(f"#{pr} {head[:10]}: every check concluded green, no review thread open")
         if current_head(pr) != head or not has_label(pr):
@@ -489,8 +576,111 @@ def run() -> int:
     return 0
 
 
+INVENTORY_STUB = """
+import glob, os, sys
+if os.path.exists("unrelated.txt"):
+    print("the trial checked out more than the inventory reads"); sys.exit(2)
+want = open("rust/Cargo.lock").read()
+stale = [p for p in sorted(glob.glob("rust/*/fuzz/Cargo.lock")) if open(p).read() != want]
+if stale:
+    print("FAIL: the fuzz harness inventory disagrees with the tree:")
+    for p in stale:
+        print("  " + p + ": stale")
+    sys.exit(1)
+print("fuzz inventory: clean")
+"""
+
+
+def inventory_selftest() -> list[str]:
+    """The trial merge on throwaway repositories, in the shape of #1489 and
+    #1497: a pull request adds a fuzz lockfile while `dev` moves the
+    workspace lock under it, and each is green alone."""
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="merge-ready-selftest-") as held:
+        origin = os.path.join(held, "origin")
+        os.mkdir(origin)
+        identity = ("-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false",
+                    "-c", "core.hooksPath=/dev/null")
+
+        def g(*args: str) -> str:
+            return subprocess.run(["git", *identity, *args], cwd=origin, check=True, capture_output=True,
+                                  text=True).stdout.strip()
+
+        def put(path: str, text: str) -> None:
+            full = os.path.join(origin, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(text)
+
+        def commit(*files: tuple[str, str]) -> str:
+            for path, text in files:
+                put(path, text)
+            g("add", "-A")
+            g("commit", "-q", "-m", "x")
+            return g("rev-parse", "HEAD")
+
+        g("init", "-q", "-b", "dev")
+        g("config", "uploadpack.allowFilter", "true")
+        g("config", "uploadpack.allowAnySHA1InWant", "true")
+        root = commit(("rust/Cargo.lock", "v1\n"), ("rust/a/fuzz/Cargo.toml", "a\n"), ("rust/a/fuzz/Cargo.lock", "v1\n"),
+                      ("unrelated.txt", "not read\n"))
+        branches = {}
+        for name, files in {
+            "adds-a-lock": [("rust/b/fuzz/Cargo.toml", "b\n"), ("rust/b/fuzz/Cargo.lock", "v1\n")],
+            "adds-it-right": [("rust/b/fuzz/Cargo.toml", "b\n"), ("rust/b/fuzz/Cargo.lock", "v2\n")],
+            "no-fuzz": [("docs.md", "text\n")],
+            "conflicts": [("rust/Cargo.lock", "v3\n")],
+        }.items():
+            g("checkout", "-q", "-b", name, root)
+            branches[name] = commit(*files)
+        g("checkout", "-q", "dev")
+        commit(("rust/Cargo.lock", "v2\n"), ("rust/a/fuzz/Cargo.lock", "v2\n"))
+        script = os.path.join(held, INVENTORY_SCRIPT)
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(INVENTORY_STUB)
+        url = f"file://{origin}"
+        for label, name, want in [
+            ("a lockfile the base's lock moved under", "adds-a-lock", "rust/b/fuzz/Cargo.lock: stale"),
+            ("a head that does not merge", "conflicts", "does not merge"),
+        ]:
+            got = inventory_on_merge(url, "dev", branches[name], script)
+            if len(got) != 1 or want not in got[0]:
+                problems.append(f"inventory on the merge, {label}: {got}")
+        for label, name in [("a lockfile at the merged version", "adds-it-right"), ("no fuzz change", "no-fuzz")]:
+            got = inventory_on_merge(url, "dev", branches[name], script)
+            if got:
+                problems.append(f"inventory on the merge, {label}: {got}")
+        for label, args in [
+            ("a head the remote does not have", (url, "dev", "0" * 39 + "1", script)),
+            ("a base the remote does not have", (url, "no-such-branch", branches["no-fuzz"], script)),
+            ("no inventory script", (url, "dev", branches["no-fuzz"], os.path.join(held, "absent.py"))),
+        ]:
+            got = inventory_on_merge(*args)
+            if len(got) != 1 or "could not be checked" not in got[0]:
+                problems.append(f"inventory on the merge, {label}: {got}")
+    for label, args, want in [
+        ("a clean exit", (0, "", "dev", "d" * 40), 0),
+        ("two findings", (1, "FAIL: x\n  a: stale\n  b: stale\n", "dev", "d" * 40), 2),
+        ("a failure with no finding named", (1, "FAIL: x\n", "dev", "d" * 40), 1),
+        ("a check that could not run", (2, "FAIL: x\n", "dev", "d" * 40), 1),
+    ]:
+        if len(inventory_reasons(*args)) != want:
+            problems.append(f"inventory_reasons, {label}: {inventory_reasons(*args)}")
+    if "could not be checked" not in inventory_reasons(2, "", "dev", "d" * 40)[0]:
+        problems.append("inventory_reasons: an exit of 2 is not named as a check that could not run")
+    # The trial tree holds what the real script reads (rule 47).
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import check_fuzz_inventory as inventory
+
+    for path in (inventory.WORKSPACE_LOCK, inventory.WORKFLOW, inventory.FUZZ_WORKFLOW):
+        if f"/{path}" not in INVENTORY_PATHS:
+            problems.append(f"INVENTORY_PATHS lacks {path}, which the inventory reads")
+    return problems
+
+
 def selftest() -> int:
-    problems = []
+    problems = inventory_selftest()
     done = lambda name, conclusion="success": {"name": name, "status": "completed", "conclusion": conclusion}  # noqa: E731
     going = lambda name, status="in_progress": {"name": name, "status": status, "conclusion": None}  # noqa: E731
     ok = [done("rust-pass"), done("cli-pass"), done("Economics sim", "skipped")]
@@ -727,8 +917,11 @@ def selftest() -> int:
         ("python3 scripts/ci/merge_ready.py run", "the label check's step"),
         ("LABELLED_AT: ${{ github.event.pull_request.updated_at }}", "the label event's time"),
         (label_cond, "the condition that runs nothing for another label"),
-        ("          ref: ${{ github.base_ref }}\n          sparse-checkout: scripts/ci/merge_ready.py\n",
-         "the label check's script from the base branch"),
+        ("          ref: ${{ github.base_ref }}\n          sparse-checkout: |\n"
+         "            scripts/ci/merge_ready.py\n            scripts/ci/check_fuzz_inventory.py\n",
+         "the label check's scripts from the base branch"),
+        ('FUZZ_INVENTORY: "true"', "the fuzz inventory on the trial merge"),
+        ("BASE: ${{ github.base_ref }}", "the base the trial merge takes"),
     ]:
         if needle not in text:
             problems.append(f"{path} lacks {what} ({needle.strip()!r})")
@@ -741,7 +934,8 @@ def selftest() -> int:
         print(f"selftest FAIL: {p}")
     if not problems:
         print("selftest: an early, red or draft label is refused, a push clears it, a run's own jobs, superseded runs, "
-              "a replaced dispatch, review jobs, the status kinds, and the workflow carries these names")
+              "a replaced dispatch, review jobs, the fuzz inventory on a trial merge, the status kinds, and the "
+              "workflow carries these names")
     return 1 if problems else 0
 
 

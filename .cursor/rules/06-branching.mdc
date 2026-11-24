@@ -174,7 +174,11 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   of its last push, so two PRs each green against the same `dev` can be
   red together (#1425 and #1426, #1489 and #1497). The run on `dev` after
   the merge tests that combination, and a red there opens its own issue
-  (`report-dev-red.yml`).
+  (`report-dev-red.yml`). One check does look at the combination when the
+  label goes on, because the break costs every lane its pushes and takes
+  seconds to see: the head must merge with the newest `dev`, and the fuzz
+  lockfiles must agree with the workspace lock on that merge. It reads
+  files and runs no test. A merge after the label is `dev`'s run's.
 - **A stacked PR retargeted onto `dev` keeps its old base's checks until
   its next push.** Merge `dev` into it before it merges
   (`scripts/ci/check_pr_event_triggers.py` names why no event does this).

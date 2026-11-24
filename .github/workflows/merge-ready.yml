@@ -17,7 +17,9 @@
 # going on is checked against every check run and status on the head; all
 # concluded green with no open review thread: `ready`. A check still running
 # or red, an open review thread or a draft takes it off again, with a comment
-# naming each. A merge into `dev` changes nothing here.
+# naming each. So does a head that does not merge with the newest `dev`, or
+# whose fuzz lockfiles disagree with the workspace lock there: a few seconds,
+# files only, no test. A merge into `dev` changes nothing here.
 #
 # The status, not a job, is the required check: a skipped job counts as a
 # pass to protection (06-branching.mdc), and a head with no status at all is
@@ -81,7 +83,7 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      # The script alone, from the base branch as it is now: never the
+      # The scripts alone, from the base branch as it is now: never the
       # pull request's own copy, so a pull request cannot change its judge,
       # and never the event's merge commit, which GitHub may not have
       # refreshed since the base moved (#1489 was judged by a script two
@@ -89,7 +91,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.base_ref }}
-          sparse-checkout: scripts/ci/merge_ready.py
+          sparse-checkout: |
+            scripts/ci/merge_ready.py
+            scripts/ci/check_fuzz_inventory.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - env:
@@ -103,5 +107,9 @@ jobs:
           # The label event's time: a check that was already running then
           # refuses the label at once, without the settle wait.
           LABELLED_AT: ${{ github.event.pull_request.updated_at }}
+          # The fuzz inventory on the head merged with this base's newest
+          # commit, once the label's other checks hold.
+          BASE: ${{ github.base_ref }}
+          FUZZ_INVENTORY: "true"
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 scripts/ci/merge_ready.py run
