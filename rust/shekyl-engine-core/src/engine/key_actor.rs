@@ -637,12 +637,14 @@ mod tests {
         tx_hash: [u8; 32],
     ) -> OutputDetectionInput {
         let constructed = construct_output(
-            &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET),
+            shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY_SECRET)
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &recipient.x25519_pk,
             &recipient.ml_kem_ek,
             recipient.spend_pk.as_canonical_bytes(),
             amount,
-            output_index,
         )
         .expect("construct_output succeeds for synthetic output");
 

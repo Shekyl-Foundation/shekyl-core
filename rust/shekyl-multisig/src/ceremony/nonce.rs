@@ -29,6 +29,10 @@
 //! the ceremony is forfeit: a new intent completes the spend, and no funds
 //! are at stake.
 
+use shekyl_engine_state::MultisigState;
+use shekyl_types::{BlockHeight, GlobalOutputIndex};
+
+use crate::invariants::ValidatedIntent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
@@ -225,16 +229,50 @@ pub(crate) fn consume(
     store.take(intent_hash).map(ConsumedNonce).ok_or(NotHeld)
 }
 
-/// A member's live ceremonies, by the inputs they spend. Slice 4a keeps
-/// it in the wallet ledger.
+/// A member's live ceremonies, by the inputs they spend. A group wallet
+/// keeps them in `.wallet.multisig`
+/// ([`shekyl_engine_state::MultisigState`]).
 pub trait LiveCeremonies {
-    /// Record that `intent_hash` spends `inputs` (global output indices).
+    /// Record that `intent` spends its inputs, until it lands or its
+    /// reference block ages out. The reservation is read from the
+    /// validated intent: its hash, its inputs and its reference height. No
+    /// caller hands in a list.
     ///
     /// # Errors
     ///
-    /// [`InputInUse`] when another live ceremony at this member spends
-    /// one of them.
-    fn reserve(&mut self, intent_hash: &[u8; 32], inputs: &[u64]) -> Result<(), InputInUse>;
+    /// [`ReserveFault::InputInUse`] when another live ceremony at this
+    /// member spends one of them, and
+    /// [`ReserveFault::ReservationDiffers`] when the stored reservation of
+    /// this intent's hash names different inputs or a different reference
+    /// height.
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), ReserveFault>;
+}
+
+impl LiveCeremonies for MultisigState {
+    fn reserve(&mut self, intent: &ValidatedIntent) -> Result<(), ReserveFault> {
+        let inputs: Vec<GlobalOutputIndex> = intent
+            .intent()
+            .input_global_indices
+            .iter()
+            .map(|&index| GlobalOutputIndex::from_raw(index))
+            .collect();
+        match MultisigState::reserve(
+            self,
+            intent.hash(),
+            &inputs,
+            BlockHeight::from_raw(intent.intent().reference_block_height),
+        ) {
+            Ok(()) => Ok(()),
+            Err(shekyl_engine_state::ReserveError::ReservedElsewhere { input }) => {
+                Err(ReserveFault::InputInUse(InputInUse {
+                    input: input.to_raw(),
+                }))
+            }
+            Err(shekyl_engine_state::ReserveError::ReservationDiffers) => {
+                Err(ReserveFault::ReservationDiffers(ReservationDiffers))
+            }
+        }
+    }
 }
 
 /// Another live ceremony at this member already spends this input.
@@ -243,6 +281,24 @@ pub trait LiveCeremonies {
 pub struct InputInUse {
     /// The input's global output index.
     pub input: u64,
+}
+
+/// The member's records already reserve this intent's hash, and the stored
+/// inputs or reference height are not this intent's. The hash commits to
+/// both, so the records disagree with the intent.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[error("this intent is already reserved with different inputs or a different reference height")]
+pub struct ReservationDiffers;
+
+/// Why a ceremony did not reserve its intent's inputs.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ReserveFault {
+    /// Another live ceremony spends one of the inputs.
+    #[error(transparent)]
+    InputInUse(#[from] InputInUse),
+    /// The stored reservation of this intent's hash disagrees with the intent.
+    #[error(transparent)]
+    ReservationDiffers(#[from] ReservationDiffers),
 }
 
 #[cfg(test)]

@@ -34,10 +34,13 @@
 
 pub mod bookkeeping_block;
 pub mod error;
+pub mod group_ledger;
+pub mod group_payee;
 pub mod invariants;
 pub mod ledger_block;
 pub mod ledger_indexes;
 pub mod local_label;
+pub mod multisig_state;
 pub mod output_state;
 pub mod payment_id;
 pub mod payment_request;
@@ -62,9 +65,16 @@ pub mod wallet_ledger;
 
 pub use bookkeeping_block::{AddressBookEntry, BookkeepingBlock, BOOKKEEPING_BLOCK_VERSION};
 pub use error::WalletLedgerError;
+pub use group_ledger::{
+    ChainPlace, GroupCoin, GroupLedgerBlock, GroupOutput, GroupRefusalKind, GroupWalletLedger,
+    RefusedGroupOutput, SpentAt, GROUP_LEDGER_BLOCK_VERSION, GROUP_WALLET_LEDGER_FORMAT_VERSION,
+    INV_GROUP_OUTPUTS_UNIQUE,
+};
+pub use group_payee::{GroupFingerprint, StoredGroupAddress};
 pub use ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks, LEDGER_BLOCK_VERSION};
 pub use ledger_indexes::LedgerIndexes;
 pub use local_label::{LocalLabel, SecretStr};
+pub use multisig_state::{MultisigState, Reservation, ReserveError, MULTISIG_STATE_VERSION};
 pub use output_state::{OutputStanding, OutputState, SpendHorizon};
 pub use payment_id::PaymentId;
 pub use payment_request::{
@@ -79,8 +89,8 @@ pub use safety_constants::{
     ReorgDepthBelowLockWindow, ReorgDepthOverride, WalletSafetyConstants, MIN_REORG_DEPTH,
 };
 pub use send_journal_block::{
-    AbandonEdge, InFlightSpendLocks, SendDestination, SendInputRef, SendJournalBlock,
-    SendRecipient, SendRecord, SendState, SEND_JOURNAL_BLOCK_VERSION,
+    AbandonEdge, InFlightSpendLocks, JournalPayee, JournalRecipient, SendDestination, SendInputRef,
+    SendJournalBlock, SendRecipient, SendRecord, SendState, SEND_JOURNAL_BLOCK_VERSION,
 };
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};

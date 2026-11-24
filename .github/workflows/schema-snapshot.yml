@@ -214,6 +214,9 @@ jobs:
             "pscan_state|rust/shekyl-engine-state/src/pscan_state.rs|PSCAN_STATE_VERSION"
             "pending_post_block|rust/shekyl-engine-state/src/pending_post_block/mod.rs|PENDING_POST_VERSION"
             "send_journal_block|rust/shekyl-engine-state/src/send_journal_block.rs|SEND_JOURNAL_BLOCK_VERSION"
+            "group_wallet_ledger|rust/shekyl-engine-state/src/group_ledger.rs|GROUP_WALLET_LEDGER_FORMAT_VERSION"
+            "group_ledger_block|rust/shekyl-engine-state/src/group_ledger.rs|GROUP_LEDGER_BLOCK_VERSION"
+            "multisig_state|rust/shekyl-engine-state/src/multisig_state.rs|MULTISIG_STATE_VERSION"
           )
 
           # The PR's full diff, source-relative. `git diff --name-only

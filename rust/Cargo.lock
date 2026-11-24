@@ -4302,6 +4302,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-network",
  "shekyl-tx-builder",

@@ -70,18 +70,19 @@ pub(crate) mod support {
         let mut spend_inputs = Vec::with_capacity(n_in);
         let mut input_total = 0u64;
 
+        let tx_key = shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY);
+        let positions = tx_key.output_positions(n_in);
         for i in 0..n_in {
             let amount = 50_000u64 + u64::try_from(i).unwrap() * 10_000;
             input_total = input_total
                 .checked_add(amount)
                 .ok_or("input amount overflow")?;
             let constructed = construct_output(
-                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
+                positions.at(u64::try_from(i).unwrap()).unwrap(),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient,
                 amount,
-                i as u64,
             )
             .map_err(|e| format!("construct_output: {e}"))?;
 
@@ -158,12 +159,14 @@ pub(crate) mod support {
         for j in 0..n_out {
             let amount = payment / n_out + u64::from(j < payment % n_out);
             let constructed = construct_output(
-                &shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY),
+                shekyl_crypto_pq::TxKey::seeded(TEST_TX_KEY)
+                    .output_positions(usize::try_from(recipient_output_index + j).unwrap() + 1)
+                    .at(recipient_output_index + j)
+                    .unwrap(),
                 &keys.keys.x25519_pk,
                 &keys.keys.ml_kem_ek,
                 &recipient,
                 amount,
-                recipient_output_index + j,
             )
             .map_err(|e| format!("output construct: {e}"))?;
             let mut kem_blob = Vec::with_capacity(32 + constructed.kem_ciphertext_ml_kem.len());

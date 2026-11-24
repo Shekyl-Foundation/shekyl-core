@@ -15,12 +15,13 @@ mod common;
 use rand_core::OsRng;
 
 use common::wallet::{
-    asked, batch_in, context, import_for, intent, ledger, spend_paths, validate,
-    verify_from_the_wire, Ledger, Live, GLOBAL_INDICES,
+    asked, batch_in, coin_at, context, import_for, intent, ledger, spend_paths, validate,
+    verify_from_the_wire, with_field_of, Ledger, Live, GLOBAL_INDICES,
 };
 use common::{found_group, pay_group_twice, Paid, NET};
 use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_curve_tree::{AssembleInput, PathParts};
+use shekyl_engine_state::GroupCoin;
 use shekyl_fcmp::frost_sal::{participant, FrostError};
 use shekyl_multisig::ceremony::context::ContextError;
 use shekyl_multisig::ceremony::files::{Body, Commitment, FinalTx, SignatureShare, SigningSet};
@@ -28,9 +29,8 @@ use shekyl_multisig::ceremony::nonce::InputInUse;
 use shekyl_multisig::ceremony::roles::{Committed, SharesPending};
 use shekyl_multisig::intent::SpendIntent;
 use shekyl_multisig::{
-    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, GroupOutputRecord,
-    HeldNonceStore, Holder, ImportError, MemberFile, Proposer, Responder, ResponderInput,
-    SigningContext,
+    import, seal_envelope, CeremonyError, Cosigner, DeriveError, DerivedSpend, HeldNonceStore,
+    Holder, ImportError, MemberFile, Proposer, Responder, ResponderInput, SigningContext,
 };
 use shekyl_types::CurveTreeRoot;
 
@@ -734,17 +734,12 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         )
         .err()
     };
-    let derive_from = |edit: &dyn Fn(&mut Vec<GroupOutputRecord>)| {
+    let derive_from = |edit: &dyn Fn(&mut Vec<GroupCoin>)| {
         let mut held = ledger(&m.b, &s.paid);
         edit(&mut held.0);
         derive_with(held, asked(&s.paid))
     };
-    assert!(derive_from(&|l| {
-        let mut unspent = l[0].clone();
-        unspent.global_index = 99;
-        l.push(unspent);
-    })
-    .is_none());
+    assert!(derive_from(&|l| l.push(coin_at(&m.b, &s.paid, 0, 99))).is_none());
     assert!(matches!(
         derive_from(&|l| {
             l.pop();
@@ -752,23 +747,23 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
         Some(DeriveError::MissingInput { .. })
     ));
     assert!(matches!(
-        derive_from(&|l| l[0].key_image = l[1].key_image),
+        derive_from(&|l| l[0] = with_field_of(&l[0], &l[1], |c| c.key_image().as_bytes().to_vec())),
         Some(DeriveError::KeyImage { .. })
     ));
     assert!(matches!(
-        derive_from(&|l| l[0].leaf_point = l[1].leaf_point),
+        derive_from(&|l| l[0] = with_field_of(&l[0], &l[1], |c| c.leaf_point().to_vec())),
         Some(DeriveError::Leaf { .. })
     ));
     // A record whose commitment is another coin's: it does not open to
     // the mask this input's secrets derive at its stated amount (R-27).
     assert!(matches!(
-        derive_from(&|l| l[0].commitment = l[1].commitment),
+        derive_from(&|l| l[0] = with_field_of(&l[0], &l[1], |c| c.commitment().to_vec())),
         Some(DeriveError::InputCommitment { .. })
     ));
     assert!(matches!(
         derive_from(&|l| {
-            l[0].source_x25519_ct = l[1].source_x25519_ct;
-            l[0].source_ml_kem_ct = l[1].source_ml_kem_ct.clone();
+            let x25519 = with_field_of(&l[0], &l[1], |c| c.source_ciphertext().x25519.to_vec());
+            l[0] = with_field_of(&x25519, &l[1], |c| c.source_ciphertext().ml_kem.clone());
         }),
         Some(DeriveError::KeyImage { .. })
     ));
@@ -790,11 +785,7 @@ fn a_derivation_spends_the_intents_inputs_as_their_secrets_derive() {
     // `one_coin_recorded_at_two_inputs_of_equal_amount_is_refused` holds
     // that refusal.
     assert!(matches!(
-        derive_from(&|l| {
-            let global_index = l[1].global_index;
-            l[1] = l[0].clone();
-            l[1].global_index = global_index;
-        }),
+        derive_from(&|l| l[1] = coin_at(&m.b, &s.paid, 0, GLOBAL_INDICES[1])),
         Some(DeriveError::InputCommitment { global_index }) if global_index == GLOBAL_INDICES[1]
     ));
 }

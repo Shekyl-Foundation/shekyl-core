@@ -33,6 +33,7 @@ use shekyl_engine_state::UnspendableReason;
 use shekyl_units::AtomicUnits;
 use subtle::ConstantTimeEq;
 
+use crate::multisig_scan::GroupScanned;
 pub use crate::multisig_scan::MultisigMemberScan;
 use crate::{extra::Extra, output::*, GuaranteedViewPair, ViewPair};
 
@@ -510,34 +511,256 @@ impl std::fmt::Debug for ScanOutcome {
     }
 }
 
-/// How a scanner judges an output its view pair matched.
-///
-/// Solo and multisig really do differ: a solo leaf commits to that output's
-/// own key, and a group leaf commits to the committed form. The mode is
-/// chosen when the scanner is built.
-#[derive(Clone)]
-enum ReceivePolicy {
-    Solo,
-    Multisig(MultisigMemberScan),
+/// The scanner's keys, as a receive step reads them.
+pub(crate) struct ScanKeys<'a> {
+    pub(crate) pair: &'a ViewPair,
+    pub(crate) spend_secret: &'a [u8; 32],
+    pub(crate) primary_spend_compressed: &'a CompressedPoint,
 }
 
-impl Zeroize for ReceivePolicy {
-    fn zeroize(&mut self) {
-        if let Self::Multisig(member) = self {
-            member.zeroize();
+/// One output's fields, read once by the shared scan steps (the gates, the
+/// CT base, the `0x06` ciphertext) and handed to the receive step.
+pub(crate) struct OutputFields<'a> {
+    pub(crate) tx_hash: TxHash,
+    pub(crate) unlock_time: u64,
+    pub(crate) extra: &'a Extra,
+    pub(crate) payment_id: Option<crate::extra::PaymentId>,
+    pub(crate) o: usize,
+    pub(crate) first_output_index: u64,
+    pub(crate) output_key_point: curve25519_dalek::EdwardsPoint,
+    pub(crate) output_key_bytes: [u8; 32],
+    pub(crate) view_tag: u8,
+    pub(crate) enc_amount: [u8; 8],
+    pub(crate) amount_tag: u8,
+    pub(crate) enc_label: [u8; 8],
+    pub(crate) label_tag: u8,
+    pub(crate) commitment: CompressedPoint,
+    pub(crate) ct_x25519: &'a [u8; X25519_KEM_CT_LEN],
+    pub(crate) ct_ml_kem: &'a [u8],
+}
+
+impl OutputFields<'_> {
+    /// The output's chain-wide index.
+    pub(crate) fn global_index(&self) -> Result<u64, ScanError> {
+        self.first_output_index
+            .checked_add(self.o as u64)
+            .ok_or(ScanError::InvalidScannableBlock(
+                "transaction's output's index isn't representable as a u64",
+            ))
+    }
+}
+
+/// What a scanner makes of an output its shared steps have read. Solo and
+/// multisig really do differ: a solo leaf commits to that output's own key,
+/// and a group leaf commits to the committed form; a solo wallet keeps a
+/// transfer, a group wallet a group record. The kind is the scanner's type
+/// ([`Scanner`] or [`GroupScanner`]), so neither yields the other's.
+pub(crate) trait Receive: Clone + Zeroize {
+    /// What the step yields for an output that is the wallet's.
+    type Item;
+
+    /// The step for one output; `None` when the output is not the wallet's.
+    fn receive(
+        &self,
+        keys: &ScanKeys<'_>,
+        fields: &OutputFields<'_>,
+    ) -> Result<Option<Self::Item>, ScanError>;
+}
+
+/// A solo wallet's receive step: recover the output, check it is the
+/// wallet's, check its leaf, compute its key image.
+#[derive(Clone, Zeroize)]
+pub(crate) struct SoloReceive;
+
+impl Receive for SoloReceive {
+    type Item = RecoveredWalletOutput;
+
+    fn receive(
+        &self,
+        keys: &ScanKeys<'_>,
+        fields: &OutputFields<'_>,
+    ) -> Result<Option<RecoveredWalletOutput>, ScanError> {
+        let OutputFields {
+            tx_hash,
+            extra,
+            payment_id,
+            o,
+            output_key_point,
+            output_key_bytes,
+            view_tag: view_tag_on_chain,
+            enc_amount,
+            amount_tag: amount_tag_on_chain,
+            enc_label,
+            label_tag: label_tag_on_chain,
+            commitment,
+            ct_x25519,
+            ct_ml_kem,
+            ..
+        } = *fields;
+        let Ok(recovered) = scan_output_recover_with_ml_kem_dk(
+            keys.pair.x25519_sk(),
+            keys.pair.parsed_ml_kem_dk(),
+            ct_x25519,
+            ct_ml_kem,
+            &output_key_bytes,
+            &commitment.0,
+            &enc_amount,
+            amount_tag_on_chain,
+            &enc_label,
+            label_tag_on_chain,
+            view_tag_on_chain,
+            o as u64,
+        ) else {
+            return Ok(None);
+        };
+
+        // --- Primary-account claim via recovered spend key B' ---
+        // Constant-time compare: `recovered_spend_key` is derived from secret
+        // scan material, so a variable-time `!=` would leak, via per-byte
+        // timing, whether this output is ours. The result branch ("is it ours")
+        // is the inherent ownership decision; what must not leak is *where* the
+        // bytes first differ. (SP-1a, `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 —
+        // the cheap, correct-regardless half of the DQ1 third option. The
+        // dominant pre-filter early-exit channel is addressed separately, by
+        // the deferred no-early-exit extractor behind the SP-1a seam.)
+        let recovered_b_compressed: CompressedPoint =
+            CompressedPoint(recovered.recovered_spend_key);
+        let is_ours: bool = recovered_b_compressed
+            .0
+            .as_slice()
+            .ct_eq(keys.primary_spend_compressed.0.as_slice())
+            .into();
+        if !is_ours {
+            return Ok(None);
         }
+
+        // PL-D3 §6.2 scan-time verification: the sender published
+        // `CM ‖ record` for this output in `0x07`; only the recipient can
+        // check that it is its own derivation. A mismatch (or a missing
+        // entry) is a received-but-unspendable output — retained, named
+        // by its transaction, never selectable (rule 82). Constant-time
+        // compare for the same reason as the ownership check above: the
+        // derived entry is a function of secret scan material.
+        let unspendable = {
+            let derived_entry = recovered.pqc_leaf.entry_bytes();
+            match extra.pqc_leaf_entry(o) {
+                None => Some(UnspendableReason::PqcLeafEntryAbsent),
+                Some(published) => {
+                    if bool::from(published.ct_eq(&derived_entry)) {
+                        None
+                    } else {
+                        Some(UnspendableReason::PqcLeafMismatch)
+                    }
+                }
+            }
+        };
+
+        let amount = recovered.amount;
+        let commitment = Commitment::new(
+            curve25519_dalek::Scalar::from_canonical_bytes(recovered.z)
+                .expect("z from wide_reduce is always canonical"),
+            amount,
+        );
+
+        // --- Key image: KI = x * Hp(O) where x = ho + b ---
+        // `Hp` is the *biased* hash-to-point — the canonical FCMP++ key-image
+        // generator (`shekyl_fcmp::tree::key_image_generator`, the leaf `I`
+        // the proof and daemon bind to). The non-biased `hash_to_point` would
+        // produce a key image the SAL linkability check rejects (`ed_ok=false`).
+        let hp_of_o = biased_hash_to_point(output_key_bytes);
+        let hp_bytes = hp_of_o.compress().to_bytes();
+
+        let ki_result = compute_output_key_image(
+            &recovered.combined_ss,
+            o as u64,
+            keys.spend_secret,
+            &hp_bytes,
+        );
+        let key_image = match ki_result {
+            Ok(r) => r.key_image,
+            Err(_) => return Ok(None),
+        };
+
+        // V3 does not use encrypted payment IDs. Pass through as-is.
+        let decrypted_payment_id = payment_id;
+
+        let global_index = fields.global_index()?;
+
+        let base_output = WalletOutput {
+            absolute_id: AbsoluteId {
+                transaction: tx_hash,
+                index_in_transaction: o as u64,
+            },
+            relative_id: RelativeId {
+                index_on_blockchain: global_index,
+            },
+            data: OutputData {
+                key: output_key_point,
+                key_offset: curve25519_dalek::Scalar::from_canonical_bytes(recovered.ho)
+                    .expect("ho from wide_reduce is always canonical"),
+                commitment,
+            },
+            metadata: Metadata {
+                additional_timelock: timelock_from_unlock_time(fields.unlock_time),
+                payment_id: decrypted_payment_id,
+                arbitrary_data: extra.arbitrary_data(),
+            },
+        };
+
+        Ok(Some(RecoveredWalletOutput {
+            base: base_output,
+            ho: Zeroizing::new(recovered.ho),
+            y: Zeroizing::new(recovered.y),
+            z: Zeroizing::new(recovered.z),
+            k_amount: Zeroizing::new(recovered.k_amount),
+            combined_shared_secret: Zeroizing::new(recovered.combined_ss),
+            key_image,
+            // Edge: `recovered.amount` is the raw `u64` recovered from KEM
+            // decryption (also fed to the fork `Commitment::new` above,
+            // which stays `u64`). Wrap as it enters the wallet domain.
+            amount: AtomicUnits::from_raw(amount),
+            source_ciphertext: HybridCiphertext {
+                x25519: *ct_x25519,
+                ml_kem: ct_ml_kem.to_vec(),
+            },
+            view_tag: view_tag_on_chain,
+            enc_amount,
+            amount_tag: amount_tag_on_chain,
+            label_plaintext: recovered.label_plaintext,
+            unspendable,
+        }))
     }
 }
 
 #[derive(Clone)]
-struct InternalScanner {
+struct InternalScanner<R: Receive> {
     pair: ViewPair,
     spend_secret: Zeroizing<[u8; 32]>,
     primary_spend_compressed: CompressedPoint,
-    receive: ReceivePolicy,
+    receive: R,
 }
 
-impl Zeroize for InternalScanner {
+/// One transaction's scan, inside the crate.
+enum TxScan<T> {
+    Completed(Vec<T>),
+    Cancelled,
+}
+
+// The items carry per-output secrets and print nothing: the variant and the
+// count, as `ScanOutcome`'s `Debug` does.
+impl<T> std::fmt::Debug for TxScan<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed(items) => f
+                .debug_struct("TxScan::Completed")
+                .field("count", &items.len())
+                .finish(),
+            Self::Cancelled => f.write_str("TxScan::Cancelled"),
+        }
+    }
+}
+
+impl<R: Receive> Zeroize for InternalScanner<R> {
     fn zeroize(&mut self) {
         self.pair.zeroize();
         self.spend_secret.zeroize();
@@ -545,20 +768,28 @@ impl Zeroize for InternalScanner {
         self.receive.zeroize();
     }
 }
-impl Drop for InternalScanner {
+impl<R: Receive> Drop for InternalScanner<R> {
     fn drop(&mut self) {
         self.zeroize();
     }
 }
-impl ZeroizeOnDrop for InternalScanner {}
+impl<R: Receive> ZeroizeOnDrop for InternalScanner<R> {}
 
-impl InternalScanner {
-    fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>, receive: ReceivePolicy) -> Self {
+impl<R: Receive> InternalScanner<R> {
+    fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>, receive: R) -> Self {
         Self {
             primary_spend_compressed: pair.spend().compress().into(),
             pair,
             spend_secret,
             receive,
+        }
+    }
+
+    fn keys(&self) -> ScanKeys<'_> {
+        ScanKeys {
+            pair: &self.pair,
+            spend_secret: &self.spend_secret,
+            primary_spend_compressed: &self.primary_spend_compressed,
         }
     }
 
@@ -568,7 +799,7 @@ impl InternalScanner {
         tx_hash: TxHash,
         tx: &Transaction,
         is_cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<ScanOutcome, ScanError> {
+    ) -> Result<TxScan<R::Item>, ScanError> {
         // Defense-in-depth size gate (PR 4 §3.1 / F11-S substrate). The
         // wallet's trust model treats the daemon as adversarial; a
         // hostile daemon could (pre-consensus rejection) deliver
@@ -614,7 +845,7 @@ impl InternalScanner {
                 max_outputs = MAX_OUTPUTS,
                 "scanner: skipping transaction with excessive output count (defense-in-depth gate; consensus would also reject)"
             );
-            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
+            return Ok(TxScan::Completed(vec![]));
         }
 
         // Defense-in-depth consensus gate: Shekyl is block-height-only for
@@ -641,14 +872,14 @@ impl InternalScanner {
                 sentinel = UNLOCK_TIME_BLOCK_SENTINEL,
                 "scanner: skipping transaction with timestamp-form unlock_time (block-height-only; consensus would also reject)"
             );
-            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
+            return Ok(TxScan::Completed(vec![]));
         }
 
         // `shekyl-wire` parses only v3 transactions (`Transaction::read` rejects
         // any other version), so the vendored `tx.version() != 3` early-return is
         // dead under the wire types and is removed (no-monero-legacy).
         let Ok(extra) = Extra::read(&mut tx.prefix.extra.as_slice()) else {
-            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
+            return Ok(TxScan::Completed(vec![]));
         };
 
         let kem_ct_blob = extra.pqc_kem_ciphertext();
@@ -674,7 +905,7 @@ impl InternalScanner {
             // discarded at function return; the caller (engine producer)
             // discards the partial block state per §5.4.7 R7.
             if is_cancelled() {
-                return Ok(ScanOutcome::Cancelled);
+                return Ok(TxScan::Cancelled);
             }
 
             let Some(output_key_point) = CompressedPoint(output.key).decompress() else {
@@ -737,151 +968,33 @@ impl InternalScanner {
             let ct_ml_kem = &ct_slice[X25519_KEM_CT_LEN..];
             debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
 
-            let Ok(recovered) = scan_output_recover_with_ml_kem_dk(
-                self.pair.x25519_sk(),
-                self.pair.parsed_ml_kem_dk(),
-                ct_x25519,
-                ct_ml_kem,
-                &output_key_bytes,
-                &commitment.0,
-                &enc_amount,
-                amount_tag_on_chain,
-                &enc_label,
-                label_tag_on_chain,
-                view_tag_on_chain,
-                o as u64,
-            ) else {
-                continue;
-            };
-
-            // --- Primary-account claim via recovered spend key B' ---
-            // Constant-time compare: `recovered_spend_key` is derived from secret
-            // scan material, so a variable-time `!=` would leak, via per-byte
-            // timing, whether this output is ours. The result branch ("is it ours")
-            // is the inherent ownership decision; what must not leak is *where* the
-            // bytes first differ. (SP-1a, `ARCHIVAL_BOND_2D1_PSCAN_PLAN.md` §6 —
-            // the cheap, correct-regardless half of the DQ1 third option. The
-            // dominant pre-filter early-exit channel is addressed separately, by
-            // the deferred no-early-exit extractor behind the SP-1a seam.)
-            let recovered_b_compressed: CompressedPoint =
-                CompressedPoint(recovered.recovered_spend_key);
-            let is_ours: bool = recovered_b_compressed
-                .0
-                .as_slice()
-                .ct_eq(self.primary_spend_compressed.0.as_slice())
-                .into();
-            if !is_ours {
-                continue;
-            }
-
-            // PL-D3 §6.2 scan-time verification: the sender published
-            // `CM ‖ record` for this output in `0x07`; only the recipient can
-            // check that it is its own derivation. A mismatch (or a missing
-            // entry) is a received-but-unspendable output — retained, named
-            // by its transaction, never selectable (rule 82). Constant-time
-            // compare for the same reason as the ownership check above: the
-            // derived entry is a function of secret scan material.
-            let unspendable = match &self.receive {
-                ReceivePolicy::Multisig(member) => member.verdict(&recovered, &extra, o),
-                ReceivePolicy::Solo => {
-                    let derived_entry = recovered.pqc_leaf.entry_bytes();
-                    match extra.pqc_leaf_entry(o) {
-                        None => Some(UnspendableReason::PqcLeafEntryAbsent),
-                        Some(published) => {
-                            if bool::from(published.ct_eq(&derived_entry)) {
-                                None
-                            } else {
-                                Some(UnspendableReason::PqcLeafMismatch)
-                            }
-                        }
-                    }
-                }
-            };
-
-            let amount = recovered.amount;
-            let commitment = Commitment::new(
-                curve25519_dalek::Scalar::from_canonical_bytes(recovered.z)
-                    .expect("z from wide_reduce is always canonical"),
-                amount,
-            );
-
-            // --- Key image: KI = x * Hp(O) where x = ho + b ---
-            // `Hp` is the *biased* hash-to-point — the canonical FCMP++ key-image
-            // generator (`shekyl_fcmp::tree::key_image_generator`, the leaf `I`
-            // the proof and daemon bind to). The non-biased `hash_to_point` would
-            // produce a key image the SAL linkability check rejects (`ed_ok=false`).
-            let hp_of_o = biased_hash_to_point(output_key_bytes);
-            let hp_bytes = hp_of_o.compress().to_bytes();
-
-            let ki_result = compute_output_key_image(
-                &recovered.combined_ss,
-                o as u64,
-                &self.spend_secret,
-                &hp_bytes,
-            );
-            let key_image = match ki_result {
-                Ok(r) => r.key_image,
-                Err(_) => continue,
-            };
-
-            // V3 does not use encrypted payment IDs. Pass through as-is.
-            let decrypted_payment_id = payment_id;
-
-            let global_index = first_output_index.checked_add(o as u64).ok_or(
-                ScanError::InvalidScannableBlock(
-                    "transaction's output's index isn't representable as a u64",
-                ),
-            )?;
-
-            let base_output = WalletOutput {
-                absolute_id: AbsoluteId {
-                    transaction: tx_hash,
-                    index_in_transaction: o as u64,
-                },
-                relative_id: RelativeId {
-                    index_on_blockchain: global_index,
-                },
-                data: OutputData {
-                    key: output_key_point,
-                    key_offset: curve25519_dalek::Scalar::from_canonical_bytes(recovered.ho)
-                        .expect("ho from wide_reduce is always canonical"),
-                    commitment,
-                },
-                metadata: Metadata {
-                    additional_timelock: timelock_from_unlock_time(tx.prefix.unlock_time),
-                    payment_id: decrypted_payment_id,
-                    arbitrary_data: extra.arbitrary_data(),
-                },
-            };
-
-            res.push(RecoveredWalletOutput {
-                base: base_output,
-                ho: Zeroizing::new(recovered.ho),
-                y: Zeroizing::new(recovered.y),
-                z: Zeroizing::new(recovered.z),
-                k_amount: Zeroizing::new(recovered.k_amount),
-                combined_shared_secret: Zeroizing::new(recovered.combined_ss),
-                key_image,
-                // Edge: `recovered.amount` is the raw `u64` recovered from KEM
-                // decryption (also fed to the fork `Commitment::new` above,
-                // which stays `u64`). Wrap as it enters the wallet domain.
-                amount: AtomicUnits::from_raw(amount),
-                source_ciphertext: HybridCiphertext {
-                    x25519: *ct_x25519,
-                    ml_kem: ct_ml_kem.to_vec(),
-                },
+            let fields = OutputFields {
+                tx_hash,
+                unlock_time: tx.prefix.unlock_time,
+                extra: &extra,
+                payment_id,
+                o,
+                first_output_index,
+                output_key_point,
+                output_key_bytes,
                 view_tag: view_tag_on_chain,
                 enc_amount,
                 amount_tag: amount_tag_on_chain,
-                label_plaintext: recovered.label_plaintext,
-                unspendable,
-            });
+                enc_label,
+                label_tag: label_tag_on_chain,
+                commitment,
+                ct_x25519,
+                ct_ml_kem,
+            };
+            if let Some(item) = self.receive.receive(&self.keys(), &fields)? {
+                res.push(item);
+            }
         }
 
-        Ok(ScanOutcome::Completed(Timelocked(res)))
+        Ok(TxScan::Completed(res))
     }
 
-    fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
+    fn scan(&mut self, block: ScannableBlock) -> Result<Vec<R::Item>, ScanError> {
         // Delegate to the cancellable variant with a never-cancelling
         // closure. Closure-invariant: `|| false` is the only closure
         // the inner call tree ever sees on this path, so every
@@ -898,15 +1011,15 @@ impl InternalScanner {
         // path) is surfaced immediately instead of silently masking
         // a logic error behind the empty-result fallback.
         match self.scan_with_cancel(block, &mut || false)? {
-            ScanOutcome::Completed(t) => Ok(t),
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => Ok(t),
+            TxScan::Cancelled => {
                 debug_assert!(
                     false,
                     "InternalScanner::scan: never-cancelling closure (|| false) \
                      cannot produce ScanOutcome::Cancelled; reaching this arm \
                      indicates a logic error in the cancellation dispatch path"
                 );
-                Ok(Timelocked(Vec::new()))
+                Ok(Vec::new())
             }
         }
     }
@@ -915,7 +1028,7 @@ impl InternalScanner {
         &mut self,
         block: ScannableBlock,
         is_cancelled: &mut dyn FnMut() -> bool,
-    ) -> Result<ScanOutcome, ScanError> {
+    ) -> Result<TxScan<R::Item>, ScanError> {
         // The archival total is the P-scan's, not the output scan's.
         let ScannableBlock {
             block,
@@ -929,7 +1042,7 @@ impl InternalScanner {
             ))?;
         }
         let Some(mut first_output_index) = first_output_index else {
-            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
+            return Ok(TxScan::Completed(vec![]));
         };
 
         if block.header.major_version < 1 {
@@ -977,16 +1090,16 @@ impl InternalScanner {
         // own checkpoint), while this outer check delivers the
         // inter-tx safe-point regardless of whether the inner
         // loop runs.
-        let mut res = Timelocked(vec![]);
+        let mut res = vec![];
         for (hash, tx) in txs_with_hashes {
             if is_cancelled() {
-                return Ok(ScanOutcome::Cancelled);
+                return Ok(TxScan::Cancelled);
             }
             match self.scan_transaction_with_cancel(first_output_index, hash, &tx, is_cancelled)? {
-                ScanOutcome::Completed(mut this_tx) => {
-                    res.0.append(&mut this_tx.0);
+                TxScan::Completed(mut this_tx) => {
+                    res.append(&mut this_tx);
                 }
-                ScanOutcome::Cancelled => {
+                TxScan::Cancelled => {
                     // Per §5.4.7 R7 atomicity-under-cancellation: the
                     // accumulated `res` for this block is discarded
                     // along with the function return; no partial
@@ -994,7 +1107,7 @@ impl InternalScanner {
                     // producer) abandons the partial block-scan state
                     // and returns `RefreshError::Cancelled` at the
                     // next call boundary.
-                    return Ok(ScanOutcome::Cancelled);
+                    return Ok(TxScan::Cancelled);
                 }
             }
 
@@ -1022,7 +1135,7 @@ impl InternalScanner {
         // is guaranteed to be either `None` or `Some(encrypted_8_bytes)` — no runtime strip
         // pass is needed here.
 
-        Ok(ScanOutcome::Completed(res))
+        Ok(TxScan::Completed(res))
     }
 }
 
@@ -1036,7 +1149,7 @@ impl InternalScanner {
 /// (ho, y, z, k_amount) are stored in the returned `RecoveredWalletOutput`
 /// to avoid re-derivation at sign time.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct Scanner(InternalScanner);
+pub struct Scanner(InternalScanner<SoloReceive>);
 
 impl Scanner {
     /// Create a Scanner from a ViewPair and the wallet's spend secret key.
@@ -1044,34 +1157,12 @@ impl Scanner {
     /// The spend secret is needed to compute key images at scan time
     /// (KI = (ho + b) * Hp(O)).
     pub fn new(pair: ViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        Self(InternalScanner::new(
-            pair,
-            spend_secret,
-            ReceivePolicy::Solo,
-        ))
-    }
-
-    /// A scanner for one member of a multisig group: `pair` is the group's
-    /// (the group KEM secret, spend point `B_group + Y_group`), `b` the
-    /// group-plaintext spend secret, and `member` this member's context.
-    /// Outputs paid to the group are found as a solo wallet finds its own;
-    /// each is then checked as a multisig output
-    /// ([`MultisigMemberScan`]).
-    pub fn new_multisig_member(
-        pair: ViewPair,
-        b: Zeroizing<[u8; 32]>,
-        member: MultisigMemberScan,
-    ) -> Self {
-        Self(InternalScanner::new(
-            pair,
-            b,
-            ReceivePolicy::Multisig(member),
-        ))
+        Self(InternalScanner::new(pair, spend_secret, SoloReceive))
     }
 
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
-        self.0.scan(block)
+        self.0.scan(block).map(Timelocked)
     }
 
     /// Cooperative-cancellation variant of [`Self::scan`].
@@ -1122,27 +1213,78 @@ impl Scanner {
         block: ScannableBlock,
         is_cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<ScanOutcome, ScanError> {
-        self.0.scan_with_cancel(block, is_cancelled)
+        self.0
+            .scan_with_cancel(block, is_cancelled)
+            .map(ScanOutcome::from_tx_scan)
     }
+}
+
+impl ScanOutcome {
+    fn from_tx_scan(scan: TxScan<RecoveredWalletOutput>) -> Self {
+        match scan {
+            TxScan::Completed(outputs) => Self::Completed(Timelocked(outputs)),
+            TxScan::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+/// A scanner for one member of a multisig group (R-30, R-35). Its outputs
+/// are group records, never solo transfers: each output the group's view
+/// key opens goes through `shekyl-crypto-pq`'s receive check
+/// ([`shekyl_crypto_pq::multisig_receive::receive_group_output`]), and the
+/// scan adds only its place on the chain.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct GroupScanner(InternalScanner<MultisigMemberScan>);
+
+impl GroupScanner {
+    /// A member's scanner: `pair` is the group's (the group KEM secret,
+    /// spend point `B_group + Y_group`), `b` the group-plaintext spend
+    /// secret, and `member` this member's context.
+    pub fn new(pair: ViewPair, b: Zeroizing<[u8; 32]>, member: MultisigMemberScan) -> Self {
+        Self(InternalScanner::new(pair, b, member))
+    }
+
+    /// Scan a block for outputs paid to the group.
+    pub fn scan(&mut self, block: ScannableBlock) -> Result<GroupScanned, ScanError> {
+        self.0.scan(block).map(GroupScanned)
+    }
+
+    /// Cooperative-cancellation variant of [`Self::scan`], with the
+    /// safe-point semantics and atomicity of [`Scanner::scan_with_cancel`].
+    pub fn scan_with_cancel(
+        &mut self,
+        block: ScannableBlock,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<GroupScanOutcome, ScanError> {
+        Ok(match self.0.scan_with_cancel(block, is_cancelled)? {
+            TxScan::Completed(outputs) => GroupScanOutcome::Completed(GroupScanned(outputs)),
+            TxScan::Cancelled => GroupScanOutcome::Cancelled,
+        })
+    }
+}
+
+/// A group scan's outcome, as [`ScanOutcome`] is a solo scan's.
+#[derive(Debug)]
+pub enum GroupScanOutcome {
+    /// The block was scanned to completion.
+    Completed(GroupScanned),
+    /// The caller cancelled between two outputs; nothing is surfaced.
+    Cancelled,
 }
 
 /// A scanner that guarantees scanned outputs are spendable (burning-bug immune).
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct GuaranteedScanner(InternalScanner);
+pub struct GuaranteedScanner(InternalScanner<SoloReceive>);
 
 impl GuaranteedScanner {
     /// Create a GuaranteedScanner from a GuaranteedViewPair and spend secret.
     pub fn new(pair: GuaranteedViewPair, spend_secret: Zeroizing<[u8; 32]>) -> Self {
-        Self(InternalScanner::new(
-            pair.0,
-            spend_secret,
-            ReceivePolicy::Solo,
-        ))
+        Self(InternalScanner::new(pair.0, spend_secret, SoloReceive))
     }
 
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
-        self.0.scan(block)
+        self.0.scan(block).map(Timelocked)
     }
 
     /// Cooperative-cancellation variant of [`Self::scan`]. See
@@ -1154,7 +1296,9 @@ impl GuaranteedScanner {
         block: ScannableBlock,
         is_cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<ScanOutcome, ScanError> {
-        self.0.scan_with_cancel(block, is_cancelled)
+        self.0
+            .scan_with_cancel(block, is_cancelled)
+            .map(ScanOutcome::from_tx_scan)
     }
 }
 
@@ -1235,7 +1379,7 @@ mod gate_tests {
     /// scanner only needs to construct successfully — the
     /// [`ViewPair`] torsion check is satisfied by the basepoint; valid
     /// ML-KEM DK bytes are required at construction but not read on the gate path.
-    fn placeholder_scanner() -> InternalScanner {
+    fn placeholder_scanner() -> InternalScanner<SoloReceive> {
         let pair = ViewPair::new(
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
@@ -1243,7 +1387,7 @@ mod gate_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo)
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), SoloReceive)
     }
 
     /// Build a non-miner `shekyl-wire` [`Transaction`] with the requested
@@ -1304,8 +1448,8 @@ mod gate_tests {
 
         let outcome = result.expect("gate skips the tx without surfacing a ScanError");
         let timelocked = match outcome {
-            ScanOutcome::Completed(t) => t,
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => t,
+            TxScan::Cancelled => {
                 panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
             }
         };
@@ -1348,8 +1492,8 @@ mod gate_tests {
         let outcome =
             result.expect("at-boundary tx scans without ScanError under placeholder keys");
         let timelocked = match outcome {
-            ScanOutcome::Completed(t) => t,
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => t,
+            TxScan::Cancelled => {
                 panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
             }
         };
@@ -1391,8 +1535,8 @@ mod gate_tests {
         });
 
         let timelocked = match result.expect("gate skips the tx without a ScanError") {
-            ScanOutcome::Completed(t) => t,
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => t,
+            TxScan::Cancelled => {
                 panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
             }
         };
@@ -1430,8 +1574,8 @@ mod gate_tests {
         });
 
         let timelocked = match result.expect("block-form tx scans without ScanError") {
-            ScanOutcome::Completed(t) => t,
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => t,
+            TxScan::Cancelled => {
                 panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
             }
         };
@@ -1524,7 +1668,7 @@ mod cancel_tests {
     /// per-output decap; placeholder keys never satisfy the decap
     /// and each iteration `continue`s after one cancellation-closure
     /// call, which is what the per-output cadence tests assert.
-    fn placeholder_scanner() -> InternalScanner {
+    fn placeholder_scanner() -> InternalScanner<SoloReceive> {
         let pair = ViewPair::new(
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
@@ -1532,7 +1676,7 @@ mod cancel_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo)
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]), SoloReceive)
     }
 
     /// Mirror of `gate_tests::synthesize_tx`: a non-miner `shekyl-wire`
@@ -1606,7 +1750,7 @@ mod cancel_tests {
             .expect("placeholder tx is structurally valid; size gate passes");
 
         assert!(
-            matches!(outcome, ScanOutcome::Cancelled),
+            matches!(outcome, TxScan::Cancelled),
             "cancellation closure returned true → outcome must be ScanOutcome::Cancelled"
         );
         assert_eq!(
@@ -1640,10 +1784,10 @@ mod cancel_tests {
             .expect("placeholder tx is structurally valid; size gate passes");
 
         match outcome {
-            ScanOutcome::Completed(t) => {
+            TxScan::Completed(t) => {
                 assert!(t.is_empty(), "placeholder keys recover no owned outputs");
             }
-            ScanOutcome::Cancelled => {
+            TxScan::Cancelled => {
                 panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
             }
         }
@@ -1670,7 +1814,7 @@ mod cancel_tests {
             .expect("placeholder tx is structurally valid; size gate passes");
 
         assert!(
-            matches!(outcome, ScanOutcome::Cancelled),
+            matches!(outcome, TxScan::Cancelled),
             "cancel-on-iter-0 must surface ScanOutcome::Cancelled"
         );
         assert_eq!(
@@ -1721,8 +1865,7 @@ mod cancel_tests {
             test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
-        let mut scanner =
-            InternalScanner::new(pair, Zeroizing::new([0u8; 32]), ReceivePolicy::Solo);
+        let mut scanner = InternalScanner::new(pair, Zeroizing::new([0u8; 32]), SoloReceive);
 
         let header = BlockHeader {
             major_version: 1,
@@ -1769,7 +1912,7 @@ mod cancel_tests {
             .expect("structurally valid miner-only block scans without ScanError");
 
         assert!(
-            matches!(outcome, ScanOutcome::Cancelled),
+            matches!(outcome, TxScan::Cancelled),
             "outer per-tx-loop check must deliver Cancelled on a miner-only block; \
              pre-fix shape returned Completed(empty) here"
         );
@@ -1861,8 +2004,8 @@ mod cancel_tests {
             .expect("oversized tx surfaces a gate-skip, not a ScanError");
 
         match outcome {
-            ScanOutcome::Completed(t) => assert!(t.is_empty()),
-            ScanOutcome::Cancelled => {
+            TxScan::Completed(t) => assert!(t.is_empty()),
+            TxScan::Cancelled => {
                 panic!("size gate must short-circuit before any cancellation check fires")
             }
         }

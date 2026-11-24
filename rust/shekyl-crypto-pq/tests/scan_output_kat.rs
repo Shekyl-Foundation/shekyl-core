@@ -107,12 +107,14 @@ fn scan_output_view_tag_kat() {
     for (i, v) in file.vectors.iter().enumerate() {
         // ── builder pin: reconstruct the output and assert byte-identity ──
         let out = construct_output(
-            &TxKey::seeded(h32(&v.tx_key)),
+            TxKey::seeded(h32(&v.tx_key))
+                .output_positions(usize::try_from(v.output_index).unwrap() + 1)
+                .at(v.output_index)
+                .unwrap(),
             &h32(&v.recipient_x25519_pk),
             &hv(&v.recipient_ml_kem_ek),
             &h32(&v.spend_key),
             v.amount,
-            v.output_index,
         )
         .unwrap_or_else(|e| panic!("vector {i}: construct_output failed: {e:?}"));
 
@@ -280,12 +282,14 @@ fn gen_scan_output_kat() {
         .iter()
         .map(|s| {
             let out = construct_output(
-                &TxKey::seeded(s.tx_key),
+                TxKey::seeded(s.tx_key)
+                    .output_positions(usize::try_from(s.output_index).unwrap() + 1)
+                    .at(s.output_index)
+                    .unwrap(),
                 &s.x25519_pk,
                 &s.ml_kem_ek,
                 &s.spend_key,
                 s.amount,
-                s.output_index,
             )
             .expect("construct_output");
             Vector {

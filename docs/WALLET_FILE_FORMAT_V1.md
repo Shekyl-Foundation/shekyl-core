@@ -50,11 +50,11 @@ operational properties the envelope guarantees.
    stable) and survives arbitrary re-orderings of auto-saves.
 
 5. **Capability-discriminated seed block.** The seed block is a
-   self-describing tagged union; V3 supports exactly one live mode,
-   `FULL` (`0x01`). Bytes `0x02`–`0x04` are retired or reserved in the
-   §2.3 discriminant table and refused by the parser (rule 23: the
-   contract records the namespace so a byte cannot be silently
-   re-minted; no code symbol exists for any non-`FULL` mode). The
+   self-describing tagged union with two live modes: `FULL` (`0x01`), a
+   solo wallet, and `GROUP_MEMBER` (`0x04`), a group wallet. Bytes `0x02`
+   and `0x03` are retired in the §2.3 discriminant table and refused by
+   the parser (rule 23: the contract records the namespace so a byte
+   cannot be silently re-minted; no code symbol exists for either). The
    discriminator lives inside the ciphertext (per Minimum-Leak), not in
    AAD, but is length-self-describing so a parser that refuses an
    unknown mode does not accidentally read past the end of cap_content.
@@ -118,11 +118,14 @@ union:
 
 The plaintext is `81 + L` bytes.
 
-`expected_classical_address` is the canonical 65-byte classical address
-(`version(1) || spend_pk(32) || view_pk(32)`). A loader that
-successfully decrypts region 1 compares this field against the address
-it would derive from `cap_content` under the declared `network`; a
-mismatch is treated as corruption.
+`expected_classical_address` is, for a `FULL` wallet, the canonical
+65-byte classical address (`version(1) || spend_pk(32) || view_pk(32)`).
+For a `GROUP_MEMBER` wallet it is the group binding
+`address_version(1) || b_group(32) || address_fingerprint(32)`, computed
+from the group address payload (`group_wallet_binding`); the fingerprint
+commits to the whole address and its network. A loader that successfully
+decrypts region 1 compares this field against the value it would derive
+from `cap_content` under the declared `network`; a mismatch is refused.
 `restore_height_hint` is the block height at wallet creation; the lost
 `.wallet` recovery path uses it as the rescan floor.
 
@@ -138,18 +141,27 @@ were AAD-bound to region 1, rotation would require re-encrypting region
 
 | `mode_byte` | Status                    | `cap_content` layout                        | `cap_content_len` |
 |-------------|---------------------------|---------------------------------------------|-------------------|
-| `0x01`      | `FULL` — the only live mode | `seed[32]`                                | 32                |
+| `0x01`      | `FULL` — a solo wallet    | `seed[32]`                                  | 32                |
 | `0x02`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
 | `0x03`      | RETIRED — never reuse     | parser refuses with `UnknownCapabilityMode` | —                 |
-| `0x04`      | RESERVED                  | parser refuses with `UnknownCapabilityMode` | —                 |
+| `0x04`      | `GROUP_MEMBER` — a group wallet (R-30) | the member file (`PQC_MULTISIG.md` §6.6) | one per group size `n`, 2 to 5 |
 | other       | unknown                   | parser refuses with `UnknownCapabilityMode` | —                 |
 
-**FULL** is the canonical — and only — mode: the wallet's 32-byte
+**FULL** is a solo wallet: its 32-byte
 seed, the one secret its 24 words spell, from which the entire Shekyl
 key tree (`spend_sk`, `view_sk`, `ml_kem_dk`) is derived under the
 network's name (`rust/shekyl-crypto-pq/src/account.rs`;
 [FCMP_PLUS_PLUS.md](FCMP_PLUS_PLUS.md) "Wallet Restore from Seed"). Every
 wallet open re-runs the derivation; no derived key is stored.
+
+**GROUP_MEMBER** is a group wallet: one member's member file, whose exact
+length for each group size is `group_member_content_len(n)`. The file is
+the wallet's backup, and a group wallet has no recovery words. It is its
+own wallet and its own handle (`GroupWalletFile`): a solo open refuses this
+byte by name (`GroupWalletKeysFile`), the group open refuses any other
+(`NotAGroupWalletKeysFile`), and neither reads the other's content. Its
+`.wallet` holds a group ledger under payload kind `0x05`, and
+`.wallet.multisig` its ceremony records under `0x04`.
 
 **Retired bytes carry no layout.** `0x02` (formerly a view-only layout;
 capability REJECTED per the decision log, 2026-09-07) and `0x03`
@@ -158,13 +170,11 @@ capability REJECTED per the decision log, 2026-09-07) and `0x03`
 device, not inherited from a guess) are retired and must never be
 reassigned a different meaning: a pre-genesis file bearing either byte
 was written by a build that no longer exists, and reusing the byte
-would make such a file silently parse as something else. `0x04` is
-RESERVED (a multisig envelope, if one ever ships, re-derives its layout
-from that design's spec; nothing about the old placeholder is
-normative). This table is the contract entry that protects the
-namespace (rule `23-disposition-visibility`); no code constant, enum
-variant, or layout for `0x02`–`0x04` exists anywhere in the tree, and
-the parser refuses all of them with the same generic
+would make such a file silently parse as something else. This table is
+the contract entry that protects the namespace (rule
+`23-disposition-visibility`); no code constant, enum variant, or layout
+for `0x02` or `0x03` exists anywhere in the tree, and the parser refuses
+both with the same generic
 `UnknownCapabilityMode` error that any unknown byte gets — a refusal
 that names no specific future arm.
 
@@ -195,21 +205,25 @@ than falling back:
    oracle.
 2. **`mode_byte` is decoded first.** Before a single byte of
    `cap_content` is interpreted, the mode byte is checked against the
-   §2.3 table. Only `0x01` (`FULL`) passes; every other byte — retired,
-   reserved, or unknown — fails with the same generic
+   §2.3 table. Only `0x01` (`FULL`) and `0x04` (`GROUP_MEMBER`) pass;
+   every other byte — retired or unknown — fails with the same generic
    `UnknownCapabilityMode` error. No refusal names a specific future
    arm, and no other decoder runs on a byte it was not handed.
 3. **`cap_content_len` is validated against the declared mode.**
-   `validate_cap_content` enforces FULL: `cap_len == 32` exactly (no
-   trailing bytes, no truncation). Any mismatch fails with
+   `validate_cap_content` enforces FULL: `cap_len == 32` exactly, and
+   GROUP_MEMBER: `cap_len` is `group_member_content_len(n)` for a group
+   size `n` from 2 to 5 (no trailing bytes, no truncation). The seal runs
+   the same check, so no file is written that open would refuse. Any
+   mismatch fails with
    `CapContentLenMismatch { mode, len }`, the typed equivalent of the
    audit plan's "CapabilityPayloadMismatch" refusal. No
    capability-shape fallback runs on a length-check failure.
 4. **Per-capability interpretation happens above the envelope.** The
    `OpenedKeysFile` produced by `open_keys_file` hands `cap_content`
-   out as opaque bytes tagged with `capability_mode`. The caller (the
-   key-tree rederivation in `shekyl-account`) owns the mode-specific
-   parse. That parse runs against bytes whose `(mode, len)` pair is
+   out as opaque bytes tagged with `capability_mode`. The caller (for
+   `FULL` the key-tree rederivation in `shekyl-account`, for `GROUP_MEMBER`
+   `MemberFile::from_bytes` in the engine's group wallet) owns the
+   mode-specific parse. That parse runs against bytes whose `(mode, len)` pair is
    already known to be consistent with the declared capability — it
    does not re-check the mode, because the envelope has already refused
    every `(mode, len)` shape that is not a member of the closed set
@@ -254,7 +268,7 @@ properties of per-region HKDF labels.
 | `shekyl-region2-aead-v2` | 22 | Region 2 — concatenated with `addr` below |
 
 Let `addr` be the 65-byte `expected_classical_address` inside region 1 plaintext
-(§2.2). Region 1 uses **label-only** HKDF so open can derive the decrypt key
+(§2.2; for a group wallet, the group binding). Region 1 uses **label-only** HKDF so open can derive the decrypt key
 before reading `addr` from ciphertext (Minimum-Leak: `addr` is not duplicated
 outside region 1). Region 2 reads `addr` from decrypted region 1
 before deriving its key.
@@ -435,7 +449,7 @@ reused with a different meaning:
 | `UnsupportedWrapCount`       | 6    | "unexpected wrap-key count" |
 | `CapContentLenMismatch`      | 7    | "capability content length does not match mode" |
 | `UnknownCapabilityMode`      | 8    | "unknown capability mode" |
-| — RETIRED, never reuse —     | 9    | was `RequiresMultisigSupport`; variant deleted with the non-`FULL` capability arms (rule 23) — mode `0x04` now refuses as `UnknownCapabilityMode` |
+| — RETIRED, never reuse —     | 9    | was `RequiresMultisigSupport`; variant deleted with the non-`FULL` capability arms (rule 23); the code stays retired, and a group wallet's `0x04` is a live mode |
 | `InvalidPasswordOrCorrupt`   | 10   | "wrong password, or wallet file corrupt" |
 | `StateSeedBlockMismatch`     | 11   | "this .wallet does not belong to the .wallet.keys next to it" |
 | `Internal`                   | 12   | "internal wallet-file error" |

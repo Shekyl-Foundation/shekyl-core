@@ -29,8 +29,8 @@ use shekyl_crypto_pq::wallet_envelope::{
 use shekyl_curve_primitives::Commitment;
 use shekyl_engine_file::{CreateParams, WalletFile};
 use shekyl_engine_state::{
-    BlockchainTip, LedgerBlock, ReorgBlocks, SendInputRef, SendRecipient, TransferDetails,
-    WalletLedger, SPENDABLE_AGE,
+    BlockchainTip, JournalPayee, JournalRecipient, LedgerBlock, ReorgBlocks, SendInputRef,
+    TransferDetails, WalletLedger, SPENDABLE_AGE,
 };
 use shekyl_types::{BlockHash, BlockHeight, TxHash};
 
@@ -103,8 +103,8 @@ fn large_ledger() -> WalletLedger {
         wallet.record_dispatched_send(
             txid,
             1_000,
-            vec![SendRecipient {
-                destination: shekyl_engine_state::SendDestination::Address("shekyl1x".into()),
+            vec![JournalRecipient {
+                payee: JournalPayee::Address("shekyl1x".into()),
                 amount: 1,
                 rid: None,
             }],

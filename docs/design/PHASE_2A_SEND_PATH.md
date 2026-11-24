@@ -1343,6 +1343,19 @@ Gated on the 2a-3 encoder existing (it needs a serializable tx); until then the
 predictor is validated component-wise (`fcmp_proof_size` KAT + BP+ size +
 `varint_len` + fixed fields).
 
+**A payment to a multisig group** (R-37, 2026-11-21) carries a `0x0D` entry of
+one KEM ciphertext and one encrypted key hash per member, so its weight is the
+shape's, not the counts'. The send path prices it with
+`predict_spend_weight(SpendShape)`, whose `group_payees` lists the size of each
+group the request pays: the fee estimate and both directive variants
+(`converge_fee`, `build_fee_directive`) take them, and the change output is the
+wallet's own, never a group's. The fee loop is one loop over a shape
+(`converge_spend_fee_by`); the count form calls it with a solo shape paying no
+group. `a_solo_wallet_pays_a_three_of_five_group` holds the gate for a group
+payee: the group-aware weight equals the built transaction's and exceeds the
+solo shape's. The fee quote (`fee_query`) names counts only and stays a solo
+payment's while no caller can name a group.
+
 #### 3.10.2 D — canonical `dust()` + `K_DUST` + `MARGINAL_INPUT_WEIGHT` (§9 #4)
 
 §3.8.5 pinned the *form* (`amount < K_DUST · fee_rate.calculate_fee_from_weight(
@@ -1469,6 +1482,23 @@ stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
   is unchanged. The single-output builder is private to that crate
   (a `compile_fail` holds it). A caller that needs one recipient's output
   asks for it by recipient.
+- **A position is a type** (R-34, amended 2026-11-21). The
+  `shekyl-crypto-pq` output constructors take an `OutputPosition`, which
+  carries the transaction key and the index together. Production code
+  gets positions only from `TxKey::place`, which takes the whole set of
+  outputs and returns each paired with its position in the key's order.
+  Reading one chosen position (`TxKey::output_positions(n).at(i)`), or
+  naming an index no order can draw (`TxKey::position_at_any_index`, for a
+  derivation test at `u64::MAX`), exists only under the TEST_ONLY
+  `test-utils` feature. The block
+  producers below name their fixed position with
+  `OutputPosition::for_block_producer`, and
+  `scripts/ci/check_fixed_output_position_callers.py` allows only their
+  three files. The type stops a bare or made-up index, two outputs on one
+  index, and a position used with another key. It does not stop a caller
+  that holds the key, computes its order and arranges its outputs to suit;
+  no type can, and the guarantee it gives is that no wallet code path
+  places an output except by the key's order.
 - **Solo.** The key is drawn from the OS, so the change lands at each
   position with equal probability (a seeded chi-square test holds it).
 - **Multisig.** The key comes from the intent, so every member derives the
@@ -1489,7 +1519,10 @@ stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
   forged chain's spends are the transactions a wallet makes, `R` in
   `tx_extra` included.
 - **Not wallet-built.** The coinbase and the genesis transaction, whose
-  outputs are public by construction, take no order.
+  outputs are public by construction, take no order. Their producers
+  (the genesis builder, the coinbase template and the harness coinbase)
+  name each output's fixed position with
+  `OutputPosition::for_block_producer`.
 - **An exact spend** (two outputs, no change) pads nothing here; that
   question is the wallet lane's.
 

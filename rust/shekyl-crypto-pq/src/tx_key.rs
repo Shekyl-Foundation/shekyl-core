@@ -21,8 +21,10 @@
 //!   fixture can pin a key.
 //!
 //! A key never hands out its bytes. It gives `R` ([`TxKey::public`]), it
-//! builds outputs (`crate::output::construct_output` and its kin take
-//! `&TxKey`), and it has two named exits, each with its own type:
+//! places and builds outputs (`crate::output::construct_output` and its kin
+//! take an [`crate::output_order::OutputPosition`], which carries the key and
+//! the index its order gives, R-34), and it has two named exits, each with
+//! its own type:
 //!
 //! - [`StoredTxKey`] — what the wallet keeps inside its sealed record so it
 //!   can prove a payment later. Opened back into a key only here
