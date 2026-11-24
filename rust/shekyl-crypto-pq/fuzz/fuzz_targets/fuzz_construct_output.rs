@@ -24,7 +24,8 @@ fuzz_target!(|data: &[u8]| {
     // place `output_index + 1` outputs and build the last.
     let (position, ()) = tx_key
         .place(vec![(); usize::try_from(output_index).unwrap() + 1])
-        .pop()
+        .into_iter()
+        .next_back()
         .unwrap();
 
     let mut spend_key = [0u8; 32];

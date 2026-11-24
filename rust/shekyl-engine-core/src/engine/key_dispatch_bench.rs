@@ -113,7 +113,8 @@ fn build_output_paid_to(
     let count = usize::try_from(output_index).expect("a bench output index fits") + 1;
     let (position, ()) = tx_key
         .place(vec![(); count])
-        .pop()
+        .into_iter()
+        .next_back()
         .expect("a placed set of at least one output");
     let constructed = construct_output(
         position,

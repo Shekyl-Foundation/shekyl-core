@@ -38,7 +38,8 @@ fuzz_target!(|data: &[u8]| {
     // place `output_index + 1` outputs and build the last.
     let (position, ()) = tx_key
         .place(vec![(); usize::try_from(output_index).unwrap() + 1])
-        .pop()
+        .into_iter()
+        .next_back()
         .unwrap();
     let x25519_pk: [u8; 32] = data[48..80].try_into().unwrap();
     let ml_kem_ek = &data[80..80 + ML_KEM_768_EK_LEN];
