@@ -1018,6 +1018,15 @@ def pr_base_selftest():
         if "change_scope.py --pr-base" not in text or "pull_request.base.sha" in text:
             print(f"WRONG: {path} does not take a pull request's base from --pr-base alone")
             bad += 1
+    # The audit reads the step output. A local run exits at the fetch guard,
+    # so the base has to be published before that exit.
+    claims = read_text(".github/workflows/doc-claims.yml")
+    published = claims.find('echo "base=$base" >> "$GITHUB_OUTPUT"')
+    guard = claims.find('if [ "${GITHUB_ACTIONS:-}" != "true" ]; then')
+    fetch = claims.find("git fetch --no-tags --depth=1 origin")
+    if not (0 <= published < guard < fetch):
+        print("WRONG: doc-claims.yml publishes the base after its fetch guard or its fetch")
+        bad += 1
     return bad
 
 
