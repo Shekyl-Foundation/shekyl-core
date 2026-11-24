@@ -53,6 +53,12 @@ path = "junit.xml"
 [test-groups]
 hasher-shell = { max-threads = 1 }
 
+# The CI log's record of the test fixture root's ancestors, which the
+# daemon's real check reads on every fixture (Rick, 2026-11-23).
+[[profile.ci.overrides]]
+filter = 'package(shekyl-daemon-config) & test(=lock::tests::the_fixture_root_passes_the_real_check)'
+success-output = "immediate"
+
 [[profile.default.overrides]]
 filter = 'package(shekyl-hasher) & test(/^shell_tests::/)'
 test-group = 'hasher-shell'

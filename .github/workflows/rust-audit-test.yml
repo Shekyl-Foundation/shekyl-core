@@ -646,7 +646,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-ct-balance -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p-store -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-rpc-transport -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-win-sec -p shekyl-wire --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-archival-retention -p shekyl-bundle-producer -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-chain-sync-runtime -p shekyl-crypto-pq -p shekyl-ct-balance -p shekyl-curve-tree -p shekyl-fcmp -p shekyl-harness-spender -p shekyl-harness-wallet -p shekyl-mempool -p shekyl-network -p shekyl-draw-rng -p shekyl-p-host -p shekyl-p-store -p shekyl-p2p-session -p shekyl-relay-privacy -p shekyl-rpc-transport -p shekyl-tor-control-client -p shekyl-tx-builder -p shekyl-verify-cost -p shekyl-win-sec -p shekyl-wire -p shekyl-os-account --lib -- -D warnings
 
       - name: "shekyl-mempool: the policy build the economics sim links (no default features)"
         working-directory: rust

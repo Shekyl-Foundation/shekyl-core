@@ -995,9 +995,12 @@ impl RegtestDaemon {
         }
         let closed_peer = unanswered.as_ref().map(UnansweredPort::peer);
         let rpc_port = Self::free_port_excluding(&reserved);
-        let data_dir = std::env::temp_dir().join(format!("shekyl-regtest-{rpc_port}"));
+        let data_dir = shekyl_os_account::test_fixture::path(&format!("regtest-{rpc_port}"))
+            .expect("a fixture path");
         drop(std::fs::remove_dir_all(&data_dir));
-        std::fs::create_dir_all(&data_dir).expect("create data dir");
+        // Made as the daemon makes a data directory: it refuses an existing
+        // one other accounts can enter (`config.data-dir.exposed`).
+        shekyl_os_account::create_account_dir_all(&data_dir).expect("create data dir");
         // The daemon reads `/etc/shekyl/shekyld-<network>.toml` by default,
         // and a fleet host's own testnet file (its `p2p-peer` rows against
         // the `clearnet off` below) is not a test daemon's: a test's result
@@ -1015,7 +1018,8 @@ impl RegtestDaemon {
         // The chain's directory is the daemon's `data-dir`. The logs stay
         // in `data_dir` either way.
         let chain_dir = chain_dir.unwrap_or_else(|| data_dir.clone());
-        std::fs::create_dir_all(&chain_dir).expect("create the chain's directory");
+        shekyl_os_account::create_account_dir_all(&chain_dir)
+            .expect("create the chain's directory");
         let mut cmd = Command::new(&bin);
         // The grammar's spellings (INPUT_GRAMMAR.md §5). Tor is off unless
         // the spawn names the pinned binary: regtest's default is the

@@ -186,8 +186,8 @@ fn raw_number(file: &File) -> u64 {
 
 /// A working directory with the private socket directory, as a harness
 /// makes it. On Windows the daemon makes the directory itself, labelled.
-fn workdir() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("a directory");
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     owner_only(dir.path());
     // Unix: the socket directory, which the daemon checks (this account's,
     // mode 0700, local). On Windows the daemon creates the rendezvous

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use shekyl_options::{Code, Diagnostic, Source};
 
 #[cfg(unix)]
-use crate::directory::{require_service_account, DirectoryAccount, ACCOUNT_ONLY_MODE};
+use crate::directory::{require_service_account, DirectoryFacts, OWNER_ONLY_DIR_MODE};
 use crate::network::Network;
 use shekyl_rpc_rendezvous::SERVICE_DATA_HOME;
 
@@ -63,9 +63,15 @@ pub fn root(platform: &Platform, mode: RunMode, option: &str) -> Result<PathBuf,
 /// data directory when `data-dir` is given, otherwise the service's root.
 /// It exists, it is not a link, it is owned by the daemon's account, its
 /// mode is 0700, and the daemon is not root; otherwise the start refuses,
-/// naming the condition (`config.service.root`). A run-as-user daemon is
-/// not checked here. On Windows `service` is refused before the walk until
-/// RT-W14 builds its dispatcher, and the installer's ACL is that slice's.
+/// naming the condition (`config.service.root`). In the default layout the
+/// network's data directory `data_dir` inside the root, when it exists, is
+/// [`shekyl_os_account::directory::account_alone`]: the fact the console
+/// leg's bind and [`crate::Lock::creatable`] hold it to, so a set-id bit is
+/// not a refusal and a directory another account can enter is. A missing
+/// network directory passes; the start makes it. A run-as-user daemon is
+/// not checked here. On Windows
+/// `service` is refused before the walk until RT-W14 builds its dispatcher,
+/// and the installer's ACL is that slice's.
 ///
 /// # Errors
 ///
@@ -74,6 +80,7 @@ pub fn check_service_data_home(
     platform: &Platform,
     mode: RunMode,
     explicit_data_dir: Option<&Path>,
+    data_dir: &Path,
 ) -> Result<(), Diagnostic> {
     #[cfg(unix)]
     {
@@ -81,12 +88,13 @@ pub fn check_service_data_home(
             platform,
             mode,
             explicit_data_dir,
+            data_dir,
             rustix::process::geteuid().as_raw(),
         )
     }
     #[cfg(not(unix))]
     {
-        let _ = (platform, mode, explicit_data_dir);
+        let _ = (platform, mode, explicit_data_dir, data_dir);
         Ok(())
     }
 }
@@ -98,6 +106,7 @@ fn check_service_data_home_as(
     platform: &Platform,
     mode: RunMode,
     explicit_data_dir: Option<&Path>,
+    data_dir: &Path,
     me: u32,
 ) -> Result<(), Diagnostic> {
     if mode != RunMode::Service {
@@ -107,26 +116,51 @@ fn check_service_data_home_as(
         Some(dir) => (dir.to_path_buf(), "data-dir"),
         None => (root(platform, mode, "data-dir")?, "service"),
     };
-    let shown = home.display().to_string();
-    let refuse = |found: String| {
+    let refuse = |path: &Path, found: String| {
         Diagnostic::new(Code::ServiceRoot, Source::Machine)
             .option(option)
-            .param("path", shown.clone())
+            .param("path", path.display().to_string())
             .param("found", found)
     };
-    require_service_account(me).map_err(refuse)?;
-    let account =
-        DirectoryAccount::inspect(&home).map_err(|fault| refuse(fault.clause(Some(&shown))))?;
-    let account = account
-        .require_owner(me)
-        .map_err(|fault| refuse(fault.clause(Some(&shown))))?;
-    let mode = account.mode();
-    if mode != ACCOUNT_ONLY_MODE {
-        return Err(refuse(format!(
-            "{shown} has mode {mode:04o}, not {ACCOUNT_ONLY_MODE:04o}"
-        )));
+    require_service_account(me).map_err(|found| refuse(&home, found))?;
+    service_owned(&home, me).map_err(|found| refuse(&home, found))?;
+    // The network directory is the console's socket directory. It is the
+    // account-alone fact, not the home's exact 0700: a set-id bit the home
+    // refuses is not another account entering. Only a directory that is not
+    // there yet passes unjudged; the start makes it 0700.
+    if data_dir != home {
+        match shekyl_os_account::directory::account_alone(data_dir, me) {
+            Ok(_)
+            | Err(shekyl_os_account::directory::AccountAloneFault::Walk(
+                shekyl_os_account::directory::DirectoryFault::Missing,
+            )) => {}
+            Err(fault) => {
+                return Err(refuse(
+                    data_dir,
+                    fault.clause(Some(&data_dir.display().to_string())),
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+/// `dir` is a directory, not a link, owned by `me`, mode 0700; otherwise the
+/// clause naming what it is instead.
+#[cfg(unix)]
+fn service_owned(dir: &Path, me: u32) -> Result<(), String> {
+    let shown = dir.display().to_string();
+    let facts = DirectoryFacts::inspect(dir)
+        .and_then(|facts| facts.require_owner(me))
+        .map_err(|fault| fault.clause(Some(&shown)))?;
+    if facts.is_owner_only_mode() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{shown} has mode {:04o}, not {OWNER_ONLY_DIR_MODE:04o}",
+            facts.mode()
+        ))
+    }
 }
 
 /// The configuration file's default path for a network.
@@ -183,8 +217,10 @@ mod tests {
             assert_eq!(d.code, Code::ServiceRoot);
             d.get("found").unwrap_or_default().to_owned()
         };
+        let network = home.join("testnet");
         let check = |explicit: Option<&Path>, uid| {
-            check_service_data_home_as(&platform, RunMode::Service, explicit, uid)
+            let data_dir = explicit.map_or(network.as_path(), |dir| dir);
+            check_service_data_home_as(&platform, RunMode::Service, explicit, data_dir, uid)
         };
 
         assert!(found(check(None, 4242)).contains("does not exist"));
@@ -211,8 +247,47 @@ mod tests {
         assert!(found(check(Some(&link), me)).contains("symbolic link"));
         check(Some(&home), me).expect("an explicit data directory, checked the same way");
 
-        check_service_data_home_as(&platform, RunMode::User, None, me)
+        check_service_data_home_as(&platform, RunMode::User, None, &network, me)
             .expect("a run-as-user daemon is not checked here");
+
+        // The network's data directory in the default layout, held to the
+        // console leg's account-alone fact: absent passes (the start makes
+        // it 0700); a link, or a mode another account can enter, is named.
+        // Set-id and the sticky bit are not that. Red edit: require exact
+        // 0700, and the 2700 directory is refused.
+        check(None, me).expect("no network directory yet");
+        let elsewhere = parent.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &network).unwrap();
+        let refused = check(None, me).expect_err("a linked network directory");
+        assert_eq!(refused.get("path"), network.to_str());
+        assert!(found(Err(refused)).contains("symbolic link"));
+        std::fs::remove_file(&network).unwrap();
+        std::fs::create_dir(&network).unwrap();
+        // The home's account owns it, as the home was given above when the
+        // tests run as root, so the mode is what this case judges.
+        std::os::unix::fs::chown(&network, Some(me), None).unwrap();
+        std::fs::set_permissions(&network, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found(check(None, me)).contains("other accounts can enter"));
+        for mode in [0o700, 0o2700, 0o1700] {
+            std::fs::set_permissions(&network, std::fs::Permissions::from_mode(mode)).unwrap();
+            check(None, me).expect("no other account can enter");
+        }
+
+        // A network directory that cannot be read is refused, never taken
+        // for an absent one. Not as root, which reads through any mode. Red
+        // edit: `symlink_metadata(..).is_ok()` in place of the `Missing` arm.
+        if !rustix::process::geteuid().is_root() {
+            let sealed = home.join("sealed");
+            std::fs::create_dir(&sealed).unwrap();
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let unreadable = sealed.join("testnet");
+            let refused =
+                check_service_data_home_as(&platform, RunMode::Service, None, &unreadable, me);
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(found(refused).contains("cannot be read"));
+        }
     }
 
     use super::*;
