@@ -19,6 +19,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
+use live_daemon::sealed_stream::SealedStream;
 use live_daemon::{connect_from, regtest_network_id, Daemon, LoopbackHost};
 use shekyl_levin::{
     invoke, notify, BasicNodeData, BucketReader, Command, CoreSyncData, GetTxpoolComplement,
@@ -44,7 +45,7 @@ enum Wire {
 
 /// A simulated peer on one loopback host.
 struct Peer {
-    stream: TcpStream,
+    stream: SealedStream,
     reader: BucketReader,
 }
 
@@ -56,6 +57,8 @@ impl Peer {
         stream
             .set_write_timeout(Some(Duration::from_secs(10)))
             .expect("write timeout");
+        let stream = SealedStream::open(stream, &regtest_network_id())
+            .unwrap_or_else(|e| panic!("the daemon did not open the channel: {e}"));
         Self {
             stream,
             reader: BucketReader::new(),

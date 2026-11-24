@@ -25,6 +25,11 @@ use shekyl_levin::{
 #[path = "../support/owner_socket_dir.rs"]
 mod owner_socket_dir;
 
+#[path = "../support/sealed_stream.rs"]
+pub mod sealed_stream;
+
+use sealed_stream::SealedStream;
+
 pub struct Daemon {
     pub child: Child,
     pub data_dir: PathBuf,
@@ -350,7 +355,10 @@ pub fn spawn_peer(
         drop(stream.set_read_timeout(Some(Duration::from_millis(500))));
         drop(stream.set_write_timeout(Some(Duration::from_secs(10))));
         drop(stream.set_nodelay(true));
-        let mut s = stream;
+        // A daemon past its ceiling closes the socket here.
+        let Ok(mut s) = SealedStream::open(stream, &regtest_network_id()) else {
+            return PeerOutcome::Closed;
+        };
         let mut reader = BucketReader::new();
         let req = HandshakeRequest {
             node_data: BasicNodeData {
