@@ -1301,6 +1301,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
   - Target: pre-genesis
 
+- **The 1.97 toolchain PR must re-pin the fips204 branch counts, on x86_64 and on the floor device.** A compiler change moves the counts in `scripts/ci/check_fips204_branch_counts.py`, and the nightly `fips204-branch-count` job goes red until they are read and re-pinned; a branch on a coefficient is a finding, not a re-pin.
+  - Owner: the toolchain PR, with `CA-3` — [`ca3_pq_branch_sweep_20261123.md`](benchmarks/ca3_pq_branch_sweep_20261123.md)
+  - Target: pre-genesis (trigger: the toolchain moves to 1.97)
+
 - **S interim: `block_weight_short_term_surge_factor` re-derived at BA-T10 (floor re-run of the batched Bp+ term); closes when the measured d24 `surge_max` is recorded and S re-signed.** The Bp+ term is measured (BA-Q9, #1319): with `Â` folded into the batch the floor device reads 3.659 ms per batched proof, so d24 is about 3.93, and the conservative bracket (the folded lone proof, 18.84 ms) is 3.67. S = 3, the integer below that bracket, is the signed value (C2-R2 Q3 re-signed 2026-11-08) and stays an Assumption: the rest of the composition is the 2026-09-05 capture's, BA-T10 re-runs the full sweep, and S is re-signed on its d24 value.
   - Owner: `BA-T10` — [`BENCHMARK_ALIGNMENT.md`](design/BENCHMARK_ALIGNMENT.md) (the floor verify surface); the interim's arithmetic is in `rust/shekyl-verify-cost/benches/block_connect_verify.rs`
   - Target: pre-genesis
