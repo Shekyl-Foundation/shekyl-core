@@ -1487,8 +1487,10 @@ stream of the key under `shekyl/tx-output-order-v1`, with pinned vectors
   carries the transaction key and the index together. Production code
   gets positions only from `TxKey::place`, which takes the whole set of
   outputs and returns each paired with its position in the key's order.
-  Reading one chosen position (`TxKey::output_positions(n).at(i)`)
-  exists only under the TEST_ONLY `test-utils` feature. The block
+  Reading one chosen position (`TxKey::output_positions(n).at(i)`), or
+  naming an index no order can draw (`TxKey::position_at_any_index`, for a
+  derivation test at `u64::MAX`), exists only under the TEST_ONLY
+  `test-utils` feature. The block
   producers below name their fixed position with
   `OutputPosition::for_block_producer`, and
   `scripts/ci/check_fixed_output_position_callers.py` allows only their

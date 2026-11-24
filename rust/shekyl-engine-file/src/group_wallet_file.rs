@@ -36,7 +36,7 @@ use shekyl_crypto_pq::wallet_envelope::{
 };
 use shekyl_engine_state::{GroupWalletLedger, SyncStateBlock};
 use shekyl_types::BlockHeight;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{decode_network, prepare_new_wallet_path, OpenedKeysFileOwned};
 use crate::atomic::{atomic_write_file, Durability};
@@ -134,10 +134,12 @@ impl GroupWalletFile {
         atomic_write_file(&keys_path, &keys_bytes)?;
         let lock = KeysFileLock::acquire(&keys_path)?;
 
-        let opened = open_keys_file(params.password, &keys_bytes)?;
+        let mut opened = open_keys_file(params.password, &keys_bytes)?;
         let network = decode_network(opened.network)?;
         let wrap_key_region_2 =
             derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
+        // The session needs only the region-2 key (format §2.6).
+        opened.file_kek.zeroize();
         let file = Self {
             multisig_path: multisig_state_path_from(&state_path),
             keys_path,
@@ -171,7 +173,7 @@ impl GroupWalletFile {
         let keys_path = keys_path_from(base_path);
         let state_path = state_path_from(base_path);
         let (lock, keys_file_bytes) = KeysFileLock::acquire_and_read(&keys_path)?;
-        let opened = open_keys_file(password, &keys_file_bytes)?;
+        let mut opened = open_keys_file(password, &keys_file_bytes)?;
         let network = decode_network(opened.network)?;
         if network != expected_network {
             return Err(WalletFileError::NetworkMismatch {
@@ -184,6 +186,8 @@ impl GroupWalletFile {
         }
         let wrap_key_region_2 =
             derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
+        // The session needs only the region-2 key (format §2.6).
+        opened.file_kek.zeroize();
 
         let outcome = match std::fs::read(&state_path) {
             Ok(state_bytes) => {
@@ -332,5 +336,57 @@ impl GroupWalletFile {
     #[must_use]
     pub fn multisig_path(&self) -> &Path {
         &self.multisig_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shekyl_address::multisig_address::HYBRID_KEM_PUBKEY_LEN;
+    use shekyl_crypto_pq::wallet_envelope::group_member_content_len;
+
+    /// Neither constructor keeps the key that opens region 1 and every
+    /// sealed file: an open handle holds the region-2 key alone.
+    #[test]
+    fn an_open_handle_does_not_hold_the_file_key() {
+        const N: u8 = 3;
+        let address = MultisigAddressPayload::new(
+            Network::Testnet,
+            N,
+            2,
+            [0x31; 32],
+            [0x32; 32],
+            vec![0x31; HYBRID_KEM_PUBKEY_LEN],
+            (1..=N)
+                .map(|k| vec![0x31 + k; HYBRID_KEM_PUBKEY_LEN])
+                .collect(),
+        )
+        .expect("a valid group address");
+        let member_file = vec![0x31; group_member_content_len(N)];
+        let ledger = GroupWalletLedger::empty();
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("group.wallet");
+        let created = GroupWalletFile::create(&GroupCreateParams {
+            base_path: &base,
+            password: b"pw",
+            group_address: &address,
+            member_file: &member_file,
+            creation_timestamp: 0,
+            restore_height_hint: 0,
+            kdf: KdfParams {
+                m_log2: 0x08,
+                t: 1,
+                p: 1,
+            },
+            initial_ledger: &ledger,
+        })
+        .unwrap();
+        assert_eq!(*created.opened_keys.0.file_kek, [0u8; FILE_KEK_BYTES]);
+        assert_ne!(*created.wrap_key_region_2, [0u8; FILE_KEK_BYTES]);
+        drop(created);
+
+        let (opened, _) = GroupWalletFile::open(&base, b"pw", Network::Testnet).unwrap();
+        assert_eq!(*opened.opened_keys.0.file_kek, [0u8; FILE_KEK_BYTES]);
+        assert_ne!(*opened.wrap_key_region_2, [0u8; FILE_KEK_BYTES]);
     }
 }
