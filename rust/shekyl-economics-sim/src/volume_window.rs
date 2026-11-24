@@ -56,8 +56,12 @@ pub enum VolumeSignal {
 pub(crate) struct VolumeFold<const W: u64> {
     /// `prefix[i]` is the cumulative transaction count through height
     /// `next - prefix.len() + i`. At most `W + 1` entries: the window's
-    /// upper term and its lower term are `W` apart.
-    prefix: VecDeque<u64>,
+    /// upper term and its lower term are `W` apart. Wider than the chain's
+    /// `u64` because a fold's lifetime sum is not the chain's operand: C2
+    /// sums scaled fee units, whose lifetime passes `u64` on a growth fold
+    /// while its window still fits, and a saturated prefix would read that
+    /// window as empty.
+    prefix: VecDeque<u128>,
     /// The height the next [`Self::operand`] prices.
     next: u64,
     /// The per-block counts of the window's blocks, the differences of the
@@ -73,6 +77,12 @@ pub(crate) type VolumeWindow = VolumeFold<{ TX_VOLUME_WINDOW }>;
 
 impl<const W: u64> VolumeFold<W> {
     /// The validator's operand for the block at the next height.
+    ///
+    /// A window whose own sum passes `u64` reads as `u64::MAX`. Only C2's
+    /// scaled fee units get there, and C2's burn reads them through
+    /// [`TxVolume::ratio_scaled_squared`], which has already saturated at
+    /// that sum, so the clamp changes no figure
+    /// (`economy::tests::a_fee_window_past_u64_burns_as_its_true_sum`).
     pub(crate) fn operand(&self) -> TxVolume {
         let span = tx_volume_span_of::<W>(BlockHeight::from_raw(self.next));
         let Some(upper) = span.upper else {
@@ -80,8 +90,11 @@ impl<const W: u64> VolumeFold<W> {
         };
         let upper_sum = self.prefix_at(upper);
         let lower_sum = span.lower.map_or(0, |at| self.prefix_at(at));
-        span.volume(upper_sum, lower_sum)
-            .expect("a fold's prefix sums only grow")
+        let window_sum = upper_sum
+            .checked_sub(lower_sum)
+            .expect("a fold's prefix sums only grow");
+        span.volume(u64::try_from(window_sum).unwrap_or(u64::MAX), 0)
+            .expect("a sum less nothing does not fall")
     }
 
     /// The operand `signal` prices the next block at: [`Self::operand`] for
@@ -136,7 +149,7 @@ impl<const W: u64> VolumeFold<W> {
 
     /// Record the block at the next height carrying `txs` transactions.
     pub(crate) fn push(&mut self, txs: u64) {
-        let cumulative = self.prefix.back().copied().unwrap_or(0).saturating_add(txs);
+        let cumulative = self.prefix.back().copied().unwrap_or(0) + u128::from(txs);
         self.prefix.push_back(cumulative);
         if self.prefix.len() as u64 > W + 1 {
             self.prefix.pop_front();
@@ -154,7 +167,7 @@ impl<const W: u64> VolumeFold<W> {
         self.next += 1;
     }
 
-    fn prefix_at(&self, at: BlockHeight) -> u64 {
+    fn prefix_at(&self, at: BlockHeight) -> u128 {
         let oldest = self.next - self.prefix.len() as u64;
         let index = at
             .to_raw()
@@ -167,6 +180,40 @@ impl<const W: u64> VolumeFold<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fold whose lifetime sum passes `u64` still reads its window: the
+    /// sum of the last `W` blocks, which fits. A saturated prefix read this
+    /// as zero, and C2's burn fell to nothing on the growth folds (§5.37.2).
+    #[test]
+    fn a_lifetime_past_u64_keeps_the_window() {
+        let per_block = u64::MAX / (TX_VOLUME_WINDOW + 1);
+        let mut fold = VolumeWindow::default();
+        for _ in 0..3 * (TX_VOLUME_WINDOW + 1) {
+            fold.push(per_block);
+        }
+        assert_eq!(
+            fold.operand(),
+            TxVolume::window(per_block * TX_VOLUME_WINDOW, TX_VOLUME_WINDOW)
+        );
+    }
+
+    /// A window past `u64` reads the largest operand, and once those blocks
+    /// leave it the window reads its true sum again.
+    #[test]
+    fn a_window_past_u64_saturates_and_recovers() {
+        let mut fold = VolumeWindow::default();
+        for _ in 0..TX_VOLUME_WINDOW {
+            fold.push(u64::MAX);
+        }
+        assert_eq!(fold.operand(), TxVolume::window(u64::MAX, TX_VOLUME_WINDOW));
+        for _ in 0..TX_VOLUME_WINDOW {
+            fold.push(7);
+        }
+        assert_eq!(
+            fold.operand(),
+            TxVolume::window(7 * TX_VOLUME_WINDOW, TX_VOLUME_WINDOW)
+        );
+    }
 
     /// Against a prefix sum held in full: the window is the transactions of
     /// the `min(h, W)` blocks before `h`, which is CEN-F20's definition read
