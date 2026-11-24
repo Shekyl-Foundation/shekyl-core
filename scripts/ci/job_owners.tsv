@@ -12,13 +12,13 @@
 .github/FUNDING.yml	none
 .github/actions/build-randomx-v2-ref/action.yml	randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet
 .github/actions/fuzz-one-target/action.yml	fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly
-.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,chain-forge:aarch64,chain-forge:x86_64,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,merge-ready-retest:retest,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:fips204-branch-count,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
+.github/actions/install-rust/action.yml	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,build:build-ubuntu,chain-forge:aarch64,chain-forge:x86_64,depends-aarch64-kats:aarch64-kats,depends:build-cross,fuzz-harness:compile,fuzz-nightly:fuzz-build,gf7-no-emit-guard:no-emit-guard,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates,nightly:bench-full,nightly:chain-ingest-ignored,nightly:economics-sim-ignored,nightly:fips204-branch-count,nightly:hasher-ignored,nightly:producer-gate,nightly:proptest-exhaustive,nightly:staking-sim-ignored,nightly:store-ignored,nightly:trybuild-ignored,nightly:wire-ignored,randomx-v2-adversarial-ratio:adversarial-ratio,randomx-v2-differential:full-parity,randomx-v2-differential:native-arm,randomx-v2-differential:rotating,randomx-v2-differential:rotating-pr,randomx-v2-differential:runtime-modes,randomx-v2-differential:structural-validate,randomx-v2-differential:verdict-ratchet,rust-audit-test:economics-sim-narrations,rust-audit-test:rust-audit-and-test,schema-snapshot:assert-snapshots
 .github/codeql/config.yml	codeql:analyze-rust
 .github/pull_request_template.md	none
 contrib/depends/	depends:build-cross,depends:legs
 scripts/ci/_census.py	docs-gates:check-doc-links
 scripts/ci/_gfm_table.py	docs-gates:check-doc-links
-scripts/ci/change_scope.py	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,fuzz-harness:scope,grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan,rust-audit-test:changes
+scripts/ci/change_scope.py	benchmarks:scope,build:changes,chain-forge:scope,codeql:changes,depends:legs,doc-claims:doc-claims,docs-gates:check-doc-links,fuzz-harness:scope,grep-gates:grep-gates,rust-audit-test:changes
 scripts/ci/check_archival_reward_gates.sh	grep-gates:grep-gates
 scripts/ci/check_armed_lever_launchers.py	grep-gates:grep-gates
 scripts/ci/check_crypto_closure.py	rust-audit-test:rust-audit-and-test,gui-drift:gui-pin,gui-drift:gui-pin-nightly
@@ -55,6 +55,7 @@ scripts/ci/check_drs_p0d_digest_coverage.py	docs-gates:check-doc-links
 scripts/ci/check_economic_accessors.py	docs-gates:check-doc-links
 scripts/ci/check_engine_decomposition.sh	grep-gates:grep-gates
 scripts/ci/check_feature_gated_members.py	grep-gates:grep-gates
+scripts/ci/check_fixed_output_position_callers.py	grep-gates:grep-gates
 scripts/ci/check_fn_dsa_genesis_gate.py	gitian:fn-dsa-genesis-gate,grep-gates:grep-gates
 scripts/ci/check_followups_owners.py	docs-gates:check-doc-links
 scripts/ci/check_followups_row_prose.py	docs-gates:check-doc-links
@@ -123,7 +124,7 @@ scripts/ci/depends_legs.py	depends:legs,grep-gates:grep-gates
 scripts/ci/domain_registry_gate.sh	grep-gates:grep-gates
 scripts/ci/drop_runner_chrome_apt_source.sh	benchmarks:capture-pr,benchmarks:profile-on-fail,benchmarks:update-baseline,grep-gates:grep-gates,nightly:bench-full
 scripts/ci/engine_decomposition_ratchet.conf	grep-gates:grep-gates
-scripts/ci/failed_tests.py	grep-gates:grep-gates,merge-ready-retest:report,report-dev-red:report
+scripts/ci/failed_tests.py	grep-gates:grep-gates,report-dev-red:report
 scripts/ci/fetch_test_chain.py	build:build-windows-msvc,chain-forge:hosted-pull,chain-forge:scope,freebsd-nightly:freebsd,nightly:chain-ingest-ignored,nightly:producer-gate
 scripts/ci/followups_owner_grandfather.txt	docs-gates:check-doc-links
 scripts/ci/gui_wallet_core_deps.toml	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
@@ -138,8 +139,7 @@ scripts/ci/ignored_set_trybuild.sh	nightly:report-red,nightly:trybuild-ignored,r
 scripts/ci/ignored_set_wire.sh	nightly:report-red,nightly:wire-ignored,rust-audit-test:rust-audit-and-test
 scripts/ci/inland_height_u64_grandfather.txt	grep-gates:grep-gates
 scripts/ci/job_owners.tsv	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates,rust-audit-test:changes
-scripts/ci/merge_ready.py	grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:report,merge-ready-retest:retest,merge-ready:label-check,merge-ready:plan
-scripts/ci/merge_ready_overlap.py	grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan
+scripts/ci/merge_ready.py	grep-gates:grep-gates,merge-ready:label-check
 scripts/ci/msvc_static_crt.ps1	build:build-windows-msvc
 scripts/ci/nextest_report.py	docs-gates:check-doc-links,rust-audit-test:rust-audit-and-test
 scripts/ci/nightly_red.py	grep-gates:grep-gates,nightly-live-daemon-slow:report-red,nightly:report-red
@@ -151,7 +151,7 @@ scripts/ci/release_matrix.py	build:build-ubuntu,docs-gates:check-doc-links,grep-
 scripts/ci/require_live_tests.sh	tor-pin-verify:verify
 scripts/ci/run_live_daemon_gates.sh	build:build-ubuntu,nightly-live-daemon-slow:body-fill,nightly-live-daemon-slow:slow-gates
 scripts/ci/run_live_tor_tests.sh	grep-gates:grep-gates,tor-pin-verify:verify
-scripts/ci/rust_scoped_tests.sh	freebsd-nightly:freebsd,merge-ready-retest:retest,rust-audit-test:rust-audit-and-test
+scripts/ci/rust_scoped_tests.sh	freebsd-nightly:freebsd,rust-audit-test:rust-audit-and-test
 scripts/ci/shipped_graph.py	grep-gates:grep-gates,gui-drift:gui-pin,gui-drift:gui-pin-nightly
 scripts/ci/strip_c_comments.py	depends:legs,docs-gates:check-doc-links,grep-gates:grep-gates
 scripts/ci/test_check_doc_code_citations.py	docs-gates:check-doc-links
@@ -163,8 +163,8 @@ scripts/ci/test_run_live_tor_tests.sh	grep-gates:grep-gates
 scripts/ci/test_tor_pin_gates.py	grep-gates:grep-gates
 scripts/ci/windows_probe.ps1	build:build-windows-msvc
 scripts/ci/with_small_disk.sh	none
-scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,fuzz-nightly:fuzz-targets,fuzz-nightly:report-red,grep-gates:grep-gates,merge-ready-dev:merges,merge-ready-retest:retest,merge-ready:plan
+scripts/ci/check_fuzz_inventory.py	fuzz-harness:compile,fuzz-harness:scope,fuzz-nightly:fuzz-targets,fuzz-nightly:report-red,grep-gates:grep-gates,merge-ready:label-check
 scripts/ci/test_check_fuzz_inventory.py	fuzz-harness:scope,fuzz-nightly:fuzz-targets
 scripts/ci/fuzz_run.py	fuzz-nightly:fuzz,fuzz-nightly:fuzz-build,fuzz-nightly:fuzz-summary,fuzz-nightly:fuzz-targets,fuzz-nightly:fuzz-weekly,fuzz-nightly:report-red
 scripts/ci/fuzz_coverage_floors.tsv	fuzz-harness:scope,fuzz-nightly:fuzz,fuzz-nightly:fuzz-weekly
-scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,merge-ready-retest:report,report-dev-red:report,rust-audit-test:pass
+scripts/ci/workflow_pass.py	build:pass,grep-gates:grep-gates,report-dev-red:report,rust-audit-test:pass

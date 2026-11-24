@@ -101,7 +101,7 @@ jobs:
           set -u
           head="${{ github.sha }}"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="${{ github.event.pull_request.base.sha }}"
+            base=$(python3 scripts/ci/change_scope.py --pr-base "$head" "${{ github.event.pull_request.head.sha }}")
           else
             # A push is measured from the last commit this workflow passed
             # on, not from `before`: see scripts/ci/push_scope_base.sh. No

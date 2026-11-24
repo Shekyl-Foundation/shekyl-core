@@ -18,25 +18,26 @@ pub use consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 pub use engine::balance_view::{BalanceSnapshot, BalanceView, BalanceViewError, StakedTotals};
 pub use engine::local_ledger_ops::{AbandonTxError, AbandonTxOutcome, SetTxNoteError};
 pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
-/// The MS-5 multisig signer marker — only present under `--features multisig`.
-#[cfg(feature = "multisig")]
-pub use engine::MultisigSignerV2;
 pub use engine::{
     AcknowledgeOutcomeError, Capability, CapabilityInput, CollectOutcome, CollectUnstakedError,
     CompleteTreeFillError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
     DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
     EngineCreateParams, EngineSignerKind, FeePriority, FeeTierQuote, FillFailure, FirstStakeError,
-    FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError, KeyError, LocalRefresh,
-    MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle,
-    PScanStartError, PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind,
-    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
-    RefreshReorgEvent, RefreshSummary, ReportedOutcome, ReservationId, ScannableBlock, SendError,
-    ShardAlarm, ShardAlarmCause, ShardAlarmReport, ShardCheck, ShardRefill, SignerFault,
-    SoloSigner, StakeInError, StakePosture, StakedBalance, StakedOutput, StakingLedgerSnapshot,
-    StakingReadError, StakingReadView, StateWrapKey, SubmitOutcome, SubmitReceipt, SuppressedClass,
-    TracingDiagnosticSink, TxDestination, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
-    TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial, DAEMON_METHODS,
+    FirstStakeOutcome, GroupDestination, InFlightRecord, InFlightState, InputCount, IoError,
+    KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine,
+    OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError,
+    ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions,
+    RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary, ReportedOutcome,
+    ReservationId, ScannableBlock, SendError, ShardAlarm, ShardAlarmCause, ShardAlarmReport,
+    ShardCheck, ShardRefill, SignerFault, SoloSigner, StakeInError, StakePosture, StakedBalance,
+    StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView, StateWrapKey,
+    SubmitOutcome, SubmitReceipt, SuppressedClass, TracingDiagnosticSink, TxDestination, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome,
+    ViewMaterial, DAEMON_METHODS,
 };
+/// The MS-5 multisig signer marker — only present under `--features multisig`.
+#[cfg(feature = "multisig")]
+pub use engine::{GroupWallet, GroupWalletCreate, GroupWalletError, MultisigSignerV2};
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The signing pass's fault, bounded, that [`SendError::Sign`] carries, and
 // the transaction limits it names.

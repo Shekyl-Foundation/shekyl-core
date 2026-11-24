@@ -79,12 +79,14 @@ fn scan_output_recover_prefix_byte_identical() {
     let output_index = 3u64;
 
     let out = construct_output(
-        &tx_key,
+        tx_key
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &recipient_pk.x25519,
         &recipient_pk.ml_kem,
         &spend_key,
         amount,
-        output_index,
     )
     .expect("construct_output");
 
@@ -130,12 +132,14 @@ fn distinct_outputs_yield_distinct_combined_ss() {
     let mut secrets: Vec<[u8; 64]> = Vec::with_capacity(4);
     for output_index in 0..4u64 {
         let out = construct_output(
-            &tx_key,
+            tx_key
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             1_000 * (output_index + 1),
-            output_index,
         )
         .expect("construct_output");
 

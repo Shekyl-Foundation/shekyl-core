@@ -83,15 +83,15 @@ fn setup(num_outputs: usize, amount_base: u64) -> TestContext {
     let mut outputs = Vec::with_capacity(num_outputs);
     let mut on_chain = Vec::with_capacity(num_outputs);
 
+    let positions = tx_key.output_positions(num_outputs);
     for i in 0..num_outputs {
         let amount = amount_base + i as u64;
         let od = construct_output(
-            &tx_key,
+            positions.at(i as u64).unwrap(),
             &pk.x25519,
             &pk.ml_kem,
             &spend_pubkey,
             amount,
-            i as u64,
         )
         .expect("construct_output");
 

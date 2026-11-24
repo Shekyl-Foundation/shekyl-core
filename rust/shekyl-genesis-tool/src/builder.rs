@@ -21,6 +21,7 @@
 use shekyl_address::Network;
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_crypto_pq::output_order::OutputPosition;
 use shekyl_network::GenesisTimestamp;
 use shekyl_wire::block::{Block, BlockHeader, HEADER_MINOR_VERSION};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
@@ -89,13 +90,15 @@ pub fn build_genesis_tx(
             .map_err(|e| invalid(format!("recipient {i} view key → X25519: {e:?}")))?;
 
         let index = u64::try_from(i).expect("recipient index fits u64");
+        // R-34: genesis places recipient `i` at output `i`. Its outputs are
+        // public and its bytes pinned (the golden KAT), so the position is
+        // fixed, not drawn from the key.
         let od = construct_output(
-            &tx_key,
+            OutputPosition::for_block_producer(&tx_key, index),
             &x25519_pk,
             &r.address.ml_kem_encap_key,
             &r.address.spend_key,
             r.amount,
-            index,
         )
         .map_err(|e| invalid(format!("construct_output for recipient {i}: {e:?}")))?;
 

@@ -156,12 +156,7 @@ jobs:
             python3 scripts/ci/check_dev_red_reporter.py --selftest
           run_one "The dev-red reporter needs every job" \
             python3 scripts/ci/check_dev_red_reporter.py
-          # The dev-red reporter and the merge-ready re-test name failing
-          # tests from a job's log; the re-test decides which labelled pull
-          # requests a merge reaches and keeps the `merge-ready` status.
-          # Each script's selftest: the log formats, the shared-test rules,
-          # the label check, the status grammar and who may post, and the
-          # names the scripts read from the merge-ready workflows (rule 47).
+          # The dev-red reporter names failing tests from a job's log.
           run_one "Failing tests are named from a job's log (selftest)" \
             python3 scripts/ci/failed_tests.py --selftest
           # The nightly workflows' reporters run on every run not cancelled
@@ -180,9 +175,9 @@ jobs:
             python3 scripts/ci/nightly_skip.py --selftest
           run_one "Every nightly job is planned or never skipped, with why" \
             python3 scripts/ci/nightly_skip.py --check
-          run_one "A merge re-tests the labelled pull requests it reaches (selftest)" \
-            python3 scripts/ci/merge_ready_overlap.py --selftest
-          run_one "merge-ready: an early label refused, a push clears it, the newest dev's re-test stands (selftest)" \
+          # The label check keeps the `merge-ready` status: its judgment
+          # and the names it reads from merge-ready.yml (rule 47).
+          run_one "merge-ready: an early label refused, a push clears it, a replaced run leaves no red (selftest)" \
             python3 scripts/ci/merge_ready.py --selftest
           run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
             python3 scripts/ci/check_workflow_fetch_guard.py --selftest
@@ -289,6 +284,13 @@ jobs:
           # each allowed path to still use it, and refuses CacheStore anywhere.
           run_one "One owner of every RandomX cache (HA-R1)" \
             scripts/ci/check_randomx_cache_owner.sh
+          # R-34: a wallet's output positions come from its transaction
+          # key's order; only the block producers name a fixed position.
+          # The selftest first, so a scan that reads nothing cannot pass.
+          run_one "R-34: fixed output positions are the block producers' (selftest)" \
+            python3 scripts/ci/check_fixed_output_position_callers.py --selftest
+          run_one "R-34: fixed output positions are the block producers'" \
+            python3 scripts/ci/check_fixed_output_position_callers.py
           # DX-Q3 Q4: the node's template draws its coinbase secret and its
           # draw commitment from the OS (the commitment through the witness
           # ring); the scenario's reproducible values stay in test code.

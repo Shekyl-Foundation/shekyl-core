@@ -44,7 +44,7 @@ use super::error::FeeEstimatorError;
 use super::fee_policy::ValidatedFeeEstimates;
 use super::refresh::LedgerSnapshot;
 use super::tx_counts::{InputCount, OutputCount};
-use super::tx_fee_model::converge_fee;
+use super::tx_fee_model::{converge_fee, GroupSize};
 
 pub use shekyl_economics::FeePriority;
 
@@ -97,6 +97,10 @@ pub struct FeeEstimationContext<'a> {
     pub fee_snapshot: ValidatedFeeEstimates,
     /// Tree depth for structural weight prediction.
     pub tree_depth: u8,
+    /// The size of each group the transaction pays, one per output paying
+    /// a group (R-37): each such output carries a `0x0D` entry with one
+    /// ciphertext per member, priced like any other byte.
+    pub group_payees: &'a [GroupSize],
 }
 
 /// Trait isolating fee-estimation strategy from the
@@ -204,11 +208,17 @@ impl FeeEstimator for DaemonFeeEstimator {
         // The counts are type-bounded (`>= 1`), so no `.max(1)` floor is needed.
         let n_in = context.input_count;
         let n_out = context.output_count;
-        let fee = converge_fee(&rate, n_in, n_out, context.tree_depth, 0).ok_or(
-            FeeEstimatorError::DaemonResponseInvalid {
-                reason: "the fee does not fit in u64",
-            },
-        )?;
+        let fee = converge_fee(
+            &rate,
+            n_in,
+            n_out,
+            context.tree_depth,
+            context.group_payees,
+            0,
+        )
+        .ok_or(FeeEstimatorError::DaemonResponseInvalid {
+            reason: "the fee does not fit in u64",
+        })?;
         Ok(AtomicUnits::from_raw(fee))
     }
 }
@@ -266,6 +276,7 @@ mod tests {
             output_count: OutputCount::clamped(2),
             fee_snapshot: snapshot,
             tree_depth: 1,
+            group_payees: &[],
         };
         for priority in [
             FeePriority::Economy,
@@ -307,6 +318,7 @@ mod tests {
             output_count: OutputCount::clamped(2),
             fee_snapshot: snapshot,
             tree_depth: 1,
+            group_payees: &[],
         };
 
         let economy = DaemonFeeEstimator

@@ -58,12 +58,15 @@ pub(crate) fn enc_fields() -> (EncryptedOutputField, EncryptedOutputField) {
         .compress()
         .to_bytes();
     let out = shekyl_crypto_pq::output::construct_output(
-        &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
+        shekyl_crypto_pq::TxKey::random()
+            .expect("the OS draws a key")
+            .output_positions(1)
+            .at(0)
+            .unwrap(),
         &pk.x25519,
         &pk.ml_kem,
         &spend,
         1,
-        0,
     )
     .expect("an output constructs");
     (out.enc_amount_wire(), out.enc_label_wire())

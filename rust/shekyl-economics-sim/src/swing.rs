@@ -208,9 +208,14 @@ pub fn a6_report(
     )?;
     let mut worst_epoch_pts = 0.0_f64;
     let mut worst_reorg_pts = 0.0_f64;
-    let mut worst_dn = 0u64;
-    let mut worst_dn_at_n = 0u64;
     let mut worst_pen_pts = 0.0_f64;
+    // What a flood at the legal limit pays in fees for one epoch, at each
+    // sampled chain size: the shards it closes there, at that size's rate.
+    // The slews at the sizes are near-tied, so the cost is reported across
+    // them, lowest and highest, never at whichever size's slew is largest:
+    // that size's rate moved the single figure from ~322 000 to ~4 400 SKL
+    // when the stuffers' shapes moved a few percent (§5.37.2).
+    let mut flood_cost: Vec<(u64, u128)> = Vec::with_capacity(n_samples.len());
     for &n in n_samples {
         let rate = admission.at(n);
         let dn_epoch =
@@ -227,10 +232,15 @@ pub fn a6_report(
         let pts = ds_epoch as f64 / SHARE_SCALE as f64 * 100.0;
         worst_epoch_pts = worst_epoch_pts.max(pts);
         worst_reorg_pts = worst_reorg_pts.max(ds_reorg as f64 / SHARE_SCALE as f64 * 100.0);
-        if dn_pen > worst_dn {
-            worst_dn = dn_pen;
-            worst_dn_at_n = n;
-        }
+        flood_cost.push((
+            n,
+            required_price(stuffer_campaign(
+                honest_leaves_at_closed_shards(n),
+                dn_pen,
+                rate,
+            ))
+            .cost_atomic,
+        ));
         worst_pen_pts =
             worst_pen_pts.max(delta_share(&curve, n, dn_pen) as f64 / SHARE_SCALE as f64 * 100.0);
         writeln!(
@@ -256,6 +266,14 @@ pub fn a6_report(
         RD = REORG_DEPTH_BLOCKS,
         V = a6_slew_verdict(worst_epoch_pts, run.economic().block_weight_surge_factor),
     )?;
+    let lo = *flood_cost
+        .iter()
+        .min_by_key(|&&(_, cost)| cost)
+        .expect("A6 samples at least one chain size");
+    let hi = *flood_cost
+        .iter()
+        .max_by_key(|&&(_, cost)| cost)
+        .expect("A6 samples at least one chain size");
     writeln!(out,
         "  -> §6.0/§6.1 SEPARATED, because they are different claims:\n\
          (a) CLIFF (structural, §6.1's actual requirement) — NOT present. The share is\n\
@@ -269,7 +287,8 @@ pub fn a6_report(
              and it is bounded, monotone and one-directional — but it is NOT invisible,\n\
              which is the honest correction to a purely structural reading of §6.0.\n\
              It is also PRICED, and the legal-limit price is dominated by a term that is\n\
-             NOT the fees: ~{C:.0} SKL/epoch in stuffing fees at the A4 rate, PLUS\n\
+             NOT the fees: {CLO:.0} to {CHI:.0} SKL/epoch in stuffing fees at the A4 rate\n\
+             across the sampled chain sizes (lowest at n = {NLO}, highest at n = {NHI}), PLUS\n\
              ~{P:.0} SKL/epoch of miner-reward penalty compensation — at B = 2M the\n\
              production penalty formula (get_block_reward) pays the miner EXACTLY ZERO,\n\
              so the flooder must fund the whole block reward, every block, or no rational\n\
@@ -280,13 +299,10 @@ pub fn a6_report(
         RDP = worst_reorg_pts,
         W = worst_epoch_pts,
         WP = worst_pen_pts,
-        C = required_price(stuffer_campaign(
-            honest_leaves_at_closed_shards(worst_dn_at_n),
-            worst_dn,
-            admission.at(worst_dn_at_n),
-        ))
-        .cost_atomic as f64
-            / crate::burden::COIN as f64,
+        CLO = lo.1 as f64 / crate::burden::COIN as f64,
+        CHI = hi.1 as f64 / crate::burden::COIN as f64,
+        NLO = lo.0,
+        NHI = hi.0,
         P = penalty_compensation_skl_per_epoch(forfeit_per_block_atomic, run),
     )?;
 

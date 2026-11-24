@@ -1208,10 +1208,17 @@ mod tests {
     /// reads only a regular file. Red edit: compare through a plain
     /// `std::fs::read`, and the replace blocks on the FIFO until this
     /// test's deadline (Copilot, #1439, a FIFO at a rebaseline output).
+    ///
+    /// The deadline covers getting past the FIFO, and nothing after it: the
+    /// comparison is the only step that opens the destination, and the
+    /// staged file appears after it, before the replace's three disk syncs,
+    /// so a slow disk is not read as a hang.
     #[test]
     fn a_fifo_at_the_destination_is_replaced_without_blocking() {
         use std::os::unix::fs::FileTypeExt;
-        const WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+        use std::sync::mpsc::RecvTimeoutError;
+        const WITHIN: Duration = Duration::from_secs(60);
+        const POLL: Duration = Duration::from_millis(50);
         let dir = tempfile::tempdir().unwrap();
         let live = dir.path().join("trace.bin");
         let live_c = std::ffi::CString::new(live.to_str().unwrap()).unwrap();
@@ -1224,10 +1231,25 @@ mod tests {
         std::thread::spawn(move || {
             drop(done.send(replace(&target, b"trace", Access::Default)));
         });
-        let replaced = finished
-            .recv_timeout(WITHIN)
-            .expect("the replace hung on the FIFO")
-            .expect("the replace");
+        let staged = staged_path(&live);
+        let deadline = Instant::now() + WITHIN;
+        let replaced = loop {
+            match finished.recv_timeout(POLL) {
+                Ok(result) => break result.expect("the replace"),
+                Err(RecvTimeoutError::Disconnected) => panic!("the replace's thread ended"),
+                Err(RecvTimeoutError::Timeout) => {
+                    // The staged file first: the rename takes it away and
+                    // makes the destination regular in one step, so a
+                    // replace past the FIFO always reads as past it.
+                    let past = staged.exists()
+                        || !std::fs::symlink_metadata(&live).is_ok_and(|m| m.file_type().is_fifo());
+                    assert!(
+                        past || Instant::now() < deadline,
+                        "the replace hung on the FIFO"
+                    );
+                }
+            }
+        };
         assert!(matches!(replaced, Replaced::Written(_)), "{replaced:?}");
         assert!(!std::fs::symlink_metadata(&live)
             .unwrap()

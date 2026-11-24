@@ -3921,6 +3921,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2",
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
@@ -3936,6 +3937,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -4302,6 +4304,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-network",
  "shekyl-tx-builder",

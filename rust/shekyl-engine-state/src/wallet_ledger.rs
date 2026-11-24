@@ -56,7 +56,9 @@ use crate::{
     bookkeeping_block::BookkeepingBlock,
     error::WalletLedgerError,
     ledger_block::LedgerBlock,
-    send_journal_block::{AbandonEdge, SendInputRef, SendJournalBlock, SendRecipient, SendState},
+    send_journal_block::{
+        AbandonEdge, JournalRecipient, SendInputRef, SendJournalBlock, SendState,
+    },
     staking_block::StakingBlock,
     sync_state_block::SyncStateBlock,
     transfer::TransferDetails,
@@ -157,7 +159,12 @@ use crate::{
 /// `26` (2026-11-15): `TransferDetails::frozen` is removed, with the user
 /// freeze (`LEDGER_BLOCK_VERSION` 15). A version-25 wallet file is refused;
 /// pre-genesis does not migrate it.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 26;
+///
+/// `27` (2026-11-22, R-37): a send can pay a multisig group, and the send
+/// journal names the group and stores its address
+/// (`SEND_JOURNAL_BLOCK_VERSION` 7). A version-26 wallet file is refused
+/// and restored from its seed; pre-genesis does not migrate it.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 27;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -421,19 +428,20 @@ impl WalletLedger {
     }
 
     /// Birth the send-journal row for a dispatch (same guard as
-    /// [`Self::record_retained_tx_key`] — pin-1 form). See
-    /// [`SendJournalBlock::record_dispatched`].
+    /// [`Self::record_retained_tx_key`] — pin-1 form). A group's address
+    /// rides on its [`JournalRecipient`]; the journal stores the address
+    /// and writes the fingerprint ([`SendJournalBlock::record_dispatched_payees`]).
     pub fn record_dispatched_send(
         &mut self,
         txid: [u8; 32],
         fee: u64,
-        recipients: Vec<SendRecipient>,
+        recipients: Vec<JournalRecipient>,
         inputs: Vec<SendInputRef>,
         tx_bytes: Vec<u8>,
     ) {
         let height = self.ledger.height();
         self.send_journal
-            .record_dispatched(txid, height, fee, recipients, inputs, tx_bytes);
+            .record_dispatched_payees(txid, height, fee, recipients, inputs, tx_bytes);
     }
 
     /// Undo a dispatch whose save failed, before its bytes left: the
@@ -1502,7 +1510,7 @@ mod tests {
 
     #[test]
     fn stamp_send_lock_baseline_arms_the_derived_view() {
-        use crate::send_journal_block::{SendInputRef, SendRecipient};
+        use crate::send_journal_block::{JournalPayee, JournalRecipient, SendInputRef};
 
         let txid = [0x44; 32];
         let mut w = WalletLedger::empty();
@@ -1513,10 +1521,8 @@ mod tests {
         w.record_dispatched_send(
             txid,
             5,
-            vec![SendRecipient {
-                destination: crate::send_journal_block::SendDestination::Address(
-                    "shekyl1example".to_owned(),
-                ),
+            vec![JournalRecipient {
+                payee: JournalPayee::Address("shekyl1example".to_owned()),
                 amount: 1,
                 rid: None,
             }],

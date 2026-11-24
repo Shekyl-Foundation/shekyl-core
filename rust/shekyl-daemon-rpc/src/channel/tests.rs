@@ -59,6 +59,11 @@ struct Served {
 
 impl Served {
     async fn start(service: bool) -> Self {
+        Self::start_within(service, shekyl_rpc_channel::deadline::HANDSHAKE_DEADLINE).await
+    }
+
+    /// A listener whose handshakes end at `handshake_deadline`.
+    async fn start_within(service: bool, handshake_deadline: Duration) -> Self {
         let dir = tempfile::tempdir().expect("a directory");
         // The service's data directory is the service account's alone, as
         // the console's leg requires; tempfile leaves it to the umask.
@@ -86,7 +91,7 @@ impl Served {
         let (_, listener) = bound.into_parts();
         let (stop, mut stopped) = watch::channel(false);
         let tracker = ConnTracker::new(ConnLimits::default());
-        let serving = tokio::spawn(super::listener::serve(
+        let serving = tokio::spawn(super::listener::serve_within(
             LimitedListener::new(listener, Arc::clone(&tracker)),
             super::listener::Leg::Network,
             Arc::clone(&channel),
@@ -94,6 +99,7 @@ impl Served {
             async move {
                 drop(stopped.wait_for(|&s| s).await);
             },
+            handshake_deadline,
         ));
         Self {
             _dir: dir,
@@ -860,13 +866,17 @@ async fn a_silent_connection_is_closed_at_the_message_1_deadline() {
 /// connection still in its handshake have both closed, and the handshake
 /// ends on the stop rather than at its deadline. The handshaking client has
 /// sent message 1 and read message 2, so the daemon waits for message 3
-/// under the 11-second handshake deadline alone. Red edit: drop the wait in
-/// `listener::serve`, and it returns with connections still counted; drop
-/// the stop from the handshake's `select!`, and the stop waits out that
-/// deadline.
+/// under the handshake deadline alone. That deadline is an hour here and
+/// the test's limit minutes, so only the stop can end the handshake inside
+/// the limit, and a slow host cannot pass or fail it by the clock. Red
+/// edit: drop the wait in `listener::serve_within`, and it returns with
+/// connections still counted; drop the stop from the handshake's `select!`,
+/// and the stop waits past the limit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
-    let served = Served::start(false).await;
+    const HANDSHAKE: Duration = Duration::from_secs(3600);
+    const WITHIN: Duration = Duration::from_secs(300);
+    let served = Served::start_within(false, HANDSHAKE).await;
     let client = StaticKeypair::generate().unwrap();
     served.enroll(&client, &[CeilingWord::View]);
     let mut session = connect(&served, &client, Preset::View.grants())
@@ -888,11 +898,11 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
         .expect("message 2: the daemon now waits for message 3");
     let counted = Instant::now();
     while served.tracker.active_total() < 2 {
-        assert!(counted.elapsed() < Duration::from_secs(5), "both counted");
+        assert!(counted.elapsed() < WITHIN, "both counted");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     served.stop.send_replace(true);
-    tokio::time::timeout(Duration::from_secs(8), served.serving)
+    tokio::time::timeout(WITHIN, served.serving)
         .await
         .expect("the stop does not wait out the handshake deadline")
         .expect("the listener's task")
@@ -903,16 +913,13 @@ async fn a_stop_waits_for_every_connection_and_ends_a_handshake() {
         "every connection ended before the listener returned"
     );
     let mut byte = [0u8; 1];
-    let read = tokio::time::timeout(Duration::from_millis(500), handshaking.read(&mut byte))
+    let read = tokio::time::timeout(WITHIN, handshaking.read(&mut byte))
         .await
         .expect("the handshaking connection is closed when the listener returns");
     assert_eq!(read.ok(), Some(0));
-    let after = tokio::time::timeout(
-        Duration::from_millis(500),
-        session.call("version", json!({})),
-    )
-    .await
-    .expect("the session is closed when the listener returns");
+    let after = tokio::time::timeout(WITHIN, session.call("version", json!({})))
+        .await
+        .expect("the session is closed when the listener returns");
     assert!(after.is_none(), "{after:?}");
 }
 

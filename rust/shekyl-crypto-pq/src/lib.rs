@@ -76,6 +76,7 @@ pub mod multisig_blob;
 pub mod multisig_envelope;
 pub mod multisig_intent;
 pub mod multisig_output;
+pub mod multisig_receive;
 pub mod output;
 pub mod output_claim;
 pub mod output_mask;

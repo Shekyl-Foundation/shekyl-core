@@ -90,6 +90,7 @@ use crate::kem::{
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment};
 use crate::output_mask::OutputMask;
+use crate::output_order::OutputPosition;
 use crate::tx_key::TxKey;
 use crate::CryptoError;
 
@@ -271,26 +272,25 @@ impl std::fmt::Debug for ScannedOutput {
 /// not a scalar. This preserves the V4 FROST SAL migration path where B
 /// may be a multisig aggregate key unknown to any single party as a scalar.
 ///
-/// KEM encapsulation is deterministic: the transaction key, the recipient's
-/// public keys and `output_index` determine the X25519 ephemeral key and
-/// the ML-KEM ciphertext. The sender re-derives `combined_ss` at proof time
-/// from the key it stored ([`TxKey::store`]) and public data
+/// KEM encapsulation is deterministic: the transaction key and the
+/// output's index, which `position` carries (R-34), and the recipient's
+/// public keys determine the X25519 ephemeral key and the ML-KEM
+/// ciphertext. The sender re-derives `combined_ss` at proof time from the
+/// key it stored ([`TxKey::store`]) and public data
 /// ([`TxKey::rederive_combined_ss`]).
 pub fn construct_output(
-    tx_key: &TxKey,
+    position: OutputPosition<'_>,
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
     spend_key: &[u8; 32],
     amount: u64,
-    output_index: u64,
 ) -> Result<OutputData, CryptoError> {
     construct_output_with_label_plaintext(
-        tx_key,
+        position,
         x25519_pk,
         ml_kem_ek,
         spend_key,
         amount,
-        output_index,
         &sentinel_plaintext(),
     )
 }
@@ -301,21 +301,20 @@ pub fn construct_output(
 /// [`crate::label::encode_request_plaintext`] (engine-core's
 /// `outbound_label` chooses it); every other output passes the sentinel.
 pub fn construct_output_with_label_plaintext(
-    tx_key: &TxKey,
+    position: OutputPosition<'_>,
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
     spend_key: &[u8; 32],
     amount: u64,
-    output_index: u64,
     label_plaintext: &[u8; 8],
 ) -> Result<OutputData, CryptoError> {
+    let output_index = position.index();
     let core = construct_output_core(
-        tx_key,
+        position,
         x25519_pk,
         ml_kem_ek,
         spend_key,
         amount,
-        output_index,
         label_plaintext,
     )?;
 
@@ -438,14 +437,15 @@ pub(crate) struct OutputCore {
 }
 
 pub(crate) fn construct_output_core(
-    tx_key: &TxKey,
+    position: OutputPosition<'_>,
     x25519_pk: &[u8; 32],
     ml_kem_ek: &[u8],
     spend_key: &[u8; 32],
     amount: u64,
-    output_index: u64,
     label_plaintext: &[u8; 8],
 ) -> Result<OutputCore, CryptoError> {
+    let tx_key = position.tx_key();
+    let output_index = position.index();
     // --- Input validation ---
 
     let b_point = CompressedEdwardsY(*spend_key)
@@ -1626,12 +1626,14 @@ mod tests {
         let output_index = 0u64;
 
         let out = construct_output(
-            &tx_key,
+            tx_key
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             amount,
-            output_index,
         )
         .expect("construct_output should succeed");
 
@@ -1696,12 +1698,14 @@ mod tests {
         for idx in 0..4u64 {
             let amount = 100_000 * (idx + 1);
             let out = construct_output(
-                &tx_key,
+                tx_key
+                    .output_positions(usize::try_from(idx).unwrap() + 1)
+                    .at(idx)
+                    .unwrap(),
                 &recipient_pk.x25519,
                 &recipient_pk.ml_kem,
                 &spend_key,
                 amount,
-                idx,
             )
             .unwrap();
 
@@ -1740,12 +1744,11 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(
-            &tx_key,
+            tx_key.output_positions(1).at(0).unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             500,
-            0,
         )
         .unwrap();
 
@@ -1792,12 +1795,11 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(
-            &tx_key,
+            tx_key.output_positions(1).at(0).unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             1000,
-            0,
         )
         .unwrap();
 
@@ -1865,12 +1867,11 @@ mod tests {
             .to_bytes();
 
         let out = construct_output(
-            &tx_key,
+            tx_key.output_positions(1).at(0).unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             7777,
-            0,
         )
         .unwrap();
 
@@ -1906,7 +1907,13 @@ mod tests {
 
         let tx_key = random_tx_key();
         let identity = EdwardsPoint::default().compress().to_bytes();
-        let result = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &identity, 100, 0);
+        let result = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &identity,
+            100,
+        );
         assert!(result.is_err(), "identity spend key must be rejected");
     }
 
@@ -1917,7 +1924,13 @@ mod tests {
 
         let tx_key = random_tx_key();
         let garbage = [0xFFu8; 32];
-        let result = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &garbage, 100, 0);
+        let result = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &garbage,
+            100,
+        );
         assert!(result.is_err(), "garbage spend key must be rejected");
     }
 
@@ -1931,7 +1944,14 @@ mod tests {
             .to_bytes();
 
         let tx_key = random_tx_key();
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 0, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            0,
+        )
+        .unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1963,8 +1983,14 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out =
-            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, u64::MAX, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            u64::MAX,
+        )
+        .unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -1996,8 +2022,22 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out0 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
-        let out1 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 1).unwrap();
+        let out0 = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
+        let out1 = construct_output(
+            tx_key.output_positions(2).at(1).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
 
         assert_ne!(
             out0.output_key, out1.output_key,
@@ -2027,7 +2067,14 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 999, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            999,
+        )
+        .unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -2175,7 +2222,14 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            500,
+        )
+        .unwrap();
 
         let scanned = scan_output(
             &sk.x25519,
@@ -2250,8 +2304,22 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out1 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 42, 7).unwrap();
-        let out2 = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 42, 7).unwrap();
+        let out1 = construct_output(
+            tx_key.output_positions(8).at(7).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            42,
+        )
+        .unwrap();
+        let out2 = construct_output(
+            tx_key.output_positions(8).at(7).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            42,
+        )
+        .unwrap();
 
         assert_eq!(out1.output_key, out2.output_key, "O must be deterministic");
         assert_eq!(out1.commitment, out2.commitment, "C must be deterministic");
@@ -2305,8 +2373,17 @@ mod tests {
         let amount = 500_000u64;
         let idx = 3u64;
 
-        let out =
-            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx).unwrap();
+        let out = construct_output(
+            tx_key
+                .output_positions(usize::try_from(idx).unwrap() + 1)
+                .at(idx)
+                .unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            amount,
+        )
+        .unwrap();
 
         let (ss_re, x25519_eph_re, ml_kem_ct_re) = tx_key
             .rederive_combined_ss(&pk.x25519, &pk.ml_kem, idx)
@@ -2385,8 +2462,17 @@ mod tests {
             .to_bytes();
 
         for idx in 0..4u64 {
-            let out =
-                construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx).unwrap();
+            let out = construct_output(
+                tx_key
+                    .output_positions(usize::try_from(idx).unwrap() + 1)
+                    .at(idx)
+                    .unwrap(),
+                &pk.x25519,
+                &pk.ml_kem,
+                &spend_key,
+                1000,
+            )
+            .unwrap();
 
             let (ss, _, _) = tx_key
                 .rederive_combined_ss(&pk.x25519, &pk.ml_kem, idx)
@@ -2478,9 +2564,14 @@ mod tests {
             .to_bytes();
 
         let amounts = [0u64, 1, 999, 1_000_000_000, u64::MAX];
+        let positions = tx_key.output_positions(amounts.len());
         for (idx, &amount) in amounts.iter().enumerate() {
             let out = construct_output(
-                &tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx as u64,
+                positions.at(idx as u64).unwrap(),
+                &pk.x25519,
+                &pk.ml_kem,
+                &spend_key,
+                amount,
             )
             .unwrap();
 
@@ -2508,7 +2599,14 @@ mod tests {
             .compress()
             .to_bytes();
 
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 12345, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            12345,
+        )
+        .unwrap();
 
         let (ss, _, _) = tx_key
             .rederive_combined_ss(&pk.x25519, &pk.ml_kem, 0)
@@ -2540,7 +2638,17 @@ mod tests {
         let spend_key = (G * spend_scalar).compress().to_bytes();
         let idx = 2u64;
 
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 1000, idx).unwrap();
+        let out = construct_output(
+            tx_key
+                .output_positions(usize::try_from(idx).unwrap() + 1)
+                .at(idx)
+                .unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            1000,
+        )
+        .unwrap();
 
         let (ss, _, _) = tx_key
             .rederive_combined_ss(&pk.x25519, &pk.ml_kem, idx)
@@ -2625,8 +2733,17 @@ mod tests {
         let idx = 1u64;
 
         // Step 1: Sender constructs output
-        let out =
-            construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, amount, idx).unwrap();
+        let out = construct_output(
+            tx_key
+                .output_positions(usize::try_from(idx).unwrap() + 1)
+                .at(idx)
+                .unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            amount,
+        )
+        .unwrap();
         eprintln!(
             "[pipeline] constructed output O={}",
             hex::encode(out.output_key)
@@ -2758,8 +2875,14 @@ mod tests {
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
-        let od =
-            construct_output(&random_tx_key(), &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+        let od = construct_output(
+            random_tx_key().output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
 
         assert_eq!(
             decrypt_label_plaintext(od.enc_label_wire().ciphertext(), &od.k_label),
@@ -2780,8 +2903,22 @@ mod tests {
         let tx_key1 = random_tx_key();
         let tx_key2 = random_tx_key();
 
-        let out1 = construct_output(&tx_key1, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
-        let out2 = construct_output(&tx_key2, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+        let out1 = construct_output(
+            tx_key1.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
+        let out2 = construct_output(
+            tx_key2.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
 
         assert_ne!(
             out1.output_key, out2.output_key,
@@ -2838,12 +2975,14 @@ mod tests {
 
         // Sender constructs with view-key-derived X25519
         let out = construct_output(
-            &tx_key,
+            tx_key
+                .output_positions(usize::try_from(idx).unwrap() + 1)
+                .at(idx)
+                .unwrap(),
             &x25519_pub,
             &full_pk.ml_kem,
             &spend_key,
             amount,
-            idx,
         )
         .unwrap();
 
@@ -2892,12 +3031,14 @@ mod tests {
         for idx in 0u64..5 {
             let amount = (idx + 1) * 1_000_000;
             let out = construct_output(
-                &tx_key,
+                tx_key
+                    .output_positions(usize::try_from(idx).unwrap() + 1)
+                    .at(idx)
+                    .unwrap(),
                 &x25519_pub,
                 &full_pk.ml_kem,
                 &spend_key,
                 amount,
-                idx,
             )
             .unwrap();
 
@@ -2930,12 +3071,11 @@ mod tests {
             .compress()
             .to_bytes();
         let out = construct_output(
-            &tx_key,
+            tx_key.output_positions(1).at(0).unwrap(),
             &recipient_pk.x25519,
             &recipient_pk.ml_kem,
             &spend_key,
             100,
-            0,
         )
         .unwrap();
 
@@ -3058,7 +3198,14 @@ mod tests {
         let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
             .compress()
             .to_bytes();
-        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+        let out = construct_output(
+            tx_key.output_positions(1).at(0).unwrap(),
+            &pk.x25519,
+            &pk.ml_kem,
+            &spend_key,
+            100,
+        )
+        .unwrap();
 
         let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
         let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());

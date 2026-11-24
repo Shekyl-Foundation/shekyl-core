@@ -103,7 +103,14 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
+use shekyl_address::multisig_address::{
+    MultisigAddressPayload, MAX_MULTISIG_PARTICIPANTS, MIN_MULTISIG_THRESHOLD,
+};
+use shekyl_address::{address_fingerprint, FINGERPRINT_LEN};
+
+use crate::kem::{HYBRID_KEM_SECRET_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
+use crate::multisig_envelope::ENVELOPE_SECRET_LEN;
+use crate::signature::HybridPublicKey;
 
 // ---------------------------------------------------------------------------
 // Format constants. Every byte offset / length in this module refers to these.
@@ -139,14 +146,60 @@ pub const DEFAULT_KDF_M_LOG2: u8 = 0x10; // 2^16 KiB = 64 MiB
 pub const DEFAULT_KDF_T: u8 = 0x03;
 pub const DEFAULT_KDF_P: u8 = 0x01;
 
-/// Capability mode discriminator. `0x01` (Full) is the only capability:
-/// ViewOnly is REJECTED and hardware-offload is DEFERRED with zero code
-/// (rule 23; decision log 2026-09-07). The retired v1 bytes `0x02`–`0x04`
-/// are RESERVED in `docs/WALLET_FILE_FORMAT_V1.md`'s discriminant table —
-/// in the spec, deliberately not as code constants — and any byte other
-/// than `0x01` is refused at open with
+/// Capability mode discriminator for a solo wallet, whose content is its
+/// 32-byte seed. ViewOnly is REJECTED and hardware-offload is DEFERRED with
+/// zero code (rule 23; decision log 2026-09-07): their bytes `0x02` and
+/// `0x03` are RETIRED in `docs/WALLET_FILE_FORMAT_V1.md`'s discriminant
+/// table, in the spec and deliberately not as code constants. Any byte that
+/// is neither this nor [`CAPABILITY_GROUP_MEMBER`] is refused at open with
 /// [`WalletEnvelopeError::UnknownCapabilityMode`].
 pub const CAPABILITY_FULL: u8 = 0x01;
+
+/// Capability mode discriminator for a group wallet (R-30), whose content
+/// is one member's member file.
+pub const CAPABILITY_GROUP_MEMBER: u8 = 0x04;
+
+/// The fixed prefix of a member file: magic (4), version (1) and the address
+/// payload's length (4).
+const MEMBER_FILE_PREFIX_BYTES: usize = 4 + 1 + 4;
+/// Bytes of a scalar, a point, or the transport secret in a member file.
+const MEMBER_FILE_FIELD_BYTES: usize = 32;
+
+/// The exact length of the member file of an `n_total`-member group (layout:
+/// `shekyl_multisig::member_file`). The one statement of that length: the
+/// member file reserves it, and the envelope's closed set of `0x04` content
+/// lengths is this function over the group sizes.
+#[must_use]
+pub const fn group_member_content_len(n_total: u8) -> usize {
+    let n = n_total as usize;
+    MEMBER_FILE_PREFIX_BYTES
+        + MultisigAddressPayload::canonical_len_for(n_total)
+        + 1 // member index
+        + MEMBER_FILE_FIELD_BYTES * (3 + n) // b, y share, transport, a share per member
+        + 2 * HYBRID_KEM_SECRET_LEN
+        + ENVELOPE_SECRET_LEN
+        + HybridPublicKey::CANONICAL_LEN * n
+}
+
+// `cap_content_len` is a `u16`: the largest group's member file must fit.
+const _: () = assert!(group_member_content_len(MAX_MULTISIG_PARTICIPANTS) <= u16::MAX as usize);
+
+/// The 65-byte value a group wallet's keys file holds where a solo wallet
+/// holds its classical address, and binds its region-2 key to (§2.6):
+/// `address version(1) ‖ b_group(32) ‖ address_fingerprint(32)`. The
+/// fingerprint commits to the whole group address and its network, so the
+/// files of two groups never share a region-2 key derivation input.
+#[must_use]
+pub fn group_wallet_binding(
+    address: &MultisigAddressPayload,
+) -> [u8; EXPECTED_CLASSICAL_ADDRESS_BYTES] {
+    const _: () = assert!(1 + 32 + FINGERPRINT_LEN == EXPECTED_CLASSICAL_ADDRESS_BYTES);
+    let mut binding = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    binding[0] = address.version();
+    binding[1..33].copy_from_slice(address.b_group());
+    binding[33..].copy_from_slice(&address_fingerprint(address));
+    binding
+}
 
 /// Canonical 65-byte classical address body (version || spend_pk || view_pk)
 /// used by the address invariant check in region 1.
@@ -260,7 +313,9 @@ pub enum WalletEnvelopeError {
     #[error("cap_content_len {len} does not match capability mode {mode:#x}")]
     CapContentLenMismatch { mode: u8, len: u16 },
 
-    #[error("unsupported capability mode {0:#x} (this build supports 0x01 only)")]
+    #[error(
+        "unsupported capability mode {0:#x} (this build supports full and group-member wallets)"
+    )]
     UnknownCapabilityMode(u8),
 
     #[error("invalid password or corrupted wallet file")]
@@ -320,33 +375,38 @@ impl KdfParams {
 }
 
 /// Capability-mode content, borrowed. Callers own the storage; we only read
-/// during seal. `Full` is the only capability (rule 23; decision log
-/// 2026-09-07) — the enum shape is kept because it is the seal-side parse
-/// boundary a ratified future capability would join through.
+/// during seal.
 pub enum CapabilityContent<'a> {
     /// FULL wallet: can spend. Contains the wallet's 32-byte seed, from
     /// which every key is rederived on open and the 24 words are shown.
     Full {
         seed: &'a [u8; FULL_CAP_CONTENT_BYTES],
     },
+    /// A group wallet (R-30): one member's member file, opaque here. Its
+    /// length is one of [`group_member_content_len`]'s; the layer above the
+    /// envelope parses it. It is the wallet's backup; there are no words.
+    GroupMember { member_file: &'a [u8] },
 }
 
 impl CapabilityContent<'_> {
     fn mode_byte(&self) -> u8 {
         match self {
             Self::Full { .. } => CAPABILITY_FULL,
+            Self::GroupMember { .. } => CAPABILITY_GROUP_MEMBER,
         }
     }
 
     fn serialized_len(&self) -> usize {
         match self {
             Self::Full { .. } => FULL_CAP_CONTENT_BYTES,
+            Self::GroupMember { member_file } => member_file.len(),
         }
     }
 
     fn write_into(&self, out: &mut Vec<u8>) {
         match self {
             Self::Full { seed } => out.extend_from_slice(seed.as_slice()),
+            Self::GroupMember { member_file } => out.extend_from_slice(member_file),
         }
     }
 }
@@ -667,18 +727,21 @@ fn write_keys_file_header(out: &mut Vec<u8>, kdf: KdfParams, wrap_salt: &[u8; WR
 /// Validate capability-mode / cap_content_len pair on open. Separate from
 /// the Poly1305 check because we want a typed error for "my seal code
 /// wrote a wrong-length cap_content" rather than generic AEAD failure.
-/// Any mode byte other than [`CAPABILITY_FULL`] refuses with the generic
-/// unsupported-capability error — it names no specific future arm.
+/// Any mode byte other than [`CAPABILITY_FULL`] and
+/// [`CAPABILITY_GROUP_MEMBER`] refuses with the generic unsupported-capability
+/// error — it names no specific future arm.
 fn validate_cap_content(mode: u8, cap_len: u16) -> Result<(), WalletEnvelopeError> {
-    match mode {
-        CAPABILITY_FULL => {
-            if usize::from(cap_len) == FULL_CAP_CONTENT_BYTES {
-                Ok(())
-            } else {
-                Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len })
-            }
-        }
-        other => Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
+    let len = usize::from(cap_len);
+    let member_of_closed_set = match mode {
+        CAPABILITY_FULL => len == FULL_CAP_CONTENT_BYTES,
+        CAPABILITY_GROUP_MEMBER => (MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS)
+            .any(|n_total| len == group_member_content_len(n_total)),
+        other => return Err(WalletEnvelopeError::UnknownCapabilityMode(other)),
+    };
+    if member_of_closed_set {
+        Ok(())
+    } else {
+        Err(WalletEnvelopeError::CapContentLenMismatch { mode, len: cap_len })
     }
 }
 
@@ -747,6 +810,8 @@ pub(crate) fn seal_keys_file_with_entropy(
         .serialized_len()
         .try_into()
         .map_err(|_| WalletEnvelopeError::Internal("cap_content exceeds u16::MAX".into()))?;
+    // A file this function writes is one `open_keys_file` reads.
+    validate_cap_content(capability.mode_byte(), cap_len)?;
 
     let mut out = Vec::with_capacity(
         OFF_REGION1_CT + R1_MIN_PLAINTEXT_BYTES + usize::from(cap_len) + AEAD_TAG_BYTES,
@@ -1411,10 +1476,9 @@ mod tests {
 
     #[test]
     fn reject_unknown_capability_mode() {
-        // The retired v1 bytes (0x02 ViewOnly, 0x03 hardware-offload,
-        // 0x04 reserved-multisig — RESERVED in the format spec, unlabeled)
-        // and a never-assigned byte all hit the same generic gate.
-        for mode in [0x02u8, 0x03, 0x04, 0x07] {
+        // The retired v1 bytes (0x02 ViewOnly, 0x03 hardware-offload) and
+        // a never-assigned byte all hit the same generic gate.
+        for mode in [0x02u8, 0x03, 0x07] {
             let err = validate_cap_content(mode, 0).unwrap_err();
             match err {
                 WalletEnvelopeError::UnknownCapabilityMode(b) => assert_eq!(b, mode),
@@ -1490,7 +1554,7 @@ mod tests {
         assert_eq!(opened.capability_mode, CAPABILITY_FULL);
         assert_eq!(opened.cap_content.as_slice(), &[0x5Au8; 32]);
 
-        for mode in [0x02u8, 0x03, 0x04, 0x7F] {
+        for mode in [0x02u8, 0x03, 0x7F] {
             let bytes = seal_raw_mode_for_test(mode);
             let err = open_keys_file(FIXTURE_PASSWORD, &bytes).unwrap_err();
             match err {
@@ -1498,6 +1562,133 @@ mod tests {
                 other => panic!("mode {mode:#x}: expected UnknownCapabilityMode, got {other:?}"),
             }
         }
+        // `0x04` is live: this helper's 32-byte content is not a member
+        // file's length, so it refuses by length and is never read as one.
+        let bytes = seal_raw_mode_for_test(CAPABILITY_GROUP_MEMBER);
+        assert!(matches!(
+            open_keys_file(FIXTURE_PASSWORD, &bytes),
+            Err(WalletEnvelopeError::CapContentLenMismatch {
+                mode: CAPABILITY_GROUP_MEMBER,
+                len: 32
+            })
+        ));
+    }
+
+    fn fast_group_kdf() -> KdfParams {
+        KdfParams {
+            m_log2: 0x08,
+            t: 1,
+            p: 1,
+        }
+    }
+
+    /// Every group size's member file seals and opens, byte for byte, under
+    /// its binding value.
+    #[test]
+    fn a_member_file_of_every_group_size_seals_and_opens() {
+        for n in MIN_MULTISIG_THRESHOLD..=MAX_MULTISIG_PARTICIPANTS {
+            let content = vec![0xA5u8; group_member_content_len(n)];
+            let binding = [0x77u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+            let sealed = seal_keys_file(
+                b"pw",
+                1,
+                &CapabilityContent::GroupMember {
+                    member_file: &content,
+                },
+                7,
+                9,
+                &binding,
+                fast_group_kdf(),
+            )
+            .unwrap();
+            let opened = open_keys_file(b"pw", &sealed).unwrap();
+            assert_eq!(opened.capability_mode, CAPABILITY_GROUP_MEMBER);
+            assert_eq!(opened.cap_content.as_slice(), content.as_slice());
+            assert_eq!(opened.expected_classical_address, binding);
+        }
+    }
+
+    /// One byte off any size in the closed set does not seal.
+    #[test]
+    fn a_member_file_of_another_length_does_not_seal() {
+        let n = MIN_MULTISIG_THRESHOLD;
+        for len in [
+            0,
+            FULL_CAP_CONTENT_BYTES,
+            group_member_content_len(n) - 1,
+            group_member_content_len(n) + 1,
+        ] {
+            let content = vec![0u8; len];
+            let refused = seal_keys_file(
+                b"pw",
+                1,
+                &CapabilityContent::GroupMember {
+                    member_file: &content,
+                },
+                0,
+                0,
+                &[0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
+                fast_group_kdf(),
+            );
+            assert!(
+                matches!(
+                    refused,
+                    Err(WalletEnvelopeError::CapContentLenMismatch {
+                        mode: CAPABILITY_GROUP_MEMBER,
+                        ..
+                    })
+                ),
+                "length {len}"
+            );
+        }
+    }
+
+    fn binding_group(network: shekyl_address::Network, fill: u8) -> MultisigAddressPayload {
+        use shekyl_address::multisig_address::HYBRID_KEM_PUBKEY_LEN;
+        MultisigAddressPayload::new(
+            network,
+            3,
+            2,
+            [fill; 32],
+            [fill.wrapping_add(1); 32],
+            vec![fill; HYBRID_KEM_PUBKEY_LEN],
+            (1..=3)
+                .map(|k| vec![fill + k; HYBRID_KEM_PUBKEY_LEN])
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    /// The binding is its stated layout, and any change to the group
+    /// address (here its KEM keys, which the first 33 bytes do not cover,
+    /// and its network) changes it.
+    #[test]
+    fn the_group_binding_commits_to_the_whole_address() {
+        use shekyl_address::multisig_address::HYBRID_KEM_PUBKEY_LEN;
+        use shekyl_address::Network;
+        let address = binding_group(Network::Testnet, 0x21);
+        let binding = group_wallet_binding(&address);
+        assert_eq!(binding[0], address.version());
+        assert_eq!(&binding[1..33], address.b_group());
+        assert_eq!(&binding[33..], &address_fingerprint(&address));
+
+        let other_kem = MultisigAddressPayload::new(
+            Network::Testnet,
+            3,
+            2,
+            *address.b_group(),
+            *address.y_group(),
+            vec![0x31; HYBRID_KEM_PUBKEY_LEN],
+            (1..=3)
+                .map(|k| vec![0x21 + k; HYBRID_KEM_PUBKEY_LEN])
+                .collect(),
+        )
+        .unwrap();
+        assert_ne!(group_wallet_binding(&other_kem), binding);
+        assert_ne!(
+            group_wallet_binding(&binding_group(Network::Stagenet, 0x21)),
+            binding
+        );
     }
 
     #[test]

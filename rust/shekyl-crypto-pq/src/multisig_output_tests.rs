@@ -13,6 +13,7 @@ use crate::multisig::{
 };
 use crate::output::recover_recipient_spend_pubkey;
 use crate::signature::pqc_leaf_key_bytes;
+use crate::TxKey;
 use curve25519_dalek::scalar::Scalar;
 use shekyl_address::Network;
 use shekyl_curve_generators::T;
@@ -156,7 +157,16 @@ fn every_member_opens_the_output_and_any_m_can_spend() {
     for (n, m) in [(2u8, 2u8), (3, 2), (5, 3)] {
         let g = group(n, m);
         let index = 1u64;
-        let out = construct_multisig_output(&tx_key(), &g.address, 7_000, index, &NET).unwrap();
+        let out = construct_multisig_output(
+            tx_key()
+                .output_positions(usize::try_from(index).unwrap() + 1)
+                .at(index)
+                .unwrap(),
+            &g.address,
+            7_000,
+            &NET,
+        )
+        .unwrap();
 
         // The solo part: the group sees its own spend point.
         let spend = curve25519_dalek::edwards::CompressedEdwardsY(*g.address.b_group())
@@ -260,7 +270,16 @@ fn the_group_key_recovers_the_output_the_sender_built() {
     let g = group(3, 2);
     let index = 1u64;
     let amount = 7_000;
-    let out = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        amount,
+        &NET,
+    )
+    .unwrap();
     let committed = open_as(
         &g,
         &out,
@@ -307,8 +326,26 @@ fn a_spent_commitment_opens_to_its_mask_at_its_amount_only() {
     let g = group(3, 2);
     let index = 1u64;
     let amount = 7_000;
-    let out = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
-    let other = construct_multisig_output(&tx_key(), &g.address, amount, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        amount,
+        &NET,
+    )
+    .unwrap();
+    let other = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        amount,
+        &NET,
+    )
+    .unwrap();
     let committed = open_as(
         &g,
         &out,
@@ -338,7 +375,16 @@ fn another_groups_key_does_not_recover_the_output() {
     let g = group(2, 2);
     let other = group(2, 2);
     let index = 0u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let committed = open_as(
         &g,
         &out,
@@ -368,7 +414,13 @@ fn another_groups_key_does_not_recover_the_output() {
 #[test]
 fn member_ciphertexts_never_share_randomness() {
     let g = group(5, 3);
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, 0, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key().output_positions(1).at(0).unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let mut ephemerals: Vec<&[u8]> = out
         .member_kem_ciphertexts
         .iter()
@@ -386,7 +438,13 @@ fn member_ciphertexts_never_share_randomness() {
 #[test]
 fn a_member_cannot_open_another_members_slot() {
     let g = group(3, 2);
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, 0, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key().output_positions(1).at(0).unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let mut view = member_view(&g, 0);
     view.member_index = 1;
     assert_eq!(
@@ -401,13 +459,26 @@ fn a_member_cannot_open_another_members_slot() {
     );
 }
 
-/// A sender that lies about one member's hash is caught: that member sees
-/// its own hash wrong, every other member sees the leaf not open.
+/// A sender that lies about one member's hash is caught. Under a leaf that
+/// commits to the true hashes, every member reaches the same verdict, the
+/// leaf not opening (R-35: the group's checks run first). Under a leaf the
+/// sender computed over the lie, the leaf opens: the member whose hash is
+/// wrong refuses by its own key, and the others accept an output the group
+/// can still spend.
 #[test]
 fn a_lie_about_one_members_hash_is_caught_by_every_member() {
     let g = group(3, 2);
     let index = 2u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let ss = group_ss(&g, &out);
     let key = derive_multisig_key_hashes_key(&ss, index);
     let cipher = ChaCha20Poly1305::new((&*key).into());
@@ -432,14 +503,31 @@ fn a_lie_about_one_members_hash_is_caught_by_every_member() {
         )
         .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
-    assert_eq!(
-        open_as(&g, &out, index, 1, g.address.n_total(), &lied, &leaf),
-        Err(MultisigReceiveError::MemberKeyHash)
-    );
-    for i in [0, 2] {
+    for i in 0..3 {
         assert_eq!(
             open_as(&g, &out, index, i, g.address.n_total(), &lied, &leaf),
-            Err(MultisigReceiveError::LeafMismatch)
+            Err(MultisigReceiveError::LeafMismatch),
+            "member {i}, the leaf over the true hashes"
+        );
+    }
+
+    let lied_hashes = hashes
+        .chunks_exact(MULTISIG_KEY_HASH_LEN)
+        .map(|h| h.try_into().unwrap())
+        .collect();
+    let committed = MultisigCommittedForm::new(g.address.m_required(), lied_hashes).unwrap();
+    let lied_leaf = pqc_leaf_commitment(&ss, index, &committed.to_bytes())
+        .unwrap()
+        .entry_bytes();
+    assert_eq!(
+        open_as(&g, &out, index, 1, g.address.n_total(), &lied, &lied_leaf),
+        Err(MultisigReceiveError::MemberKeyHash),
+        "the member whose hash is the lie"
+    );
+    for i in [0, 2] {
+        assert!(
+            open_as(&g, &out, index, i, g.address.n_total(), &lied, &lied_leaf).is_ok(),
+            "member {i}, whose hash is true"
         );
     }
 }
@@ -448,7 +536,16 @@ fn a_lie_about_one_members_hash_is_caught_by_every_member() {
 fn a_damaged_entry_or_leaf_is_refused_by_name() {
     let g = group(3, 2);
     let index = 0u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
     assert!(open_as(
         &g,
@@ -511,7 +608,12 @@ fn a_damaged_entry_or_leaf_is_refused_by_name() {
 fn the_constructor_refuses_bad_inputs() {
     let g = group(2, 2);
     assert!(matches!(
-        construct_multisig_output(&tx_key(), &g.address, 1, 256, &NET),
+        construct_multisig_output(
+            tx_key().output_positions(257).at(256).unwrap(),
+            &g.address,
+            1,
+            &NET
+        ),
         Err(CryptoError::InvalidInput(_))
     ));
 
@@ -520,7 +622,7 @@ fn the_constructor_refuses_bad_inputs() {
     identity[0] = 1;
     let bad = rebuild(&g, identity, g.address.hybrid_kem_pubkeys().to_vec()).unwrap();
     assert!(matches!(
-        construct_multisig_output(&tx_key(), &bad, 1, 0, &NET),
+        construct_multisig_output(tx_key().output_positions(1).at(0).unwrap(), &bad, 1, &NET),
         Err(CryptoError::InvalidKeyMaterial)
     ));
 }
@@ -581,7 +683,16 @@ fn rebuild(
 fn duplicate_decrypted_key_hashes_are_refused() {
     let g = group(3, 2);
     let index = 0u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 1, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        1,
+        &NET,
+    )
+    .unwrap();
     let ss = group_ss(&g, &out);
     let key = derive_multisig_key_hashes_key(&ss, index);
     let cipher = ChaCha20Poly1305::new((&*key).into());
@@ -640,7 +751,16 @@ fn a_member_signature_verifies_only_as_that_member_over_that_message() {
     let (n, m) = (3u8, 2u8);
     let g = group(n, m);
     let index = 2u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 9_000, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        9_000,
+        &NET,
+    )
+    .unwrap();
     let leaf = out.pqc_leaf.entry_bytes();
     let committed = open_as(&g, &out, index, 0, n, &out.enc_key_hashes, &leaf).unwrap();
     let msg = SigningPayloadHash::from_bytes([0x21; 64]);
@@ -725,7 +845,16 @@ fn a_member_public_key_is_the_key_it_signs_with() {
     let n = 3u8;
     let g = group(n, 2);
     let index = 1u64;
-    let out = construct_multisig_output(&tx_key(), &g.address, 4_000, index, &NET).unwrap();
+    let out = construct_multisig_output(
+        tx_key()
+            .output_positions(usize::try_from(index).unwrap() + 1)
+            .at(index)
+            .unwrap(),
+        &g.address,
+        4_000,
+        &NET,
+    )
+    .unwrap();
     let msg = SigningPayloadHash::from_bytes([0x31; 64]);
     for i in 0..n {
         let key = multisig_member_public_key(&member_view(&g, i), &own_ciphertext(&out, i, n))

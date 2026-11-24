@@ -10,8 +10,9 @@ autoexamples = false
 [features]
 # Test-support helpers that take no seed: `generate_ephemeral_keypair_for_tests`
 # (a non-derived keypair, which must never reach a wallet),
-# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests` and
-# `derive_p_hs_id_seed`. TEST_ONLY (`scripts/ci/check_test_only_features.py`):
+# `FnDsaHybridSecretKey::corrupt_fn_dsa_half_for_tests`,
+# `derive_p_hs_id_seed`, and `TxKey::output_positions` (one output position
+# read at a time; production places a whole set with `TxKey::place`, R-34). TEST_ONLY (`scripts/ci/check_test_only_features.py`):
 # enabled from `[dev-dependencies]` edges only.
 test-utils = []
 # Deterministic signing: `sign_with_ml_dsa_seed`,

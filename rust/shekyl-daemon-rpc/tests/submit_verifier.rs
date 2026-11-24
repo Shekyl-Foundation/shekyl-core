@@ -263,12 +263,14 @@ fn build_funding_setup() -> FundingSetup {
 
     let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
-        &tx_secret,
+        tx_secret
+            .output_positions(usize::try_from(spent_index).unwrap() + 1)
+            .at(spent_index)
+            .unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         INPUT_AMOUNT,
-        spent_index,
     )
     .expect("construct spent output");
 
@@ -454,21 +456,19 @@ fn build_fixture() -> SpendFixture {
     let payment_amount = output_amount / 2;
     let change_amount = output_amount - payment_amount;
     let payment = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(1).at(0).unwrap(),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
         payment_amount,
-        0,
     )
     .expect("construct payment output");
     let change = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(2).at(1).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_amount,
-        1,
     )
     .expect("construct change output");
     let outputs = [
@@ -638,21 +638,19 @@ fn build_bond_fixture(receipt: Option<&shekyl_types::archival::ReceiptSignPk>) -
     let change_a_amount = change_total / 2;
     let change_b_amount = change_total - change_a_amount;
     let change_a = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(1).at(0).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_a_amount,
-        0,
     )
     .expect("construct change output a");
     let change_b = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(2).at(1).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_b_amount,
-        1,
     )
     .expect("construct change output b");
     let outputs = [
@@ -1537,21 +1535,19 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     let change_a_amount = out_total / 2;
     let change_b_amount = out_total - change_a_amount;
     let change_a = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(1).at(0).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_a_amount,
-        0,
     )
     .expect("construct change output a");
     let change_b = construct_output(
-        &dest_secret,
+        dest_secret.output_positions(2).at(1).unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         change_b_amount,
-        1,
     )
     .expect("construct change output b");
     let outputs = [
