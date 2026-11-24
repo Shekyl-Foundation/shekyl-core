@@ -205,15 +205,15 @@ mod tests {
     const ID_A: NetworkId = [1; 16];
     const ID_B: NetworkId = [2; 16];
 
-    fn locked() -> (tempfile::TempDir, Lock) {
-        let d = tempfile::tempdir().unwrap();
+    fn locked() -> (shekyl_os_account::test_fixture::FixtureDir, Lock) {
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let lock = Lock::take(&d.path().join("data")).unwrap();
         (d, lock)
     }
 
     #[test]
     fn a_read_writes_nothing_and_sees_what_a_start_would() {
-        let d = tempfile::tempdir().unwrap();
+        let d = shekyl_os_account::test_fixture::tempdir().unwrap();
         let data = d.path().join("data");
         // Missing directory: absent, and still missing.
         assert_eq!(
@@ -221,8 +221,9 @@ mod tests {
             MarkerRead::Absent
         );
         assert!(!data.exists());
-        // An empty directory: absent, and no marker appears.
-        std::fs::create_dir(&data).unwrap();
+        // An empty directory, made as the daemon makes one: absent, and no
+        // marker appears.
+        shekyl_os_account::create_account_dir_all(&data).unwrap();
         assert_eq!(
             read(&data, Network::Testnet, ID_A).unwrap(),
             MarkerRead::Absent

@@ -82,9 +82,9 @@ fn run_child_if_requested() {
 
 /// The test's directory, laid out as an installer lays out a service's:
 /// the data home 0700, the rendezvous directory 0755.
-fn workdir() -> tempfile::TempDir {
+fn workdir() -> shekyl_os_account::test_fixture::FixtureDir {
     use std::os::unix::fs::DirBuilderExt;
-    let dir = tempfile::tempdir().expect("a directory");
+    let dir = shekyl_os_account::test_fixture::tempdir().expect("a directory");
     std::fs::DirBuilder::new()
         .mode(0o700)
         .create(dir.path().join("shekyl"))
