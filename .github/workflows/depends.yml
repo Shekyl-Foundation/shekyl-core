@@ -66,8 +66,12 @@ jobs:
         shell: bash
         run: |
           set -u
+          base=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base=$(python3 scripts/ci/change_scope.py --pr-base "${{ github.sha }}" "${{ github.event.pull_request.head.sha }}")
+          fi
           python3 scripts/ci/depends_legs.py --event "${{ github.event_name }}" \
-            --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" \
+            --base "$base" --head "${{ github.sha }}" \
             || python3 -c 'import json; print("legs=" + json.dumps(json.load(open("contrib/depends/ci-toolchains.json")), separators=(",", ":")))' >> "$GITHUB_OUTPUT"
 
   build-cross:

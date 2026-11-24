@@ -105,6 +105,7 @@ jobs:
       # wrong-referent class as the FETCH_HEAD fix, one level further out, and
       # the failure mode is a red on work that is fine.
       - name: Fetch the base revision the ratchet compares against
+        id: base
         run: |
           # Setup only, and only on the runner: on a developer's clone this
           # fetch would make the shared object store shallow, and the base
@@ -113,8 +114,15 @@ jobs:
             echo "not under GitHub Actions; the base revision is already local, fetch skipped"
             exit 0
           fi
-          git fetch --no-tags --depth=1 origin \
-            "${{ github.event.pull_request.base.sha || github.event.before }}"
+          # A pull request's event base can be older or newer than the `dev`
+          # this merge commit was built on; its first parent is that `dev`.
+          base="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base=$(python3 scripts/ci/change_scope.py --pr-base "${{ github.sha }}" "${{ github.event.pull_request.head.sha }}")
+          fi
+          [ -n "$base" ] || { echo "::error::the base revision could not be read"; exit 1; }
+          git fetch --no-tags --depth=1 origin "$base"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Run the documentation claim audit
         env:
@@ -126,7 +134,7 @@ jobs:
           # not checking, because the output names a ref it did not read.
           # On a push to `dev` there is no pull request; `before` is the
           # `dev` commit the merge landed on, a SHA as well.
-          DOC_CLAIMS_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DOC_CLAIMS_BASE_REF: ${{ steps.base.outputs.base }}
         run: python3 scripts/ci/check_doc_claims.py
 
       - name: Re-falsify the gate's own failure paths

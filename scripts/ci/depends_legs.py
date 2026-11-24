@@ -358,6 +358,9 @@ def main():
         write(toolchains, f"event {args.event}")
         return 0
     try:
+        if not args.base:
+            # `...<head>` is an empty diff, which would select no leg.
+            raise ValueError("no base revision")
         changed = changed_files(args.base, args.head)
         # Head is the checkout. Base is read from git, so a deleted export
         # still selects the leg.

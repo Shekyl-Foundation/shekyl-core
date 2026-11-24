@@ -20,7 +20,7 @@
 contrib/depends/	depends:build-cross,depends:legs
 scripts/ci/_census.py	docs-gates:check-doc-links
 scripts/ci/_gfm_table.py	docs-gates:check-doc-links
-scripts/ci/change_scope.py	benchmarks:scope,build:changes,codeql:changes,depends:legs,docs-gates:check-doc-links,fuzz-harness:scope,grep-gates:grep-gates,rust-audit-test:changes
+scripts/ci/change_scope.py	benchmarks:scope,build:changes,chain-forge:scope,codeql:changes,depends:legs,doc-claims:doc-claims,docs-gates:check-doc-links,fuzz-harness:scope,grep-gates:grep-gates,rust-audit-test:changes
 scripts/ci/check_archival_reward_gates.sh	grep-gates:grep-gates
 scripts/ci/check_armed_lever_launchers.py	grep-gates:grep-gates
 scripts/ci/check_crypto_closure.py	rust-audit-test:rust-audit-and-test,gui-drift:gui-pin,gui-drift:gui-pin-nightly
