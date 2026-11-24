@@ -275,7 +275,7 @@ members = [
     "shekyl-types",
 
     # The build identity (version, release flag, release name) read from the
-    # environment cmake/Version.cmake sets, and the protocol version
+    # environment `cargo xtask` sets, and the protocol version
     # (DAEMON_CONFIG_CUTOVER.md DC-Q20). A leaf: no dependencies.
     "shekyl-version",
 
@@ -394,7 +394,7 @@ members = [
 
     # Dev-only loopback between `PServeEndpoint` and `PFetchClient`.
     # SF-D4 keeps that edge out of both shipped graphs: nothing in
-    # `cmake/BuildRust.cmake` builds this crate, and neither end depends
+    # rust/xtask/matrix.toml builds this crate, and neither end depends
     # on it except as a dev-dependency.
     "shekyl-p-loopback",
 
@@ -539,6 +539,11 @@ members = [
     # Shard data-source abstraction (list + aggregate lookup) consumed by the
     # GUI shard view. Fixtures-backed today; ArchivalEngine impl at Stage 5.
     "shekyl-shard-source",
+
+    # The release build (`cargo xtask`, rust/.cargo/config.toml): reads
+    # rust/xtask/matrix.toml and runs the one cargo build per host. A build
+    # tool, never a shipped binary (scripts/ci/shipped_graph.py).
+    "xtask",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

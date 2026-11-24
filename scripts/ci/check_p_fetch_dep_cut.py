@@ -49,11 +49,12 @@ and `shekyl-p-host` actually contains. `--selftest` proves the resolver sees
 each of those paths on synthetic manifests, so the negative limb here is
 never a grep that happened to find nothing.
 
-The shipped roots are **read from `cmake/BuildRust.cmake`** — the `-p`
-packages of its cargo invocations and the `_shekyl_rust_bins` list (the
-daemon and the wallet binaries) — not a second copy held here; a new shipped package added there is inspected here
-without a paired edit, and the gate refuses if the parse finds nothing or
-finds a name the workspace does not have. A workspace member outside every
+The shipped roots are **read from `rust/xtask/matrix.toml`** — every
+host's `binaries`, the packages `cargo xtask` builds (the daemon, the
+wallet binaries and the RPC tunnel; `release_matrix.py` reads the file) —
+not a second copy held here; a new shipped package added there is
+inspected here without a paired edit, and the gate refuses if the reading
+finds nothing or finds a name the workspace does not have. A workspace member outside every
 shipped closure (the `SP-T3` measurement rig enables `test-signer` on a
 normal edge, and is allowed to: it is a binary nothing installs) is not a
 shipped graph, which is why `test-signer` is held here rather than in
@@ -76,9 +77,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release_matrix  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[2]
 RUST_DIR = REPO / "rust"
-BUILD_RUST = REPO / "cmake" / "BuildRust.cmake"
+BUILD_RUST = release_matrix.MATRIX
 
 CLIENT = "shekyl-p-fetch"
 SERVER = "shekyl-p-serve"
@@ -135,9 +139,9 @@ NO_SOCKS = (
 # shard-fetch *client*.
 RPC_SENTINELS = ("shekyl-daemon-rpc", "shekyl-rpc-transport")
 
-# The one shipped root that cannot leave `BuildRust.cmake` without the file
-# being rewritten: the daemon. Its presence in the parsed set is how the
-# gate knows the parse read the file it thinks it read.
+# The one shipped root that cannot leave the release matrix without the
+# file being rewritten: the daemon. Its presence in the read set is how the
+# gate knows the reading read the file it thinks it read.
 ROOT_SENTINEL = "shekyld"
 
 # (crate, feature) pairs that must not be in any shipped root's resolved
@@ -343,14 +347,9 @@ def resolve_features(root: str, members: dict[str, dict], workspace_deps: dict) 
 
 
 def shipped_roots(text: str) -> list[str]:
-    """The packages `BuildRust.cmake` builds: literal `-p <pkg>` arguments
-    and the `_shekyl_rust_bins` list. `-p "${var}"` forms are not roots
-    themselves; the list they expand from is."""
-    roots: list[str] = []
-    roots += re.findall(r"(?<![\w-])-p\s+(shekyl[a-z0-9-]*)", text)
-    for group in re.findall(r"set\(\s*_shekyl_rust_bins\s+([^)]*)\)", text):
-        roots += re.findall(r"shekyl[a-z0-9-]*", group)
-    return sorted(set(roots))
+    """The packages the release matrix builds: every host's `binaries`.
+    A matrix the strict reading refuses has no roots to give."""
+    return list(release_matrix.parse(text).roots)
 
 
 def rpc_crates(members: dict[str, dict]) -> tuple[str, ...]:
@@ -432,16 +431,17 @@ def selftest() -> int:
             if got != expect:
                 bad = 1
                 print(f"FAIL selftest [{label}]: expected detected={expect}, got {got}")
-    cmake = (
-        'cargo build -p shekyl-tool\nset(_shekyl_rust_bins shekyld shekyl-cli shekyl-wallet-rpc)\n-p "${_bin}"\n'
+    # The roots are the matrix's: a binary planted on one host joins them.
+    planted = BUILD_RUST.read_text().replace(
+        'binaries = ["shekyld", "shekyl-rpc-tunnel"]', 'binaries = ["shekyld", "shekyl-tool"]', 1
     )
-    if shipped_roots(cmake) != ["shekyl-cli", "shekyl-tool", "shekyl-wallet-rpc", "shekyld"]:
+    if "shekyl-tool" not in shipped_roots(planted) or "shekyld" not in shipped_roots(planted):
         bad = 1
-        print(f"FAIL selftest [cmake parse]: {shipped_roots(cmake)}")
+        print(f"FAIL selftest [matrix read]: {shipped_roots(planted)}")
     if not bad:
         print(
             f"PASS selftest: resolver sees {len(cases)} forwarding paths and rejects "
-            f"{len(negatives)} non-paths; BuildRust parse yields the four roots."
+            f"{len(negatives)} non-paths; a binary planted in the matrix is a root."
         )
     return bad
 
@@ -469,7 +469,11 @@ def main() -> int:
     if not BUILD_RUST.is_file():
         failed(f"{BUILD_RUST} is missing; the shipped roots cannot be read (rule 47).")
         return fail
-    roots = shipped_roots(BUILD_RUST.read_text())
+    try:
+        roots = shipped_roots(BUILD_RUST.read_text())
+    except release_matrix.MatrixError as why:
+        failed(f"{BUILD_RUST.name}: {why}; the shipped roots cannot be read (rule 47).")
+        return fail
     if not roots:
         failed(f"no shipped roots parsed from {BUILD_RUST.name}; the shipped-graph limb would be vacuous.")
     if ROOT_SENTINEL not in roots:

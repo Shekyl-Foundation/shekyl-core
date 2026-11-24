@@ -414,8 +414,8 @@ failure fails CI") is per-PR cadence for the byte-equality pass.
 
 ### 1.7 Phase 1 RandomX v2 CMake wiring (frozen by Phase 1)
 
-Per [`external/CMakeLists.txt`](../../external/CMakeLists.txt)
-lines 81–216 + [`CMakeLists.txt`](../../CMakeLists.txt) line 503:
+Per [`external/CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/external/CMakeLists.txt)
+lines 81–216 + [`CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/CMakeLists.txt) line 503:
 
 - `BUILD_RANDOMX_V2_MINER_LIB` is a CMake option defaulting OFF
   (line 503).
@@ -983,7 +983,7 @@ the verifier crate).
 
 **Decision.** How does the harness call into `shekyl_randomx_v2`
 (the IMPORTED static-library target from
-[`external/CMakeLists.txt`](../../external/CMakeLists.txt) line
+[`external/CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/external/CMakeLists.txt) line
 204)?
 
 **Options.**
@@ -1113,7 +1113,7 @@ gate.
 
 **Decision.** How does the harness build flip
 `BUILD_RANDOMX_V2_MINER_LIB=ON` (currently default-OFF per
-[`CMakeLists.txt`](../../CMakeLists.txt) line 503)?
+[`CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/CMakeLists.txt) line 503)?
 
 **Options.**
 
@@ -1128,7 +1128,7 @@ gate.
 **Criteria.**
 
 - Multi-config-generator constraint: per
-  [`external/CMakeLists.txt`](../../external/CMakeLists.txt)
+  [`external/CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/external/CMakeLists.txt)
   line 123, combining `BUILD_RANDOMX_V2_MINER_LIB=ON` with a
   multi-config generator currently `FATAL_ERROR`s. The
   per-`CONFIG` install-path follow-up is queued in
@@ -1181,7 +1181,7 @@ unambiguous.
 **Option pin.**
 
 - Top-level CMake option in
-  [`CMakeLists.txt`](../../CMakeLists.txt) (alongside the
+  [`CMakeLists.txt`](https://github.com/Shekyl-Foundation/shekyl-core/blob/842d36361c/CMakeLists.txt) (alongside the
   existing `BUILD_RANDOMX_V2_MINER_LIB` at line 503).
 - Default OFF (matches Phase 1's `BUILD_RANDOMX_V2_MINER_LIB`
   default-OFF discipline; preserves daemon-build byte-equivalence

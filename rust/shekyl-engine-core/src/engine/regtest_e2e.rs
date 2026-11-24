@@ -812,7 +812,7 @@ impl RegtestDaemon {
         match std::env::var_os("SHEKYLD_BIN") {
             Some(p) => PathBuf::from(p),
             None => panic!(
-                "SHEKYLD_BIN not set. Build the daemon (cmake --build build --target shekyl_rust_bins) \
+                "SHEKYLD_BIN not set. Build the daemon (`cargo xtask build` in rust/) \
                  and run e.g. SHEKYLD_BIN=/abs/path/build/bin/shekyld cargo test ... -- --ignored"
             ),
         }
@@ -6803,7 +6803,7 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 ///
 /// The checkout's `HEAD` alone says nothing about the binary in
 /// `SHEKYLD_BIN`: a daemon built from another tree, or from this tree before
-/// its change was committed (cmake fixes the version tag at configure time),
+/// its change was committed (the version tag is fixed when it is built),
 /// would stamp a corpus with a commit that did not mine it. The daemon
 /// reports `<version>-<sha9>`; that SHA is the build. A capture refuses
 /// unless it is the checkout's `HEAD` and the checkout is clean outside the
@@ -6829,8 +6829,8 @@ fn capture_build_identity(daemon_version: &str) -> String {
     let head = git(&["rev-parse", "--short=9", "HEAD"]);
     assert_eq!(
         built, head,
-        "SHEKYLD_BIN was built at {built} but the checkout is at {head}: re-run cmake \
-         (the version tag is fixed at configure time) and rebuild the daemon at HEAD \
+        "SHEKYLD_BIN was built at {built} but the checkout is at {head}: rebuild \
+         the daemon at HEAD (`cargo xtask build`: the version tag is fixed when it builds) \
          before capturing, so the vector names the code that mined it"
     );
     let dirty = git(&[

@@ -39,8 +39,8 @@ shekyl-network = { path = "../shekyl-network" }
 
 [features]
 # The step 7 message-size tap. Empty on purpose: it must not enable
-# `shekyl-transport-layer/measurement-spans`. CMake turns both features on
-# together, on the one `SHEKYL_MEASUREMENT_SPANS` line. A Cargo edge would
+# `shekyl-transport-layer/measurement-spans`. The xtask turns both features
+# on together, under `--measurement-spans` (rust/xtask/matrix.toml). A Cargo edge would
 # fail `check_measurement_spans.py`.
 measurement-spans = []
 

@@ -79,7 +79,7 @@ Section "Shekyl Core (required)" SecCore
   SetOutPath "$INSTDIR"
 
   ; What the Windows archive ships: the daemon and the RPC tunnel. Windows
-  ; ships no shekyl-cli or shekyl-wallet-rpc (cmake/BuildRust.cmake), so the
+  ; ships no shekyl-cli or shekyl-wallet-rpc (rust/xtask/matrix.toml), so the
   ; installer names neither.
   File "${BIN_DIR}\shekyld.exe"
   File "${BIN_DIR}\shekyl-rpc-tunnel.exe"

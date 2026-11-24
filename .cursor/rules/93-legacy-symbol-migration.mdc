@@ -3,8 +3,6 @@ description: Never introduce a MONERO_* identifier; frozen domain separators tha
 globs:
   - "rust/**"
   - "contrib/**"
-  - "cmake/**"
-  - "CMakeLists.txt"
   - "scripts/**"
   - ".github/**"
 ---
@@ -17,7 +15,7 @@ tree's code, and none is introduced.
 ## The rule: never `MONERO_*`
 
 Any identifier a PR introduces (an environment variable, a constant, a
-build flag, a CMake variable, a feature name, a workflow variable) uses
+build flag, a build variable, a feature name, a workflow variable) uses
 `SHEKYL_*` or a Shekyl name from the start.
 
 - There is no cherry-picking path from Monero that justifies a Monero name.

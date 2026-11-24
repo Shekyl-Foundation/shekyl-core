@@ -70,10 +70,43 @@ Companion docs: `RELEASING.md` (tag → CI → artifact mechanics),
 ## 3. Versioning of rehearsal releases
 
 Pre-genesis releases use **pre-release suffixes** so they cannot be mistaken for
-the genesis release (`RELEASING.md` already auto-marks `RC`/`alpha`/`beta` as
-pre-releases). Recommended: `v3.0.0-RC1`, `-RC2`, … for rehearsals. **The first
+the genesis release (the release job marks `alpha`, `beta` and `rc` tags as
+pre-releases). Recommended: `v3.0.0-rc.1`, `-rc.2`, … for rehearsals. **The first
 non-pre-release tag is reserved for the genesis mainnet release.** This uses the
 existing machinery and keeps the trust boundary legible to anyone verifying.
+
+**The release-tag grammar.** A release tag in `shekyl-core` or
+`shekyl-gui-wallet` matches this in full. In `shekyl-core`, a commit is a
+release only if one of its tags matches, and two matching tags on one commit
+are refused:
+
+```text
+^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$
+```
+
+A pre-release is the same grammar with its suffix restricted to `alpha`, `beta`
+or `rc`, with no optional `v` and no ignored case. `RC` is listed as itself
+because 17 of `shekyl-core`'s existing tags carry it; new tags use `rc`:
+
+```text
+^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$
+```
+
+`RELEASE_TAG_GRAMMAR` in `rust/xtask/src/version.rs` is canonical, and
+`scripts/ci/check_release_tag_grammar.py` holds every other reader to it.
+
+`cargo xtask --version-override <version>` stands in for a tag on an exported
+source tree, and takes the grammar without the `v`. It is refused on a checkout
+(a `.git` at the root, or `git rev-parse --git-dir` succeeds), because there
+the tag decides.
+
+The grammar covers git tags and no package version. The GUI has one mapping:
+its package version (`package.json`, synced to `src-tauri/Cargo.toml` and
+`tauri.conf.json`) is the tag without its `v`, with the first `-` written as
+`+`, so `v3.1.0-alpha.12` is `3.1.0+alpha.12`. Tauri needs SemVer and RPM
+forbids `-` (the GUI's README, "Version management").
+
+The displayed name converts it back (the GUI's `vite.config.ts`).
 
 Three version axes stay distinct and live in one authority doc:
 - **Software semver** (`v3.x`) — MAJOR bumps only on consensus-incompatible
@@ -121,6 +154,9 @@ then tag** (avoids the "tag not on the default branch" trap that
          (`NETWORK_IDENTITY.md` §2.4.1), and it must be empty at v3.1.0: the
          gate refuses a cut at or past that release with any row left. The
          remedy is fixing the row's site; there is no command-line exemption.
+   - [ ] **Windows reproducibility (genesis only):** two gitian builds of the
+         frozen SHA produce a byte-identical Windows archive. They do not yet
+         (`docs/FOLLOWUPS.md`), and a genesis cut waits until they do.
    - [ ] **Gitian dry-run gate** — dispatch the gitian workflow against the
          frozen SHA and confirm **all four platforms** (Linux/Windows/FreeBSD/macOS)
          build green *before* the cut/promote/tag:
@@ -283,7 +319,8 @@ each before the genesis freeze — after it, these are immutable.**
 
 | Item | testnet rehearsal | mainnet genesis |
 |---|---|---|
-| Tag | `v3.0.0-RCn` (pre-release) | first non-pre-release tag |
+| Tag | `v3.0.0-rc.N` (pre-release) | first non-pre-release tag |
+| Windows archive | not yet independently reproducible | two gitian builds byte-identical |
 | Frozen tuple | `config::testnet::*` | `config::mainnet::*` |
 | Block version | `CURRENT_BLOCK_MAJOR_VERSION` 1 and `CURRENT_BLOCK_MINOR_VERSION` 0 | the same constants. There is no per-network fork number |
 | Snapshot allocation | none | per `GENESIS_TRANSPARENCY.md` decision |

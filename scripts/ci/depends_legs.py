@@ -7,11 +7,11 @@
 
 The legs are contrib/depends/ci-toolchains.json. A pull request runs:
 
-- every leg when it touches the depends tree, the Makefile, depends.yml or
-  this script;
+- every leg when it touches the depends tree, depends.yml or this script;
 - the MinGW leg (x86_64-w64-mingw32) alone when it touches what decides how
-  an executable links (Rick, 2026-10-19): any CMakeLists.txt, anything under
-  cmake/, or a file of a Rust crate that defines a C export. A crate
+  an executable links (Rick, 2026-10-19): the release build (rust/xtask/,
+  its matrix included), rust/.cargo/config.toml, or a file of a Rust crate
+  that defines a C export. A crate
   defines one when a source file under its src/ declares `#[no_mangle]` or
   `#[unsafe(no_mangle)]`. Comments are stripped first (`strip_c_comments`),
   so a crate that mentions the attribute, or forbids it, is not one. The
@@ -55,9 +55,10 @@ MINGW = "x86_64-w64-mingw32"
 SELF = "scripts/ci/depends_legs.py"
 
 # Every leg.
-FULL = ("contrib/depends/*", "Makefile", ".github/workflows/depends.yml", SELF)
-# The MinGW leg: how an executable links.
-LINK = ("CMakeLists.txt", "*/CMakeLists.txt", "cmake/*")
+FULL = ("contrib/depends/*", ".github/workflows/depends.yml", SELF)
+# The MinGW leg: how an executable links. The release build passes every
+# host's linker, C flags and link arguments from rust/xtask/matrix.toml.
+LINK = ("rust/xtask/*", "rust/.cargo/config.toml")
 # A declared export. The edition-2024 spelling is `#[unsafe(no_mangle)]`.
 # A mention in a comment is not a declaration; comments are stripped first.
 EXPORT_ATTR = re.compile(r"#\[\s*(?:no_mangle|unsafe\s*\(\s*no_mangle\s*\))\s*\]")
@@ -242,18 +243,17 @@ def selftest():
     crates = {exporter}
     cases = {
         "a depends package": (["contrib/depends/packages/freebsd_base.mk"], "all"),
-        "the Makefile": (["Makefile"], "all"),
         "this workflow": ([".github/workflows/depends.yml"], "all"),
         "this script": ([SELF], "all"),
-        "the root CMakeLists.txt": (["CMakeLists.txt"], "mingw"),
-        "a nested CMakeLists.txt": (["src/blockchain_utilities/CMakeLists.txt"], "mingw"),
-        "a cmake module": (["cmake/BuildRust.cmake"], "mingw"),
+        "the release matrix": (["rust/xtask/matrix.toml"], "mingw"),
+        "the release build's source": (["rust/xtask/src/plan.rs"], "mingw"),
+        "cargo's config": (["rust/.cargo/config.toml"], "mingw"),
         "an export crate's file": ([f"rust/{exporter}/src/ffi.rs"], "mingw"),
         "an export crate's manifest": ([f"rust/{exporter}/Cargo.toml"], "mingw"),
         "a crate with no export": (["rust/shekyl-dialer/src/lib.rs"], "none"),
         "docs only": (["docs/FOLLOWUPS.md"], "none"),
         "a script outside the link set": (["scripts/ci/change_scope.py"], "none"),
-        "depends beats link": (["CMakeLists.txt", "Makefile"], "all"),
+        "depends beats link": (["rust/xtask/matrix.toml", "contrib/depends/Makefile"], "all"),
         "an empty change set runs everything": ([], "all"),
     }
     failed = False

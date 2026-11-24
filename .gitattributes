@@ -1,5 +1,4 @@
 .git* export-ignore
-cmake/Version.cmake export-subst
 # One line ending in the tree: LF. A file a Windows editor saved with
 # CRLF is normalised on commit, and a checkout on Windows gets LF, so a
 # fixture `include_str!`-ed or compared byte-for-byte reads the same on

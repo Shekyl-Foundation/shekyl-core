@@ -213,8 +213,8 @@ jobs:
           python3 scripts/ci/check_test_only_features.py
       # Same placement reason: reads `cargo metadata`. The measurement build's
       # lifted Tor spans (Rick, 2026-10-14) reach a binary only through the
-      # SHEKYL_MEASUREMENT_SPANS CMake option, default OFF; no Cargo edge and
-      # no release path may turn them on.
+      # xtask's measurement flag (rust/xtask/matrix.toml's [measurement]); no
+      # Cargo edge and no release path may turn them on.
       - name: the measurement spans never reach a release build
         run: |
           python3 scripts/ci/check_measurement_spans.py --selftest
@@ -480,9 +480,9 @@ jobs:
         # `shekyl-randomx-differential` is excluded because its `c_oracle`
         # module links against the C reference's `librandomx.a` via
         # `randomx-v2-sys`, which requires the `RANDOMX_V2_INSTALL_DIR` env
-        # var to point at a CMake-built install prefix (per
+        # var to point at the C reference's install prefix (per
         # `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.16 + §5.2.2 R5-D2).
-        # The `rust-audit-and-test` job does not configure CMake or build
+        # The `rust-audit-and-test` job does not build
         # the C library; that work lives in the dedicated
         # `.github/workflows/randomx-v2-differential.yml` workflow (per
         # §5.5.1 + R1-D12), which builds the C library and runs

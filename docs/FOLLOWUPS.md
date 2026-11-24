@@ -11,6 +11,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The Windows release archive is not yet independently reproducible: two gitian builds of one commit differ in 22 unloaded COFF symbols.** rustc generates the raw-dylib import libraries for `windows-link` 0.2.1 in a randomly named temporary folder, that name lands in the symbols, and the PE checksum follows; the loaded image is identical, and the zip's file times are normalized. The 1.97 toolchain PR finds out whether 1.97 still builds those import libraries the same way and fixes the cause there; release builds keep their symbol tables on every platform, so stripping is not the fix.
+  - Owner: the 1.97 toolchain PR, against the release-archive contract — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) (TB-6)
+  - Target: pre-genesis (gate: two Windows gitian builds of one commit proven byte-identical, the `RELEASE_PROMOTION.md` §4 pre-flight)
 - **The two body-fill walks run in full every night as a stopgap, until forged-chain walks replace them.** `e2e_complete_tree_bond_fills_serves_pulls_and_reconciles` and `e2e_market_bond_refuses_a_shard_that_is_not_final_then_fills_posts_and_serves` (`shekyl-engine-core` `regtest_e2e_body_fill.rs`) mine their own chain (the CompleteTree leg 117 minutes of a hosted runner on 2026-11-22; the market leg not yet measured to its end); each is its own leg of `nightly-live-daemon-slow.yml`'s `body-fill` job (lanes `ARMED_BODY_FILL_COMPLETE_TREE`, `ARMED_BODY_FILL_MARKET` in `run_live_daemon_gates.sh`). When the walks start from a forged chain, they leave the nightly's full-length legs.
   - Owner: the CI lane, with the chain forge lane — [`CHAIN_FORGE.md`](design/CHAIN_FORGE.md); `scripts/ci/run_live_daemon_gates.sh`
   - Target: pre-genesis (trigger: the forged-chain body-fill walks land)
@@ -1027,9 +1030,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Daemon atomic activity snapshot RPC (conditional on RPC upstream).** Same G4 [`docs/WALLET_RPC_RUST.md`](WALLET_RPC_RUST.md)
-  - Target: pre-genesis
-
-- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.** in [`external/CMakeLists.txt`](../external/CMakeLists.txt) (multi-config generators; harness/miner-lib opt-in only — the default daemon never builds the C library, so this does not gate `shekyld`)
   - Target: pre-genesis
 
 - **The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.**

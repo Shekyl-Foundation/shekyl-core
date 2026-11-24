@@ -147,15 +147,14 @@ Releases follow the `dev` -> `main` workflow. Active development happens on
 
 ### Dependencies
 
-Shekyl is a Rust workspace (`rust/`); CMake and the top-level Makefile drive
-one cargo build that stages `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc`.
-The tree holds no C++ of its own. A C toolchain is still needed: some crates
+Shekyl is a Rust workspace (`rust/`). `cargo xtask` runs the one cargo build
+that stages `shekyld`, `shekyl-cli`, `shekyl-wallet-rpc` and
+`shekyl-rpc-tunnel`. The tree holds no C++ of its own. A C toolchain is still needed: some crates
 compile C (`ring`, for one), and cross builds link through it.
 
 | Dep              | Min. version | Debian/Ubuntu pkg | Arch pkg     | Fedora pkg | Optional | Purpose                                   |
 | ---------------- | ------------ | ----------------- | ------------ | ---------- | -------- | ----------------------------------------- |
 | GCC or Clang     | any current  | `build-essential` | `base-devel` | `gcc`      | NO       | the C some crates compile; the linker     |
-| CMake            | 3.22         | `cmake`           | `cmake`      | `cmake`    | NO       | the build entry point                     |
 | Git              | any          | `git`             | `git`        | `git`      | NO       | submodules, the version string            |
 | Rust (`rustup`)  | the pin      | see rustup.rs     | `rustup`     | `rustup`   | NO       | the toolchain `rust/rust-toolchain.toml` pins |
 | Clang + libclang | any          | `clang libclang-dev` | `clang`   | `clang-devel` | YES   | bindgen, for some tests' dev-dependencies |
@@ -164,17 +163,17 @@ Install the system packages at once on Debian/Ubuntu (then Rust from
 https://rustup.rs; `cargo` picks the pinned toolchain up from the tree):
 
 ```
-sudo apt update && sudo apt install build-essential cmake git clang libclang-dev
+sudo apt update && sudo apt install build-essential git clang libclang-dev
 ```
 
 On Arch:
 ```
-sudo pacman -Syu --needed base-devel cmake git clang rustup
+sudo pacman -Syu --needed base-devel git clang rustup
 ```
 
 On Fedora:
 ```
-sudo dnf install gcc cmake git clang-devel rustup
+sudo dnf install gcc git clang-devel rustup
 ```
 
 On macOS with the provided Brewfile:
@@ -183,10 +182,11 @@ On macOS with the provided Brewfile:
 brew update && brew bundle --file=contrib/brew/Brewfile
 ```
 
-On FreeBSD:
+On FreeBSD (then Rust from https://rustup.rs: the build refuses any channel
+but the one the tree pins, so the `rust` package will not do):
 
 ```
-pkg install git gmake cmake rust
+pkg install git
 ```
 
 ### Cloning the repository
@@ -209,26 +209,25 @@ to build successfully.
 
 **Checkout hygiene.** A non-recursive clone leaves `external/randomx-v2`
 empty. `git -C` that path then walks up and reports the superproject SHA,
-which is not the pin. Default daemon CMake does **not** need that tree
+which is not the pin. The release build does **not** need that tree
 (production PoW is the Rust verifier). Initialize it when you run the
 differential harness or T15:
 
 ```
 git submodule update --init --recursive
-cmake -B build -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
-# then: RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+scripts/build_randomx_v2_ref.sh "$PWD/build/randomx-v2" "$PWD/build/randomx-v2-install"
+export RANDOMX_V2_INSTALL_DIR="$PWD/build/randomx-v2-install"
 ```
 
 Never `git submodule update --init --recursive --exclude …` for this crate.
 Worktrees inherit gitlinks, not submodule working trees — re-run init in
-the worktree. `-DMANUAL_SUBMODULES=1` is an escape hatch, not the happy
-path. `external/randomx` (tevador v1) is a gitlink-only pin and is **not**
-required for a default clone.
+the worktree.
 
 ### Build instructions
 
-Shekyl uses the CMake build system and a top-level [Makefile](Makefile) that
-invokes cmake commands as needed.
+`cargo xtask`, run from `rust/`, is the release build. `cargo xtask build`
+builds for this machine; `cargo xtask dist --host <host>` builds a release host
+from the `depends` system. What each is given is `rust/xtask/matrix.toml`.
 
 #### On Linux and macOS
 
@@ -238,21 +237,16 @@ invokes cmake commands as needed.
     ```bash
     cd shekyl-core
     git checkout dev
-    make
+    cd rust && cargo xtask build
     ```
-
-    *Optional*: If your machine has several cores and enough memory, enable
-    parallel build by running `make -j<number of threads>` instead of `make`. For
-    this to be worthwhile, the machine should have one core and about 2GB of RAM
-    available per thread.
 
     *Note*: The `dev` branch contains the latest development code. For the most
     recent tagged release, check the repository tags and use
     `git checkout <tag>` instead.
 
-* The resulting executables can be found in `build/release/bin`
+* The resulting executables can be found in `build/bin`
 
-* Add `PATH="$PATH:$HOME/Shekyl/build/release/bin"` to `.profile`
+* Add `PATH="$PATH:$HOME/shekyl-core/build/bin"` to `.profile`
 
 * Run Shekyl with `shekyld` (foreground), or supervise it with systemd/
   launchd/Task Scheduler for background operation. See
@@ -265,16 +259,10 @@ invokes cmake commands as needed.
     cd rust && cargo test --workspace --exclude shekyl-randomx-differential
     ```
 
-* **Optional**: to build binaries suitable for debugging:
+* **Optional**: to build binaries suitable for debugging (in `rust/target/debug`):
 
     ```bash
-    make debug
-    ```
-
-* **Optional**: to build statically-linked binaries:
-
-    ```bash
-    make release-static
+    cd rust && cargo build -p shekyld -p shekyl-cli -p shekyl-wallet-rpc -p shekyl-rpc-tunnel
     ```
 
 * **Optional**: build the crate documentation (from `rust/`):
@@ -285,11 +273,11 @@ invokes cmake commands as needed.
 
 #### On the Raspberry Pi (ARM)
 
-ARM builds are supported via the cross-compilation targets above
-(`make depends target=aarch64-linux-gnu` for 64-bit ARM). Native compilation on
-a Pi is possible but slow; use at least a Pi 4 with 4 GB RAM and increase swap
-to 2 GB. Install dependencies from the Debian column in the table above, clone,
-and build with `USE_SINGLE_BUILDDIR=1 make release`.
+ARM builds are supported through the `depends` system below (host
+`aarch64-linux-gnu`). Native compilation on a Pi is possible but slow; use at
+least a Pi 4 with 4 GB RAM and increase swap to 2 GB. Install dependencies from
+the Debian column in the table above, clone, and run `cargo xtask build` from
+`rust/`.
 
 #### On Windows:
 
@@ -303,8 +291,8 @@ and build with `USE_SINGLE_BUILDDIR=1 make release`.
 > et al., 2024) against fielded "CT" lattice KEM implementations. The
 > hybrid X25519+ML-KEM construction does not rescue the ML-KEM secret
 > once it leaks via timing. 32-bit build targets were permanently
-> retired in v3.1.0-alpha.5 (Chore #3) and the C++-side configure
-> refuses non-64-bit hosts. See `docs/CHANGELOG.md` entry "Retired
+> retired in v3.1.0-alpha.5 (Chore #3), and the release matrix lists
+> only 64-bit hosts. See `docs/CHANGELOG.md` entry "Retired
 > 32-bit build targets" and the audit-trail closure for full context.
 
 Binaries for Windows are built on Windows using the MinGW toolchain within
@@ -335,7 +323,7 @@ application.
 * Install dependencies for 64-bit Windows:
 
     ```bash
-    pacman -S mingw-w64-x86_64-toolchain make mingw-w64-x86_64-cmake mingw-w64-x86_64-rust git
+    pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-rustup git
     ```
 
 * Open the MingW shell via the `MinGW-w64-Win64 Shell` shortcut.
@@ -362,25 +350,19 @@ application.
     git checkout <tag>
     ```
 
-* Build the 64-bit release binaries:
+* Make MinGW rustup's default host (on Windows it otherwise picks MSVC), install the Rust channel the tree pins, then build the 64-bit release binaries:
 
     ```bash
-    make release-static-win64
+    rustup set default-host x86_64-pc-windows-gnu
+    rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust/rust-toolchain.toml)" --profile minimal
+    cd rust && cargo xtask build
     ```
 
-* The resulting executables can be found in `build/release/bin`
-
-* **Optional**: to build Windows binaries suitable for debugging on a 64-bit system, run:
-
-    ```bash
-    make debug-static-win64
-    ```
-
-* The resulting executables can be found in `build/debug/bin`
+* The resulting executables can be found in `build/bin`
 
 ### On FreeBSD:
 
-The project can be built from scratch by following instructions for Linux above(but use `gmake` instead of `make`). 
+The project can be built from scratch by following the instructions for Linux above.
 If you are running Shekyl in a jail, you need to add `sysvsem="new"` to your jail configuration, otherwise LMDB may throw: `Failed to open lmdb environment: Function not implemented`.
 
 Shekyl package naming may differ by distro and is not yet standardized.
@@ -405,50 +387,54 @@ illumos is not a supported target: no CI or gitian job builds it, and a illumos 
 
 Solaris is not a supported target: no CI or gitian job builds it, and a Solaris build stops at a `compile_error!` in `shekyl-daemon-config` ([`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) §2).
 
-### Building portable statically linked binaries
+### Portable binaries
 
-By default, in either dynamically or statically linked builds, binaries target the specific host processor on which the build happens and are not portable to other processors. Portable binaries can be built using the following targets:
-
-* ```make release-static-linux-x86_64``` builds binaries on Linux on x86_64 portable across POSIX systems on x86_64 processors
-* ```make release-static-linux-armv8``` builds binaries on Linux portable across POSIX systems on armv8 processors
-* ```make release-static-win64``` builds binaries on 64-bit Windows portable across 64-bit Windows systems
+`cargo xtask build` passes no `-march`, so what it builds runs on other
+processors of its family. The release archives are built with
+`cargo xtask dist` below.
 
 32-bit portable targets (`release-static-linux-i686`, `release-static-win32`)
 were permanently retired in v3.1.0-alpha.5 (Chore #3) on PQC constant-time
 grounds — see `docs/CHANGELOG.md` entry "Retired 32-bit build targets".
-The CMake configure refuses non-64-bit hosts, and the Rust workspace
+The release matrix lists only 64-bit hosts, and the Rust workspace
 carries two independent `compile_error!` tripwires against
 `target_pointer_width != 64`.
 
 ### Cross Compiling
 
-You can also cross-compile static binaries on Linux for Windows and macOS with the `depends` system.
+You can also cross-compile on Linux for the other release hosts with the
+`depends` system: build the host's toolchain, then the release build from it
+(staged in `build/bin` unless `--out` names another directory):
 
-* ```make depends target=x86_64-linux-gnu``` for 64-bit linux binaries.
-* ```make depends target=x86_64-w64-mingw32``` for 64-bit windows binaries.
-  * Requires: `python3 g++-mingw-w64-x86-64 wine1.6 bc`
-* ```make depends target=x86_64-apple-darwin11``` for macOS binaries.
-  * Requires: `cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev`
-* ```make depends target=aarch64-apple-darwin``` for Apple Silicon macOS binaries.
-  * Requires: `clang`
-* ```make depends target=aarch64-linux-gnu``` for armv8 binaries.
+```bash
+make -C contrib/depends HOST=<host> -j4
+cd rust && cargo xtask dist --host <host>
+```
+
+* `x86_64-linux-gnu` for 64-bit Linux binaries.
+* `aarch64-linux-gnu` for armv8 binaries.
   * Requires: `g++-aarch64-linux-gnu`
-* ```make depends target=riscv64-linux-gnu``` for RISC V 64 bit binaries
-  (a source build only: riscv64 is not a shipped target, see `docs/RELEASING.md`).
-  * Requires: `g++-riscv64-linux-gnu`
-* ```make depends target=x86_64-unknown-freebsd``` for freebsd binaries.
-  * Requires: `clang-8`
+* `x86_64-w64-mingw32` for 64-bit Windows binaries.
+  * Requires: `python3 g++-mingw-w64-x86-64`
+* `x86_64-apple-darwin11` for Intel macOS binaries, `aarch64-apple-darwin11`
+  for Apple Silicon.
+  * Requires: `cmake clang imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev`
+    (`cmake` for depends' `native_libtapi` recipe)
+* `x86_64-unknown-freebsd` for FreeBSD binaries.
+  * Requires: `clang-14 libc++-14-dev libc++abi-14-dev`
+
+Each needs its Rust target: `rustup target add "$(cargo xtask triple --host <host>)"`.
 
 32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`)
 were permanently retired in v3.1.0-alpha.5
 (Chore #3) on PQC constant-time grounds. See `docs/CHANGELOG.md`
 entry "Retired 32-bit build targets".
 
-The required packages are the names for each toolchain on apt. Depending on your distro, they may have different names. The `depends` system has been tested on Ubuntu 18.04 and 20.04.
+The required packages are the names for each toolchain on apt. Depending on your distro, they may have different names. The release builds run `depends` on Ubuntu 22.04.
 
 Using `depends` might also be easier to compile Shekyl on Windows than using MSYS. Activate Windows Subsystem for Linux (WSL) with a distro (for example Ubuntu), install the apt build essentials and follow the `depends` steps above.
 
-The produced binaries still link libc dynamically. If the binary is compiled on a current distribution, it might not run on an older distribution with an older installation of libc. Passing `-DBACKCOMPAT=ON` to cmake will make sure that the binary will run on systems having at least libc version 2.17.
+The produced binaries still link libc dynamically. If the binary is compiled on a current distribution, it might not run on an older distribution with an older installation of libc.
 
 ## Installing Shekyl from a package
 
@@ -461,15 +447,14 @@ installs the systemd unit and its slice.
 
 ## Running shekyld
 
-The build places the binary in `bin/` sub-directory within the build directory
-from which cmake was invoked (repository root by default). To run in the
-foreground:
+The build places the binaries in `build/bin` at the repository root. To run in
+the foreground:
 
 ```bash
-./bin/shekyld
+./build/bin/shekyld
 ```
 
-To list all available options, run `./bin/shekyld --help`; the same table
+To list all available options, run `./build/bin/shekyld --help`; the same table
 is in [docs/EXECUTABLES.md](docs/EXECUTABLES.md). Options can be given on
 the command line or in a configuration file: TOML, each key an option's
 name without the leading dashes (`log-level = "info"`), read from
@@ -556,20 +541,6 @@ gdb --args /path/to/shekyld <options>
 Type `run`. When the process stops on the fault, type `thread apply all bt`.
 
 ### Analysing memory corruption
-
-There are two tools available:
-
-#### ASAN
-
-Configure Shekyl with the `-D SANITIZE=ON` CMake flag, e.g.:
-
-```bash
-cd build/debug && cmake -D SANITIZE=ON -D CMAKE_BUILD_TYPE=Debug ../..
-```
-
-You can then run the Shekyl tools normally. Performance will typically halve.
-
-#### valgrind
 
 Install valgrind and run as `valgrind /path/to/shekyld`. It will be very slow.
 
