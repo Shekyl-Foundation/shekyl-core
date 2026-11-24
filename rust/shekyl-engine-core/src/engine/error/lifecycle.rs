@@ -84,6 +84,16 @@ pub enum OpenError {
     /// here, so the default build has no float grader.
     #[error("wallet open refused: this computer's random-number source failed the stake check")]
     StakeRngSelfCertFailed,
+
+    /// This binary's address-derivation corpus does not hash to its pin, so
+    /// its derivation cannot be trusted to produce the addresses a seed
+    /// should. Raised before any key is derived and before any file is
+    /// touched, on create, restore and open.
+    #[error("wallet refused: this {platform} build failed its address-derivation self-check")]
+    DerivationSelfCheckFailed {
+        /// The platform this binary was built for, as `<os> <arch>`.
+        platform: String,
+    },
 }
 
 /// Why the stake engine's startup random-number check failed (S6).

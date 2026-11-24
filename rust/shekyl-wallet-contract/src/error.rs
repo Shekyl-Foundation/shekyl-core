@@ -178,6 +178,10 @@ wallet_rpc_error_codes! {
     /// check, so the wallet did not open. Only a `conformance` build runs
     /// the check.
     RandomSourceCheckFailed = -29017 => "RANDOM_SOURCE_CHECK_FAILED",
+    /// Create, restore, open: this binary failed its address-derivation
+    /// self-check, so nothing was derived or written. `data.platform` names
+    /// the build to replace.
+    DerivationSelfCheckFailed = -29018 => "DERIVATION_SELF_CHECK_FAILED",
     /// Build: address parse / network check failed.
     InvalidRecipient = -29100 => "INVALID_RECIPIENT",
     /// Build: spendable balance too low.
@@ -648,6 +652,20 @@ pub enum WalletRpcError {
          another computer"
     )]
     RandomSourceCheckFailed,
+    /// `-29018`: this binary's address-derivation corpus does not match its
+    /// pin, so the addresses it would derive cannot be trusted. Checked
+    /// before any derivation, so no wallet was created, restored or opened
+    /// and no file was touched. The wallet and its seed are not at fault;
+    /// the binary is.
+    #[error(
+        "this {platform} build of Shekyl failed its address-derivation check, so it derived \
+         no keys and changed no file — your wallet is not damaged; do not use this copy, \
+         install the {platform} release again"
+    )]
+    DerivationSelfCheckFailed {
+        /// The platform the binary was built for, as `<os> <arch>`.
+        platform: String,
+    },
     /// `-29201`: the daemon did not answer.
     #[error(
         "the daemon did not answer — check that it is running and its address is right, then retry"
@@ -1566,6 +1584,7 @@ impl WalletRpcError {
             Self::CurveTreeUnavailable => WalletRpcErrorCode::CurveTreeUnavailable,
             Self::CurveTreeStoreUnusable { .. } => WalletRpcErrorCode::CurveTreeStoreUnusable,
             Self::RandomSourceCheckFailed => WalletRpcErrorCode::RandomSourceCheckFailed,
+            Self::DerivationSelfCheckFailed { .. } => WalletRpcErrorCode::DerivationSelfCheckFailed,
             Self::DaemonUnreachable => WalletRpcErrorCode::DaemonUnreachable,
             Self::RefreshInProgress => WalletRpcErrorCode::RefreshInProgress,
             Self::RescanBlocked { .. } => WalletRpcErrorCode::RescanBlocked,
@@ -1741,6 +1760,7 @@ impl WalletRpcError {
                 Some(json!({ "wallet": wallet, "expected": expected }))
             }
             Self::WalletCloseBlocked { count } => Some(json!({ "count": count })),
+            Self::DerivationSelfCheckFailed { platform } => Some(json!({ "platform": platform })),
             Self::CurveTreeStoreUnusable { cause } => Some(json!({ "cause": cause.as_str() })),
             Self::DaemonVersionMismatch {
                 wallet_version,
@@ -1898,6 +1918,9 @@ impl From<OpenError> for WalletRpcError {
             // The grade was logged where the check ran. The wire carries the
             // remedy only.
             OpenError::StakeRngSelfCertFailed => Self::RandomSourceCheckFailed,
+            OpenError::DerivationSelfCheckFailed { platform } => {
+                Self::DerivationSelfCheckFailed { platform }
+            }
         }
     }
 }
@@ -4084,6 +4107,23 @@ mod tests {
         assert!(!message.contains("chi-square"), "{message}");
         for remedy in ["did not open", "try once more", "another computer"] {
             assert!(message.contains(remedy), "{remedy}: {message}");
+        }
+    }
+
+    /// A build that fails its derivation check is `-29018`, names its
+    /// platform in the message and in `data`, and says the wallet is fine.
+    #[test]
+    fn a_failed_derivation_check_names_the_platform() {
+        let err: WalletRpcError = OpenError::DerivationSelfCheckFailed {
+            platform: "linux aarch64".into(),
+        }
+        .into();
+        assert_eq!(err.code(), WalletRpcErrorCode::DerivationSelfCheckFailed);
+        assert_eq!(err.code().as_i32(), -29018);
+        assert_eq!(err.data().expect("data")["platform"], "linux aarch64");
+        let message = err.message();
+        for part in ["linux aarch64", "not damaged", "install"] {
+            assert!(message.contains(part), "{part}: {message}");
         }
     }
 
