@@ -32,6 +32,10 @@ use shekyl_levin::{
 /// that ends quiet is the daemon doing nothing, not doing it late.
 const SETTLE: Duration = Duration::from_secs(5);
 
+/// How many bytes of frames the flood seals into one record: under the
+/// record framer's 65,535-byte body.
+const FLOOD_RECORD_BYTES: usize = 60 * 1024;
+
 /// What the wire did while the peer waited.
 #[derive(Debug)]
 enum Wire {
@@ -511,12 +515,16 @@ fn a_flood_of_notifications_is_read_one_at_a_time_without_growing_memory() {
     // waits in the kernel's buffers and, when they are full, in the peer.
     let mut peer = Peer::established(&daemon, LoopbackHost::peer(0), genesis_claim());
     let before = settled_resident_kib(&daemon);
+    // Many frames to a record: this test measures how the daemon reads
+    // them, and a record for each 2002 would measure this debug-built peer
+    // sealing. The daemon still dispatches one frame per permit.
     let frame = new_transactions(Vec::new());
+    let frames = frame.repeat(FLOOD_RECORD_BYTES / frame.len());
     let target: usize = 32 * 1024 * 1024;
     let mut sent = 0usize;
     let started = Instant::now();
     while sent < target {
-        match peer.stream.write(&frame) {
+        match peer.stream.write(&frames) {
             Ok(n) => sent += n,
             Err(e)
                 if matches!(
