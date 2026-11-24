@@ -1,0 +1,1 @@
+- **A wallet call no longer hangs on a daemon that has just stopped.** When a daemon stopped, a client's next call on the closed connection could wait for an answer that would never come, for up to the session's one-hour idle limit. The call now fails at once with the connection-closed error, and an answer that had already arrived is still delivered.
