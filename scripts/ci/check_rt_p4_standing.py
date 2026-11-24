@@ -60,6 +60,7 @@ import sys
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import check_measurement_spans  # noqa: E402
 import release_matrix  # noqa: E402
 
 ATTESTATION = "docs/benchmarks/rt_p4_attestation.toml"
@@ -123,8 +124,16 @@ REQUIRED_REFUSALS = (
 PLAN_FLAGS = frozenset({"--target", "-p", "--features"})
 # Arguments of the rustc and git probes in spawn.rs. Not cargo flags.
 PROBE_FLAGS = frozenset({"-vV", "--version", "--short=9", "--git-dir", "-l", "--points-at"})
-# `cargo xtask`'s own command line, parsed in main.rs.
-XTASK_FLAGS = frozenset({"--host", "--out", "--version-override", "--measurement-spans", "--native"})
+# `cargo xtask`'s own command line, parsed in main.rs. The measurement
+# flag's spelling belongs to check_measurement_spans: this file names the
+# option by that constant, so the letters are not a release build passing it.
+XTASK_FLAGS = frozenset({
+    "--host",
+    "--out",
+    "--version-override",
+    "--native",
+    check_measurement_spans.FLAG,
+})
 # The release suffix version.rs strips and appends. Not a flag cargo sees.
 VERSION_MARKS = frozenset({"-release"})
 # Flag-shaped string literals each xtask source may contain, outside tests.
@@ -1032,13 +1041,16 @@ fn git_command() {
 #[cfg(test)]
 mod tests { fn t() { Command::new("anything").arg("-C"); } }
 """
-SELFTEST_MAIN = """
-"--host"
-"--out"
-"--version-override"
-"--measurement-spans"
-"--native"
-"""
+SELFTEST_MAIN = "".join(
+    f'"{flag}"\n'
+    for flag in (
+        "--host",
+        "--out",
+        "--version-override",
+        check_measurement_spans.FLAG,
+        "--native",
+    )
+)
 SELFTEST_VERSION = """
 fn mark(tag: &str) { tag.strip_suffix("-release"); }
 """
