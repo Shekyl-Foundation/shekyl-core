@@ -1,7 +1,7 @@
 # `CA-3`: conditional branches in the post-quantum crates, swept 2026-11-23
 
 **State of this record: complete for the pinned fips204 revision
-`072a7d68be`.** Shekyl builds with `overflow-checks = true`. This record says
+`904f0bdfcd`.** Shekyl builds with `overflow-checks = true`. This record says
 what that does to the post-quantum crates, what the fork of fips204 changes,
 and why validation cannot change.
 
@@ -53,7 +53,11 @@ The argument, at the pinned revision:
 Whether a decoded public key and signature can reach the old panic range has not
 been established. The argument above does not depend on the answer.
 
-**Evidence**, at the pinned revision, on rustc 1.94.0:
+**Evidence** on rustc 1.94.0. The library's executable code is unchanged after
+`072a7d68`: the later commits correct the `center_mod` interval comment, record
+how the fork follows upstream, and make the branch checker take the caller's
+pair. The suite results below are from `072a7d68`. The x86_64 branch count was
+read again at this pin.
 
 | Check | Result |
 | --- | --- |
@@ -71,10 +75,12 @@ BINSEC's `checkct` runs the helpers on unrestricted secret `i32` inputs on
 x86_64: **the tag is secure on 0 of 5 entrypoints, the fork on 5 of 5**
 ([`docs/formal/checkct/README.md`](../formal/checkct/README.md)).
 
-`scripts/ci/check_fips204_branch_counts.py` counts the conditional branches
-inlined from the helpers in the shipped profile. Each must be a loop back-edge
-or the x86 test of the public `gamma2`. The nightly `fips204-branch-count` job
-runs it on x86_64. A toolchain bump re-pins it on x86_64 and on the floor device.
+`scripts/ci/check_fips204_branch_counts.py` runs the fork's checker on the
+shipped profile and passes the pair recorded for `fips204_branch_subject`.
+The fork classifies each conditional branch inlined from the helpers and
+carries no count of its own. Each must be a loop back-edge or the x86 test of
+the public `gamma2`. The nightly `fips204-branch-count` job runs the x86_64
+pair. A toolchain bump re-pins both pairs, on x86_64 and on the floor device.
 
 | Binary | Target | Crate | Back-edges | `gamma2` tests | Other |
 | --- | --- | --- | --- | --- | --- |

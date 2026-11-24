@@ -110,6 +110,6 @@ bench = false
 # that fix, at the same version: every value the tag returned is unchanged.
 # `[patch]` applies only in the root manifest being built: each fuzz workspace
 # with fips204 in its lock carries this same entry, and
-# scripts/ci/check_crypto_closure.py holds the revision in every lock.
+# scripts/ci/check_crypto_closure.py holds that one revision in every lock and every patch.
 [patch.crates-io]
-fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "072a7d68bef14c2332d4b5ebd006189a3eedb2eb" }
+fips204 = { git = "https://github.com/Shekyl-Foundation/fips204", rev = "904f0bdfcd9da840373c584ca1b5fb8f3cc76668" }

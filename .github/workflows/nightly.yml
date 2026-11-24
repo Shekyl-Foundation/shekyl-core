@@ -589,7 +589,8 @@ jobs:
     if: ${{ !cancelled() && (!inputs.job || inputs.job == 'all' || inputs.job == 'fips204-branch-count') && needs.plan.outputs['fips204-branch-count'] != '{"include":[]}' }}
     # fips204's coefficient helpers stay free of conditional branches in the
     # shipped profile: one build of `fips204_branch_subject` with line tables,
-    # then the count. The checker is the fork's, from the pinned revision.
+    # then the count. The checker is the fork's, from the pinned revision, and
+    # the pair it is given is the one recorded for this binary.
     #
     # Same matrix as above. Each leg asks its own tree:
     #   - it has the script: the leg runs;

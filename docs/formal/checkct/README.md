@@ -373,9 +373,10 @@ wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
 `decompose` and `make_hint`. The Shekyl fork removes those branches.
 
 - **What runs.** `drivers/fips204ct.rs`. The helpers are `pub(crate)`, so `setup.sh`
-  compiles fips204's own `helpers.rs` and `high_low.rs` from a pinned revision into
-  the driver, with `crate::` rewritten to `super::`. The fork's public API is
-  unchanged.
+  compiles that revision's `helpers.rs`, `high_low.rs` and `types.rs` unchanged,
+  as their own crate, and reads `Q`, `D` and `ZETA` from its `lib.rs`. The fork
+  revision is the `[patch]` in `rust/Cargo.toml`, the same source the
+  crypto-closure record holds. The fork's public API is unchanged.
 - **The control.** The same driver on the unpatched tag `v0.5.0` (`fips204-tag`)
   must be insecure, and is, on all five entrypoints. If it ever passes, the guard
   has stopped seeing the branch.
@@ -386,8 +387,9 @@ wallet ships, fips204 0.5.0 branches on secret coefficients in `infinity_norm`,
   (`nightly-2025-12-04`, the closest to the shipped LLVM) and its freestanding
   target, not the shipped binary. The shipped-profile aarch64 and x86_64 builds are
   checked by `scripts/ci/check_fips204_branch_counts.py`, which runs the fork's
-  `shekyl/check_branch_counts.py`; the nightly `fips204-branch-count` job runs it on
-  x86_64.
+  `shekyl/check_branch_counts.py` with the pair recorded for
+  `fips204_branch_subject`. The nightly `fips204-branch-count` job runs the
+  x86_64 pair.
 
 ```bash
 CHECKCT_NIGHTLY=nightly-2025-12-04 CHECKCT_ONLY="fips204-tag fips204-fix" docs/formal/checkct/setup.sh

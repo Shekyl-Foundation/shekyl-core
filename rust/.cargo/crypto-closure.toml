@@ -297,7 +297,7 @@ reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, she
 [[package]]
 name = "fips204"
 version = "0.5.0"
-source = "git+https://github.com/Shekyl-Foundation/fips204?rev=072a7d68bef14c2332d4b5ebd006189a3eedb2eb#072a7d68bef14c2332d4b5ebd006189a3eedb2eb"
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=904f0bdfcd9da840373c584ca1b5fb8f3cc76668#904f0bdfcd9da840373c584ca1b5fb8f3cc76668"
 reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true, and the NTT path's range is hardened (docs/benchmarks/ca3_pq_branch_sweep_20261123.md); every value the tag returned is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]

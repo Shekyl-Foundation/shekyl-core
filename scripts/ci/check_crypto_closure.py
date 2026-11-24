@@ -18,7 +18,8 @@ therefore red until the record moves with it, in a reviewed change.
 The source is held too. An entry with a `source` (a pinned fork) must come
 from exactly that source in every lock, and an entry without one must come
 from crates.io, so neither a `[patch]` of a held crate nor a fork at another
-revision passes unseen.
+revision passes unseen. Every manifest `[patch]` of that fork must name the
+recorded revision: the workspace manifest is required to have one.
 
 A different compatibility line of the same name is not the recorded
 package: `rand` 0.10 under the shard rasterizer is not `rand` 0.8 under the
@@ -61,6 +62,7 @@ RECORD = "rust/.cargo/crypto-closure.toml"
 WORKSPACE_MANIFEST = "rust/Cargo.toml"
 WORKSPACE_LOCK = "rust/Cargo.lock"
 FUZZ_LOCKS = "rust/*/fuzz/Cargo.lock"
+FUZZ_MANIFESTS = "rust/*/fuzz/Cargo.toml"
 
 
 def compat_line(version: str) -> str:
@@ -111,6 +113,56 @@ def record_sources(text: str) -> dict[tuple[str, str], str]:
             raise ValueError(f"{entry.get('name')}: source must be a git URL pinned to one full revision")
         out[(entry["name"], entry["version"])] = source
     return out
+
+
+def source_rev(source: str) -> str:
+    """The revision in a `git+URL?rev=<rev>#<rev>` source."""
+    pinned = re.fullmatch(r"git\+https://[^?#]+\?rev=([0-9a-f]{40})#([0-9a-f]{40})", source)
+    if not pinned or pinned.group(1) != pinned.group(2):
+        raise ValueError(f"source is not one full git revision: {source}")
+    return pinned.group(1)
+
+
+def patch_rev(text: str, name: str = "fips204") -> str | None:
+    """The `[patch.crates-io]` rev for `name`, or None when the manifest has no patch.
+
+    Raises ValueError when the patch is present and is not one full revision.
+    """
+    spec = tomllib.loads(text).get("patch", {}).get("crates-io", {}).get(name)
+    if spec is None:
+        return None
+    rev = spec.get("rev") if isinstance(spec, dict) else None
+    if not isinstance(rev, str) or not re.fullmatch(r"[0-9a-f]{40}", rev):
+        raise ValueError(f"the {name} patch must name one full rev")
+    return rev
+
+
+def compare_patches(want: str, workspace: tuple[str, str | None],
+                    others: list[tuple[str, str | None]]) -> list[str]:
+    """The workspace patch exists and every patch names `want`."""
+    errors = []
+    label, rev = workspace
+    if rev is None:
+        errors.append(f"{label}: the workspace patch does not pin fips204")
+    elif rev != want:
+        errors.append(f"{label}: fips204 patch rev {rev}; the crypto-closure record holds {want}")
+    for label, rev in others:
+        if rev is not None and rev != want:
+            errors.append(f"{label}: fips204 patch rev {rev}; the crypto-closure record holds {want}")
+    return errors
+
+
+def manifest_patch_errors(sources: dict[tuple[str, str], str]) -> list[str]:
+    """Each fips204 `[patch]` that is not the recorded revision."""
+    source = sources.get(("fips204", "0.5.0"))
+    if source is None:
+        return ["the crypto-closure record holds no fips204 0.5.0 source"]
+    want = source_rev(source)
+    workspace = (WORKSPACE_MANIFEST, patch_rev(open(WORKSPACE_MANIFEST, encoding="utf-8").read()))
+    others = []
+    for path in sorted(glob.glob(FUZZ_MANIFESTS)):
+        others.append((path, patch_rev(open(path, encoding="utf-8").read())))
+    return compare_patches(want, workspace, others)
 
 
 def lock_packages(text: str) -> dict[str, set[str]]:
@@ -170,6 +222,9 @@ def run_locks(record_path: str, locks: list[str]) -> int:
     record_text = open(record_path, encoding="utf-8").read()
     _, held = parse_record(record_text)
     sources = record_sources(record_text)
+    errors: list[str] = []
+    if os.path.abspath(record_path) == os.path.abspath(RECORD):
+        errors += manifest_patch_errors(sources)
     if not locks:
         locks = [WORKSPACE_LOCK] + sorted(glob.glob(FUZZ_LOCKS))
         # Rule 47: the subject exists. The workspace lock and ten fuzz locks
@@ -177,7 +232,6 @@ def run_locks(record_path: str, locks: list[str]) -> int:
         if len(locks) < 2:
             print(f"crypto closure: no fuzz lock matched {FUZZ_LOCKS}")
             return 1
-    errors: list[str] = []
     checked = 0
     for path in locks:
         lock_text = open(path, encoding="utf-8").read()
@@ -407,6 +461,29 @@ def selftest() -> int:
         failed += 1
     else:
         print("selftest ok: a git package reaches the version check")
+    recorded_rev = "a" * 40
+    other_rev = "b" * 40
+    for name, workspace, extras, count in [
+        ("the workspace patch at the recorded rev passes", ("rust/Cargo.toml", recorded_rev), [("fuzz/Cargo.toml", recorded_rev), ("plain/Cargo.toml", None)], 0),
+        ("a missing workspace patch fails", ("rust/Cargo.toml", None), [], 1),
+        ("a fuzz patch at another rev fails", ("rust/Cargo.toml", recorded_rev), [("fuzz/Cargo.toml", other_rev)], 1),
+    ]:
+        got = len(compare_patches(recorded_rev, workspace, extras))
+        if got != count:
+            print(f"selftest FAIL: {name}: {got} difference(s), expected {count}")
+            failed += 1
+        else:
+            print(f"selftest ok: {name}")
+    if patch_rev(f'[patch.crates-io]\nfips204 = {{ rev = "{recorded_rev}" }}\n') != recorded_rev:
+        print("selftest FAIL: a fips204 patch rev did not parse")
+        failed += 1
+    else:
+        print("selftest ok: a fips204 patch rev parses")
+    if patch_rev('package = []\n') is not None:
+        print("selftest FAIL: a manifest with no fips204 patch parsed as one")
+        failed += 1
+    else:
+        print("selftest ok: a manifest with no fips204 patch is not one")
     for bad in ("git+https://example.invalid/f?branch=main#" + rev_a,
                 f"git+https://example.invalid/f?rev={rev_a}#{rev_b}",
                 f"git+https://example.invalid/f?rev=abc#abc"):
