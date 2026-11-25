@@ -1257,3 +1257,27 @@ fixed. No threshold, sample size or control fraction has changed.
 **Capture:** `windows_reg3_shakedown1_void.txt`, byte for byte (9,910 bytes,
 SHA-256 `2f35a914ef99cdb3ba04946cf5ec844c84c958627941ac5d32e5c62f59b84945`),
 with the toolchain and binary hash beside the earlier captures.
+
+
+### Revision 3 replacement Windows conditions, before its preflight (2026-11-24)
+
+**REGISTERED before using the registered seed on any Windows device.** The
+first fleet VM's void preflight and both hosts' short diagnostics are
+retained. High Performance did not establish a fix on the first VM; the
+second could detect the control in several of its short diagnostics.
+Use that replacement VM, with a fresh native build of the same registered
+source `63bcfab1d4`. It is another eight-vCPU Windows Server 2025 guest.
+Selection uses the unregistered diagnostics, not a registered pair result.
+
+Set High Performance for the session, do five fixed warm-ups of keygen
+only (`ml-dsa-keygen 5000 2026112901`, diagnostic seed), then allow two
+minutes to settle before the existing four-sample quiet gate. Pin the
+warm-ups and timed process to logical processor 4 at Normal priority.
+Restore the prior plan and default workload afterward. The fixed warm-up
+count is not extended until a diagnostic happens to look favourable.
+
+The full preflight remains `ml-dsa-registered 2026112801`. Only a valid
+preflight permits `ml-dsa-registered` with the still-unused Windows
+registered seed. The signing line, timed decode, 50,000 samples, 0.5 %
+control, 100 crops, all checks and ordered verdict thresholds are unchanged.
+A void is retained and localised, not read as a passing pair.
