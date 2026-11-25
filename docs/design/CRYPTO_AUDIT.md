@@ -6,8 +6,9 @@ ignored in `cargo audit` by ruling (Rick, 2026-10-24); its long-term fix is
 not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
 operand-dependent timing in the vendored `HelioseleneField` on x86_64,
 mechanism open (§2). `CA-3` opened 2026-11-21 by Rick's ruling: no
-constant-time evidence covers any of Shekyl's post-quantum signing (§3).
-Its FN-DSA run is registered and unmeasured (§3.1).
+registered timing evidence then covered any of Shekyl's post-quantum signers (§3).
+All three signers have since passed their registered runs. CA-3 closed on
+2026-11-25 (§3.1–§3.3).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -21,7 +22,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 post-fork revision 3: floor PASSES (3.57, delta10 657 ns); both Windows VM preflights VOID (controls 6.28 and 4.39), registered seed unused there; standalone laptop run selected and pending (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **CLOSED 2026-11-25**. FN-DSA (§3.1) and SLH-DSA (§3.3) passed their registered runs. Post-fork ML-DSA-65 passed on the floor (pair 3.57, delta10 657 ns) and the physical Windows desktop (pair 3.33, delta10 139 ns), meeting the final signing criterion (§3.2). |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -408,12 +409,12 @@ fips203/204/205 0.5.0. Owner: the crypto-audit lane. It is not part of
 respect to its secret key, on the floor device (Raspberry Pi 4, rule 76)
 and on x86?
 
-**What covers post-quantum code today.** checkct's drivers and its dynamic
+**Coverage when CA-3 opened.** checkct's drivers and its dynamic
 harness (`docs/formal/checkct/`) cover crypto-bigint 0.5.5,
 `dalek_ff_group::FieldElement` and `HelioseleneField`, and nothing in
 fips203, fips204, fips205 or fn-dsa. RT-P4
 ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) §9) times ML-KEM-768 decapsulation
-only. No registered run covers any signing.
+only. At opening, no registered run covered signing.
 
 **The signers, by exposure.**
 
@@ -657,13 +658,14 @@ above. None is chosen before then.
 
 ### 3.2 ML-DSA-65, transaction authorisation
 
-**Status: post-fork revision 3 — floor PASS, Windows pending (2026-11-24).**
-The floor's registered pair is 3.57, null 2.16, control 160.82, delta10
-657 ns. Both Windows VM preflights are void (controls 6.28 and 4.39),
-even after fixed warm-up and High Performance on the replacement. The
-registered Windows seed is unused. The maintainer selected the standalone
-physical laptop runner under the same method; that run is pending. No
-threshold or sample count has been changed.
+**CLOSED 2026-11-25.** Post-fork revision 3 passed the registered signing
+line on both devices. The floor recorded pair 3.57, null 2.16, control
+160.82 and delta10 657 ns. The physical Windows desktop recorded pair
+3.33, null 2.04, control 96.68 and delta10 139 ns. Both used 50,000
+samples per comparison with key decode timed. All signature checks held.
+The two earlier VM preflights missed their controls and contributed no
+registered result. This closes the final signer under CA-3's criterion.
+
 Core #1545 pins fips204's fork at `54b76cf714`, removing the secret-coefficient
 branches and hardening the inverse NTT range; the source and guard evidence
 are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).

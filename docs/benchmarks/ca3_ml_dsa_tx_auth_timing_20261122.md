@@ -1,7 +1,7 @@
 # `CA-3`, ML-DSA-65: the transaction authorisation's signing time, registered 2026-11-22
 
 **State of this record: post-fork revision 3 — floor PASS (2026-11-24),
-Windows pending a valid preflight and registered attempt.** Revision 2 on published
+physical Windows desktop PASS (2026-11-25). CA-3 is closed.** Revision 2 on published
 fips204 0.5.0 passed on the laptop and was inconclusive (7.55) on the
 floor. The maintainer ordered a fresh-seed run after #1545 merged the
 fips204 fix. Revision 3 below fixes that run's inputs and conditions;
@@ -1379,3 +1379,31 @@ launching the single registered attempt. Use the revision-3 size, planted
 control, null, functional checks and verdict thresholds above. Retain each
 completed result and apply the existing gate stop and repeat rules. Neither
 fleet VM used the registered Windows seed.
+
+### Revision 3 registered result on physical Windows (2026-11-25)
+
+**PASS on attempt 1.** The physical i9-13900K completed the release build
+of `63bcfab1d45fb9a1a71cf9f9a6231d1f291307d1` with rustc 1.94.0, native
+x86_64 MSVC and workspace static CRT. Executable SHA-256
+`059efe5218650531648d669f9740c5e1a49678d663f99b27f97258e213fa1cb7`.
+An elevated observer read the Windows performance counters. The harness
+ran with the Administrators group deny-only, Normal priority and affinity
+0x10. Both runs passed the four-sample quiet gate and completed on their
+first launch under the ten-second sibling monitor.
+
+| Inputs | Signing pair | Null | Planted control | delta10 |
+| --- | ---: | ---: | ---: | ---: |
+| Unregistered preflight, 2026112801 | 1.59 | 1.86 | 111.94 | 143 ns |
+| Registered, 05:24:26–05:27:26 UTC | 3.33 | 2.04 | 96.68 | 139 ns |
+
+The registered binary reported `inputs=registered`. The matched pair took
+62 candidates, with 2,504 ExpandS bytes and five ExpandA rejections for
+both keys. Both replicas agreed. Each of the nine comparisons returned
+all 50,500 calls and verified all 790 retained signatures, with zero
+malformed hint sections. Exit code 0. The planted delay was 1,345 ns.
+The informational composed and key-generation pairs were 2.11 and 7.15.
+
+The capture directory contains `windows_desktop_reg3_shakedown.txt` and
+`windows_desktop_reg3_registered_attempt1.txt`. Both hashes match the
+observer logs. The floor also passed (pair 3.57, delta10 657 ns).
+These results meet the registered signing criterion on both devices.
