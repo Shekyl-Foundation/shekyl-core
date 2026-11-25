@@ -1,0 +1,6 @@
+functions base=1059 variant=1059 instructions base=152297 variant=152297
+code_identical=True only_in_base=0 only_in_variant=0
+fips204 functions=78 moved=78
+keccak functions=2 moved=2
+rodata_identical=True
+verdict=LAYOUT-ONLY

@@ -124,10 +124,9 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   merges is tested at the commit already running and at its newest. Only
   a pull request's newer push cancels its older run
   (`scripts/ci/check_dev_push_runs_finish.py`, over every workflow that
-  pushes on `dev`). `merge-ready-dev.yml` takes no group: each push's run
-  judges that push. The build and Rust scope jobs measure a push from the last commit
-  that workflow passed on (`scripts/ci/push_scope_base.sh`), not from the
-  previous push, so a replaced or cancelled run's commits stay in scope
+  pushes on `dev`). The build and Rust scope jobs measure a push from the
+  last commit that workflow passed on (`scripts/ci/push_scope_base.sh`),
+  not from the previous push, so a replaced or cancelled run's commits stay in scope
   and a docs-only merge cannot skip them. A red names the merges since the
   last green run, not one PR.
 - **A gate on a PR's own diff runs on PRs only:** the schema snapshots'
@@ -150,6 +149,9 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   cancelled. On a draft it reports as `<name> (draft)`, so a draft never
   satisfies the requirement, and a PR marked ready waits for its own pass
   job (`scripts/ci/workflow_pass.py`).
+- **A PR is a draft while it is worked on, comes out of draft for review,
+  and takes `merge-ready` when review and validation are complete**
+  (ruled 2026-11-23).
 - **`merge-ready` is the owner's "done", enforced** (ruled 2026-11-19).
   Required checks going green is not the end of a PR: other workflows and
   the lane's fleet runs on the same head can still be going. The owning
@@ -165,25 +167,18 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   never a job, so it cannot be skipped into a pass, and no job that
   posts it is named `merge-ready`, since a ruleset matches a check run
   and a status by name alike.
-- **The label re-tests the PR against the newest `dev`, and so does each
-  merge that reaches it.** A PR's CI runs on its head merged onto the
-  `dev` of its last push; another PR merging first was never tested with
-  it, and two PRs each green against the same `dev` can be red together
-  (#1425 and #1426). A label that passes its check re-tests the head
-  merged with the newest `dev` on the tests both changes reach
-  (`scripts/ci/merge_ready_overlap.py`); with none, the status is
-  success at once. After each push to `dev`, every labelled PR whose
-  tests the push reaches goes back to pending, naming the merge, and is
-  re-tested again (`merge-ready-dev.yml`); a labelled PR the push does
-  not reach is untouched, and a PR without the label is never touched.
-  A re-test covers everything merged since the head was last ready, so
-  the one re-test per PR that runs, the newest, loses nothing a
-  cancelled one would have run. Green: success. Red, a conflict or the
-  time budget: the label comes off, with a comment naming the merges and
-  the failing tests. A red re-test is the PR's, never the run on `dev`'s.
-  Nothing marks a PR merely behind `dev`: a mark on every PR a merge
-  reaches made each merge a wait for the PRs behind it, a merge queue by
-  another name.
+- **The label is a signal to the merger, not a second test run** (ruled
+  2026-11-23). Nothing re-runs a test when the label goes on or when a
+  merge reaches a labelled PR, and a merge into `dev` leaves the label and
+  the status as they are. A PR's CI runs on its head merged onto the `dev`
+  of its last push, so two PRs each green against the same `dev` can be
+  red together (#1425 and #1426, #1489 and #1497). The run on `dev` after
+  the merge tests that combination, and a red there opens its own issue
+  (`report-dev-red.yml`). One check does look at the combination when the
+  label goes on, because the break costs every lane its pushes and takes
+  seconds to see: the head must merge with the newest `dev`, and the fuzz
+  lockfiles must agree with the workspace lock on that merge. It reads
+  files and runs no test. A merge after the label is `dev`'s run's.
 - **A stacked PR retargeted onto `dev` keeps its old base's checks until
   its next push.** Merge `dev` into it before it merges
   (`scripts/ci/check_pr_event_triggers.py` names why no event does this).
@@ -191,10 +186,8 @@ gate that checks the whole tree also runs on push to `dev`, with the same
   It tests each merge result before it lands by making every author merge
   `dev` and rerun CI after every other merge; with the Rust job over an
   hour and six lanes open, each merge would cost the other five that run.
-  The `merge-ready` re-test runs only for a labelled PR, and only on the
-  tests it shares with the merges since it was last ready, and the runs
-  on `dev` test every combination once, after the merge; what still
-  lands before it is seen is a break between changes that share no test.
+  The runs on `dev` test every combination once, after the merge; what
+  lands before it is seen is a break between two changes each green alone.
 - **No merge queue (rule 21).** A queue also tests each merge result
   before it lands, but a group passes only if every required check
   finishes inside the queue's timeout, and a group removed for a timeout

@@ -282,6 +282,23 @@ pub fn converge_weight_fee_by(
     )
 }
 
+/// [`converge_weight_fee_by`] for any [`SpendShape`]: the fee fixed point
+/// of [`predict_spend_weight`], through the same loop ([`converge_fee_by`]).
+/// A solo shape paying no group converges to what [`converge_weight_fee_by`]
+/// does. `None` also when the shape pays more groups than it has outputs.
+#[must_use]
+pub fn converge_spend_fee_by(
+    shape: &SpendShape<'_>,
+    seed: u64,
+    price: impl Fn(u64) -> Option<u64>,
+) -> Option<u64> {
+    converge_fee_by(
+        |fee| u64::try_from(predict_spend_weight(shape, fee)?).ok(),
+        seed,
+        price,
+    )
+}
+
 /// The weight of a transaction measured at `measured_fee`, were it to pay
 /// `fee` instead: the fee reaches the weight only through `varint(fee)` (the
 /// field list [`predict_weight`] sums), so the rest of the measurement

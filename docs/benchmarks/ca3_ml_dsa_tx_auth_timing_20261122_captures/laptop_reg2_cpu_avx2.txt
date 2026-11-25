@@ -1,0 +1,1 @@
+AVX2: IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE)=True; .NET Avx2.IsSupported=True (read 2026-11-23T00:49Z, unelevated)

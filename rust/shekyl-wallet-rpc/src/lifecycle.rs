@@ -20,11 +20,10 @@ use shekyl_crypto_pq::bip39::{entropy_from_mnemonic, mnemonic_from_entropy};
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, DaemonExpectation, Engine, EngineCreateParams,
-    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture,
+    Network, OpenedEngine, ServingStartError, SoloSigner, StakeFacade, StakePosture, TorFile,
 };
 use shekyl_engine_file::paths::keys_path_from;
 use shekyl_engine_file::SafetyOverrides;
-use shekyl_engine_prefs::WalletPrefs;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
@@ -89,7 +88,7 @@ pub(crate) async fn create_wallet(
 
     // Short critical section: refuse if busy, reserve the opening slot,
     // snapshot config, then release the tenant mutex before slow work.
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -99,7 +98,12 @@ pub(crate) async fn create_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     // Move password into Zeroizing before any slow work so the serde
@@ -118,7 +122,7 @@ pub(crate) async fn create_wallet(
     // A freshly created wallet is a non-staker (no bond record), so
     // `start_pscan_if_staker` parks `None` here; the call is unconditional so
     // the embedder never branches on staking state (`81-no-protocol-knowledge`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -164,7 +168,6 @@ async fn create_wallet_engine(
         restore_height_hint: 0,
         kdf,
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
 
     // Engine::create is sync and may run Argon2; keep the async runtime
@@ -211,7 +214,7 @@ pub(crate) async fn restore_wallet(
     let mnemonic = Zeroizing::new(p.mnemonic);
     let password = Zeroizing::new(p.password.into_bytes());
 
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -221,7 +224,12 @@ pub(crate) async fn restore_wallet(
             return Err(WalletRpcError::WalletFileExists);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     let restored = restore_wallet_engine(
@@ -244,7 +252,7 @@ pub(crate) async fn restore_wallet(
 
     let restore_hint = (restore_height > 0).then_some(i64::from(restore_height));
     let handle = wallet_handle(&p.name, &engine, restore_hint);
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -289,7 +297,6 @@ async fn restore_wallet_engine(
         restore_height_hint: restore_height,
         kdf,
         overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
     };
 
     let engine =
@@ -306,7 +313,7 @@ pub(crate) async fn open_wallet(
     let p: OpenWalletParams = parse_required_object(params, "open_wallet")?;
     validate_wallet_name(&p.name)?;
 
-    let (base, network, daemon) = {
+    let (base, network, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         if state.tenant.is_busy() {
             return Err(WalletRpcError::WalletAlreadyOpen);
@@ -316,7 +323,12 @@ pub(crate) async fn open_wallet(
             return Err(WalletRpcError::WalletFileNotFound);
         }
         state.tenant.begin_opening();
-        (base, state.network, state.daemon.clone())
+        (
+            base,
+            state.network,
+            state.daemon.clone(),
+            state.tor_file.clone(),
+        )
     };
 
     // Same password hand-off as create: consume the serde String into
@@ -335,7 +347,7 @@ pub(crate) async fn open_wallet(
     // Auto-start the P-scan task for a staker (WI-1); a non-staker parks `None`.
     // A corrupt sealed P-scan state fails the open closed (see
     // `wrap_and_start_pscan`).
-    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon).await {
+    let (shared, tasks) = match wrap_and_start_tasks(engine, &daemon, &tor_file).await {
         Ok(v) => v,
         Err(e) => {
             tenants.lock().await.tenant.clear_opening();
@@ -395,9 +407,10 @@ async fn take_and_close_tenant(
     tenants: &tokio::sync::Mutex<TenantState>,
     expected_name: Option<&str>,
 ) -> Result<String, WalletRpcError> {
-    let (name, shared, tasks, daemon) = {
+    let (name, shared, tasks, daemon, tor_file) = {
         let mut state = tenants.lock().await;
         let daemon = state.daemon.clone();
+        let tor_file = state.tor_file.clone();
         if let Some(expected) = expected_name {
             // Same mutex hold as `take_open`: check-then-take is atomic.
             if state.tenant.open_name() != Some(expected) {
@@ -412,13 +425,13 @@ async fn take_and_close_tenant(
             .tenant
             .take_open()
             .ok_or(WalletRpcError::WalletNotOpen)?;
-        (name, shared, tasks, daemon)
+        (name, shared, tasks, daemon, tor_file)
     };
     tasks.shutdown().await;
     let lock = match Arc::try_unwrap(shared) {
         Ok(lock) => lock,
         Err(shared) => {
-            let tasks = restart_tasks(&shared, &daemon).await;
+            let tasks = restart_tasks(&shared, &daemon, &tor_file).await;
             tenants
                 .lock()
                 .await
@@ -437,7 +450,7 @@ async fn take_and_close_tenant(
         // spawn a second driver. The open-wallet ⇒ driver-running property
         // still holds — `restart_tasks` is unconditional on this path.
         let shared: SharedEngine = Arc::new(RwLock::new(engine));
-        let tasks = restart_tasks(&shared, &daemon).await;
+        let tasks = restart_tasks(&shared, &daemon, &tor_file).await;
         tenants.lock().await.tenant.set_open(name, shared, tasks);
         return Err(WalletRpcError::from(e));
     }
@@ -629,8 +642,9 @@ pub(crate) async fn make_daemon(
 async fn wrap_and_start_tasks(
     engine: Engine<SoloSigner>,
     daemon: &DaemonTarget,
+    tor_file: &TorFile,
 ) -> Result<(SharedEngine, OpenTasks), WalletRpcError> {
-    let (shared, cadence) = engine.into_shared(daemon);
+    let (shared, cadence) = engine.into_shared(daemon, tor_file);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -660,7 +674,7 @@ async fn wrap_and_start_tasks(
     // open. The task itself does not publish immediately; it waits the gate-6
     // §10.9 launch standoff first, precisely so the onion does not reanimate
     // in lockstep with this open.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon, tor_file).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `Ok(None)`: not a serving persona. `AlreadyRunning`: the driver's
         // first tick fired before this call and won the start race; the
@@ -866,81 +880,7 @@ pub(crate) async fn stake(
     // tenant's daemon target (`WSS-Q4`).
     let outcome = StakeFacade::first_stake(shared, &daemon, slot, posture)
         .await
-        .map_err(|e| {
-            use shekyl_engine_core::FirstStakeError as E;
-            match e {
-                E::BondInFlight => WalletRpcError::StakeInFlight,
-                E::AlreadyStaked => WalletRpcError::AlreadyStaked,
-                E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
-                // Neither -29500 ("fund and retry" — funding more worsens
-                // fragmentation) nor an internal fault (the funding is
-                // intact): its own code, rule 82.
-                E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
-                // A failed fee query: the build path's mapping, so the same
-                // cause answers the same code — never the "fund and retry"
-                // misdiagnosis (rule 82).
-                E::FeeEstimate(e) => e.into(),
-                // The daemon ANSWERED and the wallet refused the answer. The
-                // same -29102/-29109 split the send path draws, for the same
-                // reason: "check the connection and retry" is the wrong
-                // remedy when the connection worked (rule 82). The bond fee
-                // is charged to persona working capital with no user-facing
-                // control, so this refusal is the only place the operator
-                // ever learns the daemon quoted an absurd rate — it has to
-                // say which check fired and what the bound was.
-                E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
-                    reason: v.reason(),
-                    rate: v.rate(),
-                    bound: v.bound(),
-                },
-                // W1-clean internal failures: state file / persona-id reads.
-                // Funding cannot fix these, so they are not `-29500`.
-                E::State(d) => WalletRpcError::InternalError(format!(
-                    "stake preflight failed ({d}); nothing durable was written"
-                )),
-                E::NoStakeEngine => {
-                    WalletRpcError::InternalError("stake: no stake engine after intent open".into())
-                }
-                E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
-                // NOT an internal fault: the slot above is read from the engine
-                // BEFORE the credentialed reopen, and that reopen runs the SP-R0
-                // open-time reconcile — which can GC the picked slot as a phantom
-                // (arm #3) or burn the cursor past it for a retired persona
-                // (arm #2), either of which moves the record out from under the
-                // read. The engine refuses fail-closed; the operator's remedy is to
-                // call `stake` again, which reads the reconciled record. Rule 82: a
-                // legitimate domain state gets a domain code, never `-32603`.
-                //
-                // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
-                // here: it re-arms `staking_enabled` with a slot that has a
-                // matching bond post, so `first_stake`'s already-staked scan wins
-                // the race to refuse — and it is the right answer.
-                E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
-                // W2: durable slot may exist without a post — a `stake` re-invoke
-                // resumes. Say so in the operator-facing text (rule 82).
-                // The post's seal was not confirmed on disk: nothing was
-                // sent, the seal was removed, and the save's cause answers
-                // (Rick, 2026-11-19).
-                E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
-                    &error,
-                    shekyl_wallet_contract::error::SaveOf::Staking,
-                ),
-                E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
-                    "stake failed mid-flow ({d}); call stake again to resume"
-                )),
-                // A designed refusal with a named remedy, not an internal
-                // fault and not a funding problem: shard assignment is an
-                // unbuilt round, so market staking has nothing to bond over
-                // yet. Its own code rather than a reused one — `-29500`'s
-                // remedy is "fund and retry", which would send an operator to
-                // top up a wallet that is funded fine (rule 82).
-                E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
-                // Fill first (WSS-Q4, WSS-Q15): each refusal names its own
-                // remedy, so each has its own code (rule 82). All are
-                // W1-clean: the fill runs before the durable point.
-                E::Fill(fill) => stake_fill_error(fill),
-            }
-        })?;
+        .map_err(first_stake_rpc_error)?;
 
     Ok(json!({
         "slot": outcome.p_slot,
@@ -948,6 +888,94 @@ pub(crate) async fn stake(
         "resumed": outcome.resumed,
         "state": "pending_dispatch",
     }))
+}
+
+/// The wallet-RPC answer for a refused first stake. `stake` calls this, and
+/// the signer-fault test calls it, so the stake lane cannot drift from the
+/// other signing paths.
+fn first_stake_rpc_error(error: shekyl_engine_core::FirstStakeError) -> WalletRpcError {
+    use shekyl_engine_core::FirstStakeError as E;
+    match error {
+        E::BondInFlight => WalletRpcError::StakeInFlight,
+        E::AlreadyStaked => WalletRpcError::AlreadyStaked,
+        E::Funding(detail) => WalletRpcError::StakeNotReady { detail },
+        // Neither -29500 ("fund and retry" — funding more worsens
+        // fragmentation) nor an internal fault (the funding is
+        // intact): its own code, rule 82.
+        E::FundingFragmented { max } => WalletRpcError::StakeFundingFragmented { max },
+        // A failed fee query: the build path's mapping, so the same
+        // cause answers the same code — never the "fund and retry"
+        // misdiagnosis (rule 82).
+        E::FeeEstimate(e) => e.into(),
+        // The daemon ANSWERED and the wallet refused the answer. The
+        // same -29102/-29109 split the send path draws, for the same
+        // reason: "check the connection and retry" is the wrong
+        // remedy when the connection worked (rule 82). The bond fee
+        // is charged to persona working capital with no user-facing
+        // control, so this refusal is the only place the operator
+        // ever learns the daemon quoted an absurd rate — it has to
+        // say which check fired and what the bound was.
+        E::FeeUnreasonable(v) => WalletRpcError::DaemonFeeUnreasonable {
+            reason: v.reason(),
+            rate: v.rate(),
+            bound: v.bound(),
+        },
+        // W1-clean internal failures: state file / persona-id reads.
+        // Funding cannot fix these, so they are not `-29500`.
+        E::State(d) => WalletRpcError::InternalError(format!(
+            "stake preflight failed ({d}); nothing durable was written"
+        )),
+        E::NoStakeEngine => {
+            WalletRpcError::InternalError("stake: no stake engine after intent open".into())
+        }
+        E::RecoveredPendingReopen => WalletRpcError::StakeRecoveredPendingReopen,
+        // NOT an internal fault: the slot above is read from the engine
+        // BEFORE the credentialed reopen, and that reopen runs the SP-R0
+        // open-time reconcile — which can GC the picked slot as a phantom
+        // (arm #3) or burn the cursor past it for a retired persona
+        // (arm #2), either of which moves the record out from under the
+        // read. The engine refuses fail-closed; the operator's remedy is to
+        // call `stake` again, which reads the reconciled record. Rule 82: a
+        // legitimate domain state gets a domain code, never `-32603`.
+        //
+        // Arm #4 adoption lands on `-29502 AlreadyStaked` instead, not
+        // here: it re-arms `staking_enabled` with a slot that has a
+        // matching bond post, so `first_stake`'s already-staked scan wins
+        // the race to refuse — and it is the right answer.
+        E::WrongSlot { .. } => WalletRpcError::StakeRecordMoved,
+        // W2: durable slot may exist without a post — a `stake` re-invoke
+        // resumes. Say so in the operator-facing text (rule 82).
+        // The post's seal was not confirmed on disk: nothing was
+        // sent, the seal was removed, and the save's cause answers
+        // (Rick, 2026-11-19).
+        E::SealNotSaved(error) => shekyl_wallet_contract::error::from_unsaved_send(
+            &error,
+            shekyl_wallet_contract::error::SaveOf::Staking,
+        ),
+        E::Persist(d) | E::Engine(d) => WalletRpcError::InternalError(format!(
+            "stake failed mid-flow ({d}); call stake again to resume"
+        )),
+        // Nothing was sent and the durable slot stands, so a later
+        // `stake` resumes it: said in the log beside the fault's code.
+        E::Signer(fault) => {
+            tracing::warn!(
+                %fault,
+                "the bond post's signer refused; call stake again to resume"
+            );
+            fault.into()
+        }
+        // A designed refusal with a named remedy, not an internal
+        // fault and not a funding problem: shard assignment is an
+        // unbuilt round, so market staking has nothing to bond over
+        // yet. Its own code rather than a reused one — `-29500`'s
+        // remedy is "fund and retry", which would send an operator to
+        // top up a wallet that is funded fine (rule 82).
+        E::NoShardsAvailable => WalletRpcError::StakeNoShardsAvailable,
+        // Fill first (WSS-Q4, WSS-Q15): each refusal names its own
+        // remedy, so each has its own code (rule 82). All are
+        // W1-clean: the fill runs before the durable point.
+        E::Fill(fill) => stake_fill_error(fill),
+    }
 }
 
 /// The contract code for a refused fill: each refusal its own remedy.
@@ -1007,12 +1035,13 @@ async fn reopen_with_first_stake_intent(
     password: Zeroizing<Vec<u8>>,
     slot: u32,
 ) -> Result<SharedEngine, WalletRpcError> {
-    let (base, network, endpoint, shared) = {
+    let (base, network, endpoint, tor_file, shared) = {
         let state = tenants.lock().await;
         (
             wallet_base(&state.wallet_dir, expected_name),
             state.network,
             state.daemon.clone(),
+            state.tor_file.clone(),
             state.tenant.engine().ok_or(WalletRpcError::WalletNotOpen)?,
         )
     };
@@ -1094,7 +1123,7 @@ async fn reopen_with_first_stake_intent(
             let restored = async {
                 let pw = Zeroizing::new(password.as_slice().to_vec());
                 let (engine, _hint) = open_wallet_engine(&base, network, &endpoint, pw).await?;
-                wrap_and_start_tasks(engine, &endpoint).await
+                wrap_and_start_tasks(engine, &endpoint, &tor_file).await
             }
             .await;
             let mut state = tenants.lock().await;
@@ -1133,7 +1162,7 @@ async fn reopen_with_first_stake_intent(
     // wallet stays open with the actor resident and NO parked scan — the
     // exact state the `stake` entry's `has_pscan` check routes back through
     // this reopen, so a retry re-attempts the scan instead of spinning dark.
-    let (shared, cadence) = engine.into_shared(&endpoint);
+    let (shared, cadence) = engine.into_shared(&endpoint, &tor_file);
     match Engine::start_pscan(shared.clone()).await {
         Ok(handle) => {
             // The scan is the fail-closed one on this path (above); serving is
@@ -1141,7 +1170,7 @@ async fn reopen_with_first_stake_intent(
             // stake the operator is in the middle of. The driver's
             // serving-liveness leg re-attempts it on the next chain advance
             // (`ENGINE_CADENCE_DRIVER.md` §3 leg 2).
-            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint).await {
+            match StakeFacade::start_serving_if_staker(shared.clone(), &endpoint, &tor_file).await {
                 Ok(Some(h)) => cadence.adopt_serving(h),
                 // `None`: not a serving persona. `AlreadyRunning`: the
                 // driver's leg won the start race and parked the handle.
@@ -1201,8 +1230,12 @@ async fn reopen_with_first_stake_intent(
 /// already-shared form of the wrap (`ENGINE_CADENCE_DRIVER.md` §1) — and
 /// that one is infallible: the driver polls its way to health rather than
 /// failing to start.
-async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTasks {
-    let cadence = Engine::start_cadence(shared, daemon);
+async fn restart_tasks(
+    shared: &SharedEngine,
+    daemon: &DaemonTarget,
+    tor_file: &TorFile,
+) -> OpenTasks {
+    let cadence = Engine::start_cadence(shared, daemon, tor_file);
     let pscan = match StakeFacade::start_pscan_if_staker(shared.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
@@ -1222,7 +1255,7 @@ async fn restart_tasks(shared: &SharedEngine, daemon: &DaemonTarget) -> OpenTask
     // re-attempts on the next chain advance. A fresh standoff is drawn either
     // way, so the re-armed host does not republish in lockstep with the
     // failed close.
-    match StakeFacade::start_serving_if_staker(shared.clone(), daemon).await {
+    match StakeFacade::start_serving_if_staker(shared.clone(), daemon, tor_file).await {
         Ok(Some(handle)) => cadence.adopt_serving(handle),
         // `None`: not a serving persona. `AlreadyRunning`: the freshly
         // re-armed driver's first tick won the start race and parked the
@@ -1277,6 +1310,7 @@ mod tests {
                 url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
+            crate::server::TorFile::discover(),
         ))
     }
 
@@ -1620,6 +1654,7 @@ mod tests {
                 url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
+            crate::server::TorFile::discover(),
         ))
     }
 
@@ -1845,5 +1880,32 @@ mod tests {
             .await
             .expect("wallet still open after the refusal");
         close_wallet(&tenants, &json!({})).await.expect("close");
+    }
+
+    /// Stake answers a signer fault the way every other signing path does.
+    /// Red edit: map `FirstStakeError::Signer` to an internal error.
+    #[test]
+    fn a_stake_signer_fault_answers_the_same_as_every_other_signing_path() {
+        use shekyl_engine_core::{FirstStakeError, InternalSignFault, SignFault};
+        use shekyl_wallet_contract::error::WalletRpcErrorCode;
+
+        let internal = SignFault::Internal(InternalSignFault::MembershipSelfCheck);
+        let err = super::first_stake_rpc_error(FirstStakeError::Signer(internal));
+        assert_eq!(err.code(), WalletRpcErrorCode::SignerFailed);
+        assert!(
+            matches!(
+                err,
+                crate::error::WalletRpcError::SignerFailed {
+                    fault: "membership-self-check"
+                }
+            ),
+            "{err:?}"
+        );
+
+        let err =
+            super::first_stake_rpc_error(FirstStakeError::Signer(SignFault::PqcLeafMismatch {
+                input: 1,
+            }));
+        assert_eq!(err.code(), WalletRpcErrorCode::InputUnspendable);
     }
 }

@@ -520,13 +520,16 @@ mod windows {
 #[cfg(unix)]
 mod unix {
     use std::io;
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
 
     use shekyl_daemon_config::owner_socket::assert_dir;
     use shekyl_daemon_config::OwnerSocketPlan;
     use shekyl_options::{Code, Diagnostic, Source};
+    use shekyl_rpc_transport::listen::{
+        bind_owner_only_socket, Cleared, OwnerSocketRefusal, SocketRefusal,
+    };
 
     /// The bound listener, as [`OwnerSocket::into_parts`] hands it to the
     /// server.
@@ -596,21 +599,18 @@ mod unix {
                     .param("found", found)
             };
             assert_dir(&plan.dir).map_err(unusable)?;
-            dial_existing(plan, network)?;
-            let listener = UnixListener::bind(&plan.path).map_err(|e| match e.kind() {
-                // A daemon that won the race between the dial and the bind.
-                io::ErrorKind::AddrInUse => running(plan, network),
-                _ => unusable(format!("it cannot hold a socket: {e}")),
-            })?;
+            let bound = bind_owner_only_socket(&plan.path)
+                .map_err(|refusal| refused(plan, network, refusal, &unusable))?;
+            if bound.cleared() == Cleared::ReplacedStale {
+                tracing::info!(
+                    target: "global",
+                    "replaced a stale owner's socket at {} (nothing answered)",
+                    plan.path.display()
+                );
+            }
+            let listener = bound.into_std();
             // From here a failure must not leave the bound path behind.
             let rendezvous = Rendezvous::of(plan).map_err(unusable)?;
-            // The directory is the containment; the socket's own mode keeps
-            // it the owner's if the directory is ever widened.
-            std::fs::set_permissions(&plan.path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| unusable(format!("the socket's mode cannot be set: {e}")))?;
-            listener
-                .set_nonblocking(true)
-                .map_err(|e| unusable(format!("the socket cannot be made non-blocking: {e}")))?;
             Ok(Self {
                 listener,
                 rendezvous,
@@ -724,38 +724,42 @@ mod unix {
             .param("path", plan.path.display().to_string())
     }
 
-    /// The start-up dial (`RPC_CHANNEL.md` §7.1): an answer is a running
-    /// daemon, a refusal is a stale socket to replace, and anything that is
-    /// not this account's socket is reported and left alone.
-    fn dial_existing(plan: &OwnerSocketPlan, network: &str) -> Result<(), Diagnostic> {
+    /// The shared bind's refusal as the owner's socket words it
+    /// (`RPC_CHANNEL.md` §7.1's start-up dial): an answer is a running
+    /// daemon, a socket whose server is gone was replaced, and anything that
+    /// is not this account's socket is reported and left alone.
+    fn refused(
+        plan: &OwnerSocketPlan,
+        network: &str,
+        refusal: OwnerSocketRefusal,
+        unusable: &dyn Fn(String) -> Diagnostic,
+    ) -> Diagnostic {
         let impostor = |found: String| {
             Diagnostic::new(Code::SocketImpostor, Source::Machine)
                 .param("path", plan.path.display().to_string())
                 .param("found", found)
         };
-        let meta = match std::fs::symlink_metadata(&plan.path) {
-            Ok(meta) => meta,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(impostor(format!("it cannot be read: {e}"))),
-        };
-        if !meta.file_type().is_socket() {
-            return Err(impostor("a file that is not a socket".to_owned()));
-        }
-        if meta.uid() != plan.owner {
-            return Err(impostor(format!("a socket owned by uid {}", meta.uid())));
-        }
-        match UnixStream::connect(&plan.path) {
-            Ok(_answered) => Err(running(plan, network)),
-            Err(e) if e.kind() == io::ErrorKind::ConnectionRefused => {
-                tracing::info!(
-                    target: "global",
-                    "replacing a stale owner's socket at {} (nothing answered)",
-                    plan.path.display()
-                );
-                std::fs::remove_file(&plan.path)
-                    .map_err(|e| impostor(format!("a stale socket that cannot be removed: {e}")))
+        match refusal {
+            OwnerSocketRefusal::NoDirectory => unusable("it names no directory".to_owned()),
+            OwnerSocketRefusal::Directory(why) => unusable(why.clause(None)),
+            OwnerSocketRefusal::Path(SocketRefusal::Answers) => running(plan, network),
+            OwnerSocketRefusal::Path(SocketRefusal::NotASocket) => {
+                impostor("a file that is not a socket".to_owned())
             }
-            Err(e) => Err(impostor(format!("a socket that cannot be dialled: {e}"))),
+            OwnerSocketRefusal::Path(SocketRefusal::NotThisAccounts(uid)) => {
+                impostor(format!("a socket owned by uid {uid}"))
+            }
+            OwnerSocketRefusal::Path(SocketRefusal::Unknown(why)) => {
+                impostor(format!("a socket that cannot be read or dialled: {why}"))
+            }
+            OwnerSocketRefusal::Path(SocketRefusal::NotRemoved(why)) => {
+                impostor(format!("a stale socket that cannot be removed: {why}"))
+            }
+            // A daemon that won the race between the decision and the bind.
+            OwnerSocketRefusal::Socket(e) if e.kind() == io::ErrorKind::AddrInUse => {
+                running(plan, network)
+            }
+            OwnerSocketRefusal::Socket(e) => unusable(format!("it cannot hold a socket: {e}")),
         }
     }
 
@@ -763,6 +767,7 @@ mod unix {
     mod tests {
         use super::*;
         use shekyl_rpc_rendezvous::Instance;
+        use std::os::unix::fs::PermissionsExt;
 
         /// A listener the runtime cannot take is refused by `serve_ready`,
         /// the one fallible step between the bind and the accept loop, which
@@ -839,6 +844,23 @@ mod unix {
             let refused = OwnerSocket::bind(&plan, "regtest").unwrap_err();
             assert_eq!(refused.code, Code::SocketImpostor);
             assert_eq!(std::fs::read(&plan.path).unwrap(), b"not a socket");
+        }
+
+        /// **The owner's socket is never bound in a directory others can
+        /// enter** (Rick, 2026-11-22): the start refuses as
+        /// `config.socket-dir.unusable` and binds nothing. Red edit: drop
+        /// the directory checks before the bind.
+        #[test]
+        fn a_directory_others_can_enter_is_refused_and_nothing_is_bound() {
+            let dir = tempfile::tempdir().unwrap();
+            let plan = plan_in(dir.path());
+            for mode in [0o750, 0o755, 0o770] {
+                std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode))
+                    .unwrap();
+                let refused = OwnerSocket::bind(&plan, "regtest").unwrap_err();
+                assert_eq!(refused.code, Code::SocketDirUnusable, "mode {mode:o}");
+                assert!(!plan.path.exists(), "nothing was bound under mode {mode:o}");
+            }
         }
 
         /// A clean exit removes the socket this daemon bound, and the socket

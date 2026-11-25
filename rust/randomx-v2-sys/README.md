@@ -48,10 +48,9 @@ both surfaces against the new pin's `randomx.h` and update the
 
 The crate's `build.rs` (not present at C1; lands at C3 per §5.2.2
 and R4-D2 / R4-D3) requires the `RANDOMX_V2_INSTALL_DIR`
-environment variable to point at the CMake install prefix
-containing `lib/librandomx.a`. The Shekyl CMake build sets this
-via the `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` option per
-§5.4.1 / T12.
+environment variable to point at the install prefix containing
+`lib/librandomx.a`, which `scripts/build_randomx_v2_ref.sh` stages
+(§5.4.1 / T12).
 
 At C1 the crate is declarations-only; `cargo build -p
 randomx-v2-sys` succeeds without any C link step because no

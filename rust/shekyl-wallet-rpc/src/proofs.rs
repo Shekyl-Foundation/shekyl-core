@@ -371,6 +371,7 @@ mod tests {
                 url: "http://127.0.0.1:1".to_string(),
                 proxy: None,
             },
+            crate::server::TorFile::discover(),
         ));
 
         let err = get_reserve_proof(&tenants, &serde_json::json!({ "amount": "0" }))

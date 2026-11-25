@@ -1,0 +1,208 @@
+   Compiling quote v1.0.47
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling version_check v0.9.5
+   Compiling generic-array v0.14.7
+   Compiling libc v0.2.191
+   Compiling syn v2.0.119
+   Compiling cfg-if v1.0.5
+   Compiling typenum v1.20.1
+   Compiling radium v0.7.0
+   Compiling subtle v2.6.1
+   Compiling rustversion v1.0.23
+   Compiling crypto-common v0.1.7
+   Compiling getrandom v0.2.17
+   Compiling rand_core v0.6.4
+   Compiling block-buffer v0.10.4
+   Compiling semver v1.0.28
+   Compiling rustc_version v0.4.1
+   Compiling digest v0.10.7
+   Compiling zeroize_derive v1.5.0
+   Compiling syn v3.0.10
+   Compiling zeroize v1.9.2
+   Compiling tap v1.0.1
+   Compiling wyz v0.5.1
+   Compiling serde_core v1.0.229
+   Compiling funty v2.0.0
+   Compiling bitvec v1.1.1
+   Compiling ff v0.13.1
+   Compiling cpufeatures v0.2.17
+   Compiling zmij v1.0.23
+   Compiling group v0.13.0
+   Compiling serde_derive v1.0.229
+   Compiling foldhash v0.2.0
+   Compiling serde_json v1.0.154
+   Compiling hashbrown v0.16.1
+   Compiling serde v1.0.229
+   Compiling spin v0.10.1
+   Compiling std-shims v0.1.5
+   Compiling curve25519-dalek v4.1.3
+   Compiling flexible-transcript v0.3.4
+   Compiling ciphersuite v0.4.2
+   Compiling sha2 v0.10.9
+   Compiling keccak v0.1.6
+   Compiling zerocopy v0.8.64
+   Compiling itoa v1.0.19
+   Compiling memchr v2.8.3
+   Compiling sha3 v0.10.9
+   Compiling zerocopy-derive v0.8.64
+   Compiling blake2 v0.10.6
+   Compiling multiexp v0.4.2
+   Compiling crypto-bigint v0.5.5
+   Compiling dalek-ff-group v0.5.0
+   Compiling generalized-bulletproofs v0.1.0 (<clone>/rust/shekyl-oxide/crypto/generalized-bulletproofs)
+warning: variant `InconsistentWitness` is never constructed
+   --> shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs:106:5
+    |
+ 98 | pub(crate) enum IpProveError {
+    |                 ------------ variant in this enum
+...
+106 |     InconsistentWitness,
+    |     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `IpProveError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `generalized-bulletproofs` (lib) generated 1 warning
+   Compiling generalized-bulletproofs-circuit-abstraction v0.1.0 (<clone>/rust/shekyl-oxide/crypto/fcmps/circuit-abstraction)
+   Compiling ec-divisors v0.1.0 (<clone>/rust/shekyl-oxide/crypto/divisors)
+warning: `generalized-bulletproofs` (lib) generated 1 warning (1 duplicate)
+   Compiling generic-array v1.4.5
+   Compiling crossbeam-utils v0.8.23
+   Compiling rand_core v0.10.1
+   Compiling once_cell v1.21.4
+   Compiling generalized-bulletproofs-ec-gadgets v0.1.0 (<clone>/rust/shekyl-oxide/crypto/fcmps/ec-gadgets)
+   Compiling shekyl-units v3.1.0 (<clone>/rust/shekyl-units)
+   Compiling fn-dsa-comm v0.4.0
+   Compiling autocfg v1.5.1
+   Compiling getrandom v0.4.3
+   Compiling crossbeam-epoch v0.9.21
+   Compiling thiserror v2.0.21
+   Compiling num-traits v0.2.19
+   Compiling full-chain-membership-proofs v0.1.0 (<clone>/rust/shekyl-oxide/crypto/fcmps)
+   Compiling helioselene v0.1.0 (<clone>/rust/shekyl-oxide/crypto/helioselene)
+   Compiling ppv-lite86 v0.2.21
+   Compiling shekyl-curve-io v0.1.0 (<clone>/rust/shekyl-curve-io)
+   Compiling shekyl-types v3.1.0 (<clone>/rust/shekyl-types)
+   Compiling thiserror-impl v2.0.21
+   Compiling inout v0.1.4
+   Compiling rustix v1.1.6
+   Compiling arrayvec v0.7.8
+   Compiling crossbeam-deque v0.8.8
+   Compiling hex-conservative v0.2.3
+   Compiling cipher v0.4.4
+   Compiling shekyl-curve-generators v0.4.0 (<clone>/rust/shekyl-curve-generators)
+   Compiling rand_chacha v0.3.1
+   Compiling shekyl-crypto-hash v3.1.0 (<clone>/rust/shekyl-crypto-hash)
+   Compiling derive_more-impl v2.1.1
+   Compiling universal-hash v0.5.1
+   Compiling bitflags v2.13.2
+   Compiling signature v2.2.0
+   Compiling base64ct v1.8.3
+   Compiling regex-syntax v0.8.12
+   Compiling either v1.19.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling tinyvec v1.13.3
+   Compiling rayon-core v1.13.0
+   Compiling opaque-debug v0.3.1
+   Compiling bech32 v0.11.1
+   Compiling shekyl-encoding v3.1.0 (<clone>/rust/shekyl-encoding)
+   Compiling poly1305 v0.8.0
+   Compiling unicode-normalization v0.1.26
+   Compiling password-hash v0.5.0
+   Compiling ed25519 v2.2.3
+   Compiling shekyl-network v3.1.0 (<clone>/rust/shekyl-network)
+   Compiling rand v0.8.8
+   Compiling shekyl-fcmp-proofs v0.1.0 (<clone>/rust/shekyl-fcmp-proofs)
+   Compiling chacha20 v0.9.1
+   Compiling bitcoin_hashes v0.14.101
+   Compiling fn-dsa-vrfy v0.4.0
+   Compiling fn-dsa-sign v0.4.0
+   Compiling fn-dsa-kgen v0.4.0
+   Compiling half v2.7.1
+   Compiling shekyl-heap-secret v3.1.0 (<clone>/rust/shekyl-heap-secret)
+   Compiling postcard-derive v0.2.2
+   Compiling hmac v0.12.1
+   Compiling gungraun-macros v0.9.1
+   Compiling aead v0.5.2
+   Compiling proc-macro-error-attr3 v3.1.1
+   Compiling fastrand v2.5.0
+   Compiling plotters-backend v0.3.7
+   Compiling target-tuple v1.0.2
+   Compiling ciborium-io v0.2.2
+   Compiling winnow v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling bincode-next v3.1.2
+   Compiling clap_lex v1.1.2
+   Compiling clap_builder v4.6.7
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling plotters-svg v0.3.7
+   Compiling ciborium-ll v0.2.2
+   Compiling proc-macro-error3 v3.1.1
+   Compiling tempfile v3.27.0
+   Compiling chacha20poly1305 v0.10.1
+   Compiling hkdf v0.12.4
+   Compiling postcard-schema v0.2.5
+   Compiling shekyl-onion-key v3.1.0 (<clone>/rust/shekyl-onion-key)
+   Compiling fn-dsa v0.4.0
+   Compiling bip39 v2.2.2
+   Compiling shekyl-address v3.1.0 (<clone>/rust/shekyl-address)
+   Compiling ed25519-dalek v2.2.0
+   Compiling argon2 v0.5.3
+   Compiling regex-automata v0.4.19
+   Compiling itertools v0.10.5
+   Compiling derive_more v2.1.1
+   Compiling shekyl-curve-primitives v0.1.0 (<clone>/rust/shekyl-curve-primitives)
+   Compiling tracing-core v0.1.36
+   Compiling fips203 v0.5.0
+   Compiling fips204 v0.5.0
+   Compiling fips205 v0.5.0
+   Compiling x25519-dalek v2.0.1
+   Compiling either-or-both v0.3.1
+   Compiling serde_spanned v1.1.3
+   Compiling toml_datetime v1.1.3+spec-1.1.0
+   Compiling tracing-attributes v0.1.31
+   Compiling rapidhash v4.5.1
+   Compiling wait-timeout v0.2.1
+   Compiling quick-error v1.2.3
+   Compiling pastey v0.2.3
+   Compiling toml_writer v1.2.0+spec-1.1.0
+   Compiling fnv v1.0.7
+   Compiling same-file v1.0.6
+   Compiling unty-next v0.1.2
+   Compiling base64 v0.22.1
+   Compiling bit-vec v0.10.2
+   Compiling pin-project-lite v0.2.18
+   Compiling gungraun v0.19.4
+   Compiling cast v0.3.0
+   Compiling criterion-plot v0.5.0
+   Compiling tracing v0.1.44
+   Compiling bit-set v0.11.1
+   Compiling shekyl-crypto-pq v3.1.0 (<clone>/rust/shekyl-crypto-pq)
+   Compiling walkdir v2.5.0
+   Compiling rusty-fork v0.3.1
+   Compiling toml v1.2.1+spec-1.1.0
+   Compiling gungraun-runner v0.19.4
+   Compiling regex v1.13.2
+   Compiling rayon v1.12.0
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling clap v4.6.9
+   Compiling rand v0.10.4
+   Compiling tinytemplate v1.2.1
+   Compiling chacha20 v0.10.2
+   Compiling rand_xorshift v0.5.0
+   Compiling is-terminal v0.4.17
+   Compiling glob v0.3.4
+   Compiling unarray v0.1.4
+   Compiling termcolor v1.4.1
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling core_detect v1.0.0
+   Compiling proptest v1.12.0
+   Compiling criterion v0.5.1
+   Compiling trybuild v1.0.125
+   Compiling hex v0.4.3
+   Compiling shekyl-stats v3.1.0 (<clone>/rust/shekyl-stats)
+   Compiling shekyl-fcmp v3.1.0 (<clone>/rust/shekyl-fcmp)
+    Finished `release` profile [optimized] target(s) in 18m 43s

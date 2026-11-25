@@ -8,10 +8,8 @@
 # Usage: check_binary_hardening.sh [--tool-prefix <prefix>] <binary>...
 #
 # `shekyld`, `shekyl-cli` and `shekyl-wallet-rpc` are Rust binaries, built by
-# one cargo invocation (`shekyl_rust_bins`); their hardening is rustc's own
-# defaults, not a flag list CMake passes (the C++ remnant shekyld linked, and
-# the Corrosion rustflags that carried `LD_SECURITY_FLAGS` to it, went on
-# 2026-11-05). A default is a claim about the toolchain; this script reads the
+# one cargo invocation (`cargo xtask`); their hardening is rustc's own
+# defaults. A default is a claim about the toolchain; this script reads the
 # result off the staged file, so the claim can fail. Every check reads the binary itself: no flag grep, no
 # convention check (rule 47).
 #
@@ -26,7 +24,7 @@
 #
 # What is not read here, and why: the compile-time mitigations (stack
 # protector, FORTIFY, CET, `/GS`) leave no uniform header mark. Their presence
-# is the compiler flag lists in CMakeLists.txt, and a pure-Rust binary has no
+# is the C flags rust/xtask/matrix.toml gives each host, and a pure-Rust binary has no
 # `__stack_chk_fail` to find. Nor is the tracing dispatcher: `shekyld` is one
 # cargo link, so its graph holds the one `tracing-core` Cargo.lock resolves.
 #

@@ -39,20 +39,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TABLE = Path("rust/shekyl-network/src/lib.rs")
 
-_TAG = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$")
+# The one release-tag grammar, verbatim from rust/xtask/src/version.rs
+# (scripts/ci/check_release_tag_grammar.py holds the copies to it).
+RELEASE_TAG_GRAMMAR = r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.]+)?$"
+_TAG = re.compile(RELEASE_TAG_GRAMMAR)
 
 
 def release_key(tag: str) -> tuple:
     """SemVer precedence: the core, then a release above any pre-release,
     then the pre-release's dot-separated identifiers (numbers numerically,
     below words; words by ASCII)."""
-    m = _TAG.match(tag)
+    m = _TAG.fullmatch(tag)
     if not m:
         raise ValueError(f"{tag!r} is not a release identifier (vMAJOR.MINOR.PATCH[-pre])")
     core = tuple(int(x) for x in m.group(1, 2, 3))
-    pre = m.group(4)
-    if pre is None:
+    suffix = m.group(4)
+    if suffix is None:
         return core + ((1,),)
+    pre = suffix[1:]
     ids = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
     return core + ((0,) + ids,)
 
@@ -131,7 +135,7 @@ def selftest() -> int:
         except ValueError:
             continue
         raise AssertionError("a table the gate cannot read must fail, not pass")
-    for bad in ("3.1", "v3.1.0-", "next"):
+    for bad in ("3.1", "v3.1.0-", "next", "3.1.0-alpha.1", "V3.1.0-alpha.1", "v03.1.0"):
         try:
             release_key(bad)
         except ValueError:

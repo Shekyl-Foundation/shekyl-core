@@ -20,7 +20,7 @@ publish = false
 # **Dev-dependency edges only** — enforced by `scripts/ci/check_test_only_features.py`,
 # not by convention. Under `resolver = "2"` (the workspace pins it) dev-dep
 # features unify only when dev-dep targets are being built, and the release
-# path never builds test targets (`cmake/BuildRust.cmake` invokes no
+# path never builds test targets (`cargo xtask` invokes no
 # `--all-targets`/`--tests`), so a shipped binary cannot contain this arm.
 [features]
 unpinned-tor-for-tests = []

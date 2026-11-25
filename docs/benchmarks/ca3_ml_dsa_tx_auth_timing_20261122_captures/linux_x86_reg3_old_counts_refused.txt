@@ -1,0 +1,3 @@
+x86_64: loop back-edges=27 gamma2 tests=4 other=0
+FAIL: expected (back-edges, gamma2 tests) (16, 4), found (27, 4)
+fips204 branch counts: read the result before changing anything here. A toolchain bump re-pins BRANCH_SUBJECT_COUNTS on x86_64 and on the floor device; a branch on a coefficient is a finding.

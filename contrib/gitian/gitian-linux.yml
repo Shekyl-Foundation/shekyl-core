@@ -25,7 +25,6 @@ packages:
 - "bsdmainutils"
 - "ca-certificates"
 - "python3"
-- "cmake"
 remotes:
 - "url": "https://github.com/Shekyl-Foundation/shekyl-core.git"
   "dir": "shekyl"
@@ -37,9 +36,9 @@ script: |
   # no BINSEC decoder and no board to measure on, so CA-1's constant-time
   # record cannot cover it (docs/design/CRYPTO_AUDIT.md §1). It comes back
   # when a user asks for it and there is a way to measure it. Restoration is
-  # two edits: put the host back on this line, and drop "switched_off" from
-  # its pin row. The apt toolchain, the CMake arch mapping, the back-compat
-  # branch below, and the triple in rust_triple_for stay.
+  # three edits: put the host back on this line, add its row to
+  # rust/xtask/matrix.toml, and drop "switched_off" from its pin row. The apt
+  # toolchain stays.
   HOSTS="x86_64-linux-gnu aarch64-linux-gnu"
   FAKETIME_HOST_PROGS=""
   FAKETIME_PROGS="date"
@@ -103,41 +102,24 @@ script: |
   # no-op that only surfaces later at the first rustc use (PR #236/#241). The
   # file form with an explicit failure guard aborts here instead, and --retry
   # rides transients. Pin the workspace toolchain (rust/rust-toolchain.toml) up
-  # front with the minimal profile: a gitian build compiles the Rust FFI
-  # (cargo build --release) and never lints, so clippy/rustfmt are omitted —
-  # which also keeps the parallel `make` below from racing several cargo
-  # processes to auto-install rustup's default profile into the shared
+  # front with the minimal profile: a gitian build compiles the release
+  # binaries (`cargo xtask dist`) and never lints, so clippy/rustfmt are
+  # omitted, and nothing later auto-installs a profile into the shared
   # ~/.rustup/downloads dir ("component download failed ... could not rename",
   # the alpha.6 gitian failure). Keep 1.94.0 in lockstep with
   # rust/rust-toolchain.toml (see its bump-policy note).
   curl --proto '=https' --tlsv1.2 -sSf --retry 3 --retry-connrefused -o /tmp/rustup-init.sh https://sh.rustup.rs || { echo 'FATAL: rustup-init download failed' >&2; exit 1; }
   sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain 1.94.0
   export PATH="$HOME/.cargo/bin:$PATH"
-  # Rust triples for hosts that are not this builder. The key is the gitian
-  # host, so HOSTS decides what gets installed. riscv64-linux-gnu is absent
-  # from HOSTS and its triple stays: the day the host returns, this loop
-  # installs it. x86_64 is the builder and has no entry.
-  rust_triple_for() {
-    case "$1" in
-      aarch64-linux-gnu) echo aarch64-unknown-linux-gnu ;;
-      riscv64-linux-gnu) echo riscv64gc-unknown-linux-gnu ;;
-    esac
-  }
-  for host in $HOSTS; do
-    triple=$(rust_triple_for "$host")
-    if [ -n "$triple" ]; then
-      rustup target add "$triple"
-    fi
-  done
-
-  git config --global core.abbrev 9
   cd shekyl
-  # Set the version string that gets added to the tar archive name
-  version="`git describe`"
-  if [[ $version == *"-"*"-"* ]]; then
-    version="`git rev-parse --short=9 HEAD`"
-    version="`echo $version | head -c 9`"
-  fi
+  # The Rust target of each host, from the release matrix.
+  for host in $HOSTS; do
+    triple=$(cd rust && cargo xtask triple --host "$host")
+    rustup target add "$triple"
+  done
+  # The version in the archive's name is the one the binaries carry: the
+  # xtask computes it once (`v<version>` at a release tag).
+  version=$(cd rust && cargo xtask archive-version)
 
   BASEPREFIX=`pwd`/contrib/depends
   # Build dependencies for each host
@@ -165,7 +147,7 @@ script: |
   export SOURCE_DATE_EPOCH=`date -d ${REFERENCE_DATE}T${REFERENCE_TIME} +%s`
   export TAR_OPTIONS=--mtime=${REFERENCE_DATE}T${REFERENCE_TIME}
   for i in ${HOSTS}; do
-    export PATH=${BASEPREFIX}/${i}/native/bin:${ORIGPATH}
+    export PATH=$HOME/.cargo/bin:${BASEPREFIX}/${i}/native/bin:${ORIGPATH}
     mkdir build && cd build
     ARCH_INCLUDES="$EXTRA_INCLUDES_BASE/$i"
     if [ -d "$ARCH_INCLUDES" ]; then
@@ -175,17 +157,9 @@ script: |
     fi
     export C_INCLUDE_PATH="$EXTRA_INCLUDES"
     export CPLUS_INCLUDE_PATH="$EXTRA_INCLUDES"
-    #  glibc only added riscv support in 2.27, disable backwards compatibility
-    if [ "$i" == "riscv64-linux-gnu" ]; then
-      BACKCOMPAT_OPTION=OFF
-    else
-      BACKCOMPAT_OPTION=ON
-    fi
-    cmake .. -DCMAKE_TOOLCHAIN_FILE=${BASEPREFIX}/${i}/share/toolchain.cmake -DBACKCOMPAT=${BACKCOMPAT_OPTION} -DCMAKE_SKIP_RPATH=ON
-    make ${MAKEOPTS}
-    chmod 755 bin/*
-    cp ../LICENSE ../docs/USER_GUIDE.md ../docs/ANONYMITY_NETWORKS.md bin
-    chmod 644 bin/LICENSE bin/*.md
+    # The binaries and the files the archive carries, staged in bin/ with
+    # their modes (rust/xtask/matrix.toml).
+    (cd ../rust && cargo xtask dist --host ${i} --out ../build/bin)
     # The pinned Tor Expert Bundle (TOR_BUNDLE_DISTRIBUTION.md TB-6). It gets
     # a directory of its own, bin/tor/, because the daemon refuses a tor
     # directory that holds anything but the pinned files; the licence texts

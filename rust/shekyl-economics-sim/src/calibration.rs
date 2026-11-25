@@ -14,11 +14,13 @@
 //! ([`crate::fee_model::FeeModel::admission_rate`]: the production relay floor
 //! on the lattice, or the control arm's unrounded figure), so the lever is the ratio
 //! `archival_len / weight` over the shapes the builder accepts
-//! (`1..=MAX_INPUTS` × `1..=MAX_OUTPUTS`). That ratio is **maximised by
+//! (`1..=MAX_INPUTS` × `MIN_NON_COINBASE_OUTPUTS..=MAX_OUTPUTS`, CEN-I1's
+//! floor on the outputs). That ratio is **maximised by
 //! inputs, not outputs**: each input carries a hybrid PQC authorisation
 //! (prunable) and a share of the FCMP proof (prunable), while each output's
 //! bytes are mostly the unprunable prefix the fee pays for and the shard does
-//! not count. So the shape is **`MAX_INPUTS`-in / 1-out** — the reverse of the
+//! not count. So the shape is **`MAX_INPUTS`-in /
+//! `MIN_NON_COINBASE_OUTPUTS`-out** — the reverse of the
 //! J-segment era's 1-in / 16-out *leaf* stuffer, which inflated a count of
 //! outputs that the operand no longer measures. It is **not** a
 //! black-marble/decoy construct: FCMP++ has no rings; nothing here poisons a
@@ -28,7 +30,7 @@
 //! computed over every shape at the chain's depth, so if a wire change moved
 //! the balance the model would follow it. The one-shot (binding, attacker-
 //! favouring) cost uses that shape alone; a *sustained* campaign cannot — it
-//! consumes `MAX_INPUTS − 1` outputs per transaction, and outputs are
+//! consumes `MAX_INPUTS − MIN_NON_COINBASE_OUTPUTS` outputs per transaction, and outputs are
 //! conserved — so [`sustained_stuffer_cost_per_shard_atomic`] prices the
 //! cheapest producer/consumer **cycle** whose net output balance is zero, and
 //! the reports carry both.
@@ -265,7 +267,7 @@ impl Shape {
         self.n_out.get() as i64 - self.n_in.get() as i64
     }
 
-    /// `"8-in/1-out"`, for the reports.
+    /// `"8-in/2-out"`, for the reports.
     #[must_use]
     pub fn label(self) -> String {
         format!("{}-in/{}-out", self.n_in.get(), self.n_out.get())
@@ -329,7 +331,7 @@ pub fn stuffer_shape(tree_depth: u8, rate: PerByteRate) -> Option<Shape> {
 /// This is **not** [`stuffer_shape`]'s packing: the fee-per-byte argmin is the
 /// cheapest shape, but only whole transactions fit a finite block, so a
 /// shape with a slightly worse ratio and a smaller remainder can land more
-/// bytes (at the surge ceiling, 6-in/1-out beats 8-in/1-out by ≈ 3 %). The
+/// bytes, and which shape wins changes with depth (§5.37.2's table). The
 /// physical ceiling on the fold's slew is this search, not the cost search.
 #[must_use]
 pub fn max_archival_bytes_per_block(block_weight: u64, tree_depth: u8, rate: PerByteRate) -> u64 {
@@ -506,6 +508,7 @@ mod tests {
     use crate::engine::SimParams;
     use crate::fee_model::SECTION_12_13_ADMISSION_RATE as CONTROL;
     use shekyl_tx_weight::MAX_OUTPUTS;
+    use shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
 
     /// The relay floor at the penalty-free zone with `C = 1`, at the tail
     /// subsidy and at genesis, with the control arm's 300 between them. The
@@ -560,7 +563,7 @@ mod tests {
     fn stuffer_shape_is_max_inputs_min_outputs() {
         // Inputs carry the archival bytes (PQC auth + FCMP share, both
         // prunable); outputs carry unprunable prefix the fee pays for and the
-        // operand does not count. So the argmax is MAX_INPUTS-in / 1-out at
+        // operand does not count. So the argmax is MAX_INPUTS-in / the minimum out at
         // every depth — and the J-segment era's 1-in/16-out leaf stuffer is
         // now among the DEAREST shapes per archival byte.
         //
@@ -580,7 +583,7 @@ mod tests {
                 let s = priced(stuffer_shape(depth, rate));
                 assert_eq!(
                     (s.n_in.get(), s.n_out.get()),
-                    (max_in, 1),
+                    (max_in, MIN_NON_COINBASE_OUTPUTS),
                     "depth {depth} at {rate:?}: the archival/weight balance moved — the \
                      searched shape is now {}-in/{}-out; update the model's prose and \
                      §12.13, this is not a regression",
@@ -713,6 +716,71 @@ mod tests {
             "the search never beat the cost shape — if the wire format moved so the \
              two coincide at every depth, this expectation is stale, not the model"
         );
+    }
+
+    /// On demand (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.37.2): the
+    /// stuffers' shapes at every depth the tree reaches, at each of the three
+    /// rates [`rates`] names. Per depth: the one-shot shape (least fee per
+    /// archival byte), its runner-up and how much dearer it is; the shape
+    /// landing the most archival bytes in a block at the surge ceiling, its
+    /// runner-up and how many fewer bytes it lands; and the one-shot and
+    /// sustained costs per shard at the depth's first leaf. Prints the table
+    /// a change to the shape space is read against; asserts only that every
+    /// depth prices.
+    #[test]
+    #[ignore = "on demand: prints the stuffer calibration by depth (§5.37.2)"]
+    fn stuffer_calibration_by_depth() {
+        let block_weight = crate::swing::block_weight_penalty_free(&SimParams::default());
+        let ppm = |num: u128, den: u128| num.saturating_mul(1_000_000) / den.max(1);
+        for rate in rates() {
+            println!(
+                "rate {} atomic/B, ceiling {block_weight} B/block, outputs from {}",
+                rate.atomic(),
+                all_shapes(SpendLayers::SHALLOWEST)
+                    .map(|s| s.n_out.get())
+                    .min()
+                    .expect("a shape"),
+            );
+            println!(
+                "depth  one-shot  runner-up  dearer(ppm)  ceiling  bytes/block  runner-up  fewer(ppm)  cost/shard  sustained"
+            );
+            for depth in 1..=MAX_TREE_DEPTH {
+                let leaves = match depth {
+                    1 => 1,
+                    d => match layer_capacity(d - 1) {
+                        Some(cap) => cap + 1,
+                        None => continue,
+                    },
+                };
+                let mut by_fee: Vec<(Shape, (u128, u128))> = all_shapes(spend_layers(depth))
+                    .filter_map(|s| fee_per_archival(s, depth, rate).map(|r| (s, r)))
+                    .collect();
+                by_fee.sort_by(|a, b| (a.1 .0 * b.1 .1).cmp(&(b.1 .0 * a.1 .1)));
+                let (best, (bf, bb)) = by_fee[0];
+                let (second, (sf, sb)) = by_fee[1];
+                let dearer = ppm(sf * bb, bf * sb).saturating_sub(1_000_000);
+                let mut by_block: Vec<(Shape, u64)> = all_shapes(spend_layers(depth))
+                    .filter_map(|s| {
+                        let w = s.tx_weight(depth, rate)?;
+                        (w > 0).then(|| (s, (block_weight / w) * s.archival_bytes(depth)))
+                    })
+                    .collect();
+                by_block.sort_by(|a, b| b.1.cmp(&a.1));
+                let (top, top_bytes) = by_block[0];
+                let (next, next_bytes) = by_block[1];
+                let fewer = 1_000_000u128
+                    .saturating_sub(ppm(u128::from(next_bytes), u128::from(top_bytes)));
+                let one_shot = priced(stuffer_cost_per_shard_atomic(leaves, rate));
+                let sustained = priced(sustained_stuffer_cost_per_shard_atomic(leaves, rate));
+                println!(
+                    "{depth:>5}  {:>8}  {:>9}  {dearer:>11}  {:>7}  {top_bytes:>11}  {:>9}  {fewer:>10}  {one_shot:>10}  {sustained:>9}",
+                    best.label(),
+                    second.label(),
+                    top.label(),
+                    next.label(),
+                );
+            }
+        }
     }
 
     #[test]

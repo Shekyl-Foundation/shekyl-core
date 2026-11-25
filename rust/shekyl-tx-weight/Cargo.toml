@@ -23,6 +23,9 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
 
 [dev-dependencies]
+# R-34: tests read one output position at a time (`TxKey::output_positions`),
+# which exists only under TEST_ONLY `test-utils`.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
 # Parity test only: builds a wire `Transaction` by hand with the real `Extra`
 # serializer, then asserts `predict_weight == Transaction::weight()` — the
 # single-source guarantee. Dev-only, so it never pollutes the production surface

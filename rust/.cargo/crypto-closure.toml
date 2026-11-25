@@ -13,11 +13,25 @@
 #     its SIMD cfgs through rustc_version), a derive recorded and its
 #     compiler toolchain not walked.
 #
+#   - a package with a `source` comes from exactly that source in every lock;
+#     one without comes from crates.io, so a `[patch]` of a held crate is a
+#     change to this record.
+#
 # Moving a version here is a review, not a refresh: read the change at
 # source against .cursor/rules/30-cryptography.mdc and 35-secure-memory.mdc,
 # and run the KATs, the pinned FCMP++ vectors and the checkct rows on it
-# (rule 17). A new primitive dependency adds its name to `roots` in the
-# change that adds it.
+# (rule 17). For fips204 that includes both of its branch guards: the
+# `fips204ct` checkct row (docs/formal/checkct/) and
+# scripts/ci/check_fips204_branch_counts.py on x86_64 and on the floor
+# device. A toolchain bump re-pins that script's counts on both.
+#
+# A pinned fork revision moves only with a recorded run of the fork's workflow
+# commands: the `exhaustive` and `branch-gate` jobs in its
+# .github/workflows/test.yml. Actions is off on the fork, so they are run by
+# hand and their output goes in the record of the change that moves the pin.
+#
+# A new primitive dependency adds its name to `roots` in the change that adds
+# it.
 
 roots = [
     "aes",
@@ -290,7 +304,8 @@ reason = "ML-KEM: the post-quantum half of the hybrid KEM (shekyl-crypto-pq, she
 [[package]]
 name = "fips204"
 version = "0.5.0"
-reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=54b76cf71430a406f3c96ab9c80c42b0d74ce2fd#54b76cf71430a406f3c96ab9c80c42b0d74ce2fd"
+reason = "ML-DSA-65: the post-quantum half of the hybrid signature (shekyl-crypto-pq, shekyl-tx-builder). The Shekyl fork of tag v0.5.0: the reductions, decompose, make_hint and infinity_norm have no conditional branch on a secret coefficient under overflow-checks = true, and the NTT path's range is hardened (docs/benchmarks/ca3_pq_branch_sweep_20261123.md); every value the tag returned is unchanged. 0.5.0 reviewed (PR 2): CHANGELOG and traits.rs read; the exact-pin DummyRng is unchanged; Ph and the deprecated test hooks are gone (Shekyl used neither); a signing key with s1 or s2 outside [-eta, eta] is now refused at parse, and signing gives up after 814 attempts instead of looping; seeded keygen and try_sign_with_seed byte-identical to 0.4.6."
 
 [[package]]
 name = "fips205"
@@ -375,12 +390,12 @@ reason = "Hex under bitcoin_hashes, on bip39's checksum path. 0.2.3 admitted aft
 [[package]]
 name = "hkdf"
 version = "0.12.4"
-reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs); the prefs HMAC key (shekyl-engine-prefs hmac_key.rs)."
+reason = "HKDF-SHA512 seed normalisation and account key derivation (shekyl-crypto-pq account.rs)."
 
 [[package]]
 name = "hmac"
 version = "0.12.1"
-reason = "HMAC under hkdf; the prefs file's MAC (shekyl-engine-prefs); Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
+reason = "HMAC under hkdf; Tor control's SAFECOOKIE handshake (shekyl-tor-control-client)."
 
 [[package]]
 name = "hybrid-array"

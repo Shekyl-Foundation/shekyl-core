@@ -334,19 +334,19 @@ block, in floors per byte, at ESR-7's rows; production x1. Then the window-edge 
 member: its net cost per archival byte it added, over the floor at its start (negative where
 it gains), at the 20 % share.
 == inherited
-  baseline_steady_state  y5   constrained floor 17975 atomic/B: today 3.417, enforced 3.477 floors/B
-  baseline_steady_state  y20  carried     floor 1813 atomic/B: today 2.163, enforced 2.425 floors/B
-  baseline_steady_state  y45  tail        floor 376 atomic/B: today 1.514, enforced 1.883 floors/B
-  high_history_low_activ y50  below zone  floor 2681 atomic/B: today 0.000, enforced 0.195 floors/B
+  baseline_steady_state  y5   constrained floor 17975 atomic/B: today 3.699, enforced 3.760 floors/B
+  baseline_steady_state  y20  carried     floor 1813 atomic/B: today 2.348, enforced 2.625 floors/B
+  baseline_steady_state  y45  tail        floor 376 atomic/B: today 1.665, enforced 2.058 floors/B
+  high_history_low_activ y50  below zone  floor 2681 atomic/B: today 0.000, enforced 0.199 floors/B
   window-edge stuffer    y5   unenforced  0 archival bytes: - (listed nothing) floors/B
   window-edge stuffer    y5   enforced    0 archival bytes: - (listed nothing) floors/B
   window-edge stuffer    y30  unenforced  35014671 archival bytes: -77.893 floors/B
   window-edge stuffer    y30  enforced    35620767 archival bytes: -77.169 floors/B
 == re-derived
-  baseline_steady_state  y5   constrained floor 6259 atomic/B: today 0.000, enforced 0.104 floors/B
-  baseline_steady_state  y20  carried     floor 3671 atomic/B: today 1.840, enforced 2.141 floors/B
-  baseline_steady_state  y45  tail        floor 892 atomic/B: today 0.000, enforced 0.364 floors/B
-  high_history_low_activ y50  below zone  floor 381 atomic/B: today 0.000, enforced 0.202 floors/B
+  baseline_steady_state  y5   constrained floor 6259 atomic/B: today 0.000, enforced 0.107 floors/B
+  baseline_steady_state  y20  carried     floor 3671 atomic/B: today 2.100, enforced 2.428 floors/B
+  baseline_steady_state  y45  tail        floor 892 atomic/B: today 0.000, enforced 0.372 floors/B
+  high_history_low_activ y50  below zone  floor 381 atomic/B: today 0.000, enforced 0.206 floors/B
   window-edge stuffer    y5   unenforced  65544916 archival bytes: -35.318 floors/B
   window-edge stuffer    y5   enforced    65544916 archival bytes: -35.170 floors/B
   window-edge stuffer    y30  unenforced  60647481 archival bytes: -26.736 floors/B

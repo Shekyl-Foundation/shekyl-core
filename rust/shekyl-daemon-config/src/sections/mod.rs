@@ -815,7 +815,7 @@ pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
     log_location_creatable(file)?;
     let fail = log_unwritable(file);
     if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(&fail)?;
+        shekyl_os_account::create_account_dir_all(dir).map_err(&fail)?;
     }
     std::fs::OpenOptions::new()
         .append(true)

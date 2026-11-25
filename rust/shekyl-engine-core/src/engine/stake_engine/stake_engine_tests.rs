@@ -108,12 +108,14 @@ async fn active_persona_payment_destination_is_recovered_by_p_dual_scan() {
     let amount = 50_000u64;
     let output_index = 7u64;
     let constructed = construct_output(
-        &shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32]),
+        shekyl_crypto_pq::TxKey::seeded([0x5Au8; 32])
+            .output_positions(usize::try_from(output_index).unwrap() + 1)
+            .at(output_index)
+            .unwrap(),
         &x25519_pk,
         destination.ml_kem_ek(),
         destination.spend_pk().as_canonical_bytes(),
         amount,
-        output_index,
     )
     .expect("construct an output to P's payment destination");
 
@@ -179,12 +181,14 @@ fn p_source_secrets_bundle_byte_identical_against_scan_chain() {
 
     for output_index in [0u64, 1, 7, 255, 1_000_000] {
         let constructed = construct_output(
-            &tx_key,
+            tx_key
+                .output_positions(usize::try_from(output_index).unwrap() + 1)
+                .at(output_index)
+                .unwrap(),
             &keys.x25519_pk,
             &keys.ml_kem_ek,
             keys.spend_pk.as_canonical_bytes(),
             50_000u64.wrapping_add(output_index),
-            output_index,
         )
         .expect("construct_output succeeds for a P-paid synthetic output");
         let ciphertext = HybridCiphertext {

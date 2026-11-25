@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
-use crate::{MAX_OUTPUTS, MAX_TREE_DEPTH};
+use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_ct_balance::{InputTerm, OutputTerm};
 use shekyl_curve_generators::SpendLayers;
 use shekyl_units::AtomicUnits;
@@ -42,18 +42,14 @@ pub(crate) fn validate_inputs(
     let Some(input_count) = NonZeroUsize::new(inputs.len()) else {
         return Err(TxBuilderError::NoInputs);
     };
-    // The depth is named before the input count. A depth of 0, a one-layer
-    // tree, and a depth past the maximum are not spend depths, and none of
-    // them is "too many inputs".
+    // Depth first, by name. Zero and past the maximum are not a proof.
+    // One layer is a proof (the formula and the synthetic KATs) and not a
+    // spend: the wire refuses it when the transaction is encoded.
     if tree.tree_depth == 0 {
         return Err(TxBuilderError::ZeroTreeDepth);
     }
-    if tree.tree_depth > MAX_TREE_DEPTH {
-        return Err(TxBuilderError::TreeDepthTooLarge(tree.tree_depth));
-    }
-    let layers = SpendLayers::new(tree.tree_depth).ok_or(TxBuilderError::TreeTooShallow {
-        layers: tree.tree_depth,
-    })?;
+    let proof_layers = shekyl_curve_generators::ProofLayers::new(tree.tree_depth)
+        .ok_or(TxBuilderError::TreeDepthTooLarge(tree.tree_depth))?;
     if outputs.is_empty() {
         return Err(TxBuilderError::NoOutputs);
     }
@@ -65,11 +61,16 @@ pub(crate) fn validate_inputs(
     if outputs.len() > MAX_OUTPUTS {
         return Err(TxBuilderError::TooManyOutputs(outputs.len()));
     }
-    let output_count = NonCoinbaseOutputs::new(outputs.len())
-        .expect("the output count was just bounded to the non-coinbase range");
-    // The one consensus question: how many inputs this output count can carry
-    // at this spend depth. A wider fee is CEN-H3's refusal, on the weight.
-    let limit = max_inputs_at(output_count, layers);
+    // A spend depth asks the legal-shape function. A one-layer proof asks
+    // the cap: it is not rewritten into the shallowest spend.
+    let limit = match SpendLayers::new(proof_layers.get()) {
+        Some(layers) => {
+            let output_count = NonCoinbaseOutputs::new(outputs.len())
+                .expect("the output count was just bounded to the non-coinbase range");
+            max_inputs_at(output_count, layers)
+        }
+        None => MAX_INPUTS,
+    };
     if inputs.len() > limit {
         return Err(TxBuilderError::TooManyInputs {
             count: inputs.len(),

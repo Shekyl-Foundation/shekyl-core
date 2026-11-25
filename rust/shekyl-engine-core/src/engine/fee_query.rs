@@ -147,7 +147,10 @@ impl<
         let tree_depth = self.estimate_tree_depth().await;
 
         let quote_at = |rate| {
-            let fee = converge_fee(&rate, n_in, n_out, tree_depth, 0).ok_or(
+            // A quote names counts, not payees: it is a solo payment's.
+            // No caller of the quote can name a group yet (the CLI and
+            // RPC send surfaces take addresses only).
+            let fee = converge_fee(&rate, n_in, n_out, tree_depth, &[], 0).ok_or(
                 FeeEstimatorError::DaemonResponseInvalid {
                     reason: "the fee does not fit in u64",
                 },

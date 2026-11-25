@@ -20,6 +20,13 @@ fuzz_target!(|data: &[u8]| {
     let output_index = u64::from_le_bytes(data[8..16].try_into().unwrap()) % 256;
 
     let tx_key = TxKey::seeded(data[16..48].try_into().unwrap());
+    // R-34: the position comes from the key's order, as a wallet's does:
+    // place `output_index + 1` outputs and build the last.
+    let (position, ()) = tx_key
+        .place(vec![(); usize::try_from(output_index).unwrap() + 1])
+        .into_iter()
+        .next_back()
+        .unwrap();
 
     let mut spend_key = [0u8; 32];
     spend_key.copy_from_slice(&data[48..80]);
@@ -31,12 +38,11 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let od = match construct_output(
-        &tx_key,
+        position,
         &pk.x25519,
         &pk.ml_kem,
         &spend_key,
         amount,
-        output_index,
     ) {
         Ok(od) => od,
         Err(_) => return,

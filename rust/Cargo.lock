@@ -1171,8 +1171,7 @@ dependencies = [
 [[package]]
 name = "fips204"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a823e139c2d539b1b735d31cdce8b0b356671585eac3d54dec79d1d15052093b"
+source = "git+https://github.com/Shekyl-Foundation/fips204?rev=54b76cf71430a406f3c96ab9c80c42b0d74ce2fd#54b76cf71430a406f3c96ab9c80c42b0d74ce2fd"
 dependencies = [
  "rand_core 0.6.4",
  "sha3",
@@ -1281,9 +1280,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -3559,7 +3558,6 @@ dependencies = [
  "shekyl-economics",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-logging",
  "shekyl-options",
  "shekyl-os-account",
@@ -3923,6 +3921,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2",
  "shekyl-archival-retention",
  "shekyl-block-template",
  "shekyl-chain-rules",
@@ -3938,6 +3937,7 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "thiserror",
+ "time",
 ]
 
 [[package]]
@@ -3989,7 +3989,6 @@ dependencies = [
  "shekyl-encoding",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
@@ -3999,6 +3998,7 @@ dependencies = [
  "shekyl-noise",
  "shekyl-onion-key",
  "shekyl-operator-alarm",
+ "shekyl-os-account",
  "shekyl-p-host",
  "shekyl-p-loopback",
  "shekyl-p-serve",
@@ -4042,31 +4042,12 @@ dependencies = [
  "shekyl-address",
  "shekyl-crypto-pq",
  "shekyl-curve-primitives",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-os-account",
  "shekyl-types",
  "tempfile",
  "thiserror",
  "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "shekyl-engine-prefs"
-version = "3.1.0"
-dependencies = [
- "hkdf",
- "hmac",
- "serde",
- "sha2",
- "shekyl-os-account",
- "shekyl-units",
- "tempfile",
- "thiserror",
- "toml",
- "tracing",
- "windows-sys 0.60.2",
  "zeroize",
 ]
 
@@ -4241,6 +4222,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-hash",
  "shekyl-net-address",
+ "shekyl-os-account",
  "shekyl-p2p-transport",
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
@@ -4322,6 +4304,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-engine-state",
  "shekyl-fcmp",
  "shekyl-network",
  "shekyl-tx-builder",
@@ -4871,6 +4854,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "rand_core 0.6.4",
+ "rustix",
  "serde",
  "serde_json",
  "shekyl-address",
@@ -4885,6 +4869,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-socks",
  "shekyl-win-sec",
+ "socket2",
  "tempfile",
  "tokio",
  "tower-service",
@@ -5321,7 +5306,6 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-rpc-client",
  "shekyl-rpc-types",
@@ -5350,7 +5334,6 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-engine-core",
  "shekyl-engine-file",
- "shekyl-engine-prefs",
  "shekyl-engine-state",
  "shekyl-logging",
  "shekyl-os-account",
@@ -6437,6 +6420,13 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "xtask"
+version = "3.1.0"
+dependencies = [
+ "toml",
 ]
 
 [[package]]

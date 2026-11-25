@@ -1,8 +1,6 @@
 # Brewfile for building Shekyl from source.
 # `brew bundle --file=contrib/brew/Brewfile` installs what the build needs:
-# CMake drives one cargo build, and rustup provides the toolchain that
-# rust/rust-toolchain.toml pins (Xcode's command-line tools supply the C
-# compiler and linker).
+# rustup provides the toolchain that rust/rust-toolchain.toml pins (Xcode's
+# command-line tools supply the C compiler and linker).
 
-brew "cmake"
 brew "rustup"

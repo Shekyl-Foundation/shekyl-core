@@ -21,14 +21,17 @@ use shekyl_address::multisig_address::MultisigAddressPayload;
 use shekyl_address::Network;
 use shekyl_crypto_pq::derivation::derive_output_secrets;
 use shekyl_crypto_pq::kem::{
-    HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, X25519_KEM_CT_LEN,
+    HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, MlKemDecapsKey, X25519_KEM_CT_LEN,
 };
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::leaf_commitment::pqc_leaf_commitment;
 use shekyl_crypto_pq::multisig_envelope::mint_multisig_envelope_keypair;
 use shekyl_crypto_pq::multisig_output::{
-    construct_multisig_output, open_multisig_entry, MultisigEntryView, MultisigMemberView,
-    MultisigOutputData,
+    construct_multisig_output, MultisigMemberView, MultisigOutputData,
+};
+use shekyl_crypto_pq::multisig_receive::{
+    receive_group_output, GroupEntryOnChain, GroupOutputOnChain, GroupReceipt, GroupReceived,
+    GroupScanKeys,
 };
 use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss};
 use shekyl_curve_tree::{ChunkLeaf, PathParts};
@@ -152,31 +155,13 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
         compute_output_key_image(&ss, index, file.b(), &key_image_generator(&out.output_key))
             .unwrap();
 
-    let address = file.address();
-    let i = file.member_index();
-    let (own_x25519, own_ml_kem) =
-        out.member_kem_ciphertexts[usize::from(i)].split_at(X25519_KEM_CT_LEN);
-    let committed = open_multisig_entry(
-        &ss,
-        index,
-        &MultisigMemberView {
-            member_index: i,
-            n_total: address.n_total(),
-            m_required: address.m_required(),
-            member_kem_secret: file.member_kem_secret(),
-            network: &NET,
-        },
-        &MultisigEntryView {
-            out_idx: u8::try_from(index).unwrap(),
-            n: address.n_total(),
-            own_x25519_ct: own_x25519.try_into().unwrap(),
-            own_ml_kem_ct: own_ml_kem,
-            enc_key_hashes: &out.enc_key_hashes,
-        },
-        &out.pqc_leaf.entry().to_bytes(),
-    )
-    .expect("the output is spendable by the group as published");
-    let committed_form = committed.to_bytes().to_vec();
+    let receipt = receive(file, out, index);
+    assert_eq!(
+        receipt.key_image(),
+        &spend.key_image,
+        "the receipt's key image is the scan's"
+    );
+    let committed_form = receipt.committed_form().to_bytes().to_vec();
     let leaf = pqc_leaf_commitment(&ss, index, &committed_form).unwrap();
     assert_eq!(
         leaf.point, out.pqc_leaf.point,
@@ -189,6 +174,71 @@ pub fn scan(file: &MemberFile, out: &MultisigOutputData, index: u64) -> Scanned 
         key_image: spend.key_image,
         committed_form,
         blind: Zeroizing::new(leaf.blind),
+    }
+}
+
+/// `file`'s receive of `out`, the output at `index` in its transaction, as
+/// the chain carries it: the receipt `shekyl-crypto-pq` returns, the only
+/// thing a group coin is made from.
+pub fn receive(file: &MemberFile, out: &MultisigOutputData, index: u64) -> GroupReceipt {
+    let group = file.group_kem_secret();
+    let dk = MlKemDecapsKey::from_bytes(&group.ml_kem).unwrap();
+    let address = file.address();
+    let point = |bytes: &[u8; 32]| {
+        curve25519_dalek::edwards::CompressedEdwardsY(*bytes)
+            .decompress()
+            .unwrap()
+    };
+    let spend_key = (point(address.b_group()) + point(address.y_group()))
+        .compress()
+        .to_bytes();
+    let enc_amount = out.enc_amount_wire().to_bytes();
+    let enc_label = out.enc_label_wire().to_bytes();
+    let leaf = out.pqc_leaf.entry().to_bytes();
+    let on_chain = GroupOutputOnChain {
+        output_index: index,
+        output_key: &out.output_key,
+        commitment: &out.commitment,
+        enc_amount: enc_amount[..8].try_into().unwrap(),
+        amount_tag: enc_amount[8],
+        enc_label: enc_label[..8].try_into().unwrap(),
+        label_tag: enc_label[8],
+        view_tag: out.view_tag_prefilter,
+        source_x25519_ct: &out.kem_ciphertext_x25519,
+        source_ml_kem_ct: &out.kem_ciphertext_ml_kem,
+        leaf_entry: Some(&leaf),
+        entry: Some(GroupEntryOnChain {
+            out_idx: u8::try_from(index).unwrap(),
+            member_cts: out
+                .member_kem_ciphertexts
+                .iter()
+                .map(|ct| {
+                    let (x25519, ml_kem) = ct.split_at(X25519_KEM_CT_LEN);
+                    (x25519.try_into().unwrap(), ml_kem)
+                })
+                .collect(),
+            enc_key_hashes: &out.enc_key_hashes,
+        }),
+    };
+    let received = receive_group_output(
+        &GroupScanKeys {
+            view_x25519: &group.x25519,
+            view_ml_kem: &dk,
+            spend_key: &spend_key,
+            b: file.b(),
+        },
+        &MultisigMemberView {
+            member_index: file.member_index(),
+            n_total: address.n_total(),
+            m_required: address.m_required(),
+            member_kem_secret: file.member_kem_secret(),
+            network: &NET,
+        },
+        &on_chain,
+    );
+    match received {
+        Some(GroupReceived::Coin(receipt)) => receipt,
+        other => panic!("the output is spendable by the group as published: {other:?}"),
     }
 }
 
@@ -227,7 +277,16 @@ pub fn pay_group_twice(address: &MultisigAddressPayload, files: &[MemberFile]) -
         .map(|(amount, index)| {
             let tx_key = shekyl_crypto_pq::TxKey::random().expect("the OS draws a key");
             (
-                construct_multisig_output(&tx_key, address, amount, index, &NET).unwrap(),
+                construct_multisig_output(
+                    tx_key
+                        .output_positions(usize::try_from(index).unwrap() + 1)
+                        .at(index)
+                        .unwrap(),
+                    address,
+                    amount,
+                    &NET,
+                )
+                .unwrap(),
                 index,
                 amount,
             )

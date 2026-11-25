@@ -32,7 +32,9 @@ pub(super) struct DispatchFacts {
     pub(super) tx_bytes: Vec<u8>,
     pub(super) selected: Vec<OutputId>,
     pub(super) retained: shekyl_engine_state::TxSecretKey,
-    pub(super) recipients: Vec<shekyl_engine_state::SendRecipient>,
+    /// The recipients the journal records. A group still carries its
+    /// address; the journal stores it with the row.
+    pub(super) recipients: Vec<shekyl_engine_state::JournalRecipient>,
 }
 
 #[allow(private_bounds)]

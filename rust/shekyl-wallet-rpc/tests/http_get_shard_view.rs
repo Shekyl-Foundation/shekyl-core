@@ -105,6 +105,7 @@ fn state(dir: &TempDir, daemon_address: String) -> Arc<AppState> {
                 url: daemon_address,
                 proxy: None,
             },
+            shekyl_wallet_rpc::server::TorFile::discover(),
         )),
         auth: Arc::new(AuthConfig::Disabled),
         kdf: KdfParams {

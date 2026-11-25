@@ -96,6 +96,8 @@ use super::stake_engine::{
 };
 use shekyl_tx_builder::outputs::{BuiltSpend, Payee, Recipient};
 
+use crate::engine::error::{ClassifiedFailure, PipelineFailure};
+
 /// Why an [`assemble_drain_tx`] pipeline step refused or failed.
 ///
 /// The value-out sibling of
@@ -168,14 +170,24 @@ pub(crate) enum DrainAssemblyError {
         /// Rendered cause.
         detail: String,
     },
+
+    /// The signer refused the drain, with its own bounded fault, which
+    /// reaches the wallet RPC as it does for a transfer. Nothing was
+    /// persisted (§3.6).
+    #[error("the signer refused the drain: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
 }
 
 impl DrainAssemblyError {
-    /// Shorthand for the pipeline-step failure arm.
-    pub(crate) fn build(stage: &'static str, err: impl std::fmt::Display) -> Self {
-        Self::Build {
-            stage,
-            detail: err.to_string(),
+    /// The one constructor for a step that failed. A signer refusal — a
+    /// builder error, a [`KeyEngineError::Sign`](crate::engine::error::KeyEngineError::Sign),
+    /// or a bond-path [`Signer`](super::bond_assembly::BondAssemblyError::Signer)
+    /// — keeps its fault. Every other failure is the [`Build`](Self::Build)
+    /// arm. See [`PipelineFailure`].
+    pub(crate) fn build(stage: &'static str, err: impl PipelineFailure) -> Self {
+        match err.carry().classify(stage, "drain") {
+            ClassifiedFailure::Signer(fault) => Self::Signer(fault),
+            ClassifiedFailure::Pipeline { stage, detail } => Self::Build { stage, detail },
         }
     }
 }

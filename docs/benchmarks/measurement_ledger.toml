@@ -129,6 +129,10 @@ note = "Comment only: the gitian bump-policy line drops the deleted Android desc
 commit = "144f81fc1fd2660b36dd39b4362e8df1d56f01b4"
 note = "CA-1 (#1178): a comment-only change to rust-toolchain.toml; the bump policy gains the line that a bump re-runs docs/formal/checkct and updates results/measured.toml in the same PR. The channel stays 1.94.0; no figure moves."
 
+[[toolchain]]
+commit = "240041ee2db6030a32281630d61436c246d65296"
+note = "Comment only (structural PR 3): the file's header stops naming the deleted CMake build. The channel does not move."
+
 # --- consensus: block weight ------------------------------------------
 
 [[path_set]]
@@ -737,6 +741,7 @@ spec = [
   "rust/shekyl-transport-layer/src",
 ]
 stale_through = [
+  { through = "240041ee2db6030a32281630d61436c246d65296", note = "Structural PR 3: two doc comments in sizes.rs name `cargo xtask` for the deleted CMake option, on the same lines. No code changes, so the cost does not move." },
   { through = "765d6991bad2219dd5510d2ab083c7e531b775a6", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
   { through = "b5e7dbfed5ecbcc69ed954151c481cb9d6a54253", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
   { through = "5838269c20e83b19134d45d26c8bc9a9a439a842", note = "A mismatched dial and a clearnet proxy failure are LocalClose instead of DialFailed, and the write half logs its stall after the copy. TCP connect, SOCKS, and the handshake do the same I/O, so the span waits are unchanged. Not re-measured." },
@@ -1079,6 +1084,8 @@ spec = [
   "rust/shekyl-scanner/src/scan.rs",
 ]
 stale_through = [
+  { through = "556c473fd3dcb5259846b679d00e8c610f8ec30b", note = "In this path set, output.rs decodes its secret scalars through canonical_secret_scalar, on the scan's owned-output path among others: one 64-byte wide reduction and a 32-byte constant-time compare in place of the library's canonical decode, per scalar. Decapsulation and the view-tag prefilter decode no scalar, so an output the prefilter rejects, which is what the FA-6 budget prices, costs the same; only an output past the scan's tag checks reaches these decodes. Not re-measured; the rows stay stale." },
+  { through = "c1fef21e5fb671243a392f21905af922dbb85ebf", note = "In this path set, output.rs gains spend_key_image, the key image x*Hp(O) from a spend secret the caller already holds, which the transaction builder's membership self-verify calls once per input after proving. The decapsulation and the output scan do not call it; the scan cost does not move." },
   { through = "104487033550cbb5dfeb03eb7ca796459cc39df5", note = "#1494: kem.rs and output.rs map a decapsulation-key parse failure to CryptoError::MalformedDecapsKey (fips203 0.5.0 refuses a coefficient of q or more), with tests. The mapping runs only on an Err; the scan's decapsulation and recovery path is unchanged. fips203 itself moves 0.4.3 -> 0.5.0 in Cargo.lock in the same pull request, outside this path set: decapsulation now rounds Decompress to nearest (a multiply and a shift, as before), outputs byte-identical over 60,000 seeds. Not re-measured." },
   { through = "20738bf714be3e7b31cca47fe3d614d7d7f55021", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
   { through = "b5e7dbfed5ecbcc69ed954151c481cb9d6a54253", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
@@ -1108,7 +1115,10 @@ stale_through = [
   { through = "1d747689d23c04f3bc1b6d82ce64557e908fd1f9", note = "output.rs factors the scan into pieces held_key_image shares (1d747689d2): x25519_shared_secret, output_key_holds, and the prefilter returning Prefilter, which ml_kem_decap_prefilter_with_parsed_dk maps back to the same DecapsulationFailed text. A view-tag miss does the same decapsulation and one allocation, as before. A tag hit does the same ECDH, HKDF expansions and O = ho*G + B + y*T; an output-key mismatch no longer converts z, and a match wipes the 64-byte ho/y opening on drop. No scan cost moves beyond that." },
   { through = "5eac881e239c6d0fa571d443de2aada63d1e98dc", note = "Documentation only in output.rs (5eac881e23): Prefilter's doc links its NotForThisKey variant; no code changed, so the scan cost does not move." },
   { through = "f078152e075697e334310262b36a1e3147bd355a", note = "derive_output_secrets expands each secret into its field of a zeroed OutputSecrets instead of a local moved in (f078152e07, rule 35), and expand_first_byte wipes its 32-byte buffer; the HKDF expansions are the same ones, so a tag hit adds three 32-byte wipes. In output.rs only the test-only wipe probe changes (thread-local). A view-tag miss does not reach the derivation, so the dominant scan path does not move." },
+  { through = "e371d48c92c819f504fccfa1783ff6ce376b9174", note = "CA-3 (#1504): output.rs gains output_ml_dsa_seed_for_tests, behind the TEST_ONLY seeded-rng cfg, returning the ML-DSA seed derive_output_secrets already derives, for CA-3's timing harness. Test-only; the scan's decapsulation and every production path are untouched. Not re-measured." },
   { through = "74ee82e22a95c358bd65591e26b5f28f1ed3971c", note = "74ee82e22a: ScannableBlock carries the block's archival_cumulative and gains archival_increment and archival_placements, which only the persona scan and the body-store fill call. The decapsulation and output scan this measures do not call them, and the one added field is moved with the block. Not re-measured." },
+  { through = "5c86cf5bc737b0d7e1af02947b9a621f65280580", note = "R-34 (5c86cf5bc7): construct_output and its kin take an OutputPosition, which carries the transaction key and the output index the caller passed before; construct_output_core reads both from it. The encapsulation, derivations and output build are the same operations in the same order, and the decapsulation and output scan take no position and are unchanged. Not re-measured; the rows stay stale." },
+  { through = "40bcfdfe63e689ca0389efa67de1ae0a252388fc", note = "4a-2a (40bcfdfe63): scan.rs makes the per-output step generic over a receive step. The solo step is the code that was inline (decapsulation, the ownership compare, the leaf compare, the key image), moved into SoloReceive::receive and called once per output after the same field reads; the global index is computed by a method with the same checked add. The member's receive moved to shekyl-crypto-pq's receive_group_output, outside this path set. A solo wallet's scan does the same operations in the same order. Not re-measured; the rows stay stale." },
 ]
 
 [[constant]]

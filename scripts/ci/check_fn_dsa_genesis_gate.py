@@ -48,21 +48,25 @@ PACKAGES = ("fn-dsa", "fn-dsa-comm", "fn-dsa-kgen", "fn-dsa-sign", "fn-dsa-vrfy"
 LOCK = "rust/Cargo.lock"
 MANIFEST = "rust/shekyl-crypto-pq/Cargo.toml"
 
-# The pre-release shapes this repository cuts (RELEASE_PROMOTION.md §3):
-# `v3.1.0-alpha.9`, `v3.0.0-RC1`, `v3.0.0-beta`. Every other tag is a genesis
+# The pre-release shapes this repository cuts (RELEASE_PROMOTION.md §3): the
+# release-tag grammar restricted to `alpha`, `beta` or `rc`, as in
+# `v3.1.0-alpha.9`, `v3.1.0-rc.1`, `v3.0.0-beta`. `RC` is listed as itself
+# because 17 tags already carry it; case is not ignored, so `Rc` is not it.
+# Every other tag is a genesis
 # release as far as this gate is concerned — `v3.0.0`, and equally `V3.0.0`,
-# `v3.0`, `v3.0.0+mainnet` or `mainnet-3.0.0`. An oddly named rehearsal tag
+# `3.1.0-alpha.1`, `v03.1.0`, `v3.0.0-Rc1`, `v3.0`, `v3.0.0+mainnet` or
+# `mainnet-3.0.0`. An oddly named rehearsal tag
 # is refused until it is re-cut with a suffix; that is the direction a gate
 # whose job is to keep mainnet off a pre-standard crate has to fail in.
 # The suffix takes one optional number and no more: `v3.0.0-alpha.1.2` is
 # not a shape the repository cuts, so it is not a pre-release here.
 #
-# Written as a POSIX extended expression, matched without regard to case,
-# because `gitian.yml` hands the same text to `grep -Ei` for a tree that
-# predates this script. This script fails if that workflow does not carry
-# the expression verbatim, so the two cannot drift.
-PRERELEASE_ERE = r"^v?[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)(\.?[0-9]+)?$"
-PRERELEASE_TAG = re.compile(PRERELEASE_ERE, re.IGNORECASE)
+# Written as a POSIX extended expression because `gitian.yml` hands the same
+# text to `grep -E`, for a tree that predates this script and for the release's
+# pre-release flag. This script fails if that workflow does not carry the
+# expression verbatim, so the two cannot drift.
+PRERELEASE_ERE = r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(alpha|beta|rc|RC)(\.?[0-9]+)?$"
+PRERELEASE_TAG = re.compile(PRERELEASE_ERE)
 FALLBACK_WORKFLOW = ".github/workflows/gitian.yml"
 
 # A locked version. Group 4 is a SemVer pre-release suffix: `1.0.0-rc.1` is
@@ -100,7 +104,7 @@ def manifest_pins(manifest_text):
 
 
 def is_genesis_tag(tag):
-    return bool(tag) and not PRERELEASE_TAG.match(tag)
+    return bool(tag) and not PRERELEASE_TAG.fullmatch(tag)
 
 
 def is_pre_standard(version):
@@ -171,7 +175,7 @@ def judge(lock_text, manifest_text, tag):
         if pre_standard:
             problems.append(
                 "tag %s is not a recognised pre-release (-alpha.N, -beta, "
-                "-RCn), so it is a genesis release, and "
+                "-rc.N), so it is a genesis release, and "
                 "fn-dsa is locked at %s. A pre-1.0 fn-dsa is pre-standard: "
                 "its keys and signatures are not stable. Genesis waits for "
                 "1.0 (ARCHIVAL_SERVE_CREDIT_SPEC.md §11)" % (tag, version)
@@ -223,7 +227,9 @@ def selftest():
     ok = True
     ok &= case("pre-1.0, no tag", True, old, exact(old), None)
     ok &= case("pre-1.0, pre-release tag", True, old, exact(old), "v3.1.0-alpha.9")
-    ok &= case("pre-1.0, RC tag", True, old, exact(old), "v3.0.0-RC1")
+    ok &= case("pre-1.0, rc tag", True, old, exact(old), "v3.0.0-rc.1")
+    ok &= case("pre-1.0, the older RC spelling", True, old, exact(old), "v3.0.0-RC1")
+    ok &= case("pre-1.0, another case of it", False, old, exact(old), "v3.0.0-Rc1")
     ok &= case("pre-1.0, genesis tag", False, old, exact(old), "v3.0.0")
     ok &= case("1.0, genesis tag", True, new, exact(new), "v3.0.0")
     # A release candidate of 1.0 is not 1.0.
@@ -259,21 +265,25 @@ def selftest():
     for tag, genesis in (
         ("v3.0.0", True), ("v10.2.33", True), ("3.0.0", True),
         # The pre-release shapes the repository cuts.
-        ("v3.1.0-alpha.9", False), ("v3.0.0-RC1", False), ("v3.0.0-RC14", False),
-        ("v3.0.0-rc.1", False), ("v3.0.0-beta", False), ("3.1.0-alpha.10", False),
+        ("v3.1.0-alpha.9", False), ("v3.0.0-rc1", False), ("v3.0.0-rc14", False),
+        ("v3.0.0-rc.1", False), ("v3.0.0-beta", False),
+        # No optional `v`, no ignored case, no leading zero.
+        ("3.1.0-alpha.1", True), ("V3.1.0-alpha.1", True), ("v03.1.0", True),
+        ("v03.1.0-alpha.1", True), ("v3.0.0-RC1", False), ("v3.0.0-Rc1", True),
+        ("v3.0.0-ALPHA.1", True),
         # Unrecognised shapes are genesis: the gate fails closed.
         ("V3.0.0", True), ("v3.0", True), ("v3.0.0+mainnet", True),
         ("mainnet-3.0.0", True), ("core-v3.1.0", True), ("v3.0.0-final", True),
         ("v3.0.0-rc.1+build", True), ("v3.0.0-alphabet", True), ("genesis", True),
         # One optional number after the label, not a run of them.
-        ("v3.0.0-alpha.1.2", True), ("v3.0.0-RC1.2", True), ("v3.0.0-beta.", True),
+        ("v3.0.0-alpha.1.2", True), ("v3.0.0-rc1.2", True), ("v3.0.0-beta.", True),
         # No tag at all is an untagged build, not a release.
         ("", False), (None, False),
     ):
         if is_genesis_tag(tag) != genesis:
             print("selftest FAILED: is_genesis_tag(%r)" % (tag,), file=sys.stderr)
             ok = False
-    carries = "grep -Eiq '%s' <<<\"$GITIAN_TAG\"" % PRERELEASE_ERE
+    carries = "grep -Eq '%s' <<<\"$GITIAN_TAG\"" % PRERELEASE_ERE
     if fallback_problems("          if %s; then\n" % carries):
         print("selftest FAILED: fallback carrying the expression", file=sys.stderr)
         ok = False

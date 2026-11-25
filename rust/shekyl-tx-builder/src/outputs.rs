@@ -47,7 +47,7 @@ use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::multisig_output::{construct_multisig_output, MultisigOutputData};
 use shekyl_crypto_pq::output::construct_output_with_label_plaintext;
 use shekyl_crypto_pq::output_mask::OutputMask;
-use shekyl_crypto_pq::output_order::OutputOrder;
+use shekyl_crypto_pq::output_order::{OutputOrder, OutputPosition};
 use shekyl_crypto_pq::{CryptoError, TxKey};
 use shekyl_network::NetworkId;
 use shekyl_units::AtomicUnits;
@@ -240,9 +240,9 @@ fn multisig_entry(
         .map_err(|e| CryptoError::InvalidInput(e.to_string()))
 }
 
-/// Build the output at `output_index` paying `amount` to `payee`, under the
-/// transaction key `tx_key`. Private: the index is a position, and only
-/// [`BuiltSpend::build`] chooses positions.
+/// Build the output at `position` paying `amount` to `payee`. The position
+/// carries the transaction key and the index the key's order gave this
+/// payee (R-34); only [`BuiltSpend::build`] places payees.
 ///
 /// # Errors
 ///
@@ -250,10 +250,9 @@ fn multisig_entry(
 /// output index a group entry cannot name, or a member entry that does not
 /// assemble.
 fn build_output(
-    tx_key: &TxKey,
+    position: OutputPosition<'_>,
     payee: Payee<'_>,
     amount: u64,
-    output_index: u64,
 ) -> Result<BuiltOutput, CryptoError> {
     match payee {
         Payee::Single {
@@ -262,19 +261,17 @@ fn build_output(
             ml_kem_ek,
             label_plaintext,
         } => construct_output_with_label_plaintext(
-            tx_key,
+            position,
             view_x25519,
             ml_kem_ek,
             spend_key,
             amount,
-            output_index,
             label_plaintext,
         )
         .map(|constructed| built_output!(&constructed, amount, None)),
         Payee::Group { address, network } => {
-            let constructed =
-                construct_multisig_output(tx_key, address, amount, output_index, network)?;
-            let out_idx = u8::try_from(output_index).map_err(|_| {
+            let constructed = construct_multisig_output(position, address, amount, network)?;
+            let out_idx = u8::try_from(position.index()).map_err(|_| {
                 CryptoError::InvalidInput("a group output's index is one byte".into())
             })?;
             let entry = multisig_entry(&constructed, out_idx)?;
@@ -390,15 +387,15 @@ impl BuiltSpend {
         if count > MAX_OUTPUTS {
             return Err(BuildSpendError::TooManyOutputs { count });
         }
-        let order = tx_key.output_order(count);
         // Allocated once, at its size: each output holds its mask, and a
         // vector that grew would free its earlier buffers, masks in them,
         // without wiping them.
+        let placed = tx_key.place(recipients.iter().enumerate().collect());
+        let order = placed.order().clone();
         let mut outputs = Vec::with_capacity(count);
-        for (recipient, position) in order.recipients().zip(0u64..) {
-            let Recipient { payee, amount } = recipients[recipient];
+        for (position, (recipient, &Recipient { payee, amount })) in placed {
             outputs.push(
-                build_output(tx_key, payee, amount, position)
+                build_output(position, payee, amount)
                     .map_err(|source| BuildSpendError::Output { recipient, source })?,
             );
         }
@@ -652,13 +649,16 @@ mod tests {
             })
             .collect();
         let spend = BuiltSpend::build(&tx_key, &recipients).unwrap();
-        let order = tx_key.output_order(recipients.len());
+        let positions = tx_key.output_positions(recipients.len());
         for (recipient, r) in recipients.iter().enumerate() {
-            let position = order.position_of(recipient).unwrap();
-            assert_eq!(spend.position_of(recipient), Some(position));
+            let position = positions.of_recipient(recipient).unwrap();
+            assert_eq!(
+                spend.position_of(recipient),
+                Some(usize::try_from(position.index()).unwrap())
+            );
             let built = spend.output_for(recipient).unwrap();
             assert_eq!(built.info.amount.to_raw(), r.amount);
-            let alone = build_output(&tx_key, payee, r.amount, position as u64).unwrap();
+            let alone = build_output(position, payee, r.amount).unwrap();
             assert_eq!(built.output_key, alone.output_key);
             assert_eq!(built.commitment, alone.commitment);
         }
@@ -704,7 +704,8 @@ mod tests {
             address: &address,
             network: &NET,
         };
-        let [a, b] = [0, 1].map(|_| build_output(&tx_key, payee, 900, 0).unwrap());
+        let positions = tx_key.output_positions(1);
+        let [a, b] = [0, 1].map(|_| build_output(positions.at(0).unwrap(), payee, 900).unwrap());
         assert_eq!(a.output_key, b.output_key);
         assert_eq!(a.commitment, b.commitment);
         assert_eq!(a.kem_blob, b.kem_blob);

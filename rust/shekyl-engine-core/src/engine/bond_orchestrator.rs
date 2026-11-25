@@ -167,6 +167,21 @@ fn engine_failure_detail(e: &StakeEngineError) -> String {
     }
 }
 
+/// A post-persist assembly failure on the first-stake surface: an unsaved
+/// seal and the signer's own fault keep their types, and anything else
+/// renders through the amount-free sanitizer.
+pub(super) fn post_assembly_failure(e: StakeEngineError) -> FirstStakeError {
+    match e {
+        StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
+            FirstStakeError::SealNotSaved(error)
+        }
+        e => match e.sign_fault() {
+            Some(fault) => FirstStakeError::Signer(fault),
+            None => FirstStakeError::Engine(engine_failure_detail(&e)),
+        },
+    }
+}
+
 /// Map a W1 preflight [`BondAssemblyError`] onto the first-stake taxonomy
 /// (rule 82): only genuine wait-and-retry states become the
 /// [`FirstStakeError::Funding`] refusal (the RPC's `-29500` "fund and retry
@@ -347,6 +362,11 @@ pub enum FirstStakeError {
     /// point it is the W2 window — re-invoke `stake` to resume.
     #[error("stake engine failed: {0}")]
     Engine(String),
+    /// The wallet's signer refused the bond post: `-29119`, or the code of
+    /// the fault the user can act on. Nothing was sent, and the durable slot
+    /// stands, so a later `stake` resumes it (the W2 window).
+    #[error("the signer refused the bond post: {0}")]
+    Signer(shekyl_tx_builder::SignFault),
     /// [`StakePosture::Market`] was requested and **no shard assignment
     /// exists yet** (`COMPLETETREE_ACTIVATION.md` §10 item 1): market
     /// staking bonds over an assigned subset of the corpus, and the
@@ -1005,12 +1025,7 @@ where
         let assembled =
             Self::assemble_bond_post(self_arc.clone(), handle, ticket, filled, fee, &witness)
                 .await
-                .map_err(|e| match e {
-                    StakeEngineError::Assembly(BondAssemblyError::SealNotSaved(error)) => {
-                        FirstStakeError::SealNotSaved(error)
-                    }
-                    e => FirstStakeError::Engine(engine_failure_detail(&e)),
-                })?;
+                .map_err(post_assembly_failure)?;
 
         Ok(FirstStakeOutcome {
             p_slot: slot.to_raw(),

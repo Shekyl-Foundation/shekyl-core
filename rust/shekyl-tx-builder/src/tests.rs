@@ -58,12 +58,15 @@ pub(crate) fn enc_fields() -> (EncryptedOutputField, EncryptedOutputField) {
         .compress()
         .to_bytes();
     let out = shekyl_crypto_pq::output::construct_output(
-        &shekyl_crypto_pq::TxKey::random().expect("the OS draws a key"),
+        shekyl_crypto_pq::TxKey::random()
+            .expect("the OS draws a key")
+            .output_positions(1)
+            .at(0)
+            .unwrap(),
         &pk.x25519,
         &pk.ml_kem,
         &spend,
         1,
-        0,
     )
     .expect("an output constructs");
     (out.enc_amount_wire(), out.enc_label_wire())
@@ -506,7 +509,7 @@ fn a_count_past_the_per_depth_limit_is_refused() {
 
 #[test]
 fn validate_accepts_all_legal_depths() {
-    for depth in shekyl_fcmp::MIN_SPEND_LAYERS..=shekyl_fcmp::MAX_TREE_DEPTH {
+    for depth in 1..=shekyl_fcmp::MAX_TREE_DEPTH {
         let input = dummy_spend_input_at_depth(depth);
         let tree = dummy_tree_at_depth(depth);
         let result = validate_inputs(
@@ -526,22 +529,6 @@ fn validate_accepts_all_legal_depths() {
             result,
         );
     }
-}
-
-#[test]
-fn validate_rejects_a_one_layer_tree() {
-    let result = validate_inputs(
-        &[dummy_spend_input_at_depth(1)],
-        &dummy_outputs(100),
-        AtomicUnits::ZERO,
-        &[],
-        &[],
-        &dummy_tree_at_depth(1),
-    );
-    assert!(
-        matches!(result, Err(TxBuilderError::TreeTooShallow { layers: 1 })),
-        "{result:?}"
-    );
 }
 
 #[test]
@@ -698,13 +685,15 @@ fn extra_output_term_raises_required_total() {
 #[test]
 fn duplicate_o_c_pair_selects_the_openable_leaf() {
     use crate::sign::prove_input_from_spend;
-    use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
-    use shekyl_fcmp::PqcLeafScalar;
+    use crate::SPEND_SLOT_SCHEME;
+    use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf_with_key;
+    use shekyl_fcmp::{PqcKeyScalar, PqcLeafScalar};
 
     let inp = dummy_spend_input(100);
     let combined: [u8; 64] = inp.combined_ss[..64].try_into().unwrap();
-    let derived = derive_pqc_leaf(&combined, inp.output_index).expect("fixture leaf derives");
-    let derived_cm_x = PqcLeafScalar::from_commitment_point(&derived.point)
+    let derived =
+        derive_pqc_leaf_with_key(&combined, inp.output_index).expect("fixture leaf derives");
+    let derived_cm_x = PqcLeafScalar::from_commitment_point(&derived.commitment.point)
         .expect("derived commitment decompresses")
         .0;
 
@@ -723,7 +712,15 @@ fn duplicate_o_c_pair_selects_the_openable_leaf() {
     with_both.leaf_chunk = vec![wrong_duplicate.clone(), openable.clone()];
     let prove_input = prove_input_from_spend(0, &with_both, [0u8; 32])
         .expect("the openable duplicate must be selected");
-    assert_eq!(prove_input.pqc_leaf_commitment, derived.point);
+    assert_eq!(
+        prove_input.for_prover.pqc_leaf_commitment,
+        derived.commitment.point
+    );
+    assert_eq!(
+        prove_input.pqc_key,
+        PqcKeyScalar::from_pqc_auth(SPEND_SLOT_SCHEME.id(), &derived.public_key)
+            .expect("the leaf's public key is a spend slot")
+    );
 
     // Same (O, C) present but no entry opens: present-but-unopenable.
     let mut unopenable = dummy_spend_input(100);

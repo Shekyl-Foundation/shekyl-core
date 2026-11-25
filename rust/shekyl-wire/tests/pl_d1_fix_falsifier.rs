@@ -71,12 +71,11 @@ fn real_output(rng: &mut ChaCha20Rng, amount: u64) -> OutputData {
     let recipient = random_wallet(rng);
     let tx_secret = TxKey::seeded(Scalar::random(rng).to_bytes());
     construct_output(
-        &tx_secret,
+        tx_secret.output_positions(1).at(0).unwrap(),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
         amount,
-        0,
     )
     .expect("construct decoy output")
 }
@@ -91,12 +90,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // ── Our output, at genesis vout 0 ─────────────────────────────────────
     let tx_secret = TxKey::seeded(Scalar::random(&mut rng).to_bytes());
     let spent = construct_output(
-        &tx_secret,
+        tx_secret
+            .output_positions(usize::try_from(spent_index).unwrap() + 1)
+            .at(spent_index)
+            .unwrap(),
         &wallet.x25519_pk,
         &wallet.ml_kem_ek,
         &wallet.spend_public,
         input_amount,
-        spent_index,
     )
     .expect("construct spent output");
     let combined_ss = recover_combined_ss(
@@ -242,12 +243,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // signs, and the auth is what reveals the key.
     let recipient = random_wallet(&mut rng);
     let payment = construct_output(
-        &TxKey::seeded(Scalar::random(&mut rng).to_bytes()),
+        TxKey::seeded(Scalar::random(&mut rng).to_bytes())
+            .output_positions(1)
+            .at(0)
+            .unwrap(),
         &recipient.x25519_pk,
         &recipient.ml_kem_ek,
         &recipient.spend_public,
         input_amount - 1_000_000,
-        0,
     )
     .expect("construct payment output");
     let tx_prefix_hash = tx_prefix_hash_from_parts(

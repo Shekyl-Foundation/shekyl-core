@@ -484,6 +484,7 @@ where
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
         let payment_count = request.recipients.len();
+        let group_payees = request.group_payee_sizes();
         let rate = fee_snapshot.rate(request.priority);
 
         let estimate = |input_count: usize, output_count: usize| {
@@ -497,6 +498,7 @@ where
                         output_count: OutputCount::clamped(output_count),
                         fee_snapshot,
                         tree_depth,
+                        group_payees: &group_payees,
                     },
                 )
                 .map_err(|err| map_fee_estimator_error(&err.into()))
@@ -558,6 +560,7 @@ where
             InputCount::clamped(selected.indices.len()),
             OutputCount::clamped(payment_count),
             tree_depth,
+            &group_payees,
         )
         .ok_or(SendError::BuildInvariant {
             reason: "the fee does not fit in u64",
@@ -956,6 +959,7 @@ where
             // a fee the current inputs cannot cover escalates to reselection.
             let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
             let payment_count = request.recipients.len();
+            let group_payees = request.group_payee_sizes();
             let rate = fee_snapshot.rate(request.priority);
             let fee = self
                 .fee_estimator
@@ -968,6 +972,7 @@ where
                         output_count: OutputCount::clamped(payment_count.saturating_add(1)),
                         fee_snapshot,
                         tree_depth: depth,
+                        group_payees: &group_payees,
                     },
                 )
                 .map_err(|err| ReanchorError::Failed(map_fee_estimator_error(&err.into())))?;
@@ -1017,6 +1022,7 @@ where
                 InputCount::clamped(selected_indices.len()),
                 OutputCount::clamped(payment_count),
                 depth,
+                &group_payees,
             )
             .ok_or(ReanchorError::Failed(SendError::BuildInvariant {
                 reason: "the fee does not fit in u64",
@@ -1303,16 +1309,7 @@ where
                 tx_bytes: held.tx_bytes.clone(),
                 selected,
                 retained: shekyl_engine_state::TxSecretKey::new(held.tx_key.store()),
-                recipients: held
-                    .request
-                    .recipients
-                    .iter()
-                    .map(|r| shekyl_engine_state::SendRecipient {
-                        destination: r.destination.recorded(),
-                        amount: r.amount_atomic_units.to_raw(),
-                        rid: r.rid,
-                    })
-                    .collect(),
+                recipients: held.request.journal_recipients(),
             };
             state.in_flight.insert(
                 id,

@@ -22,8 +22,8 @@ the questions the round answers; `SSR-Q3` is the one answered.
   [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc)'s
   inventory note names.
 - **`SSR-R2` — the `unsafe` scoping PR, after `SSR-R1`.** `shekyl-process`,
-  `shekyl-thread-priority`, `shekyl-tor-control-client`, `shekyl-logging`
-  and `shekyl-engine-prefs` take `#![deny(unsafe_code)]` with item-level
+  `shekyl-thread-priority`, `shekyl-tor-control-client` and `shekyl-logging`
+  take `#![deny(unsafe_code)]` with item-level
   allows and `// SAFETY:` comments; `randomx-v2-sys` and
   `shekyl-randomx-differential` keep a crate-level allow with the reason
   stated at the root

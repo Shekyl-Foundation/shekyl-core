@@ -317,6 +317,28 @@ fn max_inputs_is_the_consensus_cap() {
     );
 }
 
+/// CEN-I1's minimum is refused at the intent, before anyone signs; change
+/// is a recipient, so a sweep to one address with no change is one output.
+#[test]
+fn an_intent_below_the_consensus_output_minimum_is_refused() {
+    let min = shekyl_wire::transaction::MIN_NON_COINBASE_OUTPUTS;
+    for count in 0..min {
+        let mut intent = make_test_intent();
+        intent.recipients.truncate(count);
+        assert!(
+            matches!(
+                intent.validate_structural(3, 2),
+                Err(SpendIntentError::TooFewRecipients(n)) if n == count
+            ),
+            "{count} recipients"
+        );
+    }
+    let mut at_minimum = make_test_intent();
+    at_minimum.recipients.truncate(min);
+    assert_eq!(at_minimum.recipients.len(), min);
+    at_minimum.validate_structural(3, 2).unwrap();
+}
+
 #[test]
 fn max_recipients_is_the_output_cap() {
     assert_eq!(

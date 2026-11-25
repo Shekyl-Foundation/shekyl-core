@@ -14,28 +14,29 @@
 //!
 //! # One variant is the correct end state, not a smell
 //!
-//! `Full` is the only capability (rule 23: ViewOnly is REJECTED and
-//! hardware-offload is DEFERRED with zero code — decision log 2026-09-07).
+//! `Full` is the only capability a [`crate::WalletFile`] holds (rule 23:
+//! ViewOnly is REJECTED and hardware-offload is DEFERRED with zero code —
+//! decision log 2026-09-07). A group wallet (`0x04`, R-30) is not a
+//! capability of this handle: it is its own type,
+//! [`crate::GroupWalletFile`], and this decode refuses its byte by name.
 //! The enum stays an enum because [`Capability::from_envelope_byte`]
 //! returning a `Result` is the parse boundary that makes "capability was
 //! validated" a type-level fact rather than a runtime predicate. Do not
-//! collapse it to a unit struct or a bool; a future capability, if one is
-//! ever ratified, joins as a variant through this same boundary.
+//! collapse it to a unit struct or a bool.
 //!
 //! # Defensive decoding
 //!
 //! The envelope's `validate_cap_content` already rejects every byte other
-//! than [`CAPABILITY_FULL`] with `UnknownCapabilityMode`, so an
-//! `OpenedKeysFile` reaching this layer cannot legitimately carry another
-//! value. [`Capability::from_envelope_byte`] still covers the non-Full
-//! bytes defensively: the envelope and the orchestrator live in separate
-//! crates, and a future refactor that skips `validate_cap_content` (e.g. a
-//! direct `OpenedKeysFile` constructed by a test helper) should not
-//! silently produce a malformed [`Capability`]. The unused v1 bytes
-//! (`0x02`–`0x04`) are RESERVED in `docs/WALLET_FILE_FORMAT_V1.md`'s
-//! discriminant table — in the spec, deliberately not as code constants.
+//! than [`CAPABILITY_FULL`] and [`CAPABILITY_GROUP_MEMBER`] with
+//! `UnknownCapabilityMode`. [`Capability::from_envelope_byte`] still covers
+//! the other bytes defensively: the envelope and the orchestrator live in
+//! separate crates, and a future refactor that skips `validate_cap_content`
+//! (e.g. a direct `OpenedKeysFile` constructed by a test helper) should not
+//! silently produce a malformed [`Capability`]. The retired v1 bytes
+//! (`0x02`, `0x03`) are in `docs/WALLET_FILE_FORMAT_V1.md`'s discriminant
+//! table — in the spec, deliberately not as code constants.
 
-use shekyl_crypto_pq::wallet_envelope::CAPABILITY_FULL;
+use shekyl_crypto_pq::wallet_envelope::{CAPABILITY_FULL, CAPABILITY_GROUP_MEMBER};
 
 use crate::error::WalletFileError;
 
@@ -52,15 +53,16 @@ pub enum Capability {
 
 impl Capability {
     /// Decode the envelope's `capability_mode` byte into a typed
-    /// [`Capability`]. Any byte other than [`CAPABILITY_FULL`] returns
-    /// the generic unsupported-capability error — it deliberately names
-    /// no specific future arm. The envelope layer's own validation
-    /// already rejects those bytes at seal/open time, so a caller that
-    /// reaches the error path has encountered an internal invariant
-    /// violation.
+    /// [`Capability`]. A group wallet's byte refuses as
+    /// [`WalletFileError::GroupWalletKeysFile`]. Any other byte returns the
+    /// generic unsupported-capability error — it deliberately names no
+    /// specific future arm; the envelope layer's own validation already
+    /// rejects those bytes at seal/open time, so a caller that reaches that
+    /// path has encountered an internal invariant violation.
     pub(crate) fn from_envelope_byte(v: u8) -> Result<Self, WalletFileError> {
         match v {
             CAPABILITY_FULL => Ok(Self::Full),
+            CAPABILITY_GROUP_MEMBER => Err(WalletFileError::GroupWalletKeysFile),
             other => Err(WalletFileError::UnknownCapability(other)),
         }
     }
@@ -78,13 +80,21 @@ mod tests {
         );
     }
 
+    /// A solo handle refuses a group wallet's keys file by name.
+    #[test]
+    fn refuses_a_group_wallets_byte_by_name() {
+        assert!(matches!(
+            Capability::from_envelope_byte(CAPABILITY_GROUP_MEMBER),
+            Err(WalletFileError::GroupWalletKeysFile)
+        ));
+    }
+
     /// Fail-closed: the retired v1 bytes (`0x02` ViewOnly, `0x03`
-    /// hardware-offload, `0x04` reserved-multisig — RESERVED in the
-    /// format spec, unlabeled) and a never-assigned byte all refuse
-    /// with the generic unsupported-capability error.
+    /// hardware-offload) and a never-assigned byte all refuse with the
+    /// generic unsupported-capability error.
     #[test]
     fn refuses_every_non_full_byte() {
-        for byte in [0x02u8, 0x03, 0x04, 0x00, 0xEF] {
+        for byte in [0x02u8, 0x03, 0x00, 0xEF] {
             let err = Capability::from_envelope_byte(byte).unwrap_err();
             match err {
                 WalletFileError::UnknownCapability(b) => assert_eq!(b, byte),
