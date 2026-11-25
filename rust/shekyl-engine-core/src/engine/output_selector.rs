@@ -398,6 +398,18 @@ pub(crate) fn input_limit_at(outputs: NonCoinbaseOutputs, layers: SpendLayers) -
     max_buildable_inputs(outputs, layers)
 }
 
+/// The input limit of a transfer: the recipients, plus the change output
+/// this build adds, at the reference tree's spend depth.
+///
+/// The with-change shape is the heavier one. Its limit falls as the tree
+/// deepens.
+#[must_use]
+pub(crate) fn transfer_input_limit(recipients: usize, tree_depth: u8) -> usize {
+    let output_count = NonCoinbaseOutputs::new(recipients.saturating_add(1))
+        .expect("check_recipients bounds the payment-plus-change count");
+    input_limit_at(output_count, selection_layers(tree_depth))
+}
+
 /// V3.0 default [`OutputSelector`] implementor.
 ///
 /// Greedy largest-first selection: sort candidates by
@@ -712,6 +724,11 @@ mod tests {
         assert_eq!(
             NonCoinbaseOutputs::new(MIN_NON_COINBASE_OUTPUTS),
             Some(NonCoinbaseOutputs::FEWEST)
+        );
+        // One recipient plus the change output is the fewest a transfer carries.
+        assert_eq!(
+            transfer_input_limit(1, MAX_TREE_DEPTH),
+            input_limit_at(NonCoinbaseOutputs::FEWEST, SpendLayers::DEEPEST)
         );
     }
 

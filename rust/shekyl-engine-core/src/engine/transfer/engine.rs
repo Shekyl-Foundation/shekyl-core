@@ -29,7 +29,7 @@ use super::super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::super::fee_snapshot::FeeSnapshotSource;
 use super::super::network::Network;
 use super::super::output_selector::{
-    input_limit_at, selection_layers, OutputSelector, SelectedInputs, SelectedOutputs,
+    transfer_input_limit, OutputSelector, SelectedInputs, SelectedOutputs,
 };
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitReceipt, TxHash,
@@ -43,7 +43,6 @@ use super::super::transaction_submitter::{canonical_tx_id, wire_fee};
 use super::super::transaction_submitter::{SubmitSuccess, SubmitterError, TransactionSubmitter};
 use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::build_fee_directive;
-use shekyl_tx_weight::NonCoinbaseOutputs;
 
 use super::super::fee_variant::selection_target;
 use super::candidates::CandidatePartition;
@@ -439,11 +438,7 @@ where
         // candidate set is a selector-contract violation.
         let resolve_insufficiency =
             |needed_raw: u64| -> SendError { partition.refusal(needed_raw, horizon) };
-        // The with-change shape is the heavier one, and the one this build
-        // makes. Its limit falls with the reference tree's depth.
-        let output_count = NonCoinbaseOutputs::new(request.recipients.len().saturating_add(1))
-            .expect("check_recipients bounds the payment-plus-change count");
-        let max_inputs = input_limit_at(output_count, selection_layers(tree_depth));
+        let max_inputs = transfer_input_limit(request.recipients.len(), tree_depth);
         let map_select_err =
             |err: OutputSelectorError, needed_raw: u64| -> (SendError, BuildErrorKind) {
                 match err {
