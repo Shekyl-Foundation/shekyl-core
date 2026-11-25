@@ -21,6 +21,16 @@
 #   tolerance   90, or for a target whose two runs differ by more than 5%,
 #               100 less twice the spread rounded up (`tolerance()`)
 #
+# A run under that line is still green only when both hold
+# (`scripts/ci/fuzz_coverage.py`): the crate's own sources since `commit`
+# are unchanged (`src`, `Cargo.toml`, `build.rs`, `fuzz/Cargo.toml`,
+# `fuzz/fuzz_targets`, `fuzz/seeds`; the fuzz lock is not a source), and
+# coverage still meets the codegen allowance, the default tolerance minus
+# one spread-limit (85 while the default is 90). The verdict names the
+# fuzz-lock packages whose versions moved. A drop past that allowance, a
+# drop after those sources changed, or a run whose sources could not be
+# read, stays red. The allowance is not stacked under a wider tolerance.
+#
 # A floor moves only in a reviewed commit that changes its run and commit
 # with it: dispatch the nightly `fuzz` job on the branch (with
 # `fuzz_target` for one target), delete the target's cached corpus first so
