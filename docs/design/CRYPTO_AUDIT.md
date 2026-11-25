@@ -429,6 +429,14 @@ alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
 silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
 on the floor device.
 
+**Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
+floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)
+records `valid-vs-invalid` at 2.26 and `fixed-vs-bitflip` at 1.66.
+The nulls were 2.29 and 1.82, and the planted control was 1331.37.
+Both validity rows are flat under the registered CA-2 thresholds, as
+predicted for the Cortex-A72. This satisfies the floor cross-check.
+The x86 measurements still need to locate the source of the gap.
+
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
 **Opened 2026-11-21 by Rick's ruling**, from shekyl-core #1494's review of
