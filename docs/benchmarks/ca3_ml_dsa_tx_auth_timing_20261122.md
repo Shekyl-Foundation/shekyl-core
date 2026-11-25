@@ -1363,3 +1363,19 @@ laptop's valid preflight and registered result.
 
 **Capture:** `windows_reg3_replacement_shakedown_void.txt`, byte for byte,
 9882 bytes, SHA-256 `1d2a2953b02bd82eb5e5dde7deefcbb88c540c1921af93a342b4b170df403199`, with SHA256SUMS.
+
+### Revision 3 replacement physical Windows host, before its preflight
+
+The maintainer selected a physical Core i9-13900K desktop for the outstanding
+Windows run. The Windows CPU-set API reports logical processors 4 and 5 on
+one performance core. Use logical 4 at Normal priority and observe sibling
+5 with the laptop quiet gate. Use the existing Balanced plan on mains power,
+with Defender active and no browser processes during the four quiet samples.
+Build and run under a limited token. Build a fresh native MSVC release from
+the registered revision with rustc 1.94.0 and the workspace static CRT.
+
+Run the full preflight with seed `2026112801` and check its controls before
+launching the single registered attempt. Use the revision-3 size, planted
+control, null, functional checks and verdict thresholds above. Retain each
+completed result and apply the existing gate stop and repeat rules. Neither
+fleet VM used the registered Windows seed.
