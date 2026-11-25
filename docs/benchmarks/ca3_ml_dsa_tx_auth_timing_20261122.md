@@ -1301,7 +1301,7 @@ no seed argument, `inputs=registered`, exit 0. The two keys matched after
 62 candidates, on 2,504 ExpandS bytes and five ExpandA rejections; both
 replicas agreed with the fork. The performance governor held at both
 ends, 1.5 GHz, 50.1 to 54.0 °C, no throttling (`0x0`), NTP synchronised,
-about 3.28 GB available. The original governor was restored after the
+about 3.13 GiB available. The original governor was restored after the
 session and read back. Operational logs stay in the private record.
 
 ```text
@@ -1326,3 +1326,40 @@ pair is also information (3.44).
 `floor_reg3_rustc_vV.txt` and `floor_reg3_binary_sha256.txt`, with SHA256SUMS.
 Windows still needs a valid preflight and a passing registered attempt;
 CA-3 is not closed by the floor result alone.
+
+
+### Revision 3: replacement Windows preflight (2026-11-24): VOID; registered seed unused
+
+**Status: VOID preflight; a test-method decision is required.** The second
+eight-vCPU Windows Server VM used its own fresh native MSVC build of
+`63bcfab1d4`, rustc 1.94.0, release, workspace static CRT. Binary SHA-256:
+`281b1efe6190b54c9452e279eaa32d959312eff1c80437380e4862b02895f84e`.
+High Performance, five fixed keygen warm-ups, the settling pause and the
+original quiet gate were applied as registered. The process ran on
+logical 4 at Normal priority, affinity read back `0x10`.
+
+The full unregistered preflight (`2026112801`) ran from 02:24:49 to
+02:36:10Z on 2026-11-25 (682 seconds; exit 1). Every functional check
+held, including the replicas and retained results. Its lines are:
+
+```text
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=1.56
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=1.72
+control=sign-planted-leak planted_ns=5922 max_abs_t=4.39 delta10_ns=13478
+result=VOID (the control was not detected, so a pass would mean nothing) sign_pair=1.56 sign_null=1.72 sign_control=4.39 delta10_ns=13478 information_composed_pair=1.64 information_keygen_pair=1.52
+```
+
+The control is at or below 10, so the pair is not read as evidence. No
+registered Windows attempt launched on either VM. The original Balanced
+plan and default workload were restored and read back. Power settings and
+a fixed warm-up did not make this platform's full preflight valid. This
+does not establish which guest or host mechanism caused the weak control.
+
+The maintainer is asked to choose an independent physical-host run under
+the existing method, a newly registered control-calibration procedure with
+an explicit sensitivity bound, or leaving Windows pending. The 50,000
+samples, 0.5 % control and verdict thresholds have not been changed. The
+floor's registered PASS remains its own result; CA-3 remains open.
+
+**Capture:** `windows_reg3_replacement_shakedown_void.txt`, byte for byte,
+9882 bytes, SHA-256 `1d2a2953b02bd82eb5e5dde7deefcbb88c540c1921af93a342b4b170df403199`, with SHA256SUMS.
