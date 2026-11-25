@@ -8,7 +8,7 @@
 //! found.
 //!
 //! Each row times one operation on two input classes interleaved at random
-//! (`classes`), every input built before the clock starts, a batch of
+//! (`classes`), each timed batch prepared before its clock starts, and a batch of
 //! `BATCH` operations per sample (`harness`), and compares the classes'
 //! timings with Welch's t, full and tail-cropped, against dudect's
 //! threshold (`stats`). The row list (`suite`) carries its own controls:

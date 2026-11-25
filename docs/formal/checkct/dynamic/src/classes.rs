@@ -8,18 +8,72 @@
 //! Two rules, each learnt on 2026-10-24 from a false class difference on
 //! operations BINSEC had proved branchless, shape everything here:
 //!
-//! - Every input of every sample exists BEFORE the timing loop starts.
-//!   Building the random class's inputs right before its batch hands the
+//! - Every input of a timed batch exists before that batch's clock starts.
+//!   Building one class in the gap after the previous timed batch hands the
 //!   two classes different cache and predictor state.
 //! - No value repeats inside a timed batch where a contrast does not mean
 //!   it to: a value repeated back-to-back runs measurably faster through
 //!   the short `HelioseleneField` operations, whatever the value is. So a
 //!   "fixed" class is a SET of `BATCH` distinct values, not one value.
+//!
+//! [`Retention`] applies the rules. A small operand keeps every batch
+//! ([`Retention::Complete`]), which is how the recorded field runs were
+//! measured. A large operand uses a windowed schedule ([`Retention::Windowed`]):
+//! the window is built, then timed, and its slots are reused. An independent
+//! buffer is read between input construction and timing to reduce cache
+//! residency from construction. Cache residency remains platform-dependent.
+
+use core::hint::black_box;
 
 use crate::rng::{Rng, Seed};
 
 /// Operations per timed sample.
 pub const BATCH: usize = 32;
+
+/// Largest operand [`Retention::Complete`] retains.
+///
+/// A field element is 32 bytes and a product pair is 64, which is what the
+/// recorded field runs held in full. The ML-KEM ciphertext pair is 2,176
+/// and sits above this.
+pub const COMPLETE_OPERAND_MAX: usize = 256;
+
+/// Target size for one window's operands and for the separate cache pad.
+/// The pad applies the same cache pressure before each window. Its size
+/// does not establish the measured operands' cache residency.
+pub const WINDOW_BYTES: usize = 64 * 1024 * 1024;
+
+/// Read one byte per 64-byte stride when touching the cache pad.
+const CACHE_STRIDE: usize = 64;
+
+/// How a row's batches are retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retention {
+    /// Every batch exists before the first clock read.
+    Complete,
+    /// A window exists before its clock reads. The slots are then reused.
+    Windowed,
+}
+
+impl Retention {
+    /// `operand_bytes` is `size_of` of one timed input.
+    pub const fn for_operand(operand_bytes: usize) -> Self {
+        if operand_bytes <= COMPLETE_OPERAND_MAX {
+            Retention::Complete
+        } else {
+            Retention::Windowed
+        }
+    }
+}
+
+/// Whether a visited batch is a sample.
+///
+/// A warmup batch is timed so the next recorded batch is preceded by the
+/// timing loop. It is not a sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchRole {
+    Record,
+    Warmup,
+}
 
 /// dudect's two classes. "Fixed" is the class a contrast varies (a fixed
 /// set, a constant, a shape); "Random" is the reference it is compared to.
@@ -78,32 +132,45 @@ enum Source<'a, I> {
 }
 
 impl<I: Clone> Source<'_, I> {
+    /// The batch the complete schedule stores. One allocation of [`BATCH`]
+    /// elements, the same draws [`Self::write_batch`] performs.
     fn batch(&self, rng: &mut Rng) -> Vec<I> {
+        let mut into = Vec::with_capacity(BATCH);
+        self.write_batch(&mut into, rng);
+        into
+    }
+
+    /// Refill `into` for a reused window slot.
+    fn write_batch(&self, into: &mut Vec<I>, rng: &mut Rng) {
+        into.clear();
+        into.reserve(BATCH);
         match self {
-            Source::Fresh(draw) => (0..BATCH).map(|_| draw(rng)).collect(),
+            Source::Fresh(draw) => {
+                for _ in 0..BATCH {
+                    into.push(draw(rng));
+                }
+            }
             Source::FixedSet { draw, seed } => {
                 let mut replay = Rng::from_seed(*seed);
-                (0..BATCH).map(|_| draw(&mut replay)).collect()
+                for _ in 0..BATCH {
+                    into.push(draw(&mut replay));
+                }
             }
-            Source::Repeated(value) => vec![(*value).clone(); BATCH],
+            Source::Repeated(value) => {
+                into.extend(std::iter::repeat_with(|| (*value).clone()).take(BATCH));
+            }
         }
     }
 }
 
-/// Every batch of a row, in the random order they are timed in.
-pub struct Schedule<I> {
-    pub batches: Vec<(Class, Vec<I>)>,
+/// The two sources of one contrast, in class order.
+struct ClassSources<'a, I> {
+    fixed: Source<'a, I>,
+    random: Source<'a, I>,
 }
 
-impl<I: Clone> Schedule<I> {
-    /// `samples_per_class` batches of each class, interleaved at random,
-    /// every input built now.
-    pub fn build(
-        contrast: &Contrast<I>,
-        draw: &dyn Fn(&mut Rng) -> I,
-        samples_per_class: usize,
-        rng: &mut Rng,
-    ) -> Self {
+impl<'a, I> ClassSources<'a, I> {
+    fn bind(contrast: &'a Contrast<I>, draw: &'a dyn Fn(&mut Rng) -> I, rng: &mut Rng) -> Self {
         let first_set = rng.seed();
         let second_set = rng.seed();
         let (fixed, random) = match contrast {
@@ -128,21 +195,147 @@ impl<I: Clone> Schedule<I> {
             Contrast::Constant(value) => (Source::Repeated(value), Source::Fresh(draw)),
             Contrast::Shaped(shaped) => (Source::Fresh(shaped.as_ref()), Source::Fresh(draw)),
         };
-        let mut order: Vec<Class> = std::iter::repeat_n(Class::Fixed, samples_per_class)
-            .chain(std::iter::repeat_n(Class::Random, samples_per_class))
-            .collect();
-        rng.shuffle(&mut order);
-        let batches = order
+        ClassSources { fixed, random }
+    }
+
+    fn source(&self, class: Class) -> &Source<'a, I> {
+        match class {
+            Class::Fixed => &self.fixed,
+            Class::Random => &self.random,
+        }
+    }
+}
+
+/// Every batch of a row, in the random order they are timed in.
+pub struct Schedule<I> {
+    pub batches: Vec<(Class, Vec<I>)>,
+}
+
+impl<I: Clone> Schedule<I> {
+    /// `samples_per_class` batches of each class, interleaved at random,
+    /// every input built now.
+    pub fn build(
+        contrast: &Contrast<I>,
+        draw: &dyn Fn(&mut Rng) -> I,
+        samples_per_class: usize,
+        rng: &mut Rng,
+    ) -> Self {
+        let sources = ClassSources::bind(contrast, draw, rng);
+        let batches = shuffled_classes(samples_per_class, rng)
             .into_iter()
-            .map(|class| {
-                let source = match class {
-                    Class::Fixed => &fixed,
-                    Class::Random => &random,
-                };
-                (class, source.batch(rng))
-            })
+            .map(|class| (class, sources.source(class).batch(rng)))
             .collect();
         Schedule { batches }
+    }
+}
+
+/// The same shuffled class order for complete and windowed schedules.
+fn shuffled_classes(samples_per_class: usize, rng: &mut Rng) -> Vec<Class> {
+    let mut order: Vec<Class> = std::iter::repeat_n(Class::Fixed, samples_per_class)
+        .chain(std::iter::repeat_n(Class::Random, samples_per_class))
+        .collect();
+    rng.shuffle(&mut order);
+    order
+}
+
+/// Visit every batch of one row.
+///
+/// A small operand is built before the first `visit` call. A large operand
+/// is built one window at a time: the first window before the first call,
+/// and each later window between calls. A one-class profile's wall-clock
+/// span therefore includes those later rebuilds. The t-statistic path does
+/// not print that span.
+pub fn visit_batches<I: Clone>(
+    contrast: &Contrast<I>,
+    draw: &dyn Fn(&mut Rng) -> I,
+    samples_per_class: usize,
+    rng: &mut Rng,
+    visit: impl FnMut(Class, &[I], BatchRole),
+) {
+    visit_batches_with(
+        contrast,
+        draw,
+        samples_per_class,
+        rng,
+        Retention::for_operand(size_of::<I>()),
+        WINDOW_BYTES,
+        visit,
+    );
+}
+
+fn visit_batches_with<I: Clone>(
+    contrast: &Contrast<I>,
+    draw: &dyn Fn(&mut Rng) -> I,
+    samples_per_class: usize,
+    rng: &mut Rng,
+    retention: Retention,
+    window_bytes: usize,
+    mut visit: impl FnMut(Class, &[I], BatchRole),
+) {
+    match retention {
+        Retention::Complete => {
+            let schedule = Schedule::build(contrast, draw, samples_per_class, rng);
+            for (class, batch) in &schedule.batches {
+                visit(*class, batch, BatchRole::Record);
+            }
+        }
+        Retention::Windowed => {
+            visit_windows(
+                contrast,
+                draw,
+                samples_per_class,
+                rng,
+                window_bytes,
+                &mut visit,
+            );
+        }
+    }
+}
+
+/// At least one recorded batch, with anything smaller than a full batch
+/// rounded up so the same path works for the final short window.
+fn recorded_batches(operand_bytes: usize, window_bytes: usize) -> usize {
+    window_bytes
+        .div_ceil(BATCH.saturating_mul(operand_bytes).max(1))
+        .max(1)
+}
+
+/// Read the independent pad after preparing a window. Keep the read
+/// observable even when the harness is built with fat LTO.
+#[inline(never)]
+fn touch_cache_pad(pad: &[u8]) {
+    let mut sum = 0u64;
+    for &byte in black_box(pad).iter().step_by(CACHE_STRIDE) {
+        sum = sum.wrapping_add(u64::from(byte));
+    }
+    black_box(sum);
+}
+
+fn visit_windows<I: Clone>(
+    contrast: &Contrast<I>,
+    draw: &dyn Fn(&mut Rng) -> I,
+    samples_per_class: usize,
+    rng: &mut Rng,
+    window_bytes: usize,
+    visit: &mut dyn FnMut(Class, &[I], BatchRole),
+) {
+    let sources = ClassSources::bind(contrast, draw, rng);
+    let order = shuffled_classes(samples_per_class, rng);
+    let limit = recorded_batches(size_of::<I>(), window_bytes).min(order.len());
+    let pad = vec![1u8; window_bytes];
+    let mut warmup = Vec::with_capacity(BATCH);
+    let mut slots: Vec<Vec<I>> = (0..limit).map(|_| Vec::with_capacity(BATCH)).collect();
+    for classes in order.chunks(limit.max(1)) {
+        let warmup_class = [Class::Fixed, Class::Random][rng.below(2)];
+        sources.source(warmup_class).write_batch(&mut warmup, rng);
+        for (&class, slot) in classes.iter().zip(&mut slots) {
+            sources.source(class).write_batch(slot, rng);
+        }
+        touch_cache_pad(&pad);
+        visit(warmup_class, &warmup, BatchRole::Warmup);
+        for (&class, slot) in classes.iter().zip(&slots) {
+            visit(class, slot, BatchRole::Record);
+        }
     }
 }
 
@@ -220,5 +413,110 @@ mod tests {
             switches > 10,
             "classes not interleaved: {switches} switches"
         );
+    }
+
+    /// A field element is 32 bytes; the mul rows time a pair of them.
+    const FIELD_PAIR_BYTES: usize = 64;
+
+    #[test]
+    fn operand_size_selects_retention() {
+        assert_eq!(
+            Retention::for_operand(FIELD_PAIR_BYTES),
+            Retention::Complete
+        );
+        assert_eq!(
+            Retention::for_operand(COMPLETE_OPERAND_MAX),
+            Retention::Complete
+        );
+        assert_eq!(
+            Retention::for_operand(COMPLETE_OPERAND_MAX + 1),
+            Retention::Windowed
+        );
+    }
+
+    #[test]
+    fn a_window_records_enough_batches_to_match_the_pad() {
+        // 100 bytes of pad, batches of 64: one batch is short of the pad.
+        let recorded = recorded_batches(2, 100);
+        assert_eq!(BATCH * 2, 64);
+        assert_eq!(recorded, 2);
+        assert!(recorded * BATCH * 2 >= 100);
+    }
+
+    #[test]
+    fn a_window_records_at_least_one_batch() {
+        assert_eq!(recorded_batches(32, 0), 1);
+    }
+
+    #[test]
+    fn a_small_operand_is_built_before_any_batch_is_timed() {
+        use std::cell::Cell;
+        let draws = Cell::new(0usize);
+        let draw = |rng: &mut Rng| {
+            draws.set(draws.get() + 1);
+            rng.byte()
+        };
+        let samples = 10;
+        let mut visits = 0;
+        let mut built = None;
+        visit_batches(
+            &Contrast::Null,
+            &draw,
+            samples,
+            &mut Rng::from_os(),
+            |_, batch, role| {
+                assert_eq!(role, BatchRole::Record);
+                assert_eq!(batch.len(), BATCH);
+                if built.is_none() {
+                    built = Some(draws.get());
+                }
+                assert_eq!(draws.get(), built.unwrap());
+                visits += 1;
+            },
+        );
+        assert_eq!(visits, samples * 2);
+        assert_eq!(built.unwrap(), samples * 2 * BATCH);
+    }
+
+    #[test]
+    fn a_window_is_built_before_its_batches_are_timed() {
+        use std::cell::Cell;
+        let draws = Cell::new(0usize);
+        let draw = |rng: &mut Rng| {
+            draws.set(draws.get() + 1);
+            rng.next_u64()
+        };
+        let window_bytes = BATCH * size_of::<u64>();
+        let mut at_visit = Vec::new();
+        visit_batches_with(
+            &Contrast::Null,
+            &draw,
+            4,
+            &mut Rng::from_os(),
+            Retention::Windowed,
+            window_bytes,
+            |class, batch, role| {
+                assert_eq!(batch.len(), BATCH);
+                at_visit.push((role, class, draws.get()));
+            },
+        );
+        // Warmup and one recorded batch. The pad is bytes, not draws.
+        let stage_draws = (1 + 1) * BATCH;
+        let (role, _, built) = at_visit[0];
+        assert_eq!(role, BatchRole::Warmup);
+        assert_eq!(built, stage_draws);
+        let (role, _, built) = at_visit[1];
+        assert_eq!(role, BatchRole::Record);
+        assert_eq!(built, stage_draws);
+        let (role, _, built) = at_visit[2];
+        assert_eq!(role, BatchRole::Warmup);
+        assert_eq!(built, stage_draws * 2);
+        let records: Vec<Class> = at_visit
+            .iter()
+            .filter(|(role, _, _)| *role == BatchRole::Record)
+            .map(|(_, class, _)| *class)
+            .collect();
+        assert_eq!(records.iter().filter(|c| **c == Class::Fixed).count(), 4);
+        assert_eq!(records.iter().filter(|c| **c == Class::Random).count(), 4);
     }
 }

@@ -19,6 +19,7 @@
 use core::marker::PhantomData;
 
 use crypto_bigint::{impl_modulus, modular::constant_mod::Residue, Encoding, U256};
+use dalek_ff_group::FieldElement as Field25519;
 
 use crate::field::{decode, FieldUnderTest};
 use crate::rng::Rng;
@@ -193,6 +194,65 @@ impl<F, A: FromShape<F>, B: FromShape<F>> FromShape<F> for (A, B) {
     }
 }
 
+/// A `Field25519` whose Montgomery residue is a sparse value.
+///
+/// The field stores `x·R mod p`, so [`FromShape`] of [`Shape::Sparse`] is
+/// not a sparse residue. This draw is `x = s·R⁻¹ mod p` for a sparse `s`.
+pub fn sparse_montgomery_fe25519(rng: &mut Rng) -> Field25519 {
+    let residue = U256::from_le_bytes(Shape::Sparse.encoding::<Field25519>(rng));
+    let canonical = Residue25519::from_montgomery(residue).retrieve();
+    decode(canonical.to_le_bytes())
+}
+
+/// A product of two [`sparse_montgomery_fe25519`] draws.
+pub fn sparse_montgomery_fe25519_pair(rng: &mut Rng) -> (Field25519, Field25519) {
+    (
+        sparse_montgomery_fe25519(rng),
+        sparse_montgomery_fe25519(rng),
+    )
+}
+
+/// An ML-KEM-768 ciphertext, the length `fips203` 0.5.0 compares.
+pub const ML_KEM_768_CIPHERTEXT_BYTES: usize = 1088;
+
+/// The two operands of that compare.
+#[derive(Clone)]
+pub struct CtPair {
+    left: [u8; ML_KEM_768_CIPHERTEXT_BYTES],
+    right: [u8; ML_KEM_768_CIPHERTEXT_BYTES],
+}
+
+impl CtPair {
+    /// A random string and itself: a ciphertext and its re-encryption.
+    pub fn equal(rng: &mut Rng) -> Self {
+        let left: [u8; ML_KEM_768_CIPHERTEXT_BYTES] = rng.bytes();
+        CtPair { left, right: left }
+    }
+
+    /// Two independent strings: an invalid ciphertext and a re-encryption.
+    pub fn random(rng: &mut Rng) -> Self {
+        CtPair {
+            left: rng.bytes(),
+            right: rng.bytes(),
+        }
+    }
+
+    /// A random string and itself with one bit flipped.
+    pub fn bitflip(rng: &mut Rng) -> Self {
+        let left: [u8; ML_KEM_768_CIPHERTEXT_BYTES] = rng.bytes();
+        let mut right = left;
+        let bit = rng.below(ML_KEM_768_CIPHERTEXT_BYTES * 8);
+        right[bit / 8] ^= 1u8 << (bit % 8);
+        CtPair { left, right }
+    }
+
+    /// `subtle`'s slice compare, the impl `ct.ct_ne(&*c_prime)` resolves to.
+    pub fn ne(pair: &Self) -> u64 {
+        use subtle::ConstantTimeEq;
+        u64::from(pair.left[..].ct_ne(&pair.right[..]).unwrap_u8())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +305,64 @@ mod tests {
             bool::from(HelioseleneField::from_repr(encoding).is_none())
         });
         assert!(invalid);
+    }
+
+    /// Re-entering the canonical value into Montgomery form gives back at
+    /// most one set byte per limb.
+    #[test]
+    fn sparse_montgomery_operands_hold_sparse_residues() {
+        use crate::classes::{Retention, COMPLETE_OPERAND_MAX};
+        let mut rng = Rng::from_os();
+        for _ in 0..256 {
+            let x = sparse_montgomery_fe25519(&mut rng);
+            let canonical = U256::from_le_bytes(x.to_repr());
+            let residue = Residue25519::new(&canonical);
+            let set_bytes = residue
+                .as_montgomery()
+                .to_le_bytes()
+                .iter()
+                .filter(|byte| **byte != 0)
+                .count();
+            assert!(set_bytes <= 4, "residue has {set_bytes} set bytes");
+        }
+        let uniform = Field25519::sample(&mut rng);
+        let uniform_residue = Residue25519::new(&U256::from_le_bytes(uniform.to_repr()));
+        let uniform_set = uniform_residue
+            .as_montgomery()
+            .to_le_bytes()
+            .iter()
+            .filter(|byte| **byte != 0)
+            .count();
+        assert!(
+            uniform_set > 4,
+            "a uniform residue was sparse ({uniform_set} set bytes)"
+        );
+        assert!(size_of::<(Field25519, Field25519)>() <= COMPLETE_OPERAND_MAX);
+        assert_eq!(
+            Retention::for_operand(size_of::<CtPair>()),
+            Retention::Windowed
+        );
+    }
+
+    #[test]
+    fn ciphertext_pairs_compare_as_their_distribution_says() {
+        let mut rng = Rng::from_os();
+        for _ in 0..32 {
+            let equal = CtPair::equal(&mut rng);
+            assert_eq!(equal.left, equal.right);
+            assert_eq!(CtPair::ne(&equal), 0);
+
+            let flipped = CtPair::bitflip(&mut rng);
+            let flipped_bits: u32 = flipped
+                .left
+                .iter()
+                .zip(&flipped.right)
+                .map(|(left, right)| (left ^ right).count_ones())
+                .sum();
+            assert_eq!(flipped_bits, 1);
+            assert_eq!(CtPair::ne(&flipped), 1);
+
+            assert_eq!(CtPair::ne(&CtPair::random(&mut rng)), 1);
+        }
     }
 }

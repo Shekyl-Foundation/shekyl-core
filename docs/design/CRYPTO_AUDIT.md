@@ -431,8 +431,9 @@ alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
 silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
 on the floor device. The isolated desktop `ct_ne 1088` rows were
 flat at 1.42 and 1.99 with 100,000 batches per class, reduced to fit
-memory. The full RT-P4 desktop run used one million samples per
-comparison.
+memory. The harness now prepares those rows in bounded windows. This
+capture predates that schedule. The full
+RT-P4 desktop run used one million samples per comparison.
 
 **Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
 floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)

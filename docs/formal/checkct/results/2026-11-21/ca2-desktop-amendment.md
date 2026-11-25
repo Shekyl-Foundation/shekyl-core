@@ -51,3 +51,10 @@ comparisons and their controls, approximately 13 GiB of ciphertext
 buffers. Record the smaller sample size alongside the result. Read
 the comparisons against the original thresholds and qualify any flat
 result by the smaller run size.
+
+The harness now supports windowed ciphertext batches. It builds each
+window before timing, reads a separate cache pad and reuses the batch
+slots. This bounds prepared operand memory independently of sample count.
+Cache residency remains platform-dependent. A future million-batch
+windowed run needs its own measurement record. The historical
+100,000-batch capture used a complete schedule.
