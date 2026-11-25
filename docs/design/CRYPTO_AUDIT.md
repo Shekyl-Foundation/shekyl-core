@@ -435,7 +435,12 @@ records `valid-vs-invalid` at 2.26 and `fixed-vs-bitflip` at 1.66.
 The nulls were 2.29 and 1.82, and the planted control was 1331.37.
 Both validity rows are flat under the registered CA-2 thresholds, as
 predicted for the Cortex-A72. This satisfies the floor cross-check.
-The x86 measurements still need to locate the source of the gap.
+**Desktop cross-check (2026-11-25).** The physical i9-13900K
+MSVC build read 1.53 on `valid-vs-invalid` and 2.96 on
+`fixed-vs-bitflip`, with nulls 1.91 and 1.55 and positive control
+409.94. Both comparisons were flat. The desktop did not reproduce
+the Tiger Lake laptop's gap. Its cause remains unresolved. See the
+[desktop RT-P4 record](../formal/checkct/results/2026-11-25/ca2-desktop-rt-p4.md).
 
 ## 3. `CA-3` — no constant-time evidence for post-quantum signing
 
