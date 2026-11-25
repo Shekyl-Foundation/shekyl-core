@@ -1214,3 +1214,46 @@ that condition is cleared. Hypervisor scheduling is outside the guest's
 quiet gate; the null and control remain required. This run establishes
 only the sensitivity it reports on this virtualized device, not the
 unavailable laptop's or dedicated physical-core scheduling.
+
+
+### Revision 3: fleet Windows shake-down 1 (2026-11-24): VOID; no attempt spent
+
+**Status: VOID preflight; registered seed unused on Windows.** A fresh
+recursive checkout of `63bcfab1d45fb9a1a71cf9f9a6231d1f291307d1`,
+rustc 1.94.0, release MSVC with workspace `+crt-static`, no extra
+RUSTFLAGS. Binary SHA-256:
+`1fb971bdf7e2adde1118f4e7125cb1fb5fecd4ec53929ead203914f23a9f055c`.
+The Windows Server VM has eight virtual cores and reports AVX2.
+
+The shake-down used explicit seed `2026112801`, not the registered seed,
+from 01:33:54 to 01:45:36Z on 2026-11-25 (702 seconds; exit 1).
+The quiet gate passed on its first four samples. The harness ran on
+logical processor 4, affinity read back `0x10`, Normal priority. Logical
+5's 69 ten-second samples averaged 1.91 %, maximum 12.06 %, with two
+samples at or above 5 % and no stop. The original power plan and
+Defender settings were unchanged; operational captures stay private.
+
+```text
+pass-line=sign-fixed-a-vs-fixed-b max_abs_t=1.73
+null=sign-fixed-a-vs-fixed-a-again max_abs_t=2.00
+control=sign-planted-leak planted_ns=5724 max_abs_t=6.28 delta10_ns=9118
+result=VOID (the control was not detected, so a pass would mean nothing) sign_pair=1.73 sign_null=2.00 sign_control=6.28 delta10_ns=9118 information_composed_pair=1.70 information_keygen_pair=3.02
+```
+
+Every replica and comparison check held: 50,500 calls returned per
+comparison and 790 retained results verified, with no malformed hints.
+The control is at or below 10, so the session is void before the pair's
+line is read. The registered attempt did not launch. The default workload
+was restored by the driver. This result is retained, not replaced.
+
+**Localisation, not an attribution:** at the control's largest cut-off,
+class 1 is 4,884 ns slower, near the intended 5,724 ns delay, but only
+reads 6.28. The composed and key-generation controls also read below 10
+(4.53 and 5.46). Guest timing spread is a candidate cause; it is not
+established by these figures. Short unregistered diagnostics compare
+Balanced and High Performance before deciding whether conditions can be
+fixed. No threshold, sample size or control fraction has changed.
+
+**Capture:** `windows_reg3_shakedown1_void.txt`, byte for byte (9,910 bytes,
+SHA-256 `2f35a914ef99cdb3ba04946cf5ec844c84c958627941ac5d32e5c62f59b84945`),
+with the toolchain and binary hash beside the earlier captures.
