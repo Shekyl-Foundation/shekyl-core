@@ -1330,7 +1330,7 @@ CA-3 is not closed by the floor result alone.
 
 ### Revision 3: replacement Windows preflight (2026-11-24): VOID; registered seed unused
 
-**Status: VOID preflight; a test-method decision is required.** The second
+**Status: VOID preflight; the maintainer selected the standalone laptop run.** The second
 eight-vCPU Windows Server VM used its own fresh native MSVC build of
 `63bcfab1d4`, rustc 1.94.0, release, workspace static CRT. Binary SHA-256:
 `281b1efe6190b54c9452e279eaa32d959312eff1c80437380e4862b02895f84e`.
@@ -1355,11 +1355,11 @@ plan and default workload were restored and read back. Power settings and
 a fixed warm-up did not make this platform's full preflight valid. This
 does not establish which guest or host mechanism caused the weak control.
 
-The maintainer is asked to choose an independent physical-host run under
-the existing method, a newly registered control-calibration procedure with
-an explicit sensitivity bound, or leaving Windows pending. The 50,000
-samples, 0.5 % control and verdict thresholds have not been changed. The
-floor's registered PASS remains its own result; CA-3 remains open.
+The maintainer selected the standalone physical laptop runner under the
+existing method. The 50,000 samples, 0.5 % control and verdict thresholds
+remain unchanged. No further fleet VM attempt is planned. The floor's
+registered PASS remains its own result; CA-3 remains open pending the
+laptop's valid preflight and registered result.
 
 **Capture:** `windows_reg3_replacement_shakedown_void.txt`, byte for byte,
 9882 bytes, SHA-256 `1d2a2953b02bd82eb5e5dde7deefcbb88c540c1921af93a342b4b170df403199`, with SHA256SUMS.

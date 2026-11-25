@@ -21,7 +21,7 @@ bump's commit is its record.
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
 | `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
-| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 post-fork revision 3: floor PASSES (3.57, delta10 657 ns); both Windows VM preflights VOID (controls 6.28 and 4.39), registered seed unused there; test-method decision pending (§3.2) |
+| `CA-3` | No constant-time evidence for post-quantum signing: FN-DSA (receipt countersignature), ML-DSA-65 (transactions), SLH-DSA-192s (messages) | **OPEN 2026-11-21** — FN-DSA CLOSED 2026-11-22, all three runs pass (§3.1); SLH-DSA-192s CLOSED 2026-11-22, both runs pass (§3.3); ML-DSA-65 post-fork revision 3: floor PASSES (3.57, delta10 657 ns); both Windows VM preflights VOID (controls 6.28 and 4.39), registered seed unused there; standalone laptop run selected and pending (§3.2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -661,9 +661,9 @@ above. None is chosen before then.
 The floor's registered pair is 3.57, null 2.16, control 160.82, delta10
 657 ns. Both Windows VM preflights are void (controls 6.28 and 4.39),
 even after fixed warm-up and High Performance on the replacement. The
-registered Windows seed is unused. A physical-host run under the same
-method or a newly registered calibration needs the maintainer's decision;
-no threshold or sample count has been changed.
+registered Windows seed is unused. The maintainer selected the standalone
+physical laptop runner under the same method; that run is pending. No
+threshold or sample count has been changed.
 Core #1545 pins fips204's fork at `54b76cf714`, removing the secret-coefficient
 branches and hardening the inverse NTT range; the source and guard evidence
 are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).
