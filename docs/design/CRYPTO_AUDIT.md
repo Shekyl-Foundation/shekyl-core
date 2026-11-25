@@ -401,13 +401,15 @@ for the release that predates it.
 
 ### 2.1 Localisation, and ML-KEM decapsulation's validity gap (registered 2026-11-21)
 
-Two runs settle which part of the inlined stream carries `CA-2`. Both are
-registered in
-[`ca2-localisation-registration.md`](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md),
-and neither has been made.
-- The halves on the inlined path, under a fat-LTO profile of the dynamic
-  crate (`release-lto`).
-- `Field25519` rows whose Montgomery residue is sparse.
+The [original registration](../formal/checkct/results/2026-11-21/ca2-localisation-registration.md)
+tests the inlined halves and sparse Montgomery `Field25519` rows.
+The [desktop amendment](../formal/checkct/results/2026-11-21/ca2-desktop-amendment.md)
+records the changed host and omits the suspect workstation's CPU-control
+follow-up from this PR. The [desktop results](../formal/checkct/results/2026-11-25/ca2-desktop-localisation.md)
+are flat: ordinary-release halves ≤2.50, fat-LTO halves ≤1.95,
+Montgomery-sparse square 3.16 and mul 1.18. The nulls and positive
+controls met their lines. These results do not localise the previously
+observed field timing effect, and CA-2 remains open.
 
 The same registration covers an observation from RT-P4 that belongs here.
 On the laptop, invalid ML-KEM-768 ciphertexts decapsulate slower than
@@ -427,7 +429,10 @@ The hypothesis to test is this core's low-activity effect: a valid
 ciphertext's compare folds equal bytes. The registration times the compare
 alone (`ct_ne 1088` rows), and RT-P4's validity comparisons on other
 silicon and under DOITM, a pinned clock and turbostat. It predicts no gap
-on the floor device.
+on the floor device. The isolated desktop `ct_ne 1088` rows were
+flat at 1.42 and 1.99 with 100,000 batches per class, reduced to fit
+memory. The full RT-P4 desktop run used one million samples per
+comparison.
 
 **Floor cross-check (2026-11-25).** The existing [RT-P4 fips203 0.5.0
 floor capture](../benchmarks/rt_p4_mlkem_decaps_timing_20261121_message.md#the-floor-device--pass)
