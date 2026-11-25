@@ -663,7 +663,9 @@ branches and hardening the inverse NTT range; the source and guard evidence
 are in [`ca3_pq_branch_sweep_20261123.md`](../benchmarks/ca3_pq_branch_sweep_20261123.md).
 The maintainer ordered the same registered line at 50,000 per comparison,
 on a fresh seed, after merging dev: signing alone with decode timed, floor
-on the performance governor, laptop behind its quiet gate. The revision-3
+on the performance governor, Windows behind its quiet gate. The maintainer
+substituted a fleet Windows VM for the unavailable laptop on 2026-11-24,
+before its run; the timing record states the conditions and limits. The revision-3
 registration is in the timing record below. Neither earlier device result
 closes the post-fork run.
 

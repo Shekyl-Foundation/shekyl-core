@@ -1190,3 +1190,27 @@ Pass on both devices closes ML-DSA and CA-3; anything else stays open
 while localisation continues, returning to the maintainer for a decision
 only when one is needed. Keep full outputs and SHA256SUMS beside the
 existing captures, with operational conditions in the private estate record.
+
+
+### Revision 3 device amendment, before the Windows run (2026-11-24)
+
+**REGISTERED by the maintainer's instruction:** use a fleet Windows machine
+in place of the unavailable personal laptop. The second device is now a
+Windows Server 2025 x86_64 VM with eight virtual cores, no guest SMT,
+and native MSVC. The source and seed remain registration commit
+`63bcfab1d45fb9a1a71cf9f9a6231d1f291307d1`; the line, sample size,
+null, control, checks, sensitivity and attempt rules do not change.
+The floor build and run are unaffected by this device substitution.
+
+Use the same quiet gate and core-4 affinity, with logical processor 5 as
+an additional load sentinel. It is **not** identified as core 4's SMT
+sibling on this VM. Record guest CPU and virtualization, other workload,
+disk latency, power state, Defender settings and the actual execution
+privilege; the SSH session is elevated, unlike the personal laptop's.
+Pause the fleet's default mining task during the measurement and restore
+its prior state afterward, without changing its configuration. No timing
+on storage affected by the live infrastructure notice is accepted until
+that condition is cleared. Hypervisor scheduling is outside the guest's
+quiet gate; the null and control remain required. This run establishes
+only the sensitivity it reports on this virtualized device, not the
+unavailable laptop's or dedicated physical-core scheduling.
