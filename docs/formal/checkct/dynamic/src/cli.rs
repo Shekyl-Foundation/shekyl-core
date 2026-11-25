@@ -5,7 +5,8 @@
 
 //! The command line: `ct-dynamic [samples-per-class] [row-filter]
 //! [only-fixed|only-random]`, positional, each optional in order. An empty
-//! filter matches every row, so `ct-dynamic 200000 "" only-fixed` times one
+//! filter matches every row. Separate alternative filters with `+`.
+//! For example, `ct-dynamic 200000 "" only-fixed` times one
 //! class of every row.
 
 use core::fmt;
@@ -42,13 +43,18 @@ impl FromStr for SampleCount {
     }
 }
 
-/// Rows whose name contains the filter; no filter matches every row.
+/// Rows whose name contains any of the requested substrings.
 #[derive(Clone, Debug, Default)]
 pub struct RowFilter(Option<String>);
 
 impl RowFilter {
     pub fn admits(&self, row: &str) -> bool {
-        self.0.as_deref().is_none_or(|part| row.contains(part))
+        self.0.as_deref().is_none_or(|filter| {
+            filter.is_empty()
+                || filter
+                    .split('+')
+                    .any(|part| !part.is_empty() && row.contains(part))
+        })
     }
 }
 
@@ -172,6 +178,15 @@ mod tests {
         assert!(c.filter.admits("helio square"));
         assert_eq!(c.classes, ClassSelection::Only(Class::Fixed));
         assert!(!c.classes.times(Class::Random));
+    }
+
+    #[test]
+    fn alternative_filters_keep_controls_without_admitting_other_rows() {
+        let c = parse(&["100", "half:+null: helio+control:+"]).unwrap();
+        assert!(c.filter.admits("half: U256::mul_wide"));
+        assert!(c.filter.admits("null: helio square"));
+        assert!(c.filter.admits("control: branch on a byte"));
+        assert!(!c.filter.admits("unrelated"));
     }
 
     #[test]

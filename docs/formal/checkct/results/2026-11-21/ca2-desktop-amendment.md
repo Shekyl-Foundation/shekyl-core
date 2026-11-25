@@ -34,3 +34,20 @@ hashes, measured affinity, counters and the exit of each run.
 Use the original thresholds and rules for void, inconclusive, and
 completed runs. Keep each result. A build or quiet-gate stop before
 measurement leaves that run unmade.
+
+## Memory and run order amendment
+
+The initial unfiltered release run was interrupted before a complete
+result. The compare harness allocates two 1,088-byte arrays for each
+of 32 operations in each batch, all before timing. A million batches
+per class requires about 130 GiB of ciphertext buffers alone. The
+desktop has 64 GiB of RAM.
+
+Collect RT-P4 first with the original binary and input count. The dynamic
+harness accepts a list of row filters separated by `+` so each run includes
+its nulls and positive controls. Use 1,000,000 batches per class for the
+field rows. Use 100,000 batches per class for the isolated `ct_ne 1088`
+comparisons and their controls, approximately 13 GiB of ciphertext
+buffers. Record the smaller sample size alongside the result. Read
+the comparisons against the original thresholds and qualify any flat
+result by the smaller run size.
